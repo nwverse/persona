@@ -41,6 +41,11 @@ final class DictationBarModel {
     /// The mic's tap gives no haptic, as before the bar: the bar's own buttons do, and their generator gets ready once
     /// the bar is in (not on the tap's frame, which already carries the bar's spring).
     func start(_ dictation: Dictation, hints: [String], reduceMotion: Bool) {
+        // A live system call: a note, and the bar never opens (dictation would cut the call's microphone).
+        if let refusal = dictation.callRefusal {
+            AppModel.shared.toast = Toast(refusal)
+            return
+        }
         run = UUID(); let mine = run
         Task {
             try? await Task.sleep(for: Theme.DictationBar.warmAfter)

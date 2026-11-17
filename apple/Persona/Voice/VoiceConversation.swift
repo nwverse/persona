@@ -358,9 +358,12 @@ struct VoiceDeps {
         if meeting == nil {
             guard await deps.mic.request() else { return end(.permissionDenied, epoch: epoch) }
             guard isCurrent(epoch) else { return }
-            guard deps.microphone.claim(microphoneOwner, givingWay: { [weak self] in self?.end(.microphoneTaken) }) else {
-                return end(.microphoneBusy)
-            }
+            // A system call keeps the microphone (#9290 follow-up: nothing in the app ends it by itself): whatever else
+            // asks for it while the call is on is refused, rather than ending the call (dictation and recordings ask
+            // `LiveCallGate` first and say why). An in-app voice chat gives way, as before.
+            let claimed = surface == .call ? deps.microphone.claim(microphoneOwner)
+                : deps.microphone.claim(microphoneOwner, givingWay: { [weak self] in self?.end(.microphoneTaken) })
+            guard claimed else { return end(.microphoneBusy) }
         }
         uplink = VoiceUplink(gated: meeting != nil)
         uplink.isMuted = muted || held

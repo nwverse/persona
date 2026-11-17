@@ -8,7 +8,10 @@ and share everything below. The in-app voice chat (the chat's handset, `docs/ass
 voice chat (`docs/apple/carplay.md`) stay what they were: calls inside the app, not system calls.
 
 The page is a full-screen call screen that can be minimised to a "return to call" bar
-(`docs/design/DESIGN_SYSTEM.md`, "Call screen" and "Return-to-call bar").
+(`docs/design/DESIGN_SYSTEM.md`, "Call screen" and "Return-to-call bar"). The call is the assistant's: the screen shows
+its own look and name, and the system's call UI, the Dynamic Island, the Lock Screen and Recents show its name. Both the
+screen and the bar live in a window of their own above the app's, so the bar is on every page and over every sheet,
+and nothing in the app ends a live call by itself ("Nothing in the app ends a call" below).
 
 ## Architecture (`apple/Persona/Calls/`)
 
@@ -19,7 +22,10 @@ The page is a full-screen call screen that can be minimised to a "return to call
 | `CallSystem` (`CallSystem.swift`) | The seam to the system. `LCKCallSystem` on devices: the app's only `ConversationManager`, made the first time a call needs it (never at launch, #9264), and its delegate `PersonaCallsLCKDelegate`, whose methods are all `nonisolated` and hop to the main actor in order (`CallMain`; an unmarked delegate method traps when LiveCommunicationKit calls it from its own queue). `SimulatedCallSystem` in the Simulator. A fake in the tests. LiveCommunicationKit's action objects cannot be made by anyone else, so each action reaches `PersonaCalls` as a `CallSystemAction` with its own fulfil and fail. |
 | `CallEngine` (`CallEngine.swift`) | What runs the conversation: `OwnerCallEngine` for a call to Persona (a `VoiceConversation(surface: .call)` on the system's audio session, `PhoneVoiceAudio(session: .system)`), `UrgentCallEngine` for an urgent call (`UrgentCallSession`, turn by turn). |
 | `CallRoute` (`CallRoute.swift`) | Where the sound goes now (receiver, speaker, Bluetooth by name, headphones, car), read from the session on every route change while there is a call, never from what the app asked for. Speaker on is `overrideOutputAudioPort(.speaker)`, handed back when the last call ends. |
-| `CallScreen`, `CallControls`, `UrgentCallView` | The pages. Every control goes through `PersonaCalls`, never to the voice directly, so the system's call UI and AirPods say the same. |
+| `CallScreen`, `CallAvatar`, `CallControls`, `UrgentCallView` | The pages. The assistant in the middle of the call screen is `CallAvatar` (its look moving with the call, a ring of the voice's level). Every control goes through `PersonaCalls`, never to the voice directly, so the system's call UI and AirPods say the same. |
+| `CallWindow` (`CallWindow.swift`) | The call screen and the bar back to a minimised call, in a passthrough window at `.normal + 0.75` over the app's windows (the + panel's, the screen viewer's) and under the toasts', the system's alerts and the keyboard. It takes touches only where it shows something: the whole screen for the call screen and a refusal's alert, the bar alone while minimised. The pages under the bar get its room (`additionalSafeAreaInsets` on the app's root, and on every sheet or cover whose content would start under it). |
+| `CallIcon` (`CallIcon.swift`) | The system call UI's template icon: Mochi's silhouette, 40 pt at 3×, made with the manager. |
+| `CallGuards` (`CallGuards.swift`), `LiveCallGate` (`apple/Shared/Recording/LiveCallGate.swift`) | What keeps in-app actions from ending a live call: the manager answers whether a call is live (`guardsLive`), the assistant's name for the questions, the call's own conversation; web pages' media waits (`CallMediaGuard`). |
 
 The voice side of a call to Persona (the `.call` surface, the system's audio session, `surface` in `start`, hold frames)
 is `docs/assistant/voice.md` "6.12 System calls"; the urgent call's side is `docs/assistant/urgent-call.md`.
@@ -40,16 +46,22 @@ LiveCommunicationKit in the Simulator, to see and log what it does.
   **Hold & Accept** (with one group the system offers only End & Accept and Decline, and a Start at capacity fails with
   `requesttransaction` code 7).
 - `includesConversationInRecents: true` (the redial), `supportsVideo: false`, `supportedHandleTypes: [.generic]`, no
-  ringtone, no icon (no monochrome brand mark exists yet).
+  ringtone. `iconTemplateImageData` is the assistant's mark as a template (`CallIcon`): an alpha silhouette of Mochi
+  (its body and outline, its eyes cut out), 40 pt at 3× as Apple's guidance for a call app's icon asks, drawn with plain
+  Core Graphics once, when the manager is made (its configuration is fixed for its life). Mochi stands for every look:
+  a package's or an uploaded picture has no outline of its own to cut.
 - Every conversation is pausable: `capabilities: [.pausing]` in the incoming report and in a `conversationUpdated`
   report for outgoing calls.
 
-The handle is `Handle(type: .generic, value: "Persona", displayName: "Persona")` (`CallHandle.persona`). The system UI
-and Recents show the handle's **value** and ignore its display name (FB24933340), and a redial gives back only the
-value, so the value is readable and stable. A redial with any value calls the current hub's main conversation. An urgent
-call's member is the same value with the call's name ("Urgent: <title>" when the Lock Screen may show details)
-only as its display name: the call id no longer goes in the
-handle (it showed as "call_…"), and the title never reaches Recents.
+The handle is the assistant's name: `Handle(type: .generic, value: <name>, displayName: <name>)`, where the name is
+`Persona.name` of the look on screen ("Persona" for the built-in Mochi, the package's name for another look), trimmed,
+and "Persona" when it is empty (`CallHandle.name`). The call takes it when it is made (`PersonaCall.name`), so the system
+and the call screen say the same for the whole call. The system UI, the Dynamic Island, the Lock Screen and Recents show
+the handle's **value** and ignore its display name (FB24933340), and a redial gives back only the value. A redial with
+any value (an old "Persona", a look's name since changed) calls the current hub's main conversation. An urgent call's
+member is the same value with the call's name ("Urgent: <title>" when the Lock Screen may show details) only as its
+display name: the call id no longer goes in the handle (it showed as "call_…"), and the title never reaches Recents.
+The opt-in SiriKit extension still names its one contact "Persona" (it cannot read the app's look; `docs/apple/siri.md`).
 
 LiveCommunicationKit reports errors in CallKit's domains (`com.apple.CallKit.error.requesttransaction`, sometimes under
 `NSUnderlyingErrorKey`). `CallSystemError` compares them as strings. The app never imports CallKit
@@ -104,9 +116,9 @@ the call's (`audioActive`). `held` is "any hold reason".
 
 ## Placing a call to Persona (`callPersona`)
 
-1. The call screen shows "Calling…" at once, before anything slow (a call already on is shown instead). From Siri,
-   Shortcuts or Recents the shell's Settings sheet closes first (`clearTheWay`), and a cold launch waits (at most 8 s)
-   for the hub links and the main conversation.
+1. The call screen shows "Calling…" at once, before anything slow (a call already on is shown instead). Whatever page or
+   sheet the app was on stays under it (the call's window goes over everything, Settings' sheet included). A cold launch
+   from Siri, Shortcuts or Recents waits (at most 8 s) for the hub links and the main conversation.
 2. Refused with the voice alert (and the page goes): an urgent call rings or is on, a recording or dictation has the
    microphone, no hub, no main conversation, no usable voice extension (the same checks and words as the chat's Voice
    Chat, after `VoiceSupport.refresh`), the microphone not allowed (asked in the app first: a locked phone mid-call
@@ -139,15 +151,20 @@ dropped: a newer call's page and alert stay.
   ends in the background.
 - Hiding the page, another page, another app, Home and the Lock Screen never end the call. Coming back to the app with
   the call on (the Dynamic Island, the status bar's call, the app switcher) shows the call screen again
-  (`returnedToApp`).
+  (`returnedToApp`), over whatever page or sheet the app was on.
 - A held call has no audio session, so iOS may suspend the app: its socket may be dead on resume, and the voice's
   usual reconnect (1, 4 and 10 s) brings it back and says the hold again.
 
 ## With voice chat, urgent calls and recording
 
-- One call at a time. Any voice chat (another chat's voice button, CarPlay's, a Continue) ends the call to Persona and
-  waits (at most 1 s) for the system to let its audio go before it opens its own (`VoiceCalls.endSystemCall`, which
-  `PersonaCalls.endForVoiceChat` answers), and is refused if an urgent call rang meanwhile.
+- One call at a time, and nothing ends the call to Persona by itself. A voice chat in another conversation (its handset,
+  + › Voice Chat, Continue on an ended voice chat) asks first: "End the call with <name> and start a voice chat here?"
+  (**End Call and Start**, destructive, or **Cancel**, which keeps the call; `VoiceUnavailableNote.endCallFirst`). Only
+  the yes ends the call and waits (at most 1 s) for the system to let its audio go before the voice chat opens its own
+  (`VoiceCalls.start(endingCall: true)`, `VoiceCalls.endSystemCall`, which `PersonaCalls.endForVoiceChat` answers); it is
+  refused if an urgent call rang meanwhile. Without the yes `VoiceCalls` refuses it, touching nothing
+  (`VoiceUnavailableNote.systemCallOn`). The main conversation's own handset or Voice Chat shows the call screen (it is
+  the same conversation).
 - An urgent call rings during a call to Persona: it is reported as always (iOS ends an app that does not report a VoIP
   push's call), and the system offers Hold & Accept, End & Accept or Decline. Pause and End reach the call to Persona
   through its machine; after the urgent call, the app unpauses it.
@@ -161,8 +178,51 @@ dropped: a newer call's page and alert stay.
   hold through the system first, as Hold & Accept does, and the urgent call talks once the system let that call's audio
   go; after it, the call to Persona is resumed. If the system will not hold the call to Persona, the urgent call is not
   answered here and its conversation opens instead.
-- A recording or dictation in progress refuses a call to Persona; one that starts during the call takes the microphone
-  and ends it (`microphoneTaken`), and the system hears the end.
+- A recording or dictation in progress refuses a call to Persona; one asked for during a call is refused with a note and
+  the call goes on (below). The call's voice keeps the microphone (`RecordingMicrophone.claim` without giving way), so
+  even a path that asked nothing cannot take it.
+
+## Nothing in the app ends a call
+
+While a call to Persona (from "Calling…") or an urgent call (ringing, once the system showed it, or answered) is live,
+an in-app action never silently ends it, takes its microphone or sets up the audio session under it
+(`PersonaCalls.guardsLive`, `LiveCallGate`):
+
+- **Dictation** (the composer's mic tapped or held, #9619; the to-do fields): refused at once with a toast, "On a call —
+  dictation is off until it ends"; neither the dictation bar nor a hold opens (`Dictation.callGate`).
+- **A recording** (a meeting from the + list, the home screen's menu, Siri, the Control or the Recordings page; a note;
+  all day): refused, "End the call first" (a toast where the start came from elsewhere, the Recordings page's line under
+  its button); a recording a call paused stays paused, saying the same (`RecordingCapture.callGate`, checked before the
+  permission, the session or the microphone).
+- **Voice chat**: asks first in another conversation, shows the call screen in the call's own (above).
+- **CarPlay**: the car's Talk to Persona (its screen, its Start, its Continue, Siri's Talk to Persona with the car
+  connected) does not start while a call to Persona is on the phone: the car says "You're on a call with <name> on the
+  phone" (`CarPlayVoiceSession.onPhoneCall`), and the call plays through the car when the car is its audio. The choice:
+  the car's voice chat would have to end the call, and a question on the phone is the wrong thing while driving.
+- **Web pages' media** (the in-app browser and its preloads, HTML cards and files, mail): suspended while a call is live
+  and let go after (`CallMediaGuard`, `WKWebView.setAllMediaPlaybackSuspended`): WebKit sets up its own audio for a
+  page's video, which would interrupt the call's session (the call would go on hold).
+- **The screen viewer's picture in picture** sets up no playback session during a call (`VNCPiP.prepare`).
+
+Every place that sets up the audio session has a verdict for a live call (`CallSourceTests.everyAudioSessionChangeHasAVerdictForALiveCall`
+fails on a new one until it is given one):
+
+| Where | Runs during a call? | Disturbs it? | Guard |
+| --- | --- | --- | --- |
+| `PersonaCalls.setCallCategory` (category before Start, as an urgent call rings) | yes, the call's own | no: the same category, before the system activates the session | none needed |
+| `CallSystem` (`activateAudio` once after the 5 s watchdog; the Simulator's stand-in) | yes, the call's own | no | none needed |
+| `CallRoute.setSpeaker` (`overrideOutputAudioPort`) | yes, on Speaker | no: the call's own route | none needed |
+| `PhoneVoiceAudio` (`.phone`, `.carPlay`: category, activation, preferred input, speaker override) | only through `VoiceCalls` | would: its session replaces the call's | refused, or asked first (`VoiceCalls.systemCallName`); the system mode (a call's) never touches the session (`aSystemCallsAudioNeverTouchesTheSystemsSession`) |
+| `Dictation` (`.record` category, activation, deactivation) | would, when tapped | would: cuts the call's microphone, its deactivation stops the call's audio | refused (`LiveCallGate.dictationRefusal`) |
+| `RecordingCapture.configureSession` (start, resume, the resume when the app comes back) | would | would | refused (`LiveCallGate.recordingRefusal`) |
+| `MeetingSpeaker` (speaker override), `MeetingVoicePlayer`, `MeetingCallAudio` | only during a meeting recording | — | none: no recording starts during a call |
+| `VNCPiP.prepare` (`.playback` category, activation) | would, opening a Mac's screen | would | skipped during a call (`LiveCallGate.callIsLive`) |
+| `UrgentCallVoice` (its recognizer's engine, `MeetingVoicePlayer`, the phone's voice) | yes, the urgent call's own | no: on the system's session, no category change | none needed |
+| `AVPlayer` / `AVPlayerViewController` / `VideoPlayer` (audio messages, video files, link cards' video, Lark media) | can | no: they play through the session as it is and change nothing | none: the sound plays in the call's route |
+| WebKit media (in-app browser, HTML cards and files, mail) | can | can: WebKit's own audio interrupts the call's session | suspended (`CallMediaGuard`) |
+| Camera (`UIImagePickerController`, photos only) and the QR scanner (`DataScannerViewController`) | can | no: video only, no audio input | none needed |
+| Haptics (`UIFeedbackGenerator`), voice cues (through the voice's own player) | can | no | none needed |
+| Hub switch, Sign Out | can | no session change; Sign Out disconnects the hub the call talks to, so its voice ends as unreachable after its reconnects | none: Sign Out is the owner leaving the hub |
 
 ## Recents and intents
 
@@ -176,10 +236,10 @@ Spotlight and the opt-in SiriKit extension: `docs/apple/siri.md`, "Calling Perso
 
 - CarPlay's own call screen is not used: CarPlay asks VoIP calling apps for CallKit and its communication entitlement.
   A call to Persona made on the phone plays through the car when the car is the route (`CallRoute` says `car`).
-- Talk to Persona with no car places a call to Persona on the phone; with CarPlay connected it is the car's voice chat,
-  or asks to open Persona on the car's screen (`docs/apple/carplay.md`).
-- The car's voice chat is refused while an urgent call rings or is on, and starting it ends a call to Persona (one call
-  at a time) and waits for the system to let its audio go, as every voice chat does.
+- Talk to Persona with no car places a call to Persona on the phone (or shows the one on); with CarPlay connected it is
+  the car's voice chat, or asks to open Persona on the car's screen (`docs/apple/carplay.md`).
+- The car's voice chat is refused while an urgent call rings or is on, and while a call to Persona is on the phone: the
+  car says the call is on the phone, and never ends it ("Nothing in the app ends a call").
 
 ## No CallKit
 
@@ -193,8 +253,9 @@ offered in China otherwise. The source guard and the binary check run in CI and 
 All are listed in `scripts/release/release.sh`, which fails a Release binary that still has them.
 
 - `-showCallSample <state>`: the call screen with no system, audio or hub: `dialing`, `connecting`, `connected`,
-  `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`
-  (`PersonaCalls.showSample`).
+  `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`
+  (the assistant speaking, its ring swelling) (`PersonaCalls.showSample`). A sample guards nothing ("Nothing in the app
+  ends a call").
 - `-openOwnerCall YES`: calls Persona once the hub is there, as a redial would (in the Simulator through
   `SimulatedCallSystem`); `-openOwnerCallSeconds <n>` hangs up n seconds after it connected.
 - `-showSystemCallService YES`: the Simulator on the real LiveCommunicationKit (it ends every call, see above).
@@ -208,12 +269,18 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
   second call, end paths, refusals before Start, tunnels, the urgent exclusion), `CallSourceTests` (one manager, no
   CallKit, the system's session left alone), `CallScreenTests` (the screen's states and layout), `CallPersonaIntentTests`,
   the `UrgentCall*Tests` suites, `VoiceCallsTests`, `VoiceConversationTests` (`.call`, hold frames, `surface`),
-  `LocalProxyRouteTests` and the CarPlay suites.
+  `LocalProxyRouteTests` and the CarPlay suites; `CallFollowUpTests` (the assistant's name on the system call and the
+  ring, the guards following the live call, voice chat refused or asked, dictation and recordings refused, web media
+  suspended, the call keeping its microphone, the assistant's look per state, the call's window, the bar's room, the
+  template icon); `CallSourceTests` also checks every audio-session site's verdict and that every way in asks first.
 - UI (`apple/PersonaUITests/`, against `MOCK_VOICE=1` `scripts/mock/mock_hub.py`, `docs/operations/testing.md`):
   `CallScreenTests` (each sample, largest text, the app's text size, the bar, + › Call Persona, the urgent call's Mute
   and its page on hold with Resume, and the real path: a call that keeps sending audio on the Agents page, in an Agent's
   conversation, on the Home Screen, with another app in front and with the phone locked, the mock's audio count at each
-  step written to `real-flow.json` beside the screenshots) and
+  step written to `real-flow.json` beside the screenshots; `testNothingInTheAppEndsTheCall`, the walk through the app
+  with the bar over the Agents page, a conversation, the + panel and Settings, dictation refused, Voice Chat asked and
+  cancelled from the panel and the handset, a typed line, Home, another app and the lock, the counts in `walk.json`;
+  `testTheAssistantOnTheCallScreen`; `testTheCallFollowsTheAssistant` with `MOCK_PERSONAS=builtin MOCK_LOOK=nwverse`) and
   `CallPersonaShortcutTests` (Call Persona and Talk to Persona from Spotlight, over Settings and an Agent's
   conversation, the microphone refused).
 - The mock's `GET /mock/voice2` keeps each start's `surface` (`"call"` for a system call) and the app's `hold` frames

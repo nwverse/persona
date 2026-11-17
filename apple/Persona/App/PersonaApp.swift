@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 PersonaCalls.shared.hangUp()
             }
         }
-        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended`: the call page's
+        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended|speaking|…`: the call page's
         // state, with no system and no audio (PersonaCalls.showSample).
         if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
             Task { @MainActor in

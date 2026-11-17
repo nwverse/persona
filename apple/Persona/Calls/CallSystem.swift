@@ -42,10 +42,11 @@ nonisolated enum CallSystemState: Equatable, Sendable {
 /// The system's side of the app's calls: one per app, made the first time a call needs it (never at launch, #9264).
 @MainActor protocol CallSystem: AnyObject {
     var handler: (any CallSystemHandler)? { get set }
-    /// Asks the system to start a call to Persona.
-    func start(_ id: UUID) async throws
-    /// An incoming call (an urgent call's ring), shown with `name`.
-    func reportIncoming(_ id: UUID, name: String) async throws
+    /// Asks the system to start a call to Persona, the assistant called `name` (`CallHandle.name`): the handle's value.
+    func start(_ id: UUID, name: String) async throws
+    /// An incoming call (an urgent call's ring) from the assistant called `name` (the handle's value), with the call's
+    /// own `title` as its display name only.
+    func reportIncoming(_ id: UUID, name: String, title: String) async throws
     func perform(_ request: CallRequest, for id: UUID) async throws
     func report(_ report: CallReport, for id: UUID)
     /// The conversation is in the system's list (reports before that are dropped).
@@ -54,11 +55,19 @@ nonisolated enum CallSystemState: Equatable, Sendable {
     func activateAudio() async -> Bool
 }
 
-/// The name the system shows and Recents keeps for Persona: the handle's value, not its display name (the system
-/// ignores that, FB24933340), and what a Recents redial gives back. Readable and stable; any value redials the
-/// current hub's main conversation.
+/// The name the system shows and Recents keeps for a call: the assistant's own name (`Persona.name`, "Persona" for the
+/// built-in Mochi), as the handle's value, which the system's call UI, the Dynamic Island, the Lock Screen and Recents
+/// show (they ignore the display name, FB24933340) and a Recents redial gives back. Any value redials the current hub's
+/// main conversation, so a name changed since still calls Persona.
 nonisolated enum CallHandle {
-    static let persona = "Persona" // i18n-ignore: the product's name, shown as is everywhere
+    /// The product's name, for an assistant with none.
+    static let fallback = "Persona" // i18n-ignore: the product's name, shown as is everywhere
+
+    /// The assistant's name as a call carries it: trimmed, or the product's name when it has none.
+    static func name(_ assistant: String?) -> String {
+        let trimmed = assistant?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? fallback : trimmed
+    }
 }
 
 /// An error from the system, by its domain and code. LiveCommunicationKit's errors keep CallKit's domain strings
@@ -116,10 +125,12 @@ nonisolated enum CallMain {
 
     /// Two groups so an urgent call during a call to Persona offers Hold & Accept (with one the system offers only End &
     /// Accept and Decline, and a Start at capacity fails); calls in Recents for the redial; one handle type, `.generic`.
+    /// The system call UI's icon is the assistant's mark as a template (`CallIcon`, Mochi's silhouette), made with the
+    /// manager: its configuration is fixed for the manager's life.
     static var configuration: ConversationManager.Configuration {
-        ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil, maximumConversationGroups: 2,
-                                          maximumConversationsPerConversationGroup: 1, includesConversationInRecents: true,
-                                          supportsVideo: false, supportedHandleTypes: [.generic])
+        ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: CallIcon.templatePNG(),
+                                          maximumConversationGroups: 2, maximumConversationsPerConversationGroup: 1,
+                                          includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
     }
 
     init() {
@@ -128,18 +139,17 @@ nonisolated enum CallMain {
         delegate.system = self
     }
 
-    private static var persona: Handle { Handle(type: .generic, value: CallHandle.persona, displayName: CallHandle.persona) }
-
-    func start(_ id: UUID) async throws {
+    func start(_ id: UUID, name: String) async throws {
+        let assistant = Handle(type: .generic, value: name, displayName: name)
         nonisolated(unsafe) let lck = manager
-        try await lck.perform([StartConversationAction(conversationUUID: id, handles: [Self.persona], isVideo: false)])
+        try await lck.perform([StartConversationAction(conversationUUID: id, handles: [assistant], isVideo: false)])
     }
 
-    func reportIncoming(_ id: UUID, name: String) async throws {
+    func reportIncoming(_ id: UUID, name: String, title: String) async throws {
         // The call's id stays out of the handle: it showed as "call_…" and would land in Recents. The title goes only in
         // the display name, which the system may show one day and Recents never keeps.
         let update = Conversation.Update(localMember: Handle(type: .generic, value: "owner"),
-                                         members: [Handle(type: .generic, value: CallHandle.persona, displayName: name)],
+                                         members: [Handle(type: .generic, value: name, displayName: title)],
                                          capabilities: [.pausing])
         nonisolated(unsafe) let lck = manager
         try await lck.reportNewIncomingConversation(uuid: id, update: update)
@@ -324,7 +334,7 @@ nonisolated final class PersonaCallsLCKDelegate: ConversationManagerDelegate, @u
     /// The call whose audio the session is: the one not paused.
     private var active: UUID?
 
-    func start(_ id: UUID) async throws {
+    func start(_ id: UUID, name: String) async throws {
         known.insert(id)
         Self.log.notice("call \(id.uuidString, privacy: .public): the stand-in starts it")
         await Task.yield() // `perform` returns before the delegate hears the action, as on a device
@@ -332,7 +342,7 @@ nonisolated final class PersonaCallsLCKDelegate: ConversationManagerDelegate, @u
         await activate(id)
     }
 
-    func reportIncoming(_ id: UUID, name: String) async throws {
+    func reportIncoming(_ id: UUID, name: String, title: String) async throws {
         known.insert(id)
         Self.log.notice("call \(id.uuidString, privacy: .public): the stand-in rings (silently)")
     }

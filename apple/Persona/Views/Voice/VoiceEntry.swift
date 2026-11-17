@@ -24,10 +24,19 @@ extension VoiceSupport {
     }
 
     /// Starts a call bound to `key` where the page offers one; otherwise what to say about it. Not while Persona's
-    /// urgent call rings or is on (#9290): its audio is the system's.
-    @discardableResult static func start(_ key: SessionKey, model: AppModel) -> VoiceUnavailableNote? {
+    /// urgent call rings or is on (#9290): its audio is the system's. While a call to Persona is on (#9290 follow-up:
+    /// nothing in the app ends it by itself): in its own conversation the call screen comes up instead (it is the same
+    /// conversation); elsewhere the user is asked first ("End the call with … and start a voice chat here?",
+    /// `VoiceUnavailableNote.endCallFirst`), and `endingCall` is their yes.
+    @discardableResult static func start(_ key: SessionKey, model: AppModel, endingCall: Bool = false) -> VoiceUnavailableNote? {
         #if os(iOS)
-        if PersonaCalls.shared.urgentInProgress { return PersonaCalls.urgentNote }
+        let calls = PersonaCalls.shared
+        if calls.urgentInProgress { return PersonaCalls.urgentNote }
+        if calls.isOwnerCallConversation(key) {
+            calls.present()
+            return nil
+        }
+        if !endingCall, let name = calls.liveOwnerCallName { return .endCallFirst(name, key: key) }
         #endif
         let availability = VoiceSupport.shared.availability(for: model.session(key), group: key.group)
         guard case .available(let id) = availability else {
@@ -39,10 +48,20 @@ extension VoiceSupport {
         #if DEBUG
         if VoiceSample.silentAudio { deps.audio = { VoiceSample.SilentAudio() } }
         #endif
-        // A call to Persona that is on ends first, and the voice chat starts once the system let its audio go
-        // (`VoiceCalls.endSystemCall`).
-        Task { await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps) }
+        // A call to Persona that is on (the user said end it) ends first, and the voice chat starts once the system let
+        // its audio go (`VoiceCalls.endSystemCall`).
+        Task { await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps, endingCall: endingCall) }
         return nil
+    }
+
+    /// The user said yes to `note`'s question (End Call and Start): the call to Persona ends and the voice chat starts or
+    /// is picked up again. What to say if it cannot after all.
+    static func proceed(_ note: VoiceUnavailableNote, model: AppModel) async -> VoiceUnavailableNote? {
+        switch note.proceed {
+        case .startVoice(let key): return start(key, model: model, endingCall: true)
+        case .resumeVoice(let key): return await VoiceCalls.shared.resume(key, endingCall: true)
+        case nil: return nil
+        }
     }
 
     /// Open Settings. The voice model's use opens over the page (`modelConfigurationSheet`); the caller does that one.
@@ -67,13 +86,28 @@ extension VoiceSupport {
 
 extension View {
     /// The 「+」 menu's Voice Chat where the page offers no call: why, and Open Settings when there is something to set.
+    /// A question (`proceed`: a call to Persona is on) asks End Call and Start, or Cancel, which keeps the call.
     func voiceUnavailableAlert(_ note: Binding<VoiceUnavailableNote?>, model: AppModel) -> some View {
         alert(note.wrappedValue?.title ?? "", isPresented: Binding(get: { note.wrappedValue != nil }, set: { if !$0 { note.wrappedValue = nil } }),
               presenting: note.wrappedValue) { shown in
-            if let place = shown.settings {
-                Button("Open Settings [Voice Entry 93112c]") { VoiceEntry.open(place, model: model) }
+            if shown.proceed != nil {
+                Button("End Call and Start", role: .destructive) {
+                    Task {
+                        // A reason it still cannot (the hub went meanwhile) comes once this alert has gone.
+                        guard let why = await VoiceEntry.proceed(shown, model: model) else { return }
+                        try? await Task.sleep(for: Theme.Motion.alertHandoff)
+                        note.wrappedValue = why
+                    }
+                }
+                .accessibilityIdentifier("voice-end-call-and-start")
+                Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("voice-keep-call")
+            } else {
+                if let place = shown.settings {
+                    Button("Open Settings [Voice Entry 93112c]") { VoiceEntry.open(place, model: model) }
+                }
+                Button("OK [In App Tunnel View f867f3]", role: .cancel) {}
             }
-            Button("OK [In App Tunnel View f867f3]", role: .cancel) {}
         } message: { shown in
             Text(shown.message)
         }
@@ -112,6 +146,13 @@ struct VoiceEndedStrip: View {
                         if call.surface == .call {
                             let group = call.key.group
                             Task { await PersonaCalls.shared.callPersona(group: group, origin: .app) }
+                            return
+                        }
+                        #endif
+                        #if os(iOS)
+                        // A call to Persona that is on: asked first, never ended by itself.
+                        if let name = PersonaCalls.shared.liveOwnerCallName {
+                            refusal = .endCallFirst(name, key: call.key, again: true)
                             return
                         }
                         #endif

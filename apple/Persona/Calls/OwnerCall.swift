@@ -15,7 +15,8 @@ extension PersonaCalls {
     /// in the app instead, with a line that says why.
     func callPersona(group: String? = nil, origin: CallOrigin = .app) async {
         let model = AppModel.shared
-        if origin != .app { await Self.clearTheWay(model) }
+        // Whatever page or sheet the app was left on stays: the call screen comes over it in its own window
+        // (`CallWindow`), and Minimize goes back to it.
         if let live = ownerCall, live.phase.isLive {
             presented = true
             return
@@ -88,7 +89,7 @@ extension PersonaCalls {
             // Asked again just before each Start: an urgent call that rang meanwhile goes first.
             if let note = admission() { return refuse(call, note: note) }
             do {
-                try await system.start(call.id)
+                try await system.start(call.id, name: call.name)
                 // Hung up while the system took it: its call ends too.
                 if call.phase.isEnded { try? await system.perform(.end, for: call.id) }
                 return
@@ -141,8 +142,8 @@ extension PersonaCalls {
         activityTypes.contains(activity.activityType) || activity.interaction?.intent is INStartCallIntent
     }
 
-    /// The handle the redial names (`CallHandle.persona`, or whatever an older entry had): any calls the current hub's
-    /// main conversation.
+    /// The handle the redial names (the assistant's name when it was called, `CallHandle.name`, or whatever an older
+    /// entry had): any calls the current hub's main conversation.
     nonisolated static func handle(_ activity: NSUserActivity) -> String? {
         (activity.interaction?.intent as? INStartCallIntent)?.contacts?.first?.personHandle?.value
     }
@@ -154,31 +155,13 @@ extension PersonaCalls {
         let now = clock.now
         if let last = lastRedial, now.timeIntervalSince(last) < 2 { return true }
         lastRedial = now
-        Self.log.notice("call: a redial (\(activity.activityType, privacy: .public), handle \(Self.handle(activity) == CallHandle.persona ? "Persona" : "other", privacy: .public))")
+        let named = Self.handle(activity) == assistantName() ? "the assistant's" : "another"
+        Self.log.notice("call: a redial (\(activity.activityType, privacy: .public), \(named, privacy: .public) name)")
         Task { await callPersona(origin: .recents) }
         return true
     }
 
     // MARK: Waiting
-
-    /// From Siri, Shortcuts or Recents the app comes to the front on whatever page it was left on. The call's page and a
-    /// refusal's alert go over the app's root (`personaCallCover`), which presents nothing while the shell's Settings
-    /// sheet is up: that sheet closes, as it does for a notification's chat (#3818), and the page waits for it to have
-    /// gone (at most a second). Any other page stays under the call: Minimize goes back to it, with the bar to the call.
-    static func clearTheWay(_ model: AppModel) async {
-        guard model.shellSettings else { return }
-        model.shellSettings = false
-        for _ in 0..<20 where rootPresents {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-    }
-
-    /// Something is still up over the app's root (the closing sheet until its animation ends).
-    private static var rootPresents: Bool {
-        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .filter { $0.session.role == .windowApplication }
-            .contains { ($0.keyWindow ?? $0.windows.first)?.rootViewController?.presentedViewController != nil }
-    }
 
     /// A launch from Recents: the hubs read and the main conversation known (at most 8 s), so the call goes to them.
     private static func waitForHub(_ group: String?) async {

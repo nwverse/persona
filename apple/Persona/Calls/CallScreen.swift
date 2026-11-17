@@ -5,7 +5,8 @@ import SwiftUI
 // Phone app's in-call screen, because a call is one task going on with its controls always under the thumb; Minimize
 // leaves it for a bar at the top that returns to it, and the call goes on (`PersonaCalls` runs it, not this page).
 
-/// What the call screen says and how its orb looks, from the call's state alone (pure, for the tests).
+/// What the call screen says and how the voice looks (the orb's phase, which the assistant's look follows:
+/// `CallAvatarLook`), from the call's state alone (pure, for the tests).
 nonisolated struct CallScreenState: Equatable, Sendable {
     nonisolated enum Line: Equatable, Sendable {
         /// Outgoing, the system asked to start it.
@@ -49,10 +50,11 @@ nonisolated struct CallScreenState: Equatable, Sendable {
     }
 }
 
-/// The call to Persona's page: Minimize at the top; Persona's orb (moving with the voice), its name, one line of where
-/// the call is and Persona's latest words in the middle; the round controls at the bottom. VoiceOver's escape
-/// minimises. When the call ends its line says why for a moment (the call stays `PersonaCalls.endedStays`), then the
-/// page goes. Minimize and the controls always keep their room: the middle takes what they leave (`CallScreenMiddle`).
+/// The call to Persona's page: Minimize at the top; the assistant in the middle, its own look (moving with the call, a
+/// ring of the voice's level around it: `CallAvatar`), its name, one line of where the call is and its latest words; the
+/// round controls at the bottom. VoiceOver's escape minimises. When the call ends its line says why for a moment (the
+/// call stays `PersonaCalls.endedStays`), then the page goes. Minimize and the controls always keep their room: the
+/// middle takes what they leave (`CallScreenMiddle`).
 struct CallScreen: View {
     let call: PersonaCall
     @State private var calls = PersonaCalls.shared
@@ -84,12 +86,12 @@ struct CallScreen: View {
         .modifier(CallAnnouncements(state: state))
     }
 
-    /// The orb's size at the default text size (`VoiceOrb` grows it by `scale`): `callOrb`, but at most `callOrbShare`
-    /// of the page's height and `free` (the middle's height less its words and the gap to them) once grown. Nil where
-    /// not even the voice bar's orb fits: the words say where the call is, the orb gives way to them.
-    static func orbSize(page: CGFloat, free: CGFloat, scale: CGFloat) -> CGFloat? {
-        guard page > 0, scale > 0 else { return Theme.Size.callOrb }
-        let points = min(Theme.Size.callOrb * scale, page * Theme.Size.callOrbShare, free)
+    /// The assistant's size at the default text size (`CallAvatar` grows it by `scale`): `callAvatar`, but at most
+    /// `callAvatarShare` of the page's height and `free` (the middle's height less its words and the gap to them) once
+    /// grown. Nil where not even the voice bar's orb's size fits: the words say where the call is, the face gives way.
+    static func avatarSize(page: CGFloat, free: CGFloat, scale: CGFloat) -> CGFloat? {
+        guard page > 0, scale > 0 else { return Theme.Size.callAvatar }
+        let points = min(Theme.Size.callAvatar * scale, page * Theme.Size.callAvatarShare, free)
         guard points >= Theme.Size.voiceOrb * scale else { return nil }
         return points / scale
     }
@@ -99,8 +101,12 @@ struct CallScreen: View {
         #if DEBUG
         reconnecting = call.sampleReconnecting
         #endif
-        return CallScreenState.make(phase: call.phase, held: call.held, muted: call.muted, note: call.note,
-                                    voice: call.voice.map { ($0.phase, $0.link) }, reconnecting: reconnecting)
+        var state = CallScreenState.make(phase: call.phase, held: call.held, muted: call.muted, note: call.note,
+                                         voice: call.voice.map { ($0.phase, $0.link) }, reconnecting: reconnecting)
+        #if DEBUG
+        if call.sampleSpeaking, case .duration = state.line { state.orb = .speaking }
+        #endif
+        return state
     }
 
     private var minimise: some View {
@@ -123,10 +129,10 @@ struct CallScreen: View {
     }
 }
 
-/// The middle of the call screen: Persona's orb, the name, the call's line and the latest caption, in the height Minimize
-/// and the controls leave it, centred. The orb gives way to the words (`CallScreen.orbSize`), down to the voice bar's
-/// orb and then altogether (a short phone at the largest text size); where the words alone do not fit, they scroll, and
-/// the controls stay. The caption keeps its two lines' room, so nothing moves as Persona's words come.
+/// The middle of the call screen: the assistant, its name, the call's line and the latest caption, in the height Minimize
+/// and the controls leave it, centred. The face gives way to the words (`CallScreen.avatarSize`), down to the voice bar's
+/// orb's size and then altogether (a short phone at the largest text size); where the words alone do not fit, they
+/// scroll, and the controls stay. The caption keeps its two lines' room, so nothing moves as the assistant's words come.
 private struct CallScreenMiddle: View {
     let call: PersonaCall
     let state: CallScreenState
@@ -141,12 +147,13 @@ private struct CallScreenMiddle: View {
         let free = room > 0 ? room - words - Theme.Space.l : .infinity
         ScrollView {
             VStack(spacing: Theme.Space.l) {
-                if let size = CallScreen.orbSize(page: page, free: free, scale: Theme.sizeScale(typeSize)) {
-                    CallScreenOrb(call: call, phase: state.orb, size: size)
+                if let size = CallScreen.avatarSize(page: page, free: free, scale: Theme.sizeScale(typeSize)) {
+                    CallScreenAvatar(call: call, phase: state.orb, size: size)
                 }
                 VStack(spacing: Theme.Space.l) {
                     VStack(spacing: Theme.Space.s) {
-                        Text(verbatim: CallHandle.persona)
+                        // The assistant's name, as the system's call UI and Recents show it (`PersonaCall.name`).
+                        Text(verbatim: call.name)
                             .font(Theme.Font.display)
                             .lineLimit(1)
                             .accessibilityAddTraits(.isHeader)
@@ -168,19 +175,24 @@ private struct CallScreenMiddle: View {
     }
 }
 
-/// Persona's orb at the call screen's size, moving with the voice (its levels: the microphone's while it listens,
-/// Persona's own while it speaks). A tap while Persona speaks stops the voice, as in the voice bar.
-private struct CallScreenOrb: View {
+/// The assistant at the call screen's size, its ring following the voice (its levels: the microphone's while it
+/// listens, the assistant's own while it speaks). A tap while it speaks stops the voice, as the voice bar's orb does.
+private struct CallScreenAvatar: View {
     let call: PersonaCall
     let phase: VoiceOrb.Phase
     let size: CGFloat
 
     var body: some View {
         let voice = call.voice
-        VoiceOrb(phase: phase, level: { [levels = voice?.levels, speaking = phase == .speaking] in
-            guard let levels else { return 0 }
+        #if DEBUG
+        let sample = call.sampleLevel
+        #else
+        let sample = 0.0
+        #endif
+        CallAvatar(look: CallAvatarLook.make(phase), level: { [levels = voice?.levels, speaking = phase == .speaking] in
+            guard let levels else { return sample }
             return Double(speaking ? levels.output : levels.input)
-        }, size: size, interrupt: voice.map { voice in { voice.interruptSpeech() } })
+        }, size: size, interrupt: phase == .speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
     }
 }
 
@@ -333,151 +345,16 @@ private struct CallAnnouncements: ViewModifier {
     }
 }
 
-// MARK: The cover, the bar back to it, and coming back to the app
-
-/// Puts the call to Persona's page over the app while it is shown (`PersonaCalls.presented`), and the bar that returns
-/// to it at the top while it is minimised; shows it again when the app comes back to the front with the call on; says
-/// why a call could not be placed (`PersonaCalls.refusal`) once the page has gone. It reads only `PersonaCalls`, which
-/// makes no system call manager until a call needs one (#9264). An answered urgent call's page goes over it instead
-/// (`urgentCallCover`): the call to Persona is on hold meanwhile, and its page comes back after.
-struct PersonaCallCover: ViewModifier {
-    @State private var calls = PersonaCalls.shared
-    @State private var urgent = UrgentCallPresenter.shared
-    @Environment(AppModel.self) private var model
-    @Environment(\.scenePhase) private var scenePhase
-    /// The app went to the background since it was last in front.
-    @State private var away = false
-    /// The page is up: a refusal waits for it to go (UIKit drops an alert presented while a cover closes).
-    @State private var coverUp = false
-    @State private var refusal: VoiceUnavailableNote?
-
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .top) { CallReturnBar().modifier(AppTextSize(model: model)) }
-            // Nothing dismisses the cover but the call (Minimize, the call over, an urgent call's page): no swipe.
-            .fullScreenCover(item: Binding(get: { shown }, set: { _ in }), onDismiss: { coverUp = false; showRefusal() }) { call in
-                CallScreen(call: call)
-                    .modifier(CoverLook(model: model))
-                    .onAppear { coverUp = true }
-            }
-            .onChange(of: calls.refusal != nil) { _, refused in if refused, !coverUp { showRefusal() } }
-            .voiceUnavailableAlert(Binding(get: { refusal }, set: { refusal = $0; if $0 == nil { calls.refusal = nil } }), model: model)
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .background { away = true }
-                if phase == .active, away {
-                    away = false
-                    calls.returnedToApp()
-                }
-            }
-    }
-
-    /// The call the page shows: presented, and no urgent call's page over everything.
-    private var shown: PersonaCall? {
-        guard calls.presented, urgent.session == nil else { return nil }
-        return calls.ownerCall
-    }
-
-    private func showRefusal() {
-        if let note = calls.refusal { refusal = note }
-    }
-}
-
-/// What `RootView` gives every screen and a cover attached outside it would miss: the accent as the tint, the style's
-/// font design, the app's text size and BeautifulUI's theme.
-private struct CoverLook: ViewModifier {
-    let model: AppModel
-
-    func body(content: Content) -> some View {
-        content.tint(Theme.accent).fontDesign(model.style.fontDesign).modifier(AppTextSize(model: model)).buiTheme(.persona())
-    }
-}
-
-/// The app's text size as `RootView` gives its pages: the system's, moved by Settings › Text Size (Small / Standard /
-/// Large), where the interface stops (`Theme.interfaceTypeSize`). For what is drawn outside RootView, which would take
-/// the window's size (the system's, capped: `WindowTextSize`) instead: the call's page and the bar back to it.
-private struct AppTextSize: ViewModifier {
-    let model: AppModel
-    /// The system's size, not the window's (which `WindowTextSize` caps).
-    @State private var system = WindowTextSize.system
-
-    func body(content: Content) -> some View {
-        content
-            .dynamicTypeSize(Theme.interfaceTypeSize(model.textSize.applied(to: system)))
-            .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
-                system = WindowTextSize.system
-            }
-    }
-}
+// MARK: The bar back to a minimised call
 
 /// While the call to Persona is on and its page minimised: a pill at the top of every page, under the status bar, in
-/// the positive role's tint (a call that is on), "Persona · 03:12" with a mark for muted or on hold. A tap opens the
-/// call screen again. Nothing else: hanging up is on the page, the voice bar and the system's call UI. Its room is the
-/// window's (`CallBarRoom`): every page, the shell's UIKit-hosted bars too, starts below it, so it covers nothing.
-struct CallReturnBar: View {
-    @State private var calls = PersonaCalls.shared
-    /// The pill's height as drawn (it grows with the text).
-    @State private var height = Theme.Size.tapTarget
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        let call = calls.presented ? nil : calls.ownerCall.flatMap { $0.phase.isLive ? $0 : nil }
-        let room = call == nil ? 0 : height + Theme.Space.xs
-        ZStack(alignment: .top) {
-            if let call {
-                CallReturnPill(call: call) { calls.present() }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                        if abs(height - h) >= 1 { height = h }
-                    }
-                    .padding(.horizontal, Theme.Space.page)
-                    // Drawn in the room above the pages' top (the window's safe area grew by `room`).
-                    .offset(y: -room)
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .background { CallBarRoom(room: room) }
-        .animation(reduceMotion ? nil : Theme.Motion.layout, value: call?.id)
-    }
-}
-
-/// The room the bar takes at the top of the window: the window's root grows its safe area by it
-/// (`additionalSafeAreaInsets`), so SwiftUI pages and the shell's UIKit containers alike start below the bar. A
-/// SwiftUI `safeAreaInset` at the root did not reach the shell's top bars, which the bar then covered.
-private struct CallBarRoom: UIViewRepresentable {
-    let room: CGFloat
-
-    func makeUIView(context: Context) -> RoomView {
-        let view = RoomView()
-        view.isUserInteractionEnabled = false
-        view.isAccessibilityElement = false
-        return view
-    }
-
-    func updateUIView(_ view: RoomView, context: Context) { view.room = room }
-
-    final class RoomView: UIView {
-        var room: CGFloat = 0 {
-            didSet { if room != oldValue { applySoon() } }
-        }
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            applySoon()
-        }
-
-        /// After SwiftUI's update: the root's layout changes with it.
-        private func applySoon() {
-            Task { @MainActor [weak self] in
-                guard let self, let root = self.window?.rootViewController else { return }
-                if abs(root.additionalSafeAreaInsets.top - self.room) > 0.5 { root.additionalSafeAreaInsets.top = self.room }
-            }
-        }
-    }
-}
-
-private struct CallReturnPill: View {
+/// the positive role's tint (a call that is on), the assistant's small face, "<name> · 03:12" and a mark for muted or on
+/// hold. A tap opens the call screen again. Nothing else: hanging up is on the page, the voice bar and the system's call
+/// UI. It lives in the call's own window (`CallWindow`), over every page and sheet, and the pages under it get its room.
+struct CallReturnPill: View {
     let call: PersonaCall
     let open: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let state = CallScreen.state(call)
@@ -486,12 +363,10 @@ private struct CallReturnPill: View {
             open()
         } label: {
             HStack(spacing: Theme.Space.s) {
-                ThemedIcon(Theme.Icon.voiceChannel)
-                    .font(Theme.Font.captionStrong)
-                    .foregroundStyle(Theme.positive)
-                    .accessibilityHidden(true)
+                // The assistant's face, still: the call screen's look, small.
+                PersonaAvatar(size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
                 HStack(spacing: Theme.Space.xs) {
-                    Text(verbatim: CallHandle.persona)
+                    Text(verbatim: call.name)
                     Text(verbatim: "·") // i18n-ignore: a separator
                         .accessibilityHidden(true)
                     CallBarLine(line: state.line)
@@ -536,8 +411,4 @@ private struct CallBarLine: View {
     }
 }
 
-extension View {
-    /// The call to Persona's page over the app, and the bar back to it (`PersonaCallCover`).
-    func personaCallCover() -> some View { modifier(PersonaCallCover()) }
-}
 #endif

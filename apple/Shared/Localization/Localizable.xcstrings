@@ -63054,6 +63054,29 @@
         }
       }
     },
+    "End Call and Start" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End Call and Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話を終了して開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束通话并开始"
+          }
+        }
+      }
+    },
     "End Conversation" : {
       "localizations" : {
         "en" : {
@@ -63162,6 +63185,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "结束会议？"
+          }
+        }
+      }
+    },
+    "End the call first" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the call first"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に通話を終了してください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先结束通话"
+          }
+        }
+      }
+    },
+    "End the call first, then start a voice chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the call first, then start a voice chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話を終了してから音声チャットを始めてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先结束通话，再开始语音对话。"
+          }
+        }
+      }
+    },
+    "End the call with %@ and start a voice chat here?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the call with %1$@ and start a voice chat here?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ との通話を終了して、ここで音声チャットを始めますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束与 %1$@ 的通话，在这里开始语音对话？"
           }
         }
       }
@@ -110653,6 +110745,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在使用个人热点"
+          }
+        }
+      }
+    },
+    "On a call with %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a call with %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ と通話中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在与 %1$@ 通话"
+          }
+        }
+      }
+    },
+    "On a call — dictation is off until it ends" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a call — dictation is off until it ends"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話中は音声入力を使えません。通話が終わると使えます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话中，通话结束后才能听写"
           }
         }
       }
@@ -161967,6 +162105,29 @@
       },
       "extractionState" : "manual"
     },
+    "The call ends, and the voice chat starts in this conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The call ends, and the voice chat starts in this conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話は終了し、この会話で音声チャットが始まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话会结束，语音对话在这个对话里开始。"
+          }
+        }
+      }
+    },
     "The call goes on; the bar at the top returns to it" : {
       "localizations" : {
         "en" : {
@@ -196851,6 +197012,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "弹出了确认卡片，你点了允许。"
+          }
+        }
+      }
+    },
+    "You're on a call with %@ on the phone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You're on a call with %1$@ on the phone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマートフォンで %1$@ と通話中です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你正在手机上与 %1$@ 通话"
           }
         }
       }

@@ -347,6 +347,11 @@ final class Dictation {
     /// Stands in for asking the person for the microphone and speech recognition (tests hold a start inside that wait);
     /// nil asks the system.
     @ObservationIgnored var permission: (() async -> Bool)?
+    /// Why dictation does not start now: a system call is live (`LiveCallGate`), and dictation's own audio session would
+    /// cut the call's microphone. Nil while it may. The tests' own stands in for the gate.
+    @ObservationIgnored var callGate: () -> String? = { LiveCallGate.dictationRefusal }
+    /// Why a start now would be refused at once (the call is on), for the mic's tap and hold to say before anything opens.
+    var callRefusal: String? { callGate() }
     #if DEBUG
     /// `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
     /// may have none), for screenshots and recordings of the composer's mic. Without `permission` nothing is asked.
@@ -385,6 +390,11 @@ final class Dictation {
     /// (a tap, then a hold, or a send, while the system still asks; #3407). A newer start takes over from an older one
     /// already listening, which would otherwise hold the microphone and fail it as in use.
     func start(hints: [String] = [], update: @escaping (String) -> Void, failed: @escaping (String) -> Void = { _ in }) {
+        // A live system call keeps the microphone and its audio session: refused at once, nothing opens, the call goes on.
+        if let refusal = callGate() {
+            failed(refusal)
+            return
+        }
         let turn = UUID()
         startTurn = turn
         heard = ""

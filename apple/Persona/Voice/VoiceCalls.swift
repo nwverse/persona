@@ -26,6 +26,10 @@ import UIKit
     /// that waits until the system let the call's audio go: its late deactivation would stop the new audio (#9290,
     /// `PersonaCalls.endForVoiceChat`). Here, for every entry (a page's Voice Chat, CarPlay, Continue), so none skips it.
     @ObservationIgnored var endSystemCall: @MainActor () async -> Void = {}
+    /// The assistant's name while a system call to Persona is on, else nil: nothing ends that call by itself (#9290
+    /// follow-up), so a voice chat from another surface is refused unless the user said to end the call
+    /// (`start(endingCall:)`, after the page's confirmation). `PersonaCalls` answers once it exists.
+    @ObservationIgnored var systemCallName: @MainActor () -> String? = { nil }
 
     /// `watchesApp`: end the phone's call when the app goes to the background (the shared one; the tests drive
     /// `appDidEnterBackground` themselves).
@@ -42,12 +46,13 @@ import UIKit
     /// Starts a call bound to `key`. The same conversation's call from the same surface is left as it is (or picked up
     /// again when it ended); another one is ended first, a call from another surface too (a voice chat on the main
     /// conversation while a call to Persona is on it is a call of its own). Returns once the call sent its `start`, or ended;
-    /// or at once with why not, touching nothing (no call ends, no audio opens), while Persona's urgent call is on. A
-    /// system call to Persona that is on ends first, and the new call waits for its audio to go (`endSystemCall`).
+    /// or at once with why not, touching nothing (no call ends, no audio opens), while Persona's urgent call is on, or
+    /// while a system call to Persona is on and `endingCall` is not set (the page asked the user first and they said end
+    /// it). With `endingCall`, that call ends first and the new one waits for its audio to go (`endSystemCall`).
     @discardableResult
-    func start(_ key: SessionKey, extensionID: String, surface: VoiceSurface, recent: [VoiceLine] = [], deps: VoiceDeps) async
-        -> VoiceUnavailableNote? {
-        if let refused = refusal(surface) { return refused }
+    func start(_ key: SessionKey, extensionID: String, surface: VoiceSurface, recent: [VoiceLine] = [], deps: VoiceDeps,
+               endingCall: Bool = false) async -> VoiceUnavailableNote? {
+        if let refused = refusal(surface) ?? callRefusal(surface, endingCall: endingCall) { return refused }
         if let refused = await handOff(surface) { return refused }
         if let call = current {
             // A system call that ended has no system call behind it any more: it is never picked up again.
@@ -82,17 +87,23 @@ import UIKit
         surface != .call && urgentCallOn() ? .urgentCall : nil
     }
 
+    /// Why a voice chat from `surface` may not start now: a system call to Persona is on and nobody said to end it.
+    private func callRefusal(_ surface: VoiceSurface, endingCall: Bool) -> VoiceUnavailableNote? {
+        guard surface != .call, !endingCall, let name = systemCallName() else { return nil }
+        return .systemCallOn(name)
+    }
+
     /// A system call that ended goes away at once: no Continue (there is no system call to pick up again).
     func release(_ call: VoiceConversation) {
         if current === call { current = nil }
     }
 
-    /// Continue on the ended call bound to `key` (not a system call's). Not while Persona's urgent call is on: why not,
-    /// and the call stays ended.
+    /// Continue on the ended call bound to `key` (not a system call's). Not while Persona's urgent call is on, nor while
+    /// a system call to Persona is on unless `endingCall` (the user said end it): why not, and the call stays ended.
     @discardableResult
-    func resume(_ key: SessionKey) async -> VoiceUnavailableNote? {
+    func resume(_ key: SessionKey, endingCall: Bool = false) async -> VoiceUnavailableNote? {
         guard let call = current, call.key == key, call.phase.isEnded, call.surface != .call else { return nil }
-        if let refused = refusal(call.surface) { return refused }
+        if let refused = refusal(call.surface) ?? callRefusal(call.surface, endingCall: endingCall) { return refused }
         if let refused = await handOff(call.surface) { return refused }
         // Something else became the call while the system call's audio went.
         guard current === call, call.phase.isEnded else { return nil }

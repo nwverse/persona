@@ -27,14 +27,16 @@ struct UrgentCallView: View {
     }
 }
 
-/// "Urgent call", how long it has lasted, and the title the lock screen showed.
+/// The assistant's small face (who is calling, as on the call screen), "Urgent call", how long it has lasted, and the
+/// title the lock screen showed.
 private struct UrgentCallHeader: View {
     let session: UrgentCallSession
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.s) {
-                ThemedIcon(Theme.Icon.voiceChannel).foregroundStyle(Theme.danger)
+                PersonaAvatar(size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
                 Text("Urgent Call").font(Theme.Font.heading).foregroundStyle(Theme.danger)
                 Spacer(minLength: Theme.Space.s)
                 if let answered = session.answeredAt {

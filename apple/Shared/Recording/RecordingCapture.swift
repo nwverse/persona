@@ -41,6 +41,10 @@ final class RecordingCapture {
     /// The system ended an interruption but the microphone could not be opened again (the app was in the background): the
     /// phone tells the user to come back (a notification), since nothing else will resume it.
     @ObservationIgnored var onInterruptionNotResumed: (() -> Void)?
+    /// Why nothing may record now: the iPhone's system call is live (`LiveCallGate`), and a recording's audio session
+    /// would cut the call's microphone. A start fails with it and a paused recording stays paused, the call untouched.
+    /// The tests' own stands in for the gate.
+    @ObservationIgnored var callGate: () -> String? = { LiveCallGate.recordingRefusal }
 
     // MARK: All-day hooks
 
@@ -285,6 +289,8 @@ final class RecordingCapture {
                playsAloud: Bool = false, shortSegments: Bool = false, meetingCall: Bool = false, echoCancellation: Bool = false,
                day: Bool = false) async {
         guard state == .idle else { return }
+        // Before anything is asked or opened: a live system call keeps its audio session (docs/apple/calls.md).
+        if let refusal = callGate() { error = refusal; return }
         generation = UUID(); let token = generation
         // One mode at a time: an all-day recording is never also a rolling one.
         let rolling = rolling && !day
@@ -496,6 +502,8 @@ final class RecordingCapture {
 
     private func resume(_ writer: RecordingSegmentWriter) {
         guard resumeTask == nil else { return }
+        // A live system call keeps its audio session: the recording stays paused and says why.
+        if let refusal = callGate() { error = refusal; return }
         let token = generation
         resumeTask = Task { @MainActor [weak self] in
             defer { self?.resumeTask = nil }

@@ -119,19 +119,20 @@ struct CallScreenTests {
         #expect(TabBarExtraRoom.extra(given: status + tabBar, rootTop: status) == tabBar, "no bar: as before")
     }
 
-    /// The orb gives way on a short page or at a large text size: to its share of the page, then to the words around it
-    /// (the room the middle has less theirs); where not even the voice bar's orb fits, it goes and the words stay.
-    @Test func theOrbGivesWayToTheControlsAndTheWords() throws {
-        #expect(CallScreen.orbSize(page: 0, free: 0, scale: 1) == Theme.Size.callOrb, "not measured yet")
-        #expect(CallScreen.orbSize(page: 900, free: .infinity, scale: 1) == Theme.Size.callOrb)
-        let large = try #require(CallScreen.orbSize(page: 740, free: .infinity, scale: 1.4))
-        #expect(large * 1.4 <= 740 * Theme.Size.callOrbShare + 0.01 && large < Theme.Size.callOrb)
-        #expect(CallScreen.orbSize(page: 900, free: 90, scale: 1) == 90, "what the words leave")
-        let grown = try #require(CallScreen.orbSize(page: 900, free: 90, scale: 1.25))
+    /// The assistant gives way on a short page or at a large text size: to its share of the page, then to the words
+    /// around it (the room the middle has less theirs); where not even the voice bar's orb's size fits, it goes and the
+    /// words stay.
+    @Test func theAssistantGivesWayToTheControlsAndTheWords() throws {
+        #expect(CallScreen.avatarSize(page: 0, free: 0, scale: 1) == Theme.Size.callAvatar, "not measured yet")
+        #expect(CallScreen.avatarSize(page: 900, free: .infinity, scale: 1) == Theme.Size.callAvatar)
+        let large = try #require(CallScreen.avatarSize(page: 740, free: .infinity, scale: 1.4))
+        #expect(large * 1.4 <= 740 * Theme.Size.callAvatarShare + 0.01 && large < Theme.Size.callAvatar)
+        #expect(CallScreen.avatarSize(page: 900, free: 90, scale: 1) == 90, "what the words leave")
+        let grown = try #require(CallScreen.avatarSize(page: 900, free: 90, scale: 1.25))
         #expect(abs(grown * 1.25 - 90) < 0.01)
-        #expect(CallScreen.orbSize(page: 900, free: Theme.Size.voiceOrb, scale: 1) == Theme.Size.voiceOrb)
-        #expect(CallScreen.orbSize(page: 900, free: Theme.Size.voiceOrb - 1, scale: 1) == nil, "no room for even the smallest orb")
-        #expect(CallScreen.orbSize(page: 100, free: .infinity, scale: 1) == nil)
+        #expect(CallScreen.avatarSize(page: 900, free: Theme.Size.voiceOrb, scale: 1) == Theme.Size.voiceOrb)
+        #expect(CallScreen.avatarSize(page: 900, free: Theme.Size.voiceOrb - 1, scale: 1) == nil, "no room for even the smallest face")
+        #expect(CallScreen.avatarSize(page: 100, free: .infinity, scale: 1) == nil)
     }
 
     #if DEBUG
@@ -153,7 +154,8 @@ struct CallScreenTests {
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         window.frame = CGRect(origin: CGPoint(x: 0, y: 100), size: size)
-        let host = UIHostingController(rootView: CallScreen(call: call).dynamicTypeSize(.xxxLarge))
+        // The assistant's face reads the app's persona, as the call's window gives it (`CallWindowRoot`).
+        let host = UIHostingController(rootView: CallScreen(call: call).dynamicTypeSize(.xxxLarge).environment(AppModel.shared))
         // The window is the room under the status bar: the test screen's own insets (its island, its home bar) are not.
         host.safeAreaRegions = []
         window.rootViewController = host
@@ -241,14 +243,15 @@ struct CallScreenTests {
     /// The call screen and its controls act only through `PersonaCalls` (so the system's call UI and AirPods say the
     /// same): never on the voice's mute, its hold, the in-app calls or the audio session themselves.
     @Test func theCallScreenActsThroughPersonaCalls() throws {
-        for file in ["Persona/Calls/CallScreen.swift", "Persona/Calls/CallControls.swift"] {
+        for file in ["Persona/Calls/CallScreen.swift", "Persona/Calls/CallControls.swift", "Persona/Calls/CallAvatar.swift",
+                     "Persona/Calls/CallWindow.swift"] {
             let code = try Self.code(file)
             for direct in ["VoiceCalls", "setCallMuted", "setHeld(", "muted.toggle", "muted = ", "overrideOutputAudioPort",
                            "AVAudioSession", ".end(."] {
                 #expect(!code.contains(direct), "\(file) uses \(direct)")
             }
         }
-        let screen = try Self.code("Persona/Calls/CallScreen.swift")
+        let screen = try Self.code("Persona/Calls/CallScreen.swift") + Self.code("Persona/Calls/CallWindow.swift")
         for action in ["calls.setMuted(", "calls.setSpeaker(", "calls.resume(", "calls.hangUp(", "calls.minimise()", "calls.present()",
                        "calls.returnedToApp()"] {
             #expect(screen.contains(action), "the call screen has no \(action)")
@@ -279,7 +282,7 @@ struct CallScreenTests {
         #expect(page.contains("calls.setSpeaker(") && page.contains("CallAudioRouteControl("))
     }
 
-    /// The page is the app's, over everything, next to the urgent call's cover.
+    /// The page is the app's, over everything (its own window), next to the urgent call's cover.
     @Test func theCoverIsTheAppsNextToTheUrgentCalls() throws {
         let app = try Self.code("Persona/App/PersonaApp.swift").components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         let cover = try #require(app.firstIndex(of: ".personaCallCover()"))

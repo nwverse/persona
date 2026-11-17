@@ -383,4 +383,247 @@ final class CallScreenTests: XCTestCase {
         }
         app.terminate()
     }
+
+    // MARK: Nothing in the app ends the call (#9290 follow-up)
+
+    /// The assistant on the call screen: its look and name (the built-in's "Persona") in each state the samples have,
+    /// speaking with its ring swelling, on hold with the pause mark, ended greyed.
+    @MainActor func testTheAssistantOnTheCallScreen() throws {
+        for (sample, name) in [("connected", "call-avatar-connected"), ("speaking", "call-avatar-speaking"), ("held", "call-avatar-held"),
+                               ("ended", "call-avatar-ended")] {
+            try XCTContext.runActivity(named: sample) { _ in
+                let app = try self.sample(sample)
+                XCTAssertTrue(app.staticTexts["Persona"].exists, "\(sample): no assistant's name\n\(app.debugDescription)")
+                shot(name, app)
+                app.terminate()
+            }
+        }
+    }
+
+    /// The owner walks the app with a call to Persona on, and nothing in it ends the call: minimised, the Agents page and
+    /// an Agent's conversation with the bar over them; the + panel open and the bar over it (a tap shows the call screen
+    /// over the panel, Minimize goes back to the panel); dictation refused with its note; Voice Chat from the panel and the
+    /// composer's handset ask first, and Cancel keeps the call; a typed line in the main conversation; Settings open with
+    /// the bar over it; the Home Screen, another app for 15 s, locked for 15 s; back in the app the call screen, still
+    /// connected; End. At every step the mock's audio count went up and no voice socket closed; the counts go to
+    /// `walk.json` beside the screenshots.
+    @MainActor func testNothingInTheAppEndsTheCall() throws {
+        let hub = try hub
+        var steps: [[String: Any]] = []
+        let closedBefore = try XCTUnwrap(log(hub)["closes"] as? Int)
+        var last = 0
+        @discardableResult func step(_ name: String, _ app: XCUIApplication? = nil, shot file: String? = nil) throws -> Int {
+            if let file { shot(file, app) }
+            let count = try audio(hub)
+            let closes = try XCTUnwrap(log(hub)["closes"] as? Int) - closedBefore
+            steps.append(["step": name, "audio": count, "closes": closes, "at": Date.now.timeIntervalSince1970])
+            print("walk: \(name) audio=\(count) closes=\(closes)")
+            XCTAssertEqual(closes, 0, "\(name): the voice's socket closed")
+            if last > 0 { XCTAssertGreaterThan(count, last, "\(name): the audio stopped (\(last) → \(count))") }
+            last = count
+            return count
+        }
+        let app = try launch(Self.main)
+        try openMore(app)
+        app.buttons["composer-menu-call"].tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
+        if allow.waitForExistence(timeout: 5) { allow.tap() }
+        XCTAssertTrue(element(app, "call-screen").waitForExistence(timeout: 15), "no call screen\n\(app.debugDescription)")
+        XCTAssertTrue(element(app, "call-duration").waitForExistence(timeout: 30), "the call never connected\n\(app.debugDescription)")
+        Thread.sleep(forTimeInterval: 3)
+        try step("connected", app, shot: "walk-connected")
+
+        app.buttons["call-minimise"].tap()
+        let bar = app.buttons["call-return-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call")
+        Thread.sleep(forTimeInterval: 1.5)
+        try step("minimised", app, shot: "walk-bar-main")
+
+        let agents = app.buttons["shell-agents"].firstMatch
+        XCTAssertTrue(agents.waitForExistence(timeout: 10), "no Agents switch\n\(app.debugDescription)")
+        agents.tap()
+        let row = app.buttons.matching(identifier: "agents.row").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "no Agents page\n\(app.debugDescription)")
+        XCTAssertTrue(bar.isHittable, "the bar is not there over the Agents page")
+        Thread.sleep(forTimeInterval: 2)
+        try step("agents page", app, shot: "walk-bar-agents")
+        // An Agent at rest (its composer has the mic; a working one's has Stop in its place).
+        let idle = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "agents.row", "博客迁移到 Astro")).firstMatch
+        for _ in 0..<5 where !idle.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(idle.isHittable, "no Agent at rest on the Agents page\n\(app.debugDescription)")
+        idle.tap()
+        let plus = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
+        XCTAssertTrue(plus.waitForExistence(timeout: 20), "no Agent's conversation\n\(app.debugDescription)")
+        XCTAssertTrue(bar.isHittable, "the bar is not there over an Agent's conversation")
+        Thread.sleep(forTimeInterval: 2)
+        try step("agent conversation", app, shot: "walk-bar-conversation")
+
+        // A sheet over it (the + panel, in a window of its own): the bar stays over it and opens the call screen over it.
+        plus.tap()
+        let more = app.buttons["attach-tab-more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "no + panel\n\(app.debugDescription)")
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertTrue(bar.isHittable, "the bar is not there over the + panel")
+        try step("+ panel open", app, shot: "walk-bar-over-plus")
+        bar.tap()
+        XCTAssertTrue(element(app, "call-screen").waitForExistence(timeout: 10), "the bar did not open the call over the + panel")
+        Thread.sleep(forTimeInterval: 1)
+        try step("call screen over the + panel", app, shot: "walk-call-over-plus")
+        app.buttons["call-minimise"].tap()
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "the + panel went: the call screen dismissed what was open")
+        // + › Voice Chat: asks first; Cancel keeps the call.
+        more.tap()
+        let voice = app.buttons["composer-menu-voice"]
+        XCTAssertTrue(voice.waitForExistence(timeout: 10), "no Voice Chat in More\n\(app.debugDescription)")
+        voice.tap()
+        try confirmAndCancel(app, shot: "walk-voice-confirm-plus")
+        try step("+ › Voice Chat, Cancel", app)
+
+        // Dictation: refused with a note, the call goes on.
+        let mic = app.descendants(matching: .any).matching(identifier: "shell-composer-mic").firstMatch
+        XCTAssertTrue(mic.waitForExistence(timeout: 10), "no mic\n\(app.debugDescription)")
+        mic.tap()
+        let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "通话结束后才能听写")).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 5), "no dictation note\n\(app.debugDescription)")
+        XCTAssertFalse(app.descendants(matching: .any)["dictation-bar"].exists, "the dictation bar opened")
+        try step("dictation refused", app, shot: "walk-dictation-refused")
+        Thread.sleep(forTimeInterval: 3) // the note goes
+
+        // The composer's handset: asks first; Cancel keeps the call.
+        let handset = app.descendants(matching: .any).matching(identifier: "shell-composer-voice").firstMatch
+        XCTAssertTrue(handset.waitForExistence(timeout: 10), "no voice chat button\n\(app.debugDescription)")
+        handset.tap()
+        try confirmAndCancel(app, shot: "walk-voice-confirm")
+        try step("voice chat button, Cancel", app)
+
+        // A typed line in the main conversation, through the call's voice bar: back to the Agents page, then Assistant.
+        let back = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).firstMatch
+        if back.waitForExistence(timeout: 5) { back.tap() }
+        let assistant = app.buttons["shell-assistant"].firstMatch
+        XCTAssertTrue(assistant.waitForExistence(timeout: 10), "no Assistant switch\n\(app.debugDescription)")
+        assistant.tap()
+        let moreOnBar = app.descendants(matching: .any)["voice-more"].firstMatch
+        XCTAssertTrue(moreOnBar.waitForExistence(timeout: 15), "no voice bar in the main conversation\n\(app.debugDescription)")
+        moreOnBar.tap()
+        let typeLine = app.buttons["打字说一句"].firstMatch
+        XCTAssertTrue(typeLine.waitForExistence(timeout: 5), "no Type a Line\n\(app.debugDescription)")
+        typeLine.tap()
+        let field = app.alerts.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no line to type\n\(app.debugDescription)")
+        field.typeText("明天上午有什么安排？")
+        app.alerts.buttons["发送"].tap()
+        Thread.sleep(forTimeInterval: 2)
+        try step("typed line in the main conversation", app, shot: "walk-typed-line")
+
+        // Settings (the shell's sheet): the bar over it.
+        // The main conversation's drawer opens from the persona's face at the top left.
+        let menu = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["assistant-sidebar-button", "shell-place-sidebar"])).firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "no way to the drawer\n\(app.debugDescription)")
+        menu.tap()
+        let settingsRow = app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier == %@ AND label == %@)",
+                                                           "sidebar-settings", "assistant-sidebar", "设置")).firstMatch
+        XCTAssertTrue(settingsRow.waitForExistence(timeout: 10), "no Settings in the drawer\n\(app.debugDescription)")
+        settingsRow.tap()
+        let close = element(app, "settings-close")
+        XCTAssertTrue(close.waitForExistence(timeout: 15), "no Settings\n\(app.debugDescription)")
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertTrue(bar.isHittable, "the bar is not there over Settings")
+        XCTAssertTrue(close.isHittable, "the bar covers Settings' Close")
+        try step("Settings open", app, shot: "walk-bar-over-settings")
+        close.tap()
+
+        XCUIDevice.shared.press(.home)
+        sleep(2)
+        try step("home screen", shot: "walk-home")
+        let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+        settings.launch()
+        sleep(15)
+        try step("settings app 15 s", shot: "walk-settings-app")
+        XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
+        sleep(15)
+        try step("locked 15 s")
+        XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
+        sleep(3)
+        let bottom = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
+        bottom.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
+        sleep(2)
+        try step("unlocked")
+        app.activate()
+        XCTAssertTrue(element(app, "call-screen").waitForExistence(timeout: 10), "the call screen did not come back\n\(app.debugDescription)")
+        XCTAssertTrue(element(app, "call-duration").exists, "the call is not connected after coming back")
+        try step("back in Persona", app, shot: "walk-back")
+
+        app.buttons["call-end"].tap()
+        XCTAssertTrue(app.staticTexts["通话已结束"].waitForExistence(timeout: 5), "no 通话已结束\n\(app.debugDescription)")
+        shot("walk-ended", app)
+        XCTAssertTrue(element(app, "call-screen").waitForNonExistence(timeout: 10), "the ended call stayed")
+        let surface = (try log(hub)["starts"] as? [[String: Any]])?.last?["surface"] as? String
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            let record: [String: Any] = ["steps": steps, "surface": surface ?? NSNull(),
+                                         "closes": (try XCTUnwrap(log(hub)["closes"] as? Int)) - closedBefore]
+            let data = try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: dir + "/walk.json"))
+        }
+        app.terminate()
+    }
+
+    /// The question before a voice chat ends the call: it names the assistant, and Cancel keeps the call.
+    @MainActor private func confirmAndCancel(_ app: XCUIApplication, shot name: String) throws {
+        let ask = app.alerts.matching(NSPredicate(format: "label CONTAINS %@", "结束与 Persona 的通话")).firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 10), "no question before ending the call\n\(app.debugDescription)")
+        XCTAssertTrue(ask.buttons["结束通话并开始"].firstMatch.exists, "no End Call and Start")
+        Thread.sleep(forTimeInterval: 1)
+        shot(name, app)
+        ask.buttons["取消"].firstMatch.tap()
+        XCTAssertTrue(ask.waitForNonExistence(timeout: 5), "Cancel did not close the question")
+        XCTAssertTrue(app.buttons["call-return-bar"].waitForExistence(timeout: 5), "the call ended")
+    }
+
+    /// Another assistant (the mock's frog look, MOCK_PERSONAS=builtin MOCK_LOOK=nwverse): the call carries its name
+    /// and the call screen and the bar show its face. Skipped against a mock without it.
+    @MainActor func testTheCallFollowsTheAssistant() throws {
+        let hub = try hub
+        var request = URLRequest(url: URL(string: hub + "/api/v1/looks")!)
+        request.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var body: Data?
+        URLSession.shared.dataTask(with: request) { data, _, _ in body = data; done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 10)
+        let looks = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        guard let current = looks?["current"] as? [String: Any], current["id"] as? String == "nwverse" else {
+            throw XCTSkip("needs MOCK_PERSONAS=builtin MOCK_LOOK=nwverse")
+        }
+        let app = try launch(Self.main)
+        // The look is downloaded after pairing; a call takes the name the app has when it is made: until the look is
+        // there, the call is the built-in's, and it is hung up and made again.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
+        var named = false
+        for attempt in 0..<5 where !named {
+            Thread.sleep(forTimeInterval: attempt == 0 ? 8 : 5)
+            try openMore(app)
+            app.buttons["composer-menu-call"].tap()
+            if allow.waitForExistence(timeout: 3) { allow.tap() }
+            XCTAssertTrue(element(app, "call-duration").waitForExistence(timeout: 30), "the call never connected\n\(app.debugDescription)")
+            named = element(app, "call-screen").staticTexts["奶蛙"].exists
+            if !named {
+                app.buttons["call-end"].tap()
+                XCTAssertTrue(element(app, "call-screen").waitForNonExistence(timeout: 10), "the ended call stayed")
+            }
+        }
+        XCTAssertTrue(named, "the call screen does not say the assistant's name\n\(app.debugDescription)")
+        Thread.sleep(forTimeInterval: 2)
+        shot("call-other-assistant", app)
+        app.buttons["call-minimise"].tap()
+        let bar = app.buttons["call-return-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call")
+        XCTAssertTrue(bar.label.contains("奶蛙"), "the bar does not say the assistant's name: \(bar.label)")
+        Thread.sleep(forTimeInterval: 1)
+        shot("call-other-assistant-bar", app)
+        bar.tap()
+        XCTAssertTrue(app.buttons["call-end"].waitForExistence(timeout: 10))
+        app.buttons["call-end"].tap()
+        app.terminate()
+    }
 }

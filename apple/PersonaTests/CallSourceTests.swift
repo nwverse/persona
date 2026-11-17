@@ -101,12 +101,113 @@ struct CallSourceTests {
         #expect(moved.contains("if owner == .app {"), "only the app's own session follows VoiceRoute")
     }
 
+    /// Every place under `apple/` that sets up the audio session (category, activation, the route, the microphone) has
+    /// a verdict for a live system call (docs/apple/calls.md, "Nothing in the app ends a call"): the call's own, gated
+    /// (asks `LiveCallGate` / the call manager first and leaves the session alone), or able to run only where a call
+    /// cannot be (a recording, which is refused during one). A new place fails here until it is given one.
+    @Test func everyAudioSessionChangeHasAVerdictForALiveCall() throws {
+        let audited: [String: (verdict: String, gate: String?)] = [
+            "Persona/Calls/CallRoute.swift": ("the call's own Speaker", nil),
+            "Persona/Calls/CallSystem.swift": ("the call's own: the watchdog's one activation, the Simulator's stand-in", nil),
+            "Persona/Calls/PersonaCalls.swift": ("the call's own category, before its Start or as it rings", nil),
+            "Persona/Voice/PhoneVoiceAudio.swift": ("an in-app voice chat, started only through VoiceCalls (refused or asked first)", "systemCallName"),
+            "Persona/Views/Chat/PromptComposer.swift": ("dictation: refused", "callGate"),
+            "Shared/Recording/RecordingCapture.swift": ("a recording: refused, a paused one stays paused", "callGate"),
+            "Persona/Screen/VNCPiP.swift": ("picture in picture: the session left alone", "LiveCallGate.callIsLive"),
+            "Persona/Recording/MeetingSpeaker.swift": ("a meeting recording's answers: no recording during a call", nil),
+        ]
+        let calls = ["setCategory(", "setActive(", "overrideOutputAudioPort(", "setPreferredInput(", "setMode("]
+        var found: Set<String> = []
+        for file in try Self.sources(tests: false) where file.lines.contains(where: { line in calls.contains { line.contains($0) } }) {
+            found.insert(file.path)
+        }
+        #expect(found == Set(audited.keys), "audit every new place for a live call (docs/apple/calls.md): \(found.symmetricDifference(audited.keys).sorted())")
+        let voiceCalls = try Self.lines("Persona/Voice/VoiceCalls.swift").joined(separator: "\n")
+        for (path, entry) in audited {
+            guard let gate = entry.gate else { continue }
+            let text = path == "Persona/Voice/PhoneVoiceAudio.swift" ? voiceCalls : try Self.lines(path).joined(separator: "\n")
+            #expect(text.contains(gate), "\(path) (\(entry.verdict)) does not ask \(gate)")
+        }
+        // The two refusals come before anything is asked or opened.
+        let dictation = try #require(Self.body(try Self.lines("Persona/Views/Chat/PromptComposer.swift"), "func start(hints:"))
+        #expect(dictation.range(of: "callGate()").map { $0.lowerBound < (dictation.range(of: "Task {")?.lowerBound ?? dictation.endIndex) } == true)
+        let capture = try Self.lines("Shared/Recording/RecordingCapture.swift")
+        for name in ["func start(locale:", "private func resume("] {
+            let body = try #require(Self.body(capture, name), "\(name)")
+            let gate = try #require(body.range(of: "callGate()"), "\(name) does not ask the gate")
+            #expect(gate.lowerBound < (body.range(of: "configureSession(")?.lowerBound ?? body.endIndex), "\(name)")
+            #expect(gate.lowerBound < (body.range(of: "permission()")?.lowerBound ?? body.endIndex), "\(name)")
+        }
+        let pip = try #require(Self.body(try Self.lines("Persona/Screen/VNCPiP.swift"), "if !LiveCallGate.callIsLive {"))
+        #expect(pip.contains("setCategory(") && pip.contains("setActive("), "picture in picture sets the session only with no call")
+    }
+
+    /// Nothing in the app ends a live call to Persona by itself (#9290 follow-up): every way into a voice chat asks the call
+    /// manager first (its own conversation shows the call screen, another asks End Call and Start), CarPlay says the call
+    /// is on the phone, a meeting recording is refused before its page opens, and the call keeps the microphone.
+    @Test func nothingInTheAppEndsALiveCallByItself() throws {
+        let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
+        let start = try #require(Self.body(entry, "static func start("))
+        let own = try #require(start.range(of: "if calls.isOwnerCallConversation(key) {"))
+        let ask = try #require(start.range(of: "return .endCallFirst(name, key: key)"))
+        let begin = try #require(start.range(of: "VoiceCalls.shared.start("))
+        #expect(own.lowerBound < ask.lowerBound && ask.lowerBound < begin.lowerBound)
+        #expect(start.contains("calls.present()"))
+        #expect(begin.upperBound < start.endIndex && start.contains("endingCall: endingCall"))
+        let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
+        #expect(strip.contains("refusal = .endCallFirst(name, key: call.key, again: true)"))
+        let alert = try #require(Self.body(entry, "func voiceUnavailableAlert("))
+        #expect(alert.contains("Button(\"End Call and Start\", role: .destructive)") && alert.contains("Button(\"Cancel\", role: .cancel) {}"))
+
+        let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift")
+        for name in ["static func start()", "static func resume()"] {
+            let body = try #require(Self.body(car, name), "\(name)")
+            #expect(body.contains("if let onPhone = onPhoneCall() { return onPhone }"), "\(name)")
+        }
+        let talk = try Self.lines("Persona/Intents/TalkToPersonaIntent.swift").joined(separator: "\n")
+        #expect(talk.contains("CarPlayVoiceSession.onPhoneCall()"))
+
+        let voiceCalls = try Self.lines("Persona/Voice/VoiceCalls.swift")
+        for name in ["func start(", "func resume("] {
+            let body = try #require(Self.body(voiceCalls, name), "\(name)")
+            #expect(body.contains("callRefusal("), "\(name)")
+        }
+        let personaCalls = try Self.lines("Persona/Calls/PersonaCalls.swift").joined(separator: "\n")
+        #expect(personaCalls.contains("voiceCalls.systemCallName = { [weak self] in self?.liveOwnerCallName }"))
+
+        let meeting = try #require(Self.body(try Self.lines("Persona/Recording/MeetingRecorder.swift"), "func startMeeting("))
+        let refused = try #require(meeting.range(of: "if let refusal = capture.callGate() {"))
+        #expect(refused.lowerBound < (meeting.range(of: "Self.openRecordings()")?.lowerBound ?? meeting.startIndex))
+
+        let voice = try #require(Self.body(try Self.lines("Persona/Voice/VoiceConversation.swift"), "func begin() async"))
+        #expect(voice.contains("surface == .call ? deps.microphone.claim(microphoneOwner)"), "a system call gives the microphone away")
+
+        let tap = try #require(Self.body(try Self.lines("Persona/DesignSystem/DictationBar.swift"), "func start(_ dictation: Dictation"))
+        let hold = try #require(Self.body(try Self.lines("Persona/DesignSystem/ComposerHoldMic.swift"), "func begin(_ dictation: Dictation"))
+        for body in [tap, hold] {
+            let gate = try #require(body.range(of: "if let refusal = dictation.callRefusal {"))
+            #expect(gate.lowerBound < (body.range(of: "withAnimation")?.lowerBound ?? body.endIndex), "the bar opens before the refusal")
+        }
+    }
+
+    /// The system call carries the assistant's name (#9290 follow-up): no literal handle left on the call's path.
+    @Test func theSystemCallCarriesTheAssistantsName() throws {
+        let system = try Self.lines("Persona/Calls/CallSystem.swift").joined(separator: "\n")
+        #expect(system.contains("Handle(type: .generic, value: name, displayName: name)"))
+        #expect(system.contains("members: [Handle(type: .generic, value: name, displayName: title)]"))
+        #expect(system.contains("iconTemplateImageData: CallIcon.templatePNG()"))
+        for path in ["Persona/Calls/CallSystem.swift", "Persona/Calls/CallScreen.swift", "Persona/Calls/OwnerCall.swift", "Persona/Calls/PersonaCalls.swift"] {
+            let text = try Self.lines(path).joined(separator: "\n")
+            #expect(!text.contains("CallHandle.persona"), "\(path)")
+        }
+    }
+
     /// The refusal itself is `VoiceCalls`' (`VoiceCallsTests`, `PersonaCallsTests`); here, that every way in says it:
     /// the page's Voice Chat at once, its Continue, CarPlay's start and Continue, and that `PersonaCalls` answers it.
     @Test func voiceChatIsRefusedDuringAnUrgentCall() throws {
         let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
         let start = try #require(Self.body(entry, "static func start("))
-        #expect(start.contains("PersonaCalls.shared.urgentInProgress"))
+        #expect(start.contains("let calls = PersonaCalls.shared") && start.contains("if calls.urgentInProgress { return PersonaCalls.urgentNote }"))
         let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
         #expect(strip.contains("refusal = await VoiceCalls.shared.resume(") && strip.contains(".voiceUnavailableAlert($refusal"))
         let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift").joined(separator: "\n")
