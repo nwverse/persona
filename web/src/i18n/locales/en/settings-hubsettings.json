@@ -52,6 +52,8 @@
   "mirror_clear": "Clear mirrors",
   "mirror_save": "Save",
   "source": "Update source",
+  "beta_channel": "Beta (prereleases)",
+  "beta_scope": "Receives prereleases from the beta channel. Choose Release to return to stable updates; an update in progress must finish before switching.",
   "web_dev": "Web development",
   "dev_setup": "To enable development updates, configure backup writer pause/resume commands on the hub machine.",
   "dev_scope": "Builds the web app, hub and computer services from one commit. Development updates require successful compilation.",
