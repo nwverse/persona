@@ -113,12 +113,31 @@ func (b *tuiBridge) control(ctx context.Context, l []byte, started bool) bool {
 	return true
 }
 
-// tuiUserLine is a user message the node writes.
+// tuiUserLine is a user message the node writes: its content is a list of blocks (assistant.send) or a plain string
+// (the /compact of a compaction, assistant_compact.go and assistant_reap.go).
 type tuiUserLine struct {
 	Type    string `json:"type"`
 	Message struct {
-		Content []map[string]any `json:"content"`
+		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+}
+
+// tuiUserContent reads a line the node writes as a user message's content blocks; false for anything else, which is
+// said on stderr rather than dropped without a word.
+func tuiUserContent(l []byte) ([]map[string]any, bool) {
+	var u tuiUserLine
+	if json.Unmarshal(l, &u) != nil || u.Type != "user" {
+		return nil, false
+	}
+	var blocks []map[string]any
+	if json.Unmarshal(u.Message.Content, &blocks) == nil {
+		return blocks, true
+	}
+	var s string
+	if json.Unmarshal(u.Message.Content, &s) == nil {
+		return []map[string]any{{"type": "text", "text": s}}, true
+	}
+	return nil, false
 }
 
 // submitLoop types the messages into Claude Code one at a time, in order.
@@ -129,12 +148,13 @@ func (b *tuiBridge) submitLoop(ctx context.Context, inputs <-chan []byte) {
 		case <-ctx.Done():
 			return
 		case l := <-inputs:
-			var u tuiUserLine
-			if json.Unmarshal(l, &u) != nil || u.Type != "user" {
+			content, ok := tuiUserContent(l)
+			if !ok {
+				fmt.Fprintf(b.stderr, "assistant-tui: a line that is no user message was not typed: %.200s\n", l)
 				continue
 			}
 			n++
-			text, err := tuiMessageText(u.Message.Content, b.dir, n)
+			text, err := tuiMessageText(content, b.dir, n)
 			if err == nil {
 				err = b.submit(ctx, text)
 			}

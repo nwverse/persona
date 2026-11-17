@@ -270,3 +270,25 @@ func TestBackgroundTasksFromTheScreen(t *testing.T) {
 		t.Fatal("spinner")
 	}
 }
+
+// The /compact a compaction writes has a plain string for content (assistant_compact.go, assistant_reap.go); it is
+// typed like any message, never dropped, and a line that is no user message is refused.
+func TestTUIUserContentTakesStringAndBlocks(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"user","message":{"role":"user","content":"/compact"}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"/compact"}]}}`,
+	} {
+		content, ok := tuiUserContent([]byte(line))
+		if !ok {
+			t.Fatalf("%s: not a user message", line)
+		}
+		if text, err := tuiMessageText(content, t.TempDir(), 1); err != nil || text != "/compact" {
+			t.Fatalf("%s: typed %q %v", line, text, err)
+		}
+	}
+	for _, line := range []string{`{"type":"control_request"}`, `{"type":"user","message":{"content":42}}`, `not json`} {
+		if _, ok := tuiUserContent([]byte(line)); ok {
+			t.Fatalf("%s taken as a user message", line)
+		}
+	}
+}
