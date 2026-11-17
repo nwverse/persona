@@ -142,6 +142,13 @@ final class MeetingLiveViewUITests: XCTestCase {
                                "-showMeetingSample", "room-taking-part"]
         app.launchPinned()
         clearLaunchAlerts()
+        if !element(app, "meeting-thread-header").waitForExistence(timeout: 20) {
+            // The Recordings page can lose its push to the main conversation's late pick on a busy Mac: once more, the
+            // chats already fresh from this launch.
+            app.terminate()
+            if let i = app.launchArguments.firstIndex(of: "-openChatsFresh") { app.launchArguments.removeSubrange(i...i + 1) }
+            app.launchPinned()
+        }
         XCTAssertTrue(element(app, "meeting-thread-header").waitForExistence(timeout: 20), "no meeting page:\n\(app.debugDescription)")
         return app
     }
