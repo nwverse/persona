@@ -80,6 +80,10 @@ class ListTapScreenShotsTest {
                 width = formWidth
             }
             rule.waitForIdle()
+            // Opens on Needs you (#9053). All is the stacked page these shots were taken on
+            // (InboxView.swift:828-830). A choice swaps at once (choose, :969).
+            sectionChip("All").performClick()
+            rule.waitForIdle()
             rule.onNodeWithText("Weekly report").performTouchInput { longClick() }
             rule.waitForIdle()
             rule.mainClock.autoAdvance = false
@@ -90,18 +94,20 @@ class ListTapScreenShotsTest {
             rule.onNodeWithText("Mark as done").performClick()
             Snapshot.sendApplyNotifications()
             val samples = mutableListOf(start)
-            val chips = mutableListOf(top("By source"))
+            // The section bar and the search field are one lazy item. They snap with the title.
+            val chips = mutableListOf(top(FILTERS))
             var savedMid = false
             var afterTitle: Float? = null
             repeat(16) {
                 rule.mainClock.advanceTimeByFrame()
-                // The chip row is one lazy item with By source. The section header also says "Needs you".
+                // Needs you and FYI have rows, so they are in the bar; Done is not until a row is filed.
+                // The section header also says "Needs you".
                 assertChip("Needs you")
+                assertChip("FYI")
                 assertChip("All")
-                assertChip("Done")
                 val y = top("Office hours")
                 samples += y
-                chips += top("By source")
+                chips += top(FILTERS)
                 // The title appears first and shifts the list at once. The removal spring is the move after that.
                 if (afterTitle == null && abs(y - start) > 4f) afterTitle = y
                 val removal = afterTitle?.let { abs(y - it) > 4f } == true
@@ -131,14 +137,15 @@ class ListTapScreenShotsTest {
             }
             rule.mainClock.advanceTimeBy(700)
             val end = top("Office hours")
-            val endChip = top("By source")
+            val endChip = top(FILTERS)
             save("$stem-end")
             if (!savedMid) save("$stem-mid")
             assertChip("Needs you")
+            assertChip("FYI")
             assertChip("All")
             assertChip("Done")
             rule.onAllNodesWithText("Weekly report").assertCountEquals(0)
-            // The large title appears at once (InboxView.swift:152-153). By source snaps with that shift.
+            // The large title appears at once (InboxView.swift:152-153). The search field snaps with that shift.
             // Office hours springs only the distance the removal added on top of that shared shift.
             val chipStart = chips.first()
             assertTrue(
@@ -208,9 +215,13 @@ class ListTapScreenShotsTest {
     }
 
     /**
-     * The bay chip. Glass draws it as a checkbox; the section header repeats "Needs you" as a button.
-     * A tab that also contains the words (the grouping control's ancestor) is not this chip.
+     * The section bar chip (Glass [JChip], a checkbox). The section header repeats "Needs you" or "FYI" as a button.
      */
+    private fun sectionChip(label: String) = rule.onNode(
+        SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox) and hasAnyDescendant(hasText(label)),
+        useUnmergedTree = true,
+    )
+
     private fun assertChip(label: String) {
         val nodes = rule.onAllNodes(
             SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox) and hasAnyDescendant(hasText(label)),
@@ -224,6 +235,11 @@ class ListTapScreenShotsTest {
     }
 
     private fun top(text: String) = rule.onNodeWithText(text).getUnclippedBoundsInRoot().top.value
+
+    /** The search field, in the same lazy item as the section bar. */
+    private companion object {
+        const val FILTERS = "Search titles, senders and text"
+    }
 
     private class Sample : InboxRepository {
         override val subscriptionsShown = MutableStateFlow(false)

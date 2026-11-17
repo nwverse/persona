@@ -448,7 +448,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             itemsIndexed(sources) { index, option ->
                 JGroupItem(GroupPosition.of(index, sources.size)) {
                     JRow(option.second, onClick = {
-                        // A source chip (InboxView.swift:1263, :1294). The bay switch above the list stays instant (:1292, animated: false).
+                        // A source chip (InboxView.swift:1263, :1294). A section-bar choice stays instant
+                        // (InboxView.swift:969): the list swaps at once, and that chip passes animated: false (:1292).
                         animateChange { filter(currentFilters.copy(source = option.first)); filterPage = null }
                     },
                         trailing = { JRadio(source == option.first, null) })
