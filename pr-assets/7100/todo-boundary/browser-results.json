@@ -1,0 +1,86 @@
+[
+  {
+    "scheme": "light",
+    "width": 1440,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-CZYxDRHR.js"
+    ],
+    "draftTitle": "Title kept through failure (light, 1440)",
+    "draftNotes": "Notes kept through failure (light, 1440)",
+    "savedTitle": "Title kept through failure (light, 1440) edited",
+    "savedNotes": "Notes kept through failure (light, 1440) edited",
+    "writes": [
+      {
+        "title": "Title kept through failure (light, 1440) edited"
+      },
+      {
+        "notes": "Notes kept through failure (light, 1440) edited"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "scheme": "light",
+    "width": 390,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-CZYxDRHR.js"
+    ],
+    "draftTitle": "Title kept through failure (light, 390)",
+    "draftNotes": "Notes kept through failure (light, 390)",
+    "savedTitle": "Title kept through failure (light, 390) edited",
+    "savedNotes": "Notes kept through failure (light, 390) edited",
+    "writes": [
+      {
+        "title": "Title kept through failure (light, 390) edited"
+      },
+      {
+        "notes": "Notes kept through failure (light, 390) edited"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "scheme": "dark",
+    "width": 1440,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-CZYxDRHR.js"
+    ],
+    "draftTitle": "Title kept through failure (dark, 1440)",
+    "draftNotes": "Notes kept through failure (dark, 1440)",
+    "savedTitle": "Title kept through failure (dark, 1440) edited",
+    "savedNotes": "Notes kept through failure (dark, 1440) edited",
+    "writes": [
+      {
+        "title": "Title kept through failure (dark, 1440) edited"
+      },
+      {
+        "notes": "Notes kept through failure (dark, 1440) edited"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "scheme": "dark",
+    "width": 390,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-CZYxDRHR.js"
+    ],
+    "draftTitle": "Title kept through failure (dark, 390)",
+    "draftNotes": "Notes kept through failure (dark, 390)",
+    "savedTitle": "Title kept through failure (dark, 390) edited",
+    "savedNotes": "Notes kept through failure (dark, 390) edited",
+    "writes": [
+      {
+        "title": "Title kept through failure (dark, 390) edited"
+      },
+      {
+        "notes": "Notes kept through failure (dark, 390) edited"
+      }
+    ],
+    "pageErrors": []
+  }
+]
