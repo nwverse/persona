@@ -193,14 +193,14 @@ fun JSidebarColumn(
                 .clickable(enabled = shown, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
         }
     }
-    if (drag == null) {
-        Box(modifier.fillMaxSize()) { panes() }
-    } else {
-        // The pictures record `panes` only. The overlay is a sibling, drawn above them (`SplitColumnControl.swift:196`).
-        Box(modifier.fillMaxSize().then(drag.gestureModifier(width, shown, detailAtRoot, overlay))) {
-            Box(Modifier.fillMaxSize().then(drag.recordModifier())) { panes() }
-            ColumnDragOverlay(drag)
-        }
+    // One slot for the page. A second branch when the drag controller appears (a phone unfolding into a regular
+    // window) composed the Assistant route twice in one frame. The pictures record `panes` only. The overlay is a
+    // sibling, drawn above them (`SplitColumnControl.swift:204`).
+    val gesture = if (drag != null) drag.gestureModifier(width, shown, detailAtRoot, overlay) else Modifier
+    val record = if (drag != null) drag.recordModifier() else Modifier
+    Box(modifier.fillMaxSize().then(gesture)) {
+        Box(Modifier.fillMaxSize().then(record)) { panes() }
+        if (drag != null) ColumnDragOverlay(drag)
     }
 }
 

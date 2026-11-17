@@ -106,7 +106,7 @@ class SidebarColumnDragShotsTest {
             } else {
                 assertEquals("$prefix $mode page edge", start.getPixel(farX, y), mid.getPixel(farX, y))
             }
-            // Hold the clock on the fade's first frame: the spring has finished, the overlay is still up (`:270`).
+            // Hold the clock on the fade's first frame: the spring has finished, the overlay is still up (`:278`).
             rule.mainClock.autoAdvance = false
             rule.runOnIdle {
                 controller.end(2000f)

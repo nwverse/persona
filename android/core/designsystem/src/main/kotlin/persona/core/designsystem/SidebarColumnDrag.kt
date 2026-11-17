@@ -53,13 +53,13 @@ import kotlin.math.roundToInt
  * The foldable list column following a finger, copying iOS `SplitColumnControl` (`apple/Persona/Views/SplitColumnControl.swift`)
  * and `Theme.Split` (`apple/Shared/Design/Theme.swift:45-61`). Assistant history and the Agents list only.
  *
- * The line is 1:1 with the finger (`SplitColumnControl.swift:246`). Pictures taken when the drag begins are stretched,
- * so the column does not lay out on each move (`:289-297`, `:321-328`). Release uses the flick at 500 pt/s, otherwise
- * half the width (`:256`), then a 0.28 s bounce-0 spring with the finger's velocity (`:284`) and a 0.2 s fade (`:270-275`).
- * Reduce Motion jumps the line and still fades (`:278-282`).
+ * The line is 1:1 with the finger (`SplitColumnControl.swift:254`). Pictures taken when the drag begins are stretched,
+ * so the column does not lay out on each move (`:300-306`, `:330-337`). Release uses the flick at 500 pt/s, otherwise
+ * half the width (`:264`), then a 0.28 s bounce-0 spring with the finger's velocity (`:293`) and a 0.2 s fade (`:277-286`).
+ * Reduce Motion jumps the line and still fades (`:287-291`).
  */
 internal object ColumnDrag {
-    /** `gestureRecognizerShouldBegin`: `abs(v.x) > abs(v.y) * 1.5` (`SplitColumnControl.swift:136`, `:145`). */
+    /** `gestureRecognizerShouldBegin`: `abs(v.x) > abs(v.y) * 1.5` (`SplitColumnControl.swift:137`, `:145`). */
     const val angle = 1.5f
     /** `Theme.Split.dragBlur` (`Theme.swift:47`). */
     const val dragBlur = 0.8f
@@ -73,15 +73,15 @@ internal object ColumnDrag {
     const val settleMs = 280
     /** `Theme.Split.fade` (`Theme.swift:55`): 0.2 s. Not `Tokens.Motion.Conceal`. */
     const val fadeMs = 200
-    /** `Theme.Split.settle` bounce 0 (`SplitColumnControl.swift:284`). */
+    /** `Theme.Split.settle` bounce 0 (`SplitColumnControl.swift:293`). */
     const val settleBounce = 0f
-    /** Half of `Theme.Size.tapTarget` (`Theme.swift:581`, `SplitColumnControl.swift:136`). Equal to `Tokens.MinTouch.ios / 2`. */
+    /** Half of `Theme.Size.tapTarget` (`Theme.swift:585`, `SplitColumnControl.swift:137`). Equal to `Tokens.MinTouch.ios / 2`. */
     const val edge = 22f
     /** `Theme.Split.guide` (`Theme.swift:58`). Equal to `Tokens.Size.bar`. */
     const val guide = 3f
     /**
      * Stand-in for a full `UIBlurEffect.systemUltraThinMaterial`. UIKit does not publish that blur's radius
-     * (`SplitColumnControl.swift:229-233`). The fraction ramps with [columnDragBlur]; this is only how many dp that
+     * (`SplitColumnControl.swift:238`). The fraction ramps with [columnDragBlur]; this is only how many dp that
      * fraction is multiplied by. Not a measured iOS value.
      */
     val fullMaterial = Tokens.Size.iconXS
@@ -95,7 +95,7 @@ internal enum class DragStep {
 
 /**
  * Open from the leading edge while the column is hidden and the detail is at its root; close from the column's edge.
- * `SplitColumnControl.swift:131-146` and `canGoBack` `:161-169`. A rightward drag on the column edge is not ours
+ * `SplitColumnControl.swift:131-146` and `canGoBack` `:160-169`. A rightward drag on the column edge is not ours
  * (`:144-145`). The angle test is strict (`>`).
  *
  * iOS reads `location.x` from the left of the window and has no layout-direction branch. [startX] is that x.
@@ -120,7 +120,7 @@ internal fun columnDragTakeOver(
     return null
 }
 
-/** `min(width, max(0, (opening ? 0 : width) + dx))` (`SplitColumnControl.swift:246`). No rubber band. */
+/** `min(width, max(0, (opening ? 0 : width) + dx))` (`SplitColumnControl.swift:254`). No rubber band. */
 internal fun columnDragLine(opening: Boolean, width: Float, dx: Float): Float {
     val start = if (opening) 0f else width
     return (start + dx).coerceIn(0f, width.coerceAtLeast(0f))
@@ -129,35 +129,35 @@ internal fun columnDragLine(opening: Boolean, width: Float, dx: Float): Float {
 /**
  * A fling faster than [ColumnDrag.flingDpPerSec] decides; otherwise past halfway stays open.
  * Exactly the fling threshold uses the half rule (`abs(velocity) > fling`). Exactly half stays closed (`line > width / 2`).
- * `SplitColumnControl.swift:256`.
+ * `SplitColumnControl.swift:264`.
  */
 internal fun columnDragShows(line: Float, width: Float, velocity: Float): Boolean =
     if (abs(velocity) > ColumnDrag.flingDpPerSec) velocity > 0f else line > width / 2f
 
 /**
- * UIKit `initialSpringVelocity` is `distance == 0 ? 0 : velocity / distance` (`SplitColumnControl.swift:284`).
+ * UIKit `initialSpringVelocity` is `distance == 0 ? 0 : velocity / distance` (`SplitColumnControl.swift:293`).
  * Compose's `Animatable` velocity is units per second, which is this share times the distance, the finger velocity.
  */
 internal fun columnDragVelocityShare(velocity: Float, distance: Float): Float =
     if (distance == 0f) 0f else velocity / distance
 
-/** `min(1, abs(dx) / Theme.Split.blurReach) * Theme.Split.dragBlur` (`SplitColumnControl.swift:248`). [dx] is in dp. */
+/** `min(1, abs(dx) / Theme.Split.blurReach) * Theme.Split.dragBlur` (`SplitColumnControl.swift:256`). [dx] is in dp. */
 internal fun columnDragBlur(dx: Float): Float = min(1f, abs(dx) / ColumnDrag.blurReach) * ColumnDrag.dragBlur
 
 internal fun columnDragBlurRadius(dxDp: Float, fullMaterial: Dp): Dp = fullMaterial * columnDragBlur(dxDp)
 
-/** `Theme.Split.overDim * line / width` (`SplitColumnControl.swift:294`). The over layout only. */
+/** `Theme.Split.overDim * line / width` (`SplitColumnControl.swift:303`). The over layout only. */
 internal fun columnDragOverDim(line: Float, width: Float): Float =
     if (width > 0f) ColumnDrag.overDim * line / width else 0f
 
-/** `min(max(line - guide / 2, 0), window - guide)` (`SplitColumnControl.swift:296`). */
+/** `min(max(line - guide / 2, 0), window - guide)` (`SplitColumnControl.swift:306`). */
 internal fun columnDragGuideX(line: Float, guide: Float, window: Float): Float {
     val limit = window - guide
     if (limit <= 0f) return 0f
     return (line - guide / 2f).coerceIn(0f, limit)
 }
 
-/** The finger-release spring for every style. `UIView.animate(springDuration: Theme.Split.settle, bounce: 0)` (`:284`). */
+/** The finger-release spring for every style. `UIView.animate(springDuration: Theme.Split.settle, bounce: 0)` (`:293`). */
 internal fun columnDragSettleSpring() = IosSpring(ColumnDrag.settleMs, ColumnDrag.settleBounce)
 
 /**
@@ -166,7 +166,12 @@ internal fun columnDragSettleSpring() = IosSpring(ColumnDrag.settleMs, ColumnDra
  */
 internal fun columnDragBlurEffect(radiusPx: Float, sdk: Int = Build.VERSION.SDK_INT): androidx.compose.ui.graphics.RenderEffect? {
     if (sdk < Build.VERSION_CODES.S || radiusPx < 1f) return null
-    return RenderEffect.createBlurEffect(radiusPx, radiusPx, Shader.TileMode.CLAMP).asComposeRenderEffect()
+    // `sdk` is what the unit test passes. Lint only trusts `SDK_INT` around `createBlurEffect` (API 31, minSdk 30).
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        RenderEffect.createBlurEffect(radiusPx, radiusPx, Shader.TileMode.CLAMP).asComposeRenderEffect()
+    } else {
+        null
+    }
 }
 
 /** The last line the overlay drew, in dp. Tests read it; production does not. */
@@ -215,8 +220,9 @@ internal class ColumnDragController {
         columnFrozen = false
         finishRequested = false
         layoutShown = null
-        // Opening records the page first (`:209-216`). Closing over records the column, then the page without it
-        // (`:217-223`). Closing beside records both and does not move the layout until release (`:198`, `:257-262`).
+        // Opening records the page first (`:206`), then the column after the column is shown (`:216-224`).
+        // Closing over records the column, then the page without it (`:225-231`).
+        // Closing beside records both and does not move the layout until release (`:199`; layout under the pictures is `:266-271`).
         step = when {
             opening -> DragStep.OpenPage
             over -> DragStep.ShutOverColumn
@@ -239,7 +245,7 @@ internal class ColumnDragController {
 
     /**
      * The draw recorded a picture. Advance one snapshot phase.
-     * iOS takes both pictures inside `begin` before the gesture returns (`SplitColumnControl.swift:209-223`).
+     * iOS takes both pictures inside `begin` before the gesture returns (`SplitColumnControl.swift:206-231`).
      * Android records in the draw that shows that phase, then advances on the next main-thread turn.
      */
     fun onPicture() {
@@ -248,7 +254,7 @@ internal class ColumnDragController {
                 if (!pageSeen || pageFrozen) return
                 pageFrozen = true
                 columnSeen = false
-                // Show the column under the picture, without the button animation (`:211-215`). Parent `shown`
+                // Show the column under the picture, without the button animation (`:217-223`). Parent `shown`
                 // waits until release (`SplitNavigation.swift:491-495` ignores settle while the drag is active).
                 layoutShown = true
                 step = DragStep.OpenColumn
@@ -334,13 +340,13 @@ private fun ColumnDragRuntime(
                 val lineDp = current / density.density
                 val velocityDp = controller.fingerVelocityPx / density.density
                 val shows = columnDragShows(lineDp, widthDp, velocityDp)
-                // `dragging` is already false before this settle (`:264-265`), so the beside choice can be remembered.
+                // `dragging` is already false before this settle (`:272-273`), so the beside choice can be remembered.
                 onSettle(shows)
                 controller.layoutShown = shows
                 val target = if (shows) widthPx else 0f
                 controller.lineAnim.snapTo(current)
                 if (reduceMotion) {
-                    // The line jumps. The fade below still runs (`:278-282`).
+                    // The line jumps. The fade below still runs (`:287-291`).
                     controller.lineAnim.snapTo(target)
                 } else {
                     val initial = if (target == current) 0f else controller.fingerVelocityPx
@@ -351,7 +357,7 @@ private fun ColumnDragRuntime(
             }
             DragStep.Fade -> {
                 controller.fadeAnim.snapTo(1f)
-                // `UIView.animate(withDuration: Theme.Split.fade)` (`:270`). The curve is the system ease; Compose's
+                // `UIView.animate(withDuration: Theme.Split.fade)` (`:278`). The curve is the system ease; Compose's
                 // default tween is not asserted to be that curve.
                 controller.fadeAnim.animateTo(0f, tween(ColumnDrag.fadeMs))
                 if (!live()) return@LaunchedEffect
@@ -388,7 +394,7 @@ internal fun ColumnDragController.recordModifier(): Modifier {
             recorded = true
         }
         drawContent()
-        // After this draw, so the layer holds the pixels iOS snapshots in `begin` (`:209-223`).
+        // After this draw, so the layer holds the pixels iOS snapshots in `begin` (`:206-231`).
         if (recorded) postPictureAdvance()
     }
 }
@@ -403,7 +409,7 @@ internal fun ColumnDragController.gestureModifier(
     val shownState = rememberUpdatedState(shown)
     val rootState = rememberUpdatedState(detailAtRoot)
     val widthState = rememberUpdatedState(width)
-    // The over/beside choice is the column's overlay flag, frozen when the finger is accepted (`:191-193`).
+    // The over/beside choice is the column's overlay flag, frozen when the finger is accepted (`:199`).
     val overState = rememberUpdatedState(overlay)
     // `pointerInput`'s key stays put so a phase change does not drop the finger (`SplitColumnControl` keeps one pan).
     return Modifier.pointerInput(this) {
@@ -497,14 +503,14 @@ internal fun ColumnDragOverlay(controller: ColumnDragController) {
     val blurDp = blurPx / density.density
     val radiusPx = with(density) { columnDragBlurRadius(blurDp, ColumnDrag.fullMaterial).toPx() }
     val dim = if (controller.over) {
-        // `UIColor.black` (`SplitColumnControl.swift:201`) at `Theme.Split.overDim * line / width` (`:294`).
+        // `UIColor.black` (`SplitColumnControl.swift:210`) at `Theme.Split.overDim * line / width` (`:303`).
         // `mediaBackdrop` is black in every style, so this file adds no color literal.
         PersonaTheme.palette.mediaBackdrop.copy(alpha = columnDragOverDim(linePx, controller.widthPx))
     } else Color.Unspecified
     val alpha = if (controller.step == DragStep.Fade) controller.fadeAnim.value else 1f
     val guidePx = with(density) { Tokens.Size.bar.toPx() }
     androidx.compose.runtime.SideEffect { columnDragDrawnLineDp = linePx / density.density }
-    // Above the column's own zIndex while it is over the page. iOS draws page, dim, column, blur, then the guide (`:198-237`).
+    // Above the column's own zIndex while it is over the page. iOS draws page, dim, column, blur, then the guide (`:206-245`).
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(2f).clipToBounds().graphicsLayer { this.alpha = alpha }) {
         val windowPx = with(density) { maxWidth.toPx() }
         androidx.compose.foundation.Canvas(Modifier.fillMaxSize().graphicsLayer {
@@ -514,13 +520,13 @@ internal fun ColumnDragOverlay(controller: ColumnDragController) {
                 opening = controller.opening, dim = dim)
         }
         val guideX = columnDragGuideX(linePx, guidePx, windowPx)
-        // The guide is a sibling of the blurred canvas, so the blur does not cover it (`:233-237` adds it after the blur).
+        // The guide is a sibling of the blurred canvas, so the blur does not cover it (`:242-245` adds it after the blur).
         Box(Modifier.offset { IntOffset(guideX.roundToInt(), 0) }.width(Tokens.Size.bar).fillMaxHeight()
             .background(PersonaTheme.palette.accent))
     }
 }
 
-/** `SplitColumnControl.draw` (`:321-328`): source start maps to dest start, clipped to the strip. */
+/** `SplitColumnControl.draw` (`:330-337`): source start maps to dest start, clipped to the strip. */
 internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawColumnDragScene(
     page: GraphicsLayer,
     column: GraphicsLayer,
@@ -531,7 +537,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawColumnDragScen
     dim: Color,
 ) {
     val window = size.width
-    // Opening, and any over drag, takes the page from the whole window (`:198`). Closing beside takes it from the column edge.
+    // Opening, and any over drag, takes the page from the whole window (`:206`). Closing beside takes it from the column edge.
     val pageStart = if (opening || !beside) 0f else columnWidthPx
     val destStart = if (beside) linePx else 0f
     drawStrip(page, pageStart, window, destStart, window)

@@ -71,7 +71,7 @@ private class AgentsOverlayScene(
         // A row pick, including a new detail on the same list, closes only the overlaid column.
         LaunchedEffect(detail?.contentKey) { shown.value = false }
         // The Agents list drags like iOS when `listKey != nil` (`SplitNavigation.swift:237`). A pushed detail keeps
-        // the edge (`SplitColumnControl.swift:161-169`); `entries.size <= 2` is the list plus its root detail.
+        // the edge (`SplitColumnControl.swift:160-169`); `entries.size <= 2` is the list plus its root detail.
         JSidebarColumn(sidebar = { entries.first().Content() }, width = PaneSplits.DefaultLeft.dp,
             pageStart = PaneSplits.DefaultLeft.dp, shown = shown.value, overlay = true,
             onDismiss = { shown.value = false }, insetSidebar = false, drags = true,

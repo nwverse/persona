@@ -118,13 +118,13 @@ class SidebarColumnDragGestureTest {
                 }
             }
         }
-        // x=80 is outside the 22dp leading edge (`SplitColumnControl.swift:136`), so the row keeps the drag.
+        // x=80 is outside the 22dp leading edge (`SplitColumnControl.swift:137`), so the row keeps the drag.
         rule.onNodeWithTag("page").performTouchInput {
             swipe(Offset(80f, 300f), Offset(240f, 300f), durationMillis = 200)
         }
         rule.waitForIdle()
         assertTrue(pageSwiped > 0)
-        // Shown column: x=40 is not the trailing edge (`:140-145`). The page under the scrim is covered.
+        // Shown column: x=40 is not the trailing edge (`:146`). The page under the scrim is covered.
         rule.runOnIdle { shown = true }
         rule.waitForIdle()
         rule.onNodeWithTag("column").performTouchInput {
@@ -164,15 +164,15 @@ class SidebarColumnDragGestureTest {
                 }
             }
         }
-        // Past half, slower than 500 dp/s: stays open (`:256`). 220 > 160.
+        // Past half, slower than 500 dp/s: stays open (`:264`). 220 > 160.
         rule.onNodeWithTag("page").performTouchInput { swipe(Offset(8f, 180f), Offset(220f, 180f), durationMillis = 800) }
         flushUntil("root") { columnDragControllerForTest?.step == DragStep.Idle }
         assertTrue("open step=${columnDragControllerForTest?.step}", shown)
-        // Slow, and the line ends at 150, short of half: stays closed. 310 is within 22dp of the edge (`:140`).
+        // Slow, and the line ends at 150, short of half: stays closed. 310 is within 22dp of the edge (`:146`).
         rule.onNodeWithTag("root").performTouchInput { swipe(Offset(310f, 220f), Offset(140f, 220f), durationMillis = 800) }
         flushUntil("root") { columnDragControllerForTest?.step == DragStep.Idle }
         assertTrue("close step=${columnDragControllerForTest?.step}", !shown)
-        // A flick faster than 500 dp/s opens even though the finger stops short of half (`:256`).
+        // A flick faster than 500 dp/s opens even though the finger stops short of half (`:264`).
         rule.onNodeWithTag("page").performTouchInput {
             swipeWithVelocity(Offset(8f, 260f), Offset(70f, 260f), endVelocity = 2000f)
         }
