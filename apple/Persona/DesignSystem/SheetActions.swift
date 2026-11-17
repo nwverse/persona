@@ -42,13 +42,17 @@ struct SheetClose: ToolbarContent {
 /// A verb that says more (Send, Connect, Install) stays a word at `.confirmationAction`.
 struct SheetConfirm: ToolbarContent {
     private let id: String
+    private let name: String?
     private let disabled: Bool
     private let busy: Bool
     private let action: () -> Void
 
-    /// `busy`: a spinner in its place while the save runs.
-    init(id: String = "sheet-confirm", disabled: Bool = false, busy: Bool = false, action: @escaping () -> Void) {
+    /// `name`: what VoiceOver reads, the word the ✓ stands for (Save, Add); the system's Done without it. `busy`: a
+    /// spinner in its place while the save runs.
+    init(id: String = "sheet-confirm", name: String? = nil, disabled: Bool = false, busy: Bool = false,
+         action: @escaping () -> Void) {
         self.id = id
+        self.name = name
         self.disabled = disabled
         self.busy = busy
         self.action = action
@@ -58,6 +62,11 @@ struct SheetConfirm: ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
             if busy {
                 ProgressView().accessibilityIdentifier(id)
+            } else if let name {
+                Button(role: .confirm, action: action)
+                    .disabled(disabled)
+                    .accessibilityLabel(Text(name))
+                    .accessibilityIdentifier(id)
             } else {
                 Button(role: .confirm, action: action)
                     .disabled(disabled)
