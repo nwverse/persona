@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -84,17 +85,19 @@ func TestUsageLimitRuleNewerLimitOutlivesInFlightPass(t *testing.T) {
 // A failed probe that reports a later weekly reset keeps refusing after the old short window passes.
 func TestUsageLimitRuleLaterResetOutlivesOldWindow(t *testing.T) {
 	s, f := launcherHealthHubOn(t, newStorelessService)
-	ctx := context.Background()
-	shortReset, weeklyReset := time.Now().Add(300*time.Millisecond), time.Now().UTC().Add(7*24*time.Hour).Truncate(time.Minute)
-	seedUsageLimit(t, s, "l4", "You've hit your weekly limit", &shortReset)
-	f.checks["l4/work"] = proto.LauncherCheck{Error: fmt.Sprintf("You've hit your weekly limit · resets %s (UTC)", weeklyReset.Format("Jan 2, 3:04pm"))}
-	if _, bad := s.launcherUnusableNow(ctx, "l4", "work"); !bad {
-		t.Fatal("the weekly limit did not refuse the start")
-	}
-	time.Sleep(time.Until(shortReset.Add(50 * time.Millisecond)))
-	if r, bad := s.launcherUnusableNow(ctx, "l4", "work"); !bad {
-		t.Fatalf("the weekly limit was dropped at the old short reset: %+v", r)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		shortReset, weeklyReset := time.Now().Add(300*time.Millisecond), time.Now().UTC().Add(7*24*time.Hour).Truncate(time.Minute)
+		seedUsageLimit(t, s, "l4", "You've hit your weekly limit", &shortReset)
+		f.checks["l4/work"] = proto.LauncherCheck{Error: fmt.Sprintf("You've hit your weekly limit · resets %s (UTC)", weeklyReset.Format("Jan 2, 3:04pm"))}
+		if _, bad := s.launcherUnusableNow(ctx, "l4", "work"); !bad {
+			t.Fatal("the weekly limit did not refuse the start")
+		}
+		<-time.After(time.Until(shortReset.Add(50 * time.Millisecond))) // the bubble's clock
+		if r, bad := s.launcherUnusableNow(ctx, "l4", "work"); !bad {
+			t.Fatalf("the weekly limit was dropped at the old short reset: %+v", r)
+		}
+	})
 }
 
 // A bare "usage limit reached" names neither family nor reset: the known Opus scope and reset stay, so a later Sonnet
@@ -323,15 +326,17 @@ func TestUsageLimitRuleLateFoldInvalidatesInFlightPass(t *testing.T) {
 // A known Opus reset says nothing of a Sonnet limit whose reset is unknown: once it passes, Sonnet is probed first.
 func TestUsageLimitRuleUnknownFamilyOutlivesOtherReset(t *testing.T) {
 	s, f := launcherHealthHubOn(t, newStorelessService)
-	ctx := context.Background()
-	reset := time.Now().Add(300 * time.Millisecond)
-	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Opus limit", resetsAt: &reset, source: healthSourceSession})
-	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", source: healthSourceSession})
-	f.checks["l4/work"] = proto.LauncherCheck{Error: "You've hit your Sonnet limit"}
-	<-time.After(time.Until(reset.Add(50 * time.Millisecond)))
-	if mid, _, err := s.startTaskAgent(ctx, &PlanTask{Machine: "l4", Cwd: "/work", Launcher: "work", Model: "sonnet", MachinePolicy: machineFixed}, false); err == nil {
-		t.Fatalf("Opus's reset admitted a Sonnet limit of unknown reset: machine=%q probes=%d record=%+v", mid, checkedCount(f, "l4/work"), healthState(s, "l4", "work"))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		reset := time.Now().Add(300 * time.Millisecond)
+		s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Opus limit", resetsAt: &reset, source: healthSourceSession})
+		s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", source: healthSourceSession})
+		f.checks["l4/work"] = proto.LauncherCheck{Error: "You've hit your Sonnet limit"}
+		<-time.After(time.Until(reset.Add(50 * time.Millisecond))) // the bubble's clock
+		if mid, _, err := s.startTaskAgent(ctx, &PlanTask{Machine: "l4", Cwd: "/work", Launcher: "work", Model: "sonnet", MachinePolicy: machineFixed}, false); err == nil {
+			t.Fatalf("Opus's reset admitted a Sonnet limit of unknown reset: machine=%q probes=%d record=%+v", mid, checkedCount(f, "l4/work"), healthState(s, "l4", "work"))
+		}
+	})
 }
 
 // An agent's turn that meets the Opus limit with a later reset is not "known already" for being before another
