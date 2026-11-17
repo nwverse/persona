@@ -2138,7 +2138,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
 	streak := s.updateRun(run, runFailed, text)
-	run.Error = text
+	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
 	name := t.labelIn(s.lang(ctx))
 	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)

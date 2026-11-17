@@ -8,6 +8,13 @@ model-written summaries without altering literal backslash-u0000 text. Exercise 
 real PostgreSQL: an in-memory JSON store accepts the very payload the production database refuses.
 If saving an assessment fails, expose the error and signal supervision without counting undurable evidence.
 A history-write failure must not suppress escalation from an assessment already committed with its schedule.
+Progress also depends on identity and evidence quality, not just timestamps: use the persisted conversation origin
+to exclude every past patrol conversation, and retain per-Agent unreadable markers so a first successful read cannot
+invent progress. Retain older known evidence so partial node failures cannot hide a real change, without suppressing
+newly linked workers' genuine output. Equal-time runs need their distinct
+IDs and dispatch order when recovering a delayed history write. Recover a watcher's evicted history row under the
+same ID, within the existing cap; history retention must not determine whether a completed run is assessed.
+Runtime failures and their automatic retries belong to the scheduler's failure handling, not the no-progress count.
 
 ## Journal recovery before changing live update files (#6921)
 

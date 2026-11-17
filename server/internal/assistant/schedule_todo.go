@@ -23,10 +23,11 @@ type ScheduleTodoAssessment struct {
 }
 
 type scheduleTodoSnapshot struct {
-	Answers  map[string]string `json:"answers,omitempty"`
-	Criteria map[string]string `json:"criteria,omitempty"`
-	Report   string            `json:"report,omitempty"`
-	Unknown  bool              `json:"unknown,omitempty"`
+	Answers    map[string]string `json:"answers,omitempty"`
+	Criteria   map[string]string `json:"criteria,omitempty"`
+	Report     string            `json:"report,omitempty"`
+	Unknown    bool              `json:"unknown,omitempty"`
+	Unreadable map[string]bool   `json:"unreadable,omitempty"` // Agent identities whose evidence could not be read
 }
 
 func (v scheduleTodoSnapshot) validate() error {
@@ -40,6 +41,11 @@ func (v scheduleTodoSnapshot) validate() error {
 	}
 	if strings.ContainsRune(v.Report, 0) {
 		return errors.New("progress snapshot contains NUL")
+	}
+	for key := range v.Unreadable {
+		if strings.ContainsRune(key, 0) {
+			return errors.New("progress snapshot contains NUL")
+		}
 	}
 	return nil
 }
@@ -130,6 +136,19 @@ func (s *Service) scheduledTodoSnapshot(ctx context.Context, task Task, run Sche
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	var origins map[string]shownOrigin
+	if len(t.Agents) > 0 {
+		var read bool
+		origins, read = s.conversationOrigins()
+		if !read {
+			out.Unknown = true
+			out.Unreadable = map[string]bool{}
+			for _, a := range t.Agents {
+				out.Unreadable[evidenceHash([2]string{a.MachineID, a.SessionID})] = true
+			}
+			return out, true
+		}
+	}
 	for _, a := range t.Agents {
 		if a.ReleasedAt != nil || a.DismissedAt != nil ||
 			a.MachineID == run.MachineID && a.SessionID == run.SessionID ||
@@ -137,15 +156,23 @@ func (s *Service) scheduledTodoSnapshot(ctx context.Context, task Task, run Sche
 			a.MachineID == task.RunMachineID && a.SessionID == task.RunSessionID {
 			continue
 		}
+		if o := origins[a.SessionID]; o.machine == a.MachineID && o.origin == OriginTask && o.ref == task.ID {
+			continue // Origin ownership outlives rotation, bounded run history and manager restarts.
+		}
 		items, read := s.lastTurnItems(ctx, a.MachineID, a.SessionID)
+		key := evidenceHash([2]string{a.MachineID, a.SessionID})
 		if !read {
 			out.Unknown = true
+			if out.Unreadable == nil {
+				out.Unreadable = map[string]bool{}
+			}
+			out.Unreadable[key] = true
 			continue
 		}
 		_, answer := turnExchange(items)
 		if answer != "" && !apiErrorText(answer) {
 			// Hash the pair, not a NUL-delimited string that JSONB cannot store.
-			out.Answers[evidenceHash([2]string{a.MachineID, a.SessionID})] = evidenceHash(answer)
+			out.Answers[key] = evidenceHash(answer)
 		}
 	}
 	return out, true
@@ -153,7 +180,8 @@ func (s *Service) scheduledTodoSnapshot(ctx context.Context, task Task, run Sche
 
 func scheduledTodoAdvanced(before, after scheduleTodoSnapshot) bool {
 	for agent, answer := range after.Answers {
-		if answer != "" && before.Answers[agent] != answer {
+		old, known := before.Answers[agent]
+		if answer != "" && old != answer && (known || !before.Unknown && !before.Unreadable[agent]) {
 			return true
 		}
 	}
@@ -162,7 +190,7 @@ func scheduledTodoAdvanced(before, after scheduleTodoSnapshot) bool {
 			return true
 		}
 	}
-	return after.Report != "" && after.Report != before.Report
+	return after.Report != "" && after.Report != before.Report && (before.Report != "" || !before.Unknown)
 }
 
 func retainTodoEvidence(before, after scheduleTodoSnapshot) scheduleTodoSnapshot {
@@ -184,10 +212,14 @@ func retainTodoEvidence(before, after scheduleTodoSnapshot) scheduleTodoSnapshot
 }
 
 func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run ScheduleRun) {
-	if task.TodoID == "" || task.Repeat == repeatOnce {
+	if task.TodoID == "" || task.Repeat == repeatOnce || run.ID == "" {
 		return
 	}
-	after, active := s.scheduledTodoSnapshot(ctx, task, run)
+	var after scheduleTodoSnapshot
+	var active bool
+	if run.Status != runFailed {
+		after, active = s.scheduledTodoSnapshot(ctx, task, run)
+	}
 	reason := run.Error
 	if reason == "" {
 		if items, ok := s.lastTurnItems(ctx, run.MachineID, run.SessionID); ok {
@@ -201,12 +233,25 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 	}
 	i := sc.indexLocked(task.ID)
 	j := slices.IndexFunc(sc.runs, func(r ScheduleRun) bool { return r.ID == run.ID })
-	if i < 0 || j < 0 || sc.tasks[i].TodoID != task.TodoID || sc.tasks[i].Repeat == repeatOnce {
+	if i < 0 || sc.tasks[i].TodoID != task.TodoID || sc.tasks[i].Repeat == repeatOnce {
 		sc.mu.Unlock()
 		return
 	}
+	evicted := j < 0
+	if evicted {
+		// The watcher still owns the original identity even after unrelated runs evicted its row.
+		sc.runs = append(sc.runs, run)
+		if len(sc.runs) > maxRuns {
+			sc.runs = slices.Clone(sc.runs[len(sc.runs)-maxRuns:])
+		}
+		j = len(sc.runs) - 1
+	}
 	cur := sc.tasks[i]
-	if old := cur.TodoProgress; old != nil && old.Run == run.ID && old.Assessment.State != "" {
+	failed := run.Status == runFailed || sc.runs[j].Status == runFailed
+	if failed {
+		sc.runs[j].Status = runFailed
+		sc.runs[j].TodoProgress = &ScheduleTodoAssessment{TodoID: task.TodoID, State: "not_run", Reason: reason}
+	} else if old := cur.TodoProgress; old != nil && old.Run == run.ID && old.Assessment.State != "" {
 		// Recover a history write that failed after the schedule's assessment was durable.
 		result := old.Assessment
 		sc.runs[j].TodoProgress = &result
@@ -216,7 +261,9 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 		progress := scheduleTodoProgress{Run: run.ID, At: run.At, Snapshot: after}
 		before := task.todoBefore
 		if old := cur.TodoProgress; old != nil {
-			if old.At.After(run.At) {
+			oldIndex := slices.IndexFunc(sc.runs, func(r ScheduleRun) bool { return r.ID == old.Run })
+			if old.At.After(run.At) || old.Run != run.ID && old.At.Equal(run.At) &&
+				(evicted || oldIndex < 0 || j < oldIndex) {
 				result.State = "superseded"
 			} else {
 				progress.NoProgress, progress.Signaled, progress.Escalated = old.NoProgress, old.Signaled, old.Escalated
@@ -224,7 +271,22 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 				if progress.EscalationRun == "" && old.NoProgress >= 2 {
 					progress.EscalationRun = old.Run // recover a partial write made before this field existed
 				}
-				before = &old.Snapshot
+				baseline := old.Snapshot
+				legacyUnknown := old.Assessment.State == "unknown" && len(baseline.Unreadable) == 0
+				if before != nil && (len(baseline.Unreadable) > 0 || legacyUnknown) {
+					// Known evidence keeps its older baseline. A first readable answer is only a baseline
+					// when it was already present before dispatch, not proof that this run advanced it.
+					baseline.Answers = maps.Clone(old.Snapshot.Answers)
+					if baseline.Answers == nil {
+						baseline.Answers = map[string]string{}
+					}
+					for agent, answer := range before.Answers {
+						if baseline.Answers[agent] == "" && (baseline.Unreadable[agent] || legacyUnknown) {
+							baseline.Answers[agent] = answer
+						}
+					}
+				}
+				before = &baseline
 			}
 		}
 		switch {
@@ -233,13 +295,13 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 			result.State = "inactive"
 			progress.NoProgress, progress.Signaled, progress.Escalated = 0, false, false
 			progress.EscalationRun = ""
-		case before == nil || before.Unknown:
+		case before == nil:
 			result.State = "unknown"
 		case scheduledTodoAdvanced(*before, after):
 			result.State = "progress"
 			progress.NoProgress, progress.Signaled, progress.Escalated = 0, false, false
 			progress.EscalationRun = ""
-		case after.Unknown:
+		case before.Unknown || after.Unknown || task.todoBefore != nil && task.todoBefore.Unknown:
 			result.State = "unknown"
 		default:
 			progress.NoProgress++
