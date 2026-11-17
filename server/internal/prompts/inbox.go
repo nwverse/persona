@@ -13,6 +13,15 @@ type InboxItem struct {
 
 func RenderInboxItem(it InboxItem) string { return render("inbox/item", it) }
 
+// LarkCLIInboxContext separates the incoming batch from older conversation context.
+type LarkCLIInboxContext struct {
+	Current, History string
+}
+
+func RenderLarkCLIInboxContext(c LarkCLIInboxContext) string {
+	return render("inbox/larkcli_context", c)
+}
+
 // InboxTriage is the system prompt that sorts an item into "Needs You" / "FYI" / "Noise" (inbox/triage).
 type InboxTriage struct {
 	Owner string // "" is the Chinese "you"

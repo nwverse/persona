@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 const (
@@ -197,10 +198,10 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 				newest = t
 			}
 			if message.MessageID != "" {
-				if isBoundAppMessage(message, auth.AppID) {
+				if !conversationMessage(message) || isBoundAppMessage(message, auth.AppID) {
 					// The app bound to lark-cli is Persona's own bot in the
-					// recommended setup. Consume its messages so they cannot form a
-					// feedback loop, while still advancing the cursor and seen ledger.
+					// recommended setup. Consume its messages and non-conversation
+					// events without waking Inbox, but keep cursor/seen progress.
 					c.markSeen(message.MessageID)
 					continue
 				}
@@ -222,7 +223,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	// doesn't lose what search found; the round keeps it and reports the error at the end.
 	direct, directErr := c.sweepDirectChats(ctx)
 	for _, message := range direct {
-		if isBoundAppMessage(message, auth.AppID) {
+		if !conversationMessage(message) || isBoundAppMessage(message, auth.AppID) {
 			c.markSeen(message.MessageID)
 			continue
 		}
@@ -695,8 +696,16 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	if page, err := c.runner.ListMessages(ctx, group.chatID, group.threadID, "", 40); err == nil && len(page.Messages) > 0 {
 		contextMessages = mergeMessages(page.Messages, group.messages)
 	}
+	visible := contextMessages[:0]
+	for _, message := range contextMessages {
+		if conversationMessage(message) && messageKey(message) == group.key {
+			visible = append(visible, message)
+		}
+	}
+	contextMessages = visible
+	currentMessages := append([]adapter.Message(nil), group.messages...)
 	// History can already contain a follow-up which search has not indexed. Only
-	// eligible incoming activity in this chat/topic can supersede the search hit.
+	// unseen eligible activity in this chat/topic can supersede the search hit.
 	c.inboxMu.Lock()
 	_, allChat := c.inboxAllChats[group.chatID]
 	c.inboxMu.Unlock()
@@ -707,11 +716,19 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		if latest.ChatType != "p2p" && group.threadID == "" && !allChat && !messageMentions(message, me) {
 			continue
 		}
+		c.inboxMu.Lock()
+		_, seen := c.inboxSeen[message.MessageID]
+		c.inboxMu.Unlock()
+		if seen {
+			continue
+		}
 		message.ChatType = firstNonEmpty(message.ChatType, latest.ChatType)
 		if len(message.ChatPartner) == 0 {
 			message.ChatPartner = latest.ChatPartner
 		}
 		latest = message
+		currentMessages = append(currentMessages, message)
+		c.markSeen(message.MessageID)
 		group.replied = false
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}
@@ -755,14 +772,27 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
 		tags = append(tags, senderTag)
 	}
+	currentIDs := make(map[string]struct{}, len(currentMessages))
+	for _, message := range currentMessages {
+		currentIDs[message.MessageID] = struct{}{}
+	}
+	var history []adapter.Message
+	for _, message := range contextMessages {
+		if _, current := currentIDs[message.MessageID]; !current {
+			history = append(history, message)
+		}
+	}
 	thing := connector.InboxThing{
-		Thread:   thread,
-		Kind:     kind,
-		Label:    label,
-		Title:    title,
-		Sender:   latest.Sender.Name,
-		Preview:  firstLine(text),
-		Context:  contextText(contextMessages, me),
+		Thread:  thread,
+		Kind:    kind,
+		Label:   label,
+		Title:   title,
+		Sender:  latest.Sender.Name,
+		Preview: firstLine(text),
+		Context: prompts.RenderLarkCLIInboxContext(prompts.LarkCLIInboxContext{
+			Current: contextText(currentMessages, me),
+			History: contextText(history, me),
+		}),
 		At:       messageTime(latest),
 		Last:     latest.MessageID,
 		ReplyTo:  replyTo(lang, name, group.threadID != ""),
@@ -944,6 +974,13 @@ func isBoundAppMessage(message adapter.Message, appID string) bool {
 		return false
 	}
 	return senderIsBot(message.Sender)
+}
+
+// System events are not new conversation requests. Keep real attachments and bot
+// notifications even when their body has no extractable text.
+func conversationMessage(message adapter.Message) bool {
+	return !message.Deleted && !strings.EqualFold(strings.TrimSpace(message.MsgType), "system") &&
+		firstNonEmpty(message.Sender.ID, message.Sender.AppID, message.Sender.OpenBotID) != ""
 }
 
 func (c *Connector) inboxStateForTests() persistedInboxState {
@@ -1159,11 +1196,19 @@ func contextText(messages []adapter.Message, me string) string {
 	var b strings.Builder
 	for _, message := range messages {
 		text := strings.TrimSpace(messageText(message))
+		if text == "" && message.MsgType != "" {
+			text = "[" + message.MsgType + "]"
+		}
 		if text == "" {
 			continue
 		}
 		if b.Len() > 0 {
 			b.WriteString("\n")
+		}
+		if at := messageTime(message); !at.IsZero() {
+			b.WriteString("[")
+			b.WriteString(at.Format(time.RFC3339))
+			b.WriteString("] ")
 		}
 		start := b.Len()
 		name := message.Sender.Name

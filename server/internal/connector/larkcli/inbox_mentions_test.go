@@ -82,8 +82,9 @@ func TestInboxItemContextMarksTheOwnerMention(t *testing.T) {
 	if got.Kind != "mention" {
 		t.Fatalf("kind = %q: %+v", got.Kind, got)
 	}
-	want := "Example peer: @Example other please send the numbers\nExample peer（@了我）: @Example user can you approve the budget today?"
-	if got.Context != want {
-		t.Fatalf("context = %q, want %q", got.Context, want)
+	current := strings.Split(got.Context, "Background history (context only, not new requests):")
+	if len(current) != 2 || !strings.Contains(current[0], "Example peer（@了我）: @Example user can you approve the budget today?") ||
+		!strings.Contains(current[1], "Example peer: @Example other please send the numbers") {
+		t.Fatalf("mention marks or the history boundary were lost: %q", got.Context)
 	}
 }
