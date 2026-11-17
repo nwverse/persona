@@ -2332,9 +2332,9 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 
 ## Embedded code: stored raw, copied per package, read whole on first use (2026-11-10, #3455)
 
-- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it the Agent SDK bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
+- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it one package's bundled bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
 - Keep generated archives byte-for-byte reproducible: no name or time in the gzip header, mode 0644, time 0 and no owner in tar entries, a fixed level, entries in path order (`TestGenerate` runs it twice and compares).
-- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held the 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
+- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held that 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
 - Compressed code is noise to a strings scan. `check_bundle_privacy.py --whole-short` inflates every gzip member it finds in a binary and scans that text as well; a test hides a private word in a member inside binary bytes, after another member and in a member cut short.
 
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
@@ -2681,6 +2681,13 @@ argument even when its shorter description still fits the budget.
 Compare the complete measurement with the fixed main total too. A merged inventory can include the
 extra tool and pass its own updater while exceeding main's allowance. Keep every new schema field
 and shorten equivalent repeated parameter guidance rather than hiding entries or raising the limit.
+
+Regenerating the full catalog may also expose upstream tools or fields missing from main's snapshots.
+Keep those measured too; move space from equivalent parameter guidance before the guarded update,
+and compare the resulting complete total with the fixed main allowance.
+
+Keep a shared request-context hook separate from repository editor UI, so a lazy naming form does
+not pull that editor into its dependency graph just to reuse ownership and lifetime checks.
 
 An automatically merged route inventory can still miss newly registered upstream routes. Regenerate
 it from actual registrations and inspect the classifications; administration routes stay restricted

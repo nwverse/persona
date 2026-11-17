@@ -637,6 +637,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
 -                    PUT /api/v1/assistant/conversations/{id}/model
+-                    PUT /api/v1/assistant/conversations/{id}/tags
 -                    PUT /api/v1/assistant/directions/{id}/name
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/feishu/companions

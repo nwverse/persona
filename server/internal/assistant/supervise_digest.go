@@ -272,6 +272,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 	}
 	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
+	msg.Interject = slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
 	if background {
 		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
 	} else if to != here.Main {
@@ -280,7 +281,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}
 	c, ok := s.session(ctx, here.MachineID, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
+	if !ok || c.Starting || !msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg)) {
 		if !s.queueDigest(to, msg, kept, now, prev) {
 			return false
 		}
@@ -301,9 +302,11 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return accepted
 	}
 	accepted = true
-	b.mu.Lock()
-	b.setQueuedLocked(to, nil)
-	b.mu.Unlock()
+	if !msg.Interject { // an in-turn decision reply can pass an older supervision relay; keep that relay tracked
+		b.mu.Lock()
+		b.setQueuedLocked(to, nil)
+		b.mu.Unlock()
+	}
 	return true
 }
 

@@ -7,7 +7,7 @@ import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sa
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
 import { Group, settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Loading } from "./atoms";
-import { useRepositoryRequestContext } from "./TaskRepositoryBindingsEditor";
+import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
 
 /** Controlled editor: clearing a field is invalid; Use inherited explicitly removes an override. */
 export function WorkspaceRulesEditor({ value, inherited, disabled, diagnostics = [], onChange }: {

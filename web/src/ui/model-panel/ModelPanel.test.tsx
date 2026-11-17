@@ -499,3 +499,55 @@ describe("a long list", () => {
     }
   });
 });
+
+describe("model families", () => {
+  const max = (): PanelProvider => ({
+    id: "claude-max",
+    name: "claude-max",
+    engine: "claude",
+    models: [
+      { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", efforts: [] },
+      { id: "opus", name: "Opus 5.5", resolved: "claude-opus-5-5", efforts: [] },
+      { id: "fable", name: "Fable 5.2", resolved: "claude-fable-5-2", efforts: [] },
+      { id: "claude-fable-5", name: "Fable 5", efforts: [] },
+      { id: "claude-opus-4-8", name: "Opus 4.8", efforts: [] },
+      { id: "claude-opus-4-7", name: "Opus 4.7", efforts: [] },
+    ],
+  });
+  const names = () => rows().map((r) => r.querySelector(".truncate")?.textContent);
+  const fold = (family: string) => document.body.querySelector<HTMLButtonElement>(`[data-panel-fold$="claude:${family}"]`)!;
+
+  it("each family under its name, the newest marked Latest; Earlier versions unfolds and folds; a search finds the folded", async () => {
+    await open({ providers: [max(), codex()], state: { current: null, recommended: [] } });
+    expect([...document.body.querySelectorAll("[data-panel-family]")].map((f) => f.getAttribute("aria-label"))).toEqual(["Claude Fable", "Claude Opus"]);
+    expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Opus 5.5", "GPT 5.5"]);
+    expect(row("Opus 5.5").querySelector("[data-row-latest]")?.textContent).toBe("最新");
+    expect(row("Default (recommended)").querySelector("[data-row-latest]")).toBeNull();
+
+    const opus = fold("opus");
+    expect(opus.textContent).toBe("更早版本 · 2");
+    expect(opus.getAttribute("aria-label")).toBe("Claude Opus：显示 2 个更早版本");
+    expect(opus.getAttribute("aria-expanded")).toBe("false");
+    act(() => opus.click());
+    expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Opus 5.5", "Opus 4.8", "Opus 4.7", "GPT 5.5"]);
+    expect(fold("opus").getAttribute("aria-expanded")).toBe("true");
+    expect(fold("opus").textContent).toBe("收起更早版本");
+    act(() => fold("opus").click());
+    expect(names()).not.toContain("Opus 4.8");
+
+    type(search(), "opus 4.7");
+    expect(names()).toEqual(["Opus 4.7"]);
+    expect(document.body.querySelector("[data-panel-fold]")).toBeNull();
+  });
+
+  it("the older model that runs now stays in its family, and ↑↓ walk the rows shown", async () => {
+    await open({ providers: [max(), codex()], state: { current: { provider: "claude-max", model: "claude-opus-4-7" }, recommended: [], starting: true } });
+    expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Opus 5.5", "Opus 4.7", "GPT 5.5"]);
+    expect(fold("opus").textContent).toBe("更早版本 · 1");
+    const now = row("Opus 4.7");
+    expect(now.hasAttribute("data-current")).toBe(true);
+    act(() => now.focus());
+    await key(now, "ArrowUp");
+    expect(document.activeElement).toBe(row("Opus 5.5"));
+  });
+});
