@@ -88,7 +88,7 @@ describe("settings sidebar groups", () => {
     expect(NAV_GROUPS.map((g) => g.key)).toEqual(["assistant", "device", "hub"]);
     expect(NAV_GROUPS.map((g) => g.tabs)).toEqual([
       ["models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents"],
-      ["general", "notifications", "shortcuts"],
+      ["general", "notifications", "shortcuts", "labs"],
       ["hub", "managers", "avatar", "devices"],
     ]);
     expect(NAV_GROUPS.flatMap((g) => g.tabs).sort()).toEqual([...TABS].sort());

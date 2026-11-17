@@ -6,8 +6,8 @@ import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 
-export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
-export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
+export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
+export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
@@ -48,6 +48,9 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   sources: { label: t("settings-nav.tab_sources"), icon: "inbox", hint: t("settings-nav.hint_sources") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
+  // trial features and new implementations, this browser's (lib/labs.ts, LabsSettings.tsx); the existing sparkles
+  // glyph rather than a new one, as the first screen has no room for another (docs/web/web.md "Labs")
+  labs: { label: t("settings-nav.tab_labs"), icon: "sparkles", hint: t("settings-nav.hint_labs") },
   devices: { label: t("settings-nav.tab_devices"), icon: "key", hint: t("settings-nav.hint_devices") },
   hub: { label: t("settings-nav.tab_hub"), icon: "hub", hint: t("settings-nav.hint_hub") },
   managers: { label: t("settings-nav.tab_managers"), icon: "person", hint: t("settings-nav.hint_managers") },
@@ -59,7 +62,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
 export type NavGroup = "assistant" | "device" | "hub";
 export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
   { key: "assistant", tabs: ["models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
-  { key: "device", tabs: ["general", "notifications", "shortcuts"] },
+  { key: "device", tabs: ["general", "notifications", "shortcuts", "labs"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
 ];
 

@@ -1563,8 +1563,8 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
     The program receives them if mouse mode is enabled, otherwise they are dropped (herdr does not tell us the program's mouse mode). Default is Pass to program: Shift-drag selects locally, Shift+right-click opens the menu above (then right-click is no longer the browser menu).
     Terminal settings › Mouse › Local selection restores the original drag-selection / context-menu behavior, with Shift passing to the program. ⌘ and touch remain local. No hover events sent. Feature `terminal_mouse`.
   - **Mac line-editing keys** (while in control, in xterm's custom key handler, `lineEdit`): ⌘⌫ → ^U, ⌘← → ^A, ⌘→ → ^E, alongside existing Shift+Enter (ESC CR); combinations with extra modifiers are unchanged.
-  - **New terminal settings**: cursor style (Block / Bar / Underline), cursor blink, WebGL rendering (`@xterm/addon-webgl`, loaded on first enable; disabling or losing context disposes it and falls back to default rendering).
-    Stored as `persona.terminal.cursorStyle` / `cursorBlink` / `webgl`; defaults (block, no blink, DOM rendering) write no keys and leave default appearance pixel-identical. Cursor style only affects xterm's cursor; the page-drawn cursor in Wrap mode is unchanged.
+  - **New terminal settings**: cursor style (Block / Bar / Underline) and cursor blink, stored as `persona.terminal.cursorStyle` / `cursorBlink`; defaults (block, no blink) write no keys and leave default appearance pixel-identical. Cursor style only affects xterm's cursor; the page-drawn cursor in Wrap mode is unchanged.
+    The renderer (DOM or WebGL, `persona.terminal.webgl`) is chosen in Settings › Labs ("Labs" above, #9877); Terminal settings shows this terminal's renderer and links there.
   - **Focus policy**: while in control, clicking anywhere in the panel or regaining window focus returns the keyboard to the terminal, unless text is selected, a dialog / menu / overlay is open, focus is in another input (including search), focus is on a control outside the panel, or this terminal is covered by another (`shouldRefocus` in `lib/terminal-details.ts`; page facts in `terminal/focus.ts`). View only never steals focus.
   - **Search** (`terminal/FindBar.tsx`, `@xterm/addon-search`): with terminal focus, ⌘F (Mac) / Ctrl+Shift+F (other OS; Ctrl+F also works when not in control, while ^F belongs to the program in control) opens a find bar at the top of the panel: search as you type, Enter next, Shift+Enter previous, Aa case-sensitive, Esc or × closes (Esc not sent to the program).
     A selected line becomes the initial query. The find bar only acts within the panel and registers no global shortcut. Search scope is in `docs/integrations/terminal.md` section 20.
@@ -1939,6 +1939,61 @@ hello's `features`, `hub_name` and `mesh` are kept in the store. Lark through th
 
 **Request failures** (#3728): `errorText` in `lib/api.ts` explains common failures in the page's language. A 404, `not_found` or a bare `not found` says the item does not exist or this version does not support it yet, and suggests refreshing or checking whether the hub or the computer needs an update; 502 / 503 / 504 say the hub cannot answer right now, other 5xx that the service hit an error, both with retry and check-that-it-runs advice. The HTTP status and the hub's original text stay in brackets for diagnosis; the terminal list's error line stays on one line and shows the whole text on hover. Wrong credentials and other business errors show as before. Code that decides on compatibility or an error code reads the raw `ApiError`, never the explained text.
 For `node_unreachable` and `timeout` (#5031) the hub did answer; the computer did not. `errorText` goes by the code and says what to do next: offline when `delivered` is `none` (check that the computer is on, online and running Persona Link), a connection cut mid-call for any other `node_unreachable` (reconnect, check whether the last action went through), a timeout (check, then try again later). These carry no status in brackets, so offline feedback does not fold them into "can't reach the hub"; the hub's words stay on the `ApiError`.
+
+## Labs
+
+Settings › Labs (#9877; `web/src/lib/labs.ts`, `web/src/views/settings/LabsSettings.tsx`) is the one place for trial
+features and for choosing between a stable and a new implementation of the same thing. It is in the sidebar's "this
+device" group, after Shortcuts. Each entry is a card: its name and a Trial chip, what it does, the choice (a segmented
+control for an implementation choice, a switch for an on / off trial), and four lines: **Default**, **Applies to**,
+**Takes effect** and **Going back**. Entries are grouped by the part of Persona they change (today: Agents).
+
+**Scope and permissions.** Every entry is kept by this browser (`localStorage`), like the page's other per-browser
+settings. It never reaches the hub, another browser, another device or another user, and grants nothing: an entry only
+picks between code paths the page already has and may already run. The page says so under its introduction. An
+instance- or user-wide trial would need a hub-side definition and the hub's existing permission checks; the registry does
+not provide one and no entry needs it yet.
+
+**Definitions.** `LABS` lists every entry with its kind (`choiceLab`: options and a default; `booleanLab`: a default),
+its storage key, scope (`browser`), activation (`new-views`) and the issue that added it. Features read an entry only
+through `readLab` (once, where the feature starts) and the settings page through `useLab`; writes go through `writeLab`.
+No feature adds its own switch for a trial. `LabsSettings.tsx` holds each entry's words in a table typed by the entry ids,
+so a new entry does not compile until it has them in all three languages.
+
+**Values.** The default writes nothing. An entry that had a key before Labs keeps that key and its stored values (an
+option's `raw`), so a saved choice keeps working and an older build reads the same value back. A stored value this build
+does not recognize (another version's, or hand-written) reads as the default, is left in place, and the card says so until
+a choice replaces it. `writeLab` refuses a value the entry does not offer and reports a browser that throws on the write or
+does not read it back; the card then shows an alert and the choice still in effect, never a choice that was not kept. A
+browser that will not let the page read storage shows the default with a note.
+
+**When a change takes effect.** `new-views`: what is already open keeps the value it opened with, and the next one opened
+(or the page after a reload) uses the new one. Nothing running switches implementation midway, and nothing typed is lost.
+
+**Terminal renderer** (the first entry). Single pane terminals (`views/session/terminal/feed.ts`) draw with xterm's DOM
+renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`, its own chunk, loaded only when chosen). Full view always
+uses the DOM renderer and is not affected. It is a browser setting because GPU support differs per browser and machine.
+Its key is `persona.terminal.webgl` with WebGL stored as `1`, the Terminal settings switch's from before Labs.
+- A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals as they are.
+- Terminal settings no longer has its own WebGL switch: its Renderer row says what draws this terminal (Standard, WebGL,
+  or Standard after WebGL stopped) and has a Labs button that opens this page.
+- If WebGL cannot start or its GPU context is lost, that terminal disposes the addon, xterm repaints with the DOM renderer
+  from its unchanged buffer, input keeps flowing, and Labs is set back to Standard so the next terminal does not fail the
+  same way. A toast says so; if Standard could not be saved, it says that instead. A terminal that fell back stays on
+  Standard until it is opened again.
+
+### Adding, graduating and removing an entry
+
+1. **Add** an entry only for a real feature with both paths in the code, where going back is safe: no irreversible data
+   migration, no restored removed implementation, no bypassed security fix. Add it to `LABS` with its issue, its words in
+   `en`, `zh-Hans` and `ja`, a search index entry, and tests for both paths and the fallback. Keep the old path the default
+   until the new one has been used for a while.
+2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
+   in the release notes, and keep the entry for at least one release so people can still go back.
+3. **Remove** after that release: delete the entry, its words and the old path. Stop reading its key; leave stored values
+   alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
+
+An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
 
 ## Developing Persona (#9617)
 

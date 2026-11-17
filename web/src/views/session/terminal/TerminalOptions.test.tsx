@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 // Terminal settings › Appearance: three choices a screen reader names, Match page until another is picked, and the
-// line under the label saying the one chosen.
+// line under the label saying the one chosen. Renderer: what draws this terminal, with the way to Settings › Labs (no
+// switch of its own).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../../i18n";
-import { AppearanceRow } from "./TerminalOptions";
+
+const nav = vi.hoisted(() => ({ to: [] as string[] }));
+vi.mock("../../../lib/router", async (orig) => ({ ...(await orig<typeof import("../../../lib/router")>()), navigate: (to: string) => nav.to.push(to) }));
+
+import { AppearanceRow, RendererRow } from "./TerminalOptions";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,5 +55,28 @@ describe("Appearance in Terminal settings", () => {
     act(() => radios()[0].click());
     expect(localStorage.getItem("persona.terminal.appearance")).toBeNull();
     expect(checked()).toBe(t("session-terminal-terminaloptions.appearance_page"));
+  });
+});
+
+describe("Renderer in Terminal settings", () => {
+  it.each([
+    [{ renderer: "standard", rendererFellBack: false }, "session-terminal-terminaloptions.renderer_standard"],
+    [{ renderer: "webgl", rendererFellBack: false }, "session-terminal-terminaloptions.renderer_webgl"],
+    [{ renderer: "standard", rendererFellBack: true }, "session-terminal-terminaloptions.renderer_fell_back"],
+  ] as const)("says what draws this terminal (%o) and has no switch", (v, line) => {
+    act(() => root.render(<RendererRow v={v} onClose={() => {}} />));
+    expect(host.textContent).toContain(t("session-terminal-terminaloptions.renderer"));
+    expect(host.textContent).toContain(t(line));
+    expect(host.querySelector('[role="switch"]')).toBeNull();
+  });
+
+  it("closes the menu and opens Settings › Labs", () => {
+    nav.to = [];
+    let closed = 0;
+    act(() => root.render(<RendererRow v={{ renderer: "standard", rendererFellBack: false }} onClose={() => closed++} />));
+    const open = [...host.querySelectorAll("button")].find((b) => b.textContent === t("session-terminal-terminaloptions.renderer_open_labs"))!;
+    act(() => open.click());
+    expect(closed).toBe(1);
+    expect(nav.to).toEqual(["/settings?tab=labs"]);
   });
 });

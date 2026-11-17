@@ -38,6 +38,7 @@ import { PersonaPicker } from "./assistant/Persona";
 import { TriageSettings } from "./settings/TriageSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
+import { LabsSettings } from "./settings/LabsSettings";
 import { NotificationSettings } from "./settings/NotificationSettings";
 import { DesktopSettings } from "./settings/DesktopSettings";
 import { DevModeRows } from "./settings/DevModeSettings";
@@ -391,6 +392,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
+              {tab === "labs" && <LabsSettings />}
               {tab === "devices" && <Devices />}
               {tab === "hub" && <>
                 <HubSettings />
