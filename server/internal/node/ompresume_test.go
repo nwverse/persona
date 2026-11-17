@@ -126,6 +126,88 @@ func TestOmpResumeTwoSendsOneTab(t *testing.T) {
 	}
 }
 
+// stoppedOmpForStart is a stopped omp on disk with an idle extension connected, whose resume tab herdr then reports as
+// that omp's pane (what herdr's omp integration does once omp writes its session file).
+func stoppedOmpForStart(t *testing.T, id string) (*Node, *fakeHerdr, *fakeRuntime, string) {
+	t.Helper()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, f, home, rh := piHerdrNode(t)
+	cwd := t.TempDir()
+	file := writeOmpSession(t, ompSessionsDir(home), "-tmp-start", id, "started", cwd, time.Now())
+	rt := ompExtensionIdle(t, rh, "omp-s"+id[len(id)-2:])
+	rt.mu.Lock()
+	rt.answer = func(method string, _ json.RawMessage) (any, error) {
+		if method == "session.items" {
+			return nil, errors.New("no such session")
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	rt.mu.Unlock()
+	ompResumeHerdr(t, f, cwd, id, rt)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && tabStartRE.MatchString(str(c.Params["text"])) {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{ompPaneAgent("w1:p2", cwd, file)}, nil))
+		}
+	})
+	return n, f, rt, cwd
+}
+
+// Two session.start calls resuming the same stopped omp start it once: the second waits on the session's recovery lock
+// and finds it running.
+func TestOmpStartResumeTwiceOneTab(t *testing.T) {
+	id := "01b10000-0000-7000-8000-000000000021"
+	n, f, _, cwd := stoppedOmpForStart(t, id)
+	var wg sync.WaitGroup
+	res := make([]map[string]any, 2)
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res[i], errs[i] = request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "omp", "agent_type": "omp", "resume_session_id": id})
+		}()
+	}
+	wg.Wait()
+	for i := range errs {
+		if errs[i] != nil {
+			t.Fatalf("start %d: %v", i, errs[i])
+		}
+		if s, _ := res[i]["session"].(map[string]any); s["session_id"] != id {
+			t.Fatalf("start %d answered %v", i, res[i])
+		}
+	}
+	if got := f.trace("tab.create"); len(got) != 1 {
+		t.Fatalf("two starts opened %d tabs", len(got))
+	}
+}
+
+// A session.start and a send racing for the same stopped omp start it once, and the message reaches that omp.
+func TestOmpStartResumeRacingASendOneTab(t *testing.T) {
+	id := "01b10000-0000-7000-8000-000000000022"
+	n, f, rt, cwd := stoppedOmpForStart(t, id)
+	var wg sync.WaitGroup
+	var startErr, sendErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, startErr = request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "omp", "agent_type": "omp", "resume_session_id": id})
+	}()
+	go func() {
+		defer wg.Done()
+		_, sendErr = request(t, n, "session.send", map[string]any{"session_id": id, "text": "go on", "client_msg_id": "m-race"})
+	}()
+	wg.Wait()
+	if startErr != nil || sendErr != nil {
+		t.Fatalf("start %v, send %v", startErr, sendErr)
+	}
+	if got := f.trace("tab.create"); len(got) != 1 {
+		t.Fatalf("a start and a send opened %d tabs", len(got))
+	}
+	if got := len(rt.got("session.send")); got != 1 {
+		t.Fatalf("the extension got %d messages, want the send's one", got)
+	}
+}
+
 // Nothing to resume with: no file, a deleted one, or one outside the agent's sessions directory. Nothing is started.
 func TestOmpResumeRefusals(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")

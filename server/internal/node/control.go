@@ -105,6 +105,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			if a, ok := n.agent(resume); ok {
 				return n.sessionFor(resume, a), nil // already running
 			}
+			// session.start holds n.recovery.lock(resume) (node.go), as a send to a stopped row does (ompcalls.go): a
+			// second start or send waits for this resume and finds the session running above, so no second omp runs.
 			// The guards a resume of any other agent passes (below): a session open elsewhere or owned by a runtime
 			// is not started again, and not on Orca.
 			if r := n.openElsewhereRefusal(resume); r != nil {

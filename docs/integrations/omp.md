@@ -109,8 +109,8 @@ to it. A `session.start` with `resume_session_id` does the same, with its prompt
   not say it. Without a usable file the send is refused with `omp_resume_unknown` and no tab opens.
 - **Refused before a tab.** A directory that is gone (`not_running`), an Orca default engine (`orca_resume`), no terminal engine
   running, and a `session.start` for a session a runtime or another tool owns (`runtime_session`, `open_elsewhere`).
-- **One resume at a time.** Two sends at once start one omp: the second waits for the first resume and goes to the omp it
-  started.
+- **One resume at a time.** Two sends or starts at once, or a send racing a start, start one omp: each takes the session's
+  recovery lock, so the second waits for the first resume and goes to the omp it started.
 - **Never a second omp.** A session whose file a live pane may still be writing is not a stopped one (see "Live rows win"), so
   it is never resumed.
 - **Other calls.** A stopped session has no terminal: rename, interrupt, modes, queue edits and close are refused with
@@ -151,6 +151,6 @@ live text, and the host's record of where a session last ran (`integrations/pi/l
   `server/internal/node/ompdisk_test.go` covers the stopped sessions: the scan and its cache, bad lines, the cap, the offline row
   and its refused send, a slow scan going on where it stopped, and a live omp pane hiding its directory (also through a symlink,
   and after its session id went missing again) while a pi pane does not; `server/internal/node/ompresume_test.go` covers the
-  resume from disk, two sends at once, the refusals, a resume that never comes up and herdr's restore command; `server/internal/node/omp_guards_test.go`
+  resume from disk, two sends or two starts at once, a start racing a send, the refusals, a resume that never comes up and herdr's restore command; `server/internal/node/omp_guards_test.go`
   covers a live pane's file, a start for a runtime's session, the fallback row moving to its session, and the calls a stopped
   session refuses.
