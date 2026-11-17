@@ -2,6 +2,9 @@ package screenlink
 
 import (
 	"bytes"
+	"encoding/json"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -252,5 +255,50 @@ func TestNodeClosedFlowRouteDropsBeforeUse(t *testing.T) {
 			l.p.waitReceived(l.id, join(all)[off:])
 			laterUseKeepsInFlight(t, l, home, relay)
 		})
+	}
+}
+
+// Review of #10025 (P1): a route left unread by a flow the node closed does not outlive the phone's move onto another
+// flow. The phone's UDP use there is a move like any other (moveLocked clears unread), so once it later leaves that
+// flow its use on the route counts as the move it is, and a use on a route it reads from keeps what is in flight.
+func TestNodeClosedFlowThenAnotherFlowClearsUnread(t *testing.T) {
+	limits := resetTestLimits()
+	limits.FlowSilence = 300 * time.Millisecond
+	l := openResetUDPLink(t, limits)
+	l.up.prove()
+	l.up.use(l.id, 0)
+	udpDelivered(t, l, videoStream(4))
+	parent := directTransport(l.s)
+	waitChannelActive(t, l.s, l.id, parent)
+	waitFor(t, "the flow closed", func() bool { return udpFlowTransport(l.s) == nil })
+	unread := func() *transport {
+		l.s.mu.Lock()
+		defer l.s.mu.Unlock()
+		return l.s.chans[l.id].unread
+	}
+	if unread() != parent {
+		t.Fatal("the node's own close did not leave the flow's route unread")
+	}
+
+	// The phone moves the video straight onto another flow on the same route, with no use on TCP in between (it opened
+	// the new flow before its pings on the old one went unanswered).
+	_ = l.up.conn.Close()
+	l.direct.send(TypeUDPOpen)
+	var ready UDPReady
+	if err := json.Unmarshal(l.p.nextOf(TypeUDPReady).body, &ready); err != nil || ready.Port == 0 {
+		t.Fatalf("udp_ready %+v %v", ready, err)
+	}
+	nodeAt, _ := net.ResolveUDPAddr("udp", net.JoinHostPort(l.paths.Candidates[0].Addr, strconv.Itoa(ready.Port)))
+	l.up = newUDPPhone(t, l.p, l.dc, ready, nodeAt)
+	l.up.ch = l.id
+	l.up.parent = l.direct
+	l.up.prove()
+	l.up.use(l.id, l.p.offset(l.id))
+	flow := udpFlowTransport(l.s)
+	if flow == nil || activeTransport(l.s, l.id) != flow {
+		t.Fatal("the video is not on the phone's new flow")
+	}
+	if u := unread(); u != nil {
+		t.Fatalf("the phone's move onto another flow left an unread route (%p)", u)
 	}
 }
