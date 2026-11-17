@@ -137,10 +137,22 @@ final class SelectTextTests: XCTestCase {
 
     /// Beside the lifted message, on the scrim: on the top bar it dims (below the status bar, whose taps never reach the
     /// app). Not at a set height: a long reply's card can start there, and a tap on the card's edge ends nothing (#6099).
+    /// When the card covers the top bar (the bar under it, with its Select Messages row, #9468, needs the room), beside
+    /// that row, or under the card and the bar.
     @MainActor private func tapBeside() {
         let card = app.descendants(matching: .any)["message-lift"].firstMatch.frame
-        let at = CGPoint(x: topBar.midX, y: topBar.midY)
-        XCTAssertFalse(topBar.isNull || card.contains(at), "nothing beside the lifted message to tap: top bar \(topBar), card \(card)")
+        let window = app.windows.firstMatch.frame
+        let row = app.buttons["chat.selectMessages"].firstMatch
+        let rowFrame = row.exists ? row.frame : CGRect.null
+        var spots = [CGPoint(x: topBar.midX, y: topBar.midY)]
+        if !rowFrame.isNull { spots.append(CGPoint(x: (rowFrame.maxX + window.maxX) / 2, y: rowFrame.midY)) }
+        spots.append(CGPoint(x: window.midX, y: max(card.maxY, rowFrame.isNull ? 0 : rowFrame.maxY) + Self.inset * 3))
+        let at = spots.first { s in
+            !card.insetBy(dx: -Self.inset, dy: -Self.inset).contains(s) && !rowFrame.contains(s)
+                && s.y < window.maxY - Self.inset * 4 && s.x < window.maxX - Self.inset
+        }
+        XCTAssertNotNil(at, "nothing beside the lifted message to tap: top bar \(topBar), card \(card), row \(rowFrame)")
+        guard let at else { return }
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y)).tap()
     }
 
