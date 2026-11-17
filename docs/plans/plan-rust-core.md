@@ -458,6 +458,17 @@ Phase 2 lands in several PRs.
     (lifecycle/network results in → request/reconnect/backoff/catch-up effects out, no real socket or persistence).
   - Nothing is implemented; no production network, client or core behavior changed, and no device claim is made.
 
+- **Production iOS continuity adapter and DEBUG shadow (#8970).**
+  - The iOS app's `ChatStore` stays authoritative behind `ChatContinuityAdapting`; DEBUG mirrors the same inputs into
+    the real C core off the main actor, applies patches and compares decoded items and continuity state. Transport
+    effects stay inside the shadow. Reports contain domain, rule and input shape, never content or identifiers.
+  - The adapter covers cached snapshots, prefetch/fill pages, native reload retention, older pages and independent
+    folds. The production shadow exposed and fixed empty-span list retention and pending patch state/ops mixing;
+    the shared corpus now replays 39 cases / 95 steps on native iOS, real C and the runtime.
+  - Release retains the original native calls and contains neither the shadow nor its switch.
+  - Native/C replays, production comparisons and optimized simulator A/B measurements are reported with the PR; they
+    are not a production Rust selection, a physical-device result or the end of the shadow-run cycle.
+
 Phase 3 lands in several PRs.
 
 - **Nested-item Envelope fallback removal (#9187).**
