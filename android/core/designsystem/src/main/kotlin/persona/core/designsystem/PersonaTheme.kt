@@ -58,7 +58,9 @@ data class IosSpring(val durationMs: Int, val bounce: Float) {
 @Immutable
 data class IosMassSpring(val mass: Float = 1f, val stiffness: Float, val damping: Float) {
     val dampingRatio: Float get() = (damping / (2f * sqrt(stiffness * mass))).coerceAtLeast(0.01f)
-    fun <T> spec(): FiniteAnimationSpec<T> = spring(dampingRatio = dampingRatio, stiffness = stiffness)
+    /** Compose's spring assumes mass 1, so the stiffness we pass is iOS stiffness / mass. */
+    val composeStiffness: Float get() = stiffness / mass
+    fun <T> spec(): FiniteAnimationSpec<T> = spring(dampingRatio = dampingRatio, stiffness = composeStiffness)
 }
 
 /**

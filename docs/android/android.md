@@ -1010,7 +1010,36 @@ Hard-coded counts for each file and category must not exceed the baseline; new f
 
 ## Motion literal baseline
 
-`scripts/app/android_motion_baseline.py` counts literal animation specs per production Kotlin file under `android/**/src/main` (numeric `tween(` / `snap(`, `spring(` with `Spring.*` or numeric damping/stiffness, `keyframes(`, and `AnimatedVisibility` / `Crossfade` that use the default enter/exit or animationSpec). Specs that already name `Tokens.Motion`, `SharedMotion`, `IosSpring`, `ComposerMotion` or `PersonaTheme.motion` are not counted. The baseline is `android/core/designsystem/tools/motion-baseline.json`; a file's count may only go down, and a new file with literals fails. `--update-baseline` rewrites it after a reviewed reduction. CI runs it beside the token checks (`scripts/ci/android.sh`, `scripts/ci/scripts.sh`).
+`scripts/app/android_motion_baseline.py` counts literal animation specs per production Kotlin file under `android/**/src/main`: `tween` / `spring` / `snap` (empty, typed, positional, or numeric `durationMillis`), `keyframes { }` / `keyframes()`, default `AnimatedVisibility` / `Crossfade` / `AnimatedContent` / `animateContentSize` / `animate*AsState` / one-argument `animateTo` / `updateTransition.animate*`, and default-spec `fadeIn` / `fadeOut` / `expand*` / `shrink*` / `slide*` / `scale*`. Only the duration and spring parameters decide whether a call is token-backed. `Tokens.kt` and `PersonaTheme.kt` are exempt. The baseline is `android/core/designsystem/tools/motion-baseline.json`; a file's count may only go down, and `--update-baseline` refuses a rise or a new file (and checks `version`). CI runs it beside the token checks (`scripts/ci/android.sh`, `scripts/ci/scripts.sh`).
+
+### Motion literal inventory (#9897 recount)
+
+Expanded detector recount (not a baseline raise): existing call sites the old patterns missed. Wire clear iOS matches later; open questions stay open.
+
+| Android site | Kind | iOS counterpart / note |
+| --- | --- | --- |
+| `ChatLinkHost.kt` (`drag.animateTo` ×6) | animateTo-default | Link sheet detents — open: match iOS sheet spring if any |
+| `LarkDocumentReader.kt` (`drag.animateTo` ×4) | animateTo-default | Document reader sheet — open |
+| `Controls.kt` press/thumb `animate*AsState`, reduce `snap()`, infinite `tween` | mixed | Press/thumb: Glass state spring; loops: local |
+| `Page.kt` `tween(180)`, `fadeIn()`/`fadeOut()`, `Crossfade` | mixed | Large-title bar — open vs iOS nav title |
+| `EndpointDrag.kt` `snap()` lift/settle | snap | Settings endpoint reorder — Reduce Motion / settle |
+| `Root.kt` `fadeIn()`/`fadeOut()` | transition-default | Root overlay — open |
+| `Glass.kt` `tween<Float>(900)` / `snap()` | tween/snap | Glass material settle — local duration |
+| `Workflows.kt` / `ChangingText.kt` / `Charts.kt` `tween(duration, …)` | tween | Count/chart motion (`PersonaMotion.count`) — prefer tokens |
+| `PersonaFace.kt` `tween(BLINK_MS)` | tween | Face blink — no shared iOS token |
+| `PageSizedSettingsSheet.kt` `fadeIn/Out(tween(duration))` | tween | Settings sheet — open |
+| `Voice.kt` / `ChatWaiting.kt` / `StructuredContent.kt` pulse `tween` | tween | Local loops |
+| `AssistantTasks.kt` `animateContentSize()`, reduce `snap()` | mixed | Task entry size — open |
+| `ExtensionViewContent.kt` `animateItem(tween…)` | tween | Extension list — open |
+| `AgentsScreen.kt` default `AnimatedVisibility` | AnimatedVisibility-default | Search chrome — open |
+| `ChatScreen.kt` `fadeOut()` exit | transition-default | Interaction feedback — open |
+| `PaneDividers.kt` `spring(Spring.*)` | spring | Pane divider — open |
+| `KeyCaps.kt` `animateFloatAsState` default | animateAsState-default / tween | Key press — open |
+| `HomeChrome.kt` / `ListTapMotion.kt` / `Agent*` reduce `snap()` | snap | Reduce Motion branches |
+| `PageTransitions.kt` `tween(it.standard)` fallback | tween | Non-Glass layout fallback |
+| `ComposerHardware.kt` reduce `snap()` | snap | Reduce Motion |
+
+
 
 ## Design-system slot order
 

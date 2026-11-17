@@ -173,6 +173,10 @@ class ShellLaneTests(unittest.TestCase):
                 self.assertIn("--max-workers=2", arguments)
                 self.assertNotIn("--profile", arguments)
                 self.assertEqual("translation checker tests" in result.stdout, lane in ("full", "lint-build-test-0"))
+                # Motion ratchet + its unit tests run in the same lint/build lane as the token checks (#9897).
+                lintish = lane in ("full", "lint-build-test-0")
+                self.assertEqual("motion checker tests" in result.stdout, lintish)
+                self.assertEqual("motion literal baseline" in result.stdout, lintish)
                 self.assertIn("run 1.98.0 cargo --version", (self.root / "rustup-arguments").read_text())
 
     def test_profile_and_gradle_failure_are_preserved(self):

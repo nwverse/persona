@@ -143,7 +143,9 @@ internal fun CloseoutCard(closeout: Closeout, artifacts: List<WorkArtifact>, ses
             }
             if (hasBody) JIcon(if (open) PhIcons.CaretDown else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, decorative = true)
         }
-        AnimatedVisibility(visible = hasBody && open, enter = enter, exit = exit) {
+        // iOS only animates the user's toggle (`CloseoutCard.swift:48`); body arriving while already open
+        // is not animated. Compose `AnimatedVisibility` skips enter when first composed already visible.
+        if (hasBody) AnimatedVisibility(visible = open, enter = enter, exit = exit) {
             SelectionContainer {
                 Column(
                     Modifier.fillMaxWidth().heightIn(max = fieldsMax).verticalScroll(rememberScrollState())

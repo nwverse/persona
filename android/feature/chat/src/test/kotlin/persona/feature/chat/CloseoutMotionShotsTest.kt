@@ -2,6 +2,7 @@ package persona.feature.chat
 
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import androidx.compose.animation.core.EaseOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,10 +20,12 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.height
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -39,6 +42,7 @@ import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import java.io.File
+import kotlin.math.abs
 
 /**
  * Closeout card fold uses [persona.core.designsystem.SharedMotion.reveal] as iOS `CloseoutCard.swift:48`
@@ -62,6 +66,7 @@ class CloseoutMotionShotsTest {
         checked = CloseoutChecked(merged = "yes"),
     )
     private val artifacts = listOf(WorkArtifact("pr", "https://example.com/acme/app/pull/128"))
+    private val emptyBody = Closeout("done")
     private var lightOpenCorner = 0
 
     @Test fun revealMidFrameAndRestingMatchAcrossStyles() {
@@ -96,6 +101,8 @@ class CloseoutMotionShotsTest {
                 Snapshot.sendApplyNotifications()
                 settle()
                 rule.onNodeWithTag("closeout-fields").assertIsDisplayed()
+                // Clipped bounds follow expandVertically; unclipped stay at the full height.
+                val openHeight = rule.onNodeWithTag("closeout-fields").getBoundsInRoot().height
                 val openMotion = capture("closeout-open-${name(s, d)}")
 
                 // Fold, then reopen and catch a mid-reveal frame (Theme.Motion.revealTime = 0.28 s).
@@ -109,7 +116,16 @@ class CloseoutMotionShotsTest {
                 rule.mainClock.advanceTimeByFrame()
                 rule.mainClock.advanceTimeBy(140)
                 val mid = capture("closeout-mid-reveal-${name(s, d)}")
-                assertTrue("mid reveal should differ from folded", differs(mid, foldedMotion))
+                // Resting before/after compare can run against origin/main's CloseoutCard (no expand).
+                if (System.getProperty("persona.closeout.before") != "1") {
+                    val midHeight = rule.onNodeWithTag("closeout-fields").getBoundsInRoot().height
+                    val expectedFraction = EaseOut.transform(0.5f)
+                    val actualFraction = midHeight.value / openHeight.value
+                    assertTrue(
+                        "mid height fraction $actualFraction should be near easeOut(0.5)=$expectedFraction (open=$openHeight mid=$midHeight)",
+                        abs(actualFraction - expectedFraction) < 0.18f,
+                    )
+                }
                 settle()
                 val openAgain = capture("closeout-open-settled-${name(s, d)}")
                 assertTrue("settled open should differ from mid", differs(openAgain, mid))
@@ -131,6 +147,34 @@ class CloseoutMotionShotsTest {
                 else assertNotEquals("light and dark differ", lightOpenCorner, openMotion.getPixel(2, 2))
             }
         }
+    }
+
+    @Test fun bodyArrivingWhileOpenIsNotAnimated() {
+        // iOS CloseoutCard.swift:48 only animates the user's toggle; body arriving while open jumps in.
+        var body by mutableStateOf(emptyBody)
+        var arts by mutableStateOf(emptyList<WorkArtifact>())
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = false, style = AppStyle.Glass) {
+                Box(
+                    Modifier.fillMaxWidth().background(PersonaTheme.palette.background)
+                        .padding(Tokens.Space.m).testTag("closeout-shot"),
+                ) {
+                    CloseoutCard(body, arts, sessionKey = "body-arrive")
+                }
+            }
+        }
+        settle()
+        assertEquals(0, rule.onAllNodesWithTag("closeout-fields").fetchSemanticsNodes().size)
+        body = closeout
+        arts = artifacts
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        rule.onNodeWithTag("closeout-fields").assertIsDisplayed()
+        val first = capture("closeout-body-arrive-frame")
+        settle()
+        val rest = capture("closeout-body-arrive-rest")
+        assertTrue("body arriving while open must already match the rest frame", same(first, rest))
     }
 
     private fun name(style: AppStyle, dark: Boolean) = "${style.name.lowercase()}-${if (dark) "dark" else "light"}"
