@@ -81,6 +81,16 @@ func TestBotSourceReportFullReplySetting(t *testing.T) {
 	}
 }
 
+// ignoreProbe answers a request that is not the open platform's: a Persona node on the machine
+// running these tests probes the fake's port (GET /, node/ports.go), as newFakeOpenAPI notes.
+func ignoreProbe(rw http.ResponseWriter, req *http.Request) bool {
+	if strings.HasPrefix(req.URL.Path, "/open-apis/") {
+		return false
+	}
+	http.NotFound(rw, req)
+	return true
+}
+
 func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
@@ -96,6 +106,9 @@ func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 	var mu sync.Mutex
 	var replies []string
 	api := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if ignoreProbe(rw, req) {
+			return
+		}
 		reply := func(v any) { _ = json.NewEncoder(rw).Encode(v) }
 		switch req.URL.Path {
 		case "/open-apis/auth/v3/tenant_access_token/internal":
@@ -176,6 +189,9 @@ func TestBotSourceReportLongReplyRetriesAfterBotRestart(t *testing.T) {
 
 	var replies atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if ignoreProbe(rw, req) {
+			return
+		}
 		reply := func(v any) { _ = json.NewEncoder(rw).Encode(v) }
 		switch req.URL.Path {
 		case "/open-apis/auth/v3/tenant_access_token/internal":
