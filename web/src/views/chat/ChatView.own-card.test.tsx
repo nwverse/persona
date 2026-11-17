@@ -26,6 +26,8 @@ vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" })
 const { ChatView } = await import("./ChatView");
 const { getState, reset, upsertSession } = await import("../../lib/store");
 const { t } = await import("../../i18n");
+const { loadPages } = await import("../../lib/lazy-page");
+await loadPages();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const bash = {
