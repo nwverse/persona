@@ -6,7 +6,6 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 
 import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
-import { devProbe } from "./dev-probe";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
@@ -700,15 +699,11 @@ export function connect() {
     } catch {
       return;
     }
-    devProbe.frame(typeof msg.type === "string" ? msg.type : "", typeof ev.data === "string" ? ev.data.length : 0);
     if (msg.type === "extension_ui_stream") {
       if (appSocketReady()) privateStreamListeners.forEach((listener) => listener(ev.data));
       return; // Private trees never enter the global replay cursor or store.
     }
-    if (msg.type === "hello") {
-      authenticatedSocket = sock;
-      devProbe.socket("connected");
-    }
+    if (msg.type === "hello") authenticatedSocket = sock;
     pushing = true;
     try {
       onMessage(msg);
@@ -721,7 +716,6 @@ export function connect() {
     if (ws === sock) directionTreeAwaitsHello(false); // no hello: whoever waited for the tree reads it now
     if (ws !== sock) return;
     const wasLive = authenticatedSocket === sock;
-    if (wasLive) devProbe.socket("dropped");
     ws = null;
     setCompatibilityFeatures([]);
     socketChanged(false);

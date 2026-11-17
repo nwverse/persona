@@ -2,13 +2,14 @@
 // (scrubbing, route patterns, the same cases as iOS DevModeTests), what the recorder writes a minute and per visible
 // period, what the package holds for each choice of categories, and that the error reporter feeds the recorder with the
 // hub's reports off.
+import { readFileSync } from "node:fs";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
-import { DevRecorder, line, MAX_AGE_MS, MAX_BYTES, MemoryStore } from "./dev-mode";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DevRecorder, errorReport, freezeReport, line, MAX_AGE_MS, MAX_BYTES, MemoryStore, pageName, stackFrames } from "./dev-mode";
 import { buildPackage, packageFiles, packageName, readme, type DevDevice } from "./dev-package";
-import { devListening, devProbe, setDevSink, type DevSink } from "./dev-probe";
-import { devRoute, devWord, MAX_TEXT, scrubText } from "./dev-scrub";
-import { ErrorReporter, type ReporterDeps } from "./error-reports";
+import { frameType, setDevSink, watchSockets, type DevSink } from "./dev-probe";
+import { DEV_API_WORDS, devRoute, devWord, MAX_TEXT, scrubText } from "./dev-scrub";
+import { pathPattern } from "./error-reports";
 import type { ErrorReport } from "./extension-wire";
 
 const T0 = Date.parse("2027-01-15T08:00:00Z");
@@ -43,6 +44,15 @@ describe("scrubbing", () => {
     const out = scrubText("长".repeat(2000));
     expect(new TextEncoder().encode(out).length).toBeLessThanOrEqual(MAX_TEXT);
     expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("uses the error reports' route words", () => {
+    for (const p of ["/machines/m/sessions/s/items", "/assistant/chats/c/messages", "/api/v1/kb-search?q=x", "https://h.example/api/v1/todos/t1"]) {
+      expect(devRoute("GET", p)).toBe(`GET ${pathPattern(p)}`);
+    }
+    const source = readFileSync(new URL("./error-reports.ts", import.meta.url), "utf8");
+    const words = /const API_WORDS = new Set\(\s*\(([\s\S]*?)\)\.split/.exec(source)![1].split("\"").filter((_, i) => i % 2 === 1).join("");
+    expect(new Set(words.split(" "))).toEqual(DEV_API_WORDS);
   });
 
   it("records routes as patterns and only code-chosen words", () => {
@@ -185,34 +195,52 @@ describe("package", () => {
   });
 });
 
-describe("probe and error reports", () => {
-  afterEach(() => setDevSink(null));
-
-  const deps = (): ReporterDeps => ({
-    storage: null,
-    send: async () => ({ ok: true, enabled: false }),
-    now: () => T0,
-    uuid: () => "u",
-    origin: "https://hub.test",
-    platform: {},
-    setTimer: () => {},
-    clearTimer: () => {},
+describe("probe", () => {
+  afterEach(() => {
+    setDevSink(null);
+    vi.unstubAllGlobals();
   });
 
-  it("does nothing without a sink", () => {
-    expect(devListening()).toBe(false);
-    expect(() => devProbe.request("GET", "/x", 200, 1, 1)).not.toThrow();
+  it("reads a frame's type without parsing it", () => {
+    expect(frameType('{"type":"sessions","rows":[]}')).toBe("sessions");
+    expect(frameType('{"seq":3, "type" : "item"}')).toBe("item");
+    expect(frameType("{}")).toBe("");
   });
 
-  it("hands the recorder an error with the hub's reports off", () => {
-    const got: ErrorReport[] = [];
-    const sink: DevSink = { request() {}, frame() {}, socket() {}, page() {}, report: (r) => void got.push(r) };
-    const reporter = new ErrorReporter(deps());
-    reporter.setFeatures([]); // the hub takes no error reports
-    reporter.capture(new Error("before"));
-    expect(got).toHaveLength(0);
+  it("hears the hub socket's frames, its hello and a live socket's close, and nothing of other sockets", () => {
+    class Fake extends EventTarget {
+      constructor(readonly url: string | URL) {
+        super();
+      }
+    }
+    vi.stubGlobal("window", { WebSocket: Fake });
+    watchSockets();
+    const heard: string[] = [];
+    const sink: DevSink = { frame: (type, bytes) => void heard.push(`${type}:${bytes}`), socket: (e) => void heard.push(e) };
     setDevSink(sink);
-    reporter.capture(new Error("while recording"));
-    expect(got.map((r) => r.message)).toEqual(["Error: while recording"]);
+    const Wrapped = (globalThis as unknown as { window: { WebSocket: typeof Fake } }).window.WebSocket;
+    const hub = new Wrapped("wss://h.example/api/v1/ws?token=t");
+    const other = new Wrapped("wss://h.example/vnc");
+    const msg = (data: string) => new MessageEvent("message", { data });
+    hub.dispatchEvent(msg('{"type":"hello"}'));
+    hub.dispatchEvent(msg('{"type":"sessions"}'));
+    other.dispatchEvent(msg('{"type":"x"}'));
+    hub.dispatchEvent(new Event("close"));
+    expect(heard).toEqual(["hello:16", "connected", "sessions:19", "dropped"]);
+  });
+
+  it("names pages and stack frames without hosts", () => {
+    expect(pageName("/settings")).toBe("settings");
+    expect(pageName("/s/m1/s1")).toBe("s");
+    expect(pageName("/")).toBe("home");
+    const frames = stackFrames("TypeError: x\n    at load (https://hub.example.com/assets/App-abc.js:1:200)\n    at https://hub.example.com/assets/index.js:2:3");
+    expect(frames).toEqual([{ file: "/assets/index.js", line: 2, column: 3 }, { function: "load", file: "/assets/App-abc.js", line: 1, column: 200 }]);
+  });
+
+  it("writes uncaught errors and freezes in the error report format", () => {
+    const e = errorReport(new TypeError("x is undefined"), "onerror", T0);
+    expect(e).toMatchObject({ source: "web", kind: "error", level: "error", message: "TypeError: x is undefined", tags: { mechanism: "onerror" } });
+    const f = freezeReport({ durationMs: 6200, mechanism: "longtask", frames: [] }, T0);
+    expect(f).toMatchObject({ kind: "anr", level: "warning", message: "Main thread blocked for 6200ms" });
   });
 });

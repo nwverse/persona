@@ -5,7 +5,6 @@ import { MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
 import { BASE } from "./base";
 import { intercepted, reloadForSignIn } from "./edge-auth";
 import { requestCrumb } from "./error-reports";
-import { devProbe } from "./dev-probe";
 import { currentLanguage, t } from "../i18n";
 import type { Item } from "./types";
 import { clearFeedCache } from "./feed-cache";
@@ -222,7 +221,6 @@ async function request<T>(path: string, init: ApiOptions, binary = false): Promi
     body = JSON.stringify(requestForHub(path, init.json));
   }
   const method = init.method ?? "GET";
-  const started = performance.now();
   let res: Response;
   try {
     // manual: a redirect (the sign-in layer in front of the hub has expired) arrives as one instead of being followed
@@ -230,14 +228,9 @@ async function request<T>(path: string, init: ApiOptions, binary = false): Promi
     res = await fetch(`${BASE}/api/v1${path}`, { redirect: "manual", ...fetchOptions, headers, body });
   } catch (e) {
     // a breadcrumb for an error report: the method, the path's pattern (no ids, no query) and that it did not get there
-    if (!isAbort(e)) {
-      requestCrumb(method, path, 0);
-      devProbe.request(method, path, 0, performance.now() - started, 0);
-    }
+    if (!isAbort(e)) requestCrumb(method, path, 0);
     throw e;
   }
-  // Developing Persona (lib/dev-probe.ts): the route, status, time to the answer's headers and its declared size
-  devProbe.request(method, path, res.status, performance.now() - started, Number(res.headers.get("Content-Length")) || 0);
   // A 304 answers a request that sent a validator (If-None-Match): the caller keeps what it has. It is neither the
   // sign-in layer's redirect nor an error.
   const notModified = res.status === 304 && headers.has("If-None-Match");

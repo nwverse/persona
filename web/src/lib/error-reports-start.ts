@@ -3,7 +3,7 @@
 import { api, ApiError } from "./api";
 import { ERROR_REPORTS_FEATURE, reportFreeze, setFreezeDropListener, startErrorReports, type SendResult } from "./error-reports";
 import { startFreezeWatch } from "./freeze-watch";
-import { devListening } from "./dev-probe";
+import { devModeSince, watchSockets } from "./dev-probe";
 import type { ErrorReport } from "./extension-wire";
 import { uuid } from "./format";
 import { getState, subscribe } from "./store";
@@ -31,8 +31,14 @@ startErrorReports({
 // A warning still in the queue when the feature turns off did not count: watch again if it comes back.
 const watchFreezes = startFreezeWatch({
   subscribe,
-  // while Developing Persona records too (lib/dev-probe.ts), which keeps freezes with the hub's reports off
-  enabled: () => getState().features.includes(ERROR_REPORTS_FEATURE) || devListening(),
+  enabled: () => getState().features.includes(ERROR_REPORTS_FEATURE),
   report: reportFreeze,
 });
 setFreezeDropListener(() => watchFreezes.rearm());
+
+// Developing Persona (docs/operations/developing-persona.md): with the switch on, the socket is wrapped before the app
+// opens it, and the recorder's chunk loads. This module is not part of the first screen's budget.
+if (devModeSince()) {
+  watchSockets();
+  void import("./dev-mode").then((m) => m.startDevMode());
+}

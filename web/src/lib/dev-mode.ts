@@ -4,9 +4,11 @@
 // while the page is visible and one for each hidden stretch, a `foreground` line per visible period, and single lines
 // for what changes (page, visibility, network, socket, errors, console). Lines are buffered and appended in batches to
 // IndexedDB, kept 24 hours and 5 MB at most. iOS's twin is apple/Persona/DevMode/DevRecorder.swift.
-import type { ErrorReport } from "./extension-wire";
-import { DEV_MODE_KEY, setDevSink, type DevSink } from "./dev-probe";
+import type { ErrorFrame, ErrorReport } from "./extension-wire";
+import { DEV_MODE_KEY, setDevSink, watchSockets, type DevSink } from "./dev-probe";
 import { devRoute, devWord, scrubText } from "./dev-scrub";
+import { startFreezeWatch, type FreezeHit } from "./freeze-watch";
+
 
 export const MAX_AGE_MS = 24 * 3600_000;
 export const MAX_BYTES = 5 * 1024 * 1024;
@@ -163,7 +165,7 @@ export class DevRecorder implements DevSink {
     this.event(at, "app", { event: "recording", visible: !hidden, build });
   }
 
-  // ── what the page tells it (DevSink) ──
+  // ── what the page does ──
 
   request(method: string, path: string, status: number, ms: number, bytes: number) {
     const route = devRoute(method, path);
@@ -361,11 +363,67 @@ function openStore(): DevStore {
   }
 }
 
-/** Starts recording (at launch with the switch on, or as it is turned on). */
+/** An uncaught error or rejection as an error report (the hub's format), for the recorder's own copy. */
+export function errorReport(error: unknown, mechanism: string, at = Date.now()): ErrorReport {
+  const e = error instanceof Error ? error : null;
+  const name = e?.name || "Error";
+  const message = e ? e.message : typeof error === "string" ? error : safeJSON(error);
+  const frames = stackFrames(e?.stack);
+  return {
+    id: `${at.toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    source: "web",
+    kind: "error",
+    level: "error",
+    time: new Date(at).toISOString(),
+    message: `${name}: ${message}`,
+    exceptions: [{ type: name, value: message, ...(frames.length ? { frames } : {}) }],
+    tags: { mechanism },
+  };
+}
+
+/** A frozen page (lib/freeze-watch.ts), as the hub's reports write it. */
+export function freezeReport(hit: FreezeHit, at = Date.now()): ErrorReport {
+  const text = `Main thread blocked for ${Math.round(hit.durationMs)}ms`;
+  return {
+    id: `${at.toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    source: "web",
+    kind: "anr",
+    level: "warning",
+    time: new Date(hit.startedAt ?? at).toISOString(),
+    message: text,
+    exceptions: [{ type: "ANR", value: text, ...(hit.frames.length ? { frames: hit.frames } : {}) }],
+    tags: { mechanism: hit.mechanism },
+  };
+}
+
+/** The page in front: its address's first word ("s" for an Agent's chat, "settings", "" for the home page), as a
+ *  code word. The router's own names would cost the first screen an export. */
+export function pageName(path = location.pathname): string {
+  const first = path.replace(/^\/+/, "").split("/")[0] ?? "";
+  return devWord(first || "home");
+}
+
+/** A stack's frames as the error reports write them (innermost last), each its function and the script's path. */
+export function stackFrames(stack: string | undefined): ErrorFrame[] {
+  if (!stack) return [];
+  const out: ErrorFrame[] = [];
+  for (const raw of stack.split("\n").slice(0, 50)) {
+    const m = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/.exec(raw) ?? /^\s*(.*?)@(.+?):(\d+):(\d+)\s*$/.exec(raw);
+    if (!m) continue;
+    out.push({ ...(m[1] ? { function: m[1] } : {}), file: scrubText(m[2]), line: Number(m[3]), column: Number(m[4]) });
+  }
+  return out.reverse();
+}
+
+/** Starts recording (at launch with the switch on, or as it is turned on). Everything it watches it hooks itself and
+ *  puts back on `setDevMode(false)`: the hub socket (lib/dev-probe.ts, wrapped before the app opens it), fetch, the
+ *  history for pages, uncaught errors and rejections, freezes and console.error / warn. */
 export function startDevMode(): DevRecorder {
   if (running) return running.recorder;
+  watchSockets(); // a socket already open is counted from its next connection
   const recorder = new DevRecorder(openStore(), () => Date.now(), webBuild(), document.visibilityState === "hidden", usedMemory);
   setDevSink(recorder);
+  recorder.page(pageName());
   let timer: ReturnType<typeof setInterval> | null = null;
   const tick = () => {
     if (timer) clearInterval(timer);
@@ -377,6 +435,40 @@ export function startDevMode(): DevRecorder {
   };
   const onOnline = () => recorder.note("network", { online: navigator.onLine });
   const onHide = () => void recorder.flush();
+  const onPage = () => recorder.page(pageName());
+  const onError = (e: ErrorEvent) => recorder.report(errorReport(e.error ?? e.message, "onerror"));
+  const onRejection = (e: PromiseRejectionEvent) => recorder.report(errorReport(e.reason, "unhandledrejection"));
+
+  // requests to the hub: the route, status, time to the answer's headers and its declared size
+  const nativeFetch = window.fetch;
+  window.fetch = async function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+    const at = url.pathname.indexOf("/api/v1/");
+    if (url.origin !== location.origin || at < 0) return nativeFetch.call(this, input, init);
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    const path = url.pathname.slice(at + "/api/v1".length);
+    const started = performance.now();
+    try {
+      const res = await nativeFetch.call(this, input, init);
+      recorder.request(method, path, res.status, performance.now() - started, Number(res.headers.get("Content-Length")) || 0);
+      return res;
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) recorder.request(method, path, 0, performance.now() - started, 0);
+      throw e;
+    }
+  } as typeof fetch;
+
+  // pages: the router pushes and replaces history entries; Back and Forward are popstate
+  const { pushState, replaceState } = history;
+  history.pushState = function (this: History, ...args: Parameters<History["pushState"]>) {
+    pushState.apply(this, args);
+    onPage();
+  };
+  history.replaceState = function (this: History, ...args: Parameters<History["replaceState"]>) {
+    replaceState.apply(this, args);
+    onPage();
+  };
+
   // console.error / warn go on as before; the recorder keeps a scrubbed copy
   const original = { error: console.error, warn: console.warn };
   const wrap = (level: "error" | "warn") =>
@@ -390,21 +482,33 @@ export function startDevMode(): DevRecorder {
     };
   console.error = wrap("error");
   console.warn = wrap("warn");
+  const freezes = startFreezeWatch({ enabled: () => true, report: (hit) => (recorder.report(freezeReport(hit)), true) });
+
   document.addEventListener("visibilitychange", onVisibility);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOnline);
   window.addEventListener("pagehide", onHide);
+  window.addEventListener("popstate", onPage);
+  window.addEventListener("error", onError);
+  window.addEventListener("unhandledrejection", onRejection);
   tick();
   running = {
     recorder,
     stop: () => {
       if (timer) clearInterval(timer);
+      window.fetch = nativeFetch;
+      history.pushState = pushState;
+      history.replaceState = replaceState;
       console.error = original.error;
       console.warn = original.warn;
+      freezes();
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOnline);
       window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("popstate", onPage);
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
       setDevSink(null);
     },
   };

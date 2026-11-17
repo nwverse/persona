@@ -5,7 +5,6 @@ import { initI18n, startI18n } from "./i18n";
 import "./styles.css";
 import { applyLook } from "./ui/look";
 import { logCaughtError } from "./lib/caught-error";
-import { devModeSince } from "./lib/dev-probe";
 
 // A provider import link (#5420) may hold a key: out of the address bar before the page waits for anything, the
 // language's strings or App (lib/import-link.ts). Any other fragment stays, so a sign-in link's `#token=` still signs in.
@@ -47,6 +46,4 @@ if (target) {
   const [{ startNewVersion }, { startLanguageSync }, { toast }, { t }] = await Promise.all([import("./lib/new-version"), import("./lib/language-sync"), import("./ui/atoms"), import("./i18n")]);
   startNewVersion((reloadNow) => toast(t("app.new_version"), "info", { label: t("app.new_version_reload"), run: reloadNow, sticky: true }));
   startLanguageSync();
-  // Developing Persona (docs/operations/developing-persona.md): the recorder's chunk loads only while the switch is on.
-  if (devModeSince()) void import("./lib/dev-mode").then((m) => m.startDevMode());
 }

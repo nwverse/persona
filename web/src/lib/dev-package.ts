@@ -3,7 +3,6 @@
 // DevPackage.swift). Built from what the recorder kept, filtered by the categories the owner left ticked; the browser,
 // system and versions always go in. Its own chunk with jszip, loaded when an export is asked for.
 import JSZip from "jszip";
-import { osOf } from "./error-reports";
 import type { DevLine, DevStore } from "./dev-mode";
 
 export type DevCategory = "logs" | "errors" | "energy";
@@ -39,12 +38,24 @@ export function thisDevice(build: string, hubVersion: string): DevDevice {
     : "other";
   return {
     platform: typeof window !== "undefined" && window.personaDesktop ? "desktop" : "web",
-    ...osOf(ua, (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform),
+    ...systemOf(ua),
     browser: brand,
     build,
     hub_version: hubVersion,
     utc_offset_minutes: -new Date().getTimezoneOffset(),
   };
+}
+
+/** The system from the user agent, as the error reports read it (lib/error-reports.ts osOf, not imported: that
+ *  would add an export to the first screen). */
+export function systemOf(ua: string): { os?: string; os_version?: string } {
+  let m: RegExpExecArray | null;
+  if ((m = /Android (\d+)/.exec(ua))) return { os: "android", os_version: m[1] };
+  if ((m = /(?:iPhone|iPad|iPod).*? OS (\d+)/.exec(ua))) return { os: "ios", os_version: m[1] };
+  if ((m = /Windows NT (\d+)/.exec(ua))) return { os: "windows", os_version: m[1] };
+  if ((m = /Mac OS X (\d+)/.exec(ua))) return { os: "macos", os_version: m[1] };
+  if (/Linux|X11|CrOS/.test(ua)) return { os: "linux" };
+  return {};
 }
 
 /** The file name: `persona-diagnostics-web-20261117-1032.zip`, in local time. */
