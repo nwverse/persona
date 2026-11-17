@@ -219,12 +219,12 @@ func adoptedPane(ctx context.Context) *host.Created {
 // user picked, else the shell the host opened, falling back to herdr's shell when the host does not report one.
 func paneShells(ctx context.Context, created *host.Created) []string {
 	if a, ok := ctx.Value(adoptedPaneKey{}).(adopted); ok {
-		return a.shells
+		return paneShellKinds(a.shells)
 	}
 	if created.Shell != "" {
-		return []string{created.Shell}
+		return paneShellKinds([]string{created.Shell})
 	}
-	return []string{herdrPaneShell()}
+	return paneShellKinds([]string{herdrPaneShell()})
 }
 
 // runAgentInPane starts an agent of a launcher in a plain shell pane, the way "New Agent" does in a new tab: same

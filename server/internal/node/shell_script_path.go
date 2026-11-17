@@ -14,11 +14,19 @@ var shellScriptGOOS = runtime.GOOS
 // backslashes shellQuote escapes, leaving an unmatched quote (#5487). There the path goes with forward slashes, which
 // Git Bash and Windows programs both read as the same path, and with no backslash in its quoting: an apostrophe is
 // written '"'"' (a double quote survives the boundary, as "$@" does).
-// Not for commands typed into a terminal (herdr panes): no argument boundary there, launcherCommand quotes as before.
+// Not for a POSIX command typed directly into a terminal (herdr panes): no argument boundary there, so
+// launcherCommand quotes as before. powerShellStartLine instead uses powerShellSourceCommand for its nested Bash
+// argument: PowerShell 5.1's native boundary does not preserve the embedded double quotes in this apostrophe form.
 func scriptPath(path string) string {
 	if shellScriptGOOS != "windows" {
 		return shellQuote(path)
 	}
+	return windowsScriptPath(path)
+}
+
+// windowsScriptPath quotes a native Windows path for a script handed to Git Bash as an argument. Forward slashes
+// avoid the backslash loss at that native argument boundary; the apostrophe form keeps a double quote, as "$@" does.
+func windowsScriptPath(path string) string {
 	path = strings.ReplaceAll(path, `\`, "/")
 	if !strings.Contains(path, "'") {
 		return shellQuote(path) // without a backslash or an apostrophe, its quoting has no backslash

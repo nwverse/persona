@@ -231,7 +231,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		n.mu.Unlock()
 	}()
 	shells := paneShells(ctx, created)
-	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...) // agentenv.go
+	cmd := n.agentStartCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...) // agentenv.go
 	began := time.Now()
 	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
 		return nil, n.startTabFailed(ctx, launch, created, ws, "", err)

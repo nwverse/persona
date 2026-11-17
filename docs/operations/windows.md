@@ -184,14 +184,10 @@ herdr has a native Windows build since 0.9.5 (ConPTY panes, [official notes](htt
 - **socket**: herdr's API on Windows is a named pipe, named `\\.\pipe\` plus the socket path (`\\.\pipe\C:\Users\<you>\AppData\Roaming\herdr\herdr.sock`);
   the config directory is `%APPDATA%\herdr` (or `herdr` under `$XDG_CONFIG_HOME` if that's set). `socket_windows.go` in `internal/herdr` dials by this rule, matching herdr's own
   `config_dir` / interprocess `GenericNamespaced`; `$HERDR_SOCKET_PATH` still takes precedence. The path itself isn't a file, so `SocketUp` checks whether the pipe exists.
-- **Shell in the pane**: herdr opens PowerShell by default on Windows, but the start commands the node types are POSIX shell syntax (`'…'` quoting, `A=1 cmd`). Set the pane shell to Git Bash in herdr's
-  `%APPDATA%\herdr\config.toml`:
-
-  ```toml
-  [terminal]
-  default_shell = "C:/Program Files/Git/bin/bash.exe"
-  ```
-
+- **Shell in the pane**: keep herdr's default PowerShell (Windows PowerShell 5.1 or PowerShell 7) and install Git for Windows. The node writes the Agent's POSIX command, including its `PERSONA_HOME` / `unset` prefix, to the same self-deleting 0600 start file as on macOS / Linux. It types only a short PowerShell line that uses `&` to invoke Git Bash with `-ic` and source that file; `-ic` is the node's existing `loginShell` mode, so aliases, functions and `PATH` from `~/.bashrc` work. Only the Git Bash path and start-file command cross PowerShell, single-quoted with each ASCII or Unicode single-quote delimiter doubled, so Windows paths, spaces and PowerShell operators stay literal. The nested source path uses Bash ANSI-C quoting, avoiding embedded double quotes that Windows PowerShell 5.1's native argument reconstruction would consume. The start file keeps POSIX quoting for the Agent's own arguments. If Git Bash cannot be found through `CLAUDE_CODE_GIT_BASH_PATH`, `git` or the standard install directories, the start fails with that reason before anything is typed; it never falls back to WSL's `bash`.
+  Classic herdr's create answers do not report the pane shell, and the node does not read `[terminal] default_shell`, so it uses the PowerShell line for a new classic-herdr pane. Do not set `default_shell` to Git Bash or `cmd.exe`: such a pane cannot read that PowerShell line (a Git Bash pane treats `&` as a POSIX operator, and `cmd.exe` does not invoke a single-quoted program). A pane whose shell the node can read, such as an adopted pane or a herdr-core terminal, keeps the POSIX path when its foreground shell reports Git Bash and uses the PowerShell path when it reports `powershell` or `pwsh`.
+  Launcher sync's `"shell": "bash"` and `"rc_file": "~/.bashrc"` describe the Git Bash that reads launcher definitions, not the shell in herdr's pane; they do not mean the pane itself runs Bash.
+  Classic herdr's separate automatic post-restart restoration is not covered by this handoff: its `resume_argv` still uses the pre-existing POSIX `eval` command, which PowerShell cannot run. After a herdr restart, use the app's ordinary Resume flow in a new PowerShell pane instead.
 - **herdr has to stay resident in the user's desktop session**: a `herdr server` started from an ssh session exits with that session. Run `herdr.exe server` from a scheduled task that starts at logon (current user,
   `Interactive`, no time limit); it's the same kind as the `persona-link install` task.
 - **`syscall.Exec`**: `personad launch` (managed launchers) and `codex-start` / `tab-start` replace themselves with claude / codex. Windows has no exec, so `osproc.Exec` starts a child in the same

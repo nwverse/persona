@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 
@@ -215,6 +216,16 @@ func orcaLaunchPath(path string) string {
 	return filepath.Clean(path)
 }
 
+// orcaRunLine adds the change into the terminal's directory around a typed start. A Windows PowerShell handoff needs
+// PowerShell syntax for this prefix too; ErrorAction Stop preserves the POSIX && guard when the directory is unusable.
+// Every other line keeps the existing POSIX bytes.
+func orcaRunLine(goos, cwd, command string) string {
+	if goos == "windows" && strings.HasPrefix(command, "& ") {
+		return "Set-Location -LiteralPath " + powerShellQuote(cwd) + " -ErrorAction Stop; " + command + "\r"
+	}
+	return "cd -- " + shellQuote(cwd) + " && " + command + "\r"
+}
+
 // Run may write shell commands only to a pane created by this host instance, once. Consuming the grant before the
 // send prevents a timeout or duplicate call from launching twice. Unlike normal sends it never refreshes a stale
 // handle: replacing that shell revokes the grant rather than redirecting the command to a different process.
@@ -241,7 +252,7 @@ func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) e
 			t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
 			break
 		}
-		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), "cd -- "+shellQuote(launch.cwd)+" && "+command+"\r"))
+		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), orcaRunLine(runtime.GOOS, launch.cwd, command)))
 	}
 	return host.Mark(fmt.Errorf("orca: the newly created shell was replaced or is no longer writable"), host.ErrNotDelivered)
 }

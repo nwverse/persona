@@ -233,7 +233,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		line = n.withSecretTicket(line, launcher, execution.SecretTicket, shellQuote)
 	}
 	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), line)
-	cmd = n.agentCommand(cmd, shellQuote, shells...)
+	cmd = n.agentStartCommand(cmd, shellQuote, shells...)
 	if cdFirst(ctx) { // a launcher switch in a shell that is not in the conversation's folder (launcher_switch.go)
 		cmd = cdThen(cwd, cmd, shells...)
 	}

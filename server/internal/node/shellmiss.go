@@ -307,12 +307,16 @@ var (
 		lazyre.New(`^fish: Unexpected end of string, quotes are not balanced$`),
 	}
 	shellContinuation = lazyre.New(`^(?:[a-z]+ )*(?:quote|dquote|bquote)>\s*$`)
+	// PowerShell 5.1 prints CategoryInfo ... ParserError; PowerShell 7 starts with ParserError and prints
+	// Unexpected token details. An unterminated string likewise carries ParserError / TerminatorExpectedAtEndOfString.
+	powerShellParseError = lazyre.New(`^(?:ParserError:|.*:\s*ParserError:|.*\bUnexpected token\b)`)
 )
 
 // mayBeRejected: the screen has a word of a shell's parse error or ends on a continuation prompt.
 func mayBeRejected(screen string) bool {
 	return strings.Contains(screen, "parse error") || strings.Contains(screen, "syntax error") ||
-		strings.Contains(screen, "quotes are not balanced") || shellContinuation.MatchString(lastLine(screen))
+		strings.Contains(screen, "quotes are not balanced") || strings.Contains(screen, "ParserError") ||
+		strings.Contains(screen, "Unexpected token") || shellContinuation.MatchString(lastLine(screen))
 }
 
 // rejectedLine is the line of screen saying the shell did not take the start's typed line as it was: a parse error
@@ -322,21 +326,32 @@ func (p *startProbe) rejectedLine(screen string) string {
 		return ""
 	}
 	lines := strings.Split(strings.ReplaceAll(screen, "\r\n", "\n"), "\n")
-	last := -1
+	first, last := -1, -1
 	for i, l := range lines {
 		if strings.Contains(l, p.anchor) && !fishTrace.MatchString(l) {
+			if first < 0 {
+				first = i
+			}
 			last = i
 		}
 	}
 	if last < 0 {
 		return ""
 	}
-	for _, l := range lines[last+1:] {
+	from := last + 1
+	if p.firstWord == "&" {
+		// PowerShell repeats the typed command inside its parser-error block, so its error can precede the last anchor.
+		from = first + 1
+	}
+	for _, l := range lines[from:] {
 		l = strings.TrimSpace(l)
 		for _, re := range shellParseErrors {
 			if re.MatchString(l) {
 				return l
 			}
+		}
+		if p.firstWord == "&" && powerShellParseError.MatchString(l) {
+			return l
 		}
 	}
 	if l := lastLine(screen); shellContinuation.MatchString(l) {
