@@ -340,6 +340,8 @@ export function promptKey(text) {
  */
 export function rowStatus(agent, o = {}) {
   if ((agent?.pendingPermissions?.length ?? 0) > 0) return 'blocked'
+  // A positive inventory summary is work even before its details arrive (or while that read fails).
+  if (o.backgroundPending) return 'working'
   switch (agent?.status) {
     case 'running':
     case 'initializing':
@@ -463,7 +465,7 @@ export function agentRow(agent, o = {}) {
     session_id: id,
     title: (typeof agent.title === 'string' && agent.title.trim()) || basename(cwd),
     cwd,
-    status: o.archived ? 'offline' : rowStatus(agent, { quiet: o.quiet, fleet: (o.fleet?.length ?? 0) > 0 }),
+    status: o.archived ? 'offline' : rowStatus(agent, { quiet: o.quiet, fleet: (o.fleet?.length ?? 0) > 0, backgroundPending: o.backgroundPending }),
     updated_at: new Date(Date.parse(agent.updatedAt) || Date.now()).toISOString(),
     rev: Date.parse(agent.updatedAt) || 0,
     space_id: space ?? (agent.workspaceId || cwd),
@@ -484,7 +486,9 @@ export function agentRow(agent, o = {}) {
   if (space && typeof agent.workspaceId === 'string' && agent.workspaceId) row.slot_name = slotNameOf(p, cwd)
   // The workspace itself, by id: the node keeps it on the row of the engine's runtime, and the apps tie the session to
   // that workspace's row in the catalog (runtime.workspaces, workspaceRow), agents in it or not.
-  if (typeof agent.workspaceId === 'string' && SESSION_ID.test(agent.workspaceId)) row.workspace_id = agent.workspaceId
+  // Retained archived transcripts are history, not current workspace members. A native workspace pin must not
+  // bring them back beside its unarchived chats; resuming restores membership from Paseo's active record.
+  if (!o.archived && typeof agent.workspaceId === 'string' && SESSION_ID.test(agent.workspaceId)) row.workspace_id = agent.workspaceId
   // Its repository, for "By repo" (#2840): Paseo keeps its worktrees under its own folder, where the path names none.
   // By its physical directory (#4492), as the node names the working tree: a repository whose sessions write its path
   // two ways (a home behind a symbolic link) is two projects in the apps.
@@ -529,9 +533,21 @@ export function agentRow(agent, o = {}) {
     row.parent_session_id = o.parent
   }
   // The agents it created that have not finished are its background work: its own turn ended, and theirs wake it.
-  const fleet = (o.fleet ?? []).map(backgroundOf).filter(Boolean)
-  if (fleet.length) row.background = fleet
+  const fleet = o.archived ? [] : (o.fleet ?? []).map(backgroundOf).filter(Boolean)
+  const native = o.archived ? [] : (o.nativeBackground ?? []).map(nativeBackgroundOf).filter(Boolean)
+  const tasks = [...new Map([...native, ...fleet].map((task) => [task.id, task])).values()]
+  if (tasks.length) row.background = tasks
   return row
+}
+
+/** Native provider jobs retain their IDs so the node can merge Claude's richer transcript copy. */
+export function nativeBackgroundOf(item) {
+  if (typeof item?.id !== 'string' || !item.id.trim() || !Number.isFinite(Date.parse(item.startedAt))) return undefined
+  return {
+    id: item.id, kind: item.kind === 'agent' ? 'agent' : 'shell', started_at: ts(item.startedAt),
+    ...(typeof item.description === 'string' && item.description.trim() ? { description: snippet(item.description) } : {}),
+    ...(typeof item.command === 'string' && item.command ? { command: item.command } : {}),
+  }
 }
 
 /** A delegated agent that has not finished, as a background task of the agent that created it (proto.BackgroundTask). */
@@ -575,7 +591,17 @@ export function workspaceRow(d, o = {}) {
   if (kind === 'worktree' && (Boolean(d.worktreeSlug) || d.gitRuntime?.isPaseoOwnedWorktree === true || p?.checkout?.isPaseoOwnedWorktree === true)) {
     row.owned = true
   }
+  const pin = workspacePinTime(d)
+  if (pin) row.pinned_at = pin
   return row
+}
+
+/** Paseo's native workspace pin, normalized for the catalog; absent on old daemons and cleared with null. */
+export function workspacePinTime(d) {
+  const value = d?.pinnedAt
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return undefined
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? new Date(at).toISOString() : undefined
 }
 
 /**

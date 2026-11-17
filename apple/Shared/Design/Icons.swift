@@ -341,9 +341,8 @@ extension Theme {
         static let collapse = "chevron.up"
         /// All of the lines hidden between a diff's hunks shown at once (UI version 5's `context`, #827): arrows out of a line.
         static let unfoldLines = "arrow.up.and.line.horizontal.and.arrow.down"
-        /// Holding the mic: slide this way to drop what was heard, or up to keep dictating hands-free (`DictationHold`).
+        /// Holding the mic: slide this way to drop what was heard (`DictationHold`).
         static let slideToCancel = back
-        static let slideToLock = collapse
         /// Clears an agent's context (/clear), in the 「+」 menu and panel.
         static let clearContext = "eraser"
 
@@ -363,6 +362,9 @@ extension Theme {
         static let ai = "sparkles"
         /// The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying).
         static let composerGlow = "wand.and.rays"
+        /// A chat's screenshot with the assistant's banner at its top (Settings › Appearance › Persona Banner in
+        /// Screenshots, #9508).
+        static let screenshotBanner = "menubar.rectangle"
         /// The Agents tab and what stands for it.
         static let agents = "chevron.left.forwardslash.chevron.right"
         /// An agent run from its command line, not its desktop app: the badge on its mark (`AgentMark`, #6390).
@@ -436,6 +438,10 @@ extension Theme {
         static let screen = "display"
         /// Which of a Mac's displays its VNC shows, when it has more than one (#80).
         static let displays = "display.2"
+        /// Phone Screen (#9314): one of the Mac's windows on a portrait display of its own, the live screen's third mode.
+        static let phoneScreen = "rectangle.portrait"
+        /// The Mac's windows to put on Phone Screen's display (#9314).
+        static let macWindows = "macwindow.on.rectangle"
         /// The Mac's pointer drawn over its screen in the app's VNC (#1343), when the Mac sends none of its own.
         static let pointer = "cursorarrow"
         /// VNC in a small window over everything (picture in picture).
@@ -740,6 +746,11 @@ extension Theme {
         static let meeting = "person.2.wave.2"
         /// Invite someone into a meeting (#8731: Persona, on the Meetings home and in the meeting room).
         static let invite = "person.badge.plus"
+        /// Leave the meeting room for the rest of the app while the meeting records (#8731: the room's collapse).
+        static let minimizeRoom = "chevron.compact.down"
+        /// Persona says its answers out loud in the meeting / only on screen (#8731: the meeting room's speaker).
+        static let answersAloud = "speaker.wave.2"
+        static let answersOnScreen = "speaker.slash"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.

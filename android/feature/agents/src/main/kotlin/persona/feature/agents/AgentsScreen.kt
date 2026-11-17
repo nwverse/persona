@@ -60,10 +60,10 @@ internal fun AgentsScreen(
     /** A notification's card to open once it is listed (#4808). */
     cardRequests: CardOpenRequests = AgentsCardOpen,
 ) {
-    val page by model.page.collectAsStateWithLifecycle()
+    val latestPage by model.page.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
-    LaunchedEffect(model, listState, page.pagination.paged) {
-        if (!page.pagination.paged) return@LaunchedEffect
+    LaunchedEffect(model, listState, latestPage.pagination.paged) {
+        if (!latestPage.pagination.paged) return@LaunchedEffect
         snapshotFlow {
             val layout = listState.layoutInfo
             val last = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
@@ -75,6 +75,15 @@ internal fun AgentsScreen(
     val everyRequest by model.interactions.pending.collectAsStateWithLifecycle()
     // The current assistant's agents (docs/assistant/managers.md "Clients"), and the cards that are theirs.
     val assistant = persona.core.designsystem.currentAssistant()
+    // What the list draws: the hub's page, held still for a bounded time while it is scrolled (AgentsFeedHold.kt). The
+    // controls and the window size start it over; a rebuilt window is not told apart from a new list.
+    val window = androidx.compose.ui.platform.LocalConfiguration.current
+    // The pill counts what the Needs You section of a page would draw, from the requests the screen shows for that page.
+    val feed = rememberAgentsFeed(latestPage, { p ->
+        agentsFeedNeedsYou(p, shownRequests(everyRequest, group, assistant, p.sessions)) { key -> model.operationState.value.sessions[key]?.closed == true }
+    }, listOf(group?.namespace, assistant.id, assistant.group, latestPage.settings, latestPage.preferences, PersonaTheme.style,
+        window.screenWidthDp, window.screenHeightDp), listState)
+    val page = feed.page
     LaunchedEffect(model, assistant) { model.show(assistant) }
     // The shell keeps the picked computer for the next launch: it follows the filter however that changes (a chip, or
     // let go by a switch of assistant or hub group).
@@ -153,6 +162,12 @@ internal fun AgentsScreen(
     }
     var now by remember { mutableStateOf(Instant.now()) }
     val lifecycle = LocalLifecycleOwner.current
+    val workspaceService = LocalAgentCreationService.current
+    LaunchedEffect(lifecycle, model, workspaceService) {
+        lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            model.watchWorkspaceCatalog(workspaceService)
+        }
+    }
     LaunchedEffect(lifecycle) {
         lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) { now = Instant.now(); delay(1_000) }
@@ -300,8 +315,10 @@ internal fun AgentsScreen(
     // it, the agents' rows under their line and the idle ones behind one quiet line; each computer's idle repositories a row
     // each in its Idle Repositories. Brief and Board keep their headings and "N more idle" (decision 8).
     val repoTree = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.Repo
-    // By project on Glass folds a space's opened idle agents again with "Hide N Idle" (iOS `collapseRow`, #4338 A8).
-    val hideIdle = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.MachineSpace
+    // By project on Glass, and By Machine always: fold opened idle agents again with "Hide N Idle" (iOS `collapseRow` /
+    // `machineSections`, #4338 A8 / #9319). Brief and Board keep one-way "N more idle" under By project (decision 8).
+    val hideIdle = page.preferences.grouping == AgentGrouping.Machine ||
+        (PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.MachineSpace)
     val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks, repoTree, hideIdle) {
         agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks,
             showAll = page.settings.expandedAll.takeIf {
@@ -312,14 +329,19 @@ internal fun AgentsScreen(
     val controls = page.settings
     // Use the effective sort and the user's fold choices, which are kept separately from the live list projection.
     // Display includes the Compact/Detailed preference in every style.
+    val restoring = RestoreAgentReadingPosition(listState, tree, paginationFooter, page.loaded)
     KeepAgentReadingPosition(listState, tree, paginationFooter,
         scope = listOf(group?.namespace, assistant.id, assistant.group, controls.grouping, controls.sort,
             controls.quick, controls.machineFilter, controls.query, controls.hideBotmux,
             controls.folded, controls.expandedIdle, controls.expandedQuiet, controls.expandedAll, page.preferences.foldedTabs, expandedTasks,
-            page.preferences.range, page.preferences.display, PersonaTheme.style))
+            page.preferences.range, page.preferences.display, PersonaTheme.style),
+        restoring = restoring)
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
-    // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9).
-    val mixesComputers = remember(page.list, page.settings.machineFilter) { page.list.mixesComputers(page.settings.machineFilter) }
+    // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9). By Machine's sections are the computers, so rows omit the name
+    // (iOS `rowMachine` skips `.machine`).
+    val mixesComputers = remember(page.list, page.settings.machineFilter, page.preferences.grouping) {
+        page.preferences.grouping != AgentGrouping.Machine && page.list.mixesComputers(page.settings.machineFilter)
+    }
     val showHost = remember(page.list, page.preferences.grouping) { page.preferences.grouping == AgentGrouping.Todo && page.list.mixesHosts() }
     val spacesById = page.spacesById
     val repoSlots = remember(tree, repoTree) { if (repoTree) repoCardSlots(tree) else emptyMap() }
@@ -588,10 +610,11 @@ internal fun AgentsScreen(
                                         WorktreeTally.Idle -> stringResource(persona.core.designsystem.R.string.designsystem_worktree_idle)
                                         is WorktreeTally.Agents -> pluralStringResource(persona.core.designsystem.R.plurals.designsystem_tab_agents, tally.count, tally.count)
                                     }
-                                }, quiet = entry.quiet, offline = line?.offline == true)
+                                }, quiet = entry.quiet, offline = line?.offline == true, pinned = line?.pinned == true)
                         } else if (entry.space) AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
                             quiet = entry.quiet, sessions = group.totalCount ?: group.rows.size, counts = group.headingCounts,
                             waiting = group.waitingInBackground, flags = buildList {
+                                if (group.worktree?.pinned == true) add(RowFlag(stringResource(R.string.agents_row_pinned), PersonaIcons.pinned))
                                 if (space != null && space.preferenceKey in page.preferences.pins.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_pinned), PhIcons.PushPin))
                                 if (space != null && space.preferenceKey in page.preferences.mutes.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_muted), PhIcons.Prohibit))
                                 // iOS TodoSpaceTag: the project is on a to-do.
@@ -639,6 +662,14 @@ internal fun AgentsScreen(
                                 // iOS `compact ? CompactList…`; Board uses the denser type too.
                                 compact = page.preferences.compact || PersonaTheme.style == AppStyle.Board,
                             )
+                        } else if (group.id.startsWith("machine/")) {
+                            // By Machine (#9319, iOS `MachineSectionHeader`): the computer's mark, online tint, state counts
+                            // from the rows (domain leaves stateCounts null for the shared fixtures).
+                            val mid = group.id.removePrefix("machine/")
+                            val host = page.machines.firstOrNull { it.id == mid }
+                            AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
+                                icon = host?.deviceIcon ?: PersonaIcons.machine, online = host?.online,
+                                counts = machineHeadingCounts(group), waiting = group.waitingInBackground)
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                             icon = PhIcons.PushPin.takeIf { group.id == "pinned" }
                                 ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" }
@@ -712,6 +743,8 @@ internal fun AgentsScreen(
                 }
             }
         }
+        AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+            .padding(horizontal = Tokens.Space.page).padding(bottom = Tokens.Space.l))
         persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
     }
     }
@@ -1028,8 +1061,12 @@ internal fun SlotRow(
                 // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
                 source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
                 if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
-                if (located) listOfNotNull(machine, session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() })
-                    .joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
+                // By Machine's sections are the computers (iOS `rowMachine` skips `.machine`); other groupings name the
+                // host while the list mixes computers ([mixesComputers]).
+                if (located) listOfNotNull(
+                    machine.takeIf { mixesComputers },
+                    session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() },
+                ).joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
                 // The model it runs on (#4338 A9): the session's model, else its launcher's, by its short name, never the raw id.
                 session.rowModel?.let { add(RowFact(it)) }
                 session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
@@ -1210,6 +1247,7 @@ private val AgentGrouping.label: String @Composable get() = stringResource(when 
     AgentGrouping.Repo -> R.string.agents_grouping_repo
     AgentGrouping.State -> R.string.agents_grouping_state
     AgentGrouping.Todo -> R.string.agents_grouping_todo
+    AgentGrouping.Machine -> R.string.agents_grouping_machine
     AgentGrouping.App -> R.string.agents_grouping_app
     AgentGrouping.Recent -> R.string.agents_grouping_recent
     AgentGrouping.Direction -> R.string.agents_grouping_direction

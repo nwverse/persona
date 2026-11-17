@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
 
@@ -49,10 +50,15 @@ type Options struct {
 	// RepositoryConfig is this manager's operator configuration file. Only its
 	// explicit repository_trusted_targets can opt private destinations in.
 	RepositoryConfig string
+	// RemoteImageCache is where the remote image route keeps the pictures it fetched (remote_image.go; a cache the
+	// directory of which may be deleted at any time); "" keeps them in no file (tests).
+	RemoteImageCache string
 }
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
+	remoteImages *remoteimage.Fetcher
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
 	inboxExt inboxExtensionCache
 	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
@@ -182,6 +188,7 @@ type Service struct {
 	accept         acceptBook     // acceptance.go
 	pushQuiet      quietSwitch    // push_quiet.go: the hub's low-distraction switch as last read
 	deploy         deployProbe    // deploy_check.go: is the work in the running hub
+	parkReplies    parkReplyBook  // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
@@ -248,6 +255,12 @@ type Service struct {
 	trust      trustBook     // machine_trust.go: the computers waiting to be confirmed
 	ready      readinessBook // readiness.go: the main conversation's readiness
 
+	// pieceWriteHook, when set, runs as a write of part_of/after (editTodo, insertTodo) has passed its caller's check
+	// and is about to take todoBook.writing (tests: two writes held there both passed against the same graph).
+	pieceWriteHook func(id string)
+	// editWriteHook, when set, runs as any edit (editTodo) is about to take todos.writing, after pieceWriteHook: tests
+	// use it to change the to-do in between (a DELETE racing the edit).
+	editWriteHook func(id string)
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
@@ -265,6 +278,8 @@ type Service struct {
 	hubTr     hubRuns
 	sockets   sync.Once
 	socketMux *http.ServeMux
+	// navMu: one change of the user's navigation choices at a time, each read and written whole (navigation.go)
+	navMu sync.Mutex
 }
 
 var _ Handler = (*Service)(nil)
@@ -274,6 +289,7 @@ func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
+	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
 	if s.store == nil {
 		s.store = func() Store { return nil }
 	}
@@ -321,6 +337,7 @@ func New(o Options) *Service {
 	s.todoRoutes()
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
+	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
 	s.companionRoutes()
 	s.kbInit(o.KB)
@@ -337,6 +354,7 @@ func New(o Options) *Service {
 	s.providerCatalogRoutes()
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
+	s.remoteImageRoutes()
 	return s
 }
 
@@ -458,6 +476,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
+		}
+	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
+		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
+		// on its launcher's window (and never adopts the spare).
+		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
+			putMainCompactWindow(s.settings(ctx), p)
 		}
 	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
@@ -742,6 +768,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.agentDecisionSpoke(ctx, r, time.Now())
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).

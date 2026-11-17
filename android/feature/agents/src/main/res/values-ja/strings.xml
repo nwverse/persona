@@ -17,6 +17,15 @@
     <plurals name="agents_summary_requests">
         <item quantity="other">%1$d件の判断を待っています</item>
     </plurals>
+    <plurals name="agents_feed_needs_you">
+        <item quantity="other">%1$d件が要対応</item>
+    </plurals>
+    <plurals name="agents_feed_offline">
+        <item quantity="other">%1$d件が停止中</item>
+    </plurals>
+    <plurals name="agents_feed_new">
+        <item quantity="other">新着 %1$d件</item>
+    </plurals>
     <plurals name="agents_summary_working">
         <item quantity="other">%1$d個のエージェントが作業中</item>
     </plurals>
@@ -75,6 +84,7 @@
     <string name="agents_grouping_state">状態別</string>
     <string name="agents_grouping_todo">ToDo別</string>
     <string name="agents_grouping_project">プロジェクト別</string>
+    <string name="agents_grouping_machine">マシン別</string>
     <string name="agents_grouping_app">アプリ別</string>
     <string name="agents_grouping_recent">最近使用した項目</string>
     <string name="agents_grouping_direction">常駐別</string>
