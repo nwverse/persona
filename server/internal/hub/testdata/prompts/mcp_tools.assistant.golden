@@ -1872,7 +1872,7 @@
   },
   {
     "name": "model_profile_rollback",
-    "description": "Undo the last model-profile switch using its saved before-image. Restores only touched model settings, not launcher credentials or the main chat's profile for new conversations. Inspect the rollback preview with model_profiles_list first; a second rollback redoes the switch.",
+    "description": "Undo the last model-profile switch using its saved before-image. Restores only touched model settings, not launcher credentials. Inspect the rollback preview with model_profiles_list first; a second rollback redoes the switch.",
     "input_schema": {
       "type": "object",
       "properties": {},
