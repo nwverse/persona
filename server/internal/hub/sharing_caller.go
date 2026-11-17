@@ -3,10 +3,12 @@ package hub
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 )
 
@@ -59,4 +61,27 @@ func attachNodeCaller(ctx context.Context, p *devicewire.NodeCall) {
 			p.Submission = &submission
 		}
 	}
+}
+
+// assistantFromMode keeps session.send's from_mode only on the assistant's own device.call: the permission-mode class of
+// the words a message carries (a task worker's, in a supervision message to its leader) is the assistant's to state, from
+// that worker's session, and a node states it to a Claude outside Persona's terminals (node claudebg.go, #9607). An app,
+// a relay, a channel or another manager never states it: theirs is dropped.
+func assistantFromMode(ctx context.Context, raw json.RawMessage) json.RawMessage {
+	if id, ok := callerOf(ctx); ok && id == assistantwire.AssistantID {
+		return raw
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return raw
+	}
+	if _, ok := fields["from_mode"]; !ok {
+		return raw
+	}
+	delete(fields, "from_mode")
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return out
 }

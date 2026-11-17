@@ -1479,6 +1479,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		var owner *ownerDelivery
 		if opts.OwnerInput {
 			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
+		} else {
+			ctx = withPeerFromMode(ctx, opts.FromMode) // claudebg.go: the class of the words, for an outside Claude
 		}
 		err := n.sends.once(opts.ClientMsgID, func() error {
 			var after echoAfter

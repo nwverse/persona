@@ -43,7 +43,7 @@ type fakeInbox struct {
 	transcript string // where a taken message is written
 
 	mu    sync.Mutex
-	mode  string           // "take" (default), "hold", "drop-auth" (close at once, like a bad auth line), or a session's class, "bypass" / "prompting" (claudeTakes); setMode
+	mode  string           // "take" (default), "hold" (its notice written), "discard" (nothing written), "drop-auth" (close at once, like a bad auth line), or a session's class, "bypass" / "prompting" (claudeTakes, else hold); setMode
 	lines []map[string]any // every line read, auth lines included
 }
 
@@ -115,11 +115,23 @@ func (f *fakeInbox) conn(c net.Conn) {
 			continue
 		}
 		content, _ := m["message"].(map[string]any)["content"].(string)
-		if mode != "take" && !((mode == peerModeBypass || mode == "prompting") && claudeTakes(mode, content)) {
-			continue
+		var line []byte
+		switch {
+		case mode == "discard":
+			continue // refused, dropped or expired: nothing written
+		case mode == "take" || (mode == peerModeBypass || mode == peerModePrompting) && claudeTakes(mode, content):
+			line, _ = json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue",
+				"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "content": "Another Claude session sent a message:\n" + content})
+		default: // held for approval: Claude Code's notice in the transcript (peerHeldSeen)
+			name := ""
+			if e := claudeEnvelopeRe.FindStringSubmatch(content); e != nil {
+				name = e[4]
+			}
+			line, _ = json.Marshal(map[string]any{"type": "system", "subtype": "informational", "level": "warning",
+				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+				"content": "Held peer message — from an unidentified session [verified pid 1] (peer claims name: " + name +
+					"); preview: «…» — not delivered to Claude (1 held). Review it below."})
 		}
-		line, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue",
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "content": "Another Claude session sent a message:\n" + content})
 		file, err := os.OpenFile(f.transcript, os.O_APPEND|os.O_WRONLY, 0o600)
 		if err == nil {
 			_, _ = file.Write(append(line, '\n'))

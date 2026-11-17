@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1453,29 +1454,128 @@ func TestLeaderSendFailingOtherwiseIsRetriedByTheDigest(t *testing.T) {
 	}
 }
 
-// A send the node says may already be in the leader's session (its Claude's inbox read it, the session holds it for
-// approval at the computer: peer_held, delivered unknown) is not sent again by the next digests (#9607): each copy
-// would wait there too.
-func TestLeaderSendMaybeDeliveredIsNotResent(t *testing.T) {
+// A send the node says may already be in the leader's session but was not seen taking (its Claude's inbox read it; held
+// for approval at the computer, dropped, typed part way: delivered unknown) is neither resent by the next digests, which
+// would only pile copies there, nor counted as told (#9607): the conversation above hears of it once, the turn stays
+// untold and the deduplication is released, so a later digest or a restarted manager can still deliver it.
+func TestLeaderSendUnconfirmedIsEscalatedNotResent(t *testing.T) {
+	for _, code := range []string{"peer_held", "peer_unconfirmed", "input_uncertain"} {
+		t.Run(code, func(t *testing.T) {
+			s, f := newQuietService(t)
+			s.leaderResume = time.Hour
+			ctx := context.Background()
+			startTaskLeader(t, s, f)
+			w := planWorker(t, s, f, nil)
+			f.mu.Lock()
+			f.failSend = &rpc.Error{Code: code, Message: "not taken there", Data: json.RawMessage(`{"delivered":"unknown"}`)}
+			f.mu.Unlock()
+			blockedReport(t, s, w.Agents[0].SessionID)
+			waitFor(t, "the unconfirmed send", func() bool { return len(sendsTo(f, "box", "s1")) > 0 })
+			for range 3 {
+				s.sendDigest(ctx)
+			}
+			waitFor(t, "the conversation above the leader to hear of it", func() bool { return leaderEscalations(f) > 0 })
+			if n := len(sendsTo(f, "box", "s1")); n != 1 {
+				t.Errorf("the leader was sent the unconfirmed message %d times", n)
+			}
+			if n := leaderEscalations(f); n != 1 {
+				t.Errorf("the conversation above heard of it %d times:\n%s", n, strings.Join(f.notices(), "\n---\n"))
+			}
+			if !strings.Contains(strings.Join(f.notices(), "\n"), "may not have received") {
+				t.Errorf("the escalation does not say the leader may not have it:\n%s", strings.Join(f.notices(), "\n---\n"))
+			}
+		})
+	}
+}
+
+// An unconfirmed supervision message does not mark the turn it tells as told: the ledger a restarted manager recovers
+// from still has it to tell (#9607).
+func TestLeaderSendUnconfirmedLeavesTheTurnUntold(t *testing.T) {
 	s, f := newQuietService(t)
 	s.leaderResume = time.Hour
 	ctx := context.Background()
 	startTaskLeader(t, s, f)
 	w := planWorker(t, s, f, nil)
+	if _, _, err := s.updateSupervision(ctx, w.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+		t.Fatal(err)
+	}
+	s.supervise.mu.Lock()
+	s.supervise.init()
+	s.supervise.mu.Unlock()
+	g := superviseSignal{Todo: w.ID, Kind: sigReview, Key: reviewKey(todoNow(s, w.ID).Supervision), Machine: "box",
+		Session: w.Agents[0].SessionID, Detail: "done", At: time.Now()}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	if !s.turnsLocked(ctx) {
+		b.mu.Unlock()
+		t.Fatal("cannot load the turn ledger")
+	}
+	b.doc.Turns[w.ID] = taskTurn{Machine: "box", Session: g.Session, Key: g.Key, State: turnInterrupted,
+		Signal: &turnSignal{Kind: g.Kind, Key: g.Key, Detail: g.Detail}}
+	b.mu.Unlock()
 	f.mu.Lock()
-	f.failSend = &rpc.Error{Code: "peer_held", Message: "held for approval at the computer", Data: json.RawMessage(`{"delivered":"unknown"}`)}
+	f.failSend = &rpc.Error{Code: "peer_unconfirmed", Message: "dropped there", Data: json.RawMessage(`{"delivered":"unknown"}`)}
 	f.mu.Unlock()
-	blockedReport(t, s, w.Agents[0].SessionID)
-	waitFor(t, "the held send", func() bool { return len(sendsTo(f, "box", "s1")) > 0 })
-	for range 3 {
-		s.sendDigest(ctx)
+	lead, _, ok := s.leaderSupervisor(todoNow(s, w.ID))
+	if !ok {
+		t.Fatal("no leader")
 	}
-	time.Sleep(200 * time.Millisecond)
-	if n := len(sendsTo(f, "box", "s1")); n != 1 {
-		t.Fatalf("the leader was sent the held message %d times", n)
+	s.supervise.dedupMu.Lock()
+	delivered := s.deliverToLeaderAgent(ctx, lead, []superviseSignal{g}, "", time.Now(), time.Time{})
+	s.supervise.dedupMu.Unlock()
+	b.mu.Lock()
+	told := b.doc.Turns[w.ID].Signal.Told != nil
+	b.mu.Unlock()
+	if delivered || told {
+		t.Errorf("an unconfirmed send: delivered %v, turn told %v", delivered, told)
 	}
-	if n := leaderEscalations(f); n != 0 {
-		t.Fatalf("a held message was escalated:\n%s", strings.Join(f.notices(), "\n---\n"))
+}
+
+// A supervision message states the permission-mode class of the worker whose words it carries, never the leader's
+// (#9607): prompting for a worker in a mode that prompts (a bypass leader outside Persona's terminals then holds it, as
+// Claude Code means it to), bypass for one in bypass permissions mode, nothing for a mode whose class cannot be told
+// (plan) or a session that is not listed.
+func TestLeaderSupervisionStatesTheWorkersClass(t *testing.T) {
+	for _, c := range []struct{ worker, want string }{
+		{"default", "prompting"}, {"auto", "prompting"}, {"bypassPermissions", "bypass"}, {"plan", ""}, {"", ""},
+	} {
+		t.Run("worker "+cmp.Or(c.worker, "unlisted"), func(t *testing.T) {
+			s, f := newQuietService(t)
+			ctx := context.Background()
+			startTaskLeader(t, s, f)
+			w := planWorker(t, s, f, nil)
+			worker := w.Agents[0].SessionID
+			sessions := []proto.Session{{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+				Status: proto.StatusIdle, PermissionMode: proto.ModeBypass, UpdatedAt: time.Now()}}
+			if c.worker != "" {
+				sessions = append(sessions, proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+					Status: proto.StatusWorking, PermissionMode: c.worker, UpdatedAt: time.Now()})
+			}
+			f.setSessions("box", sessions...)
+			const marker = "the login page is stuck in design review"
+			raw, _ := json.Marshal(map[string]any{"kind": "blocked", "text": marker})
+			if res := s.agentTool(ctx, "box", worker, "report_to_supervisor", raw); res.IsError {
+				t.Fatalf("report refused: %+v", res)
+			}
+			waitFor(t, "the report to reach the leader", func() bool { return len(sendsTo(f, "box", "s1")) > 0 })
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			for _, call := range f.calls {
+				if call.Method != DeviceSessionSend {
+					continue
+				}
+				b, _ := json.Marshal(call.Params)
+				var p map[string]any
+				_ = json.Unmarshal(b, &p)
+				if text, _ := p["text"].(string); p["session_id"] == "s1" && strings.Contains(text, marker) {
+					if got, _ := p["from_mode"].(string); got != c.want || p["owner_input"] != nil {
+						t.Errorf("from_mode %q (owner_input %v), want %q", got, p["owner_input"], c.want)
+					}
+					return
+				}
+			}
+			t.Fatal("no supervision message to the leader")
+		})
 	}
 }
 
