@@ -731,7 +731,8 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   This uses the evidence fields above, not a new receipt format; `waiting` must name the evidence
   target. Sent contact fields cannot be inferred from a PR URL. A review also requires an existing,
   fresh, open, non-draft, non-conflicting task PR observation without requested changes.
-  Alternatively, the same named target and source can reuse the last review's inspected evidence.
+  Alternatively, the exact source and the same wait kind can reuse the last review's inspected
+  evidence: "waiting for upstream review" need not repeat an already recorded reviewer's name.
   Declared contact evidence is still a source-referenced account, not an independently fetched
   provider receipt. The review's `by` is `closeout`; its evidence never claims a supervisor inspection.
 - The independently owned external-event PR observer (#9775) is not implemented here.

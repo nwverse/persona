@@ -135,16 +135,31 @@ func externalCloseout(waiting string) bool {
 }
 
 func closeoutBinds(c proto.Closeout, artifacts []proto.WorkArtifact, e *ParkEvidence) bool {
-	if !strings.Contains(strings.ToLower(c.Waiting), strings.ToLower(e.Target)) {
-		return false
-	}
 	source := e.URL
 	if e.Contact != nil && source == "" {
 		source = e.Contact.URL
 	}
-	return source != "" && (strings.Contains(c.Waiting, source) || slices.ContainsFunc(artifacts, func(a proto.WorkArtifact) bool {
+	bound := source != "" && (strings.Contains(c.Waiting, source) || slices.ContainsFunc(artifacts, func(a proto.WorkArtifact) bool {
 		return a.Ref == source
 	}))
+	if !bound {
+		return false
+	}
+	text := strings.ToLower(c.Waiting)
+	if strings.Contains(text, strings.ToLower(e.Target)) {
+		return true
+	}
+	switch e.Kind {
+	case "external_event":
+		return externalCloseout(c.Waiting)
+	case "merge_review":
+		// i18n-ignore: literal Agent closeout inputs; the exact source already binds the recorded reviewer.
+		return containsAny(text, []string{"review", "merge", "复审", "合并", "レビュー", "マージ"})
+	case "person_reply":
+		// i18n-ignore: literal Agent closeout inputs, paired with the exact sent-message source.
+		return containsAny(text, []string{"reply", "respond", "回复", "返事"})
+	}
+	return false
 }
 
 func automaticDependency(p Parked) string {

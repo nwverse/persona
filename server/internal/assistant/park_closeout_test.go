@@ -54,6 +54,8 @@ func TestAutomaticCloseoutParkingAdmission(t *testing.T) {
 		{"explicit date", automaticCloseout("the opening window on "+now.Add(48*time.Hour).Format(time.RFC3339), "", nil), true},
 		{"sent person request", automaticCloseout("reviewer-a replies in the sent thread", "", parkEvidenceArgs("person_reply")), true},
 		{"ready source-bound review", automaticCloseout("reviewer-a completes the requested review", "", parkEvidenceArgs("merge_review")), true},
+		{"reuse recorded review source", automaticCloseout("等上游复审", "pr https://github.com/example/project/pull/42", nil), true},
+		{"recorded review cannot hide deployment", automaticCloseout("deployment rollout-42", "pr https://github.com/example/project/pull/42", nil), false},
 		{"missing source", automaticCloseout("wait for deployment", "", nil), false},
 		{"unrelated build source", automaticCloseout("deployment rollout-43", "build https://example.org/deployments/rollout-42", nil), false},
 		{"PR alone is no sent review", automaticCloseout("wait for upstream review", "pr https://github.com/example/project/pull/42", nil), false},
@@ -68,11 +70,18 @@ func TestAutomaticCloseoutParkingAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, task, _, at := automaticFixture(t, tc.reply)
-			if tc.name == "ready source-bound review" {
+			if tc.name == "ready source-bound review" || tc.name == "reuse recorded review source" || tc.name == "recorded review cannot hide deployment" {
 				s.todos.mu.Lock()
 				cur := s.todos.todos[task.ID]
 				cur.PRURL = "https://github.com/example/project/pull/42"
 				cur.PRStatus = &TodoPRStatus{URL: cur.PRURL, State: "open", CheckedAt: at}
+				if tc.name != "ready source-bound review" {
+					raw, _ := json.Marshal(parkEvidenceArgs("merge_review")["evidence"])
+					var evidence ParkEvidence
+					_ = json.Unmarshal(raw, &evidence)
+					cur.Supervision.Reviews = []TaskReview{{At: at.Add(-time.Hour), Verdict: "parked",
+						WaitingOn: "someone_else", Until: at.Add(24 * time.Hour), Evidence: &evidence}}
+				}
 				s.todos.mu.Unlock()
 			}
 			g := superviseSignal{Todo: task.ID, Kind: "idle"}
