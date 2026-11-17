@@ -11,7 +11,7 @@
 import { allTypes } from "../src/lib/configuration/fixtures/shared.ts";
 import { checkUpdate, CONFIGURATION_VERSION, ConfigurationError } from "../src/lib/configuration/contract.ts";
 
-export const SCENARIO_IDS = ["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "empty", "unsupported"];
+export const SCENARIO_IDS = ["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "contract", "empty", "unsupported"];
 
 /** URL aliases: the preview can link the full set as ?scenario=overview, the name people would expect. */
 const SCENARIO_ALIASES = { overview: "default" };
@@ -20,94 +20,13 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 /** The fixture's own three languages; the page passes the app's current one. */
 const T = (lang, en, zh, ja) => (lang === "en" ? en : lang === "ja" ? ja : zh);
 
-/** The page's chrome, in the reader's language. Not catalog keys: this page is never built and adds no interface text. */
+/** The page's title, in the reader's language. Not catalog keys: this page is never built and adds no interface text. */
 export function shell(lang) {
   return {
-    title: T(lang, "Configuration showcase", "配置展示", "設定ショーケース"),
-    lead: T(
-      lang,
-      "Module-injected configuration documents, drawn by the real configuration form. These are mock modules over in-memory sources: there is no hub, no server and no real setting behind any of them.",
-      "由模块注入的配置文档，用真实的通用配置表单绘制。这里的模块都是模拟的，数据只保存在页面内存中：没有 hub、没有服务器，也没有任何真实设置。",
-      "モジュールが注入する設定ドキュメントを、実際の汎用設定フォームで表示します。ここにあるのはメモリ上のソースを使うモックモジュールで、hub もサーバーも実際の設定もありません。",
-    ),
-    mockBanner: T(
-      lang,
-      "Mock data. Changes are kept in this page's memory until you refresh; the forms read and write only these mock sources.",
-      "模拟数据。更改只保存在本页的内存中，刷新页面即会丢失；各表单只读写这些模拟数据源。",
-      "モックデータです。変更はこのページのメモリに保持され、再読み込みすると失われます。フォームが読み書きするのはこれらのモックソースだけです。",
-    ),
-    instructions: T(
-      lang,
-      "Pick a scenario, then edit any form. Save writes only to that module's memory; Use default and Reload work the same way. The paragraph beside the form says what the module does.",
-      "先选择一个场景，然后编辑任意表单。保存只会写入该模块的内存；使用默认值和重新载入也一样。表单旁的说明会介绍该模块。",
-      "シナリオを選んでから、どのフォームでも編集できます。保存はそのモジュールのメモリにだけ書き込み、既定値に戻す・再読み込みも同じように動きます。フォームの横の説明がそのモジュールの内容です。",
-    ),
-    scenarioLabel: T(lang, "Scenario", "场景", "シナリオ"),
-    scenarioNote: T(lang, "What to try", "可以试试", "試すこと"),
-    mock: T(lang, "Mock", "模拟", "モック"),
-    otherPage: T(lang, "Single-document fixture page", "单文档示例页", "単一ドキュメントの例ページ"),
-    fixtureProblem: T(lang, "Fixture problem: a mock document or value is invalid", "示例数据有问题：某个模拟文档或取值无效", "フィクスチャの問題: モックドキュメントまたは値が無効です"),
+    title: T(lang, "Settings", "设置", "設定"),
+    fixtureProblem: T(lang, "Fixture problem: a document or value is invalid", "示例数据有问题：某个文档或取值无效", "フィクスチャの問題: ドキュメントまたは値が無効です"),
   };
 }
-
-/** The selectable scenarios, with what each one demonstrates. */
-export function scenarios(lang) {
-  return [
-    {
-      id: "default",
-      label: T(lang, "All modules", "全部模块", "すべてのモジュール"),
-      note: T(lang, "Every mock module on one page; each form is independent. Save, Use default and Reload all work.", "一页展示所有模拟模块，各表单互不影响。保存、使用默认值和重新载入都可以直接试。", "すべてのモックモジュールを1ページに。各フォームは独立しています。保存・既定値に戻す・再読み込みを試せます。"),
-    },
-    {
-      id: "slow",
-      label: T(lang, "Slow source", "缓慢的数据源", "遅いソース"),
-      note: T(lang, "Reads and saves take 1.6 seconds, so Loading… and Saving… stay visible long enough to see.", "读取和保存各需要 1.6 秒，可以清楚看到「正在载入」和「正在保存」状态。", "読み込みと保存に各1.6秒かかるため、「読み込み中」「保存中」がはっきり見えます。"),
-    },
-    {
-      id: "load-fail",
-      label: T(lang, "Failed first load", "首次载入失败", "初回読み込みの失敗"),
-      note: T(lang, "Only the shared example is shown: its first read fails, and Try again loads it.", "只显示共享示例：它第一次读取会失败，点「重试」即可载入。", "共有例だけを表示しています。最初の読み込みが失敗します。「再試行」で読み込めます。"),
-    },
-    {
-      id: "reject",
-      label: T(lang, "Field rejected", "字段被拒绝", "項目の拒否"),
-      note: T(lang, "Only Daily digest is shown. Change the topic and Save: the first save is rejected with the module's own message; saving again succeeds.", "只显示「每日摘要」。修改主题并保存：第一次保存会被拒绝，并显示模块自己的提示；再次保存即可成功。", "「デイリーダイジェスト」だけを表示しています。件名を変えて保存すると、最初の保存はモジュール自身のメッセージで拒否されます。もう一度保存すると成功します。"),
-    },
-    {
-      id: "conflict",
-      label: T(lang, "Revision conflict", "版本冲突", "リビジョンの競合"),
-      note: T(lang, "Only Daily digest is shown. Change the topic and Save: another writer got there first, so the save reports a conflict. Reload refreshes the baseline while your text stays; review it, then save again.", "只显示「每日摘要」。修改主题并保存：另一个写入方抢先保存，因此报告冲突。重新载入会刷新基线，你输入的内容仍会保留；确认后再保存一次。", "「デイリーダイジェスト」だけを表示しています。件名を変えて保存すると、別の書き手が先に保存したため競合します。再読み込みすると基準が更新され、入力内容は残ります。確認してからもう一度保存してください。"),
-    },
-    {
-      id: "unconfirmed",
-      label: T(lang, "Unconfirmed save", "保存结果未知", "保存の未確認"),
-      note: T(lang, "Only Daily digest is shown. Change the topic and Save: the request never gets an answer, so the form says the save is unconfirmed and Reload is required before trying again.", "只显示「每日摘要」。修改主题并保存：请求得不到回应，表单会提示保存结果未知，必须先重新载入才能再试。", "「デイリーダイジェスト」だけを表示しています。件名を変えて保存すると、応答が返らず「保存を確認できません」と表示されます。再試行の前に再読み込みが必要です。"),
-    },
-    {
-      id: "empty",
-      label: T(lang, "Empty form", "空表单", "空のフォーム"),
-      note: T(lang, "A valid document with no groups: the form shows its title and description, and no fields.", "一个没有分组但有效的文档：表单只显示标题和说明，没有字段。", "グループのない有効なドキュメントです。タイトルと説明だけが表示され、項目はありません。"),
-    },
-    {
-      id: "unsupported",
-      label: T(lang, "Newer builds", "更新版本", "新しいビルド"),
-      note: T(lang, "A field kind this build doesn't know stays visible read-only, and a newer schema version is shown but never written.", "此版本不认识的字段类型会以只读方式显示；更新的协议版本会展示，但永远不会被写入。", "このビルドが知らない項目種別は読み取り専用で表示され、新しいスキーマバージョンは表示のみで書き込みません。"),
-    },
-  ];
-}
-
-const MODULE_NOTE = (lang, key) => {
-  const notes = {
-    terminal: T(lang, "Browser-local style: the same kind of source the real Labs page uses, with scope, activation and rollback details.", "类似浏览器本地的数据源，与真实 Labs 页面的方式相同，带适用范围、生效时机和回退说明。", "ブラウザ内ソース風。実際の Labs ページと同じ種類のソースで、適用範囲・反映のタイミング・元に戻す方法の説明付きです。"),
-    digest: T(lang, "Server-style source: values look written by another service, and notices explain what the module controls.", "类似服务器的数据源：取值像是另一个服务写入的，并用提示说明模块控制的内容。", "サーバー風のソース。値は別のサービスが書いたように見え、通知がモジュールの管理内容を説明します。"),
-    editor: T(lang, "Local editor module: all three multiselect counts (none, full, exactly one) and a fractional number.", "本地编辑器模块：三种多选数量（不限、已满、恰好一个），以及一个小数。", "ローカルなエディターモジュール。3種類の複数選択（なし・上限・ちょうど1つ）と小数の数値があります。"),
-    shared: T(lang, "The shared contract example (schema/configuration/all-types.json), unchanged and in English: every kind and every select presentation.", "共享契约示例（schema/configuration/all-types.json），保持原样、英文内容：包含所有控件类型和所有下拉呈现方式。", "共有契約の例（schema/configuration/all-types.json）をそのまま英語で表示します。すべての種類と選択の表示形式を含みます。"),
-    empty: T(lang, "A valid document with no groups.", "一个没有分组但有效的文档。", "グループのない有効なドキュメントです。"),
-    newerKind: T(lang, "One field has a kind from a newer build: shown with its words, never changed, and its value preserved.", "有一个字段来自更新版本：会显示它的文字说明，不能修改，取值会保留。", "1つの項目が新しいビルドの種別です。説明は表示されますが変更できず、値は保持されます。"),
-    newerVersion: T(lang, "A document from a newer schema version: shown read-only, never written.", "来自更新协议版本的文档：只读展示，永远不会被写入。", "新しいスキーマバージョンのドキュメントです。読み取り専用で表示され、書き込みません。"),
-  };
-  return notes[key];
-};
 
 function terminalDoc(lang) {
   return {
@@ -153,7 +72,7 @@ function digestDoc(lang) {
     id: "showcase-digest",
     revision: "digest-1",
     title: T(lang, "Daily digest", "每日摘要", "デイリーダイジェスト"),
-    description: T(lang, "A mock notifications module with a server-style source: one summary each day.", "模拟的通知模块，使用类似服务器的方式读写：每天发送一次摘要。", "通知のモックモジュール。サーバー風のソースで、毎日1回まとめを送ります。"),
+    description: T(lang, "One summary each day, at the hour you choose.", "每天按你选择的时间发送一次摘要。", "毎日、選んだ時刻に1回まとめを送ります。"),
     groups: [
       {
         id: "delivery",
@@ -193,7 +112,7 @@ function digestDoc(lang) {
             kind: "text",
             title: T(lang, "Topic", "主题", "件名"),
             description: T(lang, "One line that starts the message; required, up to 40 characters.", "摘要的开头一行，必填，最多 40 个字符。", "本文の冒頭に使う1行。必須で40文字まで。"),
-            default: "Daily summary",
+            default: T(lang, "Daily summary", "每日摘要", "今日のまとめ"),
             text: { min_length: 1, max_length: 40, placeholder: T(lang, "For example, Daily summary", "例如：每日摘要", "例：今日のまとめ") },
           },
           {
@@ -216,7 +135,7 @@ function digestDoc(lang) {
             description: T(lang, "Where the digest is sent.", "摘要发送到哪里。", "まとめの送信先です。"),
             default: "",
             read_only: true,
-            disabled_reason: T(lang, "Set by the account that owns this module.", "由拥有此模块的账号设置。", "このモジュールを所有するアカウントが設定します。"),
+            disabled_reason: T(lang, "Set by the account that owns these settings.", "由拥有这些设置的账号设置。", "これらの設定を所有するアカウントが設定します。"),
             details: [
               { title: T(lang, "Applies to", "适用范围", "対象"), description: T(lang, "This account, on every device.", "此账号的所有设备。", "このアカウントのすべてのデバイス。") },
               { title: T(lang, "Takes effect", "生效时机", "反映されるタイミング"), description: T(lang, "The next digest after the account changes it.", "账号修改后的下一份摘要。", "アカウントで変更した後の次のまとめから。") },
@@ -247,7 +166,7 @@ function editorDoc(lang) {
     id: "showcase-editor",
     revision: "editor-1",
     title: T(lang, "Editor formatting", "编辑器格式", "エディターの書式"),
-    description: T(lang, "A local editor module whose settings belong to this editor.", "本地编辑器模块，设置只属于这个编辑器。", "このエディターに属するローカルなエディターモジュールです。"),
+    description: T(lang, "This editor's own settings, independent of the app's appearance.", "此编辑器自己的设置，与应用外观相互独立。", "このエディター自身の設定で、アプリの外観とは独立しています。"),
     groups: [
       {
         id: "editor",
@@ -468,11 +387,9 @@ function memorySource({ key, doc, lang, latency, readFailures = 0, behavior = nu
   };
 }
 
-const moduleOf = (lang, key, doc, { note, readFailures = 0, behavior = null, sourceLabel, latency }) => ({
+const moduleOf = (lang, key, doc, { readFailures = 0, behavior = null, latency }) => ({
   key,
   document: doc,
-  note,
-  sourceLabel: sourceLabel ?? T(lang, "In-memory source", "内存数据源", "メモリ上のソース"),
   source: memorySource({ key, doc, lang, latency, readFailures, behavior }),
 });
 
@@ -485,40 +402,18 @@ export function buildShowcase(scenario = "default", lang = "zh-Hans", options = 
   const chosen = SCENARIO_IDS.includes(requested) ? requested : "default";
   const latency = options.latency ?? (chosen === "slow" ? { read: 1600, save: 1600 } : { read: 140, save: 320 });
   const mod = (key, doc, extra = {}) => moduleOf(lang, key, doc, { ...extra, latency });
-  const note = (key) => MODULE_NOTE(lang, key);
-
-  if (chosen === "empty") {
-    return { scenario: chosen, modules: [mod("showcase-empty", emptyDoc(lang), { note: note("empty") })] };
-  }
-  if (chosen === "unsupported") {
-    return {
-      scenario: chosen,
-      modules: [
-        mod("showcase-newer-kind", newerKindDoc(lang), { note: note("newerKind") }),
-        mod("showcase-newer-version", newerVersionDoc(lang), { note: note("newerVersion") }),
-      ],
-    };
-  }
   const behavior = chosen === "reject" ? "reject" : chosen === "conflict" ? "conflict" : chosen === "unconfirmed" ? "unconfirmed" : null;
-  const sharedModule = () =>
-    mod("showcase-shared", clone(allTypes), {
-      note: note("shared"),
-      sourceLabel: T(lang, "Shared contract example", "共享契约示例", "共有契約の例"),
-      readFailures: chosen === "load-fail" ? 1 : 0,
-    });
-  const digestModule = () => mod("showcase-digest", digestDoc(lang), { note: note("digest"), behavior });
-  // A failure scenario shows only the module it happens in, so its error controls are visible without scrolling through
-  // every other form. The full set keeps all five.
-  if (chosen === "load-fail") return { scenario: chosen, modules: [sharedModule()] };
+  const terminalModule = () => mod("showcase-terminal", terminalDoc(lang), { readFailures: chosen === "load-fail" ? 1 : 0 });
+  const digestModule = () => mod("showcase-digest", digestDoc(lang), { behavior });
+
+  // The default page is the product view: three genuine module settings, no fixture framing. The remaining scenarios
+  // exist for coverage through ?scenario= only, and a failure scenario shows just the module it happens in.
+  if (chosen === "contract") return { scenario: chosen, modules: [mod("showcase-shared", clone(allTypes))] };
+  if (chosen === "empty") return { scenario: chosen, modules: [mod("showcase-empty", emptyDoc(lang))] };
+  if (chosen === "unsupported") {
+    return { scenario: chosen, modules: [mod("showcase-newer-kind", newerKindDoc(lang)), mod("showcase-newer-version", newerVersionDoc(lang))] };
+  }
+  if (chosen === "load-fail") return { scenario: chosen, modules: [terminalModule()] };
   if (behavior) return { scenario: chosen, modules: [digestModule()] };
-  return {
-    scenario: chosen,
-    modules: [
-      mod("showcase-terminal", terminalDoc(lang), { note: note("terminal") }),
-      digestModule(),
-      mod("showcase-editor", editorDoc(lang), { note: note("editor") }),
-      sharedModule(),
-      mod("showcase-empty", emptyDoc(lang), { note: note("empty") }),
-    ],
-  };
+  return { scenario: chosen, modules: [terminalModule(), digestModule(), mod("showcase-editor", editorDoc(lang))] };
 }

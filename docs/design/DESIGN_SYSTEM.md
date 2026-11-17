@@ -2271,17 +2271,20 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 A module's settings described as a configuration Document (`docs/web/web.md`, "Configuration forms") are drawn by one
 generic form, never a page of their own: the document's title as a group heading (`text-[12px]` `ink-3`) with its
 description under it, then each group as a settings `Group` (its title above, its description as the footer). A field
-is a row: the title in the row's label type, its description in the hint type, the control, a two-column definition list
-in `text-[11.5px]` (`ink-3` terms, `ink-2` values, the page's existing `grid-cols-[auto_1fr]`: **Default** first, then the
-module's details as given), then any notice (orange for a warning, `ink-3` for info), the disabled reason or "Read only",
-a polite live line (**Saving…** with a spinner, then a green **Saved**), a red `role="alert"` error and a quiet **Use
-default** button where the value differs from the default.
+is a row: the title in the row's label type, its description in the hint type, the control, any error adjacent under it,
+any notice (orange for a warning, `ink-3` for info), the disabled reason or "Read only", and the module's details as a
+two-column definition list in `text-[11.5px]` (`ink-3` terms, `ink-2` values, the page's existing `grid-cols-[auto_1fr]`).
+Every field ends in one footer row: the default value, the scalar count where a text field has a maximum, the polite save
+state (**Saving…** with a spinner, then a green **Saved**) and the quiet **Reset** / **Cancel** / **Save** actions that
+apply, so the actions never sit between the control and its explanation and a short default keeps them on one line.
 - Controls, all existing: a toggle is the `Switch` at the row's end; a select is the `Segmented` control at the end
   (`segmented`), a native select in the settings field style at the end (`dropdown`) or `ChoiceRows` under the text
   (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
-  input or textarea, a number the input with a decimal keyboard. Text and numbers show **Cancel** / **Save** only once
-  they differ from what is saved, and a scalar count when there is a maximum; a multiselect's checks are the same kind of
-  pending edit, so a fixed count can move from A to B (two checks for the moment in between) without an invalid write.
+  input or textarea, a number a narrower input with a decimal keyboard. Text and numbers are drafts, and a multiselect's
+  checks are the same kind of pending edit, until **Save**; a multiselect whose maximum is one is drawn as a single choice
+  (`role="radio"` rows with round marks and arrow keys), and choosing another option replaces the old one in one click
+  (the wire value stays an array), while a larger maximum keeps ordinary checks and can pass through a temporary count.
+  **Reset** appears where the value differs from the default.
 - Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
   **Try again**) are one card above the groups.
 - An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a

@@ -1965,7 +1965,7 @@ writer's checks: lengths in Unicode scalar values, numbers finite and inside the
 allowed), choices known and distinct, counts within their limits. The shared `schema/configuration/validation-cases.json`
 (26 cases, the same file the Go checks run) is a Web test input; there is no Web-only copy of it or of the all-types
 document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a value that
-isn't valid is not shown and the field offers **Use default**; a schema version it doesn't know is shown and never written.
+isn't valid is not shown and the field offers **Reset**; a schema version it doesn't know is shown and never written.
 Nothing in a Document is a URL, a scope or an instruction.
 
 **Sources.** The form takes a `ConfigurationSource` injected by the owning module, already bound to its one resource:
@@ -1978,27 +1978,31 @@ imports no module, assistant, hub or storage.
 **The form.** It reuses the settings pieces (`Group`, `RowFailed`, `Switch`, `Segmented`, `ChoiceRows`, `CheckMark`, the
 field and button classes). A single-step choice (a switch, a list, dropdown or segmented selection) is written at once and
 shows **Saving…** until the source has committed; only then **Saved**. Typed text, numbers and a multiselect's checks are
-drafts until **Save** (Enter on one line; Escape puts a typed one back; **Cancel** beside any pending edit), so a fixed
-count can move from one choice to another without an invalid write in between. Drafts stay through a failed write, a
-conflict, a re-read or a change elsewhere, including what is typed or checked while its save is on the way (that newer
-edit stays unsaved). One write at a time, each against the revision shown. A conflict, or a write whose outcome is unknown
-(`configuration_unavailable`, a request that threw or timed out, or a successful answer that isn't a Document), says so
-and offers **Reload**, which keeps every draft; nothing else is written until it has read again, and a version it can't
-write blocks writing altogether. A refusal the writer names (a validation or storage failure) is retriable at once.
-Field errors appear on their fields in the client's words for codes it knows; an unknown code shows the module's own
-message. A source replaced while it is still answering is ignored, and so is a read that started before a newer Document
-arrived; a read that times out is reported, not mistaken for the form's own cancellation. The form loads with its page,
-in its own chunk. Every control is named by its field's title and described by its description.
-`web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json` for screenshots
-(`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/configuration-showcase.html`
-(`web/e2e/configuration-showcase.mjs`, `web/e2e/configuration-showcase-data.mjs`) is a fixture-only showcase for people:
-several independent mock modules — the shared example plus local, server-style and editor documents — cover every kind
-and select presentation, integer/fractional/zero/min/max numbers, empty, full and one-of-one multiselects, read-only
-fields with reasons, and info/warning notices. Selectable scenarios (`?scenario=slow|load-fail|reject|conflict|
-unconfirmed|empty|unsupported`; the full set with no query or `?scenario=overview`) show a slow source, a failed first
-load with Try again, a rejected field, a revision conflict, an unconfirmed network write with Reload recovery, an empty
-document, and an unknown kind plus a newer schema version. Each mock source keeps its values in that page's memory and
-reads or writes no real setting; the page checks its own documents with the real parser and is never built.
+drafts until **Save** (Enter on one line; Escape puts a typed one back), so a fixed count can move from one choice to
+another without an invalid write in between. A multiselect whose maximum is one is a single choice: it is drawn as
+`role="radio"` rows with round marks and arrow keys, and choosing another option replaces the old one in one click (the
+wire value stays an array); a larger maximum keeps ordinary checks, whose pending count can pass through a temporary
+value. Every field ends in one footer row that holds its default value, the count where a text field has a maximum, the
+save state and the **Reset** / **Cancel** / **Save** actions that apply, so the actions never sit between the control and
+its explanation. Drafts stay through a failed write, a conflict, a re-read or a change elsewhere, including what is typed
+or checked while its save is on the way (that newer edit stays unsaved). One write at a time, each against the revision
+shown. A conflict, or a write whose outcome is unknown (`configuration_unavailable`, a request that threw or timed out, or
+a successful answer that isn't a Document), says so and offers **Reload**, which keeps every draft; nothing else is
+written until it has read again, and a version it can't write blocks writing altogether. A refusal the writer names (a
+validation or storage failure) is retriable at once. Field errors appear on their fields in the client's words for codes
+it knows; an unknown code shows the module's own message. A source replaced while it is still answering is ignored, and so
+is a read that started before a newer Document arrived; a read that times out is reported, not mistaken for the form's own
+cancellation. The form loads with its page, in its own chunk. Every control is named by its field's title and described by
+its description. `web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json`
+for screenshots (`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/configuration-showcase.html`
+(`web/e2e/configuration-showcase.mjs`, `web/e2e/configuration-showcase-data.mjs`) is a fixture-only page that presents
+three genuine-looking module settings — a browser-local terminal renderer, a server-style daily digest and a local editor
+— exactly as the real form draws them, with no mock or test framing on the page itself. Its sources are in that page's
+memory and read or write no real setting; the page checks its own documents with the real parser. Coverage scenarios use
+the URL only (`?scenario=slow|load-fail|reject|conflict|unconfirmed|contract|empty|unsupported`; the product view with no
+query or `?scenario=overview`), and none of that navigation is drawn. `contract` shows the shared all-types example
+unchanged, `empty` shows a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the
+failure scenarios show only the module they happen in. The page is never built.
 
 ## Labs
 

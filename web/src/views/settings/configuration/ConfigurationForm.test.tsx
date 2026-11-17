@@ -105,6 +105,7 @@ function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
 }
 const key = (el: Element, k: string) => act(() => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
 const checks = (id: string) => [...row(id).querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
+const radios = (id: string) => [...row(id).querySelectorAll<HTMLButtonElement>('[role="radio"]')];
 
 describe("drawing every kind", () => {
   it("shows the document's title, groups, fields, descriptions, notices and details as given", async () => {
@@ -114,9 +115,10 @@ describe("drawing every kind", () => {
     expect(host.textContent).toContain("Use less space between rows.");
     expect(row("notes").textContent).toContain("Notes are optional.");
     const dl = row("managed").querySelector("dl")!;
-    expect([...dl.querySelectorAll("dt")].map((d) => d.textContent)).toEqual([t("settings-configuration.default"), "Applies to", "Takes effect"]);
-    expect([...dl.querySelectorAll("dd")].map((d) => d.textContent)).toEqual([t("settings-configuration.on"), "This preview only.", "When a new preview opens."]);
-    expect(row("sections").querySelector("dd")?.textContent).toBe(formatList(["Summary"]));
+    expect([...dl.querySelectorAll("dt")].map((d) => d.textContent)).toEqual(["Applies to", "Takes effect"]);
+    expect([...dl.querySelectorAll("dd")].map((d) => d.textContent)).toEqual(["This preview only.", "When a new preview opens."]);
+    expect(row("managed").textContent).toContain(`${t("settings-configuration.default")} ${t("settings-configuration.on")}`);
+    expect(row("sections").textContent).toContain(`${t("settings-configuration.default")} ${formatList(["Summary"])}`);
   });
 
   it("names every control by its field's title", async () => {
@@ -200,28 +202,39 @@ describe("single-step choices", () => {
 });
 
 describe("a multiselect's pending replacement", () => {
-  it("lets checks change locally and Save sends the final list (a fixed count moves A → B)", async () => {
+  it("draws a maximum of one as a single choice: a direct A → B click replaces it at once, and Save sends [B]", async () => {
     const m = memory(oneOfOne());
     await show(m.source);
-    expect(checks("sections")[0].getAttribute("aria-checked")).toBe("true");
-    act(() => checks("sections")[1].click()); // Activity on: two checked for a moment
+    expect(row("sections").querySelector('[role="radiogroup"]')).not.toBeNull();
+    expect(radios("sections")).toHaveLength(3);
+    expect(radios("sections")[0].getAttribute("aria-checked")).toBe("true");
+    act(() => radios("sections")[1].click()); // Activity: replaces Summary in one click
     expect(m.updates).toHaveLength(0);
-    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("true");
-    act(() => checks("sections")[0].click()); // Summary off
-    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("true");
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(row("sections").querySelector('[role="alert"]')).toBeNull();
     expect(buttonIn(row("sections"), t("settings-configuration.save"))).toBeDefined();
     act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
     await settle();
     expect(m.updates.at(-1)?.changes).toEqual({ sections: ["activity"] });
-    expect(checks("sections")[0].getAttribute("aria-checked")).toBe("false");
-    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("true");
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
     expect(row("sections").textContent).toContain(t("settings-configuration.saved"));
   });
 
-  it("Save says a count is wrong before sending anything, and Cancel puts the checks back", async () => {
+  it("moves a single choice with the arrow keys", async () => {
     const m = memory(oneOfOne());
     await show(m.source);
-    act(() => checks("sections")[0].click()); // uncheck the only choice
+    const group = row("sections").querySelector('[role="radiogroup"]')!;
+    key(group, "ArrowDown"); // Summary -> Activity
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ sections: ["activity"] });
+  });
+
+  it("still checks a count for an ordinary multiselect, and Cancel puts the checks back", async () => {
+    const m = memory();
+    await show(m.source);
+    act(() => checks("sections")[0].click()); // uncheck the only choice (min_selected 1)
     act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
     await settle();
     expect(m.updates).toHaveLength(0);
@@ -357,7 +370,7 @@ describe("typed text", () => {
 });
 
 describe("resetting", () => {
-  it("offers Use default only where the value differs, and sends reset", async () => {
+  it("offers Reset only where the value differs, and sends reset", async () => {
     const m = memory({ ...clone(example), values: { ...example.values, interval: 40 } });
     await show(m.source);
     expect(buttonIn(row("layout"), t("settings-configuration.reset"))).toBeUndefined();
