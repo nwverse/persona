@@ -530,7 +530,7 @@ func (s *Session) dropFramesLocked(ch *channel, reason string) {
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
 	ch.resetOut = false  // this is a new jump; its reset has not been handed out yet
-	ch.sentClose = false // repeat any earlier EOF close only after this jump is confirmed
+	ch.sentClose = false // a new jump invalidates an earlier close, so sentClose implies no unconfirmed jump
 	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	now := s.now()
 	for _, m := range keep {

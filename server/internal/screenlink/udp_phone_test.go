@@ -24,23 +24,24 @@ type udpPhone struct {
 	out    *udpSealer
 	flow   [8]byte
 
-	mu         sync.Mutex
-	recv       replayWindow
-	ch         byte
-	expected   uint64
-	msgs       map[uint64]*rxMessage
-	got        []byte
-	drop       func(udpFragmentHead) bool // simulated loss of fragments, by what they are
-	dropResets int
-	resetLost  chan struct{}
-	nacks      int
-	rebuilt    int
-	ctl        chan []byte
-	ratio      int
-	autoAsk    bool
-	lastHeard  time.Time
-	stop       chan struct{}
-	onError    func() // the released phone leaves a flow whose ordered receiver or assembler rejects a message
+	mu            sync.Mutex
+	recv          replayWindow
+	ch            byte
+	expected      uint64
+	msgs          map[uint64]*rxMessage
+	got           []byte
+	drop          func(udpFragmentHead) bool // simulated loss of fragments, by what they are
+	dropResets    int
+	dropResetAcks int // resets reach the receiver, but their acknowledgement is lost
+	resetLost     chan struct{}
+	nacks         int
+	rebuilt       int
+	ctl           chan []byte
+	ratio         int
+	autoAsk       bool
+	lastHeard     time.Time
+	stop          chan struct{}
+	onError       func() // the released phone leaves a flow whose ordered receiver or assembler rejects a message
 }
 
 type rxMessage struct {
@@ -363,8 +364,12 @@ func (u *udpPhone) deliver() {
 	u.mu.Lock()
 	_, failed := u.deliverLocked()
 	expected := u.expected
+	dropAck := u.dropResetAcks > 0
+	if dropAck {
+		u.dropResetAcks--
+	}
 	u.mu.Unlock()
-	if !failed {
+	if !failed && !dropAck {
 		// flowReset acknowledges every reset, also when no buffered message became deliverable.
 		go u.send(chanOffsetBody(udpAck, u.ch, expected))
 	}

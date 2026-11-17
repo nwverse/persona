@@ -699,7 +699,7 @@ func (s *Session) dropBacklogLocked(ch *channel) {
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
 	ch.resetOut = false  // this is a new jump; its reset has not been handed out yet
-	ch.sentClose = false // if EOF already sent a close, repeat it after this jump is confirmed
+	ch.sentClose = false // a new jump invalidates an earlier close, so sentClose implies no unconfirmed jump
 	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	s.logf("screenlink: video moved with a %d-byte backlog: dropped for a keyframe", dropped)
 	go ch.upstream.inject(ch, keyframeRequest)
@@ -1004,8 +1004,8 @@ func (s *Session) watch() {
 			if ch.active != nil && (ch.sent > ch.base || ch.resetOut) && now.Sub(ch.progress) >= s.limits.StallAfter {
 				stuck = append(stuck, ch.active)
 			}
-			// The local end finished and the phone has everything, including the reset for any final jump.
-			if ch.eof && ch.sentClose && len(ch.buf) == 0 && (!ch.jumpValid || ch.jumpConfirmed) {
+			// The local end finished and the phone has everything.
+			if ch.eof && ch.sentClose && len(ch.buf) == 0 {
 				expired = append(expired, ch)
 			}
 		}

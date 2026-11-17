@@ -861,12 +861,12 @@ iPhone's side comes next.
   retains non-frame decoder messages (`format`, `encoding`, …), because the helper need not repeat them for the new
   keyframe. A safety drop after EOF discards the remaining video buffer: no later keyframe can follow, and retained
   messages must not move the stream's end beyond a close the phone already holds. EOF by itself leaves buffered messages
-  intact while a reset awaits confirmation. A close does not finish a channel while its final jump is unconfirmed. A new
-  jump after a close went out owes another close after confirmation, because the phone's reset handler does not re-check
-  an earlier close; moving or losing a route alone does not owe the close again. A reset handed to a writer is outstanding
-  until the phone confirms it, whatever the buffer holds and whether or not EOF has arrived. If no bytes were already in
-  flight, its stall interval starts at handout. A route that keeps it unconfirmed for the stall limit is closed, and the
-  next route owes the reset again.
+  intact while a reset awaits confirmation. The close of a stream is handed out only once the phone has confirmed its
+  final jump. A new jump after a close went out owes another close after confirmation, because the phone's reset handler
+  does not re-check an earlier close; moving or losing a route alone does not owe the close again. A reset handed to a
+  writer is outstanding until the phone confirms it, whatever the buffer holds and whether or not EOF has arrived. If no
+  bytes were already in flight, its stall interval starts at handout. A route that keeps it unconfirmed for the stall
+  limit is closed, and the next route owes the reset again.
 - **Direct routes** (`screenlink.Direct`): while at least one session is live, the node listens on one TCP port bound
   to each of its candidate addresses (never the wildcard), and closes the listener with the last session. Candidates
   come from its own interfaces, with no Tailscale API or command: private IPv4 and unique-local IPv6 on Ethernet or
