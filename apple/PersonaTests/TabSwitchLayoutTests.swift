@@ -64,6 +64,68 @@ struct TabSwitchLayoutTests {
         #expect(TabSwitchLayout.bottomRoom(bottomBar: false, keyboardUp: false) == 0)
     }
 
+    /// A page's buttons in the side column stand clear of the tab bar (#9837): the leading ones that fit stay, Back and ⋯
+    /// always, and without a tab bar in the column all of them. Measured on iOS 27.2: on the open Duo on its side the tab
+    /// bar's top was 160 pt under the system's first item (an Agent's chat: terminal, Git and ⋯ fit, Files goes to ⋯); on
+    /// the outer display's rail 141 pt under Back (only ⋯ fits beside it).
+    @Test func aPagesButtonsStandClearOfTheTabBar() {
+        #expect(TabSwitchLayout.pageButtons(3, back: false, room: nil) == 3)
+        #expect(TabSwitchLayout.pageButtons(3, back: false, room: 160.3) == 2)
+        #expect(TabSwitchLayout.pageButtons(3, back: true, room: 141.3) == 0)
+        #expect(TabSwitchLayout.pageButtons(3, back: false, room: 1000) == 3)
+        #expect(TabSwitchLayout.pageButtons(2, back: true, room: 0) == 0)
+        let item = Theme.Shell.systemBarItem, gap = Theme.Shell.systemBarItemGap
+        for room in stride(from: CGFloat(0), through: 700, by: 0.5) {
+            for back in [false, true] {
+                let kept = TabSwitchLayout.pageButtons(9, back: back, room: room)
+                let start = back ? item + Theme.Shell.systemBarBackGap : 0
+                // The glass of the kept ones and ⋯ ends `Space.s` over the tab bar, and one more would not.
+                let glass = CGFloat(kept + 1) * item + CGFloat(kept) * gap
+                if kept > 0 { #expect(start + glass + Theme.Space.s <= room, "\(kept) kept in \(room)") }
+                if kept < 9 { #expect(start + glass + item + gap + Theme.Space.s > room, "\(kept) kept in \(room): room for one more") }
+            }
+        }
+    }
+
+    /// The system's first item is lower on the outer display (its camera is over the status bar) than on the inner one.
+    @Test func theSystemsItemsStartLowerOnTheOuterDisplay() {
+        #expect(TabSwitchLayout.systemBarTop(windowWidth: 466) == Theme.Shell.systemBarTopOuter)
+        #expect(TabSwitchLayout.systemBarTop(windowWidth: 669) == Theme.Shell.systemBarTopInner)
+        #expect(TabSwitchLayout.systemBarTop(windowWidth: 951) == Theme.Shell.systemBarTopInner)
+        #expect(Theme.Shell.systemBarTopOuter > Theme.Shell.systemBarTopInner)
+    }
+
+    /// The column's room follows the rails with a tab bar on screen: the highest one's, none once they are gone.
+    @Test func theColumnFollowsTheRailsOnScreen() {
+        let column = SideColumn(), a = UUID(), b = UUID()
+        #expect(column.room == nil)
+        column.report(a, top: 300, windowWidth: 951)
+        #expect(column.room == 300 - Theme.Shell.systemBarTopInner)
+        column.report(b, top: 280, windowWidth: 951)
+        #expect(column.room == 280 - Theme.Shell.systemBarTopInner)
+        column.report(b, top: nil, windowWidth: 951)
+        #expect(column.room == 300 - Theme.Shell.systemBarTopInner)
+        column.report(a, top: nil, windowWidth: 951)
+        #expect(column.room == nil)
+        column.report(a, top: 315, windowWidth: 466)
+        #expect(column.room == 315 - Theme.Shell.systemBarTopOuter)
+    }
+
+    /// The lens over a newly chosen item (#9837): it starts on the item that was chosen at full strength, swells on the
+    /// way, passes the new one with a bounce, and is gone, back to its size, on the new one once the glide ends.
+    @Test func theLensGlidesFromTheOldItemToTheNew() {
+        let start = TabBarGlide.frame(from: 0, to: 2, at: 0)
+        #expect(start.at == 0 && start.opacity == 1 && start.swell == 1)
+        let mid = TabBarGlide.frame(from: 0, to: 2, at: Theme.Motion.lensSwellTime)
+        #expect(mid.swell == Theme.Motion.lensSwellScale && mid.opacity == 1 && mid.at > 0)
+        let path = stride(from: 0.0, through: Theme.Motion.lensGlideTime, by: 0.01).map { TabBarGlide.frame(from: 0, to: 2, at: $0).at }
+        #expect(path.max()! > 2) // a little bounce past the new item
+        let end = TabBarGlide.frame(from: 0, to: 2, at: TabBarGlide.length)
+        #expect(end.at == 2 && end.opacity == 0 && end.swell == 1)
+        let back = TabBarGlide.frame(from: 1.5, to: 0, at: TabBarGlide.length + 1)
+        #expect(back.at == 0 && back.opacity == 0)
+    }
+
     /// The choice is Settings › Appearance › Sidebar's, this device's own: picking Separate is written at once and read
     /// back by a new reader of the same defaults, as the app's root after a relaunch; nothing picked stays Merged on the
     /// open Duo and Separate on its outer display (#4206's default, unchanged).

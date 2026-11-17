@@ -506,15 +506,9 @@ struct TodosView: View {
             .navigationTitle("New To-Do")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showCreate = false }
-                        .lineLimit(1)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add [Beautiful U I Bridge 7a8a11]") { add() }
-                        .lineLimit(1)
-                        .disabled(creatingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+                SheetClose { showCreate = false }
+                SheetConfirm(id: "todo.create.add", name: String(localized: "Add [Beautiful U I Bridge 7a8a11]"),
+                             disabled: creatingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { add() }
             }
         }
         .presentationDetents([.medium])

@@ -801,6 +801,17 @@ nonisolated enum Theme {
         }
         /// Something the finger dragged aside going back to its place (a message swiped to quote it): a little bounce.
         static let springBack = Animation.spring(duration: 0.3, bounce: 0.25)
+        /// iPhone Duo's tab bar (#9837, after the system's tab bar there): a glass lens leaves the chosen item for the new
+        /// one, swelling as it goes (`lensSwellTime`, to `lensSwellScale`, `lensStretch` longer along the bar than across),
+        /// glides there with a bounce (`lensGlide`, `lensGlideTime`) and shrinks and fades once it lands (`lensFadeTime`);
+        /// with Reduce Motion the items only cross-fade (`tabFade`).
+        static let lensGlide = Spring(duration: 0.45, bounce: 0.3)
+        static let lensGlideTime: TimeInterval = 0.45
+        static let lensSwellTime: TimeInterval = 0.15
+        static let lensFadeTime: TimeInterval = 0.2
+        static let lensSwellScale: CGFloat = 1.2
+        static let lensStretch: CGFloat = 0.12
+        static let tabFade = Animation.easeInOut(duration: 0.2)
         /// The stationary sidebar rises only this far as the page slides off it; no horizontal parallax or zoom.
         static let drawerLift = Theme.Space.s
 
@@ -1089,6 +1100,18 @@ nonisolated enum Theme {
         /// bar down the side of the outer display stands (the owner's reference, #4231), not a small block at the foot. On
         /// the outer display's rail the face and the page's action are under it.
         static let sideTabBarFoot: CGFloat = 0.25
+        /// The system's own items down that column (a page's bar items, a search at its foot), measured on iOS 27.2 on both
+        /// displays (#9837): each a 48 pt glass, Back alone, 12 pt over the rest in one glass, 4 pt apart in it; at every text
+        /// size. The first one's top is 174 pt below the safe area's on the outer display (its camera is over the status
+        /// bar there), 124 pt on the inner one; a search stands at the foot, its top 38 pt above the safe area's foot.
+        static let systemBarItem: CGFloat = 48
+        static let systemBarItemGap: CGFloat = 4
+        static let systemBarBackGap: CGFloat = 12
+        static let systemBarTopOuter: CGFloat = 174
+        static let systemBarTopInner: CGFloat = 124
+        static let systemBarFootItemTop: CGFloat = 38
+        /// The outer display is narrower than this (466 pt), the inner one wider (669 pt upright, 951 pt on its side).
+        static let outerDisplayWidest: CGFloat = 600
     }
 
     /// The page behind lists and chats.
