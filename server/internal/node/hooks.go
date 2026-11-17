@@ -238,6 +238,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}
+		if origin := n.assistantOrigin(sid); origin != "" {
+			params["origin"] = origin
+		}
 		if req.WaitUpdates {
 			waitID, wait = n.beginMCPWait(c)
 			if wait != nil {

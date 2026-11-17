@@ -6083,6 +6083,29 @@
       },
       "extractionState" : "manual"
     },
+    "%lld left [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld left"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残り %lld 問"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 题"
+          }
+        }
+      }
+    },
     "%lld More Files" : {
       "localizations" : {
         "en" : {
@@ -31685,6 +31708,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Collapse [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapse"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折りたたむ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起"
+          }
+        }
+      }
     },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
@@ -65701,6 +65747,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Expand [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开"
+          }
+        }
+      }
     },
     "Expand All" : {
       "extractionState" : "manual",
@@ -188417,6 +188486,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%1$@」を使用中"
+          }
+        }
+      }
+    },
+    "View in Chat [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View in Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元のメッセージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看原文"
           }
         }
       }

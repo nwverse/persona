@@ -159,11 +159,11 @@ func TestUsageBackfillWeeks(t *testing.T) {
 	}
 
 	// The first week's read of the long file stopped soon after the week's end.
-	p := filepath.Join(project, "s1.jsonl")
-	st, _ := os.Stat(p)
+	f := testUsagePath(t, filepath.Join(project, "s1.jsonl"))
+	st := f.st
 	m := newUsageMeter()
 	m.step, m.until, m.seen = 3600, w2, map[uint64]struct{}{}
-	read, err := m.scanSlice(context.Background(), p, st, w1, w2, lim)
+	read, err := m.scanSlice(context.Background(), f, w1, w2, lim)
 	if err != nil || read >= st.Size()/2 || read == 0 {
 		t.Fatalf("read %d of %d bytes for the first week (%v)", read, st.Size(), err)
 	}
@@ -183,7 +183,7 @@ func TestBackfillStartAndOverlap(t *testing.T) {
 			t.Fatal(err)
 		}
 		st, _ := os.Stat(p)
-		return backfillFile{usagePath: usagePath{p, st}, first: firstTime([]byte(body))}
+		return backfillFile{usagePath: usagePath{p, st, claudeUsage{}}, first: firstTime([]byte(body))}
 	}
 	a := mk("a.jsonl", claudeReply(time.Date(2026, 10, 3, 9, 30, 0, 0, time.UTC), "a", "m", 0, 0, 1, 1), time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC))
 	b := mk("b.jsonl", claudeReply(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC), "b", "m", 0, 0, 1, 1), time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC))
