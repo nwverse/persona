@@ -383,6 +383,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // layouts tried (mounting it under every exchange, or riding the reply bar's chunk, cost more). 85 B in ja, measured in
 // one environment against main 21cd52cc2 (ja 482,104 B to 482,189 B; en 478,990 B to 479,075 B, zh-Hans 479,859 B to
 // 479,944 B). Main had 422 B of room; the budget stays.
+// #9751: Just finished (lib/agent-groups.ts justFinished, the paged list's section in lib/session-groups.ts, the seen
+// outbox's unseen rows in lib/seen-outbox.ts) adds 112 B in ja, measured in one environment against main 7f756aa00a (ja
+// 482,373 B to 482,485 B; en 479,275 B to 479,391 B, zh-Hans 480,079 B to 480,221 B). Main had 153 B of room; the
+// budget stays.
 // #9053: the Inbox section bar takes 59 B of that room in each language, measured in one environment against main
 // ae3d20467b (ja 482,386 B to 482,445 B; en 479,282 B to 479,341 B, zh-Hans 480,087 B to 480,146 B): the grouping mark
 // in the icon set, IconButton saying it opens a menu, and --needs-ink with its class. The rest stays off the first
