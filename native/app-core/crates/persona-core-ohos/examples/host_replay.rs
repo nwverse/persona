@@ -454,6 +454,13 @@ fn projection_json(bytes: &[u8]) -> Result<String, String> {
                 persona_core::viewed_images::project(&input).ok_or("viewed_images: input has no viewed line")?;
             serde_json::to_string(&projection).map_err(|e| e.to_string())
         }
+        "recents" => {
+            let input: persona_core::recents::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("recents: input does not decode: {error}"))?;
+            let projection =
+                persona_core::recents::input_fixture(&input).map_err(|error| format!("recents: {error}"))?;
+            serde_json::to_string(&projection).map_err(|e| e.to_string())
+        }
         "task_index" => {
             let input: persona_core::task_index::Input = serde_json::from_value(input.clone())
                 .map_err(|error| format!("task_index: input does not decode: {error}"))?;
