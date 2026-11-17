@@ -85,16 +85,19 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   at the top center over the menu bar. Moving or adding displays places it again.
 - **Not yet**: the iPhone's other presets (tokens per minute, today's tokens), buttons on the island, Windows.
 
-Captured from the built desktop app against the synthetic hub (`scripts/mock/mock_hub.py`), in English; the island is
-always dark, as the notch is. The check by a person on a real Mac is section 9 of [mac-acceptance.md](mac-acceptance.md).
+The screenshots are on #7699, captured from the built desktop app against the synthetic hub
+(`scripts/mock/mock_hub.py`), in English; the island is always dark, as the notch is. What they show:
 
-| Settings, light, off | Settings, dark, on |
-| --- | --- |
-| ![Show at the MacBook notch, off](screenshots/notch-island/settings-light-off.png) | ![Show at the MacBook notch, on](screenshots/notch-island/settings-dark-on.png) |
+- **Settings › Notifications**, light and dark: "Show at the MacBook notch" ("Counts of Agents that need you, are working
+  or finished, around the notch; point at it for the list") sits between "Notify this browser" and "Alert sound", off by
+  default, with "Only in the Persona desktop app on this Mac. Click a row in the list to open that Agent." under it.
+- **Closed**: a black pill around the notch, a red speech bubble and the count of Agents that need you on the left, an
+  orange gear and the count of working ones on the right.
+- **Open, the pointer over it**: the same counts on top, then one row per Agent: its title, its state in that state's
+  color ("Needs you" red, "Working" orange) and, where there is one, what it waits on or is doing ("Has a question: …",
+  "Plan awaiting approval", its latest activity).
 
-| Closed | Open, the pointer over it |
-| --- | --- |
-| ![The island closed](screenshots/notch-island/island-closed.png) | ![The island open](screenshots/notch-island/island-open.png) |
+The check by a person on a real Mac is section 9 of [mac-acceptance.md](mac-acceptance.md).
 
 ## Packaging and verification
 

@@ -970,7 +970,7 @@ private struct AgentsList: View {
     /// A card on no session, open in a sheet of its own (#4059): it has no chat to go to.
     @State private var answering: Interaction?
     /// The long-press menu's actions on a row (not observed: see `AgentRowMenu`).
-    @State private var rowActions = AgentRowMenu.Actions()
+    @State private var rowActions = AgentMenuHandlers()
     @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
@@ -1230,6 +1230,10 @@ private struct AgentsList: View {
                                       }
                                   })
 
+        #if os(iOS)
+        let _ = bindAgentMenuActions()
+        #endif
+
         // The list and the chain below are erased in a few places (#6735). Unoptimized, a function reserves a stack slot on
         // entry for every opaque intermediate of a modifier chain, each holding everything before it: ~45 modifiers
         // over the List made `observedAgentList` reserve 422 KB, and a Debug build on an iPhone (a 1 MB main-thread
@@ -1245,6 +1249,23 @@ private struct AgentsList: View {
                 openFromList(adopted.key)
             }
     }
+
+    #if os(iOS)
+    private func bindAgentMenuActions() {
+        rowActions.navigate = { current, destination in
+            switch destination {
+            case .space:
+                if let space = current.spaceKey { openFromList(SpaceRoute(id: space)) }
+            default:
+                AgentMenuRouting.shared.open(destination, at: current.key)
+                openFromList(current.key)
+            }
+        }
+        rowActions.openTodo = { session in
+            if let id = session.todo?.id { openFromList(TodoDetailRoute(id: id)) }
+        }
+    }
+    #endif
 
     // Opaque helper boundaries keep the same List/modifier tree while allowing
     // the minimum compiler to solve each expression independently.
@@ -2601,11 +2622,16 @@ private struct AgentsList: View {
     // MARK: Recently active
 
     private func workspaceAgentMenu(_ s: Session) -> AgentRowMenu {
-        AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
+        #if os(iOS)
+        return AgentRowMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions)
+        #else
+        return AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
                      live: s.state.isLive, terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose,
                      attachable: s.canAttach, deletable: s.canDelete,
                      paneActions: NodeMenu.offersPaneActions(s), actions: rowActions)
+        #endif
     }
+
 
     @ViewBuilder private func worktreeMenu(_ worktree: RepoTree.Worktree, agent: Session? = nil) -> some View {
         if let target = worktree.workspace {
@@ -3455,7 +3481,13 @@ private struct AgentsList: View {
                 }
             }
             #endif
-            .contextMenu { AgentRowMenu(s, model: model, actions: rowActions).equatable() }
+            .contextMenu { () -> AnyView in
+                #if os(iOS)
+                AnyView(AgentActionMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions).equatable())
+                #else
+                AnyView(AgentRowMenu(s, model: model, actions: rowActions).equatable())
+                #endif
+            }
     }
 
     /// iOS and visionOS: rows do not swipe (a sideways drag pages the shell, #1244) and end in their time, not the system's
