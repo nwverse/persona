@@ -2312,6 +2312,24 @@ and Android follow in #5117.
   ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
   (wide / 390 × light / dark in Chinese, and wide light in English).
 
+## Sources (#9132)
+
+For everyone, Assistant first: a finished reply that looked something up on the web says where it came from, as ChatGPT,
+Perplexity and Gemini do. Under the reply (after its reply bar, before the changed-files card), a quiet row: **Sources**,
+then a chip per page by its site (two pages of one site by their titles; the title and address are the chip's tooltip and
+spoken name), three of them, then **+N** (**Show N more sources** for screen readers), which shows the rest and **Show
+less**. A chip is a link like any in a reply (`clickLink`):
+a page the app opens itself opens there, any other in a new tab; nothing is fetched for it (no favicons). Shown in Persona
+conversations and Agent sessions alike; never while the turn runs (super rule 2: the calls stay in the folded work), never
+in a supervision trace, never for a turn whose web calls all failed.
+
+- What it reads (`lib/turn-sources.ts` `turnSources`): folded work's `fold.sources` (`docs/protocol/protocol.md` "Folded
+  work"), then, for calls on the page, the pages WebFetch opened and the results WebSearch returned, by the same rules as
+  the node, which `spec/fixtures/fold-sources` pins for both; at most 10.
+- `views/chat/TurnSources.tsx` is a chunk of its own: `SegmentView` draws it only for a finished exchange with a web call
+  or a fold carrying sources (`webStep`), so other turns and the first screen do not load it.
+- Tests: `lib/turn-sources.test.ts` (the shared cases), `views/chat/TurnSources.test.tsx`.
+
 ## Compare runs (#8916)
 
 For people who work with coding Agents (Agents, not Assistant): start one task several times and keep the best result, as

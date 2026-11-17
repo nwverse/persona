@@ -1147,7 +1147,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "fold":{"items":1294,"tools":647,"thoughts":110,     // kind=fold only (only when the request carries fold_work): a folded stretch of work, see "Folded work"; may carry tasks, images, usage
          "errors":3,"tool_names":["Bash","Read","Edit"],  // failed tool results and the tools called (at most 10); absent from older nodes
          "until":"...","through_seq":6890,"through_id":"…#0",
-         "changes":[{"path":"/…/a.go","add":12,"del":3,"exact":true}]},  // the files its successful edits changed; [] when none
+         "changes":[{"path":"/…/a.go","add":12,"del":3,"exact":true}],   // the files its successful edits changed; [] when none
+         "sources":[{"url":"https://example.com/page","title":"…"}]},   // the web pages its successful web calls used; absent when none
  "image":{"mime":"image/png","data":"base64"}}        // image only (images in tool_result are also split into image items, with tool_use_id)
 
 // Interaction: something that needs a person
@@ -2198,7 +2199,7 @@ Server → client:
 | `revs` | `machine_id`, `revs` (`{session_id: rev}`, changed ones only; sent when the fields visible in the list haven't changed but the transcript grew, pushed to all clients, and the App fetches the increment in the background; an open web chat takes it as its session's rev moving, "The page's own fallback") |
 | `sessions_delta` | `machine_id`, `upsert` (`[Session…]`, new or changed sessions, whole objects), `remove` (`[session_id…]`): only to connections that asked for `sessions_delta`, after one full `sessions` snapshot per machine on connect; not in the event log; see "Session deltas" below |
 | `sessions_list` | `revision` (an opaque checkpoint): only to connections that asked for `sessions_list`, which get no `sessions` or `sessions_delta`; sent once on connect and again when the indexed session list changes. A hint to read the HTTP `since` page from the saved checkpoint, not a baseline itself; not in the event log; see "Bounded Agents lists" ("Lightweight WebSocket negotiation") below |
-| `lark` | `feed_ids` (chats with new Lark messages / changes); `settings_changed` (optional boolean, default false; this batch includes a change to message display settings, independent of the chat IDs; the client also re-reads settings); `account` (the Lark gateway account number these chats belong to); `ol_account` (only present when not the default account, equal to `account`: the parameter needed to read these chats, `docs/extensions/feishu.md` ("Multiple accounts")). The hub follows the live events `/agent/v1/events` of every signed-in account on the Lark gateway, sends at most once every 400 ms per account, and pushes to all clients. |
+| `lark` | `feed_ids` (chats with new Lark messages / changes); `settings_changed` (optional boolean, default false; this batch includes a change to message display settings, independent of the chat IDs; the client also re-reads settings); `account` (the Lark gateway account number these chats belong to); `ol_account` (only present when not the default account, equal to `account`: the parameter needed to read these chats, `docs/extensions/feishu.md` ("Multiple accounts")). The hub follows the live events `/agent/v1/events` of every signed-in account on the Lark gateway, sends at most once every 400 ms per account, and pushes to all clients. Not sent to an app that declared `lark_via_messaging` in its latest `client_hello.features`: it follows `messaging` for those screens and would drop this one (the iOS app while it uses a messaging source, #9591; it says so again in a new `client_hello` when that changes). Events replayed on resume, before that hello, still include it. |
 | `messaging` | `source` (message source id), `conversations` (ids of changed chats), `account` (optional, which account), `settings_changed` (optional): an extension's `messaging.changed`, coalesced for one second, then pushed to all clients (`docs/extensions/extension-messaging.md` ("9")) |
 | `agents` | `session_ids` (personal Agent session ids, `<source>:<sessionKey>`, whose content changed; `[]` means the list itself changed): an extension's source reported changes (`agentsrc.updated`), a send went out, a source was removed, or a conversation was removed from or restored to the list; clients re-fetch `GET /api/v1/agents/sessions` (a bounded reader from that collection's own `since` checkpoint) ([extensions.md](../extensions/extensions.md) "Personal Agent sources", "Removing a personal Agent from the list" below) |
 | `agents.prefs` | No payload: the personal Agent list preferences changed (`PUT /api/v1/agents/prefs`, a conversation hidden or unhidden); clients re-read `GET /api/v1/agents/prefs` ("Personal Agent list preferences" below) |
@@ -3333,6 +3334,15 @@ with one item of `kind: fold` (`transcript.FoldWork`):
   always there, `[]` when the run edited nothing, so an app tells that from a fold an older node made, which has no list and leaves the edits
   unknown. The web's changed-files card counts a folded run by it, so the card is the same before and after a reload; the cases both read
   are in `spec/fixtures/fold-changes/cases.json`. Old clients ignore it.
+- `fold.sources` is the web pages this run's successful web calls used (`transcript.foldSources`, #9132), so a reply shows its
+  sources without opening the run: first the pages it opened (WebFetch, and Codex's open page, which comes as one; `url` only),
+  then the results its searches returned (WebSearch: each entry of Claude Code's `Links: [{"title","url"}, …]` lines, or each
+  `title  url` line of a Codex web search; a line with only a domain names no page), each URL once (a later mention gives one
+  without a `title` its title), at most 10 (`proto.FoldSourcesMax`). Only `http` / `https` URLs without white space count; a
+  title is trimmed and cut past 200 characters. A call counts when its result is in the run and is not an error. In a result
+  the hub cut (`full_size`) a Links list keeps its entries before the cut one, and a Codex list loses its last line. Omitted
+  when there are none, and from older nodes. The web's Sources row reads it, so the row is the same before and after a
+  reload; the cases both read are in `spec/fixtures/fold-sources/cases.json`. Old clients ignore it.
 - `fold.usage` is what the folded items used (their `usage`, "Token usage on items"): entries without an `id` summed per
   `model` and `fast`, entries with one as they are. Omitted when none of them carried usage, and from older nodes. Old
   clients ignore it.
