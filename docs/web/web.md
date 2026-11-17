@@ -1361,7 +1361,8 @@ questions, `src/lib/pick-export.test.ts` the questions, the 30, Copy's text and 
 `node web/e2e/forward-message.mjs <web URL> --hub <mock hub URL> [--shots <dir>] [--channel msedge | --executable <chromium>]`.
 It forwards a reply to another computer's Agent (searching "Astro") and to Persona, checks the route line, the block and
 note the hub got (`GET /mock/sent_to`), the card in the sent bubble and that it opens the original, and New agent's card;
-then several at once: Select messages…, Cancel, none picked, your message and the reply forwarded together to the blog's
+then several at once: Select messages…, Cancel, the message menu's Select messages, none picked, your message and the
+reply forwarded together to the blog's
 Agent, the two blocks in the chat's order before the note, and the one card in the sent bubble.
 
 ### Saved prompts (#7329)
