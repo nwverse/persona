@@ -518,7 +518,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 		for _, it := range e.Store.Items(kind) {
 			if has(it.Tags) && it.Title != "" {
 				out = append(out, Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
-					Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL})
+					Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL, Source: it.Source})
 			}
 		}
 	case KindRecording:
