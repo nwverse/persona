@@ -1579,7 +1579,7 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
   - **Isolation**: rendered output goes into a `srcdoc` iframe whose `sandbox` only allows popups (web links open in a new tab), not `allow-scripts` or `allow-same-origin`, plus CSP `default-src 'none'; img-src data:`. File content cannot execute scripts, access the web token, or connect to the network (external images and tracking pixels cannot load).
     Images use data URLs (docx-preview `useBase64URL`) because the iframe cannot read this page's blob URLs; remove non-http(s) links. Lay out at the document's own page width, then shrink the entire iframe to the panel width (never enlarge).
   - **Why not pptx-preview**: the npm package is ISC, but source is not public, its README adds source-use restrictions, and it writes `innerHTML` directly into the page, preventing review. Our renderer only emits escaped text, validated colors and numbers, and self-generated data URLs.
-- **Code blocks, inline code and quotes** (#2984, as Telegram draws them; `ui/ReplyBlocks.tsx`, iOS the same): a fenced block has a title bar on top (`CodeBar`) with its language on the left (none when the fence names none) and Copy on the right, which copies the whole block and says "Copied"; it is always shown (the corner button that appeared on hover is gone). Inline code is in the body's color on its gray and a click copies it (Enter or Space when focused; not at the end of a drag that selected words); inside a link (a path that opens, a written link) it is the link's and stays blue (`rehypeLinkedCode` marks it). A quote is the accent bar on a faint accent card with a quote mark at its top right; one taller than about four lines folds, fading out: a click opens it, its chevron folds it again. A reply still being written never folds its quotes (`ReplyStreaming`).
+- **Code blocks, inline code and quotes** (#2984, as Telegram draws them; `ui/ReplyBlocks.tsx`, iOS the same): a fenced block has a title bar on top (`CodeBar`) with its language on the left (none when the fence names none) and Copy on the right, which copies the whole block and says "Copied"; it is always shown (the corner button that appeared on hover is gone). Inline code has no background, border or padding (#9477): the system's monospaced face, then the body's CJK families before the generic `monospace` (which would draw Chinese in NSimSun on Windows) at 0.94 em in `--ink` and `--ink-2` mixed 55:45, a step quieter than `--ink`. A side that meets a CJK letter directly gets 0.12 em of margin (`rehypeLinkedCode` marks it `data-gap`), none beside a space or CJK punctuation. A click copies it (Enter or Space when focused; not at the end of a drag that selected words), and a pale wash shows under the pointer; inside a link (a path that opens, a written link) it is the link's and stays blue (`rehypeLinkedCode` marks it). A quote is the accent bar on a faint accent card with a quote mark at its top right; one taller than about four lines folds, fading out: a click opens it, its chevron folds it again. A reply still being written never folds its quotes (`ReplyStreaming`).
 - **Mermaid** (#1376, `ui/Mermaid.tsx`, `lib/mermaid.ts`; iOS / Mac #1295): ```mermaid blocks in chat and file-viewer Markdown render as diagrams, supporting all Mermaid diagram types (flow, sequence, class, state, Gantt, pie, ER, mind map, and so on).
   Mermaid (MIT) loads on the first diagram (about 670 KB), with `securityLevel: "strict"` (built-in DOMPurify sanitization, no click callbacks, no HTML execution in labels). Render one at a time (global state during rendering); cache 60 per theme, no redraw on scrolling back.
   Follows light / dark (redraw on theme change); pie charts use App chart colors (Mermaid's dark pie is nearly black, light is pastel). At most 460px high, with Enlarge for full-screen viewing. During streaming, wait 350ms after code pauses before rendering, show source until ready; syntax errors show source and an error with line N, with Mermaid's English message in expandable details. Hover offers Source / Diagram, Enlarge, Copy.
@@ -2311,6 +2311,24 @@ and Android follow in #5117.
   MOCK_NEW_AGENT_PANEL=1 MOCK_ULTRACODE=1` (codex also lists glm-5.3; the Mac Studio has no codex launcher; the
   ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
   (wide / 390 × light / dark in Chinese, and wide light in English).
+
+## Sources (#9132)
+
+For everyone, Assistant first: a finished reply that looked something up on the web says where it came from, as ChatGPT,
+Perplexity and Gemini do. Under the reply (after its reply bar, before the changed-files card), a quiet row: **Sources**,
+then a chip per page by its site (two pages of one site by their titles; the title and address are the chip's tooltip and
+spoken name), three of them, then **+N** (**Show N more sources** for screen readers), which shows the rest and **Show
+less**. A chip is a link like any in a reply (`clickLink`):
+a page the app opens itself opens there, any other in a new tab; nothing is fetched for it (no favicons). Shown in Persona
+conversations and Agent sessions alike; never while the turn runs (super rule 2: the calls stay in the folded work), never
+in a supervision trace, never for a turn whose web calls all failed.
+
+- What it reads (`lib/turn-sources.ts` `turnSources`): folded work's `fold.sources` (`docs/protocol/protocol.md` "Folded
+  work"), then, for calls on the page, the pages WebFetch opened and the results WebSearch returned, by the same rules as
+  the node, which `spec/fixtures/fold-sources` pins for both; at most 10.
+- `views/chat/TurnSources.tsx` is a chunk of its own: `SegmentView` draws it only for a finished exchange with a web call
+  or a fold carrying sources (`webStep`), so other turns and the first screen do not load it.
+- Tests: `lib/turn-sources.test.ts` (the shared cases), `views/chat/TurnSources.test.tsx`.
 
 ## Compare runs (#8916)
 
