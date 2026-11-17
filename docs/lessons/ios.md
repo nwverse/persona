@@ -2063,6 +2063,9 @@ no initial Working row so the message shifted by one row, and pending local remo
   `compactChrome`), so its real touch area may be little more than the chevron. That is on `main` and not fixed here.
 - `-ui.scheme light|dark` makes the app icon follow the appearance, and SpringBoard's "You have changed the icon"
   alert covers the screenshot and takes taps: dismiss it through `com.apple.springboard` after launch.
+  Or keep the icon as it is with `-showSameIcon YES` (DEBUG, #9506): no switch, no alert. Without either, the first
+  launch after a Light & Dark change also left the app's main thread busy for 30 s in a UI test ("Unable to perform
+  work on main run loop"), and the next test class, launched in the other look, timed out on its queries the same way.
 
 ## One scroll in a pending card, its answers outside it (2026-11-13, #6605)
 
@@ -2863,6 +2866,44 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
 
+## A page put back beneath a kept item learns of the item from the item's own appearance (2026-11-16, #9053)
+
+A place's kept stack (`ShellPlaces`) comes back as a `NavigationPath`, which can't be read element by element, so the
+Inbox list rebuilt beneath a kept item can't see which item is on top of it. SwiftUI makes that list (its `@State` fresh)
+but runs its `onAppear` only when Back reveals it, and on that pop the revealed page's `onAppear` runs before the popped
+page's `onDisappear`. So the item page records itself on appear and clears itself on disappear (`InboxBarLanding`), and
+the list reads the record on its first appearance only, landing on the item's section; later appearances (an item it
+pushed itself, a chain link) leave its choice alone. `InboxSectionBarUITests.testAnItemBroughtBackLandsTheListOnItsChoice`
+walks it on an iPad, the layout whose sidebar can leave the place with an item open; with the read turned off it fails.
+In the Sidebar layout (#8359, also the iPad's Separate layout since #8367) the Inbox is the page's root, not pushed: brought
+back, the new list appears at once, before the kept item's page, so the record was empty when it looked. The record keeps
+the item last in front after its page goes, and bringing a place back with a kept path puts it in front again first
+(`InboxBarLanding.broughtBack`, from `AssistantView.show` and the Sidebar layout's pick).
+
+## A scroll to an id lands on the item that owns it, not on a frame widened around it (2026-11-17, #9053)
+
+The Inbox's section bar must scroll a chosen chip clear of the strip's edge fade (`.edgeFade()`, 24 pt). Giving each chip
+a clear background widened by the fade and an id of its own, then `ScrollViewProxy.scrollTo` that id, moved the strip
+exactly as far as scrolling to the chip itself: the chip stopped under the fade. Neither order helped (the id on the
+padding, whose own frame stays the chip's, or on the widened `Color.clear` inside it). `scrollTo` has no margin, and an
+anchor only lines up the same unit point of the chip and the strip. What works: measure the chips in the content's
+coordinate space (`onGeometryChange` into a store that redraws nothing), read the offset in view
+(`onScrollGeometryChange`), work out the least offset that clears the fade (`CapsuleReveal.offset`, pure and tested),
+and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
+checks the chip's frame against the strip's.
+
+## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
+
+`AssistantView.show` returns the place in front to its root by `backToRoot()` then appending the place's route again, in
+one update: the path goes `[inbox]` → `[]` → `[inbox]`, SwiftUI sees the same root, and keeps the same page with its
+`@State` (scroll offset, the section bar's choice). Its `onAppear` doesn't run again either. A page that must start over
+on every entry (the Inbox opens on Needs you) can't rely on being built anew: `show(.inbox)` bumps
+`AppModel.inboxEntries` when it goes to the root, and visionOS's tab, which the `TabView` keeps up, bumps it when the tab
+is picked or routed to; the page resets on `.onChange(of:)`. A kept path (`ShellPlaces`) puts a different root first,
+so that page is new and lands by itself. The Sidebar layout's pick goes through `SidebarPageRoots` instead, and a pick of
+the root in front (no move, or a pop to it) bumps the counter there. Reviewers caught it at runtime with the Inbox on FYI and a route to the Inbox
+(`personactl navigate inbox --keep`, the widget's and the quick action's way in); `InboxSectionBarUITests` now walks it.
+
 ## The newest end out of reach after a far landing (2026-11-16, #7382, #1942)
 
 - **What happened**: in Persona's main conversation a long newest answer's last lines sat under the capsule row and the
@@ -2882,3 +2923,12 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
   window after the new one came in, handed the pin the outgoing scroll view. The probe now takes the list only on its way in.
 - XCUITest's frame of a text in a misplaced list can be thousands of points off the screen while the probe says the line
   is drawn: check the probe's numbers, not only frames.
+
+## What a screenshot leaves out, and what a simulator check sees (2026-11-17, #9508)
+
+The screenshot banner hides the chats' bars from captures with a secure text field's drawing view (docs/apple/ios.md "Screenshot banner"). Checking it, and living with it:
+
+- `simctl io … screenshot`, `recordVideo` and Simulator's Save Screen read the display's frame buffer: they always show what is on screen, the bar, so they prove nothing about captures. `XCUIScreen.main.screenshot()` is the system's own capture, taken outside the app: there the bar is gone and the banner shows. Xcode 27.1 here ships no Simulator.app, so its Device › Trigger Screenshot was not available; SimulatorKit's HID button events and an accessibility-server screenshot request did nothing.
+- In-app pictures differ: `drawHierarchy` and `snapshotView` leave the layer out like a screenshot, `layer.render(in:)` draws it. Anything that photographs the window to animate (the iPad's sidebar drag, `SplitColumnControl`) or to report (DEBUG `RuntimeCLI`) must turn the layer off first (`ScreenshotBanner.beginReveal()`), or it shows the banner on screen; and take that picture with `afterScreenUpdates: true`: a picture of the frame already drawn still left the bar out right after turning it off (`ScreenshotBannerTests`).
+- The view comes out of a `UITextField` with `isSecureTextEntry` (its first subview; iOS 17 renamed its class, so never match the name). Keep the field: setting `isSecureTextEntry` back and forth turns the view's exclusion off and on, measured in place.
+- A view in a second hosting controller inside it takes every touch in its frame: overriding `hitTest` to pass the hosting view's own hits through also dropped the bar's SwiftUI buttons (they hit-test as the hosting view). `accessibilityHidden` on the banner's SwiftUI view left its text in the tree; `accessibilityElementsHidden` on its hosting view removes it.

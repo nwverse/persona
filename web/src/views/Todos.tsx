@@ -8,6 +8,7 @@ import { ago, clock, sessionCan, shortPath, stateOf, tabLabel, uuid } from "../l
 import { foldedState } from "../lib/child-sessions";
 import { sessionCard } from "../lib/folded-rows";
 import { byTime } from "../lib/times";
+import { TaskWaitInfo } from "./assistant/TaskWaitInfo";
 import { launchAgent } from "../lib/new-agent";
 import { currentHosts } from "../lib/engines";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
@@ -75,7 +76,8 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { orderWaitGroups } from "../lib/task-wait";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -296,12 +298,12 @@ export function TodosView({
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
 
   const triaged = useMemo(
-    () => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }),
+    () => orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now()),
     [todos, lookup, restored, search, listFilter, superseded, tick],
   );
   // the header's counts: what the filter shows, whatever is searched
   const triageAll = useMemo(
-    () => (search.trim() ? triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }) : triaged),
+    () => (search.trim() ? orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now()) : triaged),
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
@@ -1517,9 +1519,9 @@ const TodoListItem = memo(function TodoListItem({
   onMenu?: TodoRowMenuOpener;
 }) {
   const { status, dotState, activeCount } = view;
+  const showWait = (section ?? view.section) === "parked";
   // the PR it waits on: its current one, or an earlier one still open (#7935)
   const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
-  const pr = openPR ? prLink(openPR.url) : null;
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
@@ -1623,6 +1625,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
+        {showWait && <div className="mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
 
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
         {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
@@ -1642,30 +1645,13 @@ const TodoListItem = memo(function TodoListItem({
         )}
 
         {/* Most Urgent Agent Line */}
-        {view.urgentLine && (
+        {view.urgentLine && !showWait && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
             {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
           </div>
         )}
 
-        {/* A PR to merge: its link and how long it has not moved (#3156) */}
-        {pr && (
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3" data-testid="todo-pr-line">
-            <a
-              href={pr.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              aria-label={pr.label}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
-            >
-              <Icon name="pullRequest" size={11} />
-              {pr.text}
-            </a>
-            <span className="truncate">· {prBlockers(todo, openPR).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
-          </div>
-        )}
 
         {/* Shelved: one tap brings it back (#3156); nothing is deleted */}
         {section === "shelved" && onRestore && (
@@ -1916,12 +1902,12 @@ const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; classNa
 };
 
 /** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
-export function ReviewChecklist({ todo }: { todo: Todo }) {
+export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: SessionLookup }) {
   const sup = todo.supervision;
   if (!sup) return null;
   const list = checklist(sup);
   const review = latestReview(sup);
-  const parked = parkedLine(todo);
+  const parked = triage(todo, lookup, Date.now()).section === "parked";
   // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
   const extras = todo.done_at ? resultExtras(todo) : undefined;
   return (
@@ -1963,7 +1949,7 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
           <BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />
         </Suspense>
       )}
-      {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
+      {parked && <div data-testid="review-parked" className="mt-2 select-text"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} expanded /></div>}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
       <AutoReviewResult sup={sup} />
     </section>
@@ -2185,7 +2171,7 @@ function TodoDetail({
           <TaskBriefPanel todo={todo} />
         </Suspense>
       )}
-      <ReviewChecklist todo={todo} />
+      <ReviewChecklist todo={todo} lookup={lookup} />
       {todo.brief && (
         <Suspense fallback={null}>
           <TaskBriefHistory todo={todo} />

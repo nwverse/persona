@@ -190,6 +190,9 @@ const (
 	// ConnectorsSnapshots: {tz} → {snapshots: [connectorwire.SnapshotData]}, the live states of the signed-in connectors
 	// that keep one (the chats waiting on the user, today's meetings), those that answered within a few seconds.
 	ConnectorsSnapshots = "connectors.snapshots"
+	// ConnectorsLarkReply: connectorwire.LarkReplyWatch -> connectorwire.LarkReplyObservation. A narrow read of an
+	// explicitly bound Lark topic, through the configured built-in reader; it never sends or changes read state.
+	ConnectorsLarkReply = "connectors.lark_reply"
 
 	// AppInteractions is the hub's interaction queue (InteractionsGet, InteractionsAnswer).
 	AppInteractions = "interactions"
