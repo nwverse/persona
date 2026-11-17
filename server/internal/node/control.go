@@ -505,8 +505,8 @@ func (n *Node) close(ctx context.Context, id string) error {
 	defer n.state.stopped(id, proto.StopUser)
 	a, ok := n.agent(id)
 	if !ok {
-		if _, mine := n.state.get(id); mine {
-			return nil // already gone
+		if st, mine := n.state.get(id); mine {
+			return n.closeAfterExit(ctx, id, st)
 		}
 		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")
 	}

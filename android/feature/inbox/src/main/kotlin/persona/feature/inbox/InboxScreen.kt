@@ -18,7 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import android.content.res.Resources
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.api.ConnectionState
 import persona.core.domain.inbox.*
 import persona.core.navigation.ChatRoute
@@ -89,11 +92,20 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // the stored ones so an early landing never writes the defaults over them); Back from the item returns here. A list
     // already showing the item stays. One moved beside the item it opened goes back when that page closes. An entry
     // ([InboxLanding.enter]) puts the list back as it opens.
-    LaunchedEffect(landing?.pending) {
+    val listActive = LocalInboxListActive.current
+    // A hidden host stays composed and shares this landing. It must not take one meant for the list in front.
+    // [overEntry]: a sidebar return entered (Needs you) and then landed, in one turn. Apply the landing on that
+    // fresh bar, or a list left on All would stay there (InboxBar.landed). iOS lands on a new page
+    // (InboxView.swift:209–212, land at 977–981).
+    LaunchedEffect(landing?.pending, listActive) {
+        if (!listActive) return@LaunchedEffect
         val page = landing?.pendingPage
+        val overEntry = landing?.overEntry == true
         val to = landing?.take() ?: return@LaunchedEffect
         if (to == InboxLanding.ENTERED) { barChosen = ""; barSaved = ""; return@LaunchedEffect }
-        val moved = InboxBar.landed(bar, to)
+        // overEntry follows enter: the fresh bar is Needs you (All only while a search is kept), then the
+        // item's choice is picked. landed() would leave All in place, which a new iOS page does not.
+        val moved = if (overEntry) InboxBar.picked(InboxBar.entered(query), to.choice) else InboxBar.landed(bar, to)
         if (page != null && moved != bar) landing?.moved(page, bar)
         moveBar(moved)
         if (to.openCollapsed) {
@@ -114,6 +126,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         if (snapshot.refreshes > 0 && snapshot.error == null) error = null
     }
     var refreshing by remember { mutableStateOf(false) }
+    // Silent reload skips while one is already running (InboxStore.reload, InboxStore.swift:243–244).
+    var backgroundInFlight by remember { mutableStateOf(false) }
     val pending = remember { mutableStateMapOf<String, Boolean>() }
     // Not snapshot state. The second tap in this frame must see it before the list recomposes.
     val inFlight = remember { mutableSetOf<String>() }
@@ -179,15 +193,20 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val haptics = rememberHaptics()
     // Tap-driven row motion only (#9600). A hub refresh changes the rows with the flag clear.
     val listTapMotion = remember { ListTapMotion() }
-    fun refresh(collectNow: Boolean = true) {
-        if (refreshing) return
-        refreshing = true
+    /**
+     * [pull] drives the list's pull indicator. A background refresh must not: iOS shows that indicator
+     * only from `.refreshable` (`InboxView.swift:916`) and a center progress only while the list is empty
+     * (`InboxView.swift:917`). The empty list already uses `JLoading` via `loadingFirst`.
+     */
+    fun refresh(collectNow: Boolean = true, pull: Boolean = true) {
+        if (pull && refreshing) return
+        if (!pull && (backgroundInFlight || refreshing)) return
+        if (pull) refreshing = true else backgroundInFlight = true
         scope.launch {
             try { if (collectNow) repository.refreshNow() else repository.refresh(); error = null }
             catch (e: CancellationException) { throw e }
-            // Background refreshes stay quiet; a pull or tap reports its result.
             catch (e: Exception) { error = res.getString(R.string.inbox_refresh_failed) }
-            finally { refreshing = false }
+            finally { if (pull) refreshing = false else backgroundInFlight = false }
         }
     }
     val failedCompletions = remember(repository) {
@@ -305,7 +324,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
     if (showRules) InboxRulesSheet(repository, onDismiss = { showRules = false })
     ruleTarget?.let { InboxPolicySheet(repository, it, onDismiss = { ruleTarget = null }) }
-    LaunchedEffect(repository) { refresh(collectNow = false) }
+    // The host stays composed, so a one-shot effect would not run when Inbox returns to the front.
+    // iOS reloads every time the list appears (InboxView.swift:219–220) and shows a spinner only from
+    // `.refreshable` (InboxView.swift:916) or an empty first load (InboxView.swift:917).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(repository, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            refresh(collectNow = false, pull = false)
+        }
+    }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
     fun allTargets(shown: List<InboxGroup>) = shown.filter { it.id != "done" }.flatMap { it.rows }
