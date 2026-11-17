@@ -230,13 +230,23 @@ class SidebarRootsShotsTest {
                     placedSidebar().assertExists()
                     save(shot("window"), "$size-inbox-rest-folded-glass-$tone")
                     rule.runOnIdle { columnShown.value = true }
-                    settle()
+                    // The column opens on the layout spring (300ms, no bounce). settle() is 32ms, which
+                    // leaves that spring mid-travel: the next frame then shows the whole window, column
+                    // included, sliding left. Production does not reopen the column for a drill-down
+                    // (AssistantPaneFrame keeps it outside the host NavDisplay). Let it finish first.
+                    settle(800)
                 }
+                val columnAtRest = if (overlay) null else shot("window")
 
                 rule.onNodeWithText("Approve Friday launch").performClick()
                 advance(80)
                 val pushMid = shot("window")
                 save(pushMid, "$size-item-push-mid-glass-$tone")
+                if (columnAtRest != null) {
+                    // The left of the column, short of where a page sliding out of the slot could cover it.
+                    assertTrue("$size $tone drill-down leaves the sidebar column put",
+                        matches(leftStrip(columnAtRest, 240), leftStrip(pushMid, 240)))
+                }
                 settle(1_000)
                 val pushEnd = shot("window")
                 save(pushEnd, "$size-item-push-end-glass-$tone")
@@ -420,6 +430,9 @@ class SidebarRootsShotsTest {
     }
 
     private fun maskSidebarHeader(bitmap: Bitmap): Bitmap = mask(bitmap, 320, 220)
+
+    private fun leftStrip(bitmap: Bitmap, width: Int): Bitmap =
+        Bitmap.createBitmap(bitmap, 0, 0, minOf(width, bitmap.width), bitmap.height)
 
     private fun pageBesideColumn(bitmap: Bitmap): Bitmap {
         val start = minOf(320, bitmap.width)
