@@ -105,7 +105,7 @@ func TestInboxNoOutputRetriesOnceThenNamesUnhandledEvent(t *testing.T) {
 	s.sendDigest(context.Background())
 	waitFor(t, "the source-bearing failure notice", func() bool { return len(f.notices()) > 0 })
 	notice := strings.Join(f.notices(), "\n")
-	for _, want := range []string{"unhandled", "reviewer", linkedPRURL + "#discussion_r123"} {
+	for _, want := range []string{"unhandled", "review-1", "reviewer", linkedPRURL + "#discussion_r123"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("supervisor notice lacks %q: %s", want, notice)
 		}

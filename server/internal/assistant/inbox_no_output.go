@@ -17,6 +17,7 @@ import (
 // the existing turn ledger until the exact dispatched prompt gets visible output.
 type taskInboxEvent struct {
 	ID      string                 `json:"id"`
+	Key     string                 `json:"key"`
 	Todo    string                 `json:"todo"`
 	Machine string                 `json:"machine"`
 	Session string                 `json:"session"`
@@ -68,7 +69,7 @@ func (s *Service) recordTaskInboxEvent(ctx context.Context, e taskInboxEvent) (d
 func inboxUnhandledSignal(e taskInboxEvent) superviseSignal {
 	in := e.Inbox
 	in.ToAgent = "unhandled"
-	return superviseSignal{Todo: e.Todo, Kind: sigInbox, Key: e.ID, Detail: e.Failure, Inbox: &in}
+	return superviseSignal{Todo: e.Todo, Kind: sigInbox, Key: e.ID, Detail: e.Failure + " Source event: " + e.Key, Inbox: &in}
 }
 
 func (s *Service) taskInboxUnhandled(ctx context.Context, id string) bool {
