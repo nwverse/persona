@@ -31732,6 +31732,29 @@
         }
       }
     },
+    "Connect to %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@に接続しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接到 %1$@？"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
         "en" : {
@@ -112606,6 +112629,29 @@
       },
       "extractionState" : "manual"
     },
+    "Only connect to a hub you set up yourself or trust. It will see this device and can send it notifications." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only connect to a hub you set up yourself or trust. It will see this device and can send it notifications."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分で設定したハブか、信頼できるハブにだけ接続してください。接続すると、このデバイスを認識し、通知を送れるようになります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只连接你自己搭的或信任的 hub。连接后它能看到这台设备，也能给它发通知。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Only Its Alerts" : {
       "localizations" : {
         "en" : {
@@ -171285,6 +171331,29 @@
           }
         }
       }
+    },
+    "This hub is already paired. Connecting again refreshes this device's pairing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub is already paired. Connecting again refreshes this device's pairing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはペアリング済みです。もう一度接続すると、このデバイスのペアリングが更新されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 已经配对过，再连接一次会刷新这台设备的配对。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "This Hub Is Disconnected" : {
       "localizations" : {
