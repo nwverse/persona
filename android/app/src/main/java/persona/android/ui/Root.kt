@@ -259,6 +259,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // Overlays close when the tab or beside/over placement changes; the beside-column choice stays saved.
     val sidebarOverlayShown = remember { mutableStateOf(false) }
     val agentsOverlayShown = remember { mutableStateOf(false) }
+    // openAssistant is captured once by the navigator; it reads this after the window is measured (#9667).
+    val windowRegular = remember { mutableStateOf(false) }
+    val pageRoots = remember { SidebarPageRoots() }
     fun dismissSidebar() {
         sidebar.opened.value = false
         sidebarOverlayShown.value = false
@@ -270,8 +273,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     fun sidebarDestination(key: NavKey) {
         dismissSidebar()
-        showAssistantHome()
-        if (assistantStack.last() != key) assistantStack.add(key)
+        selected = AppTab.Persona
+        if (!windowRegular.value) {
+            // The phone drawer still pushes the place over the conversation (sidebar-navigation.md section 6).
+            pushCompactSidebarPlace(assistantStack, key)
+            return
+        }
+        // Regular width: replace the root. A switch is not animated; a re-pick pops (SidebarPageRoots.Step.animated).
+        val step = pageRoots.select(key, assistantStack.drop(1))
+        replaceBackStack(assistantStack, step.stack)
     }
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
@@ -307,8 +317,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun openAssistant(key: NavKey, select: Boolean): Boolean {
         val conversation = assistantTarget(key) ?: return false
         if (select) {
-            val stack = stacks.getValue(AppTab.Persona)
-            while (stack.size > 1) stack.removeAt(stack.lastIndex)
+            if (windowRegular.value) {
+                // Another conversation while this one is in front starts at its root, with no pop
+                // (SidebarPageRoots.select contentChanged, SidebarPageRoots.swift:90–91).
+                val step = pageRoots.select(AssistantRoute, assistantStack.drop(1), contentChanged = true)
+                replaceBackStack(assistantStack, step.stack)
+            } else {
+                val stack = stacks.getValue(AppTab.Persona)
+                while (stack.size > 1) stack.removeAt(stack.lastIndex)
+            }
             selected = AppTab.Persona
         }
         assistantPending = conversation
@@ -549,6 +566,30 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // A regular window (an open foldable, a tablet) is laid out as an open iPhone Duo or an iPad: the shared sidebar
         // is a column beside the Assistant page, and Settings shows its list beside the page it opens (RegularWindow.kt).
         val regular = isRegularWindow(windowWidth.value, windowHeight.value)
+        SideEffect { windowRegular.value = regular }
+        // Folding puts the conversation back under a place root; unfolding promotes that place to the root.
+        // The top entry does not change, so this is not a page transition (iOS keeps the phone drawer as it was).
+        LaunchedEffect(regular) {
+            if (regular) {
+                val promoted = regularPromotion(assistantStack.toList())
+                if (promoted != null) {
+                    pageRoots.adoptVisible(promoted.first())
+                    replaceBackStack(assistantStack, promoted)
+                } else if (assistantStack.firstOrNull() == AssistantRoute) {
+                    pageRoots.adoptVisible(AssistantRoute)
+                }
+            } else {
+                compactPrefix(assistantStack.toList())?.let { replaceBackStack(assistantStack, it) }
+            }
+        }
+        var seenAssistant by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(currentAssistant.id) {
+            val previous = seenAssistant
+            seenAssistant = currentAssistant.id
+            if (previous == null || previous == currentAssistant.id || !windowRegular.value) return@LaunchedEffect
+            // Another assistant forgets every root (SidebarPageRoots.forget, SidebarPageRoots.swift:108–111).
+            replaceBackStack(assistantStack, pageRoots.forget().stack)
+        }
         val widePhone = !regular && listsBesideDetails(windowWidth.value, windowHeight.value)
         val panePolicies = AppTab.entries.associateWith { tab ->
             assistantPanePolicy(tab, stacks.getValue(tab), regular, widePhone)
@@ -611,7 +652,18 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         dismissSidebar()
                         selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
                     },
-                    onAction = { action -> dismissSidebar(); showAssistantHome(); sidebar.action = action },
+                    onAction = { action ->
+                        dismissSidebar()
+                        if (windowRegular.value) {
+                            // Health, Schedule and New chat draw inside the conversation page. iOS Health selects the
+                            // conversation and then backToRoot() (AssistantView.swift:700–703, 739–741), so that page
+                            // is what is showing. These actions are not their own navigation roots on Android.
+                            pageRoots.select(AssistantRoute, assistantStack.drop(1), contentChanged = true)
+                            replaceBackStack(assistantStack, listOf(AssistantRoute))
+                            selected = AppTab.Persona
+                        } else showAssistantHome()
+                        sidebar.action = action
+                    },
                     onSettings = {
                         dismissSidebar()
                         settingsSheetStack.clear()
@@ -649,6 +701,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     },
                     // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                     fullWindowSearch = regular,
+                    shadedPlace = if (regular && selected == AppTab.Persona) sidebarShadeKey(assistantStack.firstOrNull() ?: AssistantRoute) else null,
                     onFoldColumn = onFoldColumn)
             }
         }
@@ -714,6 +767,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 val level = LocalGlassLevel.current
                 val primary = entry.contentKey in rootKeys
                 val assistantRoot = entry.contentKey == assistantRootKey
+                // A place root uses the conversation's sidebar button, never a chevron (sidebar-navigation.md section 6;
+                // iOS sidebarRootPage, SidebarPageRoots.swift:159–165, and SplitNavigation.swift:130–133).
+                val stackRootKey = assistantStack.firstOrNull()?.let { NavEntry<NavKey>(it) {}.contentKey }
+                val placeRoot = showsPlaceRootLeading(
+                    regular = currentRegular.value,
+                    persona = selected == AppTab.Persona,
+                    primary = primary,
+                    entryIsStackRoot = stackRootKey != null && entry.contentKey == stackRootKey,
+                )
                 val barHeight = remember { mutableIntStateOf(0) }
                 val tabSplit = LocalAgentsTabSplit.current
                 val entrySplit = rememberEntrySplitDetail(tabSplit, entry.contentKey)
@@ -721,7 +783,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     val content: @Composable () -> Unit = {
                         CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
                             LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
-                            LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
+                            LocalRootLeading provides if (placeRoot) { { currentLeading.value(true) } } else null,
+                            LocalRootBack provides if (primary || placeRoot) null else navigator::back,
                             LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
                                 onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
                                 leading = { currentLeading.value(assistantRoot) }) else null) {
@@ -738,7 +801,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         content()
                     }
                     // Register after the root page's own Back handler, even when NavDisplay composes it later.
-                    BackHandler(assistantRoot && selected == AppTab.Persona && currentColumnsOver.value && sidebarOverlayShown.value) {
+                    BackHandler((assistantRoot || placeRoot) && selected == AppTab.Persona && currentColumnsOver.value && sidebarOverlayShown.value) {
                         sidebarOverlayShown.value = false
                     }
                 }
@@ -913,8 +976,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                         modifier = Modifier.fillMaxSize().then(if (shown || tab == AppTab.Persona) Modifier else Modifier.unplaced()),
                                         onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
                                         sceneStrategies = listOf(agentsOverlay, listDetail.strategy),
-                                        transitionSpec = { pageTransitions.push },
-                                        popTransitionSpec = { pageTransitions.pop },
+                                        transitionSpec = {
+                                            // A root switch is instant (UnifiedSidebar.swift:67–74). Drill-downs keep the push.
+                                            if (personaSceneRootSwapped(currentRegular.value, tab == AppTab.Persona, initialState, targetState)) noPageMotion()
+                                            else pageTransitions.push
+                                        },
+                                        popTransitionSpec = {
+                                            if (personaSceneRootSwapped(currentRegular.value, tab == AppTab.Persona, initialState, targetState)) noPageMotion()
+                                            else pageTransitions.pop
+                                        },
                                         predictivePopTransitionSpec = { pageTransitions.predictivePop },
                                         entryProvider = { key -> panes(key, policy.singleRightStack) })
                                 }
@@ -1026,7 +1096,7 @@ internal fun PaneScaffoldDirective.onePane() = PaneScaffoldDirective(
 )
 
 /** The rail's key for an extension's page: never one of the tabs' names. */
-private fun extensionRailKey(extension: String, ui: String) = "extension:$extension/$ui"
+private fun extensionRailKey(extension: String, ui: String) = extensionSidebarKey(extension, ui)
 
 /** Placed nowhere: measured and kept composed, never drawn and never hit. */
 private fun Modifier.unplaced(): Modifier = layout { measurable, constraints ->

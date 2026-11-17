@@ -233,3 +233,11 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
   Agent and then another replace the root with no transition (`testTheAgentsTabSwitchesItsRootWithoutAPush`). Run on the iPad, the open Duo upright and
   on its side, and an iPhone.
 
+**Android** (#9667). A regular window — the sidebar column beside the page, or over it — follows this section. `SidebarPageRoots`
+(`android/app/src/main/java/persona/android/navigation/SidebarPageRoots.kt`) is the pure model, with the same steps as `SidebarPageRoots.swift`: a place
+replaces the Assistant stack's root and does not animate; a drill-down pushes; each root keeps its path; picking the root in
+front pops; the shaded row follows the root (`AssistantSidebarShade`). The root's top-leading control is the conversation's
+sidebar button (`resolveHomeLeadingAction`), never Back. The compact phone drawer is unchanged and still pushes the place over
+the conversation. Health and Scheduled Tasks are not navigation destinations on Android; picking them shows the conversation
+page, where those screens already open.
+
