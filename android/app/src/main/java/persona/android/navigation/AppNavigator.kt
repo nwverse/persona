@@ -29,8 +29,8 @@ internal class AppNavigator(
     private val openPlace: (NavKey) -> Boolean = { false },
     /**
      * Regular width, the stack is only a place root: Back switches to the conversation instead of leaving
-     * the app. iOS `leavePlace` selects the conversation with the place's path (`AssistantView.swift:680–686`)
-     * after `assistantReveal` (`AppModel.swift:427–429`, 1355–1362). Returns true when it switched.
+     * the app. iOS `leavePlace` selects the conversation (`AssistantView.swift:682–686`) after
+     * `assistantReveal` (`AppModel.swift:1381`, `:1393`). Returns true when it switched.
      */
     private val leavePlaceRoot: () -> Boolean = { false },
 ) : Navigator {
@@ -254,14 +254,18 @@ internal class AppNavigator(
                 }
                 if (owner != tab) {
                     stack.removeAll { it == chat }
+                    val source = inboxSource(chat)
+                    // At regular width the item is a root switch, then the chat sits on that host.
+                    // Pushing onto the conversation would make [Assistant, Inbox, InboxItem] (a drill, composed twice).
+                    val placed = owner == AppTab.Persona && source != null && openPlace(InboxItemRoute(source.itemId))
                     val destination = stacks.getValue(owner)
                     if (chat !in destination) {
-                        if (owner == selectedTab() && visible != chat) destination.add(1, chat)
-                        else destination.add(chat)
+                        if (placed || owner != selectedTab() || visible == chat) destination.add(chat)
+                        else destination.add(1, chat)
                     }
                     // The restored Agent used to live under Agents. Remember that cross-tab return even after late
                     // metadata moves its unchanged key to Persona; Back must rebuild the source detail, not the list.
-                    if (tab == AppTab.Agents && owner == AppTab.Persona && inboxSource(chat) != null) {
+                    if (tab == AppTab.Agents && owner == AppTab.Persona && source != null) {
                         openedFrom[chat] = tab
                     }
                     if (visible == chat) onSelectTab(owner)
@@ -287,8 +291,13 @@ internal class AppNavigator(
             // item's actual detail unless its detail, native source page or processing conversation is already on top.
             val visibleItem = persona.lastOrNull()?.let(::displayedInboxItemId)
             if (visibleItem != source.itemId) {
-                persona.add(InboxItemRoute(source.itemId))
-                restoreSecondaryParents(persona)
+                val item = InboxItemRoute(source.itemId)
+                // Regular width: the inbox host shows the item. Compact still pushes, and the parent insert
+                // stays in Router.restoreSecondaryParents (Router.kt:203–227).
+                if (!openPlace(item)) {
+                    persona.add(item)
+                    restoreSecondaryParents(persona)
+                }
             }
             // A real inbox source takes precedence over a stale openedFrom=Agents origin.
             onSelectTab(AppTab.Persona)

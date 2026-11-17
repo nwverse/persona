@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.ComponentName
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
@@ -519,6 +518,10 @@ private fun SidebarRootsHarness(
                         val back = rememberNavigationEventDispatcherOwner(enabled = hostShown)
                         ShellTabLifecycle(hostShown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back) {
+                                val root = stack.firstOrNull()
+                                // Same order as SidebarRootsRuntime: the place-root handler is before the display,
+                                // so a page handler inside it wins while it is enabled.
+                                PlaceRootBack(hostShown && stack.size <= 1 && root != null && root != AssistantRoute, navigator::back) {
                                 NavDisplay(
                                     backStack = stack,
                                     modifier = Modifier.fillMaxSize().then(if (hostShown) Modifier else Modifier.layout { measurable, constraints ->
@@ -574,9 +577,6 @@ private fun SidebarRootsHarness(
                                         }
                                     },
                                 )
-                                val root = stack.firstOrNull()
-                                BackHandler(hostShown && stack.size <= 1 && root != null && root != AssistantRoute) {
-                                    navigator.back()
                                 }
                             }
                         }

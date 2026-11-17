@@ -248,7 +248,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     // Not saveable: pageRoots is remember, so a saved flag would skip adopt after process death (item 7).
     val adoptedVisibleRoot = remember { mutableStateOf(false) }
-    var pendingPlace by remember { mutableStateOf<NavKey?>(null) }
+    // Pending only while the window size is unknown. A known compact window leaves nothing pending (#9667).
+    val window = remember { SidebarPlaceWindow() }
     val sidebar = remember { AssistantSidebarHost() }
     val sidebarOperations = rememberCoroutineScope()
     val sidebarState = rememberSaveableStateHolder()
@@ -266,8 +267,6 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // Overlays close when the tab or beside/over placement changes; the beside-column choice stays saved.
     val sidebarOverlayShown = remember { mutableStateOf(false) }
     val agentsOverlayShown = remember { mutableStateOf(false) }
-    // openAssistant is captured once by the navigator; it reads this after the window is measured (#9667).
-    val windowRegular = remember { mutableStateOf(false) }
     val pageRoots = remember { SidebarPageRoots() }
     fun dismissSidebar() {
         sidebar.opened.value = false
@@ -275,8 +274,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
     fun showAssistantHome() {
-        pendingPlace = null
-        if (hosts.current !== assistantStack) hosts.foldOntoConversation()
+        window.clearPending()
+        hosts.showConversation()
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
         stacks[AppTab.Persona] = assistantStack
         pageRoots.adoptVisible(AssistantRoute)
@@ -289,15 +288,19 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     fun sidebarDestination(key: NavKey) {
         dismissSidebar()
-        pendingPlace = null
+        window.clearPending()
         selected = AppTab.Persona
         // A drawer pick is a root too, so unfolding promotes it. A conversation drill is not marked.
         pageRoots.markOpenedAsRoot(key)
-        if (!windowRegular.value) {
-            // The phone drawer still pushes the place over the conversation (sidebar-navigation.md section 6).
-            if (hosts.current !== assistantStack) hosts.foldOntoConversation()
-            pushCompactSidebarPlace(assistantStack, key)
-            stacks[AppTab.Persona] = assistantStack
+        if (!window.regular) {
+            // The phone drawer still pushes a place that has no host yet over the conversation
+            // (sidebar-navigation.md section 6). A fixed place that already has a host is shown on
+            // that host, so the drawer's push does not compose it a second time.
+            if (!hosts.showRetainedCompact(key, listOf(key))) {
+                hosts.showConversation()
+                pushCompactSidebarPlace(assistantStack, key)
+            }
+            stacks[AppTab.Persona] = hosts.current
             pageRoots.adoptVisible(AssistantRoute)
             return
         }
@@ -310,37 +313,20 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
      * compact push stand; the first regular frame applies it before promoting whatever sits above the conversation.
      * Returns true when the caller must not also push.
      */
-    fun openPlace(key: NavKey): Boolean {
-        val place = placeRootFor(key) ?: return false
-        pageRoots.markOpenedAsRoot(place)
-        if (!windowRegular.value) {
-            pendingPlace = key
-            return false
-        }
-        // Already on that place: a child is a drill. The place itself is a re-pick (pop to its root).
-        if (pageRoots.current == place && key != place) return false
-        val step = pageRoots.select(place, hosts.current.drop(1))
-        // A child opened from outside replaces the saved path (AssistantView.swift:601–605).
-        val next = if (key == place) step.stack else listOf(place, key)
-        showHost(place, next)
+    fun openPlace(key: NavKey): Boolean = window.openPlace(key, pageRoots, hosts, ::showHost) {
         selected = AppTab.Persona
-        return true
     }
     /**
      * The stack is only a place root. Switch to the conversation without a push or a pop
      * (`leavePlace`, AssistantView.swift:682–686; `assistantReveal`, AppModel.swift:1381 and :1393;
      * `onChange` calls `leavePlace()` at AssistantView.swift:446).
      */
-    fun leavePlaceRoot(): Boolean {
-        if (!windowRegular.value || selected != AppTab.Persona) return false
-        val stack = stacks.getValue(AppTab.Persona)
-        if (stack.size != 1) return false
-        val root = stack.firstOrNull() ?: return false
-        if (root == AssistantRoute) return false
-        val step = pageRoots.select(AssistantRoute, emptyList())
-        showHost(step.root, step.stack)
-        return true
-    }
+    fun leavePlaceRoot(): Boolean = window.leavePlaceRoot(
+        persona = selected == AppTab.Persona,
+        stack = stacks.getValue(AppTab.Persona),
+        pageRoots = pageRoots,
+        showHost = ::showHost,
+    )
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
     val pending by session.interactions.pending.collectAsStateWithLifecycle()
@@ -375,14 +361,14 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun openAssistant(key: NavKey, select: Boolean): Boolean {
         val conversation = assistantTarget(key) ?: return false
         if (select) {
-            pendingPlace = null
-            if (windowRegular.value) {
+            window.clearPending()
+            if (window.regular) {
                 // Another conversation while this one is in front starts at its root, with no pop
                 // (SidebarPageRoots.select contentChanged, SidebarPageRoots.swift:90–91).
                 val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
                 showHost(step.root, step.stack)
             } else {
-                if (hosts.current !== assistantStack) hosts.foldOntoConversation()
+                hosts.showConversation()
                 while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
                 stacks[AppTab.Persona] = assistantStack
             }
@@ -638,7 +624,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // A regular window (an open foldable, a tablet) is laid out as an open iPhone Duo or an iPad: the shared sidebar
         // is a column beside the Assistant page, and Settings shows its list beside the page it opens (RegularWindow.kt).
         val regular = isRegularWindow(windowWidth.value, windowHeight.value)
-        SideEffect { windowRegular.value = regular }
+        // Zero size is not compact: the first frame can be unmeasured, and a place route then stays pending.
+        SideEffect { window.noteSize(windowWidth.value, windowHeight.value) }
         // Once, from the restored visible stack. A saved flag would skip this after process death, because
         // pageRoots is remember and resets with it (item 7). Offscreen place hosts are not restored.
         SideEffect {
@@ -647,47 +634,14 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 pageRoots.adoptVisible(hosts.current.firstOrNull() ?: AssistantRoute)
             }
         }
-        // Folding puts the visible place back under the conversation. Unfolding promotes it only when that
-        // place was opened as a root. A deep link that arrived before the window was measured goes first,
-        // so a compact prefix is not promoted instead of it.
-        LaunchedEffect(regular) {
-            if (regular) {
-                val pending = pendingPlace
-                if (pending != null) {
-                    pendingPlace = null
-                    val place = placeRootFor(pending)
-                    if (place != null) {
-                        pageRoots.markOpenedAsRoot(place)
-                        replaceBackStack(assistantStack, listOf(AssistantRoute))
-                        val next = if (pending == place) listOf(place) else listOf(place, pending)
-                        pageRoots.adoptVisible(place)
-                        showHost(place, next)
-                    }
-                } else {
-                    val promoted = regularPromotion(assistantStack.toList(), pageRoots::openedAsRoot)
-                    if (promoted != null) {
-                        // Pop the suffix first so AssistantRoute itself is not removed, then show the place host.
-                        replaceBackStack(assistantStack, listOf(AssistantRoute))
-                        pageRoots.adoptVisible(promoted.first())
-                        showHost(promoted.first(), promoted)
-                    } else if (hosts.current === assistantStack) {
-                        pageRoots.adoptVisible(assistantStack.firstOrNull() ?: AssistantRoute)
-                        stacks[AppTab.Persona] = assistantStack
-                    }
-                }
-            } else {
-                hosts.foldOntoConversation()
-                stacks[AppTab.Persona] = hosts.current
-                pageRoots.adoptVisible(assistantStack.firstOrNull() ?: AssistantRoute)
-            }
-        }
+        // Width changes run in SidebarRootsRuntime (same LaunchedEffect), beside the host displays.
         var seenAssistant by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(currentAssistant.id) {
             val previous = seenAssistant
             seenAssistant = currentAssistant.id
             if (previous == null || previous == currentAssistant.id) return@LaunchedEffect
             // Another assistant forgets every root, at any width (SidebarPageRoots.forget, SidebarPageRoots.swift:108–111).
-            pendingPlace = null
+            window.clearPending()
             pageRoots.forget()
             hosts.forgetPlaces()
             replaceBackStack(assistantStack, listOf(AssistantRoute))
@@ -759,7 +713,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     },
                     onAction = { action ->
                         dismissSidebar()
-                        if (windowRegular.value) {
+                        if (window.regular) {
                             // Health, Schedule and New chat draw inside the conversation page. iOS Health selects the
                             // conversation and then backToRoot() (AssistantView.swift:706–717), so that page
                             // is what is showing. These actions are not their own navigation roots on Android.
@@ -1011,6 +965,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         ReleaseTextInputOnChange(sidebarOverlayShown.value)
         ReleaseTextInputOnChange(agentsOverlayShown.value)
         ReleaseTextInputOnChange(settingsOpened)
+        // A root switch leaves the conversation composed. Clear the field it still holds
+        // (AssistantView.swift:666 `.id(value)`).
+        ReleaseFocusOnSidebarHost(hosts.currentId())
         // Back on the first page of Agents goes to Persona. Back on a place root returns to the conversation
         // (the handler on that host). Back on the conversation leaves the app (2026-11-01, the user's call).
         BackHandler(selected != AppTab.Persona && stacks.getValue(selected).size <= 1) { navigator.selectTab(AppTab.Persona) }
@@ -1131,73 +1088,67 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                             else setSidebarColumnBeside(value)
                                         }) {
                                         Box(Modifier.fillMaxSize()) {
-                                            // Always this loop, even with only the conversation visited, so its
-                                            // SaveableStateHolder is not recreated when a second host appears.
-                                            // Compact composes only the conversation host: a place key must not be
-                                            // composed twice once folding has pushed it onto that stack.
-                                            val hostIds = if (currentRegular.value) hosts.visited else listOf(SidebarRootHosts.CONVERSATION)
-                                            hostIds.forEach { hostId ->
-                                                val hostStack = hosts.stack(hostId)
-                                                // No return@key: a labeled return from inline key() compiles an illegal <anonymous> method.
-                                                if (hostStack != null) key(hostId) {
-                                                    val hostShown = shown && hosts.current === hostStack
-                                                    val hostBack = rememberNavigationEventDispatcherOwner(enabled = hostShown)
-                                                    val hostPolicy = assistantPanePolicy(tab, hostStack, currentRegular.value, widePhone)
-                                                    val hostDirective = if (hostPolicy.singleRightStack) directive.onePane() else directive
-                                                    val hostDetail = detailOf(hostStack)
-                                                    val hostList = rememberShellListDetail(
-                                                        tab, hostDirective, paneMaxWidth, paneHinges, detailOpen = hostDetail != null,
-                                                        store = paneStore, collapsible = canCollapseList(hostStack),
+                                            // SidebarRootsRuntime keeps one key() per host, so a host's SaveableStateHolder
+                                            // is not recreated when another host appears. Place-root Back is registered
+                                            // before that host's NavDisplay.
+                                            SidebarRootsRuntime(
+                                                window = window,
+                                                hosts = hosts,
+                                                pageRoots = pageRoots,
+                                                assistantStack = assistantStack,
+                                                regular = currentRegular.value,
+                                                overlayOpen = currentColumnsOver.value && sidebarOverlayShown.value,
+                                                shown = shown,
+                                                showHost = ::showHost,
+                                                assignPersona = { stacks[AppTab.Persona] = it },
+                                                onBack = navigator::back,
+                                            ) { _, hostStack, hostShown ->
+                                                val hostPolicy = assistantPanePolicy(tab, hostStack, currentRegular.value, widePhone)
+                                                val hostDirective = if (hostPolicy.singleRightStack) directive.onePane() else directive
+                                                val hostDetail = detailOf(hostStack)
+                                                val hostList = rememberShellListDetail(
+                                                    tab, hostDirective, paneMaxWidth, paneHinges, detailOpen = hostDetail != null,
+                                                    store = paneStore, collapsible = canCollapseList(hostStack),
+                                                )
+                                                val hostSplit = rememberAgentsTabSplit(
+                                                    tab = tab, stack = hostStack,
+                                                    twoPanes = hostDirective.maxHorizontalPartitions > 1 && !columnsOver,
+                                                    listHidden = hostList.listHidden, onShowList = hostList::expand,
+                                                )
+                                                val hostTransitions = rememberPageTransitions()
+                                                val hostDecorators = listOf(
+                                                    rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+                                                    rememberViewModelStoreNavEntryDecorator<NavKey>(),
+                                                    chrome,
+                                                )
+                                                CompositionLocalProvider(
+                                                    LocalHostRoot provides hostStack.firstOrNull(),
+                                                    LocalDetailKey provides hostDetail,
+                                                    LocalAgentsTabSplit provides hostSplit,
+                                                    persona.feature.settings.LocalExtensionPageVisible provides hostShown,
+                                                ) {
+                                                    NavDisplay(
+                                                        backStack = hostStack,
+                                                        modifier = Modifier.fillMaxSize().then(if (hostShown) Modifier else Modifier.unplaced()),
+                                                        onBack = {
+                                                            if (hosts.backFromCompactPrefix(currentRegular.value)) {
+                                                                stacks[AppTab.Persona] = hosts.current
+                                                                pageRoots.adoptVisible(AssistantRoute)
+                                                            } else navigator.back()
+                                                        },
+                                                        entryDecorators = hostDecorators,
+                                                        sceneStrategies = listOf(hostList.strategy),
+                                                        transitionSpec = {
+                                                            if (personaSceneRootSwapped(currentRegular.value, true, initialState, targetState)) noPageMotion()
+                                                            else hostTransitions.push
+                                                        },
+                                                        popTransitionSpec = {
+                                                            if (personaSceneRootSwapped(currentRegular.value, true, initialState, targetState)) noPageMotion()
+                                                            else hostTransitions.pop
+                                                        },
+                                                        predictivePopTransitionSpec = { hostTransitions.predictivePop },
+                                                        entryProvider = { key -> panes(key, hostPolicy.singleRightStack) },
                                                     )
-                                                    val hostSplit = rememberAgentsTabSplit(
-                                                        tab = tab, stack = hostStack,
-                                                        twoPanes = hostDirective.maxHorizontalPartitions > 1 && !columnsOver,
-                                                        listHidden = hostList.listHidden, onShowList = hostList::expand,
-                                                    )
-                                                    val hostTransitions = rememberPageTransitions()
-                                                    val hostDecorators = listOf(
-                                                        rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
-                                                        rememberViewModelStoreNavEntryDecorator<NavKey>(),
-                                                        chrome,
-                                                    )
-                                                    // CREATED while covered: collectors stop, and the composition
-                                                    // (drafts, local operations, running effects) stays.
-                                                    ShellTabLifecycle(hostShown) {
-                                                        CompositionLocalProvider(
-                                                            LocalNavigationEventDispatcherOwner provides hostBack,
-                                                            LocalHostRoot provides hostStack.firstOrNull(),
-                                                            LocalDetailKey provides hostDetail,
-                                                            LocalAgentsTabSplit provides hostSplit,
-                                                            persona.feature.settings.LocalExtensionPageVisible provides hostShown,
-                                                        ) {
-                                                            NavDisplay(
-                                                                backStack = hostStack,
-                                                                modifier = Modifier.fillMaxSize().then(if (hostShown) Modifier else Modifier.unplaced()),
-                                                                onBack = navigator::back,
-                                                                entryDecorators = hostDecorators,
-                                                                sceneStrategies = listOf(hostList.strategy),
-                                                                transitionSpec = {
-                                                                    if (personaSceneRootSwapped(currentRegular.value, true, initialState, targetState)) noPageMotion()
-                                                                    else hostTransitions.push
-                                                                },
-                                                                popTransitionSpec = {
-                                                                    if (personaSceneRootSwapped(currentRegular.value, true, initialState, targetState)) noPageMotion()
-                                                                    else hostTransitions.pop
-                                                                },
-                                                                predictivePopTransitionSpec = { hostTransitions.predictivePop },
-                                                                entryProvider = { key -> panes(key, hostPolicy.singleRightStack) },
-                                                            )
-                                                            val hostRoot = hostStack.firstOrNull()
-                                                            // After NavDisplay, so a place root takes Back. An open overlay
-                                                            // still closes first (the handler inside the page). The
-                                                            // conversation root leaves the app. iOS has no system Back.
-                                                            val overlayOpen = currentColumnsOver.value && sidebarOverlayShown.value
-                                                            BackHandler(hostShown && currentRegular.value && !overlayOpen &&
-                                                                hostStack.size <= 1 && hostRoot != null && hostRoot != AssistantRoute) {
-                                                                navigator.back()
-                                                            }
-                                                        }
-                                                    }
                                                 }
                                             }
                                         }

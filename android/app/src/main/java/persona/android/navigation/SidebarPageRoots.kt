@@ -92,6 +92,16 @@ internal class SidebarPageRoots {
     fun keeps(root: NavKey): Boolean = saved[root] != null
 }
 
+/**
+ * Live composition while another root is in front: the conversation and the fixed sidebar places.
+ * A to-do or an extension page keeps its path in [SidebarPageRoots] and is composed only while it
+ * is in front. iOS keeps paths, not live views (docs/design/sidebar-navigation.md).
+ */
+internal fun retainsSidebarComposition(root: NavKey): Boolean = when (root) {
+    AssistantRoute, InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute -> true
+    else -> false
+}
+
 /** A sidebar place that is its own root at regular width. A pushed extension page (`depth > 0`) is a drill-down. */
 internal fun isSidebarPlaceRoot(key: NavKey): Boolean = when (key) {
     InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute -> true

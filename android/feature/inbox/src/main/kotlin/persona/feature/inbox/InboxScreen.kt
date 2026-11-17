@@ -18,7 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import android.content.res.Resources
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.api.ConnectionState
 import persona.core.domain.inbox.*
 import persona.core.navigation.ChatRoute
@@ -204,7 +207,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
     if (showRules) InboxRulesSheet(repository, onDismiss = { showRules = false })
     ruleTarget?.let { InboxPolicySheet(repository, it, onDismiss = { ruleTarget = null }) }
-    LaunchedEffect(repository) { refresh(collectNow = false, pull = false) }
+    // The host stays composed, so a one-shot effect would not run when Inbox returns to the front.
+    // iOS reloads every time the list appears (InboxView.swift:219–220) and shows a spinner only from
+    // `.refreshable` (InboxView.swift:916) or an empty first load (InboxView.swift:917).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(repository, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            refresh(collectNow = false, pull = false)
+        }
+    }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
     fun allTargets(shown: List<InboxGroup>) = shown.filter { it.id != "done" }.flatMap { it.rows }
