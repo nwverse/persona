@@ -32,7 +32,7 @@ func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher str
 		s.logf("launcher health: check %s on %s: %v", launcher, machine, err)
 		return healthResult{}, false
 	}
-	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck, observedAt: &observed.CheckedAt}, true
+	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck, observed: &observed}, true
 }
 
 // healthLaunchers are the launchers to check on machine: those it can start (its ~/.zshrc's, the managed ones) and

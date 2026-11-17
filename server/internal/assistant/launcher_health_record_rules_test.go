@@ -195,14 +195,15 @@ func TestUsageLimitRuleUnknownResetIsRechecked(t *testing.T) {
 	}
 }
 
-// Two families used up: a pass of one clears only that one, and the next probe asks the other.
+// Two families used up, each with its own reset (Sonnet's unknown, so the limit's is too): a pass of one clears only
+// that one, and the next probe asks the other.
 func TestUsageLimitRulePassClearsOnlyItsFamily(t *testing.T) {
 	s, f := launcherHealthHubOn(t, newStorelessService)
 	ctx := context.Background()
 	reset := time.Now().Add(7 * 24 * time.Hour)
 	seedUsageLimit(t, s, "l4", "You've hit your Opus limit", &reset)
 	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", kind: errKindUsageLimit, source: healthSourceSession})
-	if rec := healthState(s, "l4", "work"); !slices.Equal(rec.limitModels(), []string{"sonnet", "opus"}) || rec.ResetsAt == nil {
+	if rec := healthState(s, "l4", "work"); !slices.Equal(rec.limitModels(), []string{"opus", "sonnet"}) || rec.ResetsAt != nil || !rec.LimitResets["opus"].Equal(reset) {
 		t.Fatalf("second family did not add to the first: %+v", rec)
 	}
 	var asked []string
@@ -213,16 +214,16 @@ func TestUsageLimitRulePassClearsOnlyItsFamily(t *testing.T) {
 	})
 	expireRecheckThrottle(s, "l4")
 	if _, bad := s.launcherUnusableNow(ctx, "l4", "work"); !bad {
-		t.Fatal("a Sonnet pass cleared the Opus limit too")
+		t.Fatal("an Opus pass cleared the Sonnet limit too")
 	}
-	if rec := healthState(s, "l4", "work"); !slices.Equal(rec.limitModels(), []string{"opus"}) {
+	if rec := healthState(s, "l4", "work"); !slices.Equal(rec.limitModels(), []string{"sonnet"}) || rec.ResetsAt != nil {
 		t.Fatalf("after the Sonnet pass: %+v", rec)
 	}
 	expireRecheckThrottle(s, "l4")
 	if _, bad := s.launcherUnusableNow(ctx, "l4", "work"); bad {
-		t.Fatal("an Opus pass left the limit")
+		t.Fatal("a Sonnet pass left the limit")
 	}
-	if !slices.Equal(asked, []string{"sonnet", "opus"}) {
+	if !slices.Equal(asked, []string{"opus", "sonnet"}) {
 		t.Fatalf("probes asked %v", asked)
 	}
 }
@@ -234,13 +235,13 @@ func TestUsageLimitRuleOlderResultOnlyAdds(t *testing.T) {
 	ctx := context.Background()
 	reset, later, earlier := time.Now().Add(time.Hour), time.Now().UTC().Add(48*time.Hour), time.Now().Add(time.Minute)
 	seedUsageLimit(t, s, "l4", "You've hit your Opus limit", &reset)
-	before := time.Now().Add(-time.Hour)
-	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your weekly limit", resetsAt: &earlier, source: healthSourceCheck, observedAt: &before})
-	s.recordHealth(ctx, "l4", "work", healthResult{ok: true, model: "claude-opus-4", source: healthSourceCheck, observedAt: &before})
+	older := LauncherHealth{CheckedAt: time.Now().Add(-time.Hour)}
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your weekly limit", resetsAt: &earlier, source: healthSourceCheck, observed: &older})
+	s.recordHealth(ctx, "l4", "work", healthResult{ok: true, model: "claude-opus-4", source: healthSourceCheck, observed: &older})
 	if rec := healthState(s, "l4", "work"); !rec.unusable() || !rec.ResetsAt.Equal(reset.UTC()) || !slices.Equal(rec.limitModels(), []string{"opus"}) {
 		t.Fatalf("an older result took from the limit: %+v", rec)
 	}
-	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", resetsAt: &later, source: healthSourceCheck, observedAt: &before})
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", resetsAt: &later, source: healthSourceCheck, observed: &older})
 	if rec := healthState(s, "l4", "work"); !rec.ResetsAt.Equal(later) || !slices.Equal(rec.limitModels(), []string{"opus", "sonnet"}) {
 		t.Fatalf("an older failure's later reset and family were lost: %+v", rec)
 	}
@@ -268,5 +269,83 @@ func TestUsageLimitRuleLegacyRecordKeepsFamily(t *testing.T) {
 	s.recordHealth(context.Background(), "l4", "work", healthResult{ok: true, model: "claude-sonnet-4-5", source: healthSourceCheck})
 	if rec := healthState(s, "l4", "work"); !rec.unusable() {
 		t.Fatalf("a Sonnet pass cleared a legacy Opus record: %+v", rec)
+	}
+}
+
+// Third review's counterexamples. An older failure that adds to the limit is a new version of the record: a pass a
+// probe formed against the version before it cannot clear what it added.
+func TestUsageLimitRuleLateFoldInvalidatesInFlightPass(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newStorelessService)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	short, later := time.Now().Add(time.Hour), time.Now().Add(7*24*time.Hour)
+	seedUsageLimit(t, s, "l4", "You've hit your Opus limit", &short)
+	editHealth(s, "l4", "work", func(r *LauncherHealth) { r.CheckedAt = time.Now().Add(-2 * time.Minute) })
+	older := healthState(s, "l4", "work")
+	seedUsageLimit(t, s, "l4", "You've hit your Opus limit", &short)
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.answerNode(assistantwire.DeviceLaunchersCheck, func(_ string, _ json.RawMessage) (any, error) {
+		close(entered)
+		select {
+		case <-release:
+			return proto.LauncherCheck{OK: true, Model: "claude-opus-4-1"}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	done := make(chan bool, 1)
+	go func() {
+		_, bad := s.launcherUnusableNow(ctx, "l4", "work")
+		done <- bad
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("probe did not start")
+	}
+	merged := s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Opus limit", resetsAt: &later, source: healthSourceCheck, observed: &older})
+	if merged.ResetsAt == nil || !merged.ResetsAt.Equal(later.UTC()) {
+		t.Fatalf("the older failure's later reset was not merged: %+v", merged)
+	}
+	close(release)
+	select {
+	case bad := <-done:
+		if !bad {
+			mid, _, err := s.startTaskAgent(ctx, &PlanTask{Machine: "l4", Cwd: "/work", Launcher: "work", Model: "opus", MachinePolicy: machineFixed}, false)
+			t.Fatalf("a pass formed before the merge erased it: %+v; fixed start machine=%q err=%v", healthState(s, "l4", "work"), mid, err)
+		}
+	case <-ctx.Done():
+		t.Fatal("probe did not finish")
+	}
+}
+
+// A known Opus reset says nothing of a Sonnet limit whose reset is unknown: once it passes, Sonnet is probed first.
+func TestUsageLimitRuleUnknownFamilyOutlivesOtherReset(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newStorelessService)
+	ctx := context.Background()
+	reset := time.Now().Add(300 * time.Millisecond)
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Opus limit", resetsAt: &reset, source: healthSourceSession})
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", source: healthSourceSession})
+	f.checks["l4/work"] = proto.LauncherCheck{Error: "You've hit your Sonnet limit"}
+	<-time.After(time.Until(reset.Add(50 * time.Millisecond)))
+	if mid, _, err := s.startTaskAgent(ctx, &PlanTask{Machine: "l4", Cwd: "/work", Launcher: "work", Model: "sonnet", MachinePolicy: machineFixed}, false); err == nil {
+		t.Fatalf("Opus's reset admitted a Sonnet limit of unknown reset: machine=%q probes=%d record=%+v", mid, checkedCount(f, "l4/work"), healthState(s, "l4", "work"))
+	}
+}
+
+// An agent's turn that meets the Opus limit with a later reset is not "known already" for being before another
+// family's reset: once Sonnet's pass clears Sonnet, Opus holds until its own new reset.
+func TestUsageLimitRuleTurnLimitKeepsItsFamilysReset(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newStorelessService)
+	ctx := context.Background()
+	soon, mid, week := time.Now().Add(time.Hour), time.Now().UTC().Add(72*time.Hour).Truncate(time.Second), time.Now().Add(7*24*time.Hour)
+	seedUsageLimit(t, s, "l4", "You've hit your Opus limit", &soon)
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", kind: errKindUsageLimit, resetsAt: &week, source: healthSourceSession})
+	f.setSessions("l4", proto.Session{SessionID: "s1", Launcher: "work", Status: proto.StatusIdle, State: proto.StateUnread, UpdatedAt: time.Now(),
+		TurnError: "You've hit your Opus limit", TurnErrorKind: proto.TurnErrorUsageLimit, TurnErrorResetsAt: &mid})
+	s.launcherLimitTurnEnded(ctx, "l4", "s1")
+	s.recordHealth(ctx, "l4", "work", healthResult{ok: true, model: "claude-sonnet-4-5", source: healthSourceCheck})
+	if rec := healthState(s, "l4", "work"); rec.ResetsAt == nil || !rec.ResetsAt.Equal(mid) || !slices.Equal(rec.limitModels(), []string{"opus"}) {
+		t.Fatalf("the turn's later Opus reset was dropped: %+v", rec)
 	}
 }
