@@ -51,6 +51,8 @@ import type { Session } from "../../lib/types";
 import { Button, Collapse, copyText, cx, IconButton, Loading, StatePill, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
+import { BrandMark } from "../../ui/BrandMark";
+import { connectorBrand } from "../../lib/connectors";
 import { Markdown } from "../../ui/Markdown";
 import { known, remember } from "./cache";
 import { askPersona } from "../../lib/outbox";
@@ -58,7 +60,7 @@ import { openNewAgent } from "../../lib/new-agent";
 import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
 import { Empty } from "../session/files/parts";
-import { Badges, Card, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
+import { Badges, Card, importedMeetingOf, importedNotesLabel, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Timeline lines shown before "Show all". */
@@ -201,6 +203,9 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   };
 
   const facts = d ? factsOf(d.kind, d.meta) : null;
+  // A recording that stands for an imported meeting too (#8872): its own notes there, one tap away.
+  const imported = importedMeetingOf(d);
+  const importedBrand = imported ? connectorBrand(imported.source ?? "") : undefined;
   const rec = d ? recordingView(d.kind, d.meta, d.segments) : null;
   // The meeting conversation (#3862): its private mark, room and follow-up, on a hub that lists meeting_conversation;
   // its photos too where the hub lists meeting_photos (after a change of the photos the minutes may have lost a deleted
@@ -324,6 +329,16 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                         {facts.openLabel}
                       </button>
                     )}
+                  </Card>
+                </section>
+              )}
+              {imported && (
+                <section>
+                  <Card>
+                    <button type="button" onClick={() => openPanel({ kind: "link", url: imported.url, title: importedNotesLabel(imported.source) })} className="flex w-full items-center gap-2 whitespace-nowrap px-4 py-2.5 text-left text-[13px] font-medium text-accent-ink hover:bg-hover">
+                      {importedBrand ? <BrandMark brand={importedBrand} size={16} fit="badge" /> : <Icon name="external" size={14} />}
+                      {importedNotesLabel(imported.source)}
+                    </button>
                   </Card>
                 </section>
               )}

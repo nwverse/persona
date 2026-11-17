@@ -46,6 +46,12 @@ export interface KBEntry {
   extra?: string;
   /** recordings: meeting, note or day (#8870); absent from an older hub */
   recording_kind?: string;
+  /** chats: the source they came from; docs, meetings and events: the connector that supplied them (#8872) */
+  source?: string;
+  /** recordings: the id of the imported meeting it overlaps, as the meetings list has it (#8872) */
+  meeting_id?: string;
+  /** recordings in the meetings list (this client's, `mergeMeetingLists`): the imported meeting it stands for (#8872) */
+  imported?: KBEntry;
 }
 
 /** The tag a recording's row carries in the meetings list (#8871): notes and all-day recordings are the exceptions among
@@ -58,10 +64,19 @@ export function recordingKindTag(e: KBEntry): string | null {
 }
 
 /** The meetings list (#8871): the meetings imported from connected apps and the recordings made in Persona, read from
- *  both lists; tags that both have appear once. */
+ *  both lists; tags that both have appear once. A meeting both recorded and imported is one row (#8872): the recording's,
+ *  which carries the imported meeting (`imported`), and the imported meeting's own row goes. */
 export function mergeMeetingLists(meetings: KBList, recordings: KBList): KBList {
   const tags = [...(meetings.tags ?? []), ...(recordings.tags ?? [])];
-  return { items: [...(meetings.items ?? []), ...(recordings.items ?? [])], tags: [...new Set(tags)] };
+  const byID = new Map((meetings.items ?? []).map((m) => [m.id, m]));
+  const covered = new Set<string>();
+  const recs = (recordings.items ?? []).map((r) => {
+    const m = r.meeting_id ? byID.get(r.meeting_id) : undefined;
+    if (!m) return r;
+    covered.add(m.id);
+    return { ...r, imported: m };
+  });
+  return { items: [...(meetings.items ?? []).filter((m) => !covered.has(m.id)), ...recs], tags: [...new Set(tags)] };
 }
 
 export interface KBList {
