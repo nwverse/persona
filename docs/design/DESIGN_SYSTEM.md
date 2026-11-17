@@ -283,6 +283,8 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 
 The composer and attach panel own about 20 more one-off tokens (Telegram-derived; the attach panel itself is a system sheet since #4312). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs; the reply bar (#5314, cindy's) stays 250 ms after the pointer leaves and fades over 250 ms (`REPLY_BAR_LINGER_MS`, `REPLY_BAR_FADE_MS` in `web/src/ui/motion.ts`). Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. `spec/tokens/motion.json` carries this shared set (state, layout, expand, reveal, conceal, drawer, springBack, keyboard, the needs-you breath, and the composer's send swap and press, `composerSwap` and `composerPress`: its curve, durations, scales and blur, section 3.1), checked against `Theme.Motion` by `scripts/assets/test_gen_tokens.py`. Android Glass moves with the `state` and `layout` springs (`IosSpring` in `PersonaTheme.kt`: damping ratio `1 - bounce`, stiffness `(2π / duration)²`) and swaps and presses the composer's send as iOS does (`ComposerActionSlot`, `SendButton(pressScales)`); Brief and Board keep their tweens (DS-11). Android page stacks share `rememberPageTransitions()` (`PageTransitions.kt`): existing opaque trailing-edge push/pop (300/260 ms, quarter-width parallax, RTL mirrored), predictive pop with the same easing, all instant with system animations off; an upright overlaid Agents list replaces its detail instantly and only the list slides away with Glass's `layout` spring (Brief/Board keep their tweens), copying `SplitNavigation.swift:125-208`; exact UIKit navigation timing, parallax and dimming await measurement. A swiped message springs back with `springBack` in every style (`swipeToReply`, `MessageMenu.swift:470`).
 
+On Glass, `JSegmented` and the home Assistant / Agents switch draw one pill that moves to the chosen segment on the `state` spring (`Tokens.Motion.State`, `Theme.Motion.state` in `apple/Shared/Design/Theme.swift`). That is the iPhone shell switch's pill (`apple/Persona/DesignSystem/ShellComponents.swift`, `SwitchMotion` and `matchedGeometryEffect` id `pill`) and the stand-in for a segmented picker's sliding thumb (`Picker` `.segmented`). The pill is in place at once when system animations are off. Brief and Board keep the marks they have. Android has no shell strip, so the pill does not follow a finger the way `PagerPill` does while the strip slides. The label's colour fades on that same spring: iOS animates `foregroundStyle` with `chosen` inside `SwitchMotion` (`ShellComponents.swift` lines 325 and 336; `beautifulSegment` 198–199, `plainSegment` 214–215). Where the weight changes, the two weights crossfade, because SwiftUI crossfades the glyphs when the font changes. An index that is not one of the segments draws no pill.
+
 Android's chat uses the same reveal. `Modifier.unfolding` (`Unfolding.kt`) fades what opens with `Tokens.Motion.Reveal`, copying `Theme.Motion.reveal` (`apple/Shared/Design/Theme.swift:754`) and `.unfolding` (`apple/Persona/Views/Chat/ChatPin.swift:707-726`): the block already has its height, and what closes leaves at once (`ChatPin.swift:686-688`, #3005, #9574). iPhone and regular width use that modifier; no size class skips it. Reduced motion draws the opened block at once (`ChatPin.swift:721-722`).
 
 Reduce Motion:
@@ -1234,7 +1236,8 @@ line, or the percentage for an empty label. Only this center text is capped at
 `ExtensionSurfaceTokens.circularLabelLargestTypeSize` (`.xxxLarge`, matching `Theme.interfaceLargestTypeSize`) and
 shrinks to `ExtensionSurfaceTokens.circularLabelMinimumScale` when needed to fit the fixed ring.
 VoiceOver reads the label and percentage; finite ratios are clamped to 0–1 and nonfinite ratios become zero.
-Other extension widget families retain their existing progress view.
+The circular gauge is independent of `progress.style`. `accessory_rectangular` uses a bar and `accessory_inline`
+omits progress.
 
 The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. A complication only draws what its app last wrote (a snapshot file in the watch App Group); all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'.
 
@@ -1245,6 +1248,22 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 - **Record** (#5493, `MeetingRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): static, the recording mark in the system's red and **Record**, the word of every start ("One Record entry (#5243)"); the rectangular face adds "Meeting" under it (what a tap records; a longer line was cut short in en and ja). A tap opens the app straight into a meeting recording (`persona://record?meeting=1`), or marks the meeting while all-day recording runs. Its kind stays `persona.watch.meeting-recording`. `-openWatchItem record-complication` previews every family.
 
 ### 3.14 Home Screen and Lock Screen widgets
+
+Extension widgets use `ExtensionSurfaceTokens`. In small, medium and large families, `progress.style == "ring"`
+draws a fixed ring (`ringSize`, 50 pt; `ringStroke`, 7 pt) with a same-color track (`ringTrackOpacity`), a clockwise
+arc from twelve o'clock (`ringStartAngle`) and round ends. Zero shows only the track; one fills the ring. Finite
+ratios are clamped to 0–1 and nonfinite ratios become zero. The center shows a locale-formatted whole percentage
+in `ringNumber` (15 pt rounded semibold at the default size), capped at `ringNumberLargestTypeSize` and shrinking
+to `ringNumberMinimumScale`. The label sits beside the ring in the bar's `label` font on at most two lines, capped
+at `ringContentLargestTypeSize` and shrinking to `ringLabelMinimumScale` (0.5). Text that still does not fit uses
+system truncation; detail is omitted. The row is one VoiceOver element with the progress label and percentage.
+In a Home Screen layout containing a ring, metric and chart text is capped at `ringContentLargestTypeSize`
+(`.xxxLarge`) and shrinks to `ringContentMinimumScale` so the fixed widget canvas retains every line at accessibility sizes.
+`progressTint` follows the bar's default accent without tone coloring; the arc participates in system widget accents.
+Items retain their order. A medium widget uses two columns only when its fitted view has exactly one section with
+`[metric?, progress(style: "ring"), chart]` and that chart has exactly one series and is not candlestick: metric and
+ring on the left, chart on the right. All other layouts stack items vertically. An omitted, `bar` or unknown style
+uses the default bar. Accessory families follow 3.13.
 
 The widget extension doesn't build `Theme`: Persona's widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. Heroes, rings and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. A hero may shrink to fit (`heroMinScale`), and a name in a row shrinks a little (`nameMinScale`) before it is cut short. Every widget in `docs/apple/home-widgets.md`.
 
@@ -1263,6 +1282,7 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - `RingChart`: a donut (its total in the hole) or a pie, one series of a few parts.
 - `CandleChart`: candlesticks with an optional volume chart under them; rising and falling colors come from the caller (the diff's green and red); holding a candle reads its prices, else the last one's.
 - `TrendLine`: a trend line the size of a word, no axes, in the quiet ink unless given a color; VoiceOver reads where it went and its lowest and highest.
+- `HeatGrid` (`apple/Persona/DesignSystem/HeatGrid.swift`, `Theme.Heat`): squares in the theme color's four steps from faint to full, no usage in the neutral fill (`Theme.Fill.chip`); the token calendar's days (a column a week, #9506) and its last week's hours (a row a day). The steps go by rank among the values above 0 (`HeatLevels`), never scaled from the largest, so one large value does not fade the rest. The squares keep their size at every text size and a wider screen shows more columns; labels stay few (three weekdays, the months). Today has a thin outline, a picked square a thicker one outside it; a tap picks, a second tap lets go, and the page says what the picked square holds in words above it. `HeatLegend` is its key (Less ▢▢▢▢▢ More, or 0 … the largest). The grid is one VoiceOver element whose value is the picked (or the last) square and whose adjustable action moves the pick.
 - Charts never take a hex: series use role colors, the data hues or `Theme.Hue`; text around them stays in the text's colors.
 - Machine monitoring has its own `MetricColor` palette on both Apple and Android: CPU blue, memory teal, download orange, upload purple and load magenta, with separate light/dark values from `spec/tokens/color.metric.json`. These series never reuse Agent state colors and do not change with interface style or theme accent. Android's additional disk series uses the registered neutral slate token. Holding a chart keeps one shared timestamp across the detail's charts; only **Back to now**, or that timestamp leaving the selected range, returns to current values. Missing series remain unknown and gaps never borrow a neighboring value.
 

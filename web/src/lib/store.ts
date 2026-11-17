@@ -851,7 +851,6 @@ function onMessage(msg: Record<string, unknown>) {
   switch (msg.type) {
     case "hello": {
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
-      helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       // a hub that folds side sessions into their parent's chat (#7944): set before the features, which redraw the lists
@@ -864,6 +863,11 @@ function onMessage(msg: Record<string, unknown>) {
         hubName: typeof msg.hub_name === "string" ? msg.hub_name : "",
         mesh: Array.isArray(mesh) ? mesh : [],
       });
+      // After the state has this hello's features: a hook reads them. The desktop's registration (lib/attention-signals.ts)
+      // took an empty list for a hub without desktop_unregister and closed this socket, so a desktop app with system
+      // notifications off never got a live update after loading. Also: a hub that came back may serve a new web build
+      // (lib/new-version.ts).
+      helloHooks.forEach((f) => f());
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
