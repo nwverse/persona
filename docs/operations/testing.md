@@ -1128,6 +1128,16 @@ input box. `PERSONA_LIVE_ARTIFACTS=<existing directory outside the repo>` keeps 
 receipts. Stop the test server by its exact session name afterwards. A fault-injected pass proves recovery, not
 that the normal case reproduced the original timing race.
 
+### Throwaway hubs and herdr (#10114)
+
+A throwaway hub (`personad hub run` under an isolated `HOME` / `PERSONA_HOME`) whose machine is `kind: local` starts a
+node, and that node starts herdr's headless server under the test `HOME` when none answers there (`herdr_autostart`).
+Give such a machine `"herdr_autostart": false` (and `"botmux": false`) unless the check needs herdr, as
+`scripts/test/node_reload_lab.py` does. Since #10114 a stdio node stops, as it exits, a herdr server it started itself
+that has no panes (`StopUnusedHerdr`, `server/internal/node/herdrstart.go`); a server with panes stays. A cleanup
+still ends by checking `ps eww` for processes whose `HOME` is the test's, and stops any it finds through their own
+socket (`HERDR_SOCKET_PATH=<test socket> herdr server stop`), never the user's herdr.
+
 ## Codex integration
 
 `./scripts/test/test-codex.sh` tests real Codex question/approval cards (`docs/integrations/codex.md` ("Questions and approvals")), independent `persona-codex-<pid>` herdr
