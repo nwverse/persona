@@ -72,16 +72,32 @@ class DrawerDragTest {
         assertEquals(DrawerDrag.Decision.SwipeRow, decide(dx = -20f, isOpen = true, onSwipeRow = true, childOwns = true))
     }
 
-    @Test fun trailingInsetStillRefusesAndLeadingDoesNot() {
-        // Left edge at a root is the drawer's (#9803); only the trailing system-back inset refuses.
-        assertFalse(DrawerDrag.inSystemBackInset(10f, 48f, 48f, 360f))
-        assertFalse(DrawerDrag.inSystemBackInset(80f, 48f, 48f, 360f))
-        assertTrue(DrawerDrag.inSystemBackInset(330f, 48f, 48f, 360f))
-        assertFalse(DrawerDrag.inSystemBackInset(10f, 0f, 0f, 360f))
+    @Test fun trailingInsetStillRefusesAndLeadingOnlyOutsideTheBand() {
+        // Trailing system-back inset always refuses. Leading inset is the drawer's only inside the
+        // centred exclusion band (#9803); outside that band system Back keeps the edge.
+        val height = 640f
+        val band = 200f
+        val midY = height / 2f
+        assertFalse(inset(x = 10f, y = midY, height = height, band = band))
+        assertTrue(inset(x = 10f, y = 10f, height = height, band = band))
+        assertTrue(inset(x = 10f, y = height - 10f, height = height, band = band))
+        assertFalse(inset(x = 80f, y = midY, height = height, band = band))
+        assertTrue(inset(x = 330f, y = midY, height = height, band = band))
+        assertFalse(inset(x = 10f, y = midY, leading = 0f, trailing = 0f, height = height, band = band))
         // A pushed page still refuses via atRoot, not the left inset (`AssistantSidebar.swift:505-509`).
         assertEquals(DrawerDrag.Decision.Pushed, decide(dx = 20f, atRoot = false, inSystemBack = false))
         assertEquals(DrawerDrag.Decision.Take, decide(dx = 20f, atRoot = true, inSystemBack = false))
     }
+
+    private fun inset(
+        x: Float,
+        y: Float,
+        leading: Float = 48f,
+        trailing: Float = 48f,
+        width: Float = 360f,
+        height: Float,
+        band: Float,
+    ) = DrawerDrag.inSystemBackInset(x, y, leading, trailing, width, height, band)
 
     @Test fun liftAndHairlineMatchTheIphoneAndStayExactAtRest() {
         assertEquals(8f, DrawerDrag.liftPx(0f, 8f), 0f)

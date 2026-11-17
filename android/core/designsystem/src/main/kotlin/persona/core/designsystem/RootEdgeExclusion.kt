@@ -27,8 +27,12 @@ internal object RootEdgeExclusion {
      *
      * [stripWidthPx] is the left system-gestures inset for the phone drawer, or at least the column
      * open zone (`Tokens.MinTouch.ios / 2`) for the foldable column. Zero width excludes nothing.
-     * [active] is false on a pushed page, while the drawer or column is open, or when the drag is off.
+     * [active] is false on a pushed page, while the drawer or column is open, when the pane is not
+     * the selected tab, or when the drag is off.
      * [bandHeightPx] must be at most [heightDp] in px; taller requests are clamped to the layout.
+     * [layoutLeftInWindowPx] is the node's window x: the system Back zone is measured from window
+     * x=0, so a cutout or horizontal safe-drawing pad would otherwise leave that strip uncovered
+     * (`Root.kt` pads the shell with `WindowInsets.safeDrawing` horizontal).
      */
     fun rect(
         active: Boolean,
@@ -36,6 +40,7 @@ internal object RootEdgeExclusion {
         layoutWidthPx: Float,
         layoutHeightPx: Float,
         bandHeightPx: Float,
+        layoutLeftInWindowPx: Float = 0f,
     ): Rect? {
         if (!active || stripWidthPx <= 0f || layoutWidthPx <= 0f || layoutHeightPx <= 0f || bandHeightPx <= 0f) {
             return null
@@ -44,6 +49,28 @@ internal object RootEdgeExclusion {
         val top = ((layoutHeightPx - height) / 2f).coerceAtLeast(0f)
         val width = min(stripWidthPx, layoutWidthPx)
         if (width <= 0f || height <= 0f) return null
-        return Rect(left = 0f, top = top, right = width, bottom = top + height)
+        val left = -layoutLeftInWindowPx.coerceAtLeast(0f)
+        return Rect(left = left, top = top, right = width, bottom = top + height)
+    }
+
+    /** Whether [x],[y] lie in the leading exclusion band (same geometry as [rect]). */
+    fun inLeadingBand(
+        x: Float,
+        y: Float,
+        leadingPx: Float,
+        layoutWidthPx: Float,
+        layoutHeightPx: Float,
+        bandHeightPx: Float,
+        layoutLeftInWindowPx: Float = 0f,
+    ): Boolean {
+        val band = rect(
+            active = true,
+            stripWidthPx = leadingPx,
+            layoutWidthPx = layoutWidthPx,
+            layoutHeightPx = layoutHeightPx,
+            bandHeightPx = bandHeightPx,
+            layoutLeftInWindowPx = layoutLeftInWindowPx,
+        ) ?: return false
+        return x >= band.left && x < band.right && y >= band.top && y <= band.bottom
     }
 }

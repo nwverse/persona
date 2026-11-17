@@ -85,4 +85,32 @@ class RootEdgeExclusionTest {
         assertEquals(120f, rect.height, 0f)
         assertEquals(0f, rect.top, 0f)
     }
+
+    @Test fun cutoutExtendsTheRectToWindowZero() {
+        val rect = RootEdgeExclusion.rect(
+            active = true,
+            stripWidthPx = 22f,
+            layoutWidthPx = 400f,
+            layoutHeightPx = 800f,
+            bandHeightPx = 200f,
+            layoutLeftInWindowPx = 48f,
+        )!!
+        assertEquals(-48f, rect.left, 0f)
+        assertEquals(22f, rect.right, 0f)
+    }
+
+    @Test fun leadingBandMatchesTheExclusionRect() {
+        assertTrue(
+            RootEdgeExclusion.inLeadingBand(
+                x = 10f, y = 400f, leadingPx = 48f,
+                layoutWidthPx = 360f, layoutHeightPx = 800f, bandHeightPx = 200f,
+            ),
+        )
+        assertTrue(
+            !RootEdgeExclusion.inLeadingBand(
+                x = 10f, y = 10f, leadingPx = 48f,
+                layoutWidthPx = 360f, layoutHeightPx = 800f, bandHeightPx = 200f,
+            ),
+        )
+    }
 }

@@ -30,6 +30,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.node.DelegatingNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.RootForTest
@@ -104,17 +105,34 @@ internal object DrawerDrag {
     fun takes(dx: Float, dy: Float, isOpen: Boolean): Boolean = abs(dx) > abs(dy) && (isOpen || dx > 0f)
 
     /**
-     * A down in the trailing system back-gesture inset is not the drawer's. The leading edge at a root is claimed
-     * with [RootEdgeExclusion] (#9803), matching iOS where there is no Back at the Assistant root
-     * (`SwipeBack.swift:11-16`; `DrawerPan` covers the whole page, `AssistantSidebar.swift:153-154`). A pushed page
-     * keeps the drag off (`DrawerPan`, `AssistantSidebar.swift:505-509`). The right edge stays with system Back
-     * (open in #9803). A zero trailing inset (three-button navigation) yields nothing.
-     *
-     * [leadingPx] is unused: kept so call sites that still pass the left inset stay source-compatible.
+     * A down in a system back-gesture zone that this drawer does not own. The trailing inset always refuses.
+     * The leading inset is claimed only inside the [RootEdgeExclusion] band (#9803); outside that band Android
+     * still owns Back, so taking the down would fight it. Matching iOS: no Back at the Assistant root
+     * (`SwipeBack.swift:11-16`; `DrawerPan` covers the whole page, `AssistantSidebar.swift:153-154`); a pushed
+     * page keeps the drag off (`DrawerPan`, `AssistantSidebar.swift:505-509`). A zero inset (three-button
+     * navigation) yields nothing.
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun inSystemBackInset(x: Float, leadingPx: Float, trailingPx: Float, widthPx: Float): Boolean =
-        trailingPx > 0f && x > widthPx - trailingPx
+    fun inSystemBackInset(
+        x: Float,
+        y: Float,
+        leadingPx: Float,
+        trailingPx: Float,
+        widthPx: Float,
+        heightPx: Float,
+        bandHeightPx: Float,
+    ): Boolean {
+        if (trailingPx > 0f && x > widthPx - trailingPx) return true
+        if (leadingPx <= 0f || x >= leadingPx) return false
+        // Inside the leading inset but outside the excluded band: leave it to system Back.
+        return !RootEdgeExclusion.inLeadingBand(
+            x = x,
+            y = y,
+            leadingPx = leadingPx,
+            layoutWidthPx = widthPx,
+            layoutHeightPx = heightPx,
+            bandHeightPx = bandHeightPx,
+        )
+    }
 
     /** Why a drag was refused, the words `DrawerPan` records (`AssistantSidebar.swift:484-527`). */
     enum class Decision { Take, Direction, Pushed, SwipeRow, SidewaysScroller, SystemBack, Child }
@@ -190,6 +208,8 @@ private class DrawerRuntime(opened: Boolean) {
     var widthPx = 1f
     var leadingPx = 0f
     var trailingPx = 0f
+    /** Centred exclusion band height in px (`RootEdgeExclusion.heightDp`); used to refuse left-inset downs outside it. */
+    var bandHeightPx = 0f
     var opened = opened
     var carryVelocity = false
     var style: AppStyle = AppStyle.Glass
@@ -320,7 +340,9 @@ internal fun rememberPhoneDrawerDrag(
 
     // At a root with the drawer closed, reclaim the left system-gestures strip so a finger there opens the
     // drawer (`SwipeBack.swift:11-16`, `AssistantSidebar.swift:153-154`). Opened, pushed, or drag off: no exclusion.
+    // dragEnabled is already false on another tab (`Root.kt`), so a composed-but-hidden shell publishes nothing.
     val bandHeightPx = with(density) { RootEdgeExclusion.heightDp.dp.toPx() }
+    runtime.bandHeightPx = bandHeightPx
     val excludeEdge = if (dragEnabled && !opened) {
         val leadingPx = runtime.leadingPx
         Modifier.systemGestureExclusion { coordinates ->
@@ -330,6 +352,7 @@ internal fun rememberPhoneDrawerDrag(
                 layoutWidthPx = coordinates.size.width.toFloat(),
                 layoutHeightPx = coordinates.size.height.toFloat(),
                 bandHeightPx = bandHeightPx,
+                layoutLeftInWindowPx = coordinates.positionInWindow().x,
             ) ?: Rect.Zero
         }
     } else {
@@ -520,7 +543,16 @@ private suspend fun PointerInputScope.trackDrawer(runtime: DrawerRuntime, hit: D
         runtime.superseded = false
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         // One finger (`DrawerPan` maximumNumberOfTouches, `AssistantSidebar.swift:642`).
-        if (DrawerDrag.inSystemBackInset(down.position.x, runtime.leadingPx, runtime.trailingPx, size.width.toFloat())) {
+        if (DrawerDrag.inSystemBackInset(
+                x = down.position.x,
+                y = down.position.y,
+                leadingPx = runtime.leadingPx,
+                trailingPx = runtime.trailingPx,
+                widthPx = size.width.toFloat(),
+                heightPx = size.height.toFloat(),
+                bandHeightPx = runtime.bandHeightPx,
+            )
+        ) {
             return@awaitEachGesture
         }
         runtime.fingerDown = true

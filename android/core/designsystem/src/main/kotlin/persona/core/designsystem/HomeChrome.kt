@@ -34,6 +34,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -225,6 +226,12 @@ fun JSidebarColumn(
     insetSidebar: Boolean = true,
     drags: Boolean = false,
     detailAtRoot: Boolean = true,
+    /**
+     * False while this pane is composed but not the selected tab (`Root.kt` keeps Persona with
+     * `Modifier.unplaced()`). An unplaced node can still publish exclusion rects, so the edge must
+     * stay with system Back on Agents and other tabs.
+     */
+    paneShown: Boolean = true,
     onDragSettle: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
@@ -267,10 +274,11 @@ fun JSidebarColumn(
     // window) composed the Assistant route twice in one frame. The pictures record `panes` only. The overlay is a
     // sibling, drawn above them (`SplitColumnControl.swift:204`).
     val gesture = if (drag != null) drag.gestureModifier(width, shown, detailAtRoot, overlay) else Modifier
-    // While the column is hidden and the detail is at its root, reclaim the open-zone strip so system Back does
-    // not take it (`SplitColumnControl.swift:132-137`, `:160-169`). A pushed detail keeps Back (no exclusion).
+    // While this tab is shown, the column is hidden and the detail is at its root, reclaim the open-zone
+    // strip so system Back does not take it (`SplitColumnControl.swift:132-137`, `:160-169`). A pushed
+    // detail, an open column, or an unselected tab keeps Back (no exclusion).
     val density = LocalDensity.current
-    val excludeEdge = if (drag != null && !shown && detailAtRoot) {
+    val excludeEdge = if (paneShown && drag != null && !shown && detailAtRoot) {
         val stripPx = with(density) { (Tokens.MinTouch.ios / 2).toPx() }
         val bandPx = with(density) { RootEdgeExclusion.heightDp.dp.toPx() }
         Modifier.systemGestureExclusion { coordinates ->
@@ -280,6 +288,8 @@ fun JSidebarColumn(
                 layoutWidthPx = coordinates.size.width.toFloat(),
                 layoutHeightPx = coordinates.size.height.toFloat(),
                 bandHeightPx = bandPx,
+                // Horizontal safe-drawing / cutout pads the shell (`Root.kt`); system Back is from window x=0.
+                layoutLeftInWindowPx = coordinates.positionInWindow().x,
             ) ?: Rect.Zero
         }
     } else {

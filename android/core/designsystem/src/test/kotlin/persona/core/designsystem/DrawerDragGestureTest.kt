@@ -600,7 +600,8 @@ class DrawerDragGestureTest {
             .build()
         rule.runOnIdle { ViewCompat.dispatchApplyWindowInsets(host, insets) }
         rule.mainClock.advanceTimeBy(50)
-        drag(from = Offset(10f, 240f), by = Offset(160f, 0f))
+        // Inside the centred 200 dp band (shell 640 tall → mid ≈ 320).
+        drag(from = Offset(10f, 320f), by = Offset(160f, 0f))
         rule.mainClock.advanceTimeBy(400)
         assertTrue("left edge at root, edge ${edge()}", edge() > 200)
         opened = false
@@ -610,6 +611,23 @@ class DrawerDragGestureTest {
         val widthPx = with(rule.density) { shellWidth.toPx() }
         drag(from = Offset(widthPx - 40f, 280f), by = Offset(80f, 0f))
         assertEquals(0f, edge().toFloat(), 3f)
+    }
+
+    @Test fun leftInsetOutsideTheBandIsRefused() {
+        // Android only grants the excluded band; a left-inset down outside it must stay with Back.
+        lateinit var host: View
+        show(reduce = true, onView = { host = it }) { Box(Modifier.fillMaxSize()) }
+        val insets = WindowInsetsCompat.Builder()
+            .setInsets(WindowInsetsCompat.Type.systemGestures(), Insets.of(48, 0, 48, 0))
+            .setInsets(WindowInsetsCompat.Type.mandatorySystemGestures(), Insets.of(48, 0, 48, 0))
+            .build()
+        rule.runOnIdle { ViewCompat.dispatchApplyWindowInsets(host, insets) }
+        rule.mainClock.advanceTimeBy(50)
+        drag(from = Offset(10f, 20f), by = Offset(160f, 0f))
+        assertEquals(0f, edge().toFloat(), 3f)
+        drag(from = Offset(10f, 320f), by = Offset(160f, 0f))
+        rule.mainClock.advanceTimeBy(400)
+        assertTrue("inside band, edge ${edge()}", edge() > 200)
     }
 
     @Test fun glassCarriesTheFingerVelocity() {
