@@ -178157,24 +178157,46 @@
         }
       }
     },
-    "Touch and hold to dictate. Slide left to cancel, or up to keep dictating." : {
+    "Tap to dictate, or touch and hold to dictate while you hold. Slide left to cancel." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Touch and hold to dictate. Slide left to cancel, or up to keep dictating."
+            "value" : "Tap to dictate, or touch and hold to dictate while you hold. Slide left to cancel."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "長押しで音声入力。左にスライドでキャンセル、上にスライドで入力を続けます。"
+            "value" : "タップで音声入力を開始します。押したままでも入力でき、指を離すと終了、左にスライドするとキャンセルします。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "按住听写。左滑取消，上滑可松手继续听写。"
+            "value" : "轻点开始听写；也可以按住听写，松手结束，左滑取消。"
+          }
+        }
+      }
+    },
+    "Tap to stop." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap to stop."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タップで終了します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点结束。"
           }
         }
       }
