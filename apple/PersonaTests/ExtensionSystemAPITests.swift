@@ -286,6 +286,61 @@ import PersonaWire
         }
     }
 
+    @Test func progressPresentationFollowsFamilyAndStyle() {
+        for family in ["small", "medium", "large", "accessory_circular", "accessory_rectangular", "accessory_inline"] {
+            for style: String? in [nil, "bar", "ring", "donut"] {
+                let expected: ExtensionSurfaceContent.ProgressPresentation = family == "accessory_circular" ? .accessoryGauge
+                    : ["small", "medium", "large"].contains(family) && style == "ring" ? .ring : .bar
+                #expect(ExtensionSurfaceContent.progressPresentation(family: family, style: style) == expected)
+            }
+        }
+        // The original exclusivity assertion still holds for an omitted style, including unknown families.
+        for family in ["small", "medium", "large", "accessory_rectangular", "accessory_inline", "", "circular"] {
+            #expect(ExtensionSurfaceContent.progressPresentation(family: family, style: nil) == .bar)
+        }
+        for family in ["", "circular"] {
+            #expect(ExtensionSurfaceContent.progressPresentation(family: family, style: "ring") == .bar)
+        }
+        let progress = ExtensionComponent.progress(ExtensionProgressComponent(style: "ring"))
+        let view = ExtensionView(sections: [ExtensionSection(items: [progress])])
+        #expect(ExtensionSurfaceContent.items(view, family: "accessory_inline").isEmpty)
+    }
+
+    @Test func mediumColumnsRequireOneExactRingAndChartSection() {
+        let metric = ExtensionComponent.metric(ExtensionMetricComponent(label: "Water", value: "750 / 2000"))
+        let ring = ExtensionComponent.progress(ExtensionProgressComponent(label: "To go", ratio: 0.375, style: "ring"))
+        let bar = ExtensionComponent.progress(ExtensionProgressComponent(label: "To go", ratio: 0.375, style: "bar"))
+        let series = ExtensionChartSeries(points: [ExtensionChartPoint(label: "11-11", value: 750)])
+        let chart = ExtensionComponent.chart(ExtensionChartComponent(kind: "bar", series: [series]))
+        let valid = ExtensionView(sections: [ExtensionSection(items: [metric, ring, chart])])
+        #expect(ExtensionSurfaceContent.usesMediumColumns(valid, family: "medium"))
+        #expect(ExtensionSurfaceContent.usesMediumColumns(ExtensionView(sections: [ExtensionSection(items: [ring, chart])]), family: "medium"))
+        let invalid = [
+            ExtensionView(sections: [ExtensionSection(items: [metric, ring]), ExtensionSection(items: [chart])]),
+            ExtensionView(sections: [ExtensionSection(items: [metric, ring, chart]), ExtensionSection()]),
+            ExtensionView(sections: [ExtensionSection(items: [metric, ring, .chart(ExtensionChartComponent(kind: "bar", series: [series, series]))])]),
+            ExtensionView(sections: [ExtensionSection(items: [metric, ring, .chart(ExtensionChartComponent(kind: "candlestick", series: [series]))])]),
+            ExtensionView(sections: [ExtensionSection(items: [metric, ring])]),
+            ExtensionView(sections: [ExtensionSection(items: [metric, bar, chart])]),
+            ExtensionView(sections: [ExtensionSection(items: [chart, ring, metric])]),
+            ExtensionView(sections: [ExtensionSection(items: [metric, ring, chart, .text(ExtensionTextComponent(text: "Extra"))])]),
+            ExtensionView(sections: [ExtensionSection(items: [ring, .chart(ExtensionChartComponent(kind: "bar"))])]),
+        ]
+        for view in invalid {
+            #expect(!ExtensionSurfaceContent.usesMediumColumns(view, family: "medium"))
+        }
+        for family in ["small", "large", "accessory_circular", "accessory_rectangular", "accessory_inline"] {
+            #expect(!ExtensionSurfaceContent.usesMediumColumns(valid, family: family))
+        }
+    }
+
+    @Test func progressRingClampsRatiosAndRejectsNonfiniteValues() {
+        for (input, expected) in [(0.0, 0.0), (0.375, 0.375), (1.0, 1.0), (-1.0, 0.0), (2.0, 1.0),
+                                  (Double.nan, 0.0), (Double.infinity, 0.0), (-Double.infinity, 0.0)] {
+            #expect(ExtensionSurfaceContent.progressRatio(input) == expected)
+        }
+    }
+
     @Test func staticParametersAndJSONEscapeHatchMapDeclaredNamesOnly() throws {
         let place = ExtensionShortcutPlace(params: [
             ExtensionShortcutParam(name: "note", title: "Note", kind: "text"),

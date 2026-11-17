@@ -25,9 +25,26 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 Persona is tested with Paseo 0.15.0 and newer (#8134). An older Paseo still works, but has known problems (in 0.14, a message sent while a turn starts cancels that turn),
 and the engine's note under Settings › Machines asks to update it.
 
+## Pinned workspaces
+
+Paseo's **Pin chat / Pin to top** pins a whole workspace. Persona's Agents workspace tree reads that choice automatically
+on web, desktop, Apple and Android: pinned workspaces come first, newest pin first, and show the existing pin mark.
+Their repositories move ahead of unpinned repositories so the workspace stays easy to find. Empty pinned workspaces
+remain visible; closed, unarchived conversations in a pinned workspace remain available even after Paseo unloads them.
+Explicit search and state filters still apply, and manually folded groups stay folded.
+
+Pin or unpin in Paseo. Persona reflects the change when its workspace catalog refreshes (or when the Agents page is
+opened again), including after reconnecting. Each pin belongs to that exact computer and workspace; another workspace
+in the same project or directory stays independent. Persona's own session/project pins and Assistant directions remain
+separate. Reading the catalog never changes either app's preferences.
+
+The bridge carries Paseo's `pinnedAt` as optional `pinned_at` (an RFC3339 timestamp). Clearing it or an older daemon
+omitting it means unpinned. The existing catalog snapshot preserves it while its computer is unreachable; a successful
+refresh replaces it, including removals. There is no new setting or model dependency.
+
 ## Which sessions appear
 
-- **Listed Agents**: all unarchived Paseo Agents, up to 300. Running Agents and those waiting for you are always included.
+- **Listed Agents**: all unarchived Paseo Agents, up to 300. Running Agents, those waiting for you, and Agents in natively pinned workspaces are always included.
   An Agent visible in Paseo's own App is also visible in Persona; archived Agents are omitted. Your own Agents come first:
   Agents another Agent created (below) fill what is left of the 300, and one of those that runs or waits for you is listed with
   every Agent between it and yours, whatever the count.
@@ -224,6 +241,16 @@ and the engine's note under Settings › Machines asks to update it.
     refused at the preview (Paseo would only archive those), as are a row whose folder is gone, one git no longer knows and a folder inside a
     worktree, each with its own reason. Since Paseo removes the folder whatever is in it, neither the preview nor the confirmation goes on while
     one of the workspace's Agents is at work (starting, working, waiting for you) or an Agent of another engine runs in the folder.
+- **Native background work** (#9320, Paseo 0.16): provider shell commands and monitors can outlive an Agent's foreground turn.
+  The bridge follows `agent.background_work.update` and reads `agent.background_work.list.request` when the daemon advertises
+  `agentBackgroundWork`. The session reports these jobs through Persona's existing `background` list, keeping the daemon's task IDs,
+  command, description and start time. A positive summary without readable details keeps the session Working until the inventory is
+  known. Completed jobs disappear on the next update; reconnects and periodic reads reconcile missed updates without opening the chat
+  or loading a dormant provider. A failed read preserves known work. Older daemons receive no background-work requests.
+  - A Claude task reported in both its local transcript and Paseo counts once; the transcript keeps its richer local details.
+  - Background work in a child keeps its creator active. Worktree deletion is refused while native or delegated work remains,
+    both at preview and confirmation. Per-task stopping remains in Paseo's own interface.
+
 - **Agents created by another Agent** (#4494): with Paseo's `create_agent` an Agent starts others (an orchestrator and its reviewers). Paseo marks them with the label
   `paseo.parent-agent-id`, shows them under their creator, notifies nobody when they finish (their creator is told what they did) and archives them with their creator. In Persona:
   - Such an Agent's row names its creator's session (`is_subagent`, `parent_session_id`) while the creator is listed in the same workspace, however many Agents created one another
@@ -235,7 +262,7 @@ and the engine's note under Settings › Machines asks to update it.
   - Its row says when it was created (`started_at`, Paseo's `createdAt`): the card counts its running time from it.
   - It is never Unread and sends no "done" push: once stopped it is Seen. Paseo sets `requiresAttention` on it as on any Agent, but shows that on no workspace, and nobody opens
     it there to clear it. It can be opened and sent to like any Agent.
-  - The creator's row lists the ones that have not finished (running, waiting for an answer, or waiting for Agents of their own) as background work (`background`, kind `agent`),
+  - The creator's row lists the ones that have not finished (running, waiting for an answer, running native background jobs, or waiting for Agents of their own) as background work (`background`, kind `agent`),
     so it reads Working (background), and its own "done" push waits until they have reported back.
   - The hub's fleet counts (the Live Activity, Android's notification and widget) and Android's Agents list count your own Agents; one another Agent created counts while it
     needs you.
@@ -595,7 +622,13 @@ launcher ran on another account, and a provider added in Persona never applied i
   reconnecting and continuing preserve the Agent and thread identity and leave only one conversation row, and that a read of the archived Agent no chat
   asked for starts no Codex while opening its chat reads it (#8132). It never uses the active Paseo daemon or a real model account. Its temporary
   directories go under `$TMPDIR` when it is set.
-- Tested versions: Persona targets the latest Paseo release. On 2026-11-14 the end-to-end check passed all 61 checks on Paseo 0.14.0 and on 0.15.4
+- Native background regression: add `PASEO_BACKGROUND_E2E=1` to the Codex command above with Paseo 0.16 or newer and a Codex
+  app-server that supports background terminals. A scripted tool starts a real shell command that waits for a fixture file;
+  the test checks its task ID and command after the foreground turn ends, then releases it and checks that the row clears,
+  without watching the chat. All processes, files and model traffic stay in the isolated fixture.
+- Tested versions: on 2026-11-16, Paseo 0.16.0 passed all 65 Claude Code checks and all 20 Codex checks including the native
+  background regression. The background regression fails on the pre-fix bridge because the native task never reaches Persona.
+  On 2026-11-14 the end-to-end check passed all 61 checks on Paseo 0.14.0 and on 0.15.4
   (Claude Code 2.1.294).
 - Local testing (2026-11-04, Paseo 0.14.0, Claude Code 2.1.294):
   - All 29 end-to-end checks passed (35 on 2026-11-11, with the archived sessions that keep their ID).

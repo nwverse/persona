@@ -246,6 +246,12 @@
     <string name="settings_ext_preview_again">Preview Again</string>
     <string name="settings_ext_uninstall_title">Remove %1$s?</string>
     <string name="settings_ext_uninstall_text">This stops it and deletes its settings and secrets; the connectors it provides go too.</string>
+    <string name="settings_ext_uninstall_keep_result">The package will be deleted too; the data folder will stay on the hub machine. Anything still needing manual cleanup will be listed after removal.</string>
+    <string name="settings_ext_uninstall_delete_data_result">The package and data folder will be deleted too. Anything still needing manual cleanup will be listed after removal.</string>
+    <string name="settings_ext_removal_warnings_text">Removed. A few things still need you to clean them up by hand.</string>
+    <string name="settings_ext_removal_warnings_header">Needs manual cleanup</string>
+    <string name="settings_ext_removal_copy">Copy warnings</string>
+    <string name="settings_ext_removal_done">OK</string>
     <string name="settings_ext_dependents_title">Switch off the extensions that depend on it?</string>
     <string name="settings_ext_dependents_text">Extensions that depend on %2$s will be switched off too: %1$s.</string>
     <string name="settings_ext_dependents_unnamed">Other extensions depend on %1$s and will be switched off too.</string>
@@ -390,6 +396,9 @@
     <string name="settings_subscriptions_counts_on">%1$d on</string>
     <string name="settings_subscriptions_counts_failing">%1$d on · %2$d failing</string>
     <string name="settings_subscriptions_counts_none">Available</string>
+    <string name="settings_ext_notification_expired">This notification has expired. Retry from the extension page.</string>
+    <string name="settings_ext_notification_wrong_scope">Can\'t find the original hub or assistant. Reconnect, then retry from the extension page.</string>
+    <string name="settings_ext_notification_unlock">Unlock your phone to run this notification action.</string>
     <plurals name="settings_ext_node_running">
         <item quantity="one">Running on %1$d machine</item>
         <item quantity="other">Running on %1$d machines</item>

@@ -113,7 +113,7 @@ failures with a bare 502.
   Exception: Reopen (single `done:false`, bulk `reopen` / Undo) does not check whether a newer item exists for the thread; it reopens the old one anyway, yielding two unhandled items.
   Later messages always merge into the newest (`UpdatedAt`, ties by ID, `threadIndex.openFor`, #3796); the old item stays unchanged.
 - Included Lark messages: gateway `unread` scope (Lark Unread, excluding muted chats) + `mentions` scope (mentions of me in muted groups still count).
-  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
+  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. Each context line marks whom its message @'s with the tier criteria's `（@了我）` / `（@所有人）` after the sender (both when it @'s the owner and everyone), taken from the message's structured mention ids, never from a display name another person may share (#9124). A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
   Search indexes most messages at once but some only minutes later (a direct message was seen arriving in search about ten minutes after it was sent), and a message indexed after the cursor passed its time used to be lost. So the cursor stays 10 minutes behind the newest message it saw. Each round also reads up to 10 direct chats from their own history since two hours ago (`+chat-messages-list --start`), rotating through the 50 most recently active direct chats (`+chat-list --types p2p --sort active_time`), which has no indexing delay; the `message_id` ledger drops what was already collected. The window leaves room to recover a missed conversation more than an hour after it was sent, including time spent investigating and rotating through the candidates; each chat read is still capped at 50 messages. Mentions in group chats still rely on search and its 10-minute overlap. A failed direct-chat read keeps what search found that round and reports the error (`server/internal/connector/larkcli/inbox.go`, `sweepDirectChats`).
   An owner reply settles only earlier incoming activity in the same chat or topic. A later peer follow-up stays open, including one found in the context read before search indexes it. Within a chat, source message positions resolve the CLI's minute-resolution timestamps; an opaque message ID or uncertain order never proves the owner replied later.
   As a maintainer opt-in addition, `larkcli` has an `inbox_all_chats` connector option containing chat ids whose every new incoming message is collected. The default is an empty list; this option is intentionally separate from the L4 collection rules.
@@ -222,8 +222,10 @@ a summary up to 40 characters, and a short reason:
   "请验收", "任务进展" and the like, which the app handles). When unsure, the question is whether someone waits on the owner or
   the owner's own work slips (it used to be "choose action"). @me no longer makes something Needs you by itself.
   A real person's direct message stays Needs you by default, even without a question, unless it is plainly small talk.
-  Grouping (`group.md`) also spells out what the batch's `（@了我）` / `（@所有人）` markers mean: without them a group message
-  did not @ the owner, and a name @'d in the text is someone else; and its input names the other side of a direct chat in
+  The tier criteria (`tiers.md`, shared by triage and grouping) spell out what the `（@了我）` / `（@所有人）` markers mean:
+  a message marked with both counts as @-ing the owner; a Lark group message (the Feishu plugin's batches and the `larkcli`
+  connector's context) without them did not @ the owner, and a name @'d in the text is someone else. Other sources write
+  no markers, so their absence there says nothing and the kind and text decide (#9124). Grouping's input names the other side of a direct chat in
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
@@ -637,7 +639,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
+`{item?, processing_turn?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -645,6 +647,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | `agent` | Assign an Agent (`text` is its instruction; optional `machine` / `cwd` default to assistant computer / home directory) | Code starts an Agent with that instruction (like the chat calling `agent_start`: `agent` chain entry links to it; completion reports back), `handling.state = agent` |
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
+- The manager includes a new `processing_turn` in a processing conversation's first prompt and each subsequent Inbox delivery while the item is open. The call echoes its prompt's value. The manager checks it under the Inbox lock before changing the item, so a delayed write from a superseded prompt cannot replace a suggestion or change follow-up or handling. Existing processing chats without a value can omit it until their next Inbox delivery. Handed-off conversations still write back using `item`.
 - `handback: true`: a suggestion requiring your judgment ("Ask a colleague before replying to the client"). Confirmation executes nothing; hand it back to the handling chat as instructions to act, with the normal chain recording.
 - `follow` is valid only without `kind`; the two are mutually exclusive. It contains `who`, `next`, `check_at` and `check_in`: `check_at` is an RFC 3339 timestamp with a time zone and takes precedence over `check_in`; `check_in` accepts durations such as `30m`, `4h` or `2d`. With neither time field, it defaults to `24h`; the resulting time is clamped to between 30 minutes and 14 days from now. `who` and `next` are single lines clipped to 80 characters. `recap`, `title` and `summary` may be written together with `follow`, and an existing suggestion stays in place.
 - `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
@@ -835,7 +838,8 @@ Who it serves: everyone using the Inbox on the Assistant side; it adds no settin
 `bar_landing.json` and `bar_search.json`, replayed by web, iOS / iPadOS and Android (README "Section bar").
 
 - **Choices**: Needs you and All always; In progress and FYI while they have a row (or are chosen); Done while it has a row, the hub's
-  day counts name a done item (no filter or search on), or it is chosen. A choice shows that section alone, with its source or time
+  day counts name a done item (no filter or search on; the apps read the counts when the Inbox is shown, as Done already did), or it
+  is chosen. A choice shows that section alone, with its source or time
   groups and their folds as in "Grouping and selection". **All** is the page as it was: every section stacked, folding as before.
   Collapsed has no choice of its own; it stays folded near the end of All.
 - **Default**: the Inbox opens on Needs you each time it is entered (the sidebar, a widget, a quick action, "N more in Inbox", launch).
@@ -853,11 +857,20 @@ Who it serves: everyone using the Inbox on the Assistant side; it adds no settin
 - **Search** looks through the whole Inbox: text in the field shows All, the counts say where the matches are, a choice narrows them,
   and clearing the field returns to the choice you had. Source and kind filters narrow whatever is shown, and the counts follow them.
 - **Empty**: All caught up only when nothing is open anywhere. A chosen section with nothing in it says so in its own words
-  (Nothing needs you, Nothing in progress, Nothing to read, Nothing done yet) with the other counts right above it. The filtered and
-  no-match states stay as in "Nothing open" below.
-- **Opening an item from outside the list** (a link, ⌘K, a Needs-you line, another item's chain) moves the list to the item's choice:
-  Done for a done item, All with Collapsed open for a collapsed one. Back returns to where you were. No notification opens an Inbox
-  item today; one that does follows the same rule.
+  (Nothing needs you, Nothing in progress, Nothing to read, Nothing done yet), under them "The rest are in the other sections
+  above." (Done: "What you mark done shows up here."), with the other counts right above it. zh-Hans 没有需要你处理的 / 没有进行中的 /
+  没有要看的 / 还没有已处理的, 其余的在上面的其他分区里。 / 标为已处理的会出现在这里。; ja 対応が必要なものはありません / 進行中のものはありません /
+  読むものはありません / 完了したものはまだありません, 残りは上のほかの区分にあります。 / 対応済みにしたものがここに表示されます。 Apple writes the
+  English titles in title case. The filtered and no-match states stay as in "Nothing open" below.
+- **Opening an item from outside the Inbox** (a link, ⌘K, a Needs-you line) lands the list on the item's choice: Done for a done
+  item, All with Collapsed open for a collapsed one (its time group opened too). Beside the item on a wide screen its row is in sight
+  and marked; on a phone, closing the item shows the list there, so a link lands where the item lives. **Opening one from inside**
+  (another item's chain or relations) moves a list shown beside the item the same way and leaves a list that isn't shown alone;
+  Back or closing returns it to the choice it had. A list that already shows the item (All, or the item's own choice) does not move.
+  No notification opens an Inbox item today; one that does is an outside opening.
+- **When the choices don't fit** (a phone at large text, Japanese, a narrow list column), the strip scrolls sideways with a fade at
+  the cut edge, and choosing one, or landing on it, scrolls it fully into view; the web keeps All pinned whole beside the grouping
+  menu. The Inbox opens on Needs you, the first choice, so its count starts in sight.
 - **Selection**: Select All picks the rows in sight. Picks survive a switch, and the pick bar counts the ones out of sight as it
   counts folded rows. Clean up all keeps its scope (every open item under the filters).
 - **Wide screens** keep the same bar at the top of the list (iPad's detail column, the web's list column, Android's list pane). No
@@ -887,6 +900,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   and Fold all / Unfold all.
   On iOS each title a finger taps (a section's and its Mark all seen / Clear all, a group's and, selecting, its tick, Done's and its Jump To) is at least 44 pt tall,
   its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); the tick is a finger wide too, over the header's inset and the gap before the title, with nothing drawn moving (#6658); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
+  A Jump To still waiting for its group's first page gives way to what comes after it: the next Jump To, the user dragging the list, or the list going out
+  of sight (an item opened over it, the Inbox left) cancels it, so the page coming late does not take the list from where it was sent since (iOS, #6661, `InboxJumpToRaceUITests`).
 - **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name
@@ -907,16 +922,23 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   filter mark, "Nothing open matches these filters", "Clear the filters to see the whole Inbox." and **Clear filters**; a search alone, the search mark, "No matches",
   "Try a different search." and **Clear search**. Either button clears the chips and the search: the chips are kept on this device, so a list left filtered opens
   filtered, and the Inbox outside them may still hold plenty (web #7478, `docs/web/web.md` "Pages"; iOS #7551, `InboxPage.emptyKind`).
-- DEBUG (iOS): `-showInboxPicked <n>`, `-showInboxPickedDone YES`, `-showInboxDone YES` (Done and its newest group open), `-showInboxPickGroups YES`, `-showInboxDue YES` / `-showInboxMerge YES` / `-showInboxTodo YES` (the first two rows picked and the due sheet open / merged / added to to-dos for today, #6480; `MOCK_INBOX_TODO=1|time` puts a to-do suggestion on the mock's design-review mail),
+- DEBUG (iOS): `-showInboxSection action|working|fyi|done|all` (the section bar on that choice; without it `-showInboxDone` and `-showInboxJump` choose Done and `-showInboxPickGroups` All, and `-showInboxPickedDone` shows Done after marking), `-showInboxPicked <n>`, `-showInboxPickedDone YES`, `-showInboxDone YES` (Done and its newest group open), `-showInboxPickGroups YES`, `-showInboxDue YES` / `-showInboxMerge YES` / `-showInboxTodo YES` (the first two rows picked and the due sheet open / merged / added to to-dos for today, #6480; `MOCK_INBOX_TODO=1|time` puts a to-do suggestion on the mock's design-review mail),
   `-showInboxJump <group>` (Done jumped to that group, `week` or `month`, its first page loaded). Mock hub: `MOCK_INBOX_HISTORY=busy` (36 done a day for two months), `MOCK_INBOX_DAYS=none`.
-- Tests: web `lib/inbox-groups.test.ts`, `views/inbox/Inbox.groups.test.tsx`, `views/inbox/Inbox.select.test.tsx`; Apple `InboxGroupsTests`, `InboxBulkTests`, `InboxFilteredEmptyTests`.
+- Tests: web `lib/inbox-groups.test.ts`, `views/inbox/Inbox.groups.test.tsx`, `views/inbox/Inbox.select.test.tsx`; Apple `InboxGroupsTests`, `InboxBulkTests`, `InboxFilteredEmptyTests`, and for the section bar `InboxBarFixtureTests` (the three shared files), `InboxBarTests` and `InboxSectionBarUITests`.
 
 ## App
 
 - `InboxStore` (`Persona/App/InboxStore.swift`): list cached locally (`inbox-items`), shown before refresh on cold start; fetch on Inbox events, reconnect, page entry.
   Mark done locally before request; restore on failure. A mark the hub may not have yet is laid over every list that comes in (`InboxMarks`, #2201): while its request is out, over every list; once the hub took it, over the lists that started before then. So a reload taken before the hub had it (the push after another item's Done) can't bring a swiped-away item back; the web does the same (`withPending`). Tab badge = unhandled Needs you count.
 - Page (`Persona/Views/Inbox/InboxView.swift`): top filters (All / Lark / each mail account | Mentions / Private / Groups / Mail); search titles, senders,
-  body, summary. Sections: Needs you (expanded), Working (always expanded, non-tappable heading, Inbox phase 1; present only with hub `status`, absent on older hubs using `tier`; excluded from badges and Watch Needs you, while urgent `status: action` still counts), FYI (expanded, Mark All Seen to the heading's right), Collapsed (collapsed, Clear All), then Done (collapsed); groups and selection in "Grouping and selection".
+  body, summary. The section bar is the list's first row, above the filters (`CapsuleFilterBar` with the grouping menu at its end, hidden under In Progress and Done; `Persona/Views/Inbox/InboxBar.swift`, "Section bar" above): a choice shows its section alone under a heading that doesn't fold, and All stacks the sections as follows.
+  Every entry opens on Needs you, also the Inbox chosen again while its page stays up (the place in front picked again, a widget, a quick action,
+  visionOS's Inbox tab: `AppModel.inboxEntries`). iOS and iPadOS never show the list beside an item, so they follow the phone's rule: an item
+  opened from outside (a Needs-you line over the composer) is pushed over the Inbox, the list landed on its choice (`InboxBarLanding`), so
+  closing it shows the list there, as an item a place kept and brings back does; an item opened from another item's chain or relations is
+  pushed over that item and leaves the choice alone, so Back returns to it. A strip that doesn't fit scrolls with `.edgeFade()`, and the
+  choice landed on or tapped scrolls clear of the fade (`revealsSelection`).
+  Sections: Needs you (expanded), Working (always expanded, non-tappable heading, Inbox phase 1; present only with hub `status`, absent on older hubs using `tier`; excluded from badges and Watch Needs you, while urgent `status: action` still counts), FYI (expanded, Mark All Seen to the heading's right), Collapsed (collapsed, Clear All), then Done (collapsed); groups and selection in "Grouping and selection".
   Tap headings to expand / collapse. Row: 40-point avatar (18pt source badge at bottom right: Lark blue, mail neutral gray), title (headline) + type `Chip` (mentions red), time;
   with summary, second line ✦ summary, third small "sender: content" (secondary gray, not tertiary); before triage, just "sender: content." Count badge (normally gray fill, primary-color fill for mentions).
   Separator starts at text column (16 + 40 + 12). Lark avatar palette avoids red / orange that imply Needs you. Full left swipe = done. More contains Clean up all (see "Clean up all" above).
@@ -951,7 +973,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
     FYI conclusions remain under FYI with their card; OK archives them.
   - Watch unchanged: uses `agent.draft` as before.
   - Unit tests `InboxEventsTests` (decode every event state in `PersonaTests/Fixtures/inbox-events.json`, sections, row text, chain targets, suggestion buttons with FakeHub).
-- DEBUG: `-tab mail` (Inbox), `-openInboxFirst YES` (first unhandled item), `-openInboxItem <id>` (specific item), `-showInboxAction draft|handoff` (then that sheet),
+- DEBUG: `-tab mail` (Inbox), `-showInboxSection action|working|fyi|done|all` (the section bar's choice, #9053), `-openInboxFirst YES` (first unhandled item), `-openInboxItem <id>` (specific item; on the iPhone both put the item on the Assistant stack in the list's place, so `InboxSectionBarUITests` walks the landing through a Needs-you line on an iPhone and a kept place on an iPad), `-showInboxAction draft|handoff` (then that sheet),
   `-showInboxSuggestionEdit YES` (suggestion editor on iPhone event page).
 - **Plugin-rendered details** (#1681; `docs/extensions/extensions.md`, "Inbox items"): for items from a plugin connector (`source` = connector) contributing `inbox_item`,
   the plugin's item View is the slot's source body. Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed.
@@ -1062,6 +1084,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Agents and More… with the next ones), a one-line "Hand to AI…" field and Send. A chip or a send goes without a confirmation, held for 5 s behind a toast at the bottom (`InboxHandOffModel.undoWindow`):
   Undo takes it back (a typed ask goes back into the field), View sends it at once and opens the conversation; left alone it goes and the toast says where, with View. Sending
   never leaves the page. The last target is remembered (`inbox.handOffTarget`); an Agent no longer listed falls back to Main Chat. "Also mark as done" is off, so the toast does not say the item was filed.
+  **Android's event page** (`InboxHandOffBar.kt`, `InboxHandOffBarModel.kt`) follows the same two-row pattern and local five-second wait, with Main Chat (no New Chat target), the latest 3 Agents and More… covering at most 12. The target menu reads the current sessions only when opened. Draft Reply reuses the item's existing `ReplyComposer` and `InboxDraftSheet`, and is hidden for a reply suggestion or an item that cannot accept replies. Undo only cancels the local wait and never calls the hub; Queued View fires immediately and opens after success, while Sent View only opens the returned conversation. Sending and success leave the user on the event, and a persistent status row keeps View / Retry reachable after the local toast expires. A failed explicit Retry keeps the first prompt and operation id. Mark-done failure is reported separately after an accepted hand-off, never as a failed hand-off or an automatic retry. The model is kept per item in the pairing's `InboxHandOffBars` (`InboxDataOwner`'s facade, and `InboxExperienceRepository` where used), so leaving or rotating the page does not cancel it. Each store binds the fixed repository and preferences of the pairing that created it: queued work, an accepted hand-off's memory write and Done never resolve the currently selected hub group again. Replacing or closing the pairing cancels the scope. Settled models are retained in a 64-entry access-ordered cache; Queued and Sending models are never evicted, and revisiting an evicted item starts Idle without replaying its old operation. Done rows already present in the live list and missing items offer no interactive composer; a completed item opened from the Done history keeps the hand-off bar and stays Done after hand-off.
   The Mac and the iPhone's source pages (whose own reply composer sits at the bottom) keep the sheet, which opens the conversation after sending.
   **Per source** (#2121, `InboxHandOffMemory`, shared cases in `spec/fixtures/inbox/handoff_memory.json`), the bar and the sheet remember where an item went:
   - **Key:** the item's source plus its most specific mute option (`repo`, else `chat`, else `sender`), in the hub group.

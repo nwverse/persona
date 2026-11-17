@@ -5,6 +5,7 @@
   "no_release": "There is no node build for {os}/{arch} of the hub’s version, and no release at its node packages address to take one from. Put a {name} of the hub’s version in its bin/nodes folder, or set node_packages.url in hub.json (docs/operations/docker.md, “Node builds”).",
   "package_unreachable": "Could not reach the release for the {os}/{arch} node build: {err}. Check the hub’s internet access or node_packages.proxy in hub.json, or put the build in its bin/nodes folder (docs/operations/docker.md, “Node builds”).",
   "package_bad": "The {os}/{arch} node build from the release did not check out, so it was not used: {err}",
+  "package_moved": "A newer release, {version}, was published while the {os}/{arch} node build was downloading, so the download was not used. Try again to fetch the build from it.",
   "install_failed": "Could not install: {err}",
   "minutes_one": "{count} minute",
   "minutes_other": "{count} minutes",

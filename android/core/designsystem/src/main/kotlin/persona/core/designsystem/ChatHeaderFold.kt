@@ -121,8 +121,11 @@ fun ChatSlimBar(
     Row(modifier.fillMaxWidth().statusBarsPadding().heightIn(min = Tokens.Size.slimBar).padding(horizontal = Tokens.Space.xs),
         verticalAlignment = Alignment.CenterVertically) {
         val side = Modifier.width(Tokens.MinTouch.android)
-        if (onBack != null) JIconButton(persona.core.designsystem.icons.PersonaIcons.back, stringResource(R.string.designsystem_back), onBack, side, raised = false)
-        else Spacer(side)
+        when (val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick, side, raised = false)
+            is DetailLeading.Back -> JIconButton(persona.core.designsystem.icons.PersonaIcons.back, stringResource(R.string.designsystem_back), leading.onClick, side, raised = false)
+            DetailLeading.Hidden, null -> Spacer(side)
+        }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             Row(
                 // The open header's floating glass, as `JLinkPill`: iOS's chip fill sits on its bar's material, and
