@@ -1443,6 +1443,15 @@ const (
 // TextStyles are the values of TextStyle, in order.
 var TextStyles = []string{"body", "secondary", "caption", "code", "title", "headline"}
 
+// ProgressStyle: A progress drawing hint: bar (the default) or ring.
+const (
+	ProgressStyleBar  = "bar"
+	ProgressStyleRing = "ring"
+)
+
+// ProgressStyles are the values of ProgressStyle, in order.
+var ProgressStyles = []string{"bar", "ring"}
+
 // FieldKind: date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD,
 // time HH:MM (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen
 // values, multiline the text with \n.
@@ -3423,6 +3432,10 @@ type ConnectorTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	// Words that run the tool in a shell instead (a gated command's); runtimes refuse them in an assistant conversation.
 	Shell []string `json:"shell,omitempty"`
+	// Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and loaded
+	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	DeferLoading bool `json:"defer_loading,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.
@@ -4554,10 +4567,13 @@ type KBEntry struct {
 	Updated   time.Time `json:"updated"`
 	// A project's short / long · status, a chat's dm / group…
 	Extra string `json:"extra,omitempty"`
-	// A chat's source (lark, mail, wechat, github…).
+	// A chat's source (lark, mail, wechat, github…); a document's, meeting's or event's connector (#8872).
 	Source string `json:"source,omitempty"`
 	// A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub.
 	RecordingKind string `json:"recording_kind,omitempty"`
+	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
+	// absent on other kinds, before a match and from an older hub.
+	MeetingID string `json:"meeting_id,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:

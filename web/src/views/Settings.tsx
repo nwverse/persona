@@ -40,6 +40,7 @@ import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
 import { NotificationSettings } from "./settings/NotificationSettings";
 import { DesktopSettings } from "./settings/DesktopSettings";
+import { DevModeRows } from "./settings/DevModeSettings";
 import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
@@ -662,6 +663,7 @@ function General({ onModel }: { onModel: () => void }) {
             github.com/nwverse/persona
           </a>
         </Row>
+        <DevModeRows />
       </Group>
     </>
   );

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification } from "electron";
+import { BrowserWindow, Menu, app, dialog, protocol, screen, shell, powerMonitor, Notification } from "electron";
 import { parseDeepLink, parseHubAddress, externalBrowserURL, inHub } from "./urls.js";
 import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
@@ -10,6 +10,7 @@ import { restoreWindow, DEFAULT_WINDOW } from "./window-state.js";
 import { closeToTray, installTray } from "./tray.js";
 import type { DesktopTray } from "./tray.js";
 import { desktopLocale, loadStrings } from "./strings.js";
+import { appMenuTemplate } from "./app-menu.js";
 import { updateMenu } from "./update-state.js";
 import type { UpdateMenuItem } from "./update-state.js";
 import { hubPartition } from "./sessions.js";
@@ -17,8 +18,12 @@ import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
 import { HubWindowLifecycle } from "./hub-window-lifecycle.js";
 import { desktopPresence } from "./presence.js";
+import { NotchIsland, installIslandProtocol } from "./island.js";
+import { ISLAND_SCHEME } from "./island-page.js";
 
 installSmokeCapture();
+// Electron takes this registration once, before the app is ready: every scheme of the app's own pages belongs here.
+protocol.registerSchemesAsPrivileged([{ scheme: ISLAND_SCHEME, privileges: { standard: true, secure: true } }]);
 
 let mainWindow: BrowserWindow | undefined;
 let hub: HubAddress | undefined;
@@ -29,6 +34,14 @@ let screenLocked = false;
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
 const hubWindow = new HubWindowLifecycle<BrowserWindow | undefined>();
 const store = () => JSONStore.inUserData(app.getPath("userData"));
+// The island at the MacBook notch (#7669): off until the person turns it on; a clicked row opens as a notification does.
+const island = new NotchIsland(route => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send("desktop:notification-open", route);
+  } else void showMain();
+});
 
 function navigateFromDeepLink(raw: string): void {
   const link = parseDeepLink(raw);
@@ -126,6 +139,7 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     },
   });
   mainWindow = current;
+  const page = current.webContents.id; // whose island state is whose (NotchIsland.forget)
   if (!app.isPackaged && process.env.PERSONA_DESKTOP_DEBUG === "1") {
     const log = (value: unknown) => {
       const line = `${typeof value === "string" ? value : JSON.stringify(value)}\n`;
@@ -150,6 +164,15 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     },
     presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
     openLocalSettings: () => { void showSetup(); },
+    island: {
+      status: () => island.status(),
+      set: async enabled => {
+        // Saved first: a choice that can't be kept changes nothing, so the island and the switch saying why agree.
+        await store().update({ island: enabled && island.supported });
+        return island.setEnabled(enabled);
+      },
+      state: value => island.setState(value, page),
+    },
     notifications: new DesktopNotifications(route => {
       current.show();
       current.focus();
@@ -174,7 +197,10 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     if (pendingDeepLink) navigateFromDeepLink(pendingDeepLink);
     pendingDeepLink = undefined;
   });
-  current.once("closed", () => { removeIPC(); if (mainWindow === current) mainWindow = undefined; });
+  // The island's state is this page's (#7669): once the page is gone (a hub change destroys this window, its renderer
+  // crashed), the island forgets it, so nothing of this hub stays at the notch; a newer page's state stays.
+  current.webContents.on("render-process-gone", () => island.forget(page));
+  current.once("closed", () => { removeIPC(); island.forget(page); if (mainWindow === current) mainWindow = undefined; });
   if (owner) {
     try {
       await current.loadURL(owner.url.href);
@@ -305,6 +331,7 @@ else {
     else pendingDeepLink = raw;
   });
   app.whenReady().then(async () => {
+    installIslandProtocol();
     const publishPresence = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const presence = desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported());
@@ -317,6 +344,11 @@ else {
     powerMonitor.on("resume", publishPresence);
     presenceTimer = setInterval(publishPresence, 30_000);
     const strings = await loadStrings(join(import.meta.dirname, "locales"), desktopLocale(app.getLocale()));
+    const applicationMenu = appMenuTemplate(process.platform, app.name, strings);
+    if (applicationMenu) {
+      Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenu));
+      app.setAboutPanelOptions({ applicationName: "Persona" });
+    }
     // The first check starts here, before any window loads; its state is kept until the tray exists to show it.
     let tray: DesktopTray | undefined;
     let updateItems: readonly UpdateMenuItem[] = [];
@@ -324,8 +356,9 @@ else {
       changed: state => { updateItems = updateMenu(state, strings); tray?.setUpdate(updateItems); },
       prepareQuit: () => { quitting = true; },
     });
-    const saved = await store().read<{ hub?: string }>();
+    const saved = await store().read<{ hub?: string; island?: boolean }>();
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
+    if (saved?.island === true) island.setEnabled(true);
     for (const scheme of ["persona", "jarvis"]) {
       if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
     }
@@ -348,3 +381,7 @@ app.on("before-quit", () => { quitting = true; if (presenceTimer) clearInterval(
 app.on("window-all-closed", () => {
   // Closing to the tray deliberately keeps the app alive; an explicit Quit exits on every platform.
 });
+
+// Developing Persona (#9675): the shell's own record while the page's switch is on (dev-diagnostics.ts).
+import { installDevDiagnostics } from "./dev-diagnostics.js";
+installDevDiagnostics();
