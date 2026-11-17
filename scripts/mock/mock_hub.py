@@ -11673,7 +11673,7 @@ BRIEF_PLAIN = ("早报 · 周一 结论：上午有一节辅导课，下午没�
 
 def assistant_brief(mode):
     base = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")
-    url = base + "/s/macbook/" + BLOG
+    url = base + "/persona/" + ASK1  # the conversation's page, as the hub writes it (deeplink.Conversation, #9928)
     if mode == "before":
         one = " ".join(BRIEF_MD.split())
         summary, preview, body = one[:200] + "…", one[:120] + "…", None
