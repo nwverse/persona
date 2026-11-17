@@ -89,5 +89,10 @@ class ConversationTagsTest {
         val rows = fullSearchRows("alpha", chats, chats, enabled = true, answer = answer, words = words, activeTag = "work")
         assertEquals(listOf(work.key), rows.map { it.session.key })
         assertEquals(listOf(work), filterChatsForFullSearch(chats, "", words, activeTag = "work"))
+
+        // The compact drawer's hub merge can synthesize a row unknown to the filtered local roster; it still needs the tag.
+        val drawerRows = shownSearchRows("alpha", enabled = true, local = emptyList(), known = listOf(work),
+            answer = answer, activeTag = "work")
+        assertEquals(listOf(work.key), drawerRows?.map { it.session.key })
     }
 }
