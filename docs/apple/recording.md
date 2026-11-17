@@ -12,7 +12,7 @@ All-day recording (the watch records the whole day, the phone transcribes it as 
 ## Why send only text
 
 - Audio is roughly 14 MB / hour; the knowledge base searches text, so text is enough. The assistant needs "who said what at that day's meeting," not the audio itself.
-- Privacy: by default original audio stays on the phone (watch audio is still cleaned up after transfer to the phone) and the hub holds only transcripts. A meeting has two exceptions, each said where it applies, in every language, as the contract's "Privacy per mode" Wording has it ([meeting-minutes.md](../assistant/meeting-minutes.md)): while the owner holds Talk, what is said then goes to the voice service (#3862 phase 4); and a meeting transcribed on the hub (hub mode, phase 5: picked at the start, or the default in Settings › Meetings) sends its audio, Talk included, through the hub to the speech service the hub is set up with (named when the owner chose another extension), and the hub deletes that audio once the meeting's minutes are written. The phone keeps its own audio as before, until `days` or the owner's delete. The texts: the microphone usage description (`apple/project.yml`, `apple/Persona/Resources/InfoPlist.xcstrings`), the meeting intent's description (`apple/LiveActivity/RecordingIntents.swift`), the line under Record and Settings › Meetings (`MeetingTranscriptionWords`), the recording page's footer, and the site's privacy page in both languages (`site/public/privacy/index.html`, `site/public/en/privacy/index.html`).
+- Privacy: by default original audio stays on the phone (watch audio is still cleaned up after transfer to the phone) and the hub holds only transcripts. A meeting has two exceptions, each said where it applies, in every language, as the contract's "Privacy per mode" Wording has it ([meeting-minutes.md](../assistant/meeting-minutes.md)): while Talk is on (held, or tapped on until the next tap, #9658), what is said then goes to the voice service (#3862 phase 4); and a meeting transcribed on the hub (hub mode, phase 5: picked at the start, or the default in Settings › Meetings) sends its audio, Talk included, through the hub to the speech service the hub is set up with (named when the owner chose another extension), and the hub deletes that audio once the meeting's minutes are written. The phone keeps its own audio as before, until `days` or the owner's delete. The texts: the microphone usage description (`apple/project.yml`, `apple/Persona/Resources/InfoPlist.xcstrings`), the meeting intent's description (`apple/LiveActivity/RecordingIntents.swift`), the line under Record and Settings › Meetings (`MeetingTranscriptionWords`), the recording page's footer, and the site's privacy page in both languages (`site/public/privacy/index.html`, `site/public/en/privacy/index.html`).
 - Recording entries are separate from meetings (`meetings`): a meeting is an external item from the Lark calendar, stored as one JSON document and batch-tagged by a model; a recording has a full transcript, its own retention period, and UUID-based writes and deletes from the phone. Their lifecycles differ, and combining them complicates cleanup and display.
 
 A recording marked as a meeting (`kind: "meeting"`, with the phone calendar's event in `calendar`) also gets structured minutes from the hub: [meeting-minutes.md](../assistant/meeting-minutes.md).
@@ -221,8 +221,10 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   start's choice stands in only until then. The recording's page has the same switch for every meeting on such a hub
   (hidden after `409 not_meeting`). A refused change says "Couldn't change Private Meeting. Try again." unless the hub
   names a reason (`MeetingConversation.privateMessage`).
-- **After the meeting**: the after page shows the status card (when, the minutes' state, **Open Minutes** / **Open
-  Recording** in the sheet and where the minutes push opened it, kept above the thread), the room's thread with the asks answered from material where they
+- **After the meeting**: the after page is one screen (#8731 V3, `docs/design/DESIGN_SYSTEM.md` "After the meeting"): the
+  facts, the summary card, the to-dos, the meeting map, then Minutes · Transcript · Photos · Conversation. The Meetings
+  list and Knowledge open it for every meeting recording (`RecordingOpen`), and its ⋯ menu has the recording's page
+  (Recording Details). Its Conversation part holds the room's thread with the asks answered from material where they
   were asked (or the hub's `asks` when the room never came up), **After the Meeting**, then the follow-up. Its composer
   waits while the hub would answer `409 meeting_running` (`MeetingConversation.running`): the recording runs, an upload
   on its way may carry the `ended_at` the hub doesn't have yet (within 12 hours of the last upload it stored, after which
@@ -589,12 +591,19 @@ and its states are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting pa
   meeting's. A sentence transcribed while the voice still plays is checked against the open stretch, which carries what is
   being said (`MeetingCall.openSpan`, `MeetingSpeaker.openSpan`; both, when both play).
 - **Talk** (`MeetingCall.beginTalk` / `endTalk`, from a `MeetingTalkSource`): offered while a room meeting Persona can be
-  asked in records (`MeetingCallRule.talkOffered`, listener or participant, not paused). Held on the page; a hold also
+  asked in records (`MeetingCallRule.talkOffered`, listener or participant, not paused). On the page Talk works like
+  every mic (#9619, #9658): the span opens as the finger lands, so the first words count; let go before
+  `Theme.Hold.delay` (0.3 s) it is a tap and stays open as the page's talk window (`MeetingCall.keepOpen`, source
+  `pageWindow`), which the next tap on Talk ends and sends; held longer it ends as the finger lifts. A hold also
   ends when the page's Talk leaves the screen with the finger still down (Just Me turned on, the page left, a word typed:
   `MeetingTalkButton`'s disappear, `MeetingCall.endHold`), at the Live Activity's Done, and after 60 seconds whatever the
   finger does (`MeetingCall.longestHold`). On the Lock Screen and in the island a tap opens a talk window
   (`TalkInMeetingIntent`, `MeetingCall.activityTap`), which ends on Done, on 2 seconds of silence after speech, after 20
-  seconds without speech or after 60 seconds (`MeetingTalkWindow`, ticking every 100 ms on the tap's level). Speech is the
+  seconds without speech or after 60 seconds (`MeetingTalkWindow`, ticking every 100 ms on the tap's level). The page's
+  window (a tap, or VoiceOver's double tap; `onPage`) does not end 2 seconds after speech: Talk is in sight to tap when
+  done, and a pause to think is common in a meeting, so a quiet stretch ends it only after 20 seconds (as before any
+  speech) or at 60 seconds, and the page then says why ("Talk turned off after 20 seconds without speech", "…after a
+  minute"; `MeetingCall.Note.quiet`, `.limit`). Speech is the
   owner's, not the room's: the microphone hears everyone, and a room talking at a normal level would otherwise keep a
   window open for its 60 seconds, all of it going to the voice service. So as the window opens it takes the room's level
   from what the tap heard in the 5 seconds before (`MeetingTalkWindow.Room`; the 25th percentile of its 100 ms pieces,
@@ -604,7 +613,7 @@ and its states are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting pa
   buttons carry what they showed (`open`: Talk true, Done false), and
   `MeetingCallRule.activityTap` acts only on a tap that matches what is open: Talk opens a window when no span is, Done
   ends any open span (a window, or a hold the page lost), and a Done tapped just after the window closed on its own
-  opens nothing. VoiceOver on the page opens a window too (`pageWindow`). A span opening stops what Persona is saying (the
+  opens nothing. VoiceOver's double tap on the page opens the page's window too (`pageWindow`). A span opening stops what Persona is saying (the
   call's voice, a spoken answer). With the call live, the span is `talk on`, its audio, `talk off`; the call's answer comes
   as captions and its voice, and in the room's thread as the room's turn. No span goes to the call before the owner was
   told what Talk sends (`MeetingCallRule.toCall`, `MeetingTalkPrivacy`, below): one held or opened on the page goes only
@@ -618,18 +627,19 @@ and its states are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting pa
   (`RecordingCapture.flushSegment`, also while paused, `cutsOnFlush`), the
   span is transcribed on the phone as every segment is, and once its segments have their text (at most 12 s) the
   sentences at least half inside it (`MeetingTalkWords.question`) go as a spoken question: `…/ask` with `question` and
-  `spoken: true` (`MeetingAsk.ask(_:text:spoken:)`), answered as any ask (aloud for a participant, `MeetingSpeaker`). Let
-  go in under half a second, the page says to hold Talk while speaking; a span asked without the call that held no words
-  says Persona heard nothing. A span closes with the recording's pause or the role going off (what was said is still
+  `spoken: true` (`MeetingAsk.ask(_:text:spoken:)`), answered as any ask (aloud for a participant, `MeetingSpeaker`). A
+  span asked without the call that held no words says Persona heard nothing. (Before #9658 a release under half a second
+  said to hold Talk; it is a tap now.) A span closes with the recording's pause or the role going off (what was said is still
   asked: the pause's open segment is cut while paused); Stop drops it.
 - **Typed questions** go as the call's `text` frame while it is live (`MeetingCall.say`; the fast layer hands them to the
   room, and the answer comes in the room's thread), otherwise through `…/ask` as before; the room's one-question-at-a-time
   rule is the asks', not the call's.
 - **The privacy texts**: where Talk sends its spans to the voice service, a room meeting taking part on a hub whose voice
   extension takes meeting calls (`MeetingCallRule.talkSendsAudio`), the line under Record and Talk's first-use note (and
-  its spoken hint) say "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice
-  service." (the contract's Wording). The note is a line of its own under the composer's caption, beside a word after a
-  span (hold longer, heard nothing) rather than replaced by it, until a span went to the call while it showed
+  its spoken hint) say "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice
+  service." (the contract's Wording; "while you hold Talk" until #9658 made Talk a tap as well as a hold). The note is a
+  line of its own under the composer's caption, beside a word after a span (heard nothing, why a window ended) rather
+  than replaced by it, until a span went to the call while it showed
   (`MeetingTalkPrivacy`, written once). The line tells `MeetingCall` when it is on screen (`showingPrivacy`, from its
   appearing and leaving), and it counts as shown for a span once it has been there a second (`MeetingTalkPrivacy.shown`):
   drawn in the same instant as the finger went down (the call came up just then) is not shown. VoiceOver's window counts
@@ -639,7 +649,7 @@ and its states are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting pa
   Wording too, since it may start a meeting with Talk, with "this device" for "this iPhone": App Store Connect refuses
   App Intent metadata that names the iPhone (#6471).
 - **No voice in a room opened as a chat**: a conversation whose origin is `meeting` offers no Voice Chat
-  (`VoiceAvailability.meetingRoom`; the + menu's item says to hold Talk on the meeting's page), since the extension refuses
+  (`VoiceAvailability.meetingRoom`; the + menu's item says to tap Talk on the meeting's page), since the extension refuses
   an ordinary call bound to a room (`meeting_room`).
 - **What the simulator cannot verify**: voice processing (it doesn't run there), how much it changes the recording of a
   room's far voices, and the voice's echo through the loudspeaker; measure on a device before relying on the echo rule alone.

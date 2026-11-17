@@ -852,7 +852,8 @@ struct AssistantView: View {
             backToRoot()
             model.assistantCurrent = nil
         }
-        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
+        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count, op: op) }
+        let newChat = model.assistantNewChat
         do {
             // The first one becomes the main conversation; with the settings not read yet, whether there is one is unknown.
             let makesMain = space == nil && model.assistantConfig != nil && model.assistantMain == nil
@@ -872,31 +873,39 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            // The accepted conversation is visible before a follow-up configuration refresh.
             if makesMain { Task { await model.refreshAssistant() } }
-            Haptics.success()
-            model.began(s, text: text, images: images) // the message stays on screen until claude has written it
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: true,
+                                                  space: space, showsPage: model.showsPage(of: api))
+            if decision.haptic == .success { Haptics.success() }
+            if decision.began { model.began(s, text: text, images: images) } // keep it until claude has written it
             withAnimation(Theme.Motion.standard) {
                 // Another manager's page by now: the conversation is listed on its own page, not opened on this one.
-                if space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
-                pending = nil
-                failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                if decision.open { model.assistantCurrent = s.key }
+                if decision.clearPending { pending = nil }
+                if decision.failure == .clear {
+                    failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                }
             }
         } catch {
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
-            let here = space != nil || model.showsPage(of: api) // the card belongs to the page it failed on
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: false,
+                                                  space: space, showsPage: model.showsPage(of: api))
             withAnimation(Theme.Motion.standard) {
-                pending = nil
-                if here { model.readiness.failure = coded }
-                failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
-                                                     mayHaveStarted: FailedStart.mayHaveStarted(error),
-                                                     reason: coded == nil || !here ? error.shown : nil, at: .now,
-                                                     manager: space == nil ? api.shownManager : nil))
+                if decision.clearPending { pending = nil }
+                if decision.failure == .show { model.readiness.failure = coded }
+                if decision.failure == .show || decision.failure == .record {
+                    failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
+                                                         mayHaveStarted: FailedStart.mayHaveStarted(error),
+                                                         reason: coded == nil || decision.failure != .show ? error.shown : nil, at: .now,
+                                                         manager: space == nil ? api.shownManager : nil))
+                }
             }
-            if here, coded != nil { model.readinessChanged() }
-            Haptics.error()
+            if decision.failure == .show, coded != nil { model.readinessChanged() }
+            if decision.haptic == .error { Haptics.error() }
         }
     }
 }
@@ -906,6 +915,8 @@ struct PendingStart: Equatable {
     var imageCount: Int
     /// A start that failed (#1368): drawn as the chat's failed bubble, with Resend and Delete, and no typing line.
     var failed: FailedStart.Message? = nil
+    /// Which invocation owns the sending bubble; a late completion never clears a newer send's.
+    var op: UUID? = nil
 }
 
 /// The first message of a new conversation while it spins up, laid out as the chat will lay it out the moment it takes
@@ -1573,7 +1584,9 @@ struct StarterComposer: View {
                 ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: starterModels.launchers, model: model),
-                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener, send: submit) {
+                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener,
+                                 dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                                 takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) }, send: submit) {
                     #if os(iOS)
                     // As a conversation's + (#3225): the iPhone's touch and hold, the iPad's tap with Photos and Files first.
                     if attachOpener == nil {
@@ -1762,6 +1775,8 @@ struct BeautifulStarterComposer: View {
                                return true
                            },
                            quotes: quotesBinding,
+                           dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                           takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) },
                            send: {
                                let typed = text
                                let t = typed.trimmingCharacters(in: .whitespacesAndNewlines)

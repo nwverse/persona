@@ -1064,25 +1064,20 @@ private struct ExtensionSecretSheet: View {
             .onChange(of: value) { if refusal != nil { refusal = nil } }
             .sheetCancel(unsaved: !value.isEmpty) { close() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task {
-                            busy = true
-                            switch await (byReference ? saveReference(value) : save(value)) {
-                            case .saved:
-                                value = ""
-                                refusal = nil
-                                close()
-                            case .refused(let words): refusal = words
-                            case .failed: refusal = nil
-                            }
-                            busy = false
+                SheetConfirm(id: "plugin-secret-save", disabled: value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                             busy: busy) {
+                    Task {
+                        busy = true
+                        switch await (byReference ? saveReference(value) : save(value)) {
+                        case .saved:
+                            value = ""
+                            refusal = nil
+                            close()
+                        case .refused(let words): refusal = words
+                        case .failed: refusal = nil
                         }
-                    } label: {
-                        if busy { ProgressView() } else { Text("Save").lineLimit(1) }
+                        busy = false
                     }
-                    .disabled(busy || value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("plugin-secret-save")
                 }
             }
         }

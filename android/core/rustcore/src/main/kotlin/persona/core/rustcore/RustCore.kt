@@ -82,6 +82,9 @@ internal object NativeBridge {
     /** Projects the Agents list from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectSort(input: String): String
 
+    /** Projects a session_state or hub_state fixture through the pure host adapter. No runtime handle needed. */
+    @JvmStatic external fun projectState(input: String): String
+
     /** Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectTurns(input: String): String
 

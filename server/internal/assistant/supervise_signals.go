@@ -152,6 +152,9 @@ type superviseBook struct {
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
+
+	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
+
 	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
 	// when that was last logged (sendDigest).
 	noMainSince, noMainLogged time.Time
