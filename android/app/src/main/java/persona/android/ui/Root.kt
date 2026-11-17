@@ -847,7 +847,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           AssistantStackNavigationProbe(stackEvidence.route, stackEvidence.selectedKey)
-          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar", null) }) {
+          // Phone drawer only, and only on the Assistant root. A pushed page keeps the drag (`DrawerPan.pushed`,
+          // AssistantSidebar.swift:505-509). A regular window shows the column instead of this drawer.
+          JShellDrawer(
+              sidebar.opened.value,
+              onDismiss = { sidebar.opened.value = false },
+              dragEnabled = !regular && selected == AppTab.Persona && assistantStack.size <= 1,
+              onOpen = { sidebar.opened.value = true },
+              drawer = { sharedSidebar("shared-sidebar", null) },
+          ) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
             // One background for the window. Pages paint the same light at the same place (PageBackdrop), so in wide
             // windows the rail, the panes and the room between them read as one surface; cards are what separate them.
@@ -922,11 +930,19 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                     val foldSidebarColumn: (() -> Unit)? =
                                         if (showsSidebarColumnFoldButton(regular, columnsOver)) ({ setSidebarColumnBeside(false) }) else null
                                     // One sidebar owner outside the entry stack survives root → Inbox → detail → Back.
+                                    // Assistant history drags (`AssistantView.swift:149`). A pushed page, including Inbox, keeps the edge
+                                    // for Back (`SplitColumnControl.swift:137`, `:160-169`). Settings is a sheet and has no column drag.
                                     AssistantPaneFrame(regular, policy.keepSharedSidebar,
                                         shown = if (columnsOver) sidebarOverlayShown.value else sidebarColumnShown.value,
                                         modifier = if (shown) Modifier else Modifier.unplaced(),
                                         sidebar = { sharedSidebar("shared-sidebar-column", foldSidebarColumn) }, hinges = paneHinges,
-                                        overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false }, content = display)
+                                        overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false },
+                                        drags = true, detailAtRoot = stacks.getValue(tab).size <= 1,
+                                        onDragSettle = { value ->
+                                            if (currentColumnsOver.value) sidebarOverlayShown.value = value
+                                            else setSidebarColumnBeside(value)
+                                        },
+                                        content = display)
                                 } else display()
                             }
                         }

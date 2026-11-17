@@ -650,6 +650,7 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 	}
 	sid := r.PathValue("sid")
 	p["session_id"] = sid
+	r = h.captureHumanSubmission(r, "")
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	var out json.RawMessage
