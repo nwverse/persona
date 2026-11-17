@@ -1812,10 +1812,8 @@ struct KBTagEditor: View {
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(saving)
-                }
+                SheetClose { dismiss() }
+                SheetConfirm(id: "kb-entry-save", name: String(localized: "Save"), busy: saving) { Task { await save() } }
             }
             .onAppear {
                 if capturedAPI == nil { capturedAPI = inheritedAPI ?? model.api?.currentAssistantSettings() }
