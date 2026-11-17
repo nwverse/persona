@@ -1438,6 +1438,12 @@ export type TextStyle = "body" | "secondary" | "caption" | "code" | "title" | "h
 export const TEXT_STYLES = ["body", "secondary", "caption", "code", "title", "headline"] as const;
 
 /**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+export type ProgressStyle = "bar" | "ring" | (string & {});
+export const PROGRESS_STYLES = ["bar", "ring"] as const;
+
+/**
  * date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM
  * (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline
  * the text with \n.
@@ -1602,13 +1608,19 @@ export interface MetricComponent {
 }
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 export interface ProgressComponent {
   type: "progress";
   key?: string;
   label: string;
   ratio: number;
+  /**
+   * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring; other
+   * surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not accept this
+   * field.
+   */
+  style?: ProgressStyle;
   detail?: string;
   tone?: Tone;
 }

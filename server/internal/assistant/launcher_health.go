@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"sync"
@@ -109,7 +110,17 @@ type LauncherHealth struct {
 	BlockedReason string         `json:"blocked_reason,omitempty"`
 	// ResetsAt: Kind is errKindUsageLimit and this is when the limit resets (read off the check's words when they name a
 	// time zone, or an agent's own record of the limit): the launcher counts as unusable until then, and no longer after.
+	// With LimitModels it is the latest of their resets, unknown while any of theirs is.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// LimitModels: Kind is errKindUsageLimit and these model families' own limits are used up (opus, sonnet, haiku);
+	// none: the limit names no family, and any model's answer shows it is over (recordHealth's merge rules).
+	LimitModels []string `json:"limit_models,omitempty"`
+	// LimitResets: when each of LimitModels resets, for those whose reset is known. Without it a known ResetsAt is every
+	// family's reset (limitResets: records from before it).
+	LimitResets map[string]time.Time `json:"limit_resets,omitempty"`
+	// rev is the record's version in this hub (healthBook.rev): a probe's result is current only against the version
+	// it read.
+	rev uint64
 }
 
 // LauncherFixed is the latest repair of a launcher.
@@ -146,6 +157,7 @@ type healthBook struct {
 	mu       sync.Mutex
 	loaded   bool
 	recs     map[string]*LauncherHealth // by healthKey
+	rev      uint64                     // the latest LauncherHealth.rev given
 	repairs  map[string]*machineRepair  // by broken machine
 	online   map[string]bool            // reachable at the last look
 	checking map[string]bool            // machines being checked now
@@ -314,6 +326,47 @@ func (r LauncherHealth) limitReset() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return *r.ResetsAt, true
+}
+
+// limitModels are the model families r's usage limit holds for; a record from before limit_models has them in its
+// error's words.
+func (r LauncherHealth) limitModels() []string {
+	if len(r.LimitModels) > 0 {
+		return r.LimitModels
+	}
+	return limitFamilies(r.Error)
+}
+
+// limitResets are the known resets of r's limitModels, a copy. A record without limit_resets has its known resets_at
+// for each family: main's format (no limit_models either, the families in its error's words). A record that has
+// families and no limit_resets has no resets_at but from that format, since every family's reset is known whenever
+// resets_at is (familiesReset).
+func (r LauncherHealth) limitResets() map[string]time.Time {
+	out := maps.Clone(r.LimitResets)
+	if out == nil {
+		out = map[string]time.Time{}
+	}
+	if len(out) == 0 && r.ResetsAt != nil {
+		for _, f := range r.limitModels() {
+			out[f] = *r.ResetsAt
+		}
+	}
+	return out
+}
+
+// familiesReset is when a limit on families resets: the latest of their resets, nil while any is unknown.
+func familiesReset(families []string, resets map[string]time.Time) *time.Time {
+	var latest *time.Time
+	for _, f := range families {
+		t, ok := resets[f]
+		if !ok {
+			return nil
+		}
+		if latest == nil || t.After(*latest) {
+			latest = &t
+		}
+	}
+	return latest
 }
 
 // resetNote is how agents_list's lines and a detour's reason say when r's usage limit resets ("" without one):

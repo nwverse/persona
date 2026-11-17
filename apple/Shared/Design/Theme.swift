@@ -357,6 +357,8 @@ nonisolated enum Theme {
         }
         /// The home page's greeting, the welcome page (24 bold).
         static var display: SwiftUI.Font { sized(.display, .bold) }
+        /// The display level unemphasized: "(Persona)" after the name in a screenshot's banner (#9508, 24 regular).
+        static var displayPlain: SwiftUI.Font { sized(.display) }
         /// A detail page's or a sheet's title (18 semibold).
         static var title: SwiftUI.Font { sized(.title, .semibold) }
         /// Titles of rows, cards, panels and Markdown headings below the first (13 semibold).
@@ -419,6 +421,8 @@ nonisolated enum Theme {
         static let labelStrong = label.weight(.semibold)
         static let labelMedium = label.weight(.medium)
         static let labelHeavy = label.weight(.bold)
+        /// The display level unemphasized: "(Persona)" after the name in a screenshot's banner (#9508, 28 regular).
+        static let displayPlain = display.weight(.regular)
 
         #if os(iOS) || os(visionOS)
         /// `body` for a UIKit control inside a SwiftUI page (the hidden `SecretField`): the same text style, so it
@@ -712,6 +716,32 @@ nonisolated enum Theme {
         static let lineStrong = Color.primary.opacity(0.18)
     }
 
+    /// A heat grid (`HeatGrid`, docs/design/DESIGN_SYSTEM.md 3.15): the token calendar's squares, a day each (a column a
+    /// week) or an hour each (a row a day), in the theme color's steps from faint to full and no usage in the neutral
+    /// fill. The squares keep their size at every text size; a wider screen shows more weeks.
+    enum Heat {
+        /// A day's square and the room between two: 19 weeks across an iPhone's card.
+        static let cell: CGFloat = 13
+        static let gap: CGFloat = 3
+        static let radius: CGFloat = 3
+        /// An hour's square on the last week's grid: as wide as 24 fit, this high, this far apart.
+        static let hourHeight: CGFloat = 15
+        static let hourGap: CGFloat = 2
+        /// The fewest and the most weeks a calendar shows.
+        static let minWeeks = 8
+        static let maxWeeks = 53
+        /// The theme color's strength at each step above none (`HeatLevels`, four steps).
+        static let steps: [Double] = [0.28, 0.5, 0.75, 1]
+        /// Today's outline and the picked square's.
+        static let todayLine: CGFloat = 1.5
+        static let pickedLine: CGFloat = 2
+
+        /// A square at step `level`: 0 is no usage, 1 to 4 the theme color's steps.
+        static func fill(_ level: Int) -> Color {
+            level <= 0 ? Theme.Fill.chip : Theme.accent.opacity(steps[min(level, steps.count) - 1])
+        }
+    }
+
     /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner,
     /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), the dot of a held mic (`DictationHold`) and,
     /// when it is turned on, the composer's glow while a reply is generating (`ComposerGlow`); those stop with Reduce Motion
@@ -883,8 +913,6 @@ nonisolated enum Theme {
         static let cropThirdsOpacity = 0.45
     }
 
-    /// Hold the mic to dictate, slide left to drop it, slide up to keep it going hands-free: Telegram's thresholds
-    /// for its voice button (`DictationHold`).
     /// The composer's dictation bar (`DictationBar`, ChatGPT's): [✕] the wave [■] [↑] in the composer's capsule.
     enum DictationBar {
         /// A quiet column's dot, and the room from one column's centre to the next.
@@ -912,6 +940,9 @@ nonisolated enum Theme {
         /// A column's ink, quiet and at full voice.
         static let quietInk = 0.5
         static let loudInk = 1.0
+        /// After the bar closed, how long ■ and ↑ keep their order before following the mic's place again: past the bar's
+        /// close (`Theme.Motion.dictationOut`, 0.32 s), so they never swap while they fade (#9619).
+        static let reorderAfter: TimeInterval = 0.4
         /// After stop or send, how long the recognizer may take for its last words before the bar settles for what it has.
         static let finalWait: Duration = .milliseconds(1200)
         /// The bar's parts while it is off: drawn, but not seen. Fully transparent, SwiftUI skips drawing them, and their first
@@ -931,32 +962,25 @@ nonisolated enum Theme {
         static let inkSteps = 12
     }
 
+    /// Hold a mic to dictate while held, slide left to drop it (`DictationHold`, `MicPress`, #9619): Telegram's thresholds
+    /// for its voice button, but a longer wait before a touch counts as a hold, and no lock (a tap keeps it on).
     enum Hold {
-        /// A touch held this long is a hold; let go sooner it is a tap (dictation on or off, as before).
-        static let delay: Duration = .milliseconds(190)
-        /// While the finger is down, this far left drops what was heard, this far up locks.
+        /// A touch held this long is a hold; let go sooner it is a tap (dictation on or off). Telegram's 0.19 s took a
+        /// slow tap for a hold that ended, having heard nothing, as the finger lifted.
+        static let delay: Duration = .milliseconds(300)
+        /// While the finger is down, this far left drops what was heard.
         static let cancelDistance: CGFloat = 150
-        static let lockDistance: CGFloat = 110
         /// Let go: a shorter slide counts, or a quick flick.
         static let releaseCancelDistance: CGFloat = 100
-        static let releaseLockDistance: CGFloat = 60
         static let flickSpeed: CGFloat = 400
-        /// How far up the lock's progress runs, and how far the label stays put before it follows the finger, at half its pace.
-        static let lockTravel: CGFloat = 105
+        /// How far the label stays put before it follows the finger, at half its pace.
         static let labelDeadZone: CGFloat = 8
         static let labelFollow: CGFloat = 0.5
         static let labelFade: CGFloat = 10
-        /// The lock's arrow is gone a little past halfway up.
-        static let lockArrowFade: CGFloat = 1.6
         /// The circle under the finger, and how small it gets as the finger slides toward cancel.
         static let circle: CGFloat = 96
         static let circleSlide: CGFloat = 300
         static let circleSmallest: CGFloat = 0.4
-        /// The lock's pill above the mic: its size, and how far above the mic's centre it sits.
-        static let lockWidth: CGFloat = 40
-        static let lockHeight: CGFloat = 72
-        static let lockShrink: CGFloat = 32
-        static let lockLift: CGFloat = 122
     }
 
     /// Categories with no meaning beyond telling them apart (memory types).

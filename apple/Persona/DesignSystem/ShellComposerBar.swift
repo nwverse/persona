@@ -53,6 +53,11 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @State private var hold = ComposerHold()
     /// The mic tapped: the capsule is the dictation bar (`DictationBar`).
     @State private var dictationBar = DictationBarModel()
+    /// The mic ends its row: the bar's ■ goes last, where the finger is (#9619). It follows the composer while the bar is
+    /// off, so a tap moves nothing; from a tap until the bar has gone it stays as it was.
+    @State private var barStopLast = false
+    /// When the bar last closed: the order waits until it has gone (`followMicPlace`).
+    @State private var barClosedAt = Date.distantPast
     /// The composer's row under the bar has left the accessibility tree (`Theme.DictationBar.treeAfter` after it opened).
     @State private var rowOutOfTree = false
     /// Where 「+」 is in the window, for the panel it opens. Read when tapped, never drawn, so it is kept outside the
@@ -229,10 +234,12 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .allowsHitTesting(!barOn)
                 .accessibilityElement(children: rowOutOfTree ? .ignore : .contain)
                 .accessibilityHidden(rowOutOfTree)
-            DictationBar(model: dictationBar, meter: dictation.meter,
+            DictationBar(model: dictationBar, meter: dictation.meter, stopLast: barStopLast,
                          cancel: { dictationBar.cancel(dictation, reduceMotion: reduceMotion) },
                          stop: { dictationBar.end(.stop, dictation, text: $text, reduceMotion: reduceMotion, send: { false }) },
                          send: { dictationBar.end(.send, dictation, text: $text, reduceMotion: reduceMotion, send: sendDictated) })
+                .onChange(of: barOn) { _, on in if !on { barClosedAt = .now } }
+                .task(id: DictationBarOrder(micEndsRow: micEndsRow, barOn: barOn)) { await followMicPlace() }
         }
         let erased = AnyView(layered)
         #else
@@ -582,11 +589,36 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @ViewBuilder private var mic: some View {
         #if os(iOS)
         ComposerHoldMic(dictation: dictation, text: $text, hold: hold, id: "shell-composer-mic", hints: dictationHints,
-                        tap: startDictationBar, quiet: barOn)
+                        tap: micTapped, quiet: barOn)
         #else
         ComposerMicButton(dictation: dictation, text: $text, id: "shell-composer-mic", hints: dictationHints)
         #endif
     }
+
+    #if os(iOS)
+    /// Nothing follows the mic in its row: no voice or stop on the line, no send or send gate in the card.
+    private var micEndsRow: Bool { voice == nil && stop == nil && !(expanded && (gate != nil || canSend)) }
+
+    /// The mic tapped: the bar puts ■ where the finger is, so a second tap there stops and sends nothing (#9619). The
+    /// order is normally right already (`followMicPlace`); only a tap just after the bar closed changes it here.
+    private func micTapped() {
+        if barStopLast != micEndsRow { barStopLast = micEndsRow }
+        startDictationBar()
+    }
+
+    /// The bar's ■ follows the mic's place while the bar is off, so the tap's frame reorders nothing (a reorder there
+    /// left a button without a frame for a moment and rebuilt the bar's accessibility). Just after the bar closed it
+    /// waits until the bar has gone (`Theme.DictationBar.reorderAfter`), so ■ and ↑ never swap as they fade.
+    private func followMicPlace() async {
+        guard !barOn, barStopLast != micEndsRow else { return }
+        let left = Theme.DictationBar.reorderAfter - Date.now.timeIntervalSince(barClosedAt)
+        if left > 0 {
+            try? await Task.sleep(for: .seconds(left))
+            guard !Task.isCancelled, !barOn else { return }
+        }
+        barStopLast = micEndsRow
+    }
+    #endif
 
     private func stopButton(_ stop: @escaping () -> Void) -> some View {
         ComposerRoundButton.stop(id: "shell-composer-stop") { endDictation(then: stop) }
@@ -930,5 +962,13 @@ struct ComposerLines: Encodable, Equatable {
 /// A view's frame in the window, for an action to read when it runs. Not observed: writing it draws nothing again.
 @MainActor final class WindowFrame {
     var rect: CGRect = .zero
+}
+#endif
+
+#if os(iOS)
+/// What the dictation bar's order follows (`ShellComposerBar.followMicPlace`).
+private struct DictationBarOrder: Hashable {
+    var micEndsRow: Bool
+    var barOn: Bool
 }
 #endif

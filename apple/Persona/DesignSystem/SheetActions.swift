@@ -13,6 +13,14 @@ extension View {
         modifier(SheetCancel(title: title, unsaved: unsaved, active: active, cancel: cancel))
     }
 
+    /// A sheet bar's text button that only closes (Cancel) in the primary ink, not the accent (#9460): the bar's glass
+    /// turns lighter in a dark sheet, the more so over a light page, and the accent on it read 2.1:1 (Send To over
+    /// Export Diagnostics) and 3.1:1 (Forward To over a chat); iOS draws a bar's plain items in the label color.
+    /// A confirming button (Done, Send) keeps the accent.
+    func sheetBarLabel() -> some View {
+        foregroundStyle(Color.primary)
+    }
+
     /// Done for a sheet that only shows things, in a Mac sheet's bottom row (Esc too). Nothing on iOS: there the page
     /// keeps its own Close or the swipe down.
     func macSheetDone(_ done: @escaping () -> Void) -> some View {
