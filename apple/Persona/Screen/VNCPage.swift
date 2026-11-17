@@ -1184,9 +1184,7 @@ struct VNCHelp: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { ThemedIcon(Theme.Icon.close) }.accessibilityIdentifier("vnc-help-close")
-                }
+                SheetClose(id: "vnc-help-close") { dismiss() }
             }
         }
         .accessibilityIdentifier("vnc-help-page")

@@ -90,18 +90,18 @@ func TestAssistantMainCompactWindowFingerprint(t *testing.T) {
 // options (the conversation's record, which a manual compaction uses), and a message with another window starts it
 // again on that one.
 func TestAssistantMainCompactWindowStart(t *testing.T) {
-	f := sdkTest(t)
+	f := cliTest(t)
+	f.fakeLaunch(t)
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
-	execution := sdkExec(proto.AssistantRuntimeAgentSDK)
+	execution := cliExec()
 	execution.UseEffort, execution.IsMain, execution.MainCompactWindow = true, true, 400_000
 	ctx := context.Background()
 	id, err := f.n.assistantSend(ctx, "", t.TempDir(), "gw", "hello", nil, "", "", execution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := f.start(t)["settings"].(map[string]any)["env"].(map[string]any)
 	first := f.proc(id)
-	if env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" || first.compactIdleAt != 300_000 {
+	if env := first.cmd.Env; envValue(env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW") != "400000" || envValue(env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS") != "1000000" || first.compactIdleAt != 300_000 {
 		t.Fatalf("main start: %v, idle %d", env, first.compactIdleAt)
 	}
 	if st, _ := f.n.state.get(id); !st.IsMain || st.MainCompactWindow != 400_000 {
@@ -132,11 +132,12 @@ func TestAssistantMainCompactWindowStart(t *testing.T) {
 // again on the launcher's window. On a launcher Persona does not manage the window changes nothing, so a manager that
 // starts sending it restarts nothing there either.
 func TestAssistantMainCompactWindowRPC(t *testing.T) {
-	f := sdkTest(t)
+	f := cliTest(t)
+	f.fakeLaunch(t)
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
 	send := func(method string, p map[string]any) string {
 		t.Helper()
-		p["text"], p["is_main"], p["runtime"], p["model_fingerprint"] = "hello", true, proto.AssistantRuntimeAgentSDK, "fp"
+		p["text"], p["is_main"], p["model_fingerprint"] = "hello", true, "fp"
 		raw, err := nodeCall(t, f.n, method, p)
 		if err != nil {
 			t.Fatalf("%s: %v", method, err)
@@ -148,9 +149,8 @@ func TestAssistantMainCompactWindowRPC(t *testing.T) {
 		return out.SessionID
 	}
 	id := send("assistant.send", map[string]any{"launcher": "gw", "cwd": t.TempDir(), "main_compact_window": 400_000})
-	env := f.start(t)["settings"].(map[string]any)["env"].(map[string]any)
 	first := f.proc(id)
-	if env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || first.compactIdleAt != 300_000 {
+	if env := first.cmd.Env; envValue(env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW") != "400000" || first.compactIdleAt != 300_000 {
 		t.Fatalf("assistant.send: %v, idle %d", env, first.compactIdleAt)
 	}
 	f.idle(t, id)

@@ -67,6 +67,12 @@ val LocalChromeInsets = compositionLocalOf { ChromeInsets() }
 /** The leading control of root pages (the hub avatar that opens settings), supplied by the shell. */
 val LocalRootLeading = compositionLocalOf<(@Composable () -> Unit)?> { null }
 
+/**
+ * True when this entry is a sidebar place shown as the page root at regular width.
+ * [LocalRootLeading] is also set by Settings, Engine and Pairing for other reasons, so it is not this test.
+ */
+val LocalIsSidebarRoot = compositionLocalOf { false }
+
 /** Back for a root page the shell shows as a page of its own (settings outside the board style). */
 val LocalRootBack = compositionLocalOf<(() -> Unit)?> { null }
 

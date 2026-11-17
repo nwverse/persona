@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -150,21 +151,22 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles     titleBook       // titles.go
-	phoneKept  keptPhoneTools  // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames agentNamingBook // agent_naming.go
-	prefs      settingsBook    // profile.go
-	main       mainBook        // start.go
-	archived   archiveBook     // conversations.go
-	origins    originBook      // origins.go
-	guests     guestBook       // guest.go
-	relays     relayBook       // conversations.go
-	avail      availBook       // availability.go
-	quiet      quietBook       // quiet.go
-	supervise  superviseBook   // supervise_signals.go
-	preempt    preemptBook     // owner_preempt.go
-	tbriefs    taskBriefBook   // task_brief.go
-	search     searchIndex     // search_index.go
+	titles     titleBook            // titles.go
+	phoneKept  keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames agentNamingBook      // agent_naming.go
+	prefs      settingsBook         // profile.go
+	main       mainBook             // start.go
+	archived   archiveBook          // conversations.go
+	tags       conversationTagsBook // conversation_tags.go
+	origins    originBook           // origins.go
+	guests     guestBook            // guest.go
+	relays     relayBook            // conversations.go
+	avail      availBook            // availability.go
+	quiet      quietBook            // quiet.go
+	supervise  superviseBook        // supervise_signals.go
+	preempt    preemptBook          // owner_preempt.go
+	tbriefs    taskBriefBook        // task_brief.go
+	search     searchIndex          // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	conversationWrites   sync.RWMutex
@@ -299,6 +301,7 @@ func New(o Options) *Service {
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
+	s.conversationTagRoutes()
 	s.conversationDeleteRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
@@ -717,6 +720,13 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
+	}
+	tagRecords, ok := s.conversationTagsRecords()
+	snap.Partial = snap.Partial || !ok
+	for id, rec := range tagRecords {
+		if len(rec.Tags) > 0 {
+			view(id, rec.MachineID).Tags = slices.Clone(rec.Tags)
+		}
 	}
 	picks, ok := s.modelPicksSet()
 	snap.Partial = snap.Partial || !ok
