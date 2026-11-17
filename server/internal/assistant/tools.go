@@ -612,9 +612,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
 		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
-		if !s.isWorkMachine(am.ID) {
-			prompt += "\n\n" + prompts.RenderTaskHandoff()
-		}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
@@ -643,6 +640,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 			delete(params, "effort") // Model configuration's, not this call's
+		}
+		if !s.isWorkMachine(am.ID) {
+			params["prompt"] = params["prompt"].(string) + "\n\n" + s.taskHandoff(sctx, am.ID, fit)
 		}
 		if note != "" {
 			note = " Note: " + note + "."

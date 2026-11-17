@@ -888,7 +888,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   had none). Where the system's bars run down the side it stands in that column, centred on the status bar (the 84 pt inset
   less the 14 pt strip at the screen's edge, `Theme.Shell.sideColumnEdge`: the clock is 49 pt from the edge on both displays),
   in its lower middle: on the outer display's rail above the face and the page's action, which stay at the foot within the
-  thumb's reach (#1057); on the open Duo, with nothing under it, a quarter of the column under it (`Theme.Shell.sideTabBarFoot`). On the open Duo `RootTabs` hides the system's tab bar on every tab (`PhoneTabBarHidden`, set once
+  thumb's reach (#1057); on the open Duo, with nothing under it, their room left empty (`ShellRailButtonRoom`), so it stands as high above the foot on both displays (178.7 pt above the screen's foot at the default text size; one set of values, `Theme.Shell.sideRailFoot`, `sideRailSpacing`, `sideTabBarGap`) and stays put as the Duo folds or unfolds, at the shell's text size on both (`TabSwitchSideRail` scales as the pages' rails, `TabSwitchFootBar` too; `DuoTabBarAlignmentTests`). Its count is `TabBarCount`, 18 pt with 12 pt digits, ringed in the page's color, centred 2 pt inside the corner of the symbol's well (`tabBarBadgeSpot`). On the open Duo `RootTabs` hides the system's tab bar on every tab (`PhoneTabBarHidden`, set once
   at each tab's root, never toggled) and draws the bar over the tabs (`TabSwitchOverlay`), outside the splits and stacks, so it
   stays put on a push and a pop: on its side in the system's column down the right, upright along the window's foot, centred,
   where iOS puts a tab bar with the bars across the top (there is no side column to stand in; a column of names floating over
@@ -898,9 +898,32 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   Where the bars are is read in the same update as the tabs (`toolbarVerticalEdge`), so neither starts in the other posture.
   While the keyboard is up the bar fades away and its room goes. Merged (the default where the Duo is open) is unchanged; the
   iPad keeps the system's tab bar, an ordinary iPhone the top switch. Tests: `TabSwitchLayoutTests` (the placement, the sizes,
-  the centring and the lower middle, the room, the choice kept), `DuoTabSwitchTests` (UI, each posture: one bar of symbols and
-  names where it belongs, the count at a symbol's corner, each item's page, the keyboard, Merged and Separate at once and after
+  the centring and the lower middle, the room, the choice kept), `DuoTabBarAlignmentTests` (both displays' rails laid out at every
+  text size: the same bar, as far from the edge and the foot, at the same text size; the count on the well's rim),
+  `DuoTabSwitchTests` (UI, each posture: one bar of symbols and names where it belongs, its foot 186.7 pt above the window's
+  under its last item, the count at a symbol's corner, each item's page, the keyboard, Merged and Separate at once and after
   a relaunch). Built with Xcode 26 the bar edge is never read, so the open Duo on its side gets the bar along the foot.
+- **One side column** (#9837, 2026-11-17, the owner: the tab bar lay over an Agent chat's Files and ⋯ on the open Duo on its
+  side and on the outer display, and the system's search over Messages' Lark Settings at the outer display's foot). The
+  system puts a page's own bar items down the column from its top: Back alone (a 48 pt glass), 12 pt under it the rest in
+  one glass (48 pt items, 4 pt apart), the first from 174 pt under the safe area's top on the outer display (its camera is
+  over the status bar) and 124 pt on the inner one, and a page's search at its foot (its top 38 pt over the safe area's foot),
+  at every text size (iOS 27.2, `Theme.Shell.systemBar…`; the safe area's top is 0 on both). Our rail stands from the foot.
+  - Each rail with the tab bar reports the bar's top (from the safe area's) to a `SideColumn` in the environment, which a scope gives
+    the pages under that rail (`SideColumnScope`: the open Duo's tabs in `TabSwitchPlaced`, the shell's Agents page in
+    `ShellView`); it is the room for the page's buttons from the system's first item (`TabSwitchLayout.systemBarTop`).
+  - An Agent's chat keeps Back, ⋯ and the leading ones of the chat / terminal / Git / Files buttons that stand
+    `Theme.Space.s` clear of the bar (`TabSwitchLayout.pageButtons`, `ChatView.sideButtons`); the rest are only in ⋯,
+    which has them all. Measured: on its side terminal, Git and ⋯ (Files in ⋯); under the outer display's rail only ⋯
+    beside Back. The tab bar is never moved for them.
+  - Messages in the shell under side bars shows its navigation bar without its title, so Lark Settings goes with the
+    system's items at the column's top as on the open Duo's tab; its rail keeps the face and an empty slot where the
+    system's search stands (`ShellRailSlot`), so the tab bar stays where it is on the other pages.
+  - The tab bar's chosen item is reached by a lens (`TabBarLens`): clear glass over the items in the glass styles
+    (`lensSurface`), swelling and stretching along the bar as it glides with a bounce, fading as it lands; the chosen
+    Assistant item shows the persona's face. With Reduce Motion the items cross-fade.
+  - Tests: `TabSwitchLayoutTests` (what fits, the column's room), `DuoSideColumnTests` (UI, each posture: no two buttons of
+    the column over one another on an Agent's chat, Messages, a to-do and the main chat, also at the largest text size).
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
   Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
   system's tab bar gave way to the Duo's own, #4231, above. What follows is the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
@@ -2754,7 +2777,7 @@ Requested 2026-11-17 (#9508): a screenshot of a chat carries Persona's brand whe
 - **The banner**: `PersonaBrandLockup` (`.banner`: `PersonaAvatar` at `Theme.Size.avatarM`, the name in `Theme.Font.display`, "(Persona)" in `Theme.Font.displayPlain` and the secondary color; `.slim` in a folded header), leading-aligned at the page margin so the avatar sits where the bar's own face is, in the bar's row of buttons (the Assistant chat) or centred in the header (the Agent chat). The same component signs exported pictures (`.mark`, #9468). It grows with the text size to the bar's cap (`Theme.Shell.topBarLargestTypeSize`); the name shrinks and is cut first, "(Persona)" stays whole.
 - **On screen** the bar is unchanged at rest; what scrolls under its strip no longer shows faintly through, since the backdrop under the bar is opaque: the page's color down to where the Assistant bar's fog starts to fade (`AssistantTopBar.fogSolid`, then out over `Theme.Space.m`; `BarFog` under both carries the fade on as before), the page's color and the header's material under the Agent header (the banner over the page's color alone, so no second blur). The bar takes the touches in its strip, as a hosting view does (a pass-through also lost the bar's own buttons, measured on a prototype).
 - **Settings › Appearance & Display › Persona Banner in Screenshots** (`ui.screenshotBanner`, on by default, this device only). Off, the bar is drawn as it always was, on screen and in screenshots.
-- **The bar's environment**: its hosting controller gets the page's values one by one (`IslandEnvironment` and the shell's, the tab's, the chat's link and port openers), never `.environment(\.self, …)` (see `LayoutIsland`).
+- **The bar's environment**: its hosting controller gets the page's values one by one (`IslandEnvironment` and the shell's, the tab's, the chat's link and port openers), never `.environment(\.self, …)` (see `LayoutIsland`). The look is the window's, not the copy's: the bar's and the banner's hosting controllers draw in their window's light or dark (its `traitCollection.userInterfaceStyle`, followed as it changes) and take it as their traits too, since the copy is only as new as SwiftUI's last update. With the copy alone, an Agent chat opened for the first time once drew its header and banner light above the dark chat (#9829), as the drawer's sidebar did (#4496).
 - **Accessibility**: VoiceOver reads the bar as before; the banner's hosting view is `accessibilityElementsHidden` and takes no touches (SwiftUI's `accessibilityHidden` on the banner left its text in the tree, on the prototype).
 - **Pictures the app takes of itself**: `drawHierarchy` and `snapshotView` leave the layer out as a screenshot does. The iPad's sidebar drag (`SplitColumnControl`, its pictures of the page) and DEBUG renders (`RuntimeCLI`) reveal the bars while they take them, after the screen updates while a bar is in the layer (`ScreenshotBanner.hasLayers`: a picture of the frame already drawn still leaves it out); `layer.render(in:)` draws everything and needs nothing. UI tests launch with the banner off (`launchPinned` adds `-ui.screenshotBanner NO` unless the test names it; `TEST_RUNNER_PERSONA_SCREENSHOT_BANNER=1` turns it on for a run): XCUIScreen's screenshots are the system's.
 - **Checking it**: `simctl io … screenshot` and `recordVideo` read the display's frame buffer, not the system's capture, so they show the bar either way. `ScreenshotBannerUITests` takes XCUIScreen screenshots (the system's, outside the app) and checks the bar's control is gone from them with the switch on and there with it off; `ScreenshotBannerTests` covers the layer with in-app pictures. On a device: take a screenshot (side and volume-up) and a short screen recording of a chat; both show the banner, with no black block where the bar was.
