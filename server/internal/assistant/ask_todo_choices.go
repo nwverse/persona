@@ -51,7 +51,7 @@ func (s *Service) addExpiredQuestionAsks(ctx context.Context, out map[string]tod
 	b.mu.Unlock()
 	for _, a := range records {
 		t, exists := s.todoNow(a.TodoID)
-		if !exists || t.DoneAt != nil || !a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || len(a.Questions) == 0 {
+		if !exists || t.DoneAt != nil || !a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || a.held(time.Now()) || len(a.Questions) == 0 {
 			continue
 		}
 		if _, has := out[a.TodoID]; has {
@@ -102,7 +102,7 @@ func (s *Service) chooseExpiredQuestion(ctx context.Context, id, asked, option s
 	if len(questions) == 0 || option != "" && answers != nil {
 		return acceptResult{}, errDecisionOption
 	}
-	if len(answers) == 0 {
+	if answers == nil {
 		if len(questions) != 1 || questions[0].MultiSelect {
 			return acceptResult{}, errDecisionOption
 		}

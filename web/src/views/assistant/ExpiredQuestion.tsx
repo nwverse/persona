@@ -22,9 +22,13 @@ export function ExpiredQuestion({ todo, ask, rowKey }: { todo: Todo; ask: TodoAs
   const answer = async (answers: Record<string, string>) => {
     setBusy(true);
     try {
-      await acceptBrief(todo.id, ask.asked_at, { answers });
-      setRecorded(true);
+      const result = await acceptBrief(todo.id, ask.asked_at, { answers });
       void refreshTodos();
+      if (result === "handled") {
+        toast(t("assistant-brief.handled"));
+        return false;
+      }
+      setRecorded(true);
       return true;
     } catch (error) {
       toast(t("assistant-decisionrow.failed", { error: errorText(error) }), "error");

@@ -6,6 +6,7 @@ import { t } from "../../i18n";
 import { assistantEntries } from "../../lib/assistant-entries";
 import { getState, reset } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
+import * as atoms from "../../ui/atoms";
 import { TaskDecision } from "./TaskDecision";
 
 vi.hoisted(() => {
@@ -62,6 +63,7 @@ afterEach(() => {
   host.remove();
   reset();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -116,6 +118,24 @@ describe("expired ask_user questions", () => {
     await flush();
     expect(posts).toHaveLength(2);
     expect(posts[1].body).toEqual({ asked_at: at, answers: { "Which follow-up should run next?": "Docs" } });
+  });
+
+  it("does not record a 409 answer and keeps the refreshed open form retryable", async () => {
+    const feedback = vi.spyOn(atoms, "toast");
+    status = 409;
+    mount();
+    act(() => choice("Tests").click());
+    await flush();
+    expect(host.textContent).not.toContain(t("assistant-decisionrow.answer_recorded"));
+    expect(feedback).toHaveBeenCalledWith(t("assistant-brief.handled"));
+    expect(vi.mocked(fetch).mock.calls.some(([input, init]) => String(input).includes("/todos") && !init?.method)).toBe(true);
+    expect(choice("Docs").disabled).toBe(false);
+    status = 200;
+    act(() => choice("Docs").click());
+    await flush();
+    expect(posts).toHaveLength(2);
+    expect(posts[1].body).toEqual({ asked_at: at, answers: { "Which follow-up should run next?": "Docs" } });
+    expect(host.textContent).toContain(t("assistant-decisionrow.answer_recorded"));
   });
 
   it("retains pagination and multiple-selection until the complete answer is submitted", async () => {

@@ -41,13 +41,15 @@ type fakeHub struct {
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
 	// answered. No lock held. sendHangs: session.send is never answered while the link stays up, and ends with the
 	// call's context, after beforeSend (a request that went out).
-	beforeSend   func()
-	afterList    map[string]func()
-	sendHangs    bool
-	hello        Hello
-	settings     *Settings
-	launcherList []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
-	zshrc        map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
+	beforeSend func()
+	// beforeAssistantSend blocks a relay before its reply, without holding the fake's lock.
+	beforeAssistantSend func()
+	afterList           map[string]func()
+	sendHangs           bool
+	hello               Hello
+	settings            *Settings
+	launcherList        []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
+	zshrc               map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
 	// hostLaunchers: a machine's launchers.list for a start in its engine host (the call names a host), answered as an
 	// engine that runs only its own launchers would (host_runtime, #8140).
 	hostLaunchers map[string][]proto.Launcher
@@ -247,6 +249,15 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if hangs {
 			<-ctx.Done()
 			return nil, ctx.Err()
+		}
+	}
+	if p.Method == DeviceAssistantSend {
+		f.mu.Lock()
+		hook := f.beforeAssistantSend
+		f.beforeAssistantSend = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
 		}
 	}
 	if p.Method != DeviceSessionItems {

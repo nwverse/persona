@@ -325,3 +325,91 @@ func TestExpiredQuestionUnavailableRecordIsNotAlreadyHandled(t *testing.T) {
 		t.Fatalf("answer after the record becomes readable: HTTP %d", code)
 	}
 }
+
+func TestExpiredQuestionHidesInFlightAnswer(t *testing.T) {
+	e := newAskTodoEnv(t, todoTestDB(t))
+	ix, _ := e.expire()
+	todo := e.onlyAskTodo()
+	entered, finished := make(chan struct{}), make(chan struct{})
+	gate, release := context.WithCancel(context.Background())
+	var code atomic.Int32
+	e.f.mu.Lock()
+	e.f.beforeAssistantSend = func() {
+		close(entered)
+		<-gate.Done()
+	}
+	e.f.mu.Unlock()
+	go func() {
+		defer close(finished)
+		code.Store(int32(answerExpiredQuestion(e, todo.ID, ix.CreatedAt, map[string]any{"option": "Wait"})))
+	}()
+	defer func() {
+		release()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("the blocked answer did not finish after release")
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the answer never reached its relay")
+	}
+	inFlight := expiredQuestionPayload(e, todo.ID)
+	if inFlight.Ask != nil || inFlight.DoneAt != nil {
+		t.Errorf("an in-flight answer must not advertise another answerable form: %+v", inFlight)
+	}
+	release()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the released answer did not finish")
+	}
+	if code.Load() != http.StatusOK || len(e.told("c1x1x1")) != 1 || e.get(todo.ID).DoneAt == nil {
+		t.Fatalf("the original answer must still finish once: HTTP %d", code.Load())
+	}
+	t.Logf("in_flight ask_present=%t open=%t completed_http=%d asker_messages=%d",
+		inFlight.Ask != nil, inFlight.DoneAt == nil, code.Load(), len(e.told("c1x1x1")))
+}
+
+func TestExpiredQuestionEmptyStructuredAnswersNeverTakeRecommendation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer map[string]any
+		want   int
+	}{
+		{"empty object", map[string]any{"answers": map[string]string{}}, http.StatusBadRequest},
+		{"omitted legacy answers", nil, http.StatusOK},
+		{"null legacy answers", map[string]any{"answers": nil}, http.StatusOK},
+		{"legacy option", map[string]any{"option": "Docs"}, http.StatusOK},
+		{"complete structured answer", map[string]any{"answers": map[string]string{"Which next?": "Docs"}}, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := todoTestDB(t)
+			e := newAskTodoEnv(t, database)
+			ix := proto.Interaction{ID: "ix_empty_answers", MachineID: "server", SessionID: "c1x1x1", CreatedAt: time.Now().UTC(),
+				Questions: []proto.Question{{Question: "Which next?", Recommend: "Tests",
+					Options: []proto.QuestionOption{{Label: "Docs"}, {Label: "Tests"}}}}}
+			todo, err := e.s.askExpired(context.Background(), ix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code := answerExpiredQuestion(e, todo.ID, ix.CreatedAt, tc.answer); code != tc.want {
+				t.Fatalf("HTTP %d, want %d", code, tc.want)
+			}
+			rows, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == http.StatusBadRequest {
+				if len(rows) != 0 || len(e.told("c1x1x1")) != 0 || e.get(todo.ID).DoneAt != nil ||
+					expiredQuestionPayload(e, todo.ID).Ask == nil {
+					t.Fatal("an empty answer recorded consent or lost the unanswered question")
+				}
+			} else if len(rows) != 1 || len(e.told("c1x1x1")) != 1 || e.get(todo.ID).DoneAt == nil {
+				t.Fatal("a valid legacy or complete answer did not finish once")
+			}
+		})
+	}
+}
