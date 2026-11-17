@@ -339,7 +339,7 @@ func (s *Service) launcherRoutes() {
 			return
 		}
 		if res.OK {
-			s.recordTestPassed(ctx, machine, r.PathValue("name"), res, observed.CheckedAt)
+			s.recordTestPassed(ctx, machine, r.PathValue("name"), res, observed)
 		}
 		apierr.WriteJSON(w, map[string]any{"machine": machine, "check": res})
 	})

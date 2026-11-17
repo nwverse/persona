@@ -16,10 +16,14 @@ nonisolated enum AgentMenuDestination: Hashable, Sendable {
 @MainActor @Observable
 final class AgentMenuRouting {
     static let shared = AgentMenuRouting()
+    let store = AgentGitStatusStore()
     var requests: [SessionKey: AgentMenuDestination] = [:]
     var linkingSession: Session?
     func open(_ destination: AgentMenuDestination, at key: SessionKey) { requests[key] = destination }
     func take(_ key: SessionKey) -> AgentMenuDestination? { requests.removeValue(forKey: key) }
+    func gitStatus(_ session: Session) -> GitStatus? {
+        store.status(for: .init(session: session.key, cwd: session.cwd))
+    }
 }
 
 /// What the two Agent menus show. Its equality is deliberately limited to facts that change the menu:
@@ -46,12 +50,12 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     var paneActions: Bool
 
     @MainActor
-    init(session: Session, model: AppModel, panes: [SessionPane]? = nil, paneBadges: [SessionPane: String] = [:],
-         currentPane: SessionPane = .chat, hosted: Bool = false, showsSpace: Bool = true,
+    init(session: Session, model: AppModel, currentPane: SessionPane = .chat, hosted: Bool = false, showsSpace: Bool = true,
          sides: SideSessions? = nil) {
         self.init(session: session,
                   pinned: model.isPinned(session.key), muted: model.isMuted(session.key),
-                  panes: panes ?? AgentMenuFacts.panes(session), paneBadges: paneBadges,
+                  panes: AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session)),
+                  paneBadges: AgentMenuFacts.paneBadges(AgentMenuRouting.shared.gitStatus(session)),
                   currentPane: currentPane, review: model.features(session.group).contains("git_review") && !session.cwd.isEmpty,
                   preview: !model.isDemo && model.features(session.group).contains(PreviewLogic.feature) && !session.cwd.isEmpty,
                   screen: model.canShowScreen(session.key.machineRef),
@@ -68,13 +72,13 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
          paneBadges: [SessionPane: String] = [:], currentPane: SessionPane = .chat, review: Bool = false,
          preview: Bool = false, screen: Bool = false, todoHub: Bool = false, sideCount: Int = 0,
          hosted: Bool = false, showsSpace: Bool = true, terminalResume: TerminalResume = .hidden,
-         phone: Bool = false) {
+         phone: Bool = false, git: GitStatus? = nil) {
         key = session.key
         self.session = session
         self.pinned = pinned
         self.muted = muted
-        self.panes = panes ?? AgentMenuFacts.panes(session)
-        self.paneBadges = paneBadges
+        self.panes = panes ?? AgentMenuFacts.panes(session, git: git)
+        self.paneBadges = paneBadges.isEmpty ? AgentMenuFacts.paneBadges(git) : paneBadges
         self.currentPane = currentPane
         self.review = review
         self.preview = preview
@@ -169,14 +173,21 @@ enum AgentMenuFacts {
         #endif
     }
 
-    /// Files need a known directory; Git uses the repository root already sent with the session, so opening
-    /// either menu never triggers another repository request just to decide what it can show.
-    nonisolated static func panes(_ session: Session) -> [SessionPane] {
+    /// Files need a known directory. Git appears only after the detail's existing load confirms a repository:
+    /// `repoRoot` alone must not make the two entry points disagree while that status is still loading.
+    /// The row reads the same cached status; it never starts a repository request just to draw its menu.
+    nonisolated static func panes(_ session: Session, git: GitStatus?) -> [SessionPane] {
         var result: [SessionPane] = [.chat]
         if session.canTerminal { result.append(.terminal) }
-        if session.repoRoot?.isEmpty == false { result.append(.git) }
+        if git?.isRepo == true { result.append(.git) }
         if !session.cwd.isEmpty { result.append(.files) }
         return result
+    }
+
+    /// The same status produces the same menu label in the row and detail. The detail's own Git pane keeps its badge.
+    nonisolated static func paneBadges(_ git: GitStatus?) -> [SessionPane: String] {
+        guard let count = git?.files.count, let text = CountBadge.text(count) else { return [:] }
+        return [.git: text]
     }
 }
 

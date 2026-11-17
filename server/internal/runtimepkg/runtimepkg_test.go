@@ -62,6 +62,7 @@ func TestGenerate(t *testing.T) {
 	cmd := map[string]string{"dsh/package.json": "{}", "dsh/lib/a.js": "a", "dsh/lib/b.txt": "no", "runtime-sdk/package.json": "{}",
 		"runtime-sdk/index.js": "i", "runtime-sdk/lib/r.js": "r", "dsh/test/t.js": "no",
 		"pi/package.json": "{}", "pi/index.js": "x", "pi/companion.mjs": "c", "pi/lib/pi.js": "p", "pi/e2e/run.mjs": "no",
+		"antigravity/package.json": "{}", "antigravity/companion.mjs": "c", "antigravity/mcp-proxy.mjs": "m", "antigravity/lib/runtime.js": "a", "antigravity/install.mjs": "no", "antigravity/test/map.test.js": "no",
 		"paseo/package.json": "{}", "paseo/bridge.mjs": "b", "paseo/lib/bridge.js": "l", "paseo/test/bridge.test.js": "no",
 		"agent-sdk/package.json": "{}", "agent-sdk/dist/bridge.mjs": "b", "agent-sdk/src/bridge.mjs": "no", "agent-sdk/build.mjs": "no",
 		"claude-code-plugin/.claude-plugin/plugin.json": "{}", "claude-code-plugin/hooks/hooks.json": "{}",
@@ -93,9 +94,9 @@ func TestGenerate(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("copied %v, want %v", got, want)
 	}
-	// One part per directory: the three packages that take runtime-sdk share one blob. The stale files are gone.
+	// One part per directory: the four packages that take runtime-sdk share one blob. The stale files are gone.
 	parts, _ := filepath.Glob(filepath.Join(out, "*"+partSuffix))
-	if entries, _ := os.ReadDir(out); len(parts) != 6 || len(entries) != 8 || string(mustRead(t, filepath.Join(out, "README.md"))) != "old" {
+	if entries, _ := os.ReadDir(out); len(parts) != 7 || len(entries) != 9 || string(mustRead(t, filepath.Join(out, "README.md"))) != "old" {
 		t.Fatalf("wrote %d parts, %d entries", len(parts), len(entries))
 	}
 	for _, part := range parts {
@@ -132,6 +133,14 @@ func TestGenerate(t *testing.T) {
 	want = []string{"pi/package.json", "pi/index.js", "pi/companion.mjs", "pi/lib/pi.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/r.js"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pi copied %v, want %v", got, want)
+	}
+	got = got[:0]
+	for _, f := range files["persona-antigravity-runtime"] {
+		got = append(got, f.Path)
+	}
+	want = []string{"antigravity/package.json", "antigravity/companion.mjs", "antigravity/mcp-proxy.mjs", "antigravity/lib/runtime.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/r.js"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("antigravity copied %v, want %v", got, want)
 	}
 	got = got[:0]
 	for _, f := range files["persona-paseo-runtime"] {

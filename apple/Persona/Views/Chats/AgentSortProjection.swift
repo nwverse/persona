@@ -318,7 +318,7 @@ nonisolated struct AgentSortPresentation: Equatable, Sendable {
     var bounded = Set<String>()
 }
 
-struct ShadowToken: Equatable, Sendable {
+nonisolated struct ShadowToken: Equatable, Sendable {
     var revision: UInt64
     var settings: AgentListProjection.Settings
     var presentation: AgentSortPresentation
