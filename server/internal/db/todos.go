@@ -218,6 +218,7 @@ func (d *DB) UpdateTodo(ctx context.Context, id string, title *string, notes *st
 // (#2581); the caller has checked it names one.
 type TodoEdit struct {
 	Title, Notes *string
+	InboxItem    *string
 	Done         *bool
 	SetDue       bool
 	DueAt        *time.Time
@@ -240,6 +241,9 @@ type TodoEdit struct {
 // it: no longer failed, done now by them (#3713). A reminder at another moment is to be pushed again. The store and the
 // store-less memory both change a todo with it.
 func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
+	if e.InboxItem != nil {
+		cur.InboxItem = *e.InboxItem
+	}
 	if e.Title != nil {
 		cur.Title = *e.Title
 	}
@@ -324,9 +328,9 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		e.Apply(&cur, updatedAt)
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
-			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18 WHERE id = $1`,
+			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18, inbox_item = $19 WHERE id = $1`,
 			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
-			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After))
+			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After), cur.InboxItem)
 		if err != nil {
 			return err
 		}
