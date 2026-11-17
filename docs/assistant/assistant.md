@@ -1025,6 +1025,9 @@ including for `push: asked`. Choosing another approach asks for a proposal withi
 permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it; the hub never applies
 the proposed strategy change by default. Existing notification preferences and decision routing still apply.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
+The first escalation attempt's run identity is saved with the assessment before creating its review. If the
+review succeeded but the final escalation-marker write failed, later assessments or restart replays recognize
+that exact pending review and repair the marker without replacing the decision or claiming another owner question.
 
 Observed progress resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
 previous known count, and it preserves the last readable evidence. An initially unreadable baseline must become

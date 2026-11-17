@@ -38,6 +38,8 @@ type scheduleTodoProgress struct {
 	NoProgress int                    `json:"no_progress"`
 	Signaled   bool                   `json:"signaled,omitempty"`
 	Escalated  bool                   `json:"escalated,omitempty"`
+	// Kept before creating the review, so a failed final marker write can recognize its own decision.
+	EscalationRun string `json:"escalation_run,omitempty"`
 }
 
 func (s *Service) validateScheduleTodo(ctx context.Context, self string, id *string) error {
@@ -202,6 +204,10 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 				result.State = "superseded"
 			} else {
 				progress.NoProgress, progress.Signaled, progress.Escalated = old.NoProgress, old.Signaled, old.Escalated
+				progress.EscalationRun = old.EscalationRun
+				if progress.EscalationRun == "" && old.NoProgress >= 2 {
+					progress.EscalationRun = old.Run // recover a partial write made before this field existed
+				}
 				before = &old.Snapshot
 			}
 		}
@@ -210,15 +216,20 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 		case !active || !cur.Enabled:
 			result.State = "inactive"
 			progress.NoProgress, progress.Signaled, progress.Escalated = 0, false, false
+			progress.EscalationRun = ""
 		case before == nil || before.Unknown:
 			result.State = "unknown"
 		case scheduledTodoAdvanced(*before, after):
 			result.State = "progress"
 			progress.NoProgress, progress.Signaled, progress.Escalated = 0, false, false
+			progress.EscalationRun = ""
 		case after.Unknown:
 			result.State = "unknown"
 		default:
 			progress.NoProgress++
+		}
+		if result.State == "no_progress" && progress.NoProgress >= 2 && progress.EscalationRun == "" {
+			progress.EscalationRun = run.ID
 		}
 		if before != nil {
 			progress.Snapshot = retainTodoEvidence(*before, after)
@@ -266,14 +277,24 @@ func (s *Service) escalateScheduledTodo(ctx context.Context, task Task, run Sche
 		return
 	}
 	progress := *task.TodoProgress
+	if result.NoProgress >= 2 && progress.EscalationRun == "" {
+		progress.EscalationRun = run.ID // replay a completed assessment from an older hub
+	}
 	lang := s.lang(ctx)
 	detail := i18n.T(lang, "assistant-schedule.todo_stalled", i18n.Args{
 		"name": task.labelIn(lang), "count": result.NoProgress, "reason": result.Reason,
-	}) + "\n" + run.ID
+	})
 	if !progress.Signaled {
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Report: upReportBlocked,
-			Key: run.ID, At: run.At, Machine: run.MachineID, Session: run.SessionID, Detail: detail})
+			Key: run.ID, At: run.At, Machine: run.MachineID, Session: run.SessionID, Detail: detail + "\n" + run.ID})
 		progress.Signaled = true
+	}
+	// A committed review is the outcome; its marker may still need saving after a partial write or restart.
+	if result.NoProgress >= 2 && !progress.Escalated && t.Supervision.State == reviewNeedsUser {
+		if n := len(t.Supervision.Reviews); n > 0 {
+			review := t.Supervision.Reviews[n-1]
+			progress.Escalated = review.Verdict == reviewNeedsUser && strings.HasSuffix(review.Note, "\n"+progress.EscalationRun)
+		}
 	}
 	// Never overwrite another question already waiting for the owner.
 	if result.NoProgress >= 2 && !progress.Escalated && t.Supervision.State != reviewNeedsUser {
@@ -281,7 +302,8 @@ func (s *Service) escalateScheduledTodo(ctx context.Context, task Task, run Sche
 		wait := i18n.T(lang, "assistant-schedule.todo_wait")
 		args, _ := json.Marshal(map[string]any{
 			"todo_id": t.ID, "verdict": reviewNeedsUser, "why_owner": whyPriority,
-			"note": detail, "reason": i18n.T(lang, "assistant-schedule.todo_decide", i18n.Args{"reason": result.Reason}),
+			"note":      detail + "\n" + progress.EscalationRun,
+			"reason":    i18n.T(lang, "assistant-schedule.todo_decide", i18n.Args{"reason": result.Reason}),
 			"recommend": change, "cost_of_waiting": i18n.T(lang, "assistant-schedule.todo_wait_cost"),
 			"options": []DecisionOption{
 				{Label: change, LeadsTo: i18n.T(lang, "assistant-schedule.todo_change_result")},

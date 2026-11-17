@@ -3,7 +3,9 @@
 - A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
   states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
   streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
-  replayed completions and failed persistence before emitting a supervisor signal or an owner decision.
+  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
+  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
+  duplicating that decision or mistaking an unrelated owner question for its own.
 
 - A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
 
