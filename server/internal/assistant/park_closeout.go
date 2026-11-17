@@ -29,21 +29,37 @@ type automaticPark struct {
 
 var closeoutDate = lazyre.New(`\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))?\b`)
 var closeoutSource = lazyre.New(`https?://[^\s<>"]+`)
+var closeoutPRWait = lazyre.New(`(?i)\b(review|reviews|re-review|merge|merging)\b`)
 
 // The optional park line uses task_review's existing evidence contract, not another waiting schema.
 func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.Location) (Parked, bool) {
 	c, artifacts, ok := closeout.Parse(reply)
-	if !ok || c.Status != proto.CloseoutBlocked || c.Waiting == "" || closeoutDisproved(c) {
+	if !ok && strings.Contains(reply, "<closeout") || closeoutDisproved(c) {
+		return Parked{}, false
+	}
+	delivery, marked := deliveryMark(reply)
+	if marked && (delivery.Unblock == unblockUser || delivery.Unblock == unblockAgent) {
+		return Parked{}, false
+	}
+	// A turn can be done while its delivery still waits on somebody else. Read the current reply, not an old ledger gate.
+	if c.Waiting == "" && marked && delivery.held() && delivery.Unblock == unblockOther {
+		c.Waiting = delivery.Gate
+	}
+	if c.Waiting == "" {
 		return Parked{}, false
 	}
 	// i18n-ignore: literal Agent closeout inputs; an owner's decision must stay actionable.
 	if containsAny(strings.ToLower(c.Waiting), []string{"owner decision", "user decision", "user approval", "用户决定", "用户批准", "用户拍板"}) {
 		return Parked{}, false
 	}
-	start := strings.LastIndex(reply, "<closeout")
-	body, _, complete := strings.Cut(reply[start:], "</closeout>")
-	if !complete {
-		return Parked{}, false
+	var body string
+	if ok {
+		start := strings.LastIndex(reply, "<closeout")
+		var complete bool
+		body, _, complete = strings.Cut(reply[start:], "</closeout>")
+		if !complete {
+			return Parked{}, false
+		}
 	}
 	var input struct {
 		WaitingOn string        `json:"waiting_on"`
@@ -84,6 +100,10 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 			}
 			input.WaitingOn, input.Until = parkDate, at.Format(time.RFC3339)
 			input.Evidence = &ParkEvidence{Kind: "date", Target: c.Waiting, Wake: c.Waiting}
+		} else if source := closeoutPRSource(reply); source != "" && upstreamCloseout(c.Waiting) {
+			// The PR is an external object, not proof that a reviewer was contacted.
+			input.WaitingOn = parkExternalEvent
+			input.Evidence = &ParkEvidence{Kind: "external_event", Target: c.Waiting, URL: source, Wake: c.Waiting}
 		} else if externalCloseout(c.Waiting) {
 			source := strings.TrimRight(closeoutSource.FindString(c.Waiting), ".,;)")
 			if source == "" {
@@ -118,10 +138,27 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 	if err != nil {
 		return Parked{}, false
 	}
-	if p.Evidence.Kind == "external_event" && parkReviewURL(p.Evidence.URL) {
-		return Parked{}, false // the separately owned external-PR observer is not available here
-	}
 	return p, true
+}
+
+func upstreamCloseout(waiting string) bool {
+	// i18n-ignore: literal Agent upstream-wait inputs, not a sent-contact assertion.
+	intent := closeoutPRWait.MatchString(waiting) || containsAny(waiting, []string{"评审", "复审", "复评", "合并", "レビュー", "マージ"})
+	// i18n-ignore: literal external-wait cues; one's own unfinished review is not an upstream dependency.
+	external := containsAny(strings.ToLower(waiting), []string{"upstream", "maintainer", "reviewer", "wait for", "waiting for", "wait on", "waiting on", "await", "pending", "上游", "维护者", "等", "待", "待ち"})
+	return intent && external
+}
+
+func closeoutPRSource(reply string) string {
+	var source string
+	for _, link := range ciPRURL.FindAllString(reply, -1) {
+		link = triageNormalizePRURL(link)
+		if source != "" && source != link {
+			return "" // Different PRs in the same reply need a supervisor to disambiguate the wait.
+		}
+		source = link
+	}
+	return source
 }
 
 func externalCloseout(waiting string) bool {
@@ -151,6 +188,9 @@ func closeoutBinds(c proto.Closeout, artifacts []proto.WorkArtifact, e *ParkEvid
 	}
 	switch e.Kind {
 	case "external_event":
+		if parkReviewURL(e.URL) {
+			return upstreamCloseout(c.Waiting)
+		}
 		return externalCloseout(c.Waiting)
 	case "merge_review":
 		// i18n-ignore: literal Agent closeout inputs; the exact source already binds the recorded reviewer.
@@ -200,10 +240,14 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		return false
 	}
 	dependency := automaticDependency(p)
-	if p.Evidence.Kind == "merge_review" {
+	prWait := p.Evidence.Kind == "merge_review" ||
+		p.Evidence.Kind == "external_event" && parkReviewURL(p.Evidence.URL)
+	if prWait {
 		fact := prFacts(t, p.Evidence.URL)
-		if fact == nil || fact.State != "open" || fact.Draft || fact.Conflicts || fact.Review == "changes_requested" ||
-			fact.Checks == "failing" || fact.CheckedAt.After(now) || now.Sub(fact.CheckedAt) > triagePRStatusFreshFor {
+		if t.PRURL != p.Evidence.URL && !slices.Contains(t.PRs, p.Evidence.URL) ||
+			fact == nil || fact.State != "open" || fact.HeadOID == "" || fact.Draft || fact.Conflicts || fact.Review == "changes_requested" ||
+			fact.Checks == "failure" || fact.Checks == "failing" || fact.CheckedAt.After(now) ||
+			now.Sub(fact.CheckedAt) > triagePRStatusFreshFor {
 			return false
 		}
 		dependency += "|" + fact.HeadOID + "|" + fact.Review + "|" + fact.Checks
@@ -227,9 +271,10 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 			}) {
 			return false
 		}
-		if p.Evidence.Kind == "merge_review" {
+		if prWait {
 			fact := prFacts(cur, p.Evidence.URL)
 			if fact == nil || fact.State != "open" || fact.Draft || fact.Conflicts ||
+				fact.CheckedAt.After(now) || now.Sub(fact.CheckedAt) > triagePRStatusFreshFor ||
 				dependency != automaticDependency(p)+"|"+fact.HeadOID+"|"+fact.Review+"|"+fact.Checks {
 				return false
 			}
@@ -259,6 +304,10 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 	if err != nil {
 		s.logf("task %s: closeout parking failed: %v", t.ID, err)
 		return false
+	}
+	if parked {
+		s.logf("task %s: automatically parked from closeout (evidence=%s, until=%s)",
+			t.ID, p.Evidence.Kind, p.Until.UTC().Format(time.RFC3339))
 	}
 	return parked
 }

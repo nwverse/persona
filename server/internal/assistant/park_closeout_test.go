@@ -58,13 +58,13 @@ func TestAutomaticCloseoutParkingAdmission(t *testing.T) {
 		{"recorded review cannot hide deployment", automaticCloseout("deployment rollout-42", "pr https://github.com/example/project/pull/42", nil), false},
 		{"missing source", automaticCloseout("wait for deployment", "", nil), false},
 		{"unrelated build source", automaticCloseout("deployment rollout-43", "build https://example.org/deployments/rollout-42", nil), false},
-		{"PR alone is no sent review", automaticCloseout("wait for upstream review", "pr https://github.com/example/project/pull/42", nil), false},
+		{"unobserved PR source", automaticCloseout("wait for upstream review", "pr https://github.com/example/project/pull/42", nil), false},
 		{"unrecorded natural event", automaticCloseout("wait for a natural system message", "", nil), false},
 		{"unrecorded person", automaticCloseout("wait for reviewer-a to reply", "", nil), false},
 		{"owner decision", automaticCloseout("user approval for deployment", "", parkEvidenceArgs("external_event")), false},
 		{"internal work", automaticCloseout("finish local tests", "url https://example.org/tests/pending", nil), false},
 		{"past date", automaticCloseout("the window on "+now.Add(-time.Hour).Format(time.RFC3339), "", nil), false},
-		{"done is not a park", strings.ReplaceAll(automaticCloseout("deployment rollout-42", "build https://example.org/deployments/rollout-42", nil), `status="blocked"`, `status="done"`), false},
+		{"done turn with external delivery wait", strings.ReplaceAll(automaticCloseout("deployment rollout-42", "build https://example.org/deployments/rollout-42", nil), `status="blocked"`, `status="done"`), true},
 		{"no structured closeout", "Delivery: PR; blocked on deployment; someone else can unblock it", false},
 		{"bad explicit evidence cannot fall back", automaticCloseout("deployment rollout-42", "build https://example.org/deployments/rollout-42", map[string]any{"waiting_on": "external_event"}), false},
 	} {
@@ -74,7 +74,7 @@ func TestAutomaticCloseoutParkingAdmission(t *testing.T) {
 				s.todos.mu.Lock()
 				cur := s.todos.todos[task.ID]
 				cur.PRURL = "https://github.com/example/project/pull/42"
-				cur.PRStatus = &TodoPRStatus{URL: cur.PRURL, State: "open", CheckedAt: at}
+				cur.PRStatus = &TodoPRStatus{URL: cur.PRURL, State: "open", HeadOID: "head-1", CheckedAt: at}
 				if tc.name != "ready source-bound review" {
 					raw, _ := json.Marshal(parkEvidenceArgs("merge_review")["evidence"])
 					var evidence ParkEvidence
@@ -370,7 +370,7 @@ func TestAutomaticCloseoutParkingExistingSourceWakes(t *testing.T) {
 		source := "https://github.com/example/project/pull/42"
 		s.setTaskStage(ctx, task.ID, "review", source)
 		task = todoNow(s, task.ID)
-		if err := s.applyPRStatus(ctx, task, TodoPRStatus{URL: source, State: "open", CheckedAt: now}); err != nil {
+		if err := s.applyPRStatus(ctx, task, TodoPRStatus{URL: source, State: "open", HeadOID: "head-1", CheckedAt: now}); err != nil {
 			t.Fatal(err)
 		}
 		task = todoNow(s, task.ID)
@@ -409,4 +409,122 @@ func TestAutomaticCloseoutParkingExistingSourceWakes(t *testing.T) {
 			t.Fatalf("existing named-person observer lost the automatic wait, or accepted it: %+v", current.Supervision)
 		}
 	})
+}
+
+func TestAutomaticCloseoutPassivePRAdmission(t *testing.T) {
+	const source = "https://github.com/example/project/pull/42"
+	// i18n-ignore: anonymized Agent closeouts matching the reported external-wait wording.
+	reply := func(status, fields, gate string) string {
+		delivery := ""
+		if gate != "" {
+			delivery = "交付：停在 PR；卡点：" + gate + "；谁来解：其他\n"
+		}
+		return delivery + "<closeout status=\"" + status + "\" merged=\"no\" deployed=\"no\">\n" +
+			"artifact: pr " + source + "\n" + fields + "\n</closeout>"
+	}
+	for _, tc := range []struct {
+		name, text string
+		noFact     bool
+		fact       func(*TodoPRStatus)
+		want       bool
+	}{
+		{"blocked upstream review", reply("blocked", "waiting: 等上游评审及验证维护者处理闸门；本轮不擅自公开回复、合并或部署。", ""), false, nil, true},
+		{"blocked review after local deployment", "交付：已上线并实测；卡点：上游评审待复核；谁来解：其他\n" +
+			strings.ReplaceAll(reply("blocked", "waiting: 等上游评审及验证维护者处理闸门。", ""), `deployed="no"`, `deployed="yes"`), false, nil, true},
+		{"done merge and deployment gate", reply("done", "", "待上游合并及部署 Agent 统一集成，本轮按要求未执行"), false, nil, true},
+		{"done maintainer re-review gate", reply("done", "", "待维护者复评，合并、部署及真实外发仍需另行授权"), false, nil, true},
+		{"not done merge and live verification", reply("not_done", "missing: 上游合并及统一部署实测。", "待上游合并及统一部署实测"), false, nil, true},
+		{"legacy delivery line", "PR " + source + "\n交付：停在 PR；卡点：待上游合并及统一部署实测；谁来解：其他", false, nil, true},
+		{"markdown PR source", reply("done", "", "待上游合并") + "\n[PR](" + source + "#discussion_r42)", false, nil, true},
+		{"case-normalized PR source", strings.ReplaceAll(reply("done", "", "待上游合并"), source, "https://github.com/EXAMPLE/PROJECT/pull/42"), false, nil, true},
+		{"no external blocker", reply("done", "", ""), false, nil, false},
+		{"malformed closeout", reply("invalid", "", "待上游合并"), false, nil, false},
+		{"owner gate", reply("done", "", "等用户批准合并"), false, nil, false},
+		{"agent gate", "PR " + source + "\n交付：停在 PR；卡点：待我修复测试后再合并；谁来解：Agent", false, nil, false},
+		{"own unfinished review", reply("blocked", "waiting: finish my review before merging", ""), false, nil, false},
+		{"unbound PR", strings.ReplaceAll(reply("done", "", "待上游合并"), source, "https://github.com/example/other/pull/42"), false, nil, false},
+		{"ambiguous PRs", reply("done", "", "待上游合并") + "\nhttps://github.com/example/project/pull/43", false, nil, false},
+		{"unrecorded reply", reply("blocked", "waiting: wait for reviewer-a to reply", ""), false, nil, false},
+		{"deployment alone is not a PR wait", reply("blocked", "waiting: deployment rollout-42", ""), false, nil, false},
+		{"unknown PR facts", reply("done", "", "待上游合并"), true, nil, false},
+		{"stale PR facts", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.CheckedAt = f.CheckedAt.Add(-triagePRStatusFreshFor - time.Second) }, false},
+		{"draft PR", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.Draft = true }, false},
+		{"conflicting PR", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.Conflicts = true }, false},
+		{"changes requested", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.Review = "changes_requested" }, false},
+		{"failing checks", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.Checks = "failure" }, false},
+		{"unknown head", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.HeadOID = "" }, false},
+		{"closed PR", reply("done", "", "待上游合并"), false, func(f *TodoPRStatus) { f.State = "closed" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, task, _, now := automaticFixture(t, tc.text)
+			fact := &TodoPRStatus{URL: source, State: "open", HeadOID: "head-1", Checks: "none", CheckedAt: now}
+			if tc.fact != nil {
+				tc.fact(fact)
+			}
+			if tc.noFact {
+				fact = nil
+			}
+			s.todos.mu.Lock()
+			s.todos.todos[task.ID].PRURL, s.todos.todos[task.ID].PRStatus = source, fact
+			s.todos.mu.Unlock()
+			g := superviseSignal{Todo: task.ID, Kind: sigIdle}
+			kept := s.screenMechanicalSignals(context.Background(), []superviseSignal{g}, now, now.Add(-time.Hour))
+			current := todoNow(s, task.ID)
+			if parked := current.Supervision.State == reviewParked; parked != tc.want || (len(kept) == 0) != tc.want {
+				t.Fatalf("parked=%v, remaining idle=%d, want automatic=%v; ledger=%+v", parked, len(kept), tc.want, current.Supervision)
+			}
+			if tc.want {
+				r := current.Supervision.parking()
+				if r == nil || r.By != "closeout" || r.Evidence == nil || r.Evidence.Kind != "external_event" ||
+					r.Evidence.URL != source || r.Evidence.Contact != nil || r.Evidence.RecordedBy != "" {
+					t.Fatalf("passive PR evidence invented a sent request or lost its exact source: %+v", r)
+				}
+				for _, next := range watchSignals(current, nil, now) {
+					if next.Kind == sigIdle || next.Kind == sigAllStopped {
+						t.Fatalf("parked task still raises %s", next.Kind)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAutomaticCloseoutPassivePRUsesExistingWake(t *testing.T) {
+	for _, state := range []string{"merged", "closed", "changes_requested"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			const source = "https://github.com/example/project/pull/42"
+			s, hub, task, c, now := automaticFixture(t, "PR "+source+
+				"\n交付：停在 PR；卡点：待上游合并及统一部署实测；谁来解：其他") // i18n-ignore: Agent delivery data.
+			s.setTaskStage(ctx, task.ID, "review", source)
+			fact := TodoPRStatus{URL: source, State: "open", HeadOID: "head-1", CheckedAt: now}
+			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), fact); err != nil {
+				t.Fatal(err)
+			}
+			hub.setSessions(c.MachineID, c)
+			if handled, _ := s.mechanicalSignal(ctx, superviseSignal{Todo: task.ID, Kind: sigIdle}, now); !handled {
+				t.Fatal("passive upstream PR wait did not automatically park")
+			}
+			current := todoNow(s, task.ID)
+			r := *current.Supervision.parking()
+			r.Automatic = nil
+			if parkWaitsOnPR(&r, source) {
+				t.Fatal("automatic admission changed the separately owned manual external-event observer")
+			}
+			fact.CheckedAt = now.Add(time.Minute)
+			if state == "changes_requested" {
+				at := now.Add(30 * time.Second)
+				fact.Review, fact.ChangesRequestedAt = state, &at
+			} else {
+				fact.State = state
+			}
+			if err := s.applyPRStatus(ctx, current, fact); err != nil {
+				t.Fatal(err)
+			}
+			current = todoNow(s, task.ID)
+			if current.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) || current.DoneAt != nil {
+				t.Fatalf("existing PR observer lost the automatic source wait or accepted it: %+v", current.Supervision)
+			}
+		})
+	}
 }

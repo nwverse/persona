@@ -715,9 +715,13 @@ Something the owner raises in the main conversation and wants an answer to is a 
 ### Automatic closeout admission
 
 (#9914, `assistant/park_closeout.go`.) Before routing an idle, stalled, orphaned or all-stopped
-signal, the manager can park one reachable, stopped current Agent from its final `blocked` closeout.
-The closeout must have a nonempty `waiting` line and satisfy the same `readPark` admission as
-`task_review parked`. This changes neither acceptance nor deployment, and needs no new feature switch.
+signal, the manager can park one reachable, stopped current Agent from its final external-wait closeout.
+A `done`, `not_done` or `blocked` turn may still wait on external delivery: read its `waiting`
+line, or the current delivery line's gate when delivery is held and `unblock` is `other`.
+A legacy delivery line without a structured closeout can supply the same explicit gate; a malformed
+closeout cannot fall back to it. A PR URL without an external blocker is insufficient.
+The wait must satisfy the same `readPark` admission as `task_review parked`.
+This changes neither acceptance nor deployment, and needs no new feature switch.
 Missing or conflicting evidence, owner decisions, working/queued/errored Agents, interactions,
 independent reviews, multi-Agent ambiguity and existing scheduled wakes retain ordinary supervision.
 
@@ -725,7 +729,13 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   (midnight at that date). The existing one-minute to 30-day deadline bounds apply.
 - A deployment/release/natural-event wait may name its exact HTTP(S) source in `waiting`, or name
   the object's final path component and supply that URL as a `build` or `url` artifact.
-  An unrelated artifact or PR link is insufficient. Unbound "wait for a system message" stays idle.
+  An unrelated artifact or a PR link alone is insufficient for a deployment object.
+  Unbound "wait for a system message" stays idle.
+- An explicit upstream merge/review wait can name one exact GitHub PR in its closeout or final
+  reply. Admit it only when it is bound to the task and has fresh, open, non-draft,
+  non-conflicting facts with a known head, no requested changes and no failing checks.
+  Multiple distinct PR links remain ambiguous. This is a passive `external_event` object,
+  not a claim that a reviewer was contacted; it creates no contact or supervisor-inspection receipt.
 - For a sent person/review request, or an external object that cannot be identified from that text,
   the final closeout may add one `park: {"waiting_on":"...","until":"...","evidence":{...}}` line.
   This uses the evidence fields above, not a new receipt format; `waiting` must name the evidence
@@ -735,11 +745,13 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   evidence: "waiting for upstream review" need not repeat an already recorded reviewer's name.
   Declared contact evidence is still a source-referenced account, not an independently fetched
   provider receipt. The review's `by` is `closeout`; its evidence never claims a supervisor inspection.
-- The independently owned external-event PR observer (#9775) is not implemented here.
-  External-event evidence whose object is a PR is not automatically admitted; use the complete
-  `merge_review` contract for review/merge waits. Existing bound PR/review, named-person reply,
-  owner-decision and deadline observers apply unchanged to admitted parks. Other deployment/event
-  sources get the existing deadline fallback, not a new generic event watcher.
+- Automatic passive PR waits reuse the existing exact-source terminal-PR and dated
+  changes-request observers, including their freshness, retry, replacement and multi-PR gates.
+  They wake review, never accept the task. This binding requires automatic provenance:
+  manually recorded external-event PR waits remain in the independently owned #9775 scope.
+  Existing named-person reply, owner-decision and deadline observers still apply. Other deployment/event
+  sources get the existing deadline fallback, not a new generic event watcher; ordinary PR comments
+  without a supported status transition likewise retain the deadline fallback.
 - The unchanged dependency and stopped-turn identity persist in the existing review JSON.
   The first two distinct stopped turns can park silently; the third unchanged attempt goes to
   the supervisor instead. Replaying a stopped turn spends no attempt; merely running the Agent
