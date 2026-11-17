@@ -1862,7 +1862,7 @@ Requests carry only these fields (anything else is dropped) and cannot specify a
 
 ### Links open inside the page
 
-CLAUDE.md requires links to open inside the App; on the web the browser itself is the "App", so it depends on the link:
+CLAUDE.md requires links to open inside the App; on the web the browser itself is the "App", so it depends on the link (links to this hub's own pages follow the route table in `docs/protocol/deep-links.md`):
 
 - **Lark docs / wikis / sheets / mind notes / slides / files, Moments posts**: when the hub's features include `lark`, they open in the side panel with the native reader (the matching rules follow iOS's `FeishuLinks`; without `lark` they open in a new tab like any web page),
   via `GET /lark/raw/documents/read?format=markdown`; when the author has disabled export or the format isn't supported, it fetches the node tree instead (`format=json`). Hovering a link prefetches it, and the 12 most recent docs are cached in memory. With several managers the panel reads as the manager of the chat the link was in (`LinkManager` in `lib/manager-choice.ts`: an agent's chat or conversation gives its session's `manager`, an inbox item's views the item's, the panel its own for links inside it), naming it on every request and on its pictures' and files' URLs; the cache keeps each manager's copy apart ([managers](../assistant/managers.md), "Grouping").

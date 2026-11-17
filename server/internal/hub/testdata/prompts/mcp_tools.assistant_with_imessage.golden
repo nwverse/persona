@@ -2029,13 +2029,17 @@
   },
   {
     "name": "conversations_list",
-    "description": "List Persona's own conversations (the 对话 sidebar), newest activity first: id, title, last activity, whether it is the main conversation, whether it is running now, and the gist of its last message. Archived ones are left out unless `include_archived`. This conversation is marked. Use it to find a conversation the user means (\"the one about the trip\") before reading, renaming, archiving or messaging it.",
+    "description": "List Persona's own conversations (the 对话 sidebar), newest activity first: id, title, tags, last activity, whether it is the main conversation, whether it is running now, and the gist of its last message. Archived ones are left out unless `include_archived`. This conversation is marked. Use it to find a conversation the user means (\"the one about the trip\") before reading, renaming, archiving, tagging or messaging it.",
     "input_schema": {
       "type": "object",
       "properties": {
         "query": {
           "type": "string",
           "description": "only conversations whose title or last message contains this (case-insensitive)"
+        },
+        "tag": {
+          "type": "string",
+          "description": "only conversations carrying this exact tag"
         },
         "include_archived": {
           "type": "boolean",
@@ -2141,8 +2145,32 @@
     }
   },
   {
+    "name": "conversation_tags_set",
+    "description": "Set the tags of a Persona conversation, replacing all of its current tags (an empty list clears them). Tags are short user-defined labels shared with the apps, used to group conversations and list one group; the same tag on several conversations makes them a group. Trimmed and de-duplicated automatically; each tag is at most 32 characters and a conversation carries at most 10. Only tag conversations in your own space, and only when the user asks for a tag or to group conversations — do not invent tags on your own. This conversation itself is a valid id.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "tags"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "full id or its first 8 characters"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the complete tag list to store; [] clears every tag"
+        }
+      }
+    }
+  },
+  {
     "name": "conversation_new",
-    "description": "Start a new Persona conversation with an opening message and return its id at once (it does not wait for the answer). For work that deserves its own thread, when the user asks for one. The message arrives marked as coming from this conversation; it is named after its first turn like any new conversation. It is told to send its result back with conversation_send; if a turn of it fails, or ends without it ever having sent anything back, Persona leaves one notice here (once per conversation). An organization policy may keep some conversations read-only, including starting another conversation from them: such a call is refused with the policy's reason. Do not retry it; follow what the refusal says instead.",
+    "description": "Start a new Persona conversation with an opening message and return its id at once (it does not wait for the answer). For work that deserves its own thread, when the user asks for one. The message arrives marked as coming from this conversation; it is named after its first turn like any new conversation. It is told to send its result back with conversation_send; if a turn of it fails, or ends without it ever having sent anything back, Persona leaves one notice here (once per conversation). An organization policy may keep some conversations read-only, including starting another conversation from them: such a call is refused with the policy's reason. Do not retry it; follow what the refusal says instead. Pass `tags` when the user asks for the new conversation to carry labels from the start.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2152,6 +2180,13 @@
         "text": {
           "type": "string",
           "description": "the opening message: everything the new conversation needs, it does not see this one"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "tags the new conversation is born with; trimmed and de-duplicated, at most 10 of 32 characters each"
         }
       }
     }
