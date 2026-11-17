@@ -371,3 +371,7 @@ app.on("before-quit", () => { quitting = true; if (presenceTimer) clearInterval(
 app.on("window-all-closed", () => {
   // Closing to the tray deliberately keeps the app alive; an explicit Quit exits on every platform.
 });
+
+// Developing Persona (#9675): the shell's own record while the page's switch is on (dev-diagnostics.ts).
+import { installDevDiagnostics } from "./dev-diagnostics.js";
+installDevDiagnostics();
