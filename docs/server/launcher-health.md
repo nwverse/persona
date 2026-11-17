@@ -67,9 +67,10 @@ A `usage_limit` record (#9386) keeps what is known of the subscription's limit p
 
 | Event | Limit in force | What changes | rev, check time |
 | --- | --- | --- | --- |
-| A usage-limit failure: probe (current), start, an Agent's turn | no | The record becomes this limit: the families named, each with the failure's reset when known; no family: `resets_at` is the failure's reset | advance, now |
+| A usage-limit failure: probe (current), start, an Agent's turn with a reset ahead | no | The record becomes this limit: the families named, each with the failure's reset when known; no family: `resets_at` is the failure's reset | advance, now |
 | A usage-limit failure: probe (current), start | yes | Fold; error text, source and failure count updated (a fresh refusal is new evidence even when the fold changes nothing) | advance, now |
-| A usage-limit failure: an Agent's turn | yes | Fold; when the fold changes nothing, **nothing**. This is the dedupe: the turn is judged by the families it names, not by unrelated families | advance and now only on a change |
+| A usage-limit failure: an Agent's turn with a reset ahead | yes | Fold; when the fold changes nothing, **nothing**. This is the dedupe: the turn is judged by the families it names, not by unrelated families | advance and now only on a change |
+| An Agent's turn on a usage limit whose reset is unknown, past, or further than `healthLimitMax` | any | Not recorded: the family it names is not added (current behavior, unchanged from `main`; the gap is #9646) | none |
 | A usage-limit failure: probe that read an older version | yes | Fold only (error text and check time kept) | advance on a change; check time kept |
 | The same | no | Dropped | none |
 | A pass: probe (current) or the apps' Test | yes | Removes the families the answering model belongs to, with their resets; for a limit that names no family, everything. Nothing left: the record is `ok`. Covering no limited family: nothing | advance, now (on a change) |
@@ -95,6 +96,7 @@ Nothing is ever taken away by a failure. "No new information" means the fold cha
 - `main` before this change (9489ee4c81 and earlier) wrote neither `limit_models` nor `limit_resets`. When read, the families come from the error's words, each with `resets_at` as its reset.
 - One rule reads it: no `limit_resets` and a known `resets_at` give every family that reset. In the current format the combination never arises with families: `resets_at` is known only when every family's reset is, and those are in `limit_resets`.
 - This PR's first commit (a6d5d78dfb) wrote `limit_models` without `limit_resets`. It was never merged to `main` nor deployed; the same rule happens to read it.
+- Of that draft format, a record with several families and one shared `resets_at` would read as every family resetting then. That gives a reset to a family whose reset was unknown. As the format never reached `main`, it is not handled.
 
 ## Error categories (`classifyLauncherError`)
 
