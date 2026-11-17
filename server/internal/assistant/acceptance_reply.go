@@ -70,6 +70,9 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		}
 		return true
 	}
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
+	t, ok = s.todoNow(id)
 	if !ok {
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_gone"))
 		return true
@@ -105,6 +108,9 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	if t.StartError == "" {
 		if err := s.reopenTodo(ctx, id); err != nil {
 			s.logf("task %s: acceptance reopen: %v", id, err)
+			s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent",
+				i18n.Args{"error": clip(oneLine(err.Error()), 120)}), media))
+			return true
 		}
 	}
 	if _, err := s.relayToTask(ctx, t.Origin, id, msg, nil); err != nil {
@@ -237,6 +243,31 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 	b.mu.Unlock()
 	s.askChanged(ctx) // it no longer waits
 	if !decideAsk(&cp) && !cp.Conclusion {
+		if todoOK && t.Supervision.state(t) == reviewUserCheck {
+			closed, err := s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
+			if err != nil {
+				b.mu.Lock()
+				if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+					a.AcceptedAt = time.Time{}
+					s.saveAcceptLocked(ctx)
+				}
+				b.mu.Unlock()
+				s.askChanged(ctx)
+				return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
+			}
+			v, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+				if v.State != reviewUserCheck {
+					return false
+				}
+				v.State = reviewAccepted
+				return true
+			})
+			if err != nil {
+				s.logf("task %s: owner verification: %v", id, err)
+			} else if closed {
+				s.taskReviewed(ctx, v.Supervisor, id, reviewAccepted, v)
+			}
+		}
 		completeDismissal()
 		s.taskVerified(ctx, id, cp)
 		return acceptSucceeded(), nil

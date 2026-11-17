@@ -1,4 +1,4 @@
-Verify handed-out work. accepted closes it, stopping its idle Agent but keeping the terminal. rework sends gaps to that Agent: at most 2 rounds; a third requires a complete owner decision. A stopped Agent is read-only: replace with agent_start. External waits use parked with source evidence, not needs_user. Only answerable owner-only decisions use needs_user: why_owner, reason, recommend, 2–4 options (recommended first, each with leads_to), cost_of_waiting. Otherwise act within your authority, rework or close.
+Verify handed-out work. accepted closes it unless user_check is true: then it stays open awaiting the owner's verification and keeps its Agent available. The owner's Pass completes it; change feedback returns to the same Agent as ongoing work. Ordinary completion stops its idle Agent but keeps the terminal. rework sends gaps to that Agent: at most 2 rounds; a third requires a complete owner decision. A stopped Agent is read-only: replace with agent_start. External waits use parked with source evidence, not needs_user. Only answerable owner-only decisions use needs_user: why_owner, reason, recommend, 2–4 options (recommended first, each with leads_to), cost_of_waiting. Otherwise act within your authority, rework or close.
 
 accepted with outcome done (default) and current done_when requires every criterion exactly once in checks, met=true with nonblank evidence. Refuse missing/duplicate/unknown/unmet checks before writing; user_check cannot bypass this. outcome cannot, cancelled and no-criteria tasks are unchanged. Other verdicts may omit checks without erasing progress. Report each criterion as met, not met or dropped (logged scope change), then also_done. Judge the scoped brief, not a later handover or the Agent's word; review every task supervision asks you to.
 
@@ -101,7 +101,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
     },
     "user_check": {
       "type": "boolean",
-      "description": "accepted only: the user is still to look at the result themselves (a UI change someone has to see): a \"Please verify\" card waits for their \"Pass\" instead of your acceptance passing it; default false"
+      "description": "accepted only: keep the task open awaiting the user's own verification (for example a visual change), with its Agent available. A \"Please verify\" card waits for their \"Pass\", which completes the task; feedback returns it to ongoing work with that Agent. Default false: acceptance completes the task as before"
     },
     "reversible": {
       "type": "boolean",

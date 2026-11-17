@@ -20,7 +20,8 @@ import (
 // answer too long, makes no progress, was cut off or did not start — becomes a signal; the signals of all tasks go to
 // the main conversation as one supervision message (the quiet tasks' notices are among them), at most every few minutes, and
 // the turn it starts is not pushed unless the assistant pushes (notify_user). The assistant answers with task_review:
-// accepted closes the todo (its agents are closed later, tasks_close.go), rework sends the gaps back to the agent (at
+// accepted closes the todo unless personal verification is pending (user_check); its agents close later, tasks_close.go.
+// rework sends the gaps back to the agent (at
 // most maxReworkRounds times), needs_user waits for the user, parked waits for something else until a time
 // (parked.go), cancelled ends it.
 //
@@ -28,6 +29,7 @@ import (
 
 const (
 	reviewPending   = "pending_review"
+	reviewUserCheck = "user_check"
 	reviewAccepted  = "accepted"
 	reviewRework    = "rework"
 	reviewNeedsUser = "needs_user"
@@ -193,6 +195,9 @@ func (v *Supervision) state(t Todo) string {
 	if v == nil {
 		return ""
 	}
+	if v.State == reviewUserCheck && t.DoneAt != nil {
+		return reviewAccepted
+	}
 	if v.State == reviewParked && (t.DoneAt != nil || v.parking() == nil) {
 		return ""
 	}
@@ -353,6 +358,8 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "", 5
 	}
 	switch v.state(t) {
+	case reviewUserCheck:
+		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
 		return "等你决定", 0
 	case reviewPending:

@@ -119,6 +119,7 @@
   "plan_edit_prompt": "Agentへの最初のメッセージ",
   "plan_edit_discard": "変更を破棄しますか？",
   "review_pending": "検収待ち",
+  "review_user_check": "あなたの確認待ち",
   "review_supervisor": "監督の確認待ち",
   "review_rework": "差し戻し {round} 回目",
   "review_needs_user": "判断待ち",

@@ -322,6 +322,8 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 		return nil
 	}
 	switch v.state(t) {
+	case reviewUserCheck:
+		return nil
 	case reviewPending:
 		return []superviseSignal{{Todo: t.ID, Kind: sigReview, Key: reviewKey(v)}}
 	case reviewParked: // nothing until its time, then that it came (parked.go)

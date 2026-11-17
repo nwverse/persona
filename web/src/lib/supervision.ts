@@ -4,7 +4,7 @@ import type { Todo } from "./todos";
 // A task the main conversation supervises (#3124, docs/assistant/unified-entry.md "Supervision"): what done means, where its review
 // stands, and the reviews so far. Only such tasks carry `supervision`; an older hub sends none.
 
-export type ReviewState = "" | "pending_review" | "rework" | "needs_user" | "parked" | "accepted" | "cancelled";
+export type ReviewState = "" | "pending_review" | "user_check" | "rework" | "needs_user" | "parked" | "accepted" | "cancelled";
 
 /** What a parked task waits for (#3804, docs/assistant/todos.md "Parked tasks"): the reason in one sentence, until when,
  *  what kind of thing it waits on, and how many times in a row it was parked with no agent turn in between. */
@@ -150,6 +150,7 @@ export function acceptanceStands(todo: { supervision?: Supervision }): boolean {
  *  its acceptance stands (acceptanceStands); a parked one that was closed is no longer parked. */
 export function reviewState(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): ReviewState {
   const st = todo.supervision?.state ?? "";
+  if (todo.done_at && st === "user_check") return "accepted";
   if (!todo.done_at && st === "accepted" && !acceptanceStands(todo)) return "";
   if (!todo.done_at && st === "cancelled") return "";
   if (st === "parked" && (todo.done_at || !todo.supervision?.parked)) return "";
@@ -182,6 +183,8 @@ export function reviewBadge(todo: Pick<Todo, "done_at" | "decision_review"> & { 
   switch (reviewState(todo)) {
     case "pending_review":
       return { label: t("assistant-tasks.review_pending"), tone: "accent" };
+    case "user_check":
+      return { label: t("assistant-tasks.review_user_check"), tone: "orange" };
     case "rework":
       return { label: t("assistant-tasks.review_rework", { round: sup.round ?? 1 }), tone: "orange" };
     case "needs_user":

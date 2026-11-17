@@ -715,3 +715,10 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## Personal verification is unfinished work (#10047)
+
+A supervisor's accepted review is not the owner's personal verification. Keep an explicit `user_check` task open
+until Pass, so both completed-task and ordinary idle retirement leave its Agent available. Feedback starts a new
+work round even though the task was already open: otherwise its old Pass can verify rework. Test open counts and
+the actual retirement passes as well as the card; a still-pending card alone never proves its task is open.

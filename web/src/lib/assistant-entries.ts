@@ -98,7 +98,7 @@ export function taskAwaitsDecision(todo: Todo): boolean {
   const ask = openAsk(todo);
   if (ask) return !(todo.done_at && ask.outcome === "decide");
   if (todo.done_at) return false;
-  return todo.supervision?.state === "needs_user";
+  return todo.supervision?.state === "needs_user" || todo.supervision?.state === "user_check";
 }
 
 /** The task waits for its supervisor's review and nothing of it runs: an open `pending_review` whose status is a

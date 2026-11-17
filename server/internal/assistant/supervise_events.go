@@ -81,6 +81,9 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		return
 	}
 	st := t.Supervision.state(t)
+	if st == reviewUserCheck {
+		return // the supervisor finished its review; only the owner's Pass or feedback settles this check
+	}
 	key := work.UTC().Format(time.RFC3339Nano)
 	if err == nil && c.Verdict == verdictDone {
 		if s.autoReviewBegin(ctx, t, work, c.Reason) {

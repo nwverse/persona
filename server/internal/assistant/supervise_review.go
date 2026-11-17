@@ -111,6 +111,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if !ok {
 		return "", fmt.Errorf("no task %q", a.TodoID)
 	}
+	s.reviewDismissals.actions.acquire(t.ID)
+	defer s.reviewDismissals.actions.release(t.ID)
+	t, _ = s.todoNow(t.ID)
 	// The main conversation may review any supervised task: after the main conversation changes, the old tasks'
 	// supervision messages come to the new one, which has to be able to close them (#4262).
 	// The background supervisor reviews the tasks no leader supervises, whose ledgers name the main conversation
@@ -142,6 +145,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.UserCheck && verdict != reviewAccepted {
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
+	if t.Supervision.state(t) == reviewUserCheck && verdict != reviewAccepted {
+		if err := s.reopenTodo(ctx, t.ID); err != nil {
+			return "", err
+		}
+		t, _ = s.todoNow(t.ID)
+	}
 	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
 		if err := s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
@@ -150,7 +159,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
 	// gets none here either, or its signals would go into the main conversation's supervision messages (#4262). It can still
 	// be closed; rework, needs_user and parked are what supervision is for.
-	ledger := t.Supervision != nil || isMain
+	ledger := t.Supervision != nil || isMain || a.UserCheck
 	if !ledger && (verdict == reviewRework || verdict == reviewNeedsUser || verdict == reviewParked) {
 		return "", fmt.Errorf("task %s is not supervised: send what is missing to its agent with agent_send, or ask the user in your answer", t.ID)
 	}
@@ -223,6 +232,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				r.Evidence.RecordedBy = self
 			}
 			v.State, v.Waits = verdict, nil // reviewed: the supervisor answered what the judge found
+			if verdict == reviewAccepted && a.UserCheck {
+				v.State = reviewUserCheck
+			}
 			v.Reviews = append(v.Reviews, r)
 			if len(v.Reviews) > 20 {
 				v.Reviews = v.Reviews[len(v.Reviews)-20:]
@@ -285,6 +297,23 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	conclusion := conclusionInput{Outcome: cmp.Or(a.Outcome, outcomeDone), Reason: a.Reason, Link: a.Link, Note: note, Checks: checks}
 	switch verdict {
 	case reviewAccepted, reviewCancelled:
+		if verdict == reviewAccepted && a.UserCheck {
+			if t.DoneAt != nil {
+				if err := s.reopenTodo(ctx, t.ID); err != nil {
+					return "", err
+				}
+			}
+			s.dropTaskReport(t.ID)
+			s.dropDecision(ctx, t.ID)
+			s.sendsAccepted(ctx, t.ID, time.Now())
+			if cur, ok := s.todoNow(t.ID); ok {
+				ag := lastAgent(cur)
+				s.askAcceptanceRound(cur, ag.MachineID, ag.SessionID, reviewReply(note, checks), true)
+			}
+			return fmt.Sprintf("Task %s is accepted by you and remains open awaiting the owner's verification (user_check). "+
+				"Its Agent stays available. The owner's \"Pass\" completes it; change feedback returns it to ongoing work. "+
+				"A \"Please verify\" card waits for them: don't ask them again.", t.ID) + result.words(), nil
+		}
 		reason := cmp.Or(clip(oneLine(note), 80), "验收通过")
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了")
@@ -301,14 +330,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 				// A failed start was closed already: its review clears the error without inventing completion effects.
 				switch {
-				case closed && ledger && verdict == reviewAccepted && a.UserCheck:
-					// The owner is to look themselves: a "Please verify" asks them (one still waiting stays; one the assistant
-					// passed when the work was deployed gives way to a new one).
-					s.dropTaskReport(t.ID)
-					if cur, ok := s.todoNow(t.ID); ok {
-						ag := lastAgent(cur)
-						s.askAcceptanceRound(cur, ag.MachineID, ag.SessionID, reviewReply(note, checks), true)
-					}
 				case closed && ledger && verdict == reviewAccepted:
 					// The conclusion is the one push about it: its card, not a line in the task report (#1226).
 					s.dropTaskReport(t.ID)
@@ -332,10 +353,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		against := result.words()
 		if gaps := result.unsettled(); len(gaps) > 0 {
 			against += " You accepted it with criteria of its brief not shown met: if one no longer applies, say so with task_scope before accepting next time."
-		}
-		if ledger && verdict == reviewAccepted && a.UserCheck {
-			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. A \"Please verify\" card asks the "+
-				"user to look at it themselves (user_check), and it waits for their \"Pass\": don't ask them again.", t.ID) + against, nil
 		}
 		if ledger && verdict == reviewAccepted {
 			// Checked by the supervisor: its "Please verify" is passed, not left for the owner to press (#3240).

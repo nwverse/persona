@@ -1860,7 +1860,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 }
 
 // reopenTodo reopens done todo id as the user's PATCH {done: false} does (reopened_at set: the stretch of work before
-// does not close it again); a todo open by then is left as it is.
+// does not close it again). Feedback also restarts an open personal-verification task and invalidates its old Pass.
 func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
@@ -1869,7 +1869,8 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	if !ok {
 		return db.ErrTodoNotFound
 	}
-	if cur.DoneAt == nil {
+	userCheck := cur.Supervision.state(cur) == reviewUserCheck
+	if cur.DoneAt == nil && !userCheck {
 		return nil
 	}
 	s.todos.writing.Lock()
@@ -1890,6 +1891,16 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	s.todos.writing.Unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
+	}
+	if applied && userCheck {
+		_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+			if v.State != reviewUserCheck {
+				return false
+			}
+			v.State = ""
+			return true
+		})
+		return err
 	}
 	return nil
 }
