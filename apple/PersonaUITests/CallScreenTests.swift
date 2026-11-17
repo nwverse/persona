@@ -487,6 +487,13 @@ final class CallScreenTests: XCTestCase {
         let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "通话结束后才能听写")).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 5), "no dictation note\n\(app.debugDescription)")
         XCTAssertFalse(app.descendants(matching: .any)["dictation-bar"].exists, "the dictation bar opened")
+        // The note sits below the conversation's top bar, which the call's bar moved down (it once lay on the title).
+        let backButton = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).firstMatch
+        XCTAssertTrue(backButton.exists, "no Back in the Agent's conversation\n\(app.debugDescription)")
+        let toast = app.descendants(matching: .any)["toast"].firstMatch
+        XCTAssertTrue(toast.exists, "no toast around the note\n\(app.debugDescription)")
+        XCTAssertGreaterThanOrEqual(toast.frame.minY, backButton.frame.maxY,
+                                    "the note lies on the top bar: \(toast.frame) over Back \(backButton.frame)")
         try step("dictation refused", app, shot: "walk-dictation-refused")
         Thread.sleep(forTimeInterval: 3) // the note goes
 

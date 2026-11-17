@@ -229,6 +229,25 @@ struct CallFollowUpTests {
         #expect(CallWindow.room(for: UIAlertController(title: "t", message: "m", preferredStyle: .alert), under: bar) == 0)
     }
 
+    /// The pages' windows under the call's get the bar's room, and so does the toasts' above it (a toast sits just below
+    /// the top bars, which the room moved down: the dictation refusal's note lay on an Agent conversation's title); a
+    /// system window above it (the keyboard's, an alert's) gets none.
+    @Test func theToastsGetTheBarsRoomAndTheSystemsWindowsNone() {
+        final class Toasts: UIWindow, TakesCallBarRoom {}
+        let shell = UIWindow(frame: .zero)
+        let panel = UIWindow(frame: .zero)
+        panel.windowLevel = .normal + 0.25
+        let toasts = Toasts(frame: .zero)
+        toasts.windowLevel = .normal + 1
+        let keyboard = UIWindow(frame: .zero)
+        keyboard.windowLevel = .normal + 1
+        let alert = UIWindow(frame: .zero)
+        alert.windowLevel = .alert
+        #expect(CallWindow.givesRoom(to: shell) && CallWindow.givesRoom(to: panel))
+        #expect(CallWindow.givesRoom(to: toasts))
+        #expect(!CallWindow.givesRoom(to: keyboard) && !CallWindow.givesRoom(to: alert))
+    }
+
     /// The call screen's middle sizes the assistant as it sized the orb: its share of the page, then what the words
     /// leave, down to the voice bar's orb's size.
     @Test func theAssistantGivesWayToTheWords() throws {

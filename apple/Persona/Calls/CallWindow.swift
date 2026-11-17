@@ -206,13 +206,13 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
     /// Every page under the bar starts below it: the app's root, and every controller presented over it or over another
     /// window under the call's (a sheet, a full-screen cover, the + panel's sheet) whose content would start under the
     /// bar, gets that much more safe area at its top (`additionalSafeAreaInsets`). A form sheet lower down needs none, nor
-    /// does an alert (`takesRoom`).
+    /// does an alert (`takesRoom`). The toasts' window above the call's gets it too (`givesRoom`).
     /// Without the bar everything given is taken back.
     private func applyRoom() {
         let bar = window?.mode == .bar ? state.barFrame : .null
         var seen = Set<ObjectIdentifier>()
         if let scene = (shell ?? window)?.windowScene {
-            for w in scene.windows where w !== window && !w.isHidden && w.windowLevel >= .normal && w.windowLevel < Self.level {
+            for w in scene.windows where w !== window && !w.isHidden && Self.givesRoom(to: w) {
                 var next = w.rootViewController
                 while let controller = next {
                     if !controller.isBeingDismissed { give(controller, Self.room(for: controller, under: bar), &seen) }
@@ -227,6 +227,13 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
             }
             given[id] = nil
         }
+    }
+
+    /// The windows whose pages get the bar's room: the app's own under the call's (the shell's, the + panel's, the screen
+    /// viewer's) and the toasts' above it (`TakesCallBarRoom`: a toast sits just below the top bars, which the room moved
+    /// down); never the system's (the keyboard's, its alerts').
+    static func givesRoom(to window: UIWindow) -> Bool {
+        (window.windowLevel >= .normal && window.windowLevel < level) || window is TakesCallBarRoom
     }
 
     private func give(_ controller: UIViewController, _ top: CGFloat, _ seen: inout Set<ObjectIdentifier>) {
