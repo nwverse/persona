@@ -41,7 +41,7 @@ func TestUsageBackfillScan(t *testing.T) {
 		}
 	}
 	lim := &readLimiter{rate: 1 << 30, start: time.Now()}
-	buckets, err := n.backfillScan(context.Background(), n.backfillFiles(context.Background(), since, lim), since, before, lim)
+	buckets, err := n.backfillScan(context.Background(), n.backfillFiles(context.Background(), since, lim), nil, since, before, lim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestUsageBackfillScan(t *testing.T) {
 	// The connection ended: the scan stops.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := n.backfillScan(ctx, n.backfillFiles(context.Background(), since, lim), since, before, lim); err == nil {
+	if _, err := n.backfillScan(ctx, n.backfillFiles(context.Background(), since, lim), nil, since, before, lim); err == nil {
 		t.Fatal("a scan after its connection ended")
 	}
 }
@@ -143,14 +143,14 @@ func TestUsageBackfillWeeks(t *testing.T) {
 	}
 	lim := &readLimiter{rate: 1 << 30, start: time.Now()}
 	listed := n.backfillFiles(context.Background(), w1.Add(-backfillSlice), lim)
-	if start := backfillStart(listed, w1.Add(-backfillSlice)); !start.Equal(w1.Add(time.Hour)) {
+	if start := backfillStart(listed, nil, w1.Add(-backfillSlice)); !start.Equal(w1.Add(time.Hour)) {
 		t.Fatalf("the weeks start at %v, want the first line's hour %v", start, w1.Add(time.Hour))
 	}
-	first, err := n.backfillScan(context.Background(), listed, w1, w2, lim)
+	first, err := n.backfillScan(context.Background(), listed, nil, w1, w2, lim)
 	if err != nil || len(first) != 1 || first[0].Requests != 1 || first[0].CacheRead != 100 || first[0].Minute != w1.Add(time.Hour).Unix() {
 		t.Fatalf("the first week = %+v, %v", first, err)
 	}
-	second, err := n.backfillScan(context.Background(), listed, w2, w2.Add(backfillSlice), lim)
+	second, err := n.backfillScan(context.Background(), listed, nil, w2, w2.Add(backfillSlice), lim)
 	var replies int
 	for _, b := range second {
 		replies += b.Requests
@@ -188,14 +188,14 @@ func TestBackfillStartAndOverlap(t *testing.T) {
 	}
 	a := mk("a.jsonl", claudeReply(time.Date(2026, 10, 3, 9, 30, 0, 0, time.UTC), "a", "m", 0, 0, 1, 1), time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC))
 	b := mk("b.jsonl", claudeReply(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC), "b", "m", 0, 0, 1, 1), time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC))
-	if got := backfillStart([]backfillFile{a, b}, since); !got.Equal(time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)) {
+	if got := backfillStart([]backfillFile{a, b}, nil, since); !got.Equal(time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("start = %v", got)
 	}
 	none := mk("c.jsonl", `{"type":"summary"}`+"\n", time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC))
-	if got := backfillStart([]backfillFile{a, none}, since); !got.Equal(since) {
+	if got := backfillStart([]backfillFile{a, none}, nil, since); !got.Equal(since) {
 		t.Fatalf("with a file of unknown start = %v, want since", got)
 	}
-	if got := backfillStart(nil, since); !got.Equal(since) {
+	if got := backfillStart(nil, nil, since); !got.Equal(since) {
 		t.Fatalf("no files = %v", got)
 	}
 	week := func(y int, m time.Month, d int) (time.Time, time.Time) {

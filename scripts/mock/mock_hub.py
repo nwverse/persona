@@ -13256,6 +13256,15 @@ def _many_item(section, i, n):
 MOCK_INBOX_MANY = _many_counts(os.environ.get("MOCK_INBOX_MANY", "").strip())
 for _section, _n in MOCK_INBOX_MANY.items():
     INBOX.extend(_many_item(_section, _i, _n) for _i in range(_n))
+# The first Needs-you item's Related line names the first done and the first collapsed item: an item opened from inside the
+# Inbox, which moves the section bar only beside the item (docs/assistant/inbox.md "Section bar"). Its one-entry chain
+# makes it an event, whose body (InboxEvent.tsx) is where Related is drawn.
+if MOCK_INBOX_MANY.get("action"):
+    _rel = [_many_item(_s, 0, MOCK_INBOX_MANY[_s]) for _s in ("done", "noise") if MOCK_INBOX_MANY.get(_s)]
+    if _rel:
+        _first = next(x for x in INBOX if x["id"] == "many:action:0")
+        _first["related"] = [{"id": x["id"], "title": x["title"], "source": x["source"]} for x in _rel]
+        _first["chain"] = [{"id": "c1", "at": _first["updated_at"], "kind": "received", "text": "收到 1 条新消息", "count": 1}]  # i18n-ignore: mock data
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
