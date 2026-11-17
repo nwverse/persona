@@ -57387,6 +57387,29 @@
       },
       "extractionState" : "manual"
     },
+    "Dictate to Persona" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dictate to Persona"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaに音声入力"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向 Persona 口述"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Dictation" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -115207,6 +115230,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "经 ego lite 打开网页、点按、填表、截图"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Opens a new conversation and starts dictation." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens a new conversation and starts dictation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいチャットを開き、音声入力を開始します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开新对话并开始听写。"
           }
         }
       },

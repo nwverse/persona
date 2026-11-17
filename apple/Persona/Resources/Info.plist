@@ -78,7 +78,7 @@
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Persona turns your voice into text when you hold the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can.</string>
+	<string>Persona turns your voice into text when you use the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>PersonaAppGroup</key>
