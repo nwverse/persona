@@ -92,7 +92,13 @@ private struct MeetingFloatContent: View {
             }
             .padding(Theme.Space.s)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            // A solid dark card with a hairline edge: a translucent material read gray over a light page, and a dark
+            // card needs its edge over a dark one.
+            .background(Theme.groupedCard, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(Theme.Fill.chip, lineWidth: Theme.Size.hairline)
+            }
             .contentShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -211,7 +217,8 @@ private struct MeetingFloatDock: View {
                 ThemedIcon(Theme.Icon.recording).font(Theme.Font.label).foregroundStyle(Theme.positive)
             }
             .frame(width: Theme.Size.meetingFloatDockWidth, height: Theme.Size.meetingFloatDockHeight)
-            .surface(in: .capsule)
+            .background(Theme.groupedCard, in: .capsule)
+            .overlay { Capsule().strokeBorder(Theme.Fill.chip, lineWidth: Theme.Size.hairline) }
         }
         .buttonStyle(.plain)
         .environment(\.colorScheme, .dark)

@@ -25,7 +25,8 @@ final class MeetingFloatUITests: XCTestCase {
 
         // Pulled past the side: a bar; the bar brings it back.
         let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        left.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: -0.3, dy: 0.45)))
+        // To the screen's very edge: the card's middle there puts half of it past the side (a finger can't go further).
+        left.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.45)))
         let dock = element(app, "meeting-float-dock")
         XCTAssertTrue(dock.waitForExistence(timeout: 5), "no bar:\n\(app.debugDescription)")
         try shot(app, "dock")
