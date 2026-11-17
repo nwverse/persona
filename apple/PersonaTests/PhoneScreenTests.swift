@@ -95,6 +95,24 @@ struct PhoneScreenTests {
         #expect(asked[0].width == 402 && asked[0].height == 760 && asked[2].pid == 10 && asked[2].window == 3 && asked[4].pair == "R")
     }
 
+    /// The page going without the small window: its Phone Screen ends (the Mac puts its windows back) and nothing is
+    /// kept for a later page to take. (Into the small window it stays on: VNCTests' Phone Screen Picture in Picture.)
+    @Test func thePageGoingWithoutTheSmallWindowEndsIt() async throws {
+        var asked: [String] = []
+        let display = phone(1920, 0, 540, 1021)
+        let ref = MachineRef(group: "g", id: "mac-no-pip")
+        let link = PhoneScreenLink(ref: ref) { req in
+            asked.append(req.op)
+            return req.op == "start" ? PhoneScreenReply(display: display, displays: [self.main, display]) : PhoneScreenReply()
+        }
+        link.start(pair: "P", size: CGSize(width: 402, height: 760))
+        try await until { link.phase == .on }
+        #expect(!VNCPiP.shared.keepPhone(link))
+        try await until { asked.last == "stop" }
+        #expect(link.phase == .off)
+        #expect(VNCPiP.shared.takePhone(ref) == nil)
+    }
+
     /// A refusal shows why in plain words and leaves the mode off on the Mac.
     @Test func aRefusalSaysWhy() async throws {
         let link = PhoneScreenLink(ref: MachineRef(group: "g", id: "mac")) { _ in
