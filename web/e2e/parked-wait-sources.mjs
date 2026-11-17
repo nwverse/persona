@@ -70,17 +70,18 @@ const api = async (route) => {
 let browser;
 try {
   browser = await chromium.launch({ executablePath: flag("--chromium") || "/usr/bin/chromium", headless: true });
-  const modes = ["light", "dark"].flatMap(theme => ["desktop", "phone"].map(view => ({ theme, view, lang: "zh-Hans" })));
-  modes.push({ theme: "light", view: "phone", lang: "en" }, { theme: "dark", view: "phone", lang: "ja" });
+  const modes = ["light", "dark"].flatMap(theme => ["standard", "large"].flatMap(size => ["desktop", "phone"].map(view => ({ theme, size, view, lang: "zh-Hans" }))));
+  modes.push({ theme: "light", size: "standard", view: "phone", lang: "en" }, { theme: "dark", size: "large", view: "phone", lang: "ja" });
   for (const mode of modes) {
     const context = await browser.newContext({ viewport: mode.view === "desktop" ? { width: 1280, height: 1000 } : { width: 390, height: 844 },
-      isMobile: mode.view === "phone", hasTouch: mode.view === "phone" });
+      isMobile: mode.view === "phone", hasTouch: mode.view === "phone", reducedMotion: "reduce", serviceWorkers: "block" });
     const errors = [];
     try {
-      await context.addInitScript(({ theme, lang }) => {
+      await context.addInitScript(({ theme, lang, size }) => {
         localStorage.setItem("persona.token", "synthetic-demo-token");
         localStorage.setItem("persona.language", lang);
         localStorage.setItem("persona.theme", theme);
+        localStorage.setItem("persona.text-size", size);
       }, mode);
       await context.route("**/*", async route => {
         const url = new URL(route.request().url());
@@ -95,14 +96,20 @@ try {
       const page = await context.newPage();
       page.on("pageerror", e => errors.push(String(e)));
       page.setDefaultTimeout(10_000);
+      const transcript = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/sessions/demo/demo-main/items");
       await page.goto(`${base}/`);
+      // Finish the independent startup load before measuring this local-only interaction.
+      await transcript;
+      await page.evaluate(() => document.fonts.ready);
       const tray = page.locator('[data-tray-entry="parked"]');
       await tray.waitFor();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const before = reads.length;
+      const openedAt = performance.now();
       await tray.click();
       const rows = page.locator("[data-parked-task-row]");
       await rows.first().waitFor();
+      const feedbackMs = performance.now() - openedAt;
       assert.equal(await rows.count(), 5);
       const source = (id) => page.locator(`[data-task-wait-info="source-${id}"] [data-wait-source]`);
       assert.equal(await source("bound").innerText(), "PR #73");
@@ -116,15 +123,18 @@ try {
       assert.equal(await source("missing").count(), 0);
       assert.equal(await rows.locator('a[href="https://github.com/example/demo/pull/7"], a[href="https://github.com/example/demo/pull/8"]').count(), 0);
       assert.equal(await source("bound").getAttribute("title"), prURL);
-      assert.equal(reads.length, before, "opening source names adds no HTTP metadata lookups");
+      // The chat's independent transcript load can overlap opening the local tray.
+      const backgroundReads = reads.slice(before).filter(path => path === "/sessions/demo/demo-main/items");
+      const metadataReads = reads.slice(before).filter(path => path !== "/sessions/demo/demo-main/items");
+      assert.deepEqual(metadataReads, [], `opening source names adds no HTTP metadata lookups: ${JSON.stringify(metadataReads)}`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false);
-      const stem = `wait-sources-${mode.view}-${mode.theme}-${mode.lang}`;
+      const stem = `wait-sources-${mode.view}-${mode.theme}-${mode.size}-${mode.lang}`;
       await rows.first().scrollIntoViewIfNeeded();
       await page.screenshot({ path: join(shots, `${stem}-top.png`) });
       await rows.last().scrollIntoViewIfNeeded();
       await page.screenshot({ path: join(shots, `${stem}-bottom.png`) });
       assert.deepEqual(errors, []);
-      cases.push({ ...mode, rows: 5, namedSources: 4, missingSources: 0, extraMetadataReads: reads.length - before, screenshots: 2 });
+      cases.push({ ...mode, rows: 5, namedSources: 4, missingSources: 0, extraMetadataReads: metadataReads.length, backgroundReads, feedbackMs, screenshots: 2 });
     } finally { await context.close(); }
   }
   writeFileSync(join(shots, "readings.json"), JSON.stringify({ cases, writes, taskWrites: 0, realHubRequests: 0 }, null, 2) + "\n");
