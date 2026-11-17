@@ -448,6 +448,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
 			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
+			if err == nil {
+				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
+			}
 			if err != nil {
 				if note.reopens() && sendUnknown(err) {
 					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads

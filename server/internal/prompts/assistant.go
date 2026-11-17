@@ -788,7 +788,8 @@ type SuperviseEntry struct {
 	ID, Title, Kind string
 	AgentReply      *DecisionAgentReply // decision_reply: a pending decision's owner message, not an inferred choice
 	Detail          string              // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
-	Minutes         int                 // how long it has waited (needs_you) or not moved (stalled)
+	Minutes         int                 // how long it has waited (needs_you), not moved (stalled) or not progressed (no_progress)
+	Calls, Waits    int                 // no_progress: the tool calls the hub saw since the last progress, and how many were waits or repeats
 	Ask             string              // needs_you: what it asks
 	Recommend       string              // escalated: the option the leader recommends
 	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
