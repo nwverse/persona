@@ -51,6 +51,7 @@ let root: Root;
 let calls: { method: string; url: string; body?: unknown }[];
 let pickAnswer: () => Response;
 let defaultSetup: { provider: string; model: string; effort: string };
+let superviseSetup: { provider: string; model: string; effort: string };
 
 const mid = () => `persona-${machine}`;
 const chat = (x: Partial<Session> = {}): Session =>
@@ -63,6 +64,7 @@ beforeEach(() => {
   calls = [];
   pickAnswer = () => json({ ok: true, model_pick: {} });
   defaultSetup = { provider: "claude", model: "opus", effort: "high" };
+  superviseSetup = defaultSetup; // the supervisor's own purpose follows Main chat until it is set apart
   Object.assign(getState(), { features: ["assistant_model_pick", "assistant_start_service_tier", "typed_models"], sessions: {}, assistant: { machine_id: mid(), launcher: "claude", main: "c1", conversations: [] } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -70,6 +72,7 @@ beforeEach(() => {
     calls.push({ method: init?.method ?? "GET", url, body });
     if (url.includes("/codex/models")) return json(codexList);
     if (url.includes("/models")) return json(claudeList);
+    if (url.includes("/launchers?purpose=assistant.supervise")) return json({ launchers: [{ name: "claude", source: "builtin" }], default: superviseSetup, unavailable: [] });
     if (url.includes("/launchers?purpose=assistant")) return json({
       launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
       default: defaultSetup,
@@ -161,14 +164,54 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
     expect(toast).toHaveBeenCalledWith(expect.stringContaining("relay runs Codex; this conversation runs on Claude Code"), "error");
   });
 
-  it("hides the pill on a conversation the hub does not name as the main one (#6911)", async () => {
+  it("shows the pill on a conversation that is not the main one and keeps its pick there (#9248)", async () => {
     getState().assistant!.main = "other";
     await show(chat({ launcher: "relay", model: "claude-haiku-5-5" }));
-    expect(pill()).toBeNull();
-    expect(calls.some((c) => c.url.includes("/assistant/conversations/c1/model"))).toBe(false);
+    expect(pill()).not.toBeNull();
+    await open();
+    // no pick, not a conversation that follows the default: it runs on what it started with, the strip says so
+    expect(strip()!.getAttribute("data-pick-strip")).toBe("own");
+    expect(await act(() => panel.props!.onPick({ provider: "claude", model: "opus" }))).toBe(true);
+    expect(sent("PUT")).toEqual([{ launcher: "claude", model: "opus", machine_id: mid() }]);
+    expect(getSession(mid(), "c1")?.model_pick).toEqual({ launcher: "claude", model: "opus" });
+    act(() => root.render(<AssistantModelPill session={getSession(mid(), "c1")!} />));
+    await flush();
+    expect(strip()!.getAttribute("data-pick-strip")).toBe("pick");
+    expect(pill().textContent).toContain("Opus 5.5");
+    await act(async () => strip()!.querySelector("button")!.click());
+    expect(sent("DELETE")).toEqual([null]);
   });
 
-  it("keeps its hooks when the main conversation changes away from this one (#7070)", async () => {
+  it("shows a leader and a scheduled task's conversation what the next message runs on: Main chat until they pick (#9248)", async () => {
+    for (const as of [{ leaders: ["c1"] }, {}]) {
+      Object.assign(getState().assistant!, { main: "other", leaders: undefined }, as);
+      // it last ran on Haiku, but its next message follows Model configuration › Main chat (Opus)
+      await show(chat({ launcher: "relay", model: "claude-haiku-5-5", ...(as.leaders ? {} : { origin: "task" }) }));
+      expect(pill().textContent).toContain("Opus 5.5");
+      expect(pill().textContent).not.toContain("Haiku");
+      await open();
+      expect(strip()!.getAttribute("data-pick-strip")).toBe("default");
+      act(() => root.render(<></>));
+      await flush();
+    }
+    // with a pick it shows the pick, as it runs on it
+    getState().assistant!.leaders = ["c1"];
+    await show(chat({ launcher: "relay", model: "claude-haiku-5-5", model_pick: { launcher: "claude", model: "haiku" } }));
+    expect(pill().textContent).toContain("Haiku 5.5");
+  });
+
+  it("shows the background supervisor what its own model purpose runs, not Main chat's (#9248)", async () => {
+    Object.assign(getState().assistant!, { main: "other", background_supervisor: "c1" });
+    superviseSetup = { provider: "claude", model: "haiku", effort: "low" }; // Model configuration set the supervisor apart: Haiku, Main chat stays Opus
+    await show(chat({ launcher: "claude", model: "claude-opus-5-5", effort: undefined, origin: "task" }));
+    expect(pill().textContent).toContain("Haiku 5.5");
+    expect(pill().textContent).not.toContain("Opus");
+    await open();
+    expect(strip()!.getAttribute("data-pick-strip")).toBe("default");
+    expect(panel.props!.state.current).toEqual({ provider: "claude", model: "haiku", effort: "low" });
+  });
+
+  it("keeps its hooks when the conversation becomes or stops being the main one (#7070)", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const s = chat();
@@ -179,20 +222,7 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
         act(() => root.render(<AssistantModelPill session={{ ...s }} />));
       }).not.toThrow();
       await flush();
-      expect(pill()).toBeNull();
-      expect(error).not.toHaveBeenCalled();
-    } finally {
-      error.mockRestore();
-    }
-  });
-
-  it("keeps its hooks when this conversation becomes the main one (#7070)", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const s = chat();
-      getState().assistant!.main = "other";
-      await show(s);
-      expect(pill()).toBeNull();
+      expect(pill()).not.toBeNull();
       getState().assistant!.main = "c1";
       expect(() => {
         act(() => root.render(<AssistantModelPill session={{ ...s }} />));

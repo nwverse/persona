@@ -94,6 +94,7 @@ Human-readable command output follows the terminal locale (`PERSONA_LANG`, then 
 | `persona-link logs -f` | Follow `~/.persona/link.log` |
 | `persona-link pair --listen` | Generate a passive-mode pairing link |
 | `persona-link name <new>` | Rename this computer on the hub while connected |
+| `persona-link plugin status\|install\|uninstall\|on\|off` | The Persona plugin for Claude Code, which the resident node keeps installed for this Mac's Claude Code and the desktop app's Code sessions ([link.md](link.md) "Claude Code plugin") |
 
 ## Upgrade and uninstall
 
@@ -105,7 +106,7 @@ To remove the connector while keeping its pairing and resident node:
 ~/.persona/bin/persona-link uninstall
 ```
 
-To remove the resident node too, inspect its actual service and binary first, then run `persona-link node uninstall`. `--purge` is a separate, explicit destructive operation that removes connector credentials, status, logs and its installed executable; revoke this computer on the hub as well. Persona Screen can then be removed with `/Applications/Persona Link.app` if no longer needed. Do not run those removal commands merely to troubleshoot a connection.
+To take the Persona plugin out of Claude Code too, run `~/.persona/bin/persona-link plugin uninstall` while the node is still installed. To remove the resident node too, inspect its actual service and binary first, then run `persona-link node uninstall`. `--purge` is a separate, explicit destructive operation that removes connector credentials, status, logs and its installed executable; revoke this computer on the hub as well. Persona Screen can then be removed with `/Applications/Persona Link.app` if no longer needed. Do not run those removal commands merely to troubleshoot a connection.
 
 ## Troubleshooting
 

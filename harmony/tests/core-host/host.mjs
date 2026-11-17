@@ -334,7 +334,8 @@ export function requestObject(request) {
     case 'subscribe': return request.since_seq === null ? {kind: request.kind, fold_work: request.fold_work}
       : {kind: request.kind, fold_work: request.fold_work, since_seq: request.since_seq};
     case 'fetch_older': return {kind: request.kind, before_seq: request.before_seq, fold_work: request.fold_work};
-    case 'fetch_range': return {kind: request.kind, from_seq: request.from_seq, through_seq: request.through_seq};
+    case 'fetch_range': return {kind: request.kind, from_seq: request.from_seq, through_seq: request.through_seq,
+      ...(request.fold_id === null ? {} : {fold_id: request.fold_id})};
     default: throw new Error('unknown request: ' + request.kind);
   }
 }

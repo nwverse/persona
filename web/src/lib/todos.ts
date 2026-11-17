@@ -57,6 +57,10 @@ export interface Todo {
   priority?: string;
   /** The slug of the knowledge-base project it belongs to (#2581, docs/assistant/todos.md "Project"); unset for none. */
   project?: string;
+  /** The to-do whose request this one is a piece of, and the pieces it waits for (docs/assistant/todos.md "Requests in
+   *  pieces"); unset for a to-do that is no piece and from hubs without them. */
+  part_of?: string;
+  after?: string[];
   done_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -913,7 +917,6 @@ export function formatAgentSource(
 
   return undefined;
 }
-
 
 /** An agent going on ("Needs you" / "Working") that the main conversation's dock shows after its tasks (#1113, iOS DockAgent). */
 export interface DockAgent {

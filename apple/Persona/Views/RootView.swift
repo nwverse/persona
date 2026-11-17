@@ -331,6 +331,9 @@ struct RootView: View {
         #if os(iOS)
         .environment(\.splitSideBars, barEdge != nil) // the columns' top margin under side bars (#4853)
         .readsVerticalBarEdge($barEdge)
+        // On a phone (the open iPhone Duo) the Duo's tab bar in the system's tab bar's place, down the side column or along
+        // the foot (#4231); the iPad keeps its bar.
+        .modifier(TabSwitchOverlay())
         .modifier(PadRoutes(router: pad))
         .onAppear { agentsPart.linedUpWith = personaPart } // one head line on both tabs (#8596)
         #endif
@@ -529,6 +532,7 @@ private struct TabPage<Page: View>: View, Equatable {
                 ChatsView()
                     .environment(\.unifiedSidebar, part)
                     .modifier(TabActivityScope(tab: .assistant))
+                    .modifier(PhoneTabBarHidden()) // the open Duo's tab bar stands in for it (#4231)
                 #else
                 AssistantView()
                     .modifier(TabActivityScope(tab: .assistant))
@@ -560,6 +564,7 @@ private struct TabPage<Page: View>: View, Equatable {
                 #if os(iOS)
                     // The Separate layout in the new look (#4206): the one sidebar's column with the Agents' part.
                     .environment(\.unifiedSidebar, part)
+                    .modifier(PhoneTabBarHidden()) // the open Duo's tab bar stands in for it (#4231)
                 #endif
                     .modifier(TabActivityScope(tab: .chats))
                 #if PERF_SIGNPOST
@@ -634,9 +639,12 @@ nonisolated struct ConnectionShown: Encodable, Equatable {
     var body: some TabContent<AppTab> {
         Tab(String(localized: "Messages [Quote Views 4da199]"), systemImage: Theme.Icon.feishuChats, value: AppTab.feishu) {
             TabPage {
-                // The system's tab bar on every tab, the open iPhone Duo's too (#4206): no Assistant | Agents switch drawn
-                // on the pages.
+                // No Assistant | Agents switch drawn on the pages: the system's tab bar on the iPad, the shell's upright
+                // switch over the tabs on the open iPhone Duo (#4231).
                 LarkConversationsView().modifier(TabActivityScope(tab: .feishu))
+                #if os(iOS)
+                    .modifier(PhoneTabBarHidden())
+                #endif
             }
             .equatable()
         }

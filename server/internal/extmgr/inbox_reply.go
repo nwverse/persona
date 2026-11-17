@@ -70,13 +70,15 @@ func (h *Manager) inboxSendFailure(sendID, source, outcome string, err error) er
 }
 
 // inboxSendOutcome is what a reply's error says of it (sent_messages' state): cut off (the time ran out, a link on the
-// way dropped) it may have gone out; refused it did not ("": forgotten).
+// way dropped, a mail server that got the message and did not answer it) it may have gone out; refused it did not ("":
+// forgotten).
 func inboxSendOutcome(err error) string {
 	switch {
 	case err == nil:
 		return sendDelivered
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled), errors.Is(err, rpc.ErrDropped),
-		adapter.KindOf(err) == adapter.KindTimeout: // lark-cli stopped by its own deadline: the message may be out
+		adapter.KindOf(err) == adapter.KindTimeout, // lark-cli stopped by its own deadline: the message may be out
+		errors.Is(err, mail.ErrMaybeSent):          // the SMTP server has the whole mail and never answered it (#9166)
 		return sendUnknown
 	}
 	var re *rpc.Error

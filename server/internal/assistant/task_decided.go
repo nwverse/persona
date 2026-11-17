@@ -90,11 +90,6 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 func (s *Service) decisionTold(ctx context.Context, id, label, machine, session, said string) (bool, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
-	if t, ok := s.todoNow(id); ok {
-		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
-			return false, err
-		}
-	}
 	a, err := s.askRound(id, "")
 	if err != nil || a == nil {
 		return false, err
@@ -102,6 +97,11 @@ func (s *Service) decisionTold(ctx context.Context, id, label, machine, session,
 	label = strings.TrimSpace(label)
 	if !slices.ContainsFunc(a.Options, func(o DecisionOption) bool { return o.Label == label }) {
 		return false, errDecisionOption
+	}
+	t, _ := s.todoNow(id)
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return false, err
 	}
 	s.deadlineAnswered(ctx, id, a.AskedAt)
 	if st := s.todoDB(); st != nil {
@@ -122,5 +122,6 @@ func (s *Service) decisionTold(ctx context.Context, id, label, machine, session,
 		chosen = "" // as "OK" takes it
 	}
 	s.endAsk(ctx, id, a.AskedAt, "", chosen)
+	completeDismissal()
 	return true, nil
 }

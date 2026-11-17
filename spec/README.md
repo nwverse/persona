@@ -22,6 +22,7 @@ spec/
     comments/         comment blocks a message leads with (web and iOS)
     sync/             chat sync scenarios: hub state, frames with faults, what each device shows
     fold-changes/     the files a run of work changed, counted by the hub and the web alike
+    fold-sources/     the web pages a run of work used, read by the hub and the web alike
     input-clip/       the whole-input bound after the hub and runtime SDK's two string passes
     attention/        Persona Link's "Needs you" summary against the web badge
     entries/          the Assistant's two composer entries, Needs you and In progress
@@ -49,7 +50,7 @@ spec/
 | --- | --- |
 | continuity | [连续性 README](fixtures/continuity/README.md)：连续位置、丢批补洞、历史变化、分页三态、重连、fold 替换与展开. Also replayed by the shared Rust core (`native/app-core`, `cargo test`) and through its Android binding (`:core:rustcore`), #6871 |
 | lines | 见各自 [README](fixtures/lines/README.md) |
-| sort | 见各自 [README](fixtures/sort/README.md) |
+| sort | See the domain [README](fixtures/sort/README.md). The reference implementation is `persona_core::sort` in `native/app-core`, checked by these iOS-derived fixtures. HarmonyOS production uses the core projection through `coreProjectSort` (#7579, #8966). |
 | answer | 见各自 [README](fixtures/answer/README.md) |
 | question-review | [README](fixtures/question-review/README.md): the review step of a question card of several questions, replayed by the Swift answer oracle only (#8483) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
@@ -68,6 +69,7 @@ spec/
 | stream-chunks | [README](fixtures/stream-chunks/README.md): the pure Rust projection of iOS `StreamChunks.split`, with source-cited Apple cases (#8607) |
 | tool-names | [README](fixtures/tool-names/README.md): a tool no table names in words ("GitHub · Create issue"), what its call is about, a shell's command line and its arguments as a key/value list, checked by Android; iOS's own tests hold the same cases until it reads them (#4339) |
 | fold-changes | [README](fixtures/fold-changes/README.md): the files a run of work's successful edits changed and their lines, counted by the hub for a fold and by the web for the same calls unfolded (#5157) |
+| fold-sources | [README](fixtures/fold-sources/README.md): the web pages a run of work's successful web calls used, read by the hub for a fold and by the web for the same calls unfolded (#9132) |
 | input-clip | [README](fixtures/input-clip/README.md): the hub and runtime SDK's third tool-input pass, bounding encoded objects by dropping array tails and then object fields (#2907) |
 | provider-import-link | [README](fixtures/provider-import-link/README.md): provider import links (cindy v1), the payload and fragment the web builds for a provider and what the hub reads from a link, checked by Go, the mock hub and the web app (#5420) |
 | star-prompt | [README](fixtures/star-prompt/README.md): when the GitHub star prompts show, the empty Agents pill, the milestone card after enough Agents started and the onboarding toast, checked by the web app and Android (#5761; iOS with #5910) |

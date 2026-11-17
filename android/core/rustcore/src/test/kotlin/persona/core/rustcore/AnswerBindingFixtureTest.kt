@@ -16,6 +16,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.domain.answer.AnswerBuilder
 
 /** Real Kotlin/JNI consumers for the current-iOS question transition and display-only recommendation projection. */
 class AnswerBindingFixtureTest {
@@ -144,6 +145,18 @@ class AnswerBindingFixtureTest {
             display("​ A\n (Recommended)"))
     }
 
+    @Test fun kotlinAndJniMatchTheIosWhitespaceDisplayBoundary() {
+        val case = fixture("recommended.json", "recommended_corefoundation_boundary")
+        val interaction = case.getValue("input").jsonObject.getValue("interaction").jsonObject
+        val label = interaction.getValue("questions").jsonArray[0].jsonObject
+            .getValue("options").jsonArray[0].jsonObject.getValue("label").jsonPrimitive.content
+        val expected = case.getValue("expected").jsonObject.getValue("display")
+        val kotlin = AnswerBuilder.display(label)
+        val kotlinJson = buildJsonObject { put("text", kotlin.text); put("recommended", kotlin.recommended) }
+        assertEquals(expected, kotlinJson)
+        assertEquals(kotlinJson, display(label))
+    }
+
     private fun fixture(file: String, name: String): JsonObject =
         Json.parseToJsonElement(fixtures.resolve(file).readText()).jsonObject.getValue("cases").jsonArray
             .map { it.jsonObject }.first { it.getValue("name").jsonPrimitive.content == name }
@@ -159,6 +172,7 @@ class AnswerBindingFixtureTest {
             ),
             "recommended.json" to setOf(
                 "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
+                "recommended_corefoundation_boundary",
                 "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
                 "recommended_trims_prefix_space", "recommended_unspaced",
             ),

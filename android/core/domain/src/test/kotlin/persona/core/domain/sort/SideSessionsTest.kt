@@ -84,8 +84,10 @@ class SideSessionsTest {
     }
 
     @Test fun noListDockCountOrMachineBringsASideOrItsSubtaskBackAsARoot() {
+        // By Machine only sections computers from the hub's machine list; pass the parent's host (#9319).
+        val hosts = listOf(Machine("m", "Example"))
         for (grouping in AgentGrouping.selectable) {
-            val list = buildAgentList(rows.map(::AgentSession), settings = AgentListSettings(grouping = grouping, hierarchy = true))
+            val list = buildAgentList(rows.map(::AgentSession), hosts, settings = AgentListSettings(grouping = grouping, hierarchy = true))
             assertEquals(grouping.name, setOf("p"), list.groups.flatMap { it.rows }.map { it.session.sessionId }.toSet())
             assertTrue(grouping.name, list.children.values.flatten().isEmpty())
             assertEquals(grouping.name, 1, list.counts[AgentQuickFilter.NeedsYou])

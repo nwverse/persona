@@ -16,7 +16,9 @@ internal fun managementPage(name: String): ResolvedRoute? {
         "engine" -> argument?.let { ResolvedRoute(AppTab.Agents, EngineRoute(it)) }
         "purpose" -> argument?.let { ResolvedRoute(AppTab.Persona, ModelPurposeRoute(it)) }
         "plugin" -> argument?.let { ResolvedRoute(AppTab.Persona, ExtensionRoute(it)) }
-        "plugin-ui" -> argument?.let { extension -> parts.getOrNull(2)?.takeIf { it.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, ExtensionUiRoute(extension, it, it)) } }
+        "plugin-ui" -> argument?.let { extension -> parts.getOrNull(2)?.takeIf { it.isNotBlank() }?.let {
+            ResolvedRoute(AppTab.Persona, ExtensionUiRoute(extension, it, it), parent = SettingsRoute)
+        } }
         "channel" -> argument?.let { ResolvedRoute(AppTab.Persona, ChannelRoute(it)) }
         "manager" -> argument?.let { ResolvedRoute(AppTab.Persona, ManagerRoute(it)) }
         "provider" -> argument?.let { ResolvedRoute(AppTab.Persona, ModelProviderRoute(it)) }

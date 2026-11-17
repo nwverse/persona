@@ -1738,7 +1738,7 @@
     },
     {
       "name": "agent_filter_repository",
-      "value": "仓库"
+      "value": "项目"
     },
     {
       "name": "agent_filter_worktree",
@@ -4082,7 +4082,7 @@
     },
     {
       "name": "knowledge_recording_transcribe",
-      "value": "转写普通话"
+      "value": "转写并保存到知识库"
     },
     {
       "name": "knowledge_recording_retry_upload",
@@ -4166,7 +4166,7 @@
     },
     {
       "name": "knowledge_recording_retry_transcribe",
-      "value": "重试普通话转写"
+      "value": "重试转写并保存到知识库"
     },
     {
       "name": "knowledge_recording_delete_local",
@@ -4611,6 +4611,94 @@
     {
       "name": "interaction_question_cancel",
       "value": "取消问题"
+    },
+    {
+      "name": "agent_group_state",
+      "value": "按状态"
+    },
+    {
+      "name": "agent_group_space",
+      "value": "按项目"
+    },
+    {
+      "name": "agent_group_pinned",
+      "value": "置顶"
+    },
+    {
+      "name": "agent_group_unread",
+      "value": "完成未看"
+    },
+    {
+      "name": "agent_group_awaiting",
+      "value": "待你回复"
+    },
+    {
+      "name": "agent_group_background",
+      "value": "后台等待中"
+    },
+    {
+      "name": "agent_group_waiting",
+      "value": "待唤醒"
+    },
+    {
+      "name": "agent_group_muted",
+      "value": "已屏蔽"
+    },
+    {
+      "name": "agent_group_idle",
+      "value": "已看"
+    },
+    {
+      "name": "agent_group_more_idle",
+      "value": "个空闲"
+    },
+    {
+      "name": "agent_group_quiet_spaces",
+      "value": "空闲的项目"
+    },
+    {
+      "name": "agent_expand",
+      "value": "展开"
+    },
+    {
+      "name": "agent_collapse",
+      "value": "收起"
+    },
+    {
+      "name": "knowledge_agent_configuration",
+      "value": "Agent 任务配置"
+    },
+    {
+      "name": "control_expanded",
+      "value": "已展开"
+    },
+    {
+      "name": "control_collapsed",
+      "value": "已收起"
+    },
+    {
+      "name": "knowledge_filter_kind",
+      "value": "类型"
+    },
+    {
+      "name": "knowledge_filter_tag",
+      "value": "标签"
+    },
+    {
+      "name": "knowledge_recording_save_notice",
+      "value": "文字稿和录音信息将保存到此 Hub 的知识库，音频保留在本机。离线转写支持普通话。"
+    },
+    {
+      "name": "forget_hub_notice",
+      "value": "将移除此连接的凭据、本机录音和缓存数据。Hub 上的数据会保留。"
+    },
+    {
+      "name": "increase",
+      "value": "增加"
+    },
+    {
+      "name": "decrease",
+      "value": "减少"
     }
   ]
 }

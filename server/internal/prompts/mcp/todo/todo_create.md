@@ -9,7 +9,7 @@ Record requested/agreed work or reminders immediately, without confirmation; exe
   "properties": {
     "title": {
       "type": "string",
-      "description": "Short action."
+      "description": "what is to be done, in a line, in the user's language"
     },
     "notes": {
       "type": "string",
@@ -43,6 +43,17 @@ Record requested/agreed work or reminders immediately, without confirmation; exe
     "project": {
       "type": "string",
       "description": "Existing kb_list project slug/name; prefer long-term work. Only when clear; no near-duplicates."
+    },
+    "part_of": {
+      "type": "string",
+      "description": "Request to-do id this is a piece of; hand out via task_plan todo_id."
+    },
+    "after": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "With part_of: sibling piece ids it waits for."
     },
     "repository_bindings": {
       "type": "object",

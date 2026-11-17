@@ -60,6 +60,8 @@ type extLink struct {
 	kept      map[string]keptAnswer // GET path?query → its last answer
 	// calls are the requests being relayed, by caller, so a revoked device's end (extension_calls.go).
 	calls relayedCalls
+	// relays are the relay streams kept open to each manager between requests (extensions_relays.go).
+	relays relayPools
 }
 
 type keptAnswer struct {
@@ -197,6 +199,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	out = append(out, h.remoteImagesFeatures()...)
 	out = append(out, h.assistantStartServiceTierFeatures()...)
 	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
 	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
@@ -206,8 +209,8 @@ func (h *Hub) features() []string {
 		switch f {
 		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			featureAssistantSearch, featureAssistantStartServiceTier, featureSessionsSideFold:
-			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, start speed and the side-session fold
+			featureAssistantSearch, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages:
+			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, start speed, the side-session fold and remote images
 		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)
@@ -380,9 +383,10 @@ func (h *Hub) relayToManager(w http.ResponseWriter, r *http.Request, admin bool)
 	}
 }
 
-// relayTo passes r on to manager id over a relay stream and streams its answer back. Who asked goes with it in the
-// hub's headers (any the client sent are dropped); the hub's credentials stay with the hub. While the manager is
-// away: 503 assistant_offline, or the last answer of a kept GET.
+// relayTo passes r on to manager id over one of its relay streams (a warm one when there is one:
+// extensions_relays.go) and streams its answer back. Who asked goes with it in the hub's headers (any the client sent
+// are dropped); the hub's credentials stay with the hub. While the manager is away: 503 assistant_offline, or the
+// last answer of a kept GET.
 func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id string) {
 	guardedApps, guardedRevoke, ok := computerAppsPrecondition(w, r, id)
 	if !ok {
@@ -439,6 +443,8 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 	if changes {
 		h.inboxAnswers.changed(id)
 	}
+	pool := h.relayPool(id)
+	defer pool.settle()
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "manager"
@@ -478,9 +484,7 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 			}
 			return nil
 		},
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return h.dialManager(ctx, id)
-		}, DisableKeepAlives: true, ResponseHeaderTimeout: 5 * time.Minute},
+		Transport:     pool,
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if changes {
@@ -564,10 +568,12 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	nc := websocket.NetConn(cctx, taken.conn, websocket.MessageBinary)
-	return &relayConn{Conn: nc, done: func() {
+	rc := &relayConn{Conn: nc, done: func() {
 		cancel()
 		close(taken.done)
-	}}, nil
+	}}
+	go h.pingRelay(cctx, taken.conn, rc)
+	return rc, nil
 }
 
 // relayConn ends its relay when it is closed.
@@ -575,7 +581,13 @@ type relayConn struct {
 	net.Conn
 	once sync.Once
 	done func()
+	// uses counts the requests the transport gave it, idleAt is that count when it last went back to the pool idle
+	// (relayPool.RoundTrip): it waits there while they are equal.
+	uses, idleAt atomic.Uint64
 }
+
+// idle says whether c waits in its pool for a request.
+func (c *relayConn) idle() bool { return c.idleAt.Load() == c.uses.Load() }
 
 func (c *relayConn) Close() error {
 	err := c.Conn.Close()

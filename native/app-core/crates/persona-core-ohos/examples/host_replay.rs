@@ -4,7 +4,7 @@
 //! records every callback. `harmony/tests/core-host/replay.test.mjs` and `transport.test.mjs` are its clients. The
 //! transport command also decodes raw payloads directly with `persona_core::transport`. The state command projects
 //! existing session/hub fixtures through `persona_core::state`. The projection command covers answer/display,
-//! stream chunks and task indexes. None loads the NAPI library or proves the NAPI glue itself (argument conversion,
+//! stream chunks, task indexes and turns. None loads the NAPI library or proves the NAPI glue itself (argument conversion,
 //! thread-safe functions), which only a device build links.
 //!
 //! # Framing
@@ -437,10 +437,39 @@ fn projection_json(bytes: &[u8]) -> Result<String, String> {
                 .map_err(|error| format!("stream_chunks: input does not decode: {error}"))?;
             serde_json::to_string(&persona_core::stream_chunks::split(&input)).map_err(|e| e.to_string())
         }
+        "stream_repair" => {
+            let input: persona_core::stream_repair::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("stream_repair: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::stream_repair::project(&input)).map_err(|e| e.to_string())
+        }
+        "plain_open_fence" => {
+            let input: persona_core::stream_repair::PlainFenceInput = serde_json::from_value(input.clone())
+                .map_err(|error| format!("plain_open_fence: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::stream_repair::plain_open_fence(&input)).map_err(|e| e.to_string())
+        }
+        "viewed_images" => {
+            let input: persona_core::viewed_images::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("viewed_images: input does not decode: {error}"))?;
+            let projection =
+                persona_core::viewed_images::project(&input).ok_or("viewed_images: input has no viewed line")?;
+            serde_json::to_string(&projection).map_err(|e| e.to_string())
+        }
+        "recents" => {
+            let input: persona_core::recents::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("recents: input does not decode: {error}"))?;
+            let projection =
+                persona_core::recents::input_fixture(&input).map_err(|error| format!("recents: {error}"))?;
+            serde_json::to_string(&projection).map_err(|e| e.to_string())
+        }
         "task_index" => {
             let input: persona_core::task_index::Input = serde_json::from_value(input.clone())
                 .map_err(|error| format!("task_index: input does not decode: {error}"))?;
             serde_json::to_string(&persona_core::task_index::project(&input)).map_err(|e| e.to_string())
+        }
+        "turns" => {
+            let input: persona_core::turns::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("turns: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::turns::project(&input)).map_err(|e| e.to_string())
         }
         _ => Err("projection: unknown projection kind".into()),
     }

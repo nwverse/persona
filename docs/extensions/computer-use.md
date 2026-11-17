@@ -906,12 +906,15 @@ iPhone's side comes next.
   there (to its own relay for the relay): `use` with what the phone has of each, and nothing more goes out on it until
   the node's `resumed` says what the node has; each side then sends on from there, so RFB loses and repeats nothing,
   and a stale video backlog is dropped for a keyframe on the node's side. A direct route that fails, or stays silent for
-  1.5 s with a ping out, puts the channels back on their relays at once (the node does the same on its side). A relay
+  1.5 s with a ping out, puts the channels back on their relays at once (the node does the same on its side). A direct
+  connection whose attach isn't answered within 3 s (`attachWithin`) is lost too, so the route is dialed again (#9218:
+  a redial whose answer went missing used to stay, never pinged, and kept the stream on the relay for good). A relay
   that drops while a direct route carries the session doesn't end it: the session asks the app to open the relay again
   (`attach=1`), which attaches with the token and is the channel's relay again, so the hub keeps the last word. A new
   video stream joins the route in use. Each move is a `PathChange` (the stream's first route is one too, `start`):
   `ScreenVideoLink` sends `update.path` to Persona Screen, keeps it as `route` and calls `onPathChange`, the quality
-  tiers' hook (#6396). Logs (category `screen-link`) carry route kinds and reasons, never addresses.
+  tiers' hook (#6396). Logs (category `screen-link`) carry route kinds and reasons, never addresses: dials that
+  connect or fail ("direct lan: connected" / "no connection"), routes lost ("direct lan: lost"), and moves.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
@@ -1151,7 +1154,10 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   at a constant quality.
 - **Falling back**, for the rest of the stream: ffmpeg can't start (`unavailable`); it ends, or puts out something
   that isn't the next frame (`failed`); any frame takes over 50 ms of its own, more than 10% of the last 2 s's frames
-  take over 8 ms of their own (a process's first frame aside), or a frame is still inside after 200 ms (`slow`). A
+  take over 8 ms of their own, judged once there are 60 of them, or a frame is still inside after 200 ms (`slow`). A
+  process's first frame counts for none of these, and its next 30 (its warm-up: x264's threads starting, the
+  capture's fresh buffers) only for the 50 ms bound; the reason in the log names the frame, the share and the
+  window's median and maximum. A
   frame's own time starts when ffmpeg could start on it (it came in and the frame before it was out): frames that
   waited behind a cold process's first one (30–40 ms) are not slow themselves, which on the first real session they
   were (x264 stopped a fraction of a second in); a report cuts the bitrate or
@@ -1170,6 +1176,118 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   `apple/Packages/PersonaScreenCore` (encodes, decodes with VideoToolbox as the phone does, a keyframe from the spare)
   and `PERSONA_TEST_FFMPEG=… go test -run 'X264|FFmpeg' ./internal/node/` (the probe on the real thing). Without the
   variable both skip the parts that need ffmpeg.
+
+### Phone Screen (#9314)
+
+A third mode next to Mouse Mode and Trackpad Mode: the Mac gets a portrait virtual display shaped like the phone's
+picture, the window the phone picks fills it, and the phone switches windows from a list. Text reads at phone size
+without zooming. For people who already work on their Mac from the live screen; Mouse Mode stays the default.
+The approach and its measurements of macOS follow [Snug](https://github.com/zephyr4123/snug) (MIT; code adapted from it
+keeps its notice, `THIRD_PARTY_NOTICES.md`).
+
+- **Who does what**: Persona Input (Persona Link's helper that already holds Accessibility for pixel scrolling) runs a
+  session, `--socket <path> --token <t> --phone-screen`, started by the node like its scroll session. Moving other apps'
+  windows needs Accessibility (`AXIsProcessTrusted`), which the same System Settings switch gives it. `--preflight`
+  prints a second line, `phone_screen: <version> granted|missing`; a helper from before prints none, and the node then
+  offers nothing.
+- **The virtual display** (`PhoneScreenDisplay.swift`, the sizes in `PersonaInputKit`'s `PhoneScreenFit`): private
+  `CGVirtualDisplay`, portrait, aspect = the picture's height / width (clamped 1…2.2). macOS offers a 2× desktop mode only
+  from 540 × 800 points, so the base width is 540 (wider for a short picture); every 10 points up to 1080 is a mode of the
+  same aspect, HiDPI on, so a window with a large minimum size gets a wider mode and the picture only scales. Three fixed
+  identities (vendor, product, serial), so ColorSync keeps one profile. A new display comes online at the mode macOS
+  remembers for it (the first time 1080 wide at 1×), so the helper switches it to the base width at 2× and places it.
+- **Switching modes from a child**: a short-lived run of the helper's own binary (`--phone-screen-set`, `-mode`, `-has`)
+  does every mode switch and move. A process that switched a virtual display's mode itself keeps it online about 40 s
+  after letting it go (Snug); switched from a child, it went offline 0.02 s after release here. The helper also can't read
+  the modes of a display that appeared after it started, so its size comes from `CGDisplayBounds` and a child checks that
+  a new mode is listed.
+- **Where it goes**: against the main display on the first side with room (right, left, below, above), aligned to main's
+  top or left edge (`PhoneScreenPlacement`), because of how Screen Sharing lays out displays of different scales (next).
+- **Framebuffer layout** (measured on macOS 26.6 with one 1920 × 1080 1× display and a 540 × 950 pt 2× virtual one):
+  Screen Sharing draws each display at its own pixel size, so the framebuffer was 3000 × 1900, not the displays' point
+  box (2460 × 1080). Five placements (left, right, below, above, offset) all fit one rule: the edge of a display that
+  touches the main display sits at main's pixel coordinate, and the display extends by its own pixels. A 540 × 1021 pt
+  display right of main gave 3000 × 2042, as the rule says. The node's `displays[]` carry `scale` (AppKit's
+  `backingScaleFactor`) so the phone can apply it.
+- **Other displays and windows stay put**: before adding and after removing, the helper records the other displays' modes
+  and the frames of every window on screen; once the virtual display is offline it sets back any mode macOS changed (it
+  applies the modes it remembers per combination of displays) and moves back windows that moved.
+- **Windows** (`PhoneScreenSession.swift`, `PhoneScreenAX.swift`): the list is the standard windows of apps in the Dock
+  (Accessibility, minimized ones included), front to back as on screen. Placing a window writes where it was (frame,
+  minimized, full screen) to `~/.persona/phone-screen.json` first (no record, no move), takes it out of full screen or the
+  Dock, sets size, position, size and checks (up to 10 tries; the same frame twice means the app or the menu bar holds it
+  there), takes a wider mode when the app's minimum size is larger, and brings it to the front through Accessibility's
+  `AXFrontmost` (macOS 14 and later ignore `activate()` from a helper in the background). Placing another window puts the
+  previous one back. Every placement starts again from the base width (#9500): before, one window with a large minimum
+  size (800 pt) left the display at 800 pt for every window after it. The `place` answer carries `displays`, the whole
+  arrangement after the change, since the phone finds the display on the picture by all of them. Every Accessibility call waits at most 1 s for an app that hangs. A session that died leaves records,
+  and the next one puts those windows back before anything else.
+- **Text size** (#9500): 540 pt on a phone about 400 pt wide is about three quarters of the Mac's size, and a narrower
+  display can't help: macOS marks every 2× mode under 540 pt wide not usable for the desktop (measured 402, 420, 430,
+  480 and 500 pt on macOS 26.6). So terminals and editors (Ghostty, Terminal, iTerm2, VS Code, Cursor, Zed;
+  `PhoneScreenZoom`) get ⌘+ twice when placed, posted to their process alone, and ⌘− twice when they go back; the steps
+  are kept in the restore record first, so a crash still undoes them. Browsers are left alone: their zoom is per site and
+  would follow the user's other tabs, and a page at 540 pt is already laid out narrow. Measured: Ghostty's text about
+  15 pt instead of 13 on the display, and its window back at 13 afterwards. It goes back on every way a session ends: `stop` (another mode, the
+  page closed), the socket closing without `stop` (the connection lost, the app killed, the node or Link restarting:
+  the helper sees the socket end and puts everything back), and SIGTERM. A helper that died first (a crash, `kill -9`)
+  leaves its records: the node runs `--phone-screen-restore`, which replays them, 5 s after any session ends and when it
+  starts, only while no session runs, a new session waiting for it, so a window's text is never made smaller twice. For
+  an app whose zoom is the whole app's (Zed), ⌘− goes to the app even when the window went away. Measured on this Mac:
+  Ghostty raised, its helper killed with `kill -9`, then `--phone-screen-restore` ("put back 1, kept 0"): records gone,
+  window and text size as before; the socket closed without `stop`: the same. Left: VS Code and Cursor keep a zoom per
+  workspace, so one of their windows closed on the phone keeps it when reopened (as Snug notes).
+- **Ending**: when the node closes the socket (the phone sent `stop`, its RFB stream ended, or the node went away) or the
+  helper gets SIGTERM, it puts every window back, lets the display go, waits until it is offline and sets back what moved.
+  A display let go while the Mac's monitor sleeps goes offline only when it wakes (Snug).
+- **Node** (`phonescreen.go`): `screen.phone {pair, op, width, height, pid, window}` with `op` start, windows, place or
+  stop. Like the video channel it needs the RFB stream carrying `pair` open and signed in (`not_signed_in`), allows one
+  session per Mac (`busy` for another pair), and attaches the session to that stream, so it ends when the stream does.
+  Requests go to the helper one at a time; one that takes longer than its limit (start 30 s, place 30 s, windows 15 s)
+  ends the session. The statuses carry `phone_screen {version, permission}` from the cached `--preflight`.
+- **Manager**: `POST /api/v1/machines/{mid}/computer/phone-screen` (protocol.md), with the clipboard's gate. Window titles
+  are never logged.
+- **iPhone** (`VNCPage`, `PhoneScreenLink`, `PhoneScreenWindows`): ⋯ › Mode lists Phone Screen when the Mac's status has
+  `phone_screen` (a kept choice on a Mac that no longer offers it acts as Mouse Mode). While the mode is on and the screen
+  is live, the page starts the session for its RFB connection's `pair` with the picture's size in points, and a new
+  connection starts it again. The shape is read with the keyboard down, followed until the display is up and then kept
+  (#9500): only the phone turning reads it again. The keyboard, the shortcut row and the lines over the picture change
+  its height for a while and never send `start`; before, a size read with the keyboard up made the Mac rebuild the
+  display nearly square. A line over the top of the picture says "Setting up the phone screen…" meanwhile, or why it
+  couldn't (Accessibility not allowed, another device has it, Persona Link too old). Upright, the picture always fills
+  the view's width (`VNCZoom.phoneFit`): with the keyboard up it keeps its size and the keyboard covers its bottom, moved
+  up just enough to keep the pointer (where the user tapped, usually the text field) above the keyboard, and two fingers
+  move it to show the rest. The page shows only the new display: RFB crops to it with the mixed-scale rule
+  (`VNCDisplays.anchored`; Screen Sharing sends DesktopSize when the display comes and goes, measured), and the video
+  channel captures it by its id. Each `place` answer's `displays` replaces the arrangement, so a display that widened
+  (Screen Sharing's picture grew from 3000 × 2042 to 3520 × 3024) is found again; before #9500 the page kept the
+  arrangement from `start` and lost the display after such a window. The first time it is
+  up with nothing on it, and from the bottom bar's Windows button, a sheet lists the Mac's windows by app (the one on the
+  display checked, minimized ones marked); a tap puts one there and closes it. Leaving the mode or closing the page sends
+  `stop`. Touches: a tap clicks there; one finger scrolls (by the point through Persona Input where it may, with a coast);
+  held half a second then dragged, it drags (selects text); held and lifted, the right button; two fingers and pinching as
+  in Mouse Mode. The mock hub's `MOCK_PHONE_SCREEN=1` (with `MOCK_SCREEN=fake`) plays a Mac that has it, for screenshots.
+- **Picture in Picture** (#9659): the small window shows what the page shows, the portrait display alone, so it is
+  portrait and shaped like it. Its source's frames are cut to the display at the framebuffer's own pixels (2× on the
+  Mac, so it stays sharp) by `RFBFrameSink`, with the same damage-only copying; the page sets the cut
+  (`RFBSession.cutSmallWindow`), and a new connection or a framebuffer of another size shows all of the picture. The
+  source lies over the display as the page draws it, where the system's transition starts and Restore ends. As the
+  small window takes the Mac, the page closes without sending `stop`: `VNCPiP` keeps its `PhoneScreenLink`, so the
+  display and the window on it stay; Restore hands it back to the page (no second `start`, no window list again), and
+  closing the small window sends `stop` as leaving the mode does. A mode switch, another window (the display may
+  widen) or turning the phone changes the cut, so the small window's shape follows; Mouse and Trackpad Mode keep the
+  whole picture. Only the iPhone changed: the Mac and the node do as before. The iPhone simulators have no Picture in
+  Picture; `VNCTests` checks the source's shape there (`-showPiPSource`) and the system's small window on a stock iPad
+  simulator.
+- **Measured on a Mac** (macOS 26.6, 2026-11-16, a node stand-in driving the signed helper): start 1.7–2.1 s to a 540 ×
+  1021 pt display at 2×; place 0.6–0.9 s; switching windows put the previous one back; stop 0.9 s, after which the display
+  was gone, the main display's mode unchanged and none of 180 windows had moved.
+- **Measured over Screen Sharing**: a client connected when the display comes gets DesktopSize 3000 × 2042 about 1.7 s
+  after `start` and 1920 × 1080 again after `stop`.
+- **Known limits**: `CGVirtualDisplay` is private and may change with macOS. On a Mac with no display attached any added
+  display replaces the default one (Snug). Windows in another Space or in full screen in their own Space are not listed
+  yet. With displays of mixed scales chained away from the main display, RFB may still not find the virtual display
+  (video captures it by id either way).
 
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 

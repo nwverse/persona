@@ -25,6 +25,9 @@ pub struct Input {
     /// replaces both for its group, so a pin on one hub cannot pin the same machine/session on another.
     #[serde(default)]
     pub hub_preferences: Option<StdHashMap<String, HubPreferences>>,
+    /// Manager-scoped preferences, applied only to the matching group + manager. Hub preferences remain the fallback.
+    #[serde(default)]
+    pub manager_preferences: Option<StdHashMap<String, HubPreferences>>,
     pub settings: Settings,
 }
 
@@ -36,15 +39,28 @@ pub struct Machine {
     /// matching iOS's `MachineRef.path`.
     #[serde(default)]
     pub group: Option<String>,
+    /// An owner-qualified machine registry entry. Legacy input without it retains `group|id` exactly.
+    #[serde(default)]
+    pub manager: Option<String>,
+}
+
+/// The owner-qualified path: `group|manager|id` when manager is supplied, otherwise the existing `group|id`.
+pub fn machine_path(group: Option<&str>, manager: Option<&str>, id: &str) -> String {
+    match manager {
+        Some(manager) if !manager.is_empty() => match group {
+            Some(group) if !group.is_empty() => format!("{group}|{manager}|{id}"),
+            _ => format!("{manager}|{id}"),
+        },
+        _ => match group {
+            Some(group) if !group.is_empty() => format!("{group}|{id}"),
+            _ => id.to_owned(),
+        },
+    }
 }
 
 impl Machine {
-    /// The full path: `group|id` for a non-default hub group, bare `id` for the default.
     fn path(&self) -> String {
-        match self.group.as_deref() {
-            Some(group) if !group.is_empty() => format!("{group}|{}", self.id),
-            _ => self.id.clone(),
-        }
+        machine_path(self.group.as_deref(), self.manager.as_deref(), &self.id)
     }
 }
 
@@ -65,22 +81,39 @@ pub struct HubPreferences {
 }
 
 impl Input {
-    fn preferences(&self, group: &str) -> (&Pins, &Mutes) {
-        self.hub_preferences
-            .as_ref()
-            .and_then(|preferences| preferences.get(group))
-            .map_or((&self.pins, &self.mutes), |preferences| {
-                (&preferences.pins, &preferences.mutes)
+    fn preferences(&self, group: &str, manager: Option<&str>) -> (&Pins, &Mutes) {
+        manager
+            .filter(|manager| !manager.is_empty())
+            .and_then(|manager| {
+                let key = format!("{group}|{manager}");
+                self.manager_preferences.as_ref()?.get(&key)
             })
+            .map_or_else(
+                || {
+                    self.hub_preferences
+                        .as_ref()
+                        .and_then(|preferences| preferences.get(group))
+                        .map_or((&self.pins, &self.mutes), |preferences| {
+                            (&preferences.pins, &preferences.mutes)
+                        })
+                },
+                |preferences| (&preferences.pins, &preferences.mutes),
+            )
     }
 
     fn pinned(&self, session: &Session) -> bool {
-        let (pins, _) = self.preferences(session.app_hub_group.as_deref().unwrap_or(""));
+        let (pins, _) = self.preferences(
+            session.app_hub_group.as_deref().unwrap_or(""),
+            session.manager.as_deref(),
+        );
         pins.sessions.iter().any(|pin| session.matches_preference(pin))
     }
 
     fn muted(&self, session: &Session) -> bool {
-        let (_, mutes) = self.preferences(session.app_hub_group.as_deref().unwrap_or(""));
+        let (_, mutes) = self.preferences(
+            session.app_hub_group.as_deref().unwrap_or(""),
+            session.manager.as_deref(),
+        );
         if mutes.sessions.iter().any(|id| session.matches_preference(id)) {
             return true;
         }
@@ -96,12 +129,12 @@ impl Input {
     }
 
     fn pinned_space(&self, space: &Space<'_>) -> bool {
-        let (pins, _) = self.preferences(&space.group);
+        let (pins, _) = self.preferences(&space.group, space.manager.as_deref());
         pins.spaces.contains(&format!("{}/{}", space.machine_id, space.name))
     }
 
     fn muted_space(&self, space: &Space<'_>) -> bool {
-        let (_, mutes) = self.preferences(&space.group);
+        let (_, mutes) = self.preferences(&space.group, space.manager.as_deref());
         mutes.spaces.contains(&format!("{}/{}", space.machine_id, space.name))
     }
 }
@@ -127,6 +160,9 @@ pub struct Settings {
     pub query: String,
     #[serde(default)]
     pub machine_filter: String,
+    /// Archived history may include offline rows, without making ordinary offline live sessions visible.
+    #[serde(default)]
+    pub history: bool,
     #[serde(default)]
     pub kept: Vec<String>,
     #[serde(default)]
@@ -138,6 +174,15 @@ pub struct Settings {
     /// The row style does not affect the data projection.
     #[serde(default)]
     pub compact: bool,
+    /// Opt into the real By Project tab rows. Legacy fixtures omit it and keep flat session rows.
+    #[serde(default)]
+    pub presentation_rows: bool,
+    /// Paged spaces whose hub totals may not have arrived yet. Missing totals are zero, not local-window counts.
+    #[serde(default)]
+    pub bounded_spaces: BTreeSet<String>,
+    /// Counts supplied by a paged list, keyed by the same space id as its sessions.
+    #[serde(default)]
+    pub aggregate: StdHashMap<String, AggregateCounts>,
     /// The open agent that was Unread when it was opened (`AppModel.heldInList`): it keeps its place and stays
     /// out of the idle folds until its chat is left (#2213).
     #[serde(default)]
@@ -174,6 +219,9 @@ pub enum Quick {
 pub struct Projection {
     pub counts: Counts,
     pub groups: Vec<Group>,
+    /// Real tab and agent rows of the compact By Project list; omitted for the legacy flat contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<Entry>>,
     pub unread_shown: Vec<String>,
     /// By Project always carries this field; other groupings omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -192,6 +240,21 @@ pub struct Counts {
     pub working: usize,
     #[serde(rename = "backgroundWaiting")]
     pub background_waiting: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Entry {
+    pub id: String,
+    pub fold_id: String,
+    pub rows: Vec<String>,
+    pub visible_rows: Vec<String>,
+    pub folded: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AggregateCounts {
+    #[serde(default)]
+    pub state: StdHashMap<String, usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -227,10 +290,18 @@ struct Row {
     /// `group|machine_id` for a non-default hub group, as iOS's `MachineRef.path`.
     machine_path: String,
     group: String,
+    manager: Option<String>,
     state: AgentState,
+    /// Archive history's membership flag; ordinary offline rows remain excluded.
+    listed: bool,
+    archived: bool,
     sort_date: Option<i128>,
     is_waiting: bool,
     background_waiting: bool,
+    nested_subtask: bool,
+    space_kind: String,
+    pane_id: Option<String>,
+    pane_index: Option<i64>,
     pinned: bool,
     /// The open agent that was Unread when opened (`AppModel.heldInList`): keeps its rank-1 position,
     /// stays visible, and prevents its space from folding into quiet spaces (#2213).
@@ -239,7 +310,7 @@ struct Row {
     awaits_reply: bool,
     space_id: String,
     space_name: String,
-    slot_index: i64,
+    slot_index: Option<i64>,
     slot_id: String,
 }
 
@@ -251,42 +322,69 @@ impl Row {
         let muted = input.muted(&session);
         let space_name = session.space_name.clone().unwrap_or_else(|| folder_name(&session.cwd));
         let group = session.app_hub_group.as_deref().unwrap_or("");
+        let machine_path = machine_path(
+            session.app_hub_group.as_deref(),
+            session.manager.as_deref(),
+            &session.machine_id,
+        );
         let prefix = if group.is_empty() {
             String::new()
         } else {
             format!("{group}|")
         };
-        let machine_path = format!("{prefix}{}", session.machine_id);
-        let held = input.settings.held.as_deref() == Some(short_id.as_str());
+        let row_id = if session.manager.as_deref().is_some_and(|manager| !manager.is_empty()) {
+            format!("{}|{}", machine_path, session.session_id)
+        } else {
+            format!("{prefix}{short_id}")
+        };
+        // iOS compares the complete SessionKey.path; a hub-less short id must not hold a same-named row in another hub.
+        let held = input.settings.held.as_deref() == Some(row_id.as_str());
         let sort_date = if state == AgentState::Working {
             session.state_since.as_deref().or(session.updated_at.as_deref())
         } else {
             session.updated_at.as_deref()
         };
         Self {
-            id: format!("{prefix}{short_id}"),
+            id: row_id,
             short_id,
             machine_id: session.machine_id.clone(),
             session_id: session.session_id.clone(),
             machine_path,
             group: group.to_owned(),
+            manager: session.manager.clone(),
             state,
+            listed: state.is_live() || (input.settings.history && session.archived),
+            archived: session.archived,
             sort_date: sort_date.and_then(utc_timestamp),
-            is_waiting: state.is_quiet() && session.is_waiting(),
-            background_waiting: state == AgentState::Working && session.background_waiting,
+            is_waiting: state.is_quiet()
+                && (session.is_waiting()
+                    || session
+                        .children
+                        .as_ref()
+                        .is_some_and(|children| children.working > 0 || children.needs_you > 0 || children.sides > 0)),
+            background_waiting: state == AgentState::Working
+                && session.background_waiting
+                && session
+                    .children
+                    .as_ref()
+                    .is_none_or(|children| children.working == 0 && children.needs_you == 0),
+            nested_subtask: session.nested_subtask,
+            space_kind: session.space_kind.clone().unwrap_or_default(),
+            pane_id: session.pane_id.clone(),
+            pane_index: session.pane_index,
             pinned,
             held,
             muted,
             awaits_reply: session.awaits_reply,
             space_id: session.space_id.clone().unwrap_or_else(|| "-".to_owned()),
             space_name,
-            slot_index: session.slot_index.unwrap_or(0),
+            slot_index: session.slot_index,
             slot_id: session.slot_id.clone().unwrap_or_default(),
         }
     }
 
     fn stays(&self) -> bool {
-        !self.state.is_quiet() || self.pinned || self.held || self.is_waiting || self.awaits_reply()
+        !self.state.is_quiet() || self.pinned || self.held || self.is_waiting || self.awaits_reply() || self.archived
     }
 
     fn awaits_reply(&self) -> bool {
@@ -389,16 +487,28 @@ impl Query {
         let machine = input.machines.iter().find(|machine| {
             machine.id == session.machine_id
                 && machine.group.as_deref().unwrap_or("") == session.app_hub_group.as_deref().unwrap_or("")
+                && machine.manager.as_deref() == session.manager.as_deref()
         });
         let machine_name = machine.map_or("", |machine| machine.name.as_str()).to_lowercase();
-        let group = session.app_hub_group.as_deref().unwrap_or("");
-        let machine_path = if group.is_empty() {
-            session.machine_id.clone()
-        } else {
-            format!("{group}|{}", session.machine_id)
-        };
+        let machine_path = machine_path(
+            session.app_hub_group.as_deref(),
+            session.manager.as_deref(),
+            &session.machine_id,
+        );
         if !input.settings.machine_filter.is_empty() && machine_path != input.settings.machine_filter {
-            return false;
+            let legacy = session
+                .app_hub_group
+                .as_deref()
+                .map_or(session.machine_id.clone(), |group| {
+                    if group.is_empty() {
+                        session.machine_id.clone()
+                    } else {
+                        format!("{group}|{}", session.machine_id)
+                    }
+                });
+            if legacy != input.settings.machine_filter {
+                return false;
+            }
         }
         let machine_path = machine_path.to_lowercase();
         if !self
@@ -574,9 +684,12 @@ fn project_impl(input: &Input, oldest_first: bool) -> Projection {
             }
         }
     }
+    let rows = (input.settings.grouping == Grouping::Space && input.settings.presentation_rows)
+        .then(|| tab_rows(&unpinned, &groups, &input.settings));
     Projection {
         counts,
         groups,
+        rows,
         unread_shown,
         quiet_title: (input.settings.grouping == Grouping::Space).then_some(quiet_title),
     }
@@ -590,7 +703,7 @@ pub fn project_with_order(input: &Input) -> Projection {
 
 fn counts(base: &[Row]) -> Counts {
     let mut counts = Counts::default();
-    for row in base {
+    for row in base.iter().filter(|row| !row.nested_subtask) {
         match row.counted_state() {
             // ChatsView.count(_:) counts by countedState without excluding mutes (the filter bar's
             // `filterCounts` is a separate predicate, AgentFilter.matches, which does exclude them).
@@ -644,7 +757,7 @@ fn ordered_with<'a>(rows: impl IntoIterator<Item = &'a Row>, by_rank: bool, olde
 fn pinned_sessions<'a>(rows: &[&'a Row], input: &Input) -> Vec<&'a Row> {
     let mut pinned: Vec<&Row> = rows.iter().copied().filter(|row| row.pinned).collect();
     pinned.sort_by_key(|row| {
-        let (pins, _) = input.preferences(&row.group);
+        let (pins, _) = input.preferences(&row.group, row.manager.as_deref());
         pins.sessions
             .iter()
             .position(|id| *id == row.short_id || *id == row.id)
@@ -665,7 +778,7 @@ const STATE_SECTIONS: [(&str, &str); 8] = [
 ];
 
 fn state_groups(rows: &[&Row], quick: Quick, settings: &Settings, by_rank: bool, oldest_first: bool) -> Vec<Group> {
-    let live: Vec<&Row> = rows.iter().copied().filter(|row| row.state.is_live()).collect();
+    let live: Vec<&Row> = rows.iter().copied().filter(|row| row.listed).collect();
     STATE_SECTIONS
         .iter()
         .enumerate()
@@ -698,7 +811,7 @@ fn machine_groups(rows: &[&Row], input: &Input, quick: Quick, by_rank: bool) -> 
             let members: Vec<&Row> = rows
                 .iter()
                 .copied()
-                .filter(|row| row.machine_path == path && row.state.is_live())
+                .filter(|row| row.machine_path == path && row.listed)
                 .collect();
             if members.is_empty() {
                 return None;
@@ -773,6 +886,7 @@ struct Space<'a> {
     id: String,
     machine_id: String,
     group: String,
+    manager: Option<String>,
     name: String,
     members: Vec<&'a Row>,
     priority: u8,
@@ -784,13 +898,15 @@ struct Space<'a> {
 
 fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -> (Vec<Group>, bool) {
     let mut spaces: BTreeMap<String, Space> = BTreeMap::new();
-    for row in rows.iter().copied().filter(|row| row.state.is_live()) {
+    for row in rows.iter().copied().filter(|row| row.listed) {
+        let machine_path = row.machine_path.clone();
         let space = spaces
-            .entry(format!("{}/{}", row.machine_path, row.space_id))
+            .entry(format!("{}/{}", machine_path, row.space_id))
             .or_insert_with(|| Space {
-                id: format!("{}/{}", row.machine_path, row.space_id),
+                id: format!("{}/{}", machine_path, row.space_id),
                 machine_id: row.machine_id.clone(),
                 group: row.group.clone(),
+                manager: row.manager.clone(),
                 name: row.space_name.clone(),
                 members: Vec::new(),
                 priority: u8::MAX,
@@ -810,7 +926,8 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
         space.muted = input.muted_space(space);
         space.members.sort_by(|a, b| {
             a.slot_index
-                .cmp(&b.slot_index)
+                .unwrap_or(0)
+                .cmp(&b.slot_index.unwrap_or(0))
                 .then_with(|| a.slot_id.cmp(&b.slot_id))
                 .then_with(|| a.session_id.cmp(&b.session_id))
                 .then_with(|| a.id.cmp(&b.id))
@@ -884,7 +1001,45 @@ fn make_space(space: Space, quiet: bool, input: &Input, quick: Quick, by_time: b
     let visible_rows = if folded {
         Vec::new()
     } else if quiet {
-        ids(&space.members)
+        ids(&ordered(space.members.iter().copied(), quick == Quick::All && !by_time))
+    } else if input.settings.presentation_rows {
+        let expand = input.settings.expanded_idle.contains(&space.id) || !input.settings.query.is_empty();
+        let mut by_tab: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
+        for row in &space.members {
+            if let Some(key) = tab_key(row) {
+                by_tab.entry(key).or_default().push(row);
+            }
+        }
+        let mut visible = Vec::new();
+        let mut placed = BTreeSet::new();
+        for row in ordered(space.members.iter().copied(), quick == Quick::All && !by_time) {
+            let Some(key) = tab_key(row) else {
+                if quick != Quick::All || row.stays() || expand {
+                    visible.push(row.id.clone());
+                }
+                continue;
+            };
+            if !placed.insert(key.clone()) {
+                continue;
+            }
+            let panes = by_tab.get(&key).into_iter().flatten().copied().collect::<Vec<_>>();
+            if panes.len() < 2 {
+                if quick != Quick::All || row.stays() || expand {
+                    visible.push(row.id.clone());
+                }
+            } else if quick != Quick::All || panes.iter().any(|pane| pane.stays()) || expand {
+                let mut panes = panes.clone();
+                panes.sort_by(|a, b| {
+                    a.pane_index
+                        .unwrap_or(i64::MAX)
+                        .cmp(&b.pane_index.unwrap_or(i64::MAX))
+                        .then_with(|| pane_number(a).cmp(&pane_number(b)))
+                        .then_with(|| a.session_id.cmp(&b.session_id))
+                });
+                visible.extend(ids(&panes));
+            }
+        }
+        visible
     } else {
         let members = ordered(space.members.iter().copied(), quick == Quick::All && !by_time);
         let expand = input.settings.expanded_idle.contains(&space.id) || !input.settings.query.is_empty();
@@ -894,9 +1049,101 @@ fn make_space(space: Space, quiet: bool, input: &Input, quick: Quick, by_time: b
             .map(|row| row.id.clone())
             .collect()
     };
-    let state_counts = state_counts(&space.members);
+    let (state_counts, background_waiting) = if input.settings.bounded_spaces.contains(&space.id) {
+        let aggregate = input.settings.aggregate.get(&space.id);
+        let counts = StateCounts {
+            needs_you: aggregate
+                .and_then(|counts| counts.state.get("needs_you").copied())
+                .unwrap_or(0),
+            working: aggregate
+                .and_then(|counts| counts.state.get("working").copied())
+                .unwrap_or(0),
+            unread: aggregate
+                .and_then(|counts| counts.state.get("unread").copied())
+                .unwrap_or(0),
+            idle: aggregate
+                .and_then(|counts| counts.state.get("idle").copied())
+                .unwrap_or(0),
+            unknown: aggregate
+                .and_then(|counts| counts.state.get("unknown").copied())
+                .unwrap_or(0),
+        };
+        // Hub state totals cover background waiting as working; the immutable rows carry the finer-grained flag.
+        (
+            counts,
+            space
+                .members
+                .iter()
+                .filter(|row| row.background_waiting && !row.nested_subtask)
+                .count(),
+        )
+    } else {
+        input.settings.aggregate.get(&space.id).map_or_else(
+            || {
+                (
+                    state_counts(&space.members),
+                    space
+                        .members
+                        .iter()
+                        .filter(|row| row.background_waiting && !row.nested_subtask)
+                        .count(),
+                )
+            },
+            |aggregate| {
+                let counts = StateCounts {
+                    needs_you: aggregate.state.get("needs_you").copied().unwrap_or(0),
+                    working: aggregate.state.get("working").copied().unwrap_or(0),
+                    unread: aggregate.state.get("unread").copied().unwrap_or(0),
+                    idle: aggregate.state.get("idle").copied().unwrap_or(0),
+                    unknown: aggregate.state.get("unknown").copied().unwrap_or(0),
+                };
+                // The hub supplies state totals only. Waiting remains a property of the immutable session rows.
+                (
+                    counts,
+                    space
+                        .members
+                        .iter()
+                        .filter(|row| row.background_waiting && !row.nested_subtask)
+                        .count(),
+                )
+            },
+        )
+    };
     let rows = if quiet {
-        ids(&space.members)
+        ids(&ordered(space.members.iter().copied(), quick == Quick::All && !by_time))
+    } else if input.settings.presentation_rows {
+        let mut by_tab: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
+        for row in &space.members {
+            if let Some(key) = tab_key(row) {
+                by_tab.entry(key).or_default().push(row);
+            }
+        }
+        let mut output = Vec::with_capacity(space.members.len());
+        let mut placed = BTreeSet::new();
+        for row in ordered(space.members.iter().copied(), quick == Quick::All && !by_time) {
+            let Some(key) = tab_key(row) else {
+                output.push(row);
+                continue;
+            };
+            let Some(panes) = by_tab.get(&key) else { continue };
+            if panes.len() < 2 {
+                output.push(row);
+                continue;
+            }
+            if !placed.insert(key) {
+                continue;
+            }
+            let mut panes = panes.clone();
+            panes.sort_by(|a, b| {
+                a.pane_index
+                    .unwrap_or(i64::MAX)
+                    .cmp(&b.pane_index.unwrap_or(i64::MAX))
+                    .then_with(|| pane_number(a).cmp(&pane_number(b)))
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+            });
+            output.extend(panes);
+        }
+        ids(&output)
     } else {
         ids(&ordered(space.members.iter().copied(), quick == Quick::All && !by_time))
     };
@@ -907,17 +1154,148 @@ fn make_space(space: Space, quiet: bool, input: &Input, quick: Quick, by_time: b
         visible_rows,
         folded,
         parent: quiet.then(|| "quiet".to_owned()),
-        spoken: Some(spoken(
-            &state_counts,
-            space.members.iter().filter(|row| row.background_waiting).count(),
-        )),
+        spoken: Some(spoken(&state_counts, background_waiting)),
         state_counts: Some(state_counts),
+    }
+}
+
+fn tab_key(row: &Row) -> Option<String> {
+    if row.slot_id.is_empty() || row.space_id == "-" || row.space_id.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{}/{}:{}/{}",
+            row.machine_path, row.space_kind, row.space_id, row.slot_id
+        ))
+    }
+}
+
+/// The rows the compact By Project view actually draws. A quiet space opens flat pane rows, not tab headers.
+fn tab_rows(rows: &[&Row], groups: &[Group], settings: &Settings) -> Vec<Entry> {
+    let pinned: Vec<&Row> = rows.iter().copied().filter(|row| row.pinned).collect();
+    let mut entries = plain_entries(&pinned);
+    for group in groups.iter().filter(|group| group.id != "pinned") {
+        if group.folded {
+            continue;
+        }
+        let members: Vec<&Row> = rows
+            .iter()
+            .copied()
+            .filter(|row| group.rows.contains(&row.id))
+            .collect();
+        let expanded = settings.expanded_idle.contains(&group.id) || !settings.query.is_empty();
+        let busy: BTreeSet<&str> = members
+            .iter()
+            .filter(|row| row.stays())
+            .map(|row| row.id.as_str())
+            .collect();
+        if group.parent.as_deref() == Some("quiet") {
+            let mut ordered = members;
+            ordered.sort_by(|a, b| {
+                a.slot_index
+                    .unwrap_or(0)
+                    .cmp(&b.slot_index.unwrap_or(0))
+                    .then_with(|| a.slot_id.cmp(&b.slot_id))
+                    .then_with(|| a.pane_index.unwrap_or(i64::MAX).cmp(&b.pane_index.unwrap_or(i64::MAX)))
+                    .then_with(|| pane_number(a).cmp(&pane_number(b)))
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+            });
+            entries.extend(plain_entries(&ordered));
+            continue;
+        }
+        let mut owned_tabs: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
+        for row in &members {
+            if let Some(key) = tab_key(row) {
+                owned_tabs.entry(key).or_default().push(row);
+            }
+        }
+        let mut placed: BTreeSet<String> = BTreeSet::new();
+        for row in &members {
+            if !busy.contains(row.id.as_str()) && !expanded && settings.quick == Quick::All {
+                continue;
+            }
+            let Some(key) = tab_key(row) else {
+                if let Some(entry) = plain_entries(&[row]).into_iter().next() {
+                    entries.push(entry);
+                }
+                continue;
+            };
+            let Some(panes) = owned_tabs.get(&key) else { continue };
+            if panes.len() < 2 {
+                if let Some(entry) = plain_entries(&[row]).into_iter().next() {
+                    entries.push(entry);
+                }
+                continue;
+            }
+            if !placed.insert(key.clone()) {
+                continue;
+            }
+            let mut panes = panes.clone();
+            panes.sort_by(|a, b| {
+                a.pane_index
+                    .unwrap_or(i64::MAX)
+                    .cmp(&b.pane_index.unwrap_or(i64::MAX))
+                    .then_with(|| pane_number(a).cmp(&pane_number(b)))
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+            });
+            let fold_id = tab_fold_id(row);
+            let folded = settings.query.is_empty() && settings.folded.contains(&fold_id);
+            entries.push(Entry {
+                id: format!("tab|{key}"),
+                fold_id,
+                rows: ids(&panes),
+                visible_rows: if folded { Vec::new() } else { ids(&panes) },
+                folded,
+            });
+        }
+    }
+    entries
+}
+
+fn plain_entries(rows: &[&Row]) -> Vec<Entry> {
+    rows.iter()
+        .map(|row| Entry {
+            id: row.id.clone(),
+            fold_id: row.id.clone(),
+            rows: vec![row.id.clone()],
+            visible_rows: vec![row.id.clone()],
+            folded: false,
+        })
+        .collect()
+}
+
+fn tab_fold_id(row: &Row) -> String {
+    let slot = row
+        .slot_index
+        .map_or_else(|| row.slot_id.clone(), |index| index.to_string());
+    format!("tab/{}/{}/{}", row.machine_path, row.space_name, slot)
+}
+
+fn pane_number(row: &Row) -> Option<i64> {
+    let id = row.pane_id.as_deref().filter(|id| !id.is_empty())?;
+    let suffix = id.rsplit_once(':').map_or(id, |(_, suffix)| suffix);
+    if let Some(number) = suffix.strip_prefix('p')
+        && !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        && let Ok(value) = i64::from_str_radix(number, 36)
+    {
+        return Some(value);
+    }
+    let digits: String = suffix
+        .chars()
+        .rev()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.chars().rev().collect::<String>().parse().ok()
     }
 }
 
 fn state_counts(rows: &[&Row]) -> StateCounts {
     let mut counts = StateCounts::default();
-    for row in rows {
+    for row in rows.iter().filter(|row| !row.nested_subtask) {
         match row.counted_state() {
             AgentState::NeedsYou => counts.needs_you += 1,
             AgentState::Working => counts.working += 1,
@@ -933,11 +1311,14 @@ fn state_counts(rows: &[&Row]) -> StateCounts {
 fn spoken(counts: &StateCounts, background_waiting: usize) -> String {
     let mut phrases = Vec::new();
     for (count, label) in [
-        (counts.needs_you, "需要你"),                                // i18n-ignore
-        (counts.working, "工作中"),                                  // i18n-ignore
-        (counts.unread, "完成未看"),                                 // i18n-ignore
-        (background_waiting, "后台等待中"),                          // i18n-ignore
-        (counts.idle + counts.unknown - background_waiting, "空闲"), // i18n-ignore
+        (counts.needs_you, "需要你"),       // i18n-ignore
+        (counts.working, "工作中"),         // i18n-ignore
+        (counts.unread, "完成未看"),        // i18n-ignore
+        (background_waiting, "后台等待中"), // i18n-ignore
+        (
+            (counts.idle + counts.unknown).saturating_sub(background_waiting),
+            "空闲", // i18n-ignore
+        ),
     ] {
         if count > 0 {
             phrases.push(format!("{count} 个{label}")); // i18n-ignore
