@@ -70,7 +70,7 @@ Then install what you need, for example:
 
 ## How it works
 
-You run a small hub on an always-on machine; your devices talk only to it, and it reaches each of your computers. Agents run in herdr, Orca, Herdr App, Paseo or Cindy, or through a runtime integration. The main chat can also use [Claude Agent SDK](docs/assistant/model-config.md#main-chat-runtime-2455) instead of the Claude Code CLI; this is a main-chat backend, not a separate coding Agent. Engine and runtime capabilities vary; Cindy's read-only database fallback needs the host API for sending and interruption. Your data stays on your own hardware.
+You run a small hub on an always-on machine; your devices talk only to it, and it reaches each of your computers. Agents run in herdr, Orca, Herdr App, Paseo or Cindy, or through a runtime integration. Engine and runtime capabilities vary; Cindy's read-only database fallback needs the host API for sending and interruption. Your data stays on your own hardware.
 [Architecture](docs/server/architecture.md) · [Network and security](docs/operations/network.md)
 
 ## Get started

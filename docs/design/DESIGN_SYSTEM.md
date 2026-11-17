@@ -78,7 +78,7 @@ Relationship to other docs:
 | `apple/PersonaTests/TokenRatchetTests.swift` with `apple/PersonaTests/TokenBaseline.json` | Per-file counts of hard-coded padding, HStack spacing, corner radius, hex color, animation, level weight, fixed frame and raw SF Symbol. Counts may only go down. Baseline: 339 hits in 64 files, 46% of them hex colors in terminal, Lark and OS-badge palettes. |
 | `apple/PersonaTests/TypeScaleTests.swift` | No system font styles or sizes outside `Theme.Font`. |
 | `apple/PersonaTests/IconVocabularyTests.swift` | A registered symbol must be written as its `Theme.Icon` name. |
-| `apple/PersonaTests/SheetCloseTests.swift` with `apple/PersonaTests/SheetCloseBaseline.json` | Per-file counts, under `apple/Persona` and outside Mac-only branches, of a presented page's close written by the page instead of `SheetClose` (any item at `.cancellationAction`, or a ✕, Cancel, Close or Done at `.topBarLeading` outside `SheetActions.swift`), and of closes at the trailing edge (✕, a close or cancel role, Cancel, Close, or a Done whose action is one plain statement, at `.confirmationAction`, `.topBarTrailing` or `.primaryAction`; Select's Done and Mark as Done do more and do not count). Counts may only go down. Baseline: 18 own closes in 15 files, 12 trailing closes in 9 files (2026-11-17, after Settings, chat, Inbox and Knowledge). |
+| `apple/PersonaTests/SheetCloseTests.swift` with `apple/PersonaTests/SheetCloseBaseline.json` | Per-file counts, under `apple/Persona` and outside Mac-only branches, of a presented page's close written by the page instead of `SheetClose` (any item at `.cancellationAction`, or a ✕, Cancel, Close or Done at `.topBarLeading` outside `SheetActions.swift`), and of closes at the trailing edge (✕, a close or cancel role, Cancel, Close, or a Done whose action is one plain statement, at `.confirmationAction`, `.topBarTrailing` or `.primaryAction`; Select's Done and Mark as Done do more and do not count). Counts may only go down. Baseline: none of either since 2026-11-17 (#9653): every presented page closes through `SheetClose`, so any new one fails. |
 | `apple/PersonaTests/ContinuousMotionTests.swift` | Every unending animation lists where Reduce Motion stops it. |
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
@@ -903,7 +903,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - The composer's + panel on the iPhone (`AttachSheet`) is a system sheet with detents medium and large and the drag indicator, like the system's photo picker; its bar sits in `safeAreaInset(edge: .bottom)` so the keyboard pushes it up (#4312).
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).
-- **Bar buttons of a presented page** (`apple/Persona/DesignSystem/SheetActions.swift`, #9653): `SheetClose` is the ✕ at `.cancellationAction`: a close-role button with the style's ✕ (`ThemedIcon(Theme.Icon.close)`) in the primary ink, named Close for VoiceOver, closed by Esc from a keyboard, identifier `sheet-close` unless the page gives its own. The system's own ✕ (`Button(role: .close)` without a label) takes the app's tint, which read 2–3:1 on the bar's glass in dark. `SheetConfirm` is an edit sheet's ✓, the system's confirm button (`Button(role: .confirm)`, a white tick on the accent, at least 3.5:1 by `PersonaPalette`) at `.confirmationAction`; a verb that says more stays the page's own item there. Edit sheets reach `SheetClose` through `sheetCancel(unsaved:)`, which asks to discard on Mac only; on iOS it leaves at once. A self-drawn header (the link card, a hosted chat, the terminal's grab bar, the image viewer) puts its ✕ first, before its title. Pages never write their own close or put one at the trailing edge; `SheetCloseTests` counts both.
+- **Bar buttons of a presented page** (`apple/Persona/DesignSystem/SheetActions.swift`, #9653): `SheetClose` is the ✕ at `.cancellationAction`: a close-role button with the style's ✕ (`ThemedIcon(Theme.Icon.close)`) in the primary ink, named Close for VoiceOver, closed by Esc from a keyboard, identifier `sheet-close` unless the page gives its own. The system's own ✕ (`Button(role: .close)` without a label) takes the app's tint, which read 2–3:1 on the bar's glass in dark. `SheetConfirm` is an edit sheet's ✓, the system's confirm button (`Button(role: .confirm)`, a white tick on the accent, at least 3.5:1 by `PersonaPalette`) at `.confirmationAction`; a verb that says more stays the page's own item there. Edit sheets reach `SheetClose` through `sheetCancel(unsaved:)`, which asks to discard on Mac only; on iOS it leaves at once. A page that only shows things and is also pushed elsewhere takes `sheetDone`: the ✕ as a sheet, nothing when `detailPresentation` pushed it into a column (a to-do's details). A self-drawn header (the link card, a hosted chat, the terminal's grab bar, the image viewer) puts its ✕ first, before its title. Pages never write their own close or put one at the trailing edge; `SheetCloseTests` counts both.
 - A word on a sheet's bar that only closes draws in the primary ink, `sheetBarLabel()` (`apple/Persona/DesignSystem/SheetActions.swift`, #9460): on the bar's glass, which turns lighter in a dark sheet over a light page, the accent read 2.1:1 (Send To) and 3.1:1 (Forward To), and 2–3:1 across the app's 54 bar Cancels (#9634). `SheetClose`'s ✕ replaced those words; a confirming button keeps the accent.
 - Busy sheets disable interactive dismissal. Detents and drag indicators are inconsistent (DS-22).
 - Confirmation sheets for Close and Delete agent exist because a system dialog was too wordy (`apple/Persona/DesignSystem/Components.swift:444`).
@@ -2323,6 +2323,31 @@ speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTex
 Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
+
+### The floating meeting window (#8731 V5)
+
+While a meeting records and its room is put away (the room's collapse, or swiped down), a small card floats over every
+page of the app (`MeetingFloatingWindow`, on `RootView`). The room's full-screen cover lies over it, and it goes with the
+recording.
+
+- **Look:** dark in both appearances, as the room is. The first line has the recording's dot (gray while paused), the
+  meeting's name and the time in the danger color. The second line has who speaks now: their face (a green ring while they
+  speak; Persona's avatar with the purple ring), the word for it and a small waveform that moves while someone speaks.
+- **Who it can tell** (E7, `MeetingFloatSpeaker`):
+  - **Persona is answering** while the phone says its answer or the meeting call's voice speaks;
+  - **Someone is speaking** while the microphone hears a voice (a gate that opens at one level and closes after a hold
+    below another, so a breath doesn't flicker);
+  - **You're speaking** instead when the microphone is a headset's, which hears little but its wearer;
+  - **Quiet** otherwise, **Paused** while paused.
+  - No numbered speakers: the phone can't tell people apart.
+- **Interaction:**
+  - a tap brings the room back (`MeetingRecorder.openRecordings`);
+  - dragged, it settles on the nearer side at that height, inside a band clear of the top bar and the bottom's composer
+    and tabs (`MeetingFloatPlace`);
+  - pulled past a side, it docks there as a bar with the dot and the recording mark, and the bar's tap brings the card
+    back. VoiceOver has Move to the Side.
+  - No buttons in it: Pause and End are the room's and the Dynamic Island's.
+- **Tokens:** `Theme.Size.meetingFloat*` and `Theme.Recording.float*`.
 
 ### After the meeting (#8731 V3)
 
