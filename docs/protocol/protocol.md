@@ -454,6 +454,20 @@ The table lists the shared handler and the main business codes; other explicit n
 
 APIs that take a JSON body all have a size limit, from 1 KiB to 32 MiB depending on the API (`decodeJSONBody` in the hub, and the managers' copies of it): the manager join (`POST /api/v1/bus/join`) 1 KiB; small settings, card choices (`…/choose`) and pair codes 4 KiB; device registration and prefs, notify and `POST /api/v1/admin/peers` 16 KiB; hub-to-hub pairing (`POST /api/v1/peer/pair`) 64 KiB; pin / mute / launchers / card answers (`…/resolve`) / connector replies 1 MiB; starting a session (`POST /api/v1/sessions`) 4 MiB; session messages, interrupts, keys and the other bodies the hub hands to a node as they are (git commit / push / pr, agent settings) 32 MiB, which is also the hub's cap on any request it forwards to a manager. Over the limit returns 413 `too_large`; the hub stops reading at the limit instead of reading it all. Malformed input is still 400. Some manager routes still read with a plain size cap and answer an oversized body with 400 instead, for example `PUT /api/v1/recordings/{id}` (16 MiB) and `POST /api/v1/task-plans/{id}/start` (1 MiB).
 
+## Portable configuration forms
+
+Modules can supply a versioned, localized configuration document instead of a
+client-specific settings page. The shared [configuration contract](../../schema/configuration/README.md)
+defines typed text, toggle, single-selection, multiple-selection and number
+fields; ordered titles/descriptions; effective/default values; partial updates,
+explicit resets, field errors and revision conflicts. The Go package
+`server/internal/configuration` validates the contract and adapts an injected
+resource provider to GET/PATCH at a module-owned authenticated endpoint.
+It registers no global route or storage. Settings › Labs first consumes the
+contract through a browser-local terminal adapter; server-backed modules supply
+their own persistence and authority. The same JSON is usable by Web, iOS and
+Android, with controls rendered in each client's design system (#9877).
+
 ## Operation receipts (client_ops)
 
 Once the server declares `client_ops`, clients may send `X-Persona-Op-Id: <UUID>` on the following write requests:
