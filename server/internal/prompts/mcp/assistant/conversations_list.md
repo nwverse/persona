@@ -10,7 +10,7 @@ List Persona's own conversations (the 对话 sidebar), newest activity first: id
     },
     "tag": {
       "type": "string",
-      "description": "only conversations carrying this exact tag"
+      "description": "one exact tag"
     },
     "include_archived": {
       "type": "boolean",
