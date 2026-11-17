@@ -9,7 +9,7 @@ hub or anyone else unless the owner sends the file, and then only as an ordinary
 
 | Client | State |
 | --- | --- |
-| iPhone / iPad | #9460: switch, recording, MetricKit, export with Share File; Send to Agent follows |
+| iPhone / iPad | #9460: switch, recording, MetricKit, export with Send to Agent and Share File |
 | Web, desktop app | planned: same switch and package (the desktop app adds its main process) |
 | Android | planned, separate issue |
 | Watch | not in the first version (MetricKit is not available on watchOS) |
@@ -70,6 +70,16 @@ other than the energy ones), **Errors and Crashes** (`errors.jsonl`, `metrickit/
 Performance** (`minute`, `foreground`, `thermal`, `power`, `battery`, `path`, `metrickit/metrics-*`), and **Device and App
 Version** (`manifest.json`, `README.md`, always).
 
+## Send to Agent
+
+The export page's first button. It builds the package and opens **Send To**, the targets of Forward To
+(`ForwardTargets`, the same rows `ForwardFixedRow` / `ForwardSessionRow`): Persona's main chat, the recent targets, each
+computer's live Agents, and search. Picking one opens that chat with the zip as a file card over its box, uploaded to the
+computer the chat runs on as any picked file is (`ComposerAttachments.files`), and a note in the box ("Here are the Persona
+diagnostics from my device (since …). Please find out what is using the battery and what is failing.") unless the box
+already holds words. Nothing is sent until the owner sends it; the Agent reads the zip from that computer. Persona with no
+main conversation yet: the new conversation's box. **Share File…** is the system share sheet.
+
 ## What is never included
 
 Message text, knowledge base content, keys, tokens, passwords, cookies, pairing links, the device's name, the hub's
@@ -89,6 +99,6 @@ not one of the API's words is `:id`. `DevModeTests` keeps the Swift list equal t
 
 `apple/Persona/DevMode/`: `DevMode` (the switch, lifecycle, device observers, the minute roll), `DevRecorder` (counting
 and lines), `DevStore` (files, limits), `DevMetrics` (MetricKit), `DevPackage` (the zip), `DevScrub`, `DevModeViews`
-(About's group, Export Diagnostics). Shared code reports through `apple/Shared/DevProbe.swift`; requests through
+(About's group, Export Diagnostics), `DevSend` (Send To and the hand-off to a chat's box). Shared code reports through `apple/Shared/DevProbe.swift`; requests through
 `HubRedirects.finished` in PersonaWire. DEBUG: `-openAbout YES` opens About, `-openAbout export` its export page.
 Tests: `apple/PersonaTests/DevModeTests.swift`.
