@@ -197,10 +197,11 @@ fun JSidebarColumn(
     // window) composed the Assistant route twice in one frame. The pictures record `panes` only. The overlay is a
     // sibling, drawn above them (`SplitColumnControl.swift:204`).
     val gesture = if (drag != null) drag.gestureModifier(width, shown, detailAtRoot, overlay) else Modifier
-    val record = if (drag != null) drag.recordModifier() else Modifier
+    // [progress] is this frame's layout. The picture waits until that value has caught up (`SplitColumnControl.swift:216-231`).
+    val record = if (drag != null) drag.recordModifier(progress) else Modifier
     Box(modifier.fillMaxSize().then(gesture)) {
         Box(Modifier.fillMaxSize().then(record)) { panes() }
-        if (drag != null) ColumnDragOverlay(drag)
+        if (drag != null) ColumnDragOverlay(drag, drag.pagePicture, drag.columnPicture, drag.step)
     }
 }
 

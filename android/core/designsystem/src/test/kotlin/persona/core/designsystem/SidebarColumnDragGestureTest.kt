@@ -242,6 +242,85 @@ class SidebarColumnDragGestureTest {
         assertEquals(DragStep.Idle, controller.step)
     }
 
+    @Test fun aCancelEndsWithNoVelocity() {
+        var shown by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                JSidebarColumn(sidebar = { Box(Modifier.fillMaxSize().background(Color(0xFF226644))) },
+                    width = 320.dp, pageStart = 320.dp, shown = shown, overlay = true, drags = true,
+                    modifier = Modifier.testTag("root"), onDragSettle = { shown = it }) {
+                    Box(Modifier.fillMaxSize().testTag("page").background(Color(0xFF88AACC)))
+                }
+            }
+        }
+        // The same move as a flick (`:176`), but the system cancels the pointer (`.cancelled` passes 0, `:178`).
+        rule.onNodeWithTag("page").performTouchInput {
+            down(Offset(8f, 260f))
+            moveTo(Offset(70f, 260f))
+            cancel()
+        }
+        flushUntil("root") { columnDragControllerForTest?.step == DragStep.Idle }
+        val controller = columnDragControllerForTest
+        assertEquals(0f, controller?.fingerVelocityPx ?: Float.NaN)
+        assertTrue("cancel must not flick open (step=${controller?.step})", !shown)
+    }
+
+    @Test fun aSecondFingerDoesNotEndTheDrag() {
+        var shown by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                JSidebarColumn(sidebar = { Box(Modifier.fillMaxSize().background(Color(0xFF226644))) },
+                    width = 320.dp, pageStart = 320.dp, shown = shown, overlay = true, drags = true,
+                    modifier = Modifier.testTag("root"), onDragSettle = { shown = it }) {
+                    Box(Modifier.fillMaxSize().background(Color(0xFF88AACC)))
+                }
+            }
+        }
+        // A pan does not end when another finger lands (`moved` has no pointer-count branch, `:171-179`).
+        // The step under the slop shares the down's time. The next steps are 100ms apart, so the one that
+        // passes the slop has a speed under a fling, and the line is still short of half: ending there stays shut.
+        // The tracked finger then passes half while the other finger is down, and the column opens.
+        rule.onNodeWithTag("root").performTouchInput {
+            down(0, Offset(8f, 220f))
+            moveTo(0, Offset(12f, 220f))
+            moveTo(0, Offset(36f, 220f), delayMillis = 100)
+            moveTo(0, Offset(60f, 220f), delayMillis = 100)
+            down(1, Offset(40f, 500f))
+            moveTo(0, Offset(120f, 220f), delayMillis = 100)
+            moveTo(0, Offset(180f, 220f), delayMillis = 100)
+            moveTo(0, Offset(240f, 220f), delayMillis = 100)
+            up(0)
+        }
+        flushUntil("root") { columnDragControllerForTest?.step == DragStep.Idle }
+        val controller = columnDragControllerForTest
+        assertEquals(DragStep.Idle, controller?.step)
+        assertTrue("second finger ended the drag early (dx=${controller?.dxPx})", shown)
+    }
+
+    @Test fun aGestureWhileTheLineIsSettlingDoesNotSwallowTheRow() {
+        var drags = 0
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                JSidebarColumn(sidebar = { Box(Modifier.fillMaxSize()) }, width = 320.dp, pageStart = 320.dp,
+                    shown = false, overlay = true, drags = true, modifier = Modifier.testTag("root")) {
+                    Box(Modifier.fillMaxSize().testTag("page").pointerInput(Unit) {
+                        detectHorizontalDragGestures { _, drag -> if (drag != 0f) drags++ }
+                    })
+                }
+            }
+        }
+        rule.waitForIdle()
+        val controller = columnDragControllerForTest ?: error("missing controller")
+        // `gestureRecognizerShouldBegin` is false while a drag exists (`drag == nil`, `:131`).
+        rule.runOnIdle { controller.step = DragStep.Follow }
+        rule.onNodeWithTag("page").performTouchInput {
+            swipe(Offset(8f, 300f), Offset(180f, 300f), durationMillis = 200)
+        }
+        rule.waitForIdle()
+        assertTrue("the row kept the drag", drags > 0)
+        assertEquals(DragStep.Follow, controller.step)
+    }
+
     @Test fun noBlurBeforeApi31() {
         // This process is API 35. API 28 is covered by SidebarColumnDragTest, which passes the SDK in.
         assertTrue(columnDragBlurEffect(8f) != null)
@@ -251,7 +330,7 @@ class SidebarColumnDragGestureTest {
     /** A picture is taken in draw. Capturing forces that draw, then the posted phase advance runs. */
     private fun flushUntil(tag: String, done: () -> Boolean) {
         var i = 0
-        while (i < 8 && !done()) {
+        while (i < 16 && !done()) {
             rule.onNodeWithTag(tag, useUnmergedTree = true).captureToImage()
             rule.waitForIdle()
             ShadowLooper.idleMainLooper()

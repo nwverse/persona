@@ -29,14 +29,15 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
-import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
@@ -53,8 +54,9 @@ import kotlin.math.roundToInt
  * The foldable list column following a finger, copying iOS `SplitColumnControl` (`apple/Persona/Views/SplitColumnControl.swift`)
  * and `Theme.Split` (`apple/Shared/Design/Theme.swift:45-61`). Assistant history and the Agents list only.
  *
- * The line is 1:1 with the finger (`SplitColumnControl.swift:254`). Pictures taken when the drag begins are stretched,
- * so the column does not lay out on each move (`:300-306`, `:330-337`). Release uses the flick at 500 pt/s, otherwise
+ * The line is 1:1 with the finger (`SplitColumnControl.swift:254`). Still pictures, taken after the layout they show
+ * has been drawn (`snapshotView(afterScreenUpdates: true)`, `:216-231`), are stretched, so the column does not lay out
+ * on each move (`:300-306`, `:330-337`). Release uses the flick at 500 pt/s, otherwise
  * half the width (`:264`), then a 0.28 s bounce-0 spring with the finger's velocity (`:293`) and a 0.2 s fade (`:277-286`).
  * Reduce Motion jumps the line and still fades (`:287-291`).
  */
@@ -191,8 +193,11 @@ internal class ColumnDragController {
     var fingerVelocityPx by mutableFloatStateOf(0f)
     val lineAnim = Animatable(0f)
     val fadeAnim = Animatable(1f)
-    var page: GraphicsLayer? = null
-    var column: GraphicsLayer? = null
+    /** Scratch layers. The overlay draws [pagePicture] and [columnPicture], never these. */
+    var pageLayer: GraphicsLayer? = null
+    var columnLayer: GraphicsLayer? = null
+    var pagePicture: ImageBitmap? = null
+    var columnPicture: ImageBitmap? = null
     var pageSeen = false
     var columnSeen = false
     var pageFrozen = false
@@ -201,9 +206,10 @@ internal class ColumnDragController {
     var generation = 0
 
     val snaps: Boolean get() = step != DragStep.Idle
+    /** Both stills exist. The overlay stays down until then, so a picture is of the live layout, not of the overlay. */
     val covers: Boolean
-        get() = step == DragStep.OpenColumn || step == DragStep.ShutOverPage || step == DragStep.Follow ||
-            step == DragStep.Settle || step == DragStep.Fade
+        get() = pagePicture != null && columnPicture != null &&
+            (step == DragStep.Follow || step == DragStep.Settle || step == DragStep.Fade)
 
     fun begin(zone: ColumnDragZone, over: Boolean, widthPx: Float) {
         if (step != DragStep.Idle) return
@@ -218,6 +224,8 @@ internal class ColumnDragController {
         columnSeen = false
         pageFrozen = false
         columnFrozen = false
+        pagePicture = null
+        columnPicture = null
         finishRequested = false
         layoutShown = null
         // Opening records the page first (`:206`), then the column after the column is shown (`:216-224`).
@@ -308,8 +316,8 @@ internal fun rememberColumnDragController(
     val controller = remember { ColumnDragController() }
     val page = rememberGraphicsLayer()
     val column = rememberGraphicsLayer()
-    controller.page = page
-    controller.column = column
+    controller.pageLayer = page
+    controller.columnLayer = column
     val reduceMotion = PersonaTheme.reduceMotion
     val settle = rememberUpdatedState(onSettle)
     DisposableEffect(controller) {
@@ -371,32 +379,66 @@ private fun ColumnDragRuntime(
     }
 }
 
-internal fun ColumnDragController.recordModifier(): Modifier {
-    val pageLayer = page
-    val columnLayer = column
-    val recordPage = !pageFrozen && pageLayer != null &&
-        (step == DragStep.OpenPage || step == DragStep.ShutBeside || step == DragStep.ShutOverPage)
-    val recordColumn = !columnFrozen && columnLayer != null &&
-        (step == DragStep.OpenColumn || step == DragStep.ShutBeside || step == DragStep.ShutOverColumn)
-    val pageToRecord = if (recordPage) pageLayer else null
-    val columnToRecord = if (recordColumn) columnLayer else null
+/**
+ * True once this frame's layout is the one the picture must show.
+ * `animateFloatAsState` applies `snap()` on a later frame than the write, so the first frame after
+ * `layoutShown` changes still has the old [progress]. iOS calls `layoutIfNeeded` and then
+ * `snapshotView(afterScreenUpdates: true)` (`SplitColumnControl.swift:216-231`).
+ */
+/** The column in place (`:217-224`). Beside close keeps both where they already are. */
+private fun columnPictureReady(step: DragStep, progress: Float): Boolean = when (step) {
+    DragStep.OpenColumn, DragStep.ShutOverColumn, DragStep.ShutBeside -> progress >= 0.999f
+    else -> false
+}
+
+/** The page as it is (`:206`), and again after the column is hidden (`:225-231`). */
+private fun pagePictureReady(step: DragStep, progress: Float): Boolean = when (step) {
+    DragStep.OpenPage, DragStep.ShutOverPage -> progress <= 0.001f
+    DragStep.ShutBeside -> progress >= 0.999f
+    else -> false
+}
+
+/**
+ * [progress] is the value this frame composed with, so the draw matches it.
+ * The bitmap is pixels (`GraphicsLayer.toImageBitmap`). A `GraphicsLayer` kept as the picture would still
+ * point at child layers, which move or leave when the column does (`snapshotView` is a still image).
+ */
+internal fun ColumnDragController.recordModifier(progress: Float): Modifier {
+    val pageToRecord = pageLayer?.takeIf { !pageFrozen && pagePictureReady(step, progress) }
+    val columnToRecord = columnLayer?.takeIf { !columnFrozen && columnPictureReady(step, progress) }
     if (pageToRecord == null && columnToRecord == null) return Modifier
     return Modifier.drawWithContent {
         var recorded = false
         if (pageToRecord != null) {
             pageToRecord.record { this@drawWithContent.drawContent() }
-            pageSeen = true
-            recorded = true
+            stillImage(pageToRecord)?.let {
+                pagePicture = it
+                pageSeen = true
+                recorded = true
+            }
         }
         if (columnToRecord != null) {
             columnToRecord.record { this@drawWithContent.drawContent() }
-            columnSeen = true
-            recorded = true
+            stillImage(columnToRecord)?.let {
+                columnPicture = it
+                columnSeen = true
+                recorded = true
+            }
         }
         drawContent()
-        // After this draw, so the layer holds the pixels iOS snapshots in `begin` (`:206-231`).
+        // The bitmap already holds pixels. The phase change (show or hide the column) waits until after this draw.
         if (recorded) postPictureAdvance()
     }
+}
+
+/**
+ * Rasterize while the recorded children still exist. On API 28 and later, and under Robolectric, `toImageBitmap`
+ * draws into a bitmap and returns it without suspending, so this does not wait on another frame.
+ */
+private fun stillImage(layer: GraphicsLayer): ImageBitmap? {
+    val size = layer.size
+    if (size.width < 1 || size.height < 1) return null
+    return runBlocking { layer.toImageBitmap() }
 }
 
 @Composable
@@ -421,6 +463,8 @@ internal fun ColumnDragController.gestureModifier(
             onBegin = { zone -> begin(zone, overState.value, widthState.value.toPx()) },
             onMove = ::move,
             onEnd = ::end,
+            // `gestureRecognizerShouldBegin` returns false while a drag exists (`drag == nil`, `:131`).
+            canBegin = { step == DragStep.Idle },
         )
     }
 }
@@ -440,10 +484,13 @@ private suspend fun PointerInputScope.detectColumnDrag(
     onBegin: (ColumnDragZone) -> Unit,
     onMove: (Float) -> Unit,
     onEnd: (Float) -> Unit,
+    canBegin: () -> Boolean,
 ) {
     val slop = viewConfiguration.touchSlop
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        // Refuse before taking the touch (`:131`). Consuming here would swallow a scroll or a row swipe.
+        if (!canBegin()) return@awaitEachGesture
         val tracker = VelocityTracker()
         tracker.addPosition(down.uptimeMillis, down.position)
         val origin = down.position
@@ -451,13 +498,15 @@ private suspend fun PointerInputScope.detectColumnDrag(
         try {
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
+                // Extra fingers stay down. A pan does not end for them (`moved` has no pointer-count branch, `:171-179`).
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                if (event.changes.any { it.id != down.id && it.pressed }) {
-                    if (accepted) onEnd(0f)
-                    return@awaitEachGesture
-                }
                 if (!change.pressed) {
-                    if (accepted) onEnd(tracker.calculateVelocity().x)
+                    if (accepted) {
+                        // `onCancelPointerInput` rebuilds the up with the change already consumed. A finger-up is not.
+                        // `.cancelled` passes velocity 0 (`:178`); `.ended` passes `pan.velocity.x` (`:176`).
+                        val cancelled = change.isConsumed
+                        onEnd(if (cancelled) 0f else tracker.calculateVelocity().x)
+                    }
                     return@awaitEachGesture
                 }
                 tracker.addPosition(change.uptimeMillis, change.position)
@@ -465,7 +514,12 @@ private suspend fun PointerInputScope.detectColumnDrag(
                 val dy = change.position.y - origin.y
                 if (!accepted) {
                     if (dx * dx + dy * dy <= slop * slop) continue
-                    val velocity = tracker.calculateVelocity()
+                    if (!canBegin()) return@awaitEachGesture
+                    val tracked = tracker.calculateVelocity()
+                    // The platform tracker reports 0 until it has a speed. The movement since the down is that
+                    // direction, which is what the angle test compares (`SplitColumnControl.swift:133`).
+                    val velocityX = if (tracked.x == 0f && tracked.y == 0f) change.position.x - origin.x else tracked.x
+                    val velocityY = if (tracked.x == 0f && tracked.y == 0f) change.position.y - origin.y else tracked.y
                     val zone = columnDragTakeOver(
                         drags = true,
                         shown = shown(),
@@ -473,8 +527,8 @@ private suspend fun PointerInputScope.detectColumnDrag(
                         startX = origin.x,
                         columnWidth = columnWidthPx(),
                         edge = edgePx(),
-                        velocityX = velocity.x,
-                        velocityY = velocity.y,
+                        velocityX = velocityX,
+                        velocityY = velocityY,
                     ) ?: return@awaitEachGesture
                     accepted = true
                     onBegin(zone)
@@ -490,16 +544,22 @@ private suspend fun PointerInputScope.detectColumnDrag(
 }
 
 @Composable
-internal fun ColumnDragOverlay(controller: ColumnDragController) {
-    if (!controller.covers) return
-    val page = controller.page ?: return
-    val column = controller.column ?: return
+internal fun ColumnDragOverlay(
+    controller: ColumnDragController,
+    page: ImageBitmap?,
+    column: ImageBitmap?,
+    step: DragStep,
+) {
+    // Pictures are written in draw, so they are parameters: a skipped read of the controller would keep the
+    // overlay down after the stills exist (`SplitColumnControl` draws them for the whole drag, `:206-245`).
+    if (page == null || column == null) return
+    if (step != DragStep.Follow && step != DragStep.Settle && step != DragStep.Fade) return
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val linePx = when (controller.step) {
+    val linePx = when (step) {
         DragStep.Settle, DragStep.Fade -> controller.lineAnim.value
         else -> columnDragLine(controller.opening, controller.widthPx, controller.dxPx)
     }
-    val blurPx = if (controller.step == DragStep.Settle || controller.step == DragStep.Fade) controller.blurDxPx else controller.dxPx
+    val blurPx = if (step == DragStep.Settle || step == DragStep.Fade) controller.blurDxPx else controller.dxPx
     val blurDp = blurPx / density.density
     val radiusPx = with(density) { columnDragBlurRadius(blurDp, ColumnDrag.fullMaterial).toPx() }
     val dim = if (controller.over) {
@@ -507,7 +567,7 @@ internal fun ColumnDragOverlay(controller: ColumnDragController) {
         // `mediaBackdrop` is black in every style, so this file adds no color literal.
         PersonaTheme.palette.mediaBackdrop.copy(alpha = columnDragOverDim(linePx, controller.widthPx))
     } else Color.Unspecified
-    val alpha = if (controller.step == DragStep.Fade) controller.fadeAnim.value else 1f
+    val alpha = if (step == DragStep.Fade) controller.fadeAnim.value else 1f
     val guidePx = with(density) { Tokens.Size.bar.toPx() }
     androidx.compose.runtime.SideEffect { columnDragDrawnLineDp = linePx / density.density }
     // Above the column's own zIndex while it is over the page. iOS draws page, dim, column, blur, then the guide (`:206-245`).
@@ -528,8 +588,8 @@ internal fun ColumnDragOverlay(controller: ColumnDragController) {
 
 /** `SplitColumnControl.draw` (`:330-337`): source start maps to dest start, clipped to the strip. */
 internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawColumnDragScene(
-    page: GraphicsLayer,
-    column: GraphicsLayer,
+    page: ImageBitmap,
+    column: ImageBitmap,
     linePx: Float,
     columnWidthPx: Float,
     beside: Boolean,
@@ -546,7 +606,7 @@ internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawColumnDragScen
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrip(
-    layer: GraphicsLayer,
+    image: ImageBitmap,
     sourceStart: Float,
     sourceEnd: Float,
     destStart: Float,
@@ -558,7 +618,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStrip(
     val scale = (span / source).coerceAtLeast(0.001f)
     clipRect(destStart, 0f, destEnd, size.height) {
         translate(destStart - sourceStart * scale, 0f) {
-            scale(scale, 1f, pivot = Offset.Zero) { drawLayer(layer) }
+            scale(scale, 1f, pivot = Offset.Zero) { drawImage(image) }
         }
     }
 }
