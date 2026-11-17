@@ -3,6 +3,7 @@ package persona.feature.inbox
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.LocalRippleConfiguration
@@ -28,6 +29,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -278,6 +280,45 @@ class InboxSectionBarTest {
         rule.runOnIdle { landing.land(drafting) }
         rule.waitForIdle()
         choice("In progress").assertIsSelected()
+    }
+
+    @Test fun aSidebarReturnLandsOffAllOntoTheItemsChoice() {
+        val landing = InboxLanding()
+        show(BarInbox(all), landing)
+        pick("All")
+        // enter then land, one turn: iOS's new page starts on Needs you, then land (InboxView.swift:209–212).
+        rule.runOnIdle {
+            landing.enter()
+            landing.land(digest)
+        }
+        rule.waitForIdle()
+        choice("FYI").assertIsSelected()
+        choice("All").assertIsNotSelected()
+        assertNull(landing.pending)
+    }
+
+    @Test fun theListInFrontTakesTheLandingAHiddenListLeaves() {
+        val landing = InboxLanding()
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = true) {
+                CompositionLocalProvider(LocalRippleConfiguration provides null, LocalInboxLanding provides landing) {
+                    Column {
+                        CompositionLocalProvider(LocalInboxListActive provides false) {
+                            Box(Modifier.height(400.dp)) { InboxScreen(BarInbox(all), navigator) }
+                        }
+                        CompositionLocalProvider(LocalInboxListActive provides true) {
+                            Box(Modifier.height(400.dp)) { InboxScreen(BarInbox(all), navigator) }
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.runOnIdle { landing.land(invoice) }
+        rule.waitForIdle()
+        assertEquals(1, rule.onAllNodes(hasText("Done") and isSelected()).fetchSemanticsNodes().size)
+        assertEquals(1, rule.onAllNodes(hasText("Needs you") and isSelected()).fetchSemanticsNodes().size)
+        assertNull(landing.pending)
     }
 
     @Test fun anEntryPutsAListLeftUnderOtherPagesBackOnNeedsYou() {

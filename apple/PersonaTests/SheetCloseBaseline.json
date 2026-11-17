@@ -20,62 +20,6 @@
   "Persona\/Views\/Chats\/RenameWorktreeSheet.swift" : {
     "ownClose" : 1
   },
-  "Persona\/Views\/Feishu\/Docs\/FeishuDocsComments.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Inbox\/InboxActions.swift" : {
-    "ownClose" : 2
-  },
-  "Persona\/Views\/Inbox\/InboxEventViews.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Inbox\/InboxMutesView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/InboxPolicySheet.swift" : {
-    "ownClose" : 1,
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/InboxSameMatterPicker.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Inbox\/InboxTodoViews.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkChatPinsView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkEncryptionControls.swift" : {
-    "ownClose" : 2
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkMessageDisplay.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkPeople.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkReactionsMoments.swift" : {
-    "ownClose" : 2
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkSummaryCards.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/Lark\/LarkThreadView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Inbox\/Lark\/MessagingComposeSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Knowledge\/KBTopicViews.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Knowledge\/KnowledgeView.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Mail\/MailViews.swift" : {
-    "ownClose" : 2,
-    "trailingClose" : 1
-  },
   "Persona\/Views\/Session\/FileInfoSheet.swift" : {
     "trailingClose" : 1
   },

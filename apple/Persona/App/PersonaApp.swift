@@ -16,6 +16,7 @@ struct PersonaApp: App {
             RootView()
                 #if os(iOS)
                 .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
+                .overlay { MeetingFloatingWindow() } // a meeting recording with its room put away (#8731 V5)
                 #endif
                 #if DEBUG && os(iOS)
                 .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
