@@ -256,7 +256,7 @@ func TestMinutesCalendarAndAsking(t *testing.T) {
 
 // A meeting a connected app imports after the recording was matched to its calendar event: a later round links it as
 // the recording's imported meeting, the nearer of two by its start, within a day of the end, the event and the match
-// left as they were; the Meetings list's recording row names it (#8872).
+// left as they were; the Meetings list's recording row names it, and the meetings list the app it came from (#8872).
 func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	e := goldenEngine(t, nil) // no model: the rounds match, no minutes are written
 	at := func(h, m int) time.Time { return time.Date(2026, 11, 10, h, m, 0, 0, goldenZone) }
@@ -280,7 +280,7 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	now = at(13, 0)
 	for _, it := range []*Item{
 		{Kind: KindMeeting, ID: "m-early", Title: "早到的会", At: at(9, 50)},
-		{Kind: KindMeeting, ID: "m1", Title: "周会（视频）", At: at(10, 1)},
+		{Kind: KindMeeting, Source: "lark", ID: "m1", Title: "周会（视频）", At: at(10, 1)},
 		{Kind: KindMeeting, ID: "m-old", Title: "两天前的会", At: at(10, 1).AddDate(0, 0, -2)},
 	} {
 		if err := e.Store.PutItem(it); err != nil {
@@ -300,6 +300,19 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	}
 	if got := listedMeetingID(t, e, recID); got != "m1" {
 		t.Errorf("later: the list's meeting_id %q", got)
+	}
+	// The meetings list and the recording's links name the app it came from, for the one row's mark and its page.
+	for _, en := range e.List(KindMeeting, "") {
+		if want := map[string]string{"m1": "lark"}[en.ID]; en.Source != want {
+			t.Errorf("meetings list: %s's source %q, want %q", en.ID, en.Source, want)
+		}
+	}
+	d, err := e.Get(KindRecording, recID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(d.Links, func(l Entry) bool { return l.Kind == KindMeeting && l.ID == "m1" }); i < 0 || d.Links[i].Source != "lark" {
+		t.Errorf("links: %+v", d.Links)
 	}
 	if o := recordingNow(t, e, old); o.ImportedMeeting != nil {
 		t.Errorf("a recording that ended two days before: linked to %+v", o.ImportedMeeting)

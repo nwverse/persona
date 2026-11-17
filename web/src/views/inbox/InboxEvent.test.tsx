@@ -537,10 +537,13 @@ describe("收件箱事件：已处理", () => {
 });
 
 describe("收件箱事件：列表", () => {
+  // the section bar opens on 需要你 (#9053): these cases read every section, 全部
+  const showAll = () => act(() => host.querySelector<HTMLButtonElement>('[data-bar-choice="all"]')!.click());
   it("has 进行中 between 需要你 and 知悉即可, marks the rows, and draws a suggestion instead of the draft", async () => {
     calls.items = fixture.items;
     act(() => root.render(<InboxList />));
     await flush();
+    showAll();
     const titles = [...host.querySelectorAll("[data-section-title]")].map((s) => s.textContent);
     expect(titles).toEqual(["需要你", "进行中", "知悉即可", "已折叠", "已处理"]);
     const row = (id: string) => host.querySelector(`[data-item="${id}"]`)!;
@@ -561,6 +564,7 @@ describe("收件箱事件：列表", () => {
     calls.items = showcase.items;
     act(() => root.render(<InboxList />));
     await flush();
+    showAll();
     const mark = (id: string) => host.querySelector(`[data-item="${id}"] [data-event-mark="now"]`)!;
     expect(mark("sc-1").getAttribute("data-event-icon")).toBe("clock");
     expect(mark("sc-1").textContent).toContain("等张三确认新报价");
@@ -578,6 +582,7 @@ describe("收件箱事件：列表", () => {
     calls.items = fixture.items.map(legacy);
     act(() => root.render(<InboxList />));
     await flush();
+    showAll();
     const titles = [...host.querySelectorAll("[data-section-title]")].map((s) => s.textContent);
     expect(titles).toEqual(["需要你", "知悉即可", "已折叠", "已处理"]);
     expect(host.querySelector("[data-event-mark]")).toBeNull();
