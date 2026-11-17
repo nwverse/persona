@@ -6061,6 +6061,28 @@
       },
       "extractionState" : "manual"
     },
+    "%lld min [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld min"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 分"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 分钟"
+          }
+        }
+      }
+    },
     "%lld More Files" : {
       "localizations" : {
         "en" : {
@@ -6118,6 +6140,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld more topics [Meeting Map]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld more topics"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほか %lld 件の議題"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 个议题"
+          }
+        }
+      }
     },
     "%lld Picked" : {
       "localizations" : {
@@ -31440,6 +31484,50 @@
       },
       "extractionState" : "manual"
     },
+    "Cloud Transcription [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloud transcription"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クラウド文字起こし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "云端转写"
+          }
+        }
+      }
+    },
+    "Conversation [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会話"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话"
+          }
+        }
+      }
+    },
     "Couldn’t export: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -53735,6 +53823,28 @@
         }
       }
     },
+    "Decisions [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decisions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "決定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "决定"
+          }
+        }
+      }
+    },
     "Developing Persona" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -66192,6 +66302,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Full Screen [Meeting Map]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全画面"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全屏"
+          }
+        }
+      }
     },
     "FYI" : {
       "localizations" : {
@@ -86759,6 +86891,28 @@
       },
       "extractionState" : "manual"
     },
+    "Loading photos…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading photos…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真を読み込み中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在载入照片…"
+          }
+        }
+      }
+    },
     "Loading Pinned Messages…" : {
       "localizations" : {
         "en" : {
@@ -88543,6 +88697,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "MCP 服务器：%1$@"
+          }
+        }
+      }
+    },
+    "Meeting Map [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting Map"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議マップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议导图"
           }
         }
       }
@@ -92543,6 +92719,28 @@
     },
     "Minutes" : {
       "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minutes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "纪要"
+          }
+        }
+      }
+    },
+    "Minutes [Meeting After]" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -99358,6 +99556,28 @@
       },
       "extractionState" : "manual"
     },
+    "No minutes for this recording." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No minutes for this recording."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この録音には議事録がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条录音没有纪要。"
+          }
+        }
+      }
+    },
     "No Model Configuration Yet" : {
       "localizations" : {
         "en" : {
@@ -99403,6 +99623,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No photos in this meeting." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No photos in this meeting."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議には写真がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会没有照片。"
+          }
+        }
+      }
     },
     "No Projects Yet" : {
       "extractionState" : "manual",
@@ -109989,6 +110231,28 @@
       },
       "extractionState" : "manual"
     },
+    "Open [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未決"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待定"
+          }
+        }
+      }
+    },
     "Opens token usage by day, hour and computer" : {
       "localizations" : {
         "en" : {
@@ -116473,6 +116737,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拍照"
+          }
+        }
+      }
+    },
+    "Photos [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
           }
         }
       }
@@ -126079,6 +126365,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已记录"
+          }
+        }
+      }
+    },
+    "Recording Details" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recording Details"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音の詳細"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音详情"
           }
         }
       }
@@ -147496,6 +147804,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Summary [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Summary"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まとめ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结"
+          }
+        }
+      }
     },
     "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead." : {
       "localizations" : {
@@ -176788,6 +177118,28 @@
       },
       "extractionState" : "manual"
     },
+    "To-Dos [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To-dos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ToDo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待办"
+          }
+        }
+      }
+    },
     "To-do…" : {
       "localizations" : {
         "en" : {
@@ -178474,6 +178826,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Transcript [Meeting After]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字起こし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿"
+          }
+        }
+      }
     },
     "Transcript around %@" : {
       "extractionState" : "manual",

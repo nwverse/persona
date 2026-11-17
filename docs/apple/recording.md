@@ -221,8 +221,10 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   start's choice stands in only until then. The recording's page has the same switch for every meeting on such a hub
   (hidden after `409 not_meeting`). A refused change says "Couldn't change Private Meeting. Try again." unless the hub
   names a reason (`MeetingConversation.privateMessage`).
-- **After the meeting**: the after page shows the status card (when, the minutes' state, **Open Minutes** / **Open
-  Recording** in the sheet and where the minutes push opened it, kept above the thread), the room's thread with the asks answered from material where they
+- **After the meeting**: the after page is one screen (#8731 V3, `docs/design/DESIGN_SYSTEM.md` "After the meeting"): the
+  facts, the summary card, the to-dos, the meeting map, then Minutes · Transcript · Photos · Conversation. The Meetings
+  list and Knowledge open it for every meeting recording (`RecordingOpen`), and its ⋯ menu has the recording's page
+  (Recording Details). Its Conversation part holds the room's thread with the asks answered from material where they
   were asked (or the hub's `asks` when the room never came up), **After the Meeting**, then the follow-up. Its composer
   waits while the hub would answer `409 meeting_running` (`MeetingConversation.running`): the recording runs, an upload
   on its way may carry the `ended_at` the hub doesn't have yet (within 12 hours of the last upload it stored, after which

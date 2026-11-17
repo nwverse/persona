@@ -37,6 +37,13 @@ final class RecordingKnowledgeUITests: XCTestCase {
 
         let putsBefore = try puts(hub)
         row.tap()
+        // A meeting opens after the meeting (#8731 V3); its recording's page, with Delete, is the menu's Recording Details.
+        let menu = app.buttons["meeting-after-menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), app.debugDescription)
+        menu.tap()
+        let details = app.buttons["meeting-after-details"].firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 5), app.debugDescription)
+        details.tap()
         let delete = app.buttons["recording-delete"]
         XCTAssertTrue(delete.waitForExistence(timeout: 8), app.debugDescription)
         try shot(app, "detail")

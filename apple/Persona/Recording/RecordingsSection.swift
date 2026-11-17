@@ -115,7 +115,7 @@ struct RecordingsSection: View {
                     NavigationLink { RecordingDayView(id: entry.id) } label: { RecordingDayRow(entry: entry) }
                         .accessibilityIdentifier("recording-day-row")
                 } else {
-                    NavigationLink { RecordingDetailView(id: entry.id) } label: { RecordingRow(entry: entry) }
+                    NavigationLink { RecordingOpen(id: entry.id) } label: { RecordingRow(entry: entry) }
                         .accessibilityIdentifier("recording-row")
                         // Rename (#8873): a touch and hold, and VoiceOver's actions (a menu is no control of its own).
                         .contextMenu {
@@ -891,8 +891,28 @@ struct RecordingsPage: View {
 
 /// One recording's transcript, with re-transcribing in another language and delete (here and in the knowledge base). A
 /// meeting also has its private mark, and a room meeting the way to its conversation (#3862).
+/// Where a recording opens from the lists (#8731 V3): a meeting that ended, its after-meeting screen (`MeetingPage`'s after
+/// mode: summary, to-dos, map, the minutes, transcript, photos and conversation); anything else, its recording page.
+struct RecordingOpen: View {
+    var id: UUID
+
+    var body: some View {
+        #if os(iOS)
+        if let entry = RecordingLibrary.shared.entry(id), entry.isMeeting, !entry.active {
+            MeetingPage(id: id, mode: .after)
+        } else {
+            RecordingDetailView(id: id)
+        }
+        #else
+        RecordingDetailView(id: id)
+        #endif
+    }
+}
+
 struct RecordingDetailView: View {
     var id: UUID
+    /// Opened from the after-meeting screen's menu (#8731 V3): no Talk about this meeting, which is that screen.
+    var fromMeetingPage = false
     #if os(iOS)
     @Environment(AppModel.self) private var model
     @State private var conversation = MeetingConversation.shared
@@ -1174,7 +1194,7 @@ struct RecordingDetailView: View {
         let meeting = conversation.meeting(id)
         let offered = MeetingAttendees.conversation(model)
         let showsPrivate = entry.isMeeting && !notMeeting
-        let showsThread = MeetingTalk.offered(entry, conversation: offered, minutes: minutes.ready != nil, meeting: meeting,
+        let showsThread = !fromMeetingPage && MeetingTalk.offered(entry, conversation: offered, minutes: minutes.ready != nil, meeting: meeting,
                                               text: hasText, expired: sync.isExpired(entry))
         if offered, showsPrivate || showsThread {
             Section {

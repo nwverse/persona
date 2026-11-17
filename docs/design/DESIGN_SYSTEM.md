@@ -2291,6 +2291,33 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
 
+### After the meeting (#8731 V3)
+
+A meeting that ended is one screen: `MeetingPage`'s after mode. It opens after End in the meeting room, and from the
+Meetings list and Knowledge for every meeting recording (`RecordingOpen`). Notes and all-day recordings keep their
+recording page.
+
+- **The bar:** in the sheet its ✕ at the leading corner (`SheetClose`, #9653), pushed its back button. Trailing, the ⋯
+  menu: Rename and **Recording Details**, the recording's page (`RecordingDetailView`, with its audio, sharing,
+  regenerating and deleting). That page shows no Talk about this meeting, since it was opened from here.
+- **From the top:**
+  - the name, then when it ran, how long, who was in it (you, and Persona if it answered at any point) and Cloud
+    transcription when the hub transcribed it (`MeetingAfterHeader`);
+  - the **summary card** (`MeetingSummaryCard`): the minutes' headline and at most three core conclusions, or the first
+    two points of older minutes, then three counts: decisions, to-dos and open questions (`MeetingAfterSummary`).
+    While the minutes are on their way the card holds where they are (Writing the minutes…), and the summary comes in
+    its place;
+  - the **to-dos**: the minutes' own Action Items card, with Add to To-Dos and Add All (`MinutesCard`);
+  - the **meeting map** (`MeetingMapCard`): the minutes' topics with their bullets, else the topics the room kept during
+    the meeting, else no map (`MeetingAfterMap`). Its first five topics are drawn as the meeting room's Map page draws
+    them (`MeetingTopicMapRows`), and **Full Screen** opens that page (`MeetingTopicMap`);
+  - the parts by name (`MeetingTabRow`, as the meeting room's): **Minutes** (the full minutes, as on the recording's
+    page, each card boxed: `minutesBoxed`), **Transcript**, **Photos** (a room meeting that took photos) and
+    **Conversation** (the room's thread and the follow-up). Conversation shows wherever the room or a follow-up has one,
+    since the composer writes there.
+- **The composer:** "Talk with Persona about this meeting" stays in the bar. Typing opens Conversation, which follows its
+  newest end as the thread did; the other parts open at the top.
+
 ### The meeting room (#8731 v2)
 
 A room meeting records in a meeting app's room: full screen and dark in both appearances (E1, as meeting apps are; the
@@ -2330,12 +2357,9 @@ page the user watches during the meeting is the page they keep writing in after 
   aside instead, and only the Live page folds (its Live box to its newest line). The Highlights page keeps its card
   whole, Full Transcript included, since the card is that page. At accessibility sizes a one-line header (dot, time, menu, Hide)
   stays fixed, the rest scrolls as one, nothing folds, and the bar stays pinned.
-- **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
-  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
-  sheet and where the minutes push opened the page, not when pushed from the recording's page, whose Back returns there) kept
-  above the thread rather than scrolled away with it (the thread follows its end), the room's thread, the **After the
-  Meeting** divider, the follow-up's thread, and the composer alone in the bar. At accessibility sizes and while the
-  keyboard is up the card is one fixed line (the minutes' state, Open as an icon with its name as the label), and the
+- **Structure, after**: since #8731 V3, "After the meeting" above: the facts, summary, to-dos and map over the parts by
+  name, the Conversation part holding the room's thread, the **After the Meeting** divider and the follow-up's thread, and
+  the composer alone in the bar. While the keyboard is up the screen is the conversation under one fixed line (the minutes' state, Open as an icon with its name as the label), and the
   title scrolls with the thread. While the hub would still answer `409 meeting_running` the composer is disabled with a
   caption that says why: the end still on its way ("in a moment"), the end refused or the sync paused (the sync's own
   problem; the hub ends such a meeting 12 hours after its last stored upload), or an older manager without the follow-up.
