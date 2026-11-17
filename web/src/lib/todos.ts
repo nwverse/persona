@@ -10,7 +10,7 @@ import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import type { AgentState, Machine, Session } from "./types";
+import type { AgentState, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
 import { stateName } from "./state-labels";
@@ -133,6 +133,8 @@ export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: 
  * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
  */
 export interface TodoAsk {
+  /** An expired ask_user's original form. Answer it on the to-do, not its expired interaction. */
+  questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;

@@ -692,7 +692,7 @@ export async function retryTask(todo: Todo) {
 
 /** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
  *  of the fixed responses that say the owner cannot answer it as asked. */
-export type AskAnswer = { option: string } | { response: string };
+export type AskAnswer = { option: string } | { response: string } | { answers: Record<string, string> };
 
 /** The Accept button of a `brief` item's task to verify: "accepted" when the hub took it, "recorded" when no Agent could
  *  receive the decision and the supervisor has it, or "handled" when that round is already over (409). Any other failure
