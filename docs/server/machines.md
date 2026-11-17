@@ -224,7 +224,7 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   which session a file belongs to and which parser reads it: Claude Code's main and subagent transcripts in every config directory, and the agents of its workflow runs
   (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex and of the compatible traex CLI. The parsers (`server/internal/tokenuse`)
   are the same ones the usage on a chat's replies and the subagent summaries read (`docs/protocol/protocol.md`, "Token usage on items"), so a request counts the same everywhere
-  and sums the replies per minute, model and **launcher**: the launcher Persona started the session with (`sessionState.Launcher`, looked up by the transcript's session or thread id;
+  and sums the replies per minute, model, **agent** (its adapter's, `proto.Session.Agent`'s names, #9984) and **launcher**: the launcher Persona started the session with (`sessionState.Launcher`, looked up by the transcript's session or thread id;
   a subagent's or workflow agent's transcript is its session's). A session typed in a terminal has no launcher (`""`, shown as "Other"). The node keeps 26 hours and reports changed minutes as `usage`
   (`"launchers": true` says its buckets name the launcher; an older node's do not, and the apps grey out the launcher filter for it).
 - **Counted once**: a reply is counted once in the window even when it is in several files. A fork (Claude Code's `--fork-session`, Codex's fork) copies the history it starts from,
@@ -240,7 +240,8 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   A bucket is its minute's whole total, so a later one replaces it; a node's whole window (`full`, after it connects) first deletes the machine's minute rows of that window, so what the node
   counts now is the record (an older node's rows without a launcher do not stay next to the new ones). Each minute the minute rows older than 27 hours are summed into one row per 10 minutes
   (`step = 600`), the 10-minute rows older than 7 days and an hour into one row per hour (`step = 3600`, `db.RollupUsageHours`), and rows older than 53 weeks and a day are deleted.
-  About 1 to 3 rows a machine and minute (one per model and launcher in use), 10,000 to 30,000 rows a machine for the week, then 24 to 72 a machine and day for the year (about 9,000 to 27,000).
+  About 1 to 3 rows a machine and minute (one per model, launcher and agent in use), 10,000 to 30,000 rows a machine for the week, then 24 to 72 a machine and day for the year (about 9,000 to 27,000).
+  Rows keep their agent through the rollups (`machine_usage.agent`, migration `manager/0551_usage_by_agent.sql`); rows stored before agents were kept apart, and an older node's, have `''`.
 - **Ranges**: 1 hour by minute (60 points), 24 hours by 10 minutes (144), 7 days by hour (168). A point is the step's sums; for "per minute" the apps divide by the step's minutes, the step under way by the part of it that had passed when the report came (at least a minute, `web/src/lib/usage-rate.ts` `stepMinutes`, PersonaWire `MachineUsageSeries.minutes(at:)`; #9205).
   A step with no monitoring sample and nothing counted is a break (`gap`), as in the monitoring charts; a machine that never sent monitoring samples has no breaks.
 - **Card** (`GET /api/v1/metrics`'s `usage` per machine, from memory): today's sums, all tokens per minute now (over the last two to three minutes) and the last 60 minutes by minute.
@@ -252,8 +253,9 @@ so a day's number is the same sum as today's tokens on the Machines page.
 
 - **Days** (`GET /api/v1/usage/days?days=N`, 1 to 371, default 140): each of the last N days in the user's zone (`Options.Location`), midnight to midnight, oldest first; the last is today.
 - **Hours** (`GET /api/v1/usage/hours?days=N`, 1 to 7, default 7): each hour on the clock from the first day's midnight to the hour under way, with its day and hour on the clock
-  (a day the clocks change has 23 or 25; the hour that comes twice is there twice), each machine's share of them, largest first (a machine no longer here has no name), and their total.
-- **Sums** (`db.UsageSpans`): Go works out the day or hour starts in the zone and Postgres sums the rows into them (`width_bucket` over the starts), every machine's together or each apart,
+  (a day the clocks change has 23 or 25; the hour that comes twice is there twice), each machine's share of them, largest first (a machine no longer here has no name), each agent's share
+  (`agents`, #9984; `''` for the rows stored before agents were kept apart: they leave the week a week after the update, and a node's first whole window after it re-sends its last 26 hours by agent), and their total.
+- **Sums** (`db.UsageSpans`): Go works out the day or hour starts in the zone and Postgres sums the rows into them (`width_bucket` over the starts), every machine's together or each machine's or agent's apart,
   through the `machine_usage_ts` index. A row counts in the span its start is in: the minute and 10-minute rows of the last week fall exactly, while the hour rows split a day at the hour
   in a zone whose clock is not a whole hour from UTC.
 - Without Postgres (`stored: false`) both come from the buckets in memory, the last 26 hours.
@@ -282,6 +284,11 @@ The history starts the day the manager began keeping it; the days before are onl
   (as hour rows, `step = 3600`) only when the machine had no row in it before the request, so the live meter's count of an hour always stays; in the same transaction it records
   the last hour sent and, with the last request, when the scan finished. A scan cut off (a restart, a dropped connection) asks again on the next connection and reads from the
   hour after the last stored; a request sent twice adds nothing. Once finished, the node is not asked again.
+- **By agent** (#9984): the node names the agents it reads and the manager keeps a record per agent (`usage_backfill.agent`). Claude Code, Codex and traex, what the
+  backfill read before, share the machine's first record (`''`): done stays done. An agent whose adapter a node gains later has its own record, so its history is read
+  (only its files) from the history's start, and its hours are stored beside the others: an hour is stored for an agent only when the machine had none of that agent's usage
+  in it (Claude Code, Codex, traex and the rows from before agents were kept count together). A request names the agents it read; only their buckets are stored and only
+  their records move on. An older node names none (the first record, as before); an older manager answers its one range, which the node then reads for every agent.
 
 ## Gaps
 

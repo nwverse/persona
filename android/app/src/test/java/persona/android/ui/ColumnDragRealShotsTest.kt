@@ -37,6 +37,7 @@ import org.junit.Assert.assertTrue
 import kotlin.math.abs
 import org.junit.Before
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -65,7 +66,8 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(application = Application::class, sdk = [35])
 class ColumnDragRealShotsTest {
-    @get:Rule val rule = createComposeRule()
+    val rule = createComposeRule()
+    @get:Rule val host = RuleChain.outerRule(ComponentActivityHostRule()).around(rule)
 
     @Before fun hardwareSnapshots() = installColumnDragHardwareSnapshot(on = true)
 
