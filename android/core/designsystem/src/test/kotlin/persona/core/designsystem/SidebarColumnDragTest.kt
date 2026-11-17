@@ -11,14 +11,13 @@ import kotlin.math.pow
 /** `SplitColumnControl` and `Theme.Split`, without a device. */
 class SidebarColumnDragTest {
     @Test fun tokensMatchTheSplitConstants() {
-        assertEquals(Tokens.Size.box80.value, ColumnDrag.blurReach, 0f)
-        assertEquals(Tokens.MinTouch.ios.value / 2f, ColumnDrag.edge, 0f)
-        assertEquals(Tokens.Size.bar.value, ColumnDrag.guide, 0f)
         assertEquals(Tokens.Size.iconXS, ColumnDrag.fullMaterial)
+        // Blur reach is `Tokens.Size.box80` (`Theme.Split.blurReach`, `Theme.swift:49`).
+        assertEquals(0.8f, columnDragBlur(Tokens.Size.box80.value), 0.0001f)
     }
 
     @Test fun takeOverMatchesTheEdgeAndTheAngle() {
-        val edge = ColumnDrag.edge
+        val edge = (Tokens.MinTouch.ios / 2).value
         assertEquals(ColumnDragZone.Open, take(shown = false, startX = edge, vx = 2f, vy = 0f))
         assertNull(take(shown = false, startX = edge + 0.1f, vx = 2f, vy = 0f))
         assertNull(take(shown = false, startX = 0f, vx = 1.5f, vy = 1f))
@@ -95,5 +94,5 @@ class SidebarColumnDragTest {
         vx: Float,
         vy: Float,
         columnWidth: Float = 320f,
-    ) = columnDragTakeOver(drags, shown, detailAtRoot, startX, columnWidth, ColumnDrag.edge, vx, vy)
+    ) = columnDragTakeOver(drags, shown, detailAtRoot, startX, columnWidth, (Tokens.MinTouch.ios / 2).value, vx, vy)
 }

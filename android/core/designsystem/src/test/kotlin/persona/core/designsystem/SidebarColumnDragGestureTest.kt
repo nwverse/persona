@@ -27,9 +27,11 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeWithVelocity
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,6 +48,10 @@ import org.robolectric.shadows.ShadowLooper
 @Config(sdk = [35], qualifiers = "en-w673dp-h951dp-mdpi")
 class SidebarColumnDragGestureTest {
     @get:Rule val rule = createComposeRule()
+
+    @Before fun hooks() { columnDragTestHooks = true }
+
+    @After fun clearHooks() { columnDragTestHooks = false }
 
     @Test fun dragsOffIgnoresTheEdge() {
         var settled: Boolean? = null

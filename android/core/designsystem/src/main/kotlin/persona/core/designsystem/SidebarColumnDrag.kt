@@ -42,8 +42,12 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.zIndex
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
@@ -66,8 +70,6 @@ internal object ColumnDrag {
     const val angle = 1.5f
     /** `Theme.Split.dragBlur` (`Theme.swift:47`). */
     const val dragBlur = 0.8f
-    /** `Theme.Split.blurReach` (`Theme.swift:49`). Kept equal to `Tokens.Size.box80`. */
-    const val blurReach = 80f
     /** `Theme.Split.fling` (`Theme.swift:51`), in dp each second. */
     const val flingDpPerSec = 500f
     /** `Theme.Split.overDim` (`Theme.swift:61`). */
@@ -78,10 +80,6 @@ internal object ColumnDrag {
     const val fadeMs = 200
     /** `Theme.Split.settle` bounce 0 (`SplitColumnControl.swift:293`). */
     const val settleBounce = 0f
-    /** Half of `Theme.Size.tapTarget` (`Theme.swift:585`, `SplitColumnControl.swift:137`). Equal to `Tokens.MinTouch.ios / 2`. */
-    const val edge = 22f
-    /** `Theme.Split.guide` (`Theme.swift:58`). Equal to `Tokens.Size.bar`. */
-    const val guide = 3f
     /**
      * Stand-in for a full `UIBlurEffect.systemUltraThinMaterial`. UIKit does not publish that blur's radius
      * (`SplitColumnControl.swift:238`). The fraction ramps with [columnDragBlur]; this is only how many dp that
@@ -145,7 +143,7 @@ internal fun columnDragVelocityShare(velocity: Float, distance: Float): Float =
     if (distance == 0f) 0f else velocity / distance
 
 /** `min(1, abs(dx) / Theme.Split.blurReach) * Theme.Split.dragBlur` (`SplitColumnControl.swift:256`). [dx] is in dp. */
-internal fun columnDragBlur(dx: Float): Float = min(1f, abs(dx) / ColumnDrag.blurReach) * ColumnDrag.dragBlur
+internal fun columnDragBlur(dx: Float): Float = min(1f, abs(dx) / Tokens.Size.box80.value) * ColumnDrag.dragBlur
 
 internal fun columnDragBlurRadius(dxDp: Float, fullMaterial: Dp): Dp = fullMaterial * columnDragBlur(dxDp)
 
@@ -177,23 +175,30 @@ internal fun columnDragBlurEffect(radiusPx: Float, sdk: Int = Build.VERSION.SDK_
     }
 }
 
-/** The last line the overlay drew, in dp. Tests read it; production does not. */
+/**
+ * Test-only writes. Production leaves [columnDragDrawnLineDp], [columnDragOverlayDrawn] and
+ * [columnDragControllerForTest] untouched. A test sets this before the column is composed.
+ */
+internal var columnDragTestHooks = false
+
+/** The last line the overlay drew, in dp. Written only while [columnDragTestHooks] is set. */
 internal var columnDragDrawnLineDp = Float.NaN
 
-/** True after the overlay has drawn this frame. Tests read it; production does not. */
+/** True after the overlay has drawn this frame. Written only while [columnDragTestHooks] is set. */
 internal var columnDragOverlayDrawn = false
 
 /** The live controller, so a test can move the line without a second gesture path. */
 internal var columnDragControllerForTest: ColumnDragController? = null
 
 /**
- * Replaces [stillImage] in tests. Null in production.
+ * Replaces [stillImage] in tests. Null in production. A null bitmap or a throw is a failed snapshot
+ * (`SplitColumnControl.swift:191-195` returns without starting the drag).
  *
  * minSdk is 30, so `GraphicsLayer.toImageBitmap()` already uses the API 28 hardware snapshot and keeps a child
  * `RenderEffect`. Robolectric forces the software snapshot, which drops that effect. The replacement lives in test
  * source, because the hardware path reflects into an internal Compose method that R8 does not keep.
  */
-internal var columnDragSnapshotForTest: (suspend (GraphicsLayer) -> ImageBitmap)? = null
+internal var columnDragSnapshotForTest: (suspend (GraphicsLayer) -> ImageBitmap?)? = null
 
 internal class ColumnDragController {
     var step by mutableStateOf(DragStep.Idle)
@@ -239,7 +244,7 @@ internal class ColumnDragController {
         columnPicture = null
         finishRequested = false
         pendingLayout = false
-        columnDragOverlayDrawn = false
+        if (columnDragTestHooks) columnDragOverlayDrawn = false
         layoutShown = null
         // Opening records the page first (`:206`), then the column after the column is shown (`:216-224`).
         // Closing over records the column, then the page without it (`:225-231`).
@@ -333,14 +338,72 @@ internal class ColumnDragController {
             }
         }
     }
+
+    /**
+     * The snapshot was missing or threw (`SplitColumnControl.swift:191-195`). Leave the column where the parent
+     * has it: [layoutShown] goes back to null, so the drag never settles.
+     */
+    fun postSnapshotAbort() {
+        val gen = generation
+        Handler(Looper.getMainLooper()).post {
+            if (generation != gen) return@post
+            if (step == DragStep.Idle || step == DragStep.Settle || step == DragStep.Fade) return@post
+            abortToIdle(null)
+        }
+    }
+
+    /**
+     * The window changed under a drag (`SplitColumnControl.swift:178` cancels with velocity 0). The stills are the
+     * old size, so the overlay goes with them instead of stretching.
+     */
+    fun onWindowSizeChanged(density: Density) {
+        if (step == DragStep.Idle) return
+        if (step == DragStep.Follow) {
+            releaseStills(density)
+            fingerVelocityPx = 0f
+            blurDxPx = dxPx
+            step = DragStep.Settle
+            return
+        }
+        if (step == DragStep.Settle || step == DragStep.Fade) {
+            releaseStills(density)
+            return
+        }
+        abortToIdle(density)
+    }
+
+    /** Drop the bitmaps. A public `record` replaces the layer's display list; Compose keeps discard internal. */
+    fun releaseStills(density: Density?) {
+        pagePicture = null
+        columnPicture = null
+        pageSeen = false
+        columnSeen = false
+        if (density == null) return
+        pageLayer?.let { runCatching { it.dropRecorded(density) } }
+        columnLayer?.let { runCatching { it.dropRecorded(density) } }
+    }
+
+    private fun abortToIdle(density: Density?) {
+        generation++
+        pendingLayout = false
+        finishRequested = false
+        pageFrozen = true
+        columnFrozen = true
+        releaseStills(density)
+        layoutShown = null
+        dxPx = 0f
+        step = DragStep.Idle
+    }
+}
+
+private fun GraphicsLayer.dropRecorded(density: Density) {
+    if (isReleased) return
+    record(density, LayoutDirection.Ltr, IntSize(1, 1)) {}
 }
 
 @Composable
 internal fun rememberColumnDragController(
     width: Dp,
-    overlay: Boolean,
-    shown: Boolean,
-    detailAtRoot: Boolean,
     onSettle: (Boolean) -> Unit,
 ): ColumnDragController {
     val controller = remember { ColumnDragController() }
@@ -351,6 +414,7 @@ internal fun rememberColumnDragController(
     val reduceMotion = PersonaTheme.reduceMotion
     val settle = rememberUpdatedState(onSettle)
     DisposableEffect(controller) {
+        if (!columnDragTestHooks) return@DisposableEffect onDispose {}
         columnDragControllerForTest = controller
         onDispose { if (columnDragControllerForTest === controller) columnDragControllerForTest = null }
     }
@@ -402,6 +466,7 @@ private fun ColumnDragRuntime(
                 controller.layoutShown = null
                 controller.pageFrozen = true
                 controller.columnFrozen = true
+                controller.releaseStills(density)
                 controller.step = DragStep.Idle
             }
             else -> Unit
@@ -409,12 +474,6 @@ private fun ColumnDragRuntime(
     }
 }
 
-/**
- * True once this frame's layout is the one the picture must show.
- * `animateFloatAsState` applies `snap()` on a later frame than the write, so the first frame after
- * `layoutShown` changes still has the old [progress]. iOS calls `layoutIfNeeded` and then
- * `snapshotView(afterScreenUpdates: true)` (`SplitColumnControl.swift:216-231`).
- */
 /** The column in place (`:217-224`). Beside close keeps both where they already are. */
 private fun columnPictureReady(step: DragStep, progress: Float): Boolean = when (step) {
     DragStep.OpenColumn, DragStep.ShutOverColumn, DragStep.ShutBeside -> progress >= 0.999f
@@ -430,48 +489,91 @@ private fun pagePictureReady(step: DragStep, progress: Float): Boolean = when (s
 
 /**
  * [progress] is the value this frame composed with, so the draw matches it.
+ * `animateFloatAsState` applies `snap()` on a later frame than the write, so the first frame after
+ * `layoutShown` changes still has the old progress. iOS calls `layoutIfNeeded` and then
+ * `snapshotView(afterScreenUpdates: true)` (`SplitColumnControl.swift:216-231`).
+ *
  * The bitmap is pixels (`GraphicsLayer.toImageBitmap`). A `GraphicsLayer` kept as the picture would still
  * point at child layers, which move or leave when the column does (`snapshotView` is a still image).
+ * Closing beside records one frame and uses it for both strips: both pictures are that same layout.
  */
 internal fun ColumnDragController.recordModifier(progress: Float): Modifier {
     val pageToRecord = pageLayer?.takeIf { !pageFrozen && pagePictureReady(step, progress) }
     val columnToRecord = columnLayer?.takeIf { !columnFrozen && columnPictureReady(step, progress) }
     if (pageToRecord == null && columnToRecord == null) return Modifier
+    val shareBeside = step == DragStep.ShutBeside && pageToRecord != null && columnToRecord != null
     return Modifier.drawWithContent {
         var recorded = false
-        if (pageToRecord != null) {
-            pageToRecord.record { this@drawWithContent.drawContent() }
-            stillImage(pageToRecord)?.let {
-                pagePicture = it
-                pageSeen = true
-                recorded = true
-            }
+        var failed = false
+        fun take(layer: GraphicsLayer): Still {
+            layer.record { this@drawWithContent.drawContent() }
+            val still = stillImage(layer)
+            if (still is Still.Failed) runCatching { layer.record { } }
+            return still
         }
-        if (columnToRecord != null) {
-            columnToRecord.record { this@drawWithContent.drawContent() }
-            stillImage(columnToRecord)?.let {
-                columnPicture = it
-                columnSeen = true
-                recorded = true
+        if (shareBeside) {
+            when (val still = take(pageToRecord)) {
+                is Still.Image -> {
+                    pagePicture = still.bitmap
+                    columnPicture = still.bitmap
+                    pageSeen = true
+                    columnSeen = true
+                    recorded = true
+                }
+                Still.Waiting -> Unit
+                Still.Failed -> failed = true
+            }
+        } else {
+            if (pageToRecord != null) {
+                when (val still = take(pageToRecord)) {
+                    is Still.Image -> {
+                        pagePicture = still.bitmap
+                        pageSeen = true
+                        recorded = true
+                    }
+                    Still.Waiting -> Unit
+                    Still.Failed -> failed = true
+                }
+            }
+            if (!failed && columnToRecord != null) {
+                when (val still = take(columnToRecord)) {
+                    is Still.Image -> {
+                        columnPicture = still.bitmap
+                        columnSeen = true
+                        recorded = true
+                    }
+                    Still.Waiting -> Unit
+                    Still.Failed -> failed = true
+                }
             }
         }
         drawContent()
         // The bitmap already holds pixels. The phase change (show or hide the column) waits until after this draw.
-        if (recorded) postPictureAdvance()
+        // A failed snapshot never starts that phase (`SplitColumnControl.swift:191-195`).
+        if (failed) postSnapshotAbort() else if (recorded) postPictureAdvance()
     }
+}
+
+private sealed interface Still {
+    class Image(val bitmap: ImageBitmap) : Still
+    data object Waiting : Still
+    data object Failed : Still
 }
 
 /**
  * Rasterize while the recorded children still exist.
  *
  * Public `toImageBitmap` (`SplitColumnControl.swift:191` is the same rendered frame). A test may replace it via
- * [columnDragSnapshotForTest].
+ * [columnDragSnapshotForTest]. A throw or a null bitmap is [Still.Failed]; a layer with no size yet is [Still.Waiting].
  */
-private fun stillImage(layer: GraphicsLayer): ImageBitmap? {
+private fun stillImage(layer: GraphicsLayer): Still {
     val size = layer.size
-    if (size.width < 1 || size.height < 1) return null
+    if (size.width < 1 || size.height < 1) return Still.Waiting
     val shot = columnDragSnapshotForTest
-    return runBlocking { if (shot != null) shot(layer) else layer.toImageBitmap() }
+    val image = runCatching {
+        runBlocking { if (shot != null) shot(layer) else layer.toImageBitmap() }
+    }.getOrNull() ?: return Still.Failed
+    return Still.Image(image)
 }
 
 @Composable
@@ -595,10 +697,35 @@ internal fun ColumnDragOverlay(
         else -> null
     }
     if (!interactive && cover == null) {
-        columnDragOverlayDrawn = false
+        if (columnDragTestHooks) columnDragOverlayDrawn = false
         return
     }
     val density = androidx.compose.ui.platform.LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxSize().zIndex(2f)) {
+        val maxW = constraints.maxWidth
+        val maxH = constraints.maxHeight
+        val bounded = maxW < Constraints.Infinity && maxH < Constraints.Infinity
+        val stale = bounded && listOfNotNull(page, column).any { bmp ->
+            abs(bmp.width - maxW) > 1 || abs(bmp.height - maxH) > 1
+        }
+        if (stale) {
+            if (columnDragTestHooks) columnDragOverlayDrawn = false
+            androidx.compose.runtime.SideEffect { controller.onWindowSizeChanged(density) }
+            return@BoxWithConstraints
+        }
+        columnDragOverlayBody(controller, page, column, step, cover, density)
+    }
+}
+
+@Composable
+private fun columnDragOverlayBody(
+    controller: ColumnDragController,
+    page: ImageBitmap?,
+    column: ImageBitmap?,
+    step: DragStep,
+    cover: ImageBitmap?,
+    density: androidx.compose.ui.unit.Density,
+) {
     val linePx = when (step) {
         DragStep.Settle, DragStep.Fade -> controller.lineAnim.value
         else -> columnDragLine(controller.opening, controller.widthPx, controller.dxPx)
@@ -613,27 +740,29 @@ internal fun ColumnDragOverlay(
     } else Color.Unspecified
     val alpha = if (step == DragStep.Fade) controller.fadeAnim.value else 1f
     val guidePx = with(density) { Tokens.Size.bar.toPx() }
-    androidx.compose.runtime.SideEffect { columnDragDrawnLineDp = linePx / density.density }
+    if (columnDragTestHooks) {
+        androidx.compose.runtime.SideEffect { columnDragDrawnLineDp = linePx / density.density }
+    }
     if (cover != null) {
         val still = cover
         // The screen as it was, over whatever changes under it (`:204-216`). No line yet: the finger's frame is the
         // one that has both pictures (`:247-248`).
-        Canvas(Modifier.fillMaxSize().zIndex(2f)) {
+        Canvas(Modifier.fillMaxSize()) {
             drawImage(still)
-            columnDragOverlayDrawn = true
+            if (columnDragTestHooks) columnDragOverlayDrawn = true
             controller.onCoverDrawn()
         }
         return
     }
     // Above the column's own zIndex while it is over the page. iOS draws page, dim, column, blur, then the guide (`:206-245`).
-    BoxWithConstraints(Modifier.fillMaxSize().zIndex(2f).clipToBounds().graphicsLayer { this.alpha = alpha }) {
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().graphicsLayer { this.alpha = alpha }) {
         val windowPx = with(density) { maxWidth.toPx() }
         androidx.compose.foundation.Canvas(Modifier.fillMaxSize().graphicsLayer {
             renderEffect = columnDragBlurEffect(radiusPx)
         }) {
             drawColumnDragScene(page!!, column!!, linePx, controller.widthPx, beside = !controller.over,
                 opening = controller.opening, dim = dim)
-            columnDragOverlayDrawn = true
+            if (columnDragTestHooks) columnDragOverlayDrawn = true
         }
         val guideX = columnDragGuideX(linePx, guidePx, windowPx)
         // The guide is a sibling of the blurred canvas, so the blur does not cover it (`:242-245` adds it after the blur).

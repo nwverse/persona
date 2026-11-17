@@ -45,6 +45,10 @@ internal fun installColumnDragHardwareSnapshot(on: Boolean) {
     val setter = holder.methods.first {
         it.name.startsWith("setColumnDragSnapshotForTest") && it.parameterCount == 1
     }
-    val shot: (suspend (GraphicsLayer) -> ImageBitmap)? = if (on) ::columnDragHardwareSnapshot else null
+    val shot: (suspend (GraphicsLayer) -> ImageBitmap?)? = if (on) ::columnDragHardwareSnapshot else null
     setter.invoke(null, shot)
+    val hooks = holder.methods.first {
+        it.name.startsWith("setColumnDragTestHooks") && it.parameterCount == 1
+    }
+    hooks.invoke(null, on)
 }

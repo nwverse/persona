@@ -51,11 +51,13 @@ class SidebarColumnDragShotsTest {
     @get:Rule val rule = createComposeRule()
 
     @Before fun hardwareSnapshots() {
+        columnDragTestHooks = true
         columnDragSnapshotForTest = ::columnDragHardwareSnapshot
     }
 
     @After fun clearHardwareSnapshots() {
         columnDragSnapshotForTest = null
+        columnDragTestHooks = false
     }
 
     @Config(sdk = [35], qualifiers = "en-w673dp-h951dp-mdpi")
@@ -254,6 +256,7 @@ class SidebarColumnDragShotsTest {
                 fade++
             }
             assertEquals(DragStep.Idle, controller.step)
+            assertTrue("$prefix $mode kept a still", controller.pagePicture == null && controller.columnPicture == null)
             assertTrue("$prefix $mode stayed shut", shown)
             rule.mainClock.autoAdvance = true
             rule.runOnIdle { controller.begin(ColumnDragZone.Close, over = over, widthPx = widthPx) }
@@ -281,6 +284,7 @@ class SidebarColumnDragShotsTest {
                 shutFrames++
             }
             assertEquals(DragStep.Idle, controller.step)
+            assertTrue("$prefix $mode shut kept a still", controller.pagePicture == null && controller.columnPicture == null)
             assertTrue("$prefix $mode shut did not close", !shown)
         }
     }

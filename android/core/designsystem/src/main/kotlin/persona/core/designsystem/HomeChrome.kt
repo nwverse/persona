@@ -160,7 +160,7 @@ fun JSidebarColumn(
 ) {
     // The finger drag is SplitColumnControl (`SidebarColumnDrag.kt`). Idle, and a column that does not drag, keeps
     // this layout and `sidebarColumnSpec` (the button, the scrim and Back).
-    val drag = if (drags && sidebar != null) rememberColumnDragController(width, overlay, shown, detailAtRoot, onDragSettle) else null
+    val drag = if (drags && sidebar != null) rememberColumnDragController(width, onDragSettle) else null
     val laidOut = drag?.layoutShown ?: shown
     val progress by animateFloatAsState(if (laidOut) 1f else 0f,
         if (drag?.snaps == true) snap() else sidebarColumnSpec(PersonaTheme.style, PersonaTheme.reduceMotion),
