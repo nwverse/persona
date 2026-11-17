@@ -118,6 +118,8 @@ type TaskReview struct {
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
+	ExternalPR *TodoPRStatus `json:"external_pr,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -162,6 +164,14 @@ func (v *Supervision) clone() *Supervision {
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
+		}
+		if r.ExternalPR != nil {
+			status := *r.ExternalPR
+			if status.ChangesRequestedAt != nil {
+				at := *status.ChangesRequestedAt
+				status.ChangesRequestedAt = &at
+			}
+			out.Reviews[i].ExternalPR = &status
 		}
 	}
 	if out.DoneWhen == nil {

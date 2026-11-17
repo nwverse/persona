@@ -196,6 +196,9 @@ func polledPRs(t Todo) []string {
 			}
 			break
 		}
+		if u := externalParkPRURL(r); u != "" && !slices.Contains(out, u) {
+			out = append(out, u)
+		}
 	}
 	return out
 }
@@ -229,7 +232,7 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 	s.todos.mu.RLock()
 	var tasks []Todo
 	for _, t := range s.todos.todos {
-		if t.DoneAt == nil && t.PRURL != "" && !isAskTodo(t.ID) {
+		if t.DoneAt == nil && (t.PRURL != "" || externalParkPRURL(t.Supervision.parking()) != "") && !isAskTodo(t.ID) {
 			tasks = append(tasks, copyTodoLocked(t))
 		}
 	}
@@ -243,7 +246,11 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			if m == nil {
 				continue
 			}
-			if old := prFacts(t, url); old != nil && now.Sub(old.CheckedAt) < deployRecheck {
+			old := prFacts(t, url)
+			if r := t.Supervision.parking(); externalParkPRURL(r) == url {
+				old = r.ExternalPR // Only this captured wait's source receipt throttles its first observation.
+			}
+			if old != nil && now.Sub(old.CheckedAt) < deployRecheck {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -274,7 +281,8 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			}
 			observedAt := now.UTC()
 			// The pass may have started before this captured wait. Its source request cannot predate that wait.
-			if held := t.Supervision.parking(); held != nil && held.Evidence != nil && parkWaitsOnPR(held, url) && observedAt.Before(held.At) {
+			if held := t.Supervision.parking(); held != nil && held.Evidence != nil &&
+				(parkWaitsOnPR(held, url) || externalParkPRURL(held) == url) && observedAt.Before(held.At) {
 				observedAt = held.At
 			}
 			status.URL, status.CheckedAt = url, observedAt
@@ -288,6 +296,11 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
 	// The wait belongs to the snapshot taken before the forge request, not a park created while it was in flight.
 	held := t.Supervision.parking()
+	if externalParkPRURL(held) == status.URL && status.URL != "" {
+		if err := s.applyExternalParkPRStatus(ctx, t, status); err != nil {
+			return err
+		}
+	}
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil || current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
 		return nil

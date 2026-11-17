@@ -692,6 +692,22 @@ Something the owner raises in the main conversation and wants an answer to is a 
 
 ## Parked tasks
 
+**External PR objects (#9775).** An `external_event` park whose `evidence.url` is exactly a GitHub PR page is
+observed by the existing PR-status pass, even without an independent current/earlier task-PR association.
+The bound object adds at most one source to the existing bounded PR sample; it does not fabricate an association
+or displace another open PR. The source pass is scheduled every minute, with the existing ten-minute per-PR
+attempt/fact throttle and bounded pass time, not a fixed one-minute delivery guarantee. A fresh merge/close
+observation saves `external_pr` on that same parked review and transitions to `pending_review` atomically;
+the existing current-supervisor signal asks for reassessment. Another unrelated open PR does not represent this
+external object. Merge-review readiness and multi-PR gates remain separate and unchanged.
+
+This source wake is not proof that a subsequent deployment or any other dependency succeeded, and does not
+accept/complete the task or claim direct Agent delivery. Only the recorded PR URL is observed, not prose,
+person/date waits, generic release/check URLs, GitLab MRs, or a related but different PR. The current open task,
+captured park, bound object and receipt time are rechecked after the source read. Replacement, re-parking,
+completion/cancellation and older responses cannot end a newer wait. Failed ledger writes remain retryable,
+including after reconstruction; a committed pending-review wake is recovered by the ordinary supervision watch.
+
 (#3804, `assistant/parked.go`, `assistant/park_evidence.go`.) Parking is for an evidenced external wait, not a way to defer work or ask the owner a question. A new park must say what is awaited and include source-backed evidence.
 
 - **New parks**: `task_review` with `parked` requires a one-sentence `reason`, `waiting_on` (`someone_else`, `external_event` or `date`), and typed `evidence` with nonblank `kind`, `target` and `wake`. A new owner decision is `needs_user` with its complete decision fields; `owner_priority` is refused for new parks. Legacy `owner_priority` reviews remain readable; the existing supervision watch reconciles their open, current parks into `needs_user` rather than leaving an owner choice hidden in the waiting-only digest.
