@@ -874,6 +874,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - The composer's + panel on the iPhone (`AttachSheet`) is a system sheet with detents medium and large and the drag indicator, like the system's photo picker; its bar sits in `safeAreaInset(edge: .bottom)` so the keyboard pushes it up (#4312).
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).
 - Edit sheets: `sheetCancel` asks to discard on Mac only; on iOS it discards at once (`apple/Persona/DesignSystem/SheetActions.swift:44`).
+- A sheet bar's text button that only closes (Cancel) draws its words in the primary ink, `sheetBarLabel()` (`apple/Persona/DesignSystem/SheetActions.swift`, #9460): on the bar's glass, which turns lighter in a dark sheet over a light page, the accent read 2.1:1 (Send To) and 3.1:1 (Forward To). A confirming button (Done, Send) keeps the accent. Forward To and Send To use it; the other sheets' Cancel still draws the accent until each is touched.
 - Busy sheets disable interactive dismissal. Detents and drag indicators are inconsistent (DS-22).
 - Confirmation sheets for Close and Delete agent exist because a system dialog was too wordy (`apple/Persona/DesignSystem/Components.swift:444`).
 - Web: dialog is a centered card, becomes a bottom sheet on phones. Android: `JSheet`.

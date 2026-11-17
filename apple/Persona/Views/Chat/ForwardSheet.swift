@@ -96,9 +96,11 @@ struct ForwardSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button {
                         work?.cancel()
                         dismiss()
+                    } label: {
+                        Text("Cancel").lineLimit(1).sheetBarLabel()
                     }
                     .accessibilityIdentifier("forward.cancel")
                 }
