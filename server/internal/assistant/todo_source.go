@@ -402,9 +402,9 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 	}
 	var text string
 	if st.SourceReportFullReply && t.StartError == "" && !t.Cancelled() {
-		reply, pending := s.sourceFinalReply(ctx, t)
-		if pending && reply == "" && time.Since(*t.DoneAt) < sourceReportWait {
-			s.sourceReportSoon(t.ID, 5*time.Second)
+		reply, wait := s.sourceFinalReply(ctx, t)
+		if remaining := wait - time.Since(*t.DoneAt); reply == "" && wait > 0 && remaining > 0 {
+			s.sourceReportSoon(t.ID, min(remaining, 5*time.Second))
 			return
 		}
 		text = reply

@@ -178,9 +178,12 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		msgType, content := feishubot.TypeText, feishubot.TextContent(a.Text)
 		if a.FullAnswer {
-			msgType, content, err = api.AnswerContent(ctx, a.Text)
+			msgType, content, err = h.feishuAnswerContent(ctx, api, a.ReplyTo, replyUUID, a.Text)
 			if err != nil {
 				return nil, err
+			}
+			if current, settings := h.botAPI(); current != api || !settings.SourceReportFullReply {
+				return nil, errBotSourceReply
 			}
 		}
 		if found && !h.useAISourceReply(a.ReplyTo, a.FullAnswer) {

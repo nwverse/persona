@@ -145,6 +145,8 @@ type botHub struct {
 	// handedGroup are the group messages handed to the assistant lately: a recall in a group is only passed on for one
 	// of these (botRecalled), memory only.
 	handedGroup idRing
+	// answerFiles keeps prepared long replies across retries and hub restarts.
+	answerFiles botAnswerFiles
 	// line is closed once the last message taken has been handed to the assistant (botMessage): they go in the
 	// order they came.
 	line chan struct{}
