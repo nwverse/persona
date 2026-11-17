@@ -44,11 +44,64 @@ const (
 	backfillSmall = 256 << 10
 )
 
-// backfillStatus is the manager's answer to usage.backfill.status.
-type backfillStatus struct {
+// backfillRange is what the manager wants read: nothing (done), or from Since to Before.
+type backfillRange struct {
 	Done   bool  `json:"done"`
 	Since  int64 `json:"since"`  // Unix: the first hour to count
 	Before int64 `json:"before"` // Unix: count only what came before (the live window starts there)
+}
+
+// backfillStatus is the manager's answer to usage.backfill.status: its own range (the agents read before agents
+// were kept apart; an older manager's for every agent) and, from a manager that keeps a record per agent (#9984),
+// each agent's the node named.
+type backfillStatus struct {
+	backfillRange
+	Agents map[string]backfillRange `json:"agents"`
+}
+
+// backfillPlan is what to read of each of agents (those with nothing to read left out), and from when to when all
+// of them; ok is false when there is nothing.
+func backfillPlan(agents []string, st backfillStatus) (ranges map[string]backfillRange, since, before time.Time, ok bool) {
+	ranges = map[string]backfillRange{}
+	for _, a := range agents {
+		r := st.backfillRange
+		if st.Agents != nil {
+			var answered bool
+			if r, answered = st.Agents[a]; !answered {
+				continue
+			}
+		}
+		if r.Done || r.Since >= r.Before {
+			continue
+		}
+		ranges[a] = r
+		if s := time.Unix(r.Since, 0); since.IsZero() || s.Before(since) {
+			since = s
+		}
+		if b := time.Unix(r.Before, 0); b.After(before) {
+			before = b
+		}
+	}
+	return ranges, since, before, len(ranges) > 0
+}
+
+// backfillWeek is what of a week's buckets (from start to end) the manager asked for: each agent's within its range,
+// and the agents whose range the week reads (the requests say them: their records move on).
+func backfillWeek(buckets []proto.UsageBucket, ranges map[string]backfillRange, start, end time.Time) ([]proto.UsageBucket, []string) {
+	var agents []string
+	for a, r := range ranges {
+		if r.Since < end.Unix() && r.Before > start.Unix() {
+			agents = append(agents, a)
+		}
+	}
+	slices.Sort(agents)
+	keep := buckets[:0]
+	for _, b := range buckets {
+		if r, ok := ranges[b.Agent]; ok && b.Minute >= r.Since && b.Minute < r.Before {
+			keep = append(keep, b)
+		}
+	}
+	return keep, agents
 }
 
 // backfillUsage asks the manager whether this machine's history wants a backfill and does it.
@@ -66,29 +119,41 @@ func (n *Node) backfillUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 	if n.peer == nil {
 		return
 	}
+	names := n.usageAgents()
 	var st backfillStatus
 	cctx, cancel := context.WithTimeout(ctx, backfillCall)
-	err := n.peer.Call(cctx, "usage.backfill.status", map[string]any{}, &st)
+	err := n.peer.Call(cctx, "usage.backfill.status", map[string]any{"agents": names}, &st)
 	cancel()
-	if err != nil || st.Done || st.Since >= st.Before { // an older manager does not know it
+	if err != nil { // an older manager does not know it
 		return
 	}
-	since, before := time.Unix(st.Since, 0), time.Unix(st.Before, 0)
+	ranges, since, before, ok := backfillPlan(names, st)
+	if !ok {
+		return
+	}
 	started := time.Now()
 	lim := &readLimiter{rate: backfillRate, start: started}
 	files := n.backfillFiles(ctx, since, lim)
+	files = slices.DeleteFunc(files, func(f backfillFile) bool { _, want := ranges[f.ad.agent()]; return !want })
+	queries := slices.DeleteFunc(n.usageQueries(), func(q usageQuery) bool { _, want := ranges[q.agent()]; return !want })
+	var firsts []time.Time
+	for _, q := range queries {
+		firsts = append(firsts, q.first(ctx, n))
+	}
 	read, hours := 0, 0
 	// The weeks before the transcripts' first day hold nothing: start there (#9616).
-	for start := backfillStart(files, since); start.Before(before); {
+	for start := backfillStart(files, firsts, since); start.Before(before); {
 		end := start.Add(backfillSlice)
 		if end.After(before) {
 			end = before
 		}
-		buckets, err := n.backfillScan(ctx, files, start, end, lim)
+		buckets, err := n.backfillScan(ctx, files, queries, start, end, lim)
 		if err != nil {
 			return
 		}
+		buckets, agents := backfillWeek(buckets, ranges, start, end)
 		for _, req := range backfillRequests(buckets, end, end.Equal(before)) {
+			req["agents"] = agents
 			var res struct {
 				Stored int `json:"stored"`
 			}
@@ -156,8 +221,8 @@ func (n *Node) backfillFiles(ctx context.Context, since time.Time, lim *readLimi
 }
 
 // backfillStart is where the weeks begin: since, or the hour of the earliest first line when all the files have one
-// and it is later.
-func backfillStart(files []backfillFile, since time.Time) time.Time {
+// and it is later; firsts are the databases' earliest requests (zero: none).
+func backfillStart(files []backfillFile, firsts []time.Time, since time.Time) time.Time {
 	var first time.Time
 	for _, f := range files {
 		if f.first.IsZero() {
@@ -165,6 +230,11 @@ func backfillStart(files []backfillFile, since time.Time) time.Time {
 		}
 		if first.IsZero() || f.first.Before(first) {
 			first = f.first
+		}
+	}
+	for _, t := range firsts {
+		if !t.IsZero() && (first.IsZero() || t.Before(first)) {
+			first = t
 		}
 	}
 	if first.IsZero() || !first.After(since) {
@@ -178,9 +248,9 @@ func (f backfillFile) overlaps(start, end time.Time) bool {
 	return f.st.ModTime().After(start) && (f.first.IsZero() || f.first.Before(end))
 }
 
-// backfillScan sums the replies of every transcript from start to end by the hour, model and launcher, in time
-// order. Only ctx ending stops it (its error).
-func (n *Node) backfillScan(ctx context.Context, files []backfillFile, start, end time.Time, lim *readLimiter) ([]proto.UsageBucket, error) {
+// backfillScan sums the replies of every transcript and database from start to end by the hour, model, launcher and
+// agent, in time order. Only ctx ending stops it (its error).
+func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries []usageQuery, start, end time.Time, lim *readLimiter) ([]proto.UsageBucket, error) {
 	m := newUsageMeter()
 	m.step, m.until, m.seen = 3600, end, map[uint64]struct{}{}
 	m.launcherOf = func(session string) string {
@@ -193,6 +263,15 @@ func (n *Node) backfillScan(ctx context.Context, files []backfillFile, start, en
 		}
 		if _, err := m.scanSlice(ctx, f.usagePath, start, end, lim); err != nil {
 			return nil, err
+		}
+	}
+	for _, q := range queries {
+		recs, err := q.between(ctx, n, start, end)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range recs {
+			m.add(&usageFile{}, r, start)
 		}
 	}
 	out := make([]proto.UsageBucket, 0, len(m.buckets))

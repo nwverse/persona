@@ -31091,6 +31091,30 @@
       },
       "extractionState" : "manual"
     },
+    "By Agent · Last 7 Days" : {
+      "comment" : "Token usage page: each coding agent's tokens over the last week",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By Agent · Last 7 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent別 · 過去7日間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Agent · 最近 7 天"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "By App" : {
       "localizations" : {
         "en" : {
@@ -31731,6 +31755,29 @@
           }
         }
       }
+    },
+    "Connect to %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@に接続しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接到 %1$@？"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
@@ -83715,6 +83762,28 @@
       },
       "extractionState" : "manual"
     },
+    "Lark Meeting Notes [Imported Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lark Meeting Notes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lark の議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "飞书会议纪要"
+          }
+        }
+      }
+    },
     "Lark Messages" : {
       "localizations" : {
         "en" : {
@@ -105506,6 +105575,30 @@
         }
       }
     },
+    "Not Split (Before the Update)" : {
+      "comment" : "Token usage page, By Agent: usage the hub kept before it counted each agent apart",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Split (Before the Update)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "区別なし（更新前）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未区分（更新前）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Not Started" : {
       "localizations" : {
         "en" : {
@@ -112606,6 +112699,29 @@
       },
       "extractionState" : "manual"
     },
+    "Only connect to a hub you set up yourself or trust. It will see this device and can send it notifications." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only connect to a hub you set up yourself or trust. It will see this device and can send it notifications."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分で設定したハブか、信頼できるハブにだけ接続してください。接続すると、このデバイスを認識し、通知を送れるようになります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只连接你自己搭的或信任的 hub。连接后它能看到这台设备，也能给它发通知。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Only Its Alerts" : {
       "localizations" : {
         "en" : {
@@ -116681,6 +116797,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Original Meeting Notes [Imported Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original Meeting Notes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原会议纪要"
+          }
+        }
+      }
     },
     "Original [Image Editor 9a4f22]" : {
       "extractionState" : "manual",
@@ -171285,6 +171423,29 @@
           }
         }
       }
+    },
+    "This hub is already paired. Connecting again refreshes this device's pairing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub is already paired. Connecting again refreshes this device's pairing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはペアリング済みです。もう一度接続すると、このデバイスのペアリングが更新されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 已经配对过，再连接一次会刷新这台设备的配对。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "This Hub Is Disconnected" : {
       "localizations" : {

@@ -23,9 +23,10 @@ import (
 // ("full"): nothing is stored, and restarting either side recounts the same numbers; the manager keeps the week
 // (docs/server/machines.md "Token usage").
 //
-// Each bucket also says which launcher ran it (the session's, as Persona started it; "" for one typed in a terminal),
-// and a reply is counted once in the window even when it is in more than one file: a fork (Claude Code's
-// --fork-session, Codex's fork) copies the history it starts from, timestamps and all, into the new file.
+// Each bucket also says which launcher ran it (the session's, as Persona started it; "" for one typed in a terminal)
+// and which agent (its adapter's), and a reply is counted once in the window even when it is in more than one file: a
+// fork (Claude Code's --fork-session, Codex's fork) copies the history it starts from, timestamps and all, into the
+// new file.
 
 const (
 	usageWindow  = 26 * time.Hour // "today" in any time zone, and the hour before
@@ -38,6 +39,7 @@ type usageKey struct {
 	minute   int64
 	model    string
 	launcher string
+	agent    string
 }
 
 type usageFile struct {
@@ -88,7 +90,7 @@ type usagePath struct {
 func (n *Node) usageFiles(cutoff time.Time) []usagePath {
 	var out []usagePath
 	for _, ad := range n.usageAdapters() {
-		for _, p := range ad.paths(n) {
+		for _, p := range ad.paths(n, cutoff) {
 			if st, err := os.Stat(p); err == nil && st.ModTime().After(cutoff) && n.scopedTranscriptAllows(p) {
 				out = append(out, usagePath{p, st, ad})
 			}
@@ -115,6 +117,7 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
+	queries := n.usageQueries()
 	t := time.NewTicker(usageEvery)
 	defer t.Stop()
 	for {
@@ -125,6 +128,11 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 				return
 			}
 			m.scan(f, cutoff)
+		}
+		for _, q := range queries {
+			for _, r := range q.poll(ctx, n, cutoff) {
+				m.add(&usageFile{}, r, cutoff)
+			}
 		}
 		m.prune(cutoff)
 		if n.peer != nil {
@@ -209,11 +217,15 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 	if model == "" {
 		model = "unknown"
 	}
-	launcher := ""
-	if m.launcherOf != nil && uf.session != "" {
-		launcher = m.launcherOf(uf.session)
+	session := uf.session
+	if r.Session != "" { // a database's row says its session
+		session = r.Session
 	}
-	uf.skip, uf.at = false, usageKey{minute, model, launcher}
+	launcher := ""
+	if m.launcherOf != nil && session != "" {
+		launcher = m.launcherOf(session)
+	}
+	uf.skip, uf.at = false, usageKey{minute, model, launcher, r.Agent}
 	m.addTo(uf.at, r.Tokens, true)
 }
 
@@ -221,7 +233,7 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 func (m *usageMeter) addTo(k usageKey, t tokenuse.Tokens, request bool) {
 	b := m.buckets[k]
 	if b == nil {
-		b = &proto.UsageBucket{Minute: k.minute, Model: k.model, Launcher: k.launcher}
+		b = &proto.UsageBucket{Minute: k.minute, Model: k.model, Launcher: k.launcher, Agent: k.agent}
 		m.buckets[k] = b
 	}
 	b.Input += t.Input
