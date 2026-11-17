@@ -225,6 +225,15 @@ refresh replaces it, including removals. There is no new setting or model depend
     shorten the name, not the number. Closing a Paseo Agent offers to remove its own worktree as for herdr (#6297): `worktree/status` calls it
     Persona's when it is the folder of a worktree workspace Paseo made, and `worktree/remove` archives that workspace through Paseo with Delete
     worktree's guards (below).
+  - **Creation keeps project identity** (#9726): an explicitly selected workspace supplies its own project ID. With a directory alone,
+    the bridge reads the active projects and compares physical paths for the directory, Git checkout and main checkout. A unique match
+    is passed as `source.projectId`; names and remote URLs are never used to merge independent clones. Multiple matching projects or a
+    failed/malformed project list stop creation. Only a successful list with no match allows Paseo to allocate a project.
+    A direct Agent start that needs a new workspace uses the same resolver: since `agent.create.request` has no project ID, the bridge
+    creates a directory workspace with that ID first, then starts the Agent in it. This stays inside the existing pending-start flow;
+    retries reuse its creation key. If the Agent fails later, the directory workspace remains available for retry.
+    Existing groups and sessions are preserved: Paseo 0.16's public workspace commands/protocol have no move or reparent operation.
+    This prevents future duplicates; it does not migrate previously duplicated project groups.
   - **Terminals for a Paseo Agent's folder**: a Paseo workspace has no terminal, so Open Terminal Here and a dev server's Start for one of its
     Agents open in the terminal engine's workspace that holds the folder, else in a new workspace there, never in one that only happens to be first;
     the web and iOS offer Start only for sessions with a terminal. For that, Open Terminal Here sends the Agent's Paseo workspace with the folder

@@ -789,6 +789,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   launcher and thinking effort are sent only if changed this time (so values stored by unified model config are not overwritten, `docs/assistant/model-config.md`), and when the hub has unified model config there is a link to it.
 - **Inbox** (`/inbox`, `/inbox/<item>`, `src/views/inbox/`, `src/lib/inbox.ts`, `docs/assistant/inbox.md`; the list, its store and what the sidebar and the chat read are in `lib/inbox.ts`, on every first screen; what only the page uses (the words for mutes, rules, bulk actions and unread sources, the **Hand to AI** message, Feishu message parts and sends) is in `lib/inbox-page.ts` with its strings in the `lib-inbox-page` namespace, both loaded with the page, #8806): Lark, mail, cloud docs, Moments and connectors (GitHub, Telegram, Messages, extensions) in one list,
   in four sections: needs you / FYI (mark all seen) / folded (clear all) / done (collapsed, can be moved back), grouped by source or time with Select and Mark as Done (`docs/assistant/inbox.md` "Grouping and selection"); filters: all / Lark / each mail account / each connector with items | @me / DMs / groups / mail / Agent; search titles, senders, content, summaries and where the matter happens.
+  - **Done's Jump to** (#9282): its label is followed by the existing down `chevron` glyph (10 px, stroke 2.4), so the menu affordance is visible. It opens the same groups and counts; selecting a group keeps the existing unfolding, paging and scrolling behavior.
   - **Filtered empty list, loading and failed reads** (web usability audit items 15 and 84): when chips, a folder or the search leave nothing open, the list says so in a neutral empty state (the filter mark and "Nothing open matches these filters", or the search mark and "No matches") with **Clear filters** / **Clear search**, which clears the chips, folder and search; the green check and "All caught up" are only for an unfiltered list with nothing open, since the chips are kept on this device and a list left filtered opens filtered. **Clean up all** then names the filters without a count ("Lark · Mail") instead of "Nothing to do", and while the list loads or after a failed read it shows no scope at all. A failed read over waiting agents keeps its red line with its own **Retry** beside it (`InboxList.filtered-empty.test.tsx`).
   - **Keyboard** (audit items 71 and 74): **Select** and **Done** are one button that changes its label, so the focus stays on it; when selecting ends elsewhere (Esc on a row's tick, Mark as Done in the bar) the focus comes back to Select. On a narrow page, where the opened item takes the list's place, opening a row by keyboard moves the focus to the item's title (a heading that takes the focus, with the accent ring; the item's pane while it loads), Esc goes back to the list as ‹ does (not over a dialog or menu, nor in a text field, and not on a wide page where the list is beside the item), and ‹, Esc or the browser's Back puts the focus back on the row it was opened from. When that row has moved (**Done** in the item's header files it under Done), the focus goes to the row now in its place and the list stays where it was. A wide page, with the list beside the item, keeps the focus where it is both ways (`Inbox.keyboard.test.tsx`; the shared rule is `docs/design/DESIGN_SYSTEM.md` "3.5 Navigation"). **Clear filters** / **Clear search** hand the focus to the **All** chip, since the button goes with the empty state.
   - **Long lists** (audit item 34): a run of rows (a group's, or a section's without groups) mounts its first 20 rows at once and 20 more each time the page is idle until all are there (`Rows` in `InboxList.tsx`), so 300 notices no longer build some 7,000 elements before the Inbox shows. The opened item's row is there from the start and stays once it is, so the focus can come back to it. A returned view that puts its scroll position back (the browser's Back into the Inbox from another page, or to another item's entry) still mounts every row at once, as before, since the rows above the saved position must be there to restore it. `ui/use-clamped.ts` measures a clamped text when it mounts, when its fold, box or words change, not after every render; a caller whose text is a plain string passes it, so new words are measured before the page paints (the others are told by a `MutationObserver`). `e2e/inbox-keyboard-long-list.mjs` checks these in a browser.
@@ -2076,6 +2077,20 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   are listed, then **Show all N models** (显示全部 N 个; N 件をすべて表示), which opens that provider's view. A row whose name
   is cut short shows the whole model ID as its second line (monospace, wrapping, two lines at most); on a touch screen,
   which has no tooltips, every row whose name is not its ID shows the ID there instead of the provider's name.
+- **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
+  runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
+  order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
+  thinking levels and release channels such as `-medium` or `-preview` are not tiers). The family is read from the
+  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
+  (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
+  families. Vendors come in the order the list first names them, other families by first mention. Within a family the
+  newest version leads (every row of it, a 1M-context one too) and says **Latest** (最新; 最新) when older ones exist; the
+  older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
+  opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
+  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
+  has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
+  per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
+  buried the newest of each family (the user's ask, 2026-11-17).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
@@ -2169,7 +2184,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   and a lazy-loaded status strip above the composer names the actual and configured launchers and opens the existing
   **New main chat…** dialog (#4662). The Main chat settings editor shows the same explanation from its provider draft.
   A same-kind default, an unloaded launcher list, an unknown default or a conversation pick shows no strip.
-- **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
+- **Tests**: `lib/model-families.test.ts` (families from IDs, order, folding, what never folds, the newest under a
+  search), `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
   send refusals are the switch's), `lib/assistant-panel.test.ts` (a Persona chat's setup and where it comes from, its pill,
@@ -2182,7 +2198,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   (the footer and context row), `ChatView.awaiting.test.tsx` (a refused switch keeps the words in the box), `ChatView.chrome-renders.test.tsx` (the
   pill on both composers),
   `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the mock's `MOCK_MODEL_PANEL_USAGE=1`
-  scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
+  scenario supplies synthetic weekly windows without reading a real account; `MOCK_MODEL_PICK=1 MOCK_MODEL_FAMILIES=1` gives a Persona chat long lists of several families (a Claude account with
+  every pinned version, Codex's GPT lines, a gateway mixing Claude, GPT, Gemini and others); `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
   the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own;
   its `gpt-5.5-codex` catalog row advertises Fast for the new-chat checks, while `gpt-5.5` is the negative control; a

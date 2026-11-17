@@ -14,11 +14,13 @@ import SwiftUI
 /// read 2–3:1 in dark, as the Cancel it replaces did (#9634). VoiceOver reads Close; Esc closes it from a keyboard.
 struct SheetClose: ToolbarContent {
     private let id: String
+    private let disabled: Bool
     private let action: () -> Void
 
-    /// `id`: the accessibility identifier UI tests find it by.
-    init(id: String = "sheet-close", action: @escaping () -> Void) {
+    /// `id`: the accessibility identifier UI tests find it by. `disabled`: while work that cannot be left runs.
+    init(id: String = "sheet-close", disabled: Bool = false, action: @escaping () -> Void) {
         self.id = id
+        self.disabled = disabled
         self.action = action
     }
 
@@ -27,6 +29,7 @@ struct SheetClose: ToolbarContent {
             // The ink on the icon itself: a bar ignores a foreground style set on the button (docs/lessons/ios.md).
             Button(role: .close, action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
                 .tint(Color.primary)
+                .disabled(disabled)
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel(Text("Close"))
                 .accessibilityIdentifier(id)
@@ -40,19 +43,26 @@ struct SheetClose: ToolbarContent {
 struct SheetConfirm: ToolbarContent {
     private let id: String
     private let disabled: Bool
+    private let busy: Bool
     private let action: () -> Void
 
-    init(id: String = "sheet-confirm", disabled: Bool = false, action: @escaping () -> Void) {
+    /// `busy`: a spinner in its place while the save runs.
+    init(id: String = "sheet-confirm", disabled: Bool = false, busy: Bool = false, action: @escaping () -> Void) {
         self.id = id
         self.disabled = disabled
+        self.busy = busy
         self.action = action
     }
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
-            Button(role: .confirm, action: action)
-                .disabled(disabled)
-                .accessibilityIdentifier(id)
+            if busy {
+                ProgressView().accessibilityIdentifier(id)
+            } else {
+                Button(role: .confirm, action: action)
+                    .disabled(disabled)
+                    .accessibilityIdentifier(id)
+            }
         }
     }
 }
