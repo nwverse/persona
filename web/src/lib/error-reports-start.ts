@@ -3,6 +3,7 @@
 import { api, ApiError } from "./api";
 import { ERROR_REPORTS_FEATURE, reportFreeze, setFreezeDropListener, startErrorReports, type SendResult } from "./error-reports";
 import { startFreezeWatch } from "./freeze-watch";
+import { devListening } from "./dev-probe";
 import type { ErrorReport } from "./extension-wire";
 import { uuid } from "./format";
 import { getState, subscribe } from "./store";
@@ -30,7 +31,8 @@ startErrorReports({
 // A warning still in the queue when the feature turns off did not count: watch again if it comes back.
 const watchFreezes = startFreezeWatch({
   subscribe,
-  enabled: () => getState().features.includes(ERROR_REPORTS_FEATURE),
+  // while Developing Persona records too (lib/dev-probe.ts), which keeps freezes with the hub's reports off
+  enabled: () => getState().features.includes(ERROR_REPORTS_FEATURE) || devListening(),
   report: reportFreeze,
 });
 setFreezeDropListener(() => watchFreezes.rearm());

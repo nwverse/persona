@@ -7,6 +7,7 @@
 // Reporting never throws and never reports itself.
 
 import type { ErrorBreadcrumb, ErrorException, ErrorFrame, ErrorLevel, ErrorReport } from "./extension-wire";
+import { devListening, devProbe } from "./dev-probe";
 
 export const ERROR_REPORTS_FEATURE = "error_reports";
 export const QUEUE_KEY = "persona.errorReports";
@@ -229,10 +230,13 @@ export class ErrorReporter {
   /** Reports an error (anything thrown). Never throws; an error while reporting is not reported. `componentStack`:
    *  where in the component tree a boundary caught it (React's ErrorInfo). */
   capture(error: unknown, opts: { level?: ErrorLevel; mechanism?: string; componentStack?: string | null } = {}) {
-    if (this.busy || this.gate === "off") return;
+    // Developing Persona keeps its own copy (lib/dev-probe.ts), with the hub's reports off too
+    if (this.busy || (this.gate === "off" && !devListening())) return;
     this.guard(() => {
       const report = this.build(error, opts.level ?? "error", opts.mechanism, opts.componentStack);
       if (!report) return;
+      devProbe.report(report);
+      if (this.gate === "off") return;
       const key = `${report.message}|${topFrame(report)}`;
       const now = this.deps.now();
       for (const [k, at] of this.recent) if (now - at > DEDUPE_MS) this.recent.delete(k);
@@ -249,11 +253,11 @@ export class ErrorReporter {
    *  breadcrumbs already kept. Frames are script paths only (scriptFrame again, so a full URL cannot ride along).
    *  `false` when the feature is off or it is under the threshold, so the caller can report a later freeze. */
   captureFreeze(hit: { durationMs: number; mechanism: string; frames: ErrorFrame[]; startedAt?: number }): boolean {
-    if (this.busy || this.gate === "off") return false;
+    if (this.busy || (this.gate === "off" && !devListening())) return false;
     if (!Number.isFinite(hit.durationMs) || hit.durationMs < FREEZE_MS) return false;
     let queued = false;
     this.guard(() => {
-      if (this.gate === "off") return;
+      if (this.gate === "off" && !devListening()) return;
       const text = truncate(`Main thread blocked for ${Math.round(hit.durationMs)}ms`, MAX_MESSAGE);
       const frames = cleanFreezeFrames(hit.frames, this.deps.origin);
       const exception: ErrorException = { type: "ANR", value: text };
@@ -271,6 +275,11 @@ export class ErrorReporter {
       };
       if (this.crumbs.length) report.breadcrumbs = this.crumbs.slice();
       if (hit.mechanism === "long-animation-frame" || hit.mechanism === "longtask") report.tags = { mechanism: hit.mechanism };
+      devProbe.report(report);
+      if (this.gate === "off") {
+        queued = true; // kept by Developing Persona only
+        return;
+      }
       const key = `anr|${text}|${topFrame(report)}`;
       const now = this.deps.now();
       for (const [k, at] of this.recent) if (now - at > DEDUPE_MS) this.recent.delete(k);
