@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -463,10 +464,14 @@ private fun HomeNavigationLayout(
             ) { trailing() }
         }.first().measure(androidx.compose.ui.unit.Constraints())
         val full = subcompose(2) {
-            Box(Modifier.clearAndSetSemantics {}) { fullSwitcher() }
+            Box(Modifier.clearAndSetSemantics {}) {
+                CompositionLocalProvider(LocalSlidingPillMeasurement provides true) { fullSwitcher() }
+            }
         }.first().measure(androidx.compose.ui.unit.Constraints())
         val compact = subcompose(3) {
-            Box(Modifier.clearAndSetSemantics {}) { compactSwitcher() }
+            Box(Modifier.clearAndSetSemantics {}) {
+                CompositionLocalProvider(LocalSlidingPillMeasurement provides true) { compactSwitcher() }
+            }
         }.first().measure(androidx.compose.ui.unit.Constraints())
         val accessory = endAccessory?.let { content ->
             subcompose(4) {

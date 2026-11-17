@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -39,14 +38,14 @@ private val DpRect.height: Dp get() = bottom - top
 
 /**
  * Glass draws one pill and moves it on `Theme.Motion.state` (`ShellComponents.swift` `SwitchMotion`).
- * A fraction is iOS `PagerPill` with animations off (`ShellPager.drag`). Brief and Board draw no pill.
+ * The first frame already sits on the selected segment. Brief and Board draw no pill.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-mdpi")
 class SlidingPillTest {
     @get:Rule val rule = createComposeRule()
 
-    @Test fun pillFrameLerpsTheSegmentTheFingerIsOver() {
+    @Test fun pillFrameLerpsBetweenSegments() {
         assertEquals(PillFrame(0, 100, 36), pillFrame(0f, listOf(0, 100), listOf(100, 100), 36))
         assertEquals(PillFrame(50, 100, 36), pillFrame(0.5f, listOf(0, 100), listOf(100, 100), 36))
         assertEquals(PillFrame(100, 100, 36), pillFrame(1f, listOf(0, 100), listOf(100, 100), 36))
@@ -94,7 +93,7 @@ class SlidingPillTest {
         assertEquals(1, selected)
     }
 
-    @Test fun aJumpDoesNotGrowThroughTheMiddleSegment() {
+    @Test fun aJumpSpringsTheIndexAcrossTheSegmentsBetween() {
         rule.mainClock.autoAdvance = false
         var selected by mutableIntStateOf(0)
         rule.setContent {
@@ -113,8 +112,12 @@ class SlidingPillTest {
         Snapshot.sendApplyNotifications()
         rule.mainClock.advanceTimeBy(80)
         val mid = pill()
-        val along = progress(go.left, end.left, mid.left)
-        assertTrue("jump progress $along width ${mid.width} middle ${middle.width}", along in 0.35f..0.85f && mid.width < middle.width)
+        // The index springs through the segment between, so the left edge is not halfway across the row yet.
+        val widest = maxOf(go.width, middle.width, end.width)
+        assertTrue(
+            "jump left ${mid.left} width ${mid.width} widest $widest",
+            mid.left > go.left && mid.left < end.left && mid.width <= widest + 1.dp,
+        )
         rule.mainClock.advanceTimeBy(920)
         assertNear(end.left, pill().left)
         assertNear(end.width, pill().width)
@@ -176,48 +179,44 @@ class SlidingPillTest {
         assertEquals("agents", selected)
     }
 
-    @Test fun fractionFollowsWithoutASpringOfItsOwn() {
+    @Test fun theFirstFrameShowsThePillOnTheSelectedSegment() {
         rule.mainClock.autoAdvance = false
-        var fraction by mutableFloatStateOf(0f)
         rule.setContent {
             PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = false) {
-                GlassSlidingPill(selected = 0, count = 2, color = Color.Black, fraction = fraction) { index ->
-                    Box(Modifier.size(if (index == 0) 40.dp else 80.dp, 36.dp).testTag("seg-$index"))
+                GlassSlidingPill(selected = 1, count = 2, color = Color.Black) { index ->
+                    Box(Modifier.size(if (index == 0) 40.dp else 70.dp, 36.dp).testTag("seg-$index"))
                 }
             }
         }
-        rule.mainClock.advanceTimeBy(100)
-        val first = bounds("seg-0")
-        val second = bounds("seg-1")
-        assertNear(first.left, pill().left)
-        assertNear(first.width, pill().width)
-        rule.runOnIdle { fraction = 0.5f }
-        Snapshot.sendApplyNotifications()
-        rule.mainClock.advanceTimeBy(16)
-        val mid = pill()
-        assertNear(first.left + (second.left - first.left) * 0.5f, mid.left)
-        assertNear(first.width + (second.width - first.width) * 0.5f, mid.width)
-        rule.mainClock.advanceTimeBy(500)
-        assertNear(mid.left, pill().left)
-        assertNear(mid.width, pill().width)
+        val chosen = bounds("seg-1")
+        assertNear(chosen.left, pill().left)
+        assertNear(chosen.width, pill().width)
+        assertNear(chosen.height, pill().height)
+        assertEquals(1, pillCount())
+        assertTrue("the second segment is not the leading edge", chosen.left > bounds("seg-0").left)
+        rule.mainClock.advanceTimeBy(48)
+        assertNear(chosen.left, pill().left)
+        assertNear(chosen.width, pill().width)
     }
 
-    @Test fun thePillSitsOnTheChosenSegmentInRtl() {
+    @Test fun theFirstFrameShowsThePillOnTheSelectedSegmentInRtl() {
         rule.mainClock.autoAdvance = false
         rule.setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = true) {
+                PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = false) {
                     GlassSlidingPill(selected = 0, count = 2, color = Color.Black) { index ->
                         Box(Modifier.size(if (index == 0) 50.dp else 90.dp, 36.dp).testTag("seg-$index"))
                     }
                 }
             }
         }
-        rule.mainClock.advanceTimeBy(100)
         val chosen = bounds("seg-0")
         assertNear(chosen.left, pill().left)
         assertNear(chosen.width, pill().width)
         assertTrue("first segment should sit on the right", chosen.left > bounds("seg-1").left)
+        rule.mainClock.advanceTimeBy(48)
+        assertNear(chosen.left, pill().left)
+        assertNear(chosen.width, pill().width)
     }
 
     @Test fun briefAndBoardKeepTheirOwnMarks() {
