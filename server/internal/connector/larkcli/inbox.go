@@ -728,7 +728,6 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		}
 		latest = message
 		currentMessages = append(currentMessages, message)
-		c.markSeen(message.MessageID)
 		group.replied = false
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}

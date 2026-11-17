@@ -161,12 +161,6 @@ func TestInboxCurrentIncludesOnlyUnseenHistoryFollowups(t *testing.T) {
 			if got.Last != wantLast || strings.Contains(current, "Follow-up found in history") == seen {
 				t.Fatalf("history freshness was lost (seen=%v): %+v", seen, got)
 			}
-			c.inboxMu.Lock()
-			_, recorded := c.inboxSeen[followup.MessageID]
-			c.inboxMu.Unlock()
-			if !recorded {
-				t.Fatal("a newly discovered follow-up was not marked seen")
-			}
 		})
 	}
 }
@@ -186,5 +180,26 @@ func TestInboxCurrentAttachmentIsNotReplacedByOldText(t *testing.T) {
 	current := strings.Split(got.Context, "Background history (context only, not new requests):")[0]
 	if got.Last != image.MessageID || !strings.Contains(current, "[image]") || strings.Contains(current, "Old request") {
 		t.Fatalf("new attachment disappeared behind old text: %+v", got)
+	}
+}
+
+func TestInboxHistoryPromotionStaysStableAcrossGroups(t *testing.T) {
+	first := adapter.Message{MessageID: "om_first", MessagePosition: "10", ChatID: "oc_example",
+		ChatType: "p2p", CreateTime: "2030-01-01T00:00:00Z",
+		Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`"First request"`)}
+	other := first
+	other.MessageID, other.ChatID, other.CreateTime = "om_other", "oc_other", "2030-01-01T00:01:00Z"
+	second := first
+	second.MessageID, second.MessagePosition, second.CreateTime = "om_second", "12", "2030-01-01T00:02:00Z"
+	followup := first
+	followup.MessageID, followup.MessagePosition, followup.CreateTime = "om_followup", "13", "2030-01-01T00:03:00Z"
+	followup.Content = json.RawMessage(`"Unindexed follow-up"`)
+	c := followupConnector(t, []adapter.Message{first, other, second}, []adapter.Message{followup, second, other, first})
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := inboxThings(t, c)["larkcli:chat:oc_example"]
+	if got.Last != followup.MessageID || !strings.Contains(got.Preview, "Unindexed follow-up") {
+		t.Fatalf("a later group rewound the history-discovered follow-up: %+v", got)
 	}
 }

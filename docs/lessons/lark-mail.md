@@ -4,7 +4,7 @@ Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUD
 
 ## Lark system events are not new conversation requests
 
-A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. A newly discovered history follow-up must also enter the seen ledger; an already processed one remains background.
+A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. An already collected follow-up remains background; promoting an unindexed follow-up must not rewind Last when another group of the same chat is processed in the same round.
 
 ## Saving mail attachments
 
