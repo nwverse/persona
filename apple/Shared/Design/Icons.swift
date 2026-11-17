@@ -363,6 +363,9 @@ extension Theme {
         static let ai = "sparkles"
         /// The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying).
         static let composerGlow = "wand.and.rays"
+        /// A chat's screenshot with the assistant's banner at its top (Settings › Appearance › Persona Banner in
+        /// Screenshots, #9508).
+        static let screenshotBanner = "menubar.rectangle"
         /// The Agents tab and what stands for it.
         static let agents = "chevron.left.forwardslash.chevron.right"
         /// An agent run from its command line, not its desktop app: the badge on its mark (`AgentMark`, #6390).
