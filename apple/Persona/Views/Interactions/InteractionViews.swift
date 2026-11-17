@@ -970,7 +970,7 @@ struct PlanTextSheet: View {
             }
             .navigationTitle(PlanText.title(plan))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { done() } } }
+            .toolbar { SheetClose { done() } }
         }
     }
 }
@@ -2474,9 +2474,7 @@ struct SessionlessCardSheet: View {
             .macSheetDone { dismiss() }
             #else
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1)
-                }
+                SheetClose { dismiss() }
             }
             #endif
         }

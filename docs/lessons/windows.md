@@ -135,6 +135,9 @@ See [windows.md](../operations/windows.md) ("Codex") and [codex.md](../integrati
   `orcart` selects the transport by platform: on Windows, `named-pipe` first (`tailscale/go-winio` for dialing), then `unix`; on other platforms, only `unix`. The protocol (one JSON per line) is unchanged.
 - Orca terminals have `ORCA_PANE_KEY` / `ORCA_AGENT_PANE`, just like macOS, plus `ORCA_USER_DATA_PATH` (`%APPDATA%\orca`).
 - Paths in the `topologyRevisions` keys of `terminal.list` mix separators (`C:/Users/…` and `C:\Users\…` on the same computer). Do not compare them directly to `worktreePath` as strings.
+- **Orca's terminals run Windows PowerShell 5.1 unless the user changed Orca's `terminalWindowsShell`**. A POSIX line typed there (`cd -- '…' && …`, `'\''` quoting) leaves no error in any log: PowerShell rejects `&&`, or an odd count of quotes leaves it at its `>>` continuation prompt, and the node waits for an Agent that never starts (#9810).
+  Open the terminal in the shell you type for instead of translating the quoting: `terminal.create` takes `shell` (`git-bash`, `powershell.exe`, `pwsh.exe`, `cmd.exe`, `wsl.exe`), and only a runtime that advertises `terminal.create-shell-selection.v1` in `status.get` honours it; an older one ignores the field and starts its default.
+  The fake runtime (`orcarttest`) has no shell, so unit tests cannot show this: check a change to what the node types into Orca against the real Orca on Windows.
 
 ## herdr
 

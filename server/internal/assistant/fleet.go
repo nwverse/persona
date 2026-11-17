@@ -84,6 +84,9 @@ type fleetBook struct {
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
+	// finishedDue: when the first Just finished row of each machine's list, as last decorated to be told, runs out
+	// of its window (#9751), under shownMu. Nothing else tells a list again when only time passes (republishFinished).
+	finishedDue map[string]time.Time
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
 	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and

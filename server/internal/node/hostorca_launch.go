@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -46,7 +47,8 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string)
 		return nil, err
 	}
 
-	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID())
+	shell, typed := h.launchShell(ctx)
+	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID(), shell)
 	if err != nil {
 		return nil, orcaErr(err)
 	}
@@ -63,7 +65,27 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string)
 		SpaceID: t.WorktreeID,
 		SlotID:  t.TabID,
 		Pane:    host.PaneRef{Kind: host.Orca, ID: t.PaneKey()},
+		Shell:   typed,
 	}, nil
+}
+
+// orcaOnWindows: the node and its Orca run on Windows. A var for tests.
+var orcaOnWindows = func() bool { return runtime.GOOS == "windows" }
+
+// launchShell is the shell a terminal the node types its starts into should run (terminal.create's shell), and the
+// one it then reports to them (host.Created's Shell): "" for both, Orca's default, except on Windows. There Orca
+// opens Windows PowerShell by default, which reads neither the `cd -- <dir> &&` Run types nor the POSIX start
+// (#9810), so the terminal runs Git Bash when Orca can be told so (orcart.CapShellSelection). An Orca that cannot keeps
+// its default: a user who made that Git Bash still starts as before.
+func (h *orcaHost) launchShell(ctx context.Context) (shell, typed string) {
+	if !orcaOnWindows() {
+		return "", ""
+	}
+	st, err := h.c.Probe(ctx)
+	if err != nil || !slices.Contains(st.Capabilities, orcart.CapShellSelection) {
+		return "", ""
+	}
+	return orcart.GitBash, "bash"
 }
 
 // resolveWorktree locates the best-matching local Orca worktree for cwd.
@@ -216,16 +238,6 @@ func orcaLaunchPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// orcaRunLine adds the change into the terminal's directory around a typed start. A Windows PowerShell handoff needs
-// PowerShell syntax for this prefix too; ErrorAction Stop preserves the POSIX && guard when the directory is unusable.
-// Every other line keeps the existing POSIX bytes.
-func orcaRunLine(goos, cwd, command string) string {
-	if goos == "windows" && strings.HasPrefix(command, "& ") {
-		return "Set-Location -LiteralPath " + powerShellQuote(cwd) + " -ErrorAction Stop; " + command + "\r"
-	}
-	return "cd -- " + shellQuote(cwd) + " && " + command + "\r"
-}
-
 // Run may write shell commands only to a pane created by this host instance, once. Consuming the grant before the
 // send prevents a timeout or duplicate call from launching twice. Unlike normal sends it never refreshes a stale
 // handle: replacing that shell revokes the grant rather than redirecting the command to a different process.
@@ -252,7 +264,7 @@ func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) e
 			t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
 			break
 		}
-		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), orcaRunLine(runtime.GOOS, launch.cwd, command)))
+		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), "cd -- "+shellQuote(launch.cwd)+" && "+command+"\r"))
 	}
 	return host.Mark(fmt.Errorf("orca: the newly created shell was replaced or is no longer writable"), host.ErrNotDelivered)
 }
