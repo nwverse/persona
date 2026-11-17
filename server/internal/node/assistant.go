@@ -2,7 +2,6 @@ package node
 
 import (
 	"bufio"
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -78,6 +77,8 @@ type assistantProc struct {
 	// personaMCPOnly is fixed at a Claude or Codex process start. A warm spare must still match
 	// the hub's current capability before it becomes a new conversation.
 	personaMCPOnly bool
+	// origin is set before the process can make its first model tool call, including while Codex still has a proc-* id.
+	origin string
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
 	// is complete only then. nil for Codex.
 	stderrDone chan struct{}
@@ -117,9 +118,6 @@ type assistantProc struct {
 	manual        bool     // the compaction running is the user's (assistant_compact.go): its end is reported
 	requested     bool     // its first request was logged
 	stderrTail    []string // its last assistantStderrTail stderr lines (watchAssistantStderr)
-	runtime       string   // proto.AssistantRuntimeAgentSDK when it runs on the bridge (assistant_sdk.go), "" on the CLI
-	fallback      string   // why it runs on the CLI though asked to run on the Agent SDK
-	sdkVersion    string   // the bridge's SDK version (its ready line)
 	claudeVersion string   // the Claude Code its system/init named (claude_code_version), "" before it
 
 	// declaredWindow: the window the launcher declares (assistantCompaction.declared), 0 for none; replyModel: the
@@ -323,6 +321,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.state.put(id, st)
 		}
 	}
+	origin := executionOption(options).Origin
+	if origin == "" {
+		origin = st.Origin
+	}
 	if mode == "" && guest == nil {
 		mode = st.AppMode
 		if mode == "" {
@@ -332,6 +334,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			mode = proto.ModeBypass
 		}
 	}
+	if origin == originInbox && guest == nil {
+		mode = proto.ModePlan // an Inbox handling chat investigates and suggests, never runs in bypass mode
+	}
 	if guest != nil {
 		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
 			return "", skillSelectionError(assistantskills.ErrReference)
@@ -339,23 +344,24 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if resume {
 			launcher, options = "", nil // it keeps what it started on (the hub sends none either)
 		}
-		for i := range options {
-			if options[i].Runtime != "" && (options[i].Runtime != proto.AssistantRuntimeAgentSDK || guestKind == guestMeeting) {
-				return "", errGuestAgent
-			}
-		}
 	}
 	if own, switched := n.assistantResumeLauncher(ctx, id, launcher, st); switched {
 		n.logger.Printf("assistant %s: resumes on %s, the kind of agent it was started on, not on %s", short(id), launcherOr(own, st.Launcher), launcher)
 		launcher, options = own, nil // the model picked for the other launcher is not this one's
 	}
 	execution := executionOption(options)
+	execution.Origin = origin
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
 	rl := launcherOr(launcher, st.Launcher)
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if origin == originInbox {
+			// External runtimes do not yet attest the origin on their first callback. Refuse rather than leave an
+			// unguarded startup window; built-in Claude and Codex carry it in their process and session state.
+			return "", errors.New("inbox handling requires a built-in Claude or Codex launcher")
+		}
 		if policy != "" {
 			return "", supervisionRuntimeRefusal(ctx)
 		}
@@ -379,7 +385,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
-			execution = modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, SupervisionInstructions: st.SupervisionInstructions}
+			execution = modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -434,12 +440,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if startTier != "" && agent != "codex" {
 		return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 	}
-	if guest != nil && (agent != "claude" || execution.Runtime != "" && (execution.Runtime != proto.AssistantRuntimeAgentSDK || guestKind == guestMeeting)) {
+	if guest != nil && agent != "claude" {
 		return "", errGuestAgent
 	}
 	if agent == "claude" {
 		asked := n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
-		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, asked, resume)
+		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, asked, resume)
 		if err != nil {
 			return "", err
 		}
@@ -459,9 +465,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// The spare was started without --permission-mode, and bypassPermissions can't be switched to later.
 		if p = n.adoptSpareFor(cwd, launcher, mode, execution); p != nil {
 			id, launcher, cwd = p.id, p.launcher, p.cwd
+			p.mu.Lock()
+			p.origin = origin // no model turn ran as a spare; every later MCP call now carries this conversation's origin
+			p.mu.Unlock()
 		} else if agent == "claude" {
 			id = newUUID()
 		}
+	}
+	if id != "" && origin != "" {
+		// A Claude process can discover MCP as soon as it starts. Persist the origin before spawning it so even that
+		// first request is classified as this conversation, not as an ordinary Agent with the same session id.
+		st.Origin, st.Launcher, st.Cwd = origin, launcher, cwd
+		n.state.put(id, st)
 	}
 	if cwd == "" {
 		cwd = n.storedCwd(st.Cwd)
@@ -552,13 +567,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		n.noteModes(id, mode, effort)
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
 		}
 		st.Launcher, st.Cwd, st.StartedAt = launcher, cwd, started
-		st.Model, st.ModelFingerprint, st.ModelEffort, st.Runtime = execution.Model, execution.Fingerprint, execution.Effort, execution.Runtime
+		st.Model, st.ModelFingerprint, st.ModelEffort = execution.Model, execution.Fingerprint, execution.Effort
+		st.Origin = origin
 		st.IsMain, st.MainCompactWindow = execution.IsMain, execution.MainCompactWindow
 		st.SupervisionInstructions = execution.SupervisionInstructions
 		st.FollowsSetting = execution.FollowsSetting
@@ -738,10 +754,6 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		n := p.ownerOr(started) // a resident node's next connection may have taken it over (assistant_keep.go)
 		line := sc.Bytes()
 		if len(line) == 0 || line[0] != '{' { // interactive zsh may print banners
-			continue
-		}
-		// The bridge's own lines: only its ready says it started (an error is the line it prints before it exits).
-		if bytes.Contains(line, []byte(`"persona_bridge"`)) && n.sdkBridgeEvent(p, line) {
 			continue
 		}
 		p.started()
@@ -1106,7 +1118,7 @@ func (n *Node) assistantSessions() []proto.Session {
 		}
 		p.mu.Unlock()
 		s := proto.Session{SessionID: p.id, Cwd: p.cwd, Status: status, Launcher: p.launcher, UpdatedAt: updated.UTC(),
-			Runtime: p.runtime, RuntimeFallback: p.fallback, Queued: queued}
+			Queued: queued}
 		if p.agent == "codex" {
 			s.Agent = "codex"
 		}

@@ -29,18 +29,57 @@ import UIKit
         }
     }
 
-    private func window(_ view: some View) async throws -> UIWindow {
+    /// What the bar and the banner were drawn in.
+    @Observable final class Looks {
+        var bar: ColorScheme?
+        var banner: ColorScheme?
+        /// What the page's environment says: dark against a light window on purpose, a copy as stale as the one an
+        /// Agent chat opened for the first time kept (#9829).
+        var page: ColorScheme = .dark
+    }
+
+    private struct LookProbe: View {
+        let seen: (ColorScheme) -> Void
+        @Environment(\.colorScheme) private var scheme
+
+        var body: some View {
+            Color.clear.onChange(of: scheme, initial: true) { seen(scheme) }
+        }
+    }
+
+    /// A bar and its banner that report their look, on a page whose environment says `Looks.page`.
+    private struct LookSample: View {
+        let looks: Looks
+
+        var body: some View {
+            VStack(spacing: 0) {
+                LookProbe { looks.bar = $0 }
+                    .frame(height: 60)
+                    .screenshotBanner { Color.clear } banner: { LookProbe { looks.banner = $0 } }
+                Spacer(minLength: 0)
+            }
+            .environment(\.colorScheme, looks.page)
+            .ignoresSafeArea()
+        }
+    }
+
+    private func window(_ view: some View, style: UIUserInterfaceStyle = .unspecified) async throws -> UIWindow {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
         window.frame = CGRect(origin: .zero, size: Self.size)
         window.windowLevel = .alert + 1
+        window.overrideUserInterfaceStyle = style
         window.rootViewController = UIHostingController(rootView: view.environment(AppModel.shared))
         window.makeKeyAndVisible()
+        try await settle(window)
+        return window
+    }
+
+    private func settle(_ window: UIWindow) async throws {
         for _ in 0..<10 {
             try await Task.sleep(for: .milliseconds(50))
             window.layoutIfNeeded()
         }
-        return window
     }
 
     private func seen(_ picture: UIImage) throws -> Seen {
@@ -129,6 +168,30 @@ import UIKit
         defer { w.isHidden = true }
         let pictured = try drawn(w)
         #expect(pictured == .bar, "switched off, a picture showed \(pictured)")
+    }
+
+    /// The bar and the banner take the look of the window they are drawn in (#9829), as the drawer's sidebar does (#4496,
+    /// `DrawerSidebarLookTests`): their hosting controllers get a copy of the page's environment, only as new as the
+    /// last update SwiftUI sent, and an Agent chat opened for the first time drew its header and banner light above the
+    /// dark chat.
+    @Test func theBarAndTheBannerFollowTheirWindow() async throws {
+        let looks = Looks()
+        let w = try await window(LookSample(looks: looks), style: .light)
+        defer { w.isHidden = true }
+        #expect(looks.bar == .light && looks.banner == .light,
+                "a light window, the page's environment dark: the bar drew \(String(describing: looks.bar)), the banner \(String(describing: looks.banner))")
+
+        // The window changes look (the system's, or Settings › Appearance › Light & Dark): both follow it.
+        w.overrideUserInterfaceStyle = .dark
+        try await settle(w)
+        #expect(looks.bar == .dark && looks.banner == .dark,
+                "the window went dark: the bar drew \(String(describing: looks.bar)), the banner \(String(describing: looks.banner))")
+
+        // An update from the page in the other look does not take them with it.
+        looks.page = .light
+        try await settle(w)
+        #expect(looks.bar == .dark && looks.banner == .dark,
+                "the page updated in the other look: the bar drew \(String(describing: looks.bar)), the banner \(String(describing: looks.banner))")
     }
 
     /// The banner is for pictures only: VoiceOver never reaches it, and it takes no touches.

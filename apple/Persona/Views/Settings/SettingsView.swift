@@ -154,9 +154,9 @@ struct SettingsView: View {
                 }
                 #if os(iOS)
                 settingsLink(.knowledgeSelection, "Knowledge Selection", Theme.Icon.knowledge, id: "settings-knowledge-selection")
-                if MeetingAttendees.offered(model) {
-                    settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings", value: MeetingAttendees.defaultRole(model).title)
-                }
+                // Every iPhone: the calendar reminder is the phone's (#8731 G2); the role shows where the hub offers one.
+                settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings",
+                             value: MeetingAttendees.offered(model) ? MeetingAttendees.defaultRole(model).title : "")
                 #endif
                 settingsLink(.agents, "Agent", Theme.Icon.options, id: "settings-agents")
                 NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
