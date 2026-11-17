@@ -90,7 +90,7 @@ function LabCard<I extends LabId>({ id }: { id: I }) {
 
   return (
     <div data-settings-row={`lab-${id}`} data-lab={id} className="px-4 py-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+      <div className="flex flex-col gap-x-3 gap-y-2 sm:flex-row sm:items-start">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate text-[13px] text-ink">{copy.title}</span>
@@ -111,7 +111,7 @@ function LabCard<I extends LabId>({ id }: { id: I }) {
           )}
         </div>
       </div>
-      <dl id={detailsId} className="mt-2.5 grid grid-cols-1 gap-x-3 gap-y-1 text-[11.5px] leading-snug sm:grid-cols-[max-content_1fr]">
+      <dl id={detailsId} className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11.5px] leading-snug">
         <Detail term={t("settings-labs.default")}>{optionLabel(def.default)}</Detail>
         <Detail term={t("settings-labs.scope")}>{def.scope === "browser" ? t("settings-labs.scope_browser") : def.scope}</Detail>
         <Detail term={t("settings-labs.activation")}>{copy.activation}</Detail>
@@ -134,7 +134,7 @@ function Detail({ term, children }: { term: string; children: React.ReactNode })
   return (
     <>
       <dt className="text-ink-3">{term}</dt>
-      <dd className="mb-1 text-ink-2 sm:mb-0">{children}</dd>
+      <dd className="min-w-0 text-ink-2">{children}</dd>
     </>
   );
 }

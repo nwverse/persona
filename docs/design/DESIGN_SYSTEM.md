@@ -2264,7 +2264,7 @@ Settings › Labs (`docs/web/web.md`, "Labs") shows each trial feature or implem
 `Group`, grouped under the area it changes: the name in the row's label type with an orange `Pill` ("Trial"), the
 description in the hint type, the existing `Segmented` control for a choice (or `Switch` for on / off) at the end, stacked
 under the text on a narrow screen, then a two-column definition list in `text-[11.5px]` (`ink-3` terms, `ink-2` values;
-one column on a phone) with **Default**, **Applies to**, **Takes effect** and **Going back**. A saved value the build does
+the term column as wide as its longest term at every width, with the page's existing `grid-cols-[auto_1fr]`) with **Default**, **Applies to**, **Takes effect** and **Going back**. A saved value the build does
 not recognize, or storage it cannot read, adds an orange note under the list; a save that failed adds a red `role="alert"`
 line and the control keeps showing the value in effect; a save that worked adds a green line in a polite live region. The
 page's sidebar icon is the existing `sparkles` glyph (a dedicated one would not fit the first screen's budget). Why a new row pattern: principle 3 asks every behavior-changing
