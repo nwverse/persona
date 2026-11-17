@@ -20,7 +20,12 @@ function reset(input = {}) {
     backup: { id: backups[0].id, retained: 3, pruned: [] }, last_check: "2026-11-15T10:00:00Z" };
   if (mode === "release" || mode === "setup") {
     status.source = "release"; status.state = "idle"; status.latest = undefined;
+    status.version = "0.6.2";
     status.development.configured = mode !== "setup";
+  }
+  if (mode === "beta") {
+    status.source = "beta"; status.state = "idle"; status.version = "0.6.2";
+    status.latest = { version: "0.7.0-beta.1", build: 202611171300, newer: true, bad: false };
   }
   if (mode === "backing_up") status.progress = "Synthetic snapshot: verifying saved programs";
   if (mode === "failed") status.error = "Update recovery is unresolved. Inspect the retained adoption journal and staged programs before retrying. (Synthetic fixture)";
