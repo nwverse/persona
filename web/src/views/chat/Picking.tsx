@@ -169,7 +169,7 @@ export function PickBar({ pick, chat, onEnd }: PickBarProps) {
       role="switch"
       aria-checked={include}
       onClick={() => void pick.setInclude(!include)}
-      className={cx("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-label font-semibold whitespace-nowrap", include ? "bg-accent-tint text-accent" : "text-ink-2 shadow-hairline")}
+      className={cx("inline-flex h-7 shrink-0 touch-hit items-center gap-1.5 rounded-full px-2.5 text-label font-semibold whitespace-nowrap", include ? "bg-accent-tint text-accent" : "text-ink-2 shadow-hairline")}
       data-pick-questions={include ? "on" : "off"}
     >
       <CheckMark on={include} round />
