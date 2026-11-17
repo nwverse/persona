@@ -46,6 +46,11 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
+- Prompt-size checks read the MCP catalog goldens, not newly added tool files (#9762). Regenerate every assistant
+  catalog and check `TestGoldenMCPTools` before trusting the footprint. Measure changed tool and shared-prompt sources
+  too, so stale goldens cannot hide growth. Fitting the total budget does not register a new per-tool baseline key;
+  keep that remaining gate explicit when baseline edits are not authorized.
+
 
 - Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
   drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.

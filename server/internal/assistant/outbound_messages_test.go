@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -130,6 +131,41 @@ func putMessageGrant(t *testing.T, st Store, scenario string) {
 		Revision: 1, Authorizations: []StandingAuthorization{messageTestGrant(scenario)},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOutboundPromptsFitExistingBudget(t *testing.T) {
+	raw, err := os.ReadFile(promptSizeBaseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseline map[string]int
+	if err := json.Unmarshal(raw, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	limit := 0
+	for _, size := range baseline {
+		limit += size
+	}
+
+	sizes := promptSizePieces(t)
+	// Measure live sources too: stale goldens must not hide a newly added tool or longer instructions.
+	tool, err := json.Marshal(toolsNamed([]string{"message_send"})[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sizes["mcp_tools.assistant#message_send"] = len(tool)
+	s := newTestService(t, claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"}))
+	s.kb.dir = "<hub>/data"
+	total := len(s.claudeMD(context.Background(), "server", true))
+	for key, size := range sizes {
+		if !strings.HasPrefix(key, "assistant_claude_md.lark_cli#") {
+			total += size
+		}
+	}
+	t.Logf("prompt footprint: %d bytes; existing budget: %d bytes", total, limit)
+	if total > limit {
+		t.Fatalf("outbound prompts exceed the unchanged budget by %d bytes", total-limit)
 	}
 }
 
