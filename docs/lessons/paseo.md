@@ -124,3 +124,21 @@ transcript's output path and command when both sources report the same task. Inc
 a delegated agent has finished, pinning active rows, and protecting worktree deletion. Those checks cannot rely only on
 foreground `status`. The real Codex regression uses a file-watching process and a fixture-controlled exit, proving that
 the task remains listed after the answer and disappears after exit without opening the chat or using a real model.
+
+## Creation needs project identity, not only a path (#9726)
+
+Git resolves a symlink spelling to its physical checkout. Paseo 0.16's project registry matches root paths by spelling,
+so handing it only that checkout can allocate a second project. An explicit workspace supplies the project; folder-only
+creation requires a fresh project list and a unique physical-path match. An unavailable list is not an empty list, and
+list order does not identify the intended owner when duplicates already exist. Use checkout roots rather than remotes
+so independent clones remain independent. Read symlinks afresh for writes, outside the display cache.
+
+The direct Agent route reaches `findOrCreateProjectForDirectory` too. Its request has no project ID field: create a
+keyed directory workspace with the resolved project first, then pass its workspace ID to Agent creation. Keep the new
+step inside the existing pending-start flow so a slow creation remains visible. A later Agent failure leaves that
+workspace available; never remove a project or move existing sessions as part of alias repair.
+
+The real Codex E2E registers the alias project without a workspace, then calls the real node with the alias. This
+forces Git's physical-root handoff; an existing source workspace can hide the original defect in Paseo's own fallback.
+It also explicitly creates duplicate fixture projects to prove ambiguity is refused and selected workspace ownership
+still wins. All of these resources belong to the isolated daemon.
