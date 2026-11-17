@@ -1,11 +1,15 @@
 package persona.core.designsystem
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -111,6 +115,40 @@ class QuickFilterCountToneTest {
             choice("All").assertIsDisplayed()
             val needs = choice("Needs you").fetchSemanticsNode()
             assertEquals("${s.key}: Needs you whole", needs.size.width.toFloat(), needs.boundsInRoot.width, 1f)
+        }
+    }
+
+    /**
+     * [JSegmented] drawn by itself, as another caller may: its toned counts and the scroll to a chosen segment hold in every
+     * style, Glass's one sliding pill (#9632) included, where the segments sit in boxes the pill's layout places.
+     */
+    @Test fun aSegmentedRowKeepsItsTonesAndScrollsToItsChoiceInEveryStyle() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var scroll: ScrollState? = null
+        val segments = listOf(JSegment("Needs you", 120, countTone = Status.NeedsYou), JSegment("In progress", 4, countTone = Status.Idle),
+            JSegment("FYI", 40, countTone = Status.Idle), JSegment("Done"), JSegment("All"))
+        val width = 200.dp
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                // A new row per style, so each one scrolls from its start.
+                key(style) {
+                    val state = rememberScrollState().also { scroll = it }
+                    Box(Modifier.width(width)) { JSegmented(segments, 4, onSelect = {}, modifier = Modifier.horizontalScroll(state), revealIn = state) }
+                }
+            }
+        }
+        val edge = with(rule.density) { width.toPx() }
+        for (s in AppStyle.entries) {
+            style = s
+            rule.waitForIdle()
+            assertTrue("${s.key}: 99+ past 99", texts("99+").isNotEmpty())
+            assertEquals("${s.key}: the exact number spoken", 1, spoken("Needs you, 120").size)
+            // Board's ruled strip shares out the width instead of running past it; the others scroll to the last segment.
+            val state = scroll!!
+            if (state.maxValue > 0) assertTrue("${s.key}: the row scrolled", state.value > 0)
+            else assertTrue("${s.key}: only Board fits", s == AppStyle.Board)
+            val all = choice("All").fetchSemanticsNode().boundsInRoot
+            assertTrue("${s.key}: the chosen segment whole in sight (${all.left}..${all.right} of $edge)", all.left >= 0f && all.right <= edge + 1f)
         }
     }
 
