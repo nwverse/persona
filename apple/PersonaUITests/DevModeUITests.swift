@@ -2,7 +2,7 @@ import XCTest
 
 /// Settings › About › Developing Persona (#9460, docs/operations/developing-persona.md): the switch, the rows it adds,
 /// the question before turning it off with something recorded, and Export Diagnostics. Needs a mock hub in
-/// `PERSONA_MOCK_HUB`; `PERSONA_SHOTS=<dir>` keeps `dev-mode-<1-off|2-on|3-confirm|4-export>-<light|dark>.png`.
+/// `PERSONA_MOCK_HUB`; `PERSONA_SHOTS=<dir>` keeps `dev-mode-<1-off|2-on|3-confirm|4-export|5-send|6-chat>-<light|dark>.png`.
 final class DevModeUITests: XCTestCase {
     override func setUp() { continueAfterFailure = false }
 
@@ -80,5 +80,38 @@ final class DevModeUITests: XCTestCase {
             XCTAssertTrue(element("dev-mode-export", app).waitForNonExistence(timeout: 10), "still on after Turn Off and Delete")
             app.terminate()
         }
+    }
+
+    /// Send to Agent: the export page's first button builds the package and opens Send To; Persona takes it to the main
+    /// chat, the zip as a file card over the box (uploaded to the mock) and the note in the box, not sent.
+    @MainActor func testSendToAgent() throws {
+        let look = ProcessInfo.processInfo.environment["PERSONA_SHOTS_APPEARANCE"] == "dark" ? "dark" : "light"
+        XCUIDevice.shared.appearance = look == "dark" ? .dark : .light
+        let app = try launch(["-openAbout", "YES"])
+        let toggle = element("dev-mode-switch", app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 30), "no Developing Persona switch:\n\(app.debugDescription)")
+        toggle.switches.firstMatch.tap()
+        XCTAssertTrue(element("dev-mode-export", app).waitForExistence(timeout: 10))
+        element("dev-mode-export", app).tap()
+
+        let send = element("dev-export-send", app)
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "no Send to Agent on the export page")
+        XCTAssertTrue(element("dev-export-share", app).exists)
+        shot("4-export", look)
+        send.tap()
+        XCTAssertTrue(element("dev-send.sheet", app).waitForExistence(timeout: 20), "Send To did not open")
+        XCTAssertTrue(element("dev-send.file", app).exists)
+        XCTAssertTrue(element("dev-send.persona", app).exists)
+        shot("5-send", look)
+        element("dev-send.persona", app).tap()
+
+        let card = element("file-attachments", app)
+        XCTAssertTrue(card.waitForExistence(timeout: 20), "the package is not over the main chat's box:\n\(app.debugDescription)")
+        XCTAssertTrue(element("file-attachment-ready", app).waitForExistence(timeout: 20), "the package did not upload")
+        let note = NSPredicate(format: "value CONTAINS %@", "这是我设备上的 Persona 诊断数据")
+        XCTAssertTrue(app.textViews.matching(note).firstMatch.waitForExistence(timeout: 10)
+                      || app.textFields.matching(note).firstMatch.exists, "no note in the box")
+        shot("6-chat", look)
+        app.terminate()
     }
 }

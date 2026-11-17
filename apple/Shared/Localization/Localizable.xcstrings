@@ -71881,6 +71881,29 @@
         }
       }
     },
+    "Here are the Persona diagnostics from my device (since %@). Please find out what is using the battery and what is failing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Here are the Persona diagnostics from my device (since %@). Please find out what is using the battery and what is failing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これは私のデバイスの Persona 診断データです（%@ から）。電池を消費している原因とエラーの原因を調べてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是我设备上的 Persona 诊断数据（%@ 起），请分析耗电和报错的原因。"
+          }
+        }
+      }
+    },
     "Highlights [Meeting Room]" : {
       "localizations" : {
         "en" : {
@@ -136794,6 +136817,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Send To" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send To"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信先"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发给"
+          }
+        }
+      }
+    },
+    "Send to Agent…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send to Agent…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent に送る…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发给 Agent…"
+          }
+        }
+      }
     },
     "SF Mono (System)" : {
       "localizations" : {

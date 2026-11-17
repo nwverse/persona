@@ -50,14 +50,20 @@ struct DevModeSection: View {
 }
 
 /// Export Diagnostics (Settings › About › Developing Persona): what the package holds, which of it to leave out, and
-/// where it goes.
+/// where it goes: Send to Agent (`DevSendSheet`, a chat's box with the zip and a note) or the system's Share sheet.
 struct DevExportPage: View {
     @Environment(AppModel.self) private var model
     @State private var picked = Set(DevPackage.Category.allCases)
-    @State private var busy = false
+    /// Which button is building the package.
+    @State private var busy: Way?
     #if os(iOS)
     @State private var sharing: DevExportFile?
+    @State private var sending: DevExportFile?
+    /// The chat Send To picked and the package for it; it goes there once the sheet has gone.
+    @State private var target: (ForwardTarget, URL)?
     #endif
+
+    private enum Way { case send, share }
     private let dev = DevMode.shared
 
     var body: some View {
@@ -99,6 +105,9 @@ struct DevExportPage: View {
         .sheet(item: $sharing) { file in
             FileShareSheet(url: file.url) { sharing = nil }
         }
+        .sheet(item: $sending, onDismiss: sent) { file in
+            DevSendSheet(zip: file.url, size: file.size) { target = ($0, file.url) }
+        }
         #endif
     }
 
@@ -121,23 +130,34 @@ struct DevExportPage: View {
 
     private var bottomBar: some View {
         VStack(spacing: Theme.Space.s) {
-            Button(action: share) {
-                Group {
-                    if busy {
-                        ProgressView()
-                    } else {
-                        Label { Text("Share File…").buttonLabelLine() } icon: { ThemedIcon(Theme.Icon.share) }
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .themedButton(prominent: true)
-            .disabled(busy)
-            .accessibilityIdentifier("dev-export-share")
+            #if os(iOS)
+            button(.send, String(localized: "Send to Agent…"), icon: Theme.Icon.sendMail, id: "dev-export-send")
+                .themedButton(prominent: true)
+            button(.share, String(localized: "Share File…"), icon: Theme.Icon.share, id: "dev-export-share")
+                .themedButton()
+            #else
+            button(.share, String(localized: "Share File…"), icon: Theme.Icon.share, id: "dev-export-share")
+                .themedButton(prominent: true)
+            #endif
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .background(Theme.groupedPage)
+    }
+
+    private func button(_ way: Way, _ title: String, icon: String, id: String) -> some View {
+        Button { export(way) } label: {
+            Group {
+                if busy == way {
+                    ProgressView()
+                } else {
+                    Label { Text(verbatim: title).buttonLabelLine() } icon: { ThemedIcon(icon) }
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .disabled(busy != nil)
+        .accessibilityIdentifier(id)
     }
 
     private var window: String {
@@ -155,26 +175,38 @@ struct DevExportPage: View {
         return String(localized: "About \(size) · zip · \(system)")
     }
 
-    private func share() {
-        busy = true
+    private func export(_ way: Way) {
+        busy = way
         let picked = picked
         Task {
-            defer { busy = false }
+            defer { busy = nil }
             do {
                 let url = try await dev.exportDiagnostics(picked)
                 #if os(iOS)
-                sharing = DevExportFile(url: url)
+                let file = DevExportFile(url: url, size: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init))
+                if way == .send { sending = file } else { sharing = file }
                 #endif
             } catch {
                 model.toast = Toast(String(localized: "Couldn’t export: \(error.localizedDescription)"), style: .error)
             }
         }
     }
+
+    #if os(iOS)
+    /// Send To went: the package and the note go to the chat it picked (nothing when it was cancelled).
+    private func sent() {
+        guard let (to, zip) = target else { return }
+        target = nil
+        let since = dev.since?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? "–"
+        model.attachDiagnostics(zip, note: DevMode.note(since: since), to: to, group: model.hub?.group ?? "")
+    }
+    #endif
 }
 
 #if os(iOS)
 private struct DevExportFile: Identifiable {
     let url: URL
+    var size: Int64?
     var id: URL { url }
 }
 #endif
