@@ -209,6 +209,8 @@ func (s *Service) publishList(machine string) []proto.Session {
 		// Before the list: a session just archived is never in neither of them on the hub.
 		s.tellArchived(machine, archived, hide)
 	}
+	// Whether told now or the same as told last: when its first Just finished row runs out (republishFinished).
+	s.noteFinishedDue(machine, finishedDue(list, justFinishedFor(s.triageCfg(context.Background()))))
 	msg := assistantwire.FleetSessions{MachineID: machine, Sessions: list, Muted: s.mutedSessions(machine, list)}
 	// json.Marshal's bytes, encoded into the one buffer and compared with the list told last by length and SHA-256: a
 	// list that is the same (most of them) is not told again, and none of them is kept (#3197: 3.6 MB at 20 computers
@@ -357,6 +359,8 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	shown, via := r.sessions, r.marks
 	r.mu.RUnlock()
 	lang := s.lang(context.Background())
+	// A done turn nobody has seen is Just finished when it ended after this (#9751).
+	finishedSince := time.Now().Add(-justFinishedFor(s.triageCfg(context.Background())))
 	dir := m.assistantCwd() // once, not a path.Join for each row
 	asks := s.fleet.asks.reader(machine, complete)
 	defer asks.done()
@@ -377,6 +381,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		if list[i].Assistant {
 			list[i].Archived = shown[list[i].SessionID].Archived
+			list[i].Tags = rowTagsOf(shown[list[i].SessionID].Tags)
 			v := shown[list[i].SessionID]
 			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
 			list[i].ModelPick = v.ModelPick                                                         // what its next messages run on (model_pick.go)
@@ -408,7 +413,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 				list[i].TurnErrorKind = proto.TurnErrorUser
 			}
 		}
-		s.decorateWork(machine, &list[i], asking)
+		s.decorateWork(machine, &list[i], asking, finishedSince)
 		decorateAwaits(&list[i], asks)
 		decorateSuggestion(&list[i], suggested)
 	}

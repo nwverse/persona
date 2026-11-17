@@ -3552,6 +3552,12 @@ export interface ConnectorTool {
    * conversation.
    */
   shell?: string[];
+  /**
+   * Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and
+   * loaded with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every
+   * list whatever a connector sent.
+   */
+  defer_loading?: boolean;
 }
 
 /**
@@ -4841,10 +4847,15 @@ export interface KBEntry {
   updated: string;
   /** A project's short / long · status, a chat's dm / group… */
   extra?: string;
-  /** A chat's source (lark, mail, wechat, github…). */
+  /** A chat's source (lark, mail, wechat, github…); a document's, meeting's or event's connector (#8872). */
   source?: string;
   /** A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub. */
   recording_kind?: string;
+  /**
+   * A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
+   * absent on other kinds, before a match and from an older hub.
+   */
+  meeting_id?: string;
 }
 
 /**

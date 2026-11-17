@@ -215,6 +215,8 @@ The Desktop workflow runs it on all three systems (`update` job in `.github/work
 
 Not proven by this test: a signed build updating from a published GitHub Release, the macOS install, notarization, and the tray entries as drawn on screen (their text and order are unit-tested; no screenshot of a native menu is taken).
 
+On macOS, `desktop/src/app-menu.ts` reproduces Electron's default application menu with native roles and the same order; only About, Hide and Quit take labels from `desktop/src/locales` (Quit reuses `tray_quit`), unchanged role labels stay with Electron, and the About panel is explicitly named Persona. This does not change `app.name` or the profile folder. `desktop/test/app-menu.test.ts` checks all three languages, the complete item/role order and the macOS-only decision; a development run compares `Menu.getApplicationMenu()` before and after. Like the tray entries, the native application menu is not screenshotted.
+
 # Acceptance evidence
 
 The complete acceptance checklist for the desktop migration is in
