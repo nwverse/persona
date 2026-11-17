@@ -147,6 +147,13 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         sleep(1)
     }
 
+    @MainActor private func clearRetainedByTouch(_ field: XCUIElement) {
+        XCTAssertTrue(field.exists && field.isHittable, "the retained field is not reachable for Clear")
+        // The inactive field is one VoiceOver element with a Clear Search custom action; its nested UIButton is
+        // deliberately not a second accessibility element. Exercise the physical clear control at its trailing edge.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+    }
+
     @MainActor private func dismissSoftwareKeyboard() {
         let field = app.textFields["full-search-field"].firstMatch
         XCTAssertTrue(field.exists && field.isHittable, "the regular search field is not reachable for Return")
@@ -249,9 +256,8 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         _ = assertRetainedAtRest("second retained return")
         scrollFar()
 
-        let clear = app.searchFields.firstMatch.buttons.firstMatch
-        XCTAssertTrue(clear.waitForExistence(timeout: 5) && clear.isHittable, "no reachable clear button in the retained field")
-        clear.tap()
+        let clearing = assertRetainedAtRest("before clearing the retained query")
+        clearRetainedByTouch(clearing)
         sleep(1)
         XCTAssertFalse(app.searchFields.firstMatch.isHittable, "clearing at a folded position must restore the empty-field fold")
         XCTAssertFalse(app.keyboards.firstMatch.exists, "clearing also activated search")
@@ -308,11 +314,8 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
                 XCTAssertGreaterThan(scrolled, band / 2 + 2)
                 XCTAssertLessThan(scrolled, band - 4)
             }
-            _ = assertRetainedAtRest("retained after the \(name) small drag")
-
-            let clear = app.searchFields.firstMatch.buttons.firstMatch
-            XCTAssertTrue(clear.waitForExistence(timeout: 5) && clear.isHittable)
-            clear.tap()
+            let retained = assertRetainedAtRest("retained after the \(name) small drag")
+            clearRetainedByTouch(retained)
             sleep(2)
             let settledY = app.buttons["agents.filter.all"].firstMatch.frame.midY
             XCTAssertEqual(settledY, reveals ? restY : restY - band, accuracy: 2,
