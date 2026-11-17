@@ -91,7 +91,9 @@ struct ChatView: View {
     @State private var filesReveal: String?
     /// Kept when the Files pane swaps back to Chat, so an unfinished remote operation can be seen again.
     @State private var folderTransfers = FolderTransfers()
-    @State private var git: GitStatus?
+    private var git: GitStatus? {
+        session.flatMap { AgentMenuRouting.shared.gitStatus($0) }
+    }
     @State private var menu = MessageMenu()
     /// What Forward To picked (#3807): done once its sheet has gone, as a navigation made while it goes is dropped.
     @State private var forwardPicked: ForwardOutcome?
@@ -2231,26 +2233,22 @@ struct ChatView: View {
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
     private var panes: [SessionPane] {
         guard let session else { return [.chat] }
-        return AgentMenuFacts.panes(session, git: git)
+        return AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session))
     }
 
     private var paneBadges: [SessionPane: String] {
-        AgentMenuFacts.paneBadges(git)
+        AgentMenuFacts.paneBadges(session.flatMap { AgentMenuRouting.shared.gitStatus($0) })
     }
 
     private var sharedGit: Binding<GitStatus?> {
         Binding(get: { git }, set: { new in
-            git = new
-            AgentMenuRouting.shared.git[key] = new
+            if let session { AgentMenuRouting.shared.store.set(new, for: .init(session: session.key, cwd: session.cwd)) }
         })
     }
 
     private func loadGit() async {
-        guard style == .dev, let cwd = session?.cwd, !cwd.isEmpty, let api = model.api(key.group) else { return }
-        if let s = try? await api.gitStatus(machine: key.machineID, cwd: cwd) {
-            git = s
-            AgentMenuRouting.shared.git[key] = s
-        }
+        guard style == .dev, let session, !session.cwd.isEmpty, let api = model.api(session.group) else { return }
+        await AgentMenuRouting.shared.store.load(.init(session: session.key, cwd: session.cwd), api: api)
     }
 
     /// The chat is an upside-down list (newest first, flipped back on screen), the way chat apps do it: the newest
@@ -3617,8 +3615,8 @@ struct ChatView: View {
         #if os(iOS)
         if style == .dev, let host { hostedMenuItems(host) }
         if style == .dev, let session {
-            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, panes: panes, paneBadges: paneBadges,
-                                                            currentPane: pane, hosted: host != nil, showsSpace: openSpace != nil,
+            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: pane,
+                                                            hosted: host != nil, showsSpace: openSpace != nil,
                                                             sides: sides),
                                     handlers: agentMenuHandlers)).stackSegment()
         } else if session?.canAttach == true {
@@ -5043,8 +5041,7 @@ struct ChatView: View {
         bindMenu()
         menu.selected = nil
         if pane == .git || pane == .files { pane = .chat } // the next agent may live in another directory
-        git = nil
-        AgentMenuRouting.shared.git[key] = nil
+        AgentMenuRouting.shared.store.clear(.init(session: key, cwd: session?.cwd ?? ""))
         position = ScrollPosition(edge: .top)
         model.subscribe(next, by: owner)
         model.show(next, by: owner)

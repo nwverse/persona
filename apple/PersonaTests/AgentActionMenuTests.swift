@@ -106,22 +106,21 @@ import PersonaWire
         s.repoRoot = "/work/example"
         let model = AppModel.shared
         let routing = AgentMenuRouting.shared
-        routing.git[s.key] = nil
-        defer { routing.git[s.key] = nil }
+        routing.store.clear(.init(session: s.key, cwd: s.cwd))
+        defer { routing.store.clear(.init(session: s.key, cwd: s.cwd)) }
 
         // These are the real row/detail input paths: no repository request and no manually cloned facts.
         func rowFacts() -> AgentActionFacts { AgentActionFacts(session: s, model: model) }
-        func detailFacts(git: GitStatus?) -> AgentActionFacts {
-            AgentActionFacts(session: s, model: model, panes: AgentMenuFacts.panes(s, git: git),
-                             paneBadges: AgentMenuFacts.paneBadges(git))
+        func detailFacts() -> AgentActionFacts {
+            AgentActionFacts(session: s, model: model)
         }
-        let unloaded = try #require(detailFacts(git: nil))
+        let unloaded = try #require(detailFacts())
         #expect(rowFacts().items.map(\.id) == unloaded.items.map(\.id))
         #expect(!unloaded.items.contains { $0.id == .git })
 
         let changed = try gitStatus(files: 3)
-        routing.git[s.key] = changed
-        let loaded = try #require(detailFacts(git: changed))
+        routing.store.set(changed, for: .init(session: s.key, cwd: s.cwd))
+        let loaded = try #require(detailFacts())
         #expect(rowFacts().items.map(\.id) == loaded.items.map(\.id))
         #expect(rowFacts().panes == loaded.panes)
         #expect(rowFacts().paneBadges[.git] == loaded.paneBadges[.git])
