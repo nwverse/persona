@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -38,9 +37,6 @@ import kotlin.math.roundToInt
  * `reduceMotion ? nil`). The horizontal switch does not read Reduce Motion (line 336); Android still stops,
  * with the rest of its motion.
  */
-/** Measurement copies of the home switch are not the switch the user sees, so they carry no pill tag. */
-internal val LocalSlidingPillMeasurement = staticCompositionLocalOf { false }
-
 @Composable
 internal fun GlassSlidingPill(
     selected: Int,
@@ -56,22 +52,28 @@ internal fun GlassSlidingPill(
     val spec: FiniteAnimationSpec<Float> = if (!reduce && glass) PersonaTheme.motion.enter() else snap()
     val sprung by animateFloatAsState(selected.toFloat(), spec, label = "pill-index")
     val animatedIndex = if (!reduce && glass) sprung else selected.toFloat()
-    val tag = if (LocalSlidingPillMeasurement.current) Modifier
-        else Modifier.testTag("sliding-pill").semantics { hideFromAccessibility() }
     // One layout, absolute left edges. A Row would mirror in RTL and a Box would mirror a shorter pill
     // again (`Alignment.TopStart`), so the pill left the segment. iOS keeps the pill on the segment when
     // the control mirrors (the system segmented thumb, and `ShellSwitch`'s pill).
     Layout(
         modifier = modifier,
         content = {
-            Box(Modifier.clip(CircleShape).background(color).then(tag))
+            Box(
+                Modifier.clip(CircleShape).background(color)
+                    .testTag("sliding-pill").semantics { hideFromAccessibility() },
+            )
             repeat(count) { index -> Box { segment(index) } }
         },
     ) { measurables, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val segmentPlaceables = measurables.drop(1).map { it.measure(loose) }
-        val width = segmentPlaceables.sumOf { it.width }
-        val height = segmentPlaceables.maxOfOrNull { it.height } ?: 0
+        val contentWidth = segmentPlaceables.sumOf { it.width }
+        val contentHeight = segmentPlaceables.maxOfOrNull { it.height } ?: 0
+        // The old Glass `JSegmented` was a `Row` (`Arrangement.Start`): `fillMaxWidth` makes
+        // minWidth equal maxWidth, and the row then fills that width with the segments packed at
+        // the start (the right edge in RTL). Reporting only the content width is coerced and centered.
+        val width = maxOf(contentWidth, constraints.minWidth).coerceAtMost(constraints.maxWidth)
+        val height = maxOf(contentHeight, constraints.minHeight).coerceAtMost(constraints.maxHeight)
         val rtl = layoutDirection == LayoutDirection.Rtl
         val starts = IntArray(segmentPlaceables.size)
         val widths = IntArray(segmentPlaceables.size)
@@ -81,7 +83,7 @@ internal fun GlassSlidingPill(
             widths[i] = child.width
             cursor += child.width
         }
-        val frame = pillFrame(animatedIndex, starts.asList(), widths.asList(), height)
+        val frame = pillFrame(animatedIndex, starts.asList(), widths.asList(), contentHeight)
         val pillPlaceable = measurables.first().measure(
             Constraints.fixed(frame.width.coerceAtLeast(0), frame.height.coerceAtLeast(0)),
         )

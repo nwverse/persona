@@ -3,6 +3,7 @@ package persona.core.designsystem
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -13,9 +14,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.filter
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -219,6 +226,52 @@ class SlidingPillTest {
         assertNear(chosen.width, pill().width)
     }
 
+    @Test fun fillMaxWidthPacksSegmentsAtTheStart() {
+        rule.mainClock.autoAdvance = false
+        var rtl by mutableStateOf(false)
+        var selected by mutableIntStateOf(0)
+        rule.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+                PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = true) {
+                    Box(Modifier.width(360.dp)) {
+                        JSegmented(
+                            listOf(JSegment("Day"), JSegment("This week")),
+                            selected,
+                            { selected = it },
+                            Modifier.fillMaxWidth().testTag("segmented"),
+                        )
+                    }
+                }
+            }
+        }
+        val control = bounds("segmented")
+        assertNear(360.dp, control.width)
+        val day = bounds("Day")
+        val week = bounds("This week")
+        assertNear(day.left, pill().left)
+        assertNear(day.width, pill().width)
+        assertTrue("LTR start ${day.left - control.left}", day.left - control.left < 32.dp)
+        assertTrue("LTR tail ${control.right - week.right}", control.right - week.right > 80.dp)
+        rule.runOnIdle { selected = 1 }
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeBy(16)
+        val weekOn = bounds("This week")
+        assertNear(weekOn.left, pill().left)
+        assertTrue("second segment stays in the leading half", weekOn.right < control.left + control.width / 2)
+        rule.runOnIdle { rtl = true; selected = 0 }
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeBy(16)
+        val controlRtl = bounds("segmented")
+        val dayRtl = bounds("Day")
+        val weekRtl = bounds("This week")
+        assertNear(360.dp, controlRtl.width)
+        assertNear(dayRtl.left, pill().left)
+        assertNear(dayRtl.width, pill().width)
+        assertTrue("RTL end ${controlRtl.right - dayRtl.right}", controlRtl.right - dayRtl.right < 32.dp)
+        assertTrue("RTL lead ${weekRtl.left - controlRtl.left}", weekRtl.left - controlRtl.left > 80.dp)
+        assertTrue(dayRtl.left > weekRtl.left)
+    }
+
     @Test fun briefAndBoardKeepTheirOwnMarks() {
         var selected by mutableIntStateOf(0)
         var style by mutableStateOf(AppStyle.Brief)
@@ -238,9 +291,22 @@ class SlidingPillTest {
         }
     }
 
-    private fun pill(): DpRect = rule.onNodeWithTag("sliding-pill", useUnmergedTree = true).getUnclippedBoundsInRoot()
+    /** The placed switch is under `home-level-*`. Measurement copies are not, and carry no tag of their own. */
+    private fun placedPills() = run {
+        val all = rule.onAllNodesWithTag("sliding-pill", useUnmergedTree = true)
+        val onTheSwitch = all.filter(
+            hasAnyAncestor(
+                SemanticsMatcher("home level") { node ->
+                    node.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("home-level") == true
+                },
+            ),
+        )
+        if (onTheSwitch.fetchSemanticsNodes().isNotEmpty()) onTheSwitch else all
+    }
 
-    private fun pillCount(): Int = rule.onAllNodesWithTag("sliding-pill", useUnmergedTree = true).fetchSemanticsNodes().size
+    private fun pill(): DpRect = placedPills().onFirst().getUnclippedBoundsInRoot()
+
+    private fun pillCount(): Int = placedPills().fetchSemanticsNodes().size
 
     private fun bounds(tagOrText: String): DpRect {
         val tagged = rule.onAllNodesWithTag(tagOrText, useUnmergedTree = true).fetchSemanticsNodes()
