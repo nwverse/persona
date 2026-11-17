@@ -106,7 +106,8 @@ private struct ScreenshotSwap<Content: View, Backdrop: View, BannerBackdrop: Vie
 
     /// Draws the bars into in-app pictures of the window until `endReveal()`: `snapshotView` and `drawHierarchy`
     /// leave the capture layer out like a screenshot, so the iPad's sidebar drag (its picture of the page) and DEBUG
-    /// screenshots would show the banner instead of the bar. Nested calls count.
+    /// screenshots would show the banner instead of the bar. Nested calls count. Pictures taken at once after it need
+    /// `afterScreenUpdates: true` (`hasLayers`).
     static func beginReveal() {
         reveals += 1
         if reveals == 1 { apply() }
@@ -117,6 +118,10 @@ private struct ScreenshotSwap<Content: View, Backdrop: View, BannerBackdrop: Vie
         if reveals == 0 { apply() }
     }
 
+    /// Whether a bar is in the capture layer now. A picture taken right after `beginReveal()` must then be taken after
+    /// the screen updates (`afterScreenUpdates: true`): one of the frame already drawn still leaves the bars out.
+    static var hasLayers: Bool { !fields.allObjects.isEmpty }
+
     fileprivate static func register(_ field: UITextField) {
         fields.add(field)
         field.isSecureTextEntry = reveals == 0
@@ -124,7 +129,6 @@ private struct ScreenshotSwap<Content: View, Backdrop: View, BannerBackdrop: Vie
 
     private static func apply() {
         for field in fields.allObjects { field.isSecureTextEntry = reveals == 0 }
-        // Committed now, so a picture taken right after (`afterScreenUpdates: false`) has the bars.
         CATransaction.flush()
     }
 }

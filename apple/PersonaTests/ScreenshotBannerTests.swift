@@ -49,12 +49,13 @@ import UIKit
         let ctx = try #require(CGContext(data: &px, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: cg.width * 4,
                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
-        // The bar's middle (30 pt down), in the picture's own pixels; the context's rows run bottom up.
-        let x = cg.width / 2, y = cg.height - 1 - Int(30 * CGFloat(cg.height) / Self.size.height)
+        // The bar's middle (30 pt down), in the picture's own pixels (the buffer's first row is the picture's top).
+        let x = cg.width / 2, y = Int(30 * CGFloat(cg.height) / Self.size.height)
         let i = (y * cg.width + x) * 4
         let (r, g, b) = (px[i], px[i + 1], px[i + 2])
-        if r > 200 && g < 60 && b < 60 { return .bar }
-        if b > 200 && r < 60 && g < 60 { return .banner }
+        // The system's red and blue (255, 66, 69 and 0, 145, 255 here).
+        if r > 200 && g < 120 && b < 120 { return .bar }
+        if b > 200 && r < 80 { return .banner }
         return .other(r, g, b)
     }
 
@@ -98,14 +99,16 @@ import UIKit
         #expect(after == .banner, "after the reveal, a picture showed \(after)")
     }
 
-    /// The iPad's sidebar drag takes its pictures with `afterScreenUpdates: false` right after revealing: they have
-    /// the bar, not the banner (laid over the window, the picture covers the bar's own layer, captured again).
+    /// The iPad's sidebar drag takes its pictures right after revealing, after the screen updates while a bar is in the
+    /// layer (`hasLayers`; a picture of the frame already drawn still leaves it out): they have the bar, not the banner
+    /// (laid over the window, the picture covers the bar's own layer, captured again).
     @Test func aSnapshotRightAfterRevealingHasTheBar() async throws {
         let w = try await window(Sample())
         defer { w.isHidden = true }
         let root = try #require(w.rootViewController?.view)
+        #expect(ScreenshotBanner.hasLayers)
         ScreenshotBanner.beginReveal()
-        let snap = try #require(root.snapshotView(afterScreenUpdates: false))
+        let snap = try #require(root.snapshotView(afterScreenUpdates: ScreenshotBanner.hasLayers))
         ScreenshotBanner.endReveal()
         snap.frame = w.bounds
         w.addSubview(snap)

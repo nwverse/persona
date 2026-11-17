@@ -40,6 +40,18 @@ final class ScreenshotBannerUITests: XCTestCase {
         }
     }
 
+    /// The iPad's bar (`classicBar`: the face over the name in the middle, New Chat beside the sidebar): on screen and
+    /// for VoiceOver with the switch on, and the screenshots kept for a look (the lockup can reach the middle of a
+    /// narrow page, so no pixel check here). Skips on a phone.
+    @MainActor func testIPad() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("an iPad's bar") }
+        for scheme in ["light", "dark"] {
+            for banner in [false, true] {
+                _ = try look(banner: banner, scheme: scheme, page: "ipad", ["-openAssistant", Self.main], control: "persona-avatar")
+            }
+        }
+    }
+
     /// Settings › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
     /// `ScreenshotBannerPrefs.enabledByDefault`, ScreenshotBannerTests).
     @MainActor func testTheSwitch() throws {

@@ -186,7 +186,9 @@ struct SplitColumnControl: UIViewControllerRepresentable {
             // The pictures leave the capture layer out as a screenshot does: the bars in them, not the screenshot banner
             // (#9508), until the pictures are gone.
             ScreenshotBanner.beginReveal()
-            guard let screen = root.snapshotView(afterScreenUpdates: false),
+            // A picture of the frame already drawn still leaves them out: with bars in the layer, one after it updates.
+            let fresh = ScreenshotBanner.hasLayers
+            guard let screen = root.snapshotView(afterScreenUpdates: fresh),
                   let screenAgain = root.snapshotView(afterScreenUpdates: false) else {
                 ScreenshotBanner.endReveal()
                 return
