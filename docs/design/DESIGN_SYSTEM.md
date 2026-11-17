@@ -285,6 +285,8 @@ The composer and attach panel own about 20 more one-off tokens (Telegram-derived
 
 On Glass, `JSegmented` and the home Assistant / Agents switch draw one pill that moves to the chosen segment on the `state` spring (`Tokens.Motion.State`, `Theme.Motion.state` in `apple/Shared/Design/Theme.swift`). That is the iPhone shell switch's pill (`apple/Persona/DesignSystem/ShellComponents.swift`, `SwitchMotion` and `matchedGeometryEffect` id `pill`) and the stand-in for a segmented picker's sliding thumb (`Picker` `.segmented`). The pill is in place at once when system animations are off. Brief and Board keep the marks they have. Android has no shell strip, so the pill does not follow a finger the way `PagerPill` does while the strip slides.
 
+Android's chat uses the same reveal. `Modifier.unfolding` (`Unfolding.kt`) fades what opens with `Tokens.Motion.Reveal`, copying `Theme.Motion.reveal` (`apple/Shared/Design/Theme.swift:754`) and `.unfolding` (`apple/Persona/Views/Chat/ChatPin.swift:707-726`): the block already has its height, and what closes leaves at once (`ChatPin.swift:686-688`, #3005, #9574). iPhone and regular width use that modifier; no size class skips it. Reduced motion draws the opened block at once (`ChatPin.swift:721-722`).
+
 Reduce Motion:
 
 - In a view: `accessibilityReduceMotion`. Outside a view: `Theme.Motion.reduced` (`apple/Shared/Design/Theme.swift:639`).
