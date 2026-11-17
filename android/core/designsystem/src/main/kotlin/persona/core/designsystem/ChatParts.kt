@@ -197,7 +197,8 @@ fun ErrorCard(
 private fun ErrorStack(modifier: Modifier, gap: Dp, content: @Composable () -> Unit) {
     val gapPx = with(LocalDensity.current) { gap.roundToPx() }
     Layout(content, modifier) { measurables, constraints ->
-        val placeables = measurables.map { it.measure(constraints.copy(minHeight = 0)) }
+        // Loose width, as the Column this replaced. A tight minWidth stretches Retry to the card.
+        val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
         val shown = placeables.filter { it.height > 0 }
         val height = shown.sumOf { it.height } + gapPx * (shown.size - 1).coerceAtLeast(0)
         layout(constraints.maxWidth, height) {

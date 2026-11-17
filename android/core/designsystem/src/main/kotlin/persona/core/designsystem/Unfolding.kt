@@ -60,6 +60,7 @@ fun Modifier.unfolding(revealing: Boolean): Modifier {
             tween(Tokens.Motion.Reveal.duration, easing = ComposerMotion.curve(Tokens.Motion.Reveal.curve)),
         )
     }
-    if (!fade || reduce || alpha.value >= 1f) return this
+    // Read alpha only while drawing. Reading it here recomposes the caller on every frame of the fade.
+    if (!fade || reduce) return this
     return graphicsLayer { this.alpha = alpha.value }
 }
