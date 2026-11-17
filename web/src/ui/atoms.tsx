@@ -87,8 +87,9 @@ export function Loading({ label = t("common.loading") }: { label?: string }) {
   );
 }
 
-/** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096). */
-export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
+/** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096); `finished`:
+ *  done before anybody looked (Just finished, #9751). */
+export function StatePill({ state, awaiting = false, finished = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; finished?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
   const tone: Record<AgentState, string> = {
     needs_you: "bg-field text-attention",
     working: "bg-field text-orange",
@@ -98,11 +99,12 @@ export function StatePill({ state, awaiting = false, waiting = false, dot = true
     unknown: "bg-field text-ink-3",
   };
   const reply = awaiting && state === "idle";
+  const done = finished && state === "idle" && !reply;
   const bg = waiting && state === "working";
   return (
-    <span className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium ${reply ? "bg-field text-green" : bg ? "bg-field text-ink-2" : tone[state]}`} data-bg-waiting={bg || undefined} data-state-pill="">
+    <span className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium ${reply || done ? "bg-field text-green" : bg ? "bg-field text-ink-2" : tone[state]}`} data-bg-waiting={bg || undefined} data-state-pill="">
       {dot && (state === "working" || state === "needs_you") && <StatusMark state={state} size="sm" label={false} waiting={bg} />}
-      {reply ? stateName("awaits_reply") : bg ? stateName("bg_waiting") : STATE_LABEL[state]}
+      {reply ? stateName("awaits_reply") : done ? stateName("just_finished") : bg ? stateName("bg_waiting") : STATE_LABEL[state]}
     </span>
   );
 }

@@ -126,7 +126,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | --- | --- | --- | --- |
 | Needs you | system blue `#007AFF`/`#0A84FF` | `#0064C8`/`#409CFF` | blue since #6231 |
 | Working | `#E8890C`/`#FFB224` | `#A35A00`/`#FFB224` | amber |
-| Unread / awaiting reply | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green |
+| Unread / awaiting reply / just finished | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green; awaiting reply and just finished are a plain dot on the web, not Unread's glow |
 | Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
@@ -803,6 +803,18 @@ A child session (an Agent another Agent started, folded under a listed parent; w
 A side session folded into its parent (#7944, `parent_agent_id`, with `sessions_side_fold`) is the same: its parent's row carries it in the folded state, and the parent's chat header carries a needs-you dot on its Side sessions control while one waits, so a waiting side is visible without opening anything. An older hub that does not fold sides leaves each a row with its own state mark, counted on its own.
 
 A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 that this follow cindy's Team exactly). In a tab with several Agents the lead is the Agent in its first pane and the tab's other running Agents are its workers, folded under it by the hub. A worker is never a row, dock entry or count of its own; the lead's row carries it as above. The lead's chat shows no strip of pane tabs any more: its workers are in the **Team** side panel (section 3.3). A tab whose first pane is a shell has no lead, and its Agents stay rows of their own.
+
+#### Finished work nobody has seen
+
+With Session Triage on, a turn the triage found done leaves Unread, but while it is new it is not filed with the
+seen ones (#9751, `docs/protocol/agent-states.md` ("Just finished")): for three hours, or until it is seen, it has a
+By Status section of its own after the work still going (Working, Waiting in the background) and before Waiting,
+Muted and Seen, and it keeps its space, repository and worktree out of the idle folds. Its mark is the unread green as
+a plain dot, its state word "Just finished" (the To-dos' section word, `StateName`), its second line the triage's
+"✓ conclusion". A muted one is plain Seen. Why not Unread: Unread stays what needs a look. Why not plain Seen: work
+that ended minutes ago sank under sessions seen days ago. Why after the work still going: as in the To-dos' order
+above, what still runs comes before what is done. The web has it first; Apple, Android and HarmonyOS follow in their
+own issues and show these rows as Seen until then.
 
 #### The work-item row
 

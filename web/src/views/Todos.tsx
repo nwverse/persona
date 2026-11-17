@@ -1308,10 +1308,11 @@ const SECTION_TONE: Record<TriageSection, string> = {
   done: "text-ink-3",
 };
 
-/** A section's title: the two that are agent states take the state names (lib/state-labels.ts). */
+/** A section's title: the three that are agent states take the state names (lib/state-labels.ts). */
 function sectionTitle(section: TriageSection): string {
   if (section === "waiting") return stateName("needs_you");
   if (section === "working") return stateName("working");
+  if (section === "just_done") return stateName("just_finished");
   return t(`todos.section_${section}`);
 }
 
