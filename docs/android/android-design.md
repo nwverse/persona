@@ -291,7 +291,7 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   and the Assistant root leaves out the avatar (keeping its room, so nothing shifts); when folded, the avatar comes back and brings the column back (#9336).
   A choice made beside the page is kept across rotation, folding and relaunch (`ShellPosition`, `ColumnMemory`), while a choice made over the page,
   on a hidden tab, in a demo or under automation is not kept. The sidebar column's width is a list's (`sidebarSplit`: 38% of the window, 280–380dp, at most the phone drawer's width), on the same surface as the drawer
-  with a hairline toward the page. On Agents the left column is the Agents list,
+  with a hairline toward the page. While the column stands beside the page, the page slot is clipped to that inset, so a push or a pop stays inside the detail column, as the detail stack's navigation controller stays in the split's secondary column (`SplitNavigation.swift:140-143`). On Agents the left column is the Agents list,
   as in the Duo's Agents tab; the avatar there still opens the sidebar as the drawer, so Settings stays one sidebar away from both pages. Folding turns the column back into the drawer (closed)
   and unfolding back into the column; unfolding with the drawer open over the Assistant page shows the column instead. The drawer and the column keep separate saveable state (`shared-sidebar`, `shared-sidebar-column`):
   the Assistant page stays composed behind Agents, so both can be composed at once.
