@@ -667,11 +667,8 @@ struct MeetingPage: View {
                 .themedGroupedPage()
                 .navigationTitle(String(localized: "Meeting Map [Meeting After]"))
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { mapFull = false }.accessibilityIdentifier("meeting-map-done")
-                    }
-                }
+                // A presented page: its ✕ at the leading corner (#9653).
+                .toolbar { SheetClose(id: "meeting-map-done") { mapFull = false } }
         }
     }
 

@@ -790,6 +790,8 @@ struct RecordingsPage: View {
     private nonisolated enum DebugPage: Hashable {
         case recording(UUID)
         case day(UUID)
+        /// After the meeting (#8731 V3): its one screen.
+        case after(UUID)
     }
 
     @State private var debugPage: DebugPage?
@@ -852,6 +854,12 @@ struct RecordingsPage: View {
                 switch page {
                 case .recording(let id): RecordingDetailView(id: id)
                 case .day(let id): RecordingDayView(id: id)
+                case .after(let id):
+                    #if os(iOS)
+                    MeetingPage(id: id, mode: .after)
+                    #else
+                    RecordingDetailView(id: id)
+                    #endif
                 }
             }
             .onAppear {
@@ -869,6 +877,14 @@ struct RecordingsPage: View {
                 } else if defaults.string(forKey: "showMeetingSample") == "overview" {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.overviewMeeting)
+                } else if ["after-minutes", "after-pending"].contains(defaults.string(forKey: "showMeetingSample")) {
+                    // After the meeting (#8731 V3): the made-up finished meeting's one screen; `after-overview`, the
+                    // longer one's (its minutes with an overview: headline, conclusions, topics).
+                    Self.sampleOpened = true
+                    debugPage = .after(RecordingSamples.pastMeeting)
+                } else if defaults.string(forKey: "showMeetingSample") == "after-overview" {
+                    Self.sampleOpened = true
+                    debugPage = .after(RecordingSamples.overviewMeeting)
                 } else if defaults.string(forKey: "showMeetingSample") == "untitled-page" {
                     // The unnamed meeting's page (#8873): its name from the hub, Rename under the transcript.
                     Self.sampleOpened = true
