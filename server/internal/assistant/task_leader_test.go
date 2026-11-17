@@ -1453,6 +1453,32 @@ func TestLeaderSendFailingOtherwiseIsRetriedByTheDigest(t *testing.T) {
 	}
 }
 
+// A send the node says may already be in the leader's session (its Claude's inbox read it, the session holds it for
+// approval at the computer: peer_held, delivered unknown) is not sent again by the next digests (#9607): each copy
+// would wait there too.
+func TestLeaderSendMaybeDeliveredIsNotResent(t *testing.T) {
+	s, f := newQuietService(t)
+	s.leaderResume = time.Hour
+	ctx := context.Background()
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	f.mu.Lock()
+	f.failSend = &rpc.Error{Code: "peer_held", Message: "held for approval at the computer", Data: json.RawMessage(`{"delivered":"unknown"}`)}
+	f.mu.Unlock()
+	blockedReport(t, s, w.Agents[0].SessionID)
+	waitFor(t, "the held send", func() bool { return len(sendsTo(f, "box", "s1")) > 0 })
+	for range 3 {
+		s.sendDigest(ctx)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(sendsTo(f, "box", "s1")); n != 1 {
+		t.Fatalf("the leader was sent the held message %d times", n)
+	}
+	if n := leaderEscalations(f); n != 0 {
+		t.Fatalf("a held message was escalated:\n%s", strings.Join(f.notices(), "\n---\n"))
+	}
+}
+
 // A flexible task leader started again on another computer: the worker's fallback by the leader task's link reaches its
 // current agent there, not only one on the old computer.
 func TestLeaderRestartedOnAnotherComputerIsStillReached(t *testing.T) {

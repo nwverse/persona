@@ -7,11 +7,27 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
+
+// claudeEnvelopeRe is Claude Code 2.1.326's parser of the cross-session envelope (its jl), with the attribute order
+// and the from-mode classes it accepts; an envelope it does not match carries no from-mode.
+var claudeEnvelopeRe = regexp.MustCompile(`^<cross-session-message(?: from="([A-Za-z0-9%:_/.\\-]+)")?(?: from-session="([A-Za-z0-9_-]{1,80})")?(?: hop-chain="([0-9a-f]{24}(?:,[0-9a-f]{24}){0,31})")?(?: from-name="([^"<>\n\r]+)")?(?: from-mode="(bypass|prompting)")?(?: from-plugin="([^"<>\n\r]+)")?>\n([\s\S]*)\n</cross-session-message>$`)
+
+// claudeTakes is what a Claude Code 2.1.326 session of class (bypass / prompting), with crossSessionInbound unset,
+// does with a peer message: a stated from-mode is taken only when it is the session's class; with none stated a
+// bypass session holds it and a prompting one takes it.
+func claudeTakes(class, content string) bool {
+	m := claudeEnvelopeRe.FindStringSubmatch(content)
+	if m != nil && m[5] != "" {
+		return m[5] == class
+	}
+	return class != peerModeBypass
+}
 
 // fakeInbox is a Claude Code peer inbox as 2.1.308 runs one (claudepeer.go): a socket or pipe whose connections are
 // one JSON object per line; the first line must be {"type":"auth","token":…} where the inbox requires auth; a user
@@ -27,7 +43,7 @@ type fakeInbox struct {
 	transcript string // where a taken message is written
 
 	mu    sync.Mutex
-	mode  string           // "take" (default), "hold", "drop-auth" (close at once, like a bad auth line); setMode
+	mode  string           // "take" (default), "hold", "drop-auth" (close at once, like a bad auth line), or a session's class, "bypass" / "prompting" (claudeTakes); setMode
 	lines []map[string]any // every line read, auth lines included
 }
 
@@ -95,10 +111,13 @@ func (f *fakeInbox) conn(c net.Conn) {
 		if f.requireAut && !authed {
 			return
 		}
-		if m["type"] != "user" || mode != "take" {
+		if m["type"] != "user" {
 			continue
 		}
 		content, _ := m["message"].(map[string]any)["content"].(string)
+		if mode != "take" && !((mode == peerModeBypass || mode == "prompting") && claudeTakes(mode, content)) {
+			continue
+		}
 		line, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue",
 			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "content": "Another Claude session sent a message:\n" + content})
 		file, err := os.OpenFile(f.transcript, os.O_APPEND|os.O_WRONLY, 0o600)

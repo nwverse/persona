@@ -352,6 +352,7 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 			owner.as, owner.reason = deliveredRelayed, why
 		}
 	}
+	p.fromMode = n.peerAttest(id)
 	err = peerSendAt(ctx, p, id, text, priority)
 	var pe *errPeer
 	if asPeer(err, &pe) {
@@ -385,8 +386,10 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 }
 
 // holdsPeerMessages: session id runs in bypass permissions mode, where Claude Code holds a message from a sender that
-// states no permission mode of its own (Persona's) for the person at the computer to approve. A message such a
-// session did not take is waiting there, not lost: the app says so instead of only "not confirmed" (peerHeld).
+// states no permission mode of its own, or the other class, for the person at the computer to approve (claudepeer.go,
+// from-mode). The node states its class to such a session (peerAttest); a message it still did not take (its
+// crossSessionInbound says hold, or its mode changed since the transcript last said) is waiting there, not lost: the
+// app says so instead of only "not confirmed" (peerHeld).
 func (n *Node) holdsPeerMessages(id string) bool {
 	path := n.transcriptPath(id)
 	if path == "" {
@@ -398,6 +401,19 @@ func (n *Node) holdsPeerMessages(id string) bool {
 	}
 	mode, _ := n.currentModes(id, n.metaNow(path, st))
 	return mode == "bypassPermissions"
+}
+
+// peerAttest is the from-mode the node states in a message to session id: bypass to a session in bypass permissions
+// mode, none to any other. The class is the node's own, whatever the session: personad is the owner's unattended
+// process, run as the owner, and nothing it does waits on a permission prompt (it starts Agents in bypassPermissions
+// and types into their terminals); it hands on what the owner and the owner's Persona Agents send, and the same
+// message to a session in one of Persona's panes is typed in with no prompt at all. A prompting session takes a
+// message that states no mode, and would hold one stating bypass as a mismatch, so to one the node states none.
+func (n *Node) peerAttest(id string) string {
+	if n.holdsPeerMessages(id) {
+		return peerModeBypass
+	}
+	return ""
 }
 
 // computerWaitKey is where sendOutside leaves, for session.send's answer, that the session took the message while
@@ -439,6 +455,7 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 		offset = st.Size()
 	}
 	stop := prompts.PeerStop()
+	p.fromMode = n.peerAttest(id)
 	err = peerSendAt(ctx, p, id, stop, peerNow)
 	var pe *errPeer
 	if asPeer(err, &pe) {

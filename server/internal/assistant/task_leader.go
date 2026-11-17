@@ -495,9 +495,9 @@ func (e leaderEscalated) Unwrap() error { return e.err }
 // sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. A closed agent is
 // resumed in the background (that takes minutes): when that fails the signals are escalated and retried
 // (escalateLeaderMessage). A send the node refuses because the agent has stopped (agent_stopped: read-only until the
-// user's Resume, node stopped.go) goes the same way at once (#8518): another digest would only be refused again. A
-// session its computer does not list, or a send that failed otherwise, is a leaderUnreachable for the caller, which
-// puts the signals back for the next digest.
+// user's Resume, node stopped.go) goes the same way at once (#8518): another digest would only be refused again. A send
+// the node says may have arrived (delivered unknown or yes) counts as sent. A session its computer does not list, or a
+// send that failed otherwise, is a leaderUnreachable for the caller, which puts the signals back for the next digest.
 func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) error {
 	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !ok {
@@ -519,6 +519,13 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
 			s.escalateLeaderMessage(lead, kept, text)
 			return leaderEscalated{err}
+		}
+		if nodeMayHaveTaken(err) {
+			// The node says it may be there already (a Claude's inbox read it but the session has not taken it: held for
+			// approval at the computer, peer_held / peer_unconfirmed; typing failed part way): sending it again would only
+			// pile up copies there, one per digest (#9607).
+			s.logf("task leader %s: the message may have reached it, not sending it again: %v", short(lead.SessionID), err)
+			return nil
 		}
 		return leaderUnreachable{err}
 	}

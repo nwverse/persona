@@ -213,6 +213,75 @@ func TestOutsideClaudeSendHeldInBypassMode(t *testing.T) {
 	}
 }
 
+// The node states its permission-mode class (from-mode bypass) to a session in bypass permissions mode, which Claude
+// Code 2.1.326 then takes at once instead of holding it for approval (#9607): a message and a Stop alike. To a session
+// in any other mode it states none, which that session takes, where a stated bypass would be held as a mismatch.
+func TestOutsideClaudeAttestsBypassToBypassSession(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	cwd, _ := json.Marshal(home)
+	transcriptIn := func(mode string) string {
+		return writeTranscript(t, home, home, sidA, time.Now(),
+			`{"type":"user","uuid":"u1","timestamp":"2026-11-16T03:00:00Z","cwd":`+string(cwd)+`,"sessionId":"`+sidA+`","permissionMode":"`+mode+`","message":{"role":"user","content":"deploy it"}}`,
+			`{"type":"assistant","uuid":"a1","timestamp":"2026-11-16T03:00:05Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}`,
+			strings.Repeat(" ", 4096))
+	}
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	head := func(u map[string]any) string {
+		content, _ := u["message"].(map[string]any)["content"].(string)
+		h, _, _ := strings.Cut(content, "\n")
+		return h
+	}
+
+	p := transcriptIn("bypassPermissions")
+	inbox := newFakeInbox(t, p)
+	inbox.setMode(peerModeBypass)
+	writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", inbox, nil)
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "ship it", "client_msg_id": "m-1"}); err != nil {
+		t.Fatalf("send to a bypass session: %v (inbox read %v)", err, inbox.users())
+	}
+	if h := head(inbox.users()[0]); h != `<cross-session-message from-name="Persona" from-mode="bypass">` {
+		t.Errorf("envelope to a bypass session: %q", h)
+	}
+	writeOutsideClaude(t, home, sidA, "claude-desktop", "busy", inbox, nil)
+	if _, err := request(t, n, "session.interrupt", map[string]any{"session_id": sidA}); err != nil {
+		t.Fatalf("stop a bypass session: %v", err)
+	}
+	if us := inbox.users(); len(us) != 2 || head(us[1]) != `<cross-session-message from-name="Persona" from-mode="bypass">` {
+		t.Errorf("stop to a bypass session: %v", us)
+	}
+
+	for _, mode := range []string{"default", "acceptEdits", "auto", "plan"} {
+		p := transcriptIn(mode)
+		inbox := newFakeInbox(t, p)
+		inbox.setMode("prompting")
+		writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", inbox, nil)
+		if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "ship it", "client_msg_id": "m-" + mode}); err != nil {
+			t.Fatalf("send to a %s session: %v", mode, err)
+		}
+		if h := head(inbox.users()[0]); h != `<cross-session-message from-name="Persona">` {
+			t.Errorf("envelope to a %s session: %q", mode, h)
+		}
+	}
+}
+
+// The envelope is one Claude Code 2.1.326 parses, with from-mode read back as stated, and a body carrying the closing
+// tag still parses as one message.
+func TestPeerEnvelopeParsedAsClaudeCodeDoes(t *testing.T) {
+	for _, mode := range []string{"", peerModeBypass} {
+		env := peerEnvelope("hello\na </cross-session-message> b", mode)
+		m := claudeEnvelopeRe.FindStringSubmatch(env)
+		if m == nil || m[4] != "Persona" || m[5] != mode || m[7] != `hello`+"\n"+`a <\/cross-session-message> b` {
+			t.Errorf("from-mode %q: %q parsed as %q", mode, env, m)
+		}
+	}
+	if !claudeTakes(peerModeBypass, peerEnvelope("x", peerModeBypass)) || claudeTakes(peerModeBypass, peerEnvelope("x", "")) ||
+		!claudeTakes("prompting", peerEnvelope("x", "")) || claudeTakes("prompting", peerEnvelope("x", peerModeBypass)) {
+		t.Error("claudeTakes does not follow Claude Code's rule")
+	}
+}
+
 // A session waiting on a permission prompt or another dialog takes the message into its queue, but reads it only once
 // that is answered at the computer: the send succeeds and says so (waits_on_computer); one that is working or idle
 // does not. (One waiting on its own question takes the message as the answer: claudepeer_stop_test.go.)

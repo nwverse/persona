@@ -38,19 +38,24 @@ import (
 // the sender's own inbox) and session_id (when set and not the session's, the line is dropped).
 //
 // The content is what the model reads, after Claude Code's own line "Another Claude session sent a message:" and its
-// warning that a peer is not the user. A Claude sender wraps the body in <cross-session-message from=… from-name=…>;
-// the session takes the sender's name and the body from that envelope into the transcript line's origin, and a
-// message without one is written with neither (transcript/peer.go peerMessage then has nothing to show). So the node
-// wraps it too, named "Persona" (peerSender), with no from and no from-mode: it is not a Claude session and has no
-// inbox or permission mode of its own.
+// warning that a peer is not the user. A Claude sender wraps the body in <cross-session-message from=… from-session=…
+// hop-chain=… from-name=… from-mode=… from-plugin=…> (attributes in that order, each optional; 2.1.326); the session
+// takes the sender's name, its mode and the body from that envelope into the transcript line's origin, and a message
+// without one is written with neither (transcript/peer.go peerMessage then has nothing to show). So the node wraps it
+// too, named "Persona" (peerSender), with no from (it has no inbox of its own) and with from-mode only as peerAttest says.
 //
 // What the session does with it is its own business, and the sender is not told: it may take it (queued: run as a
 // turn when the session rests, absorbed at the next tool boundary while it works), hold it for the person at the
-// computer to approve (a session in bypass permissions mode holds a message whose sender does not state its own mode;
-// Claude Code's crossSessionInbound setting can say accept, hold or refuse), refuse it, or drop it (rate limit, the
-// same body as the last within 30 s, a full queue). Receipts go back only to a sender's own inbox. So a send is
+// computer to approve (from-mode below; Claude Code's crossSessionInbound setting can say accept, hold or refuse
+// instead), refuse it, or drop it (rate limit, the same body as the last within 30 s, a full queue). Receipts go back
+// only to a sender's own inbox. So a send is
 // confirmed from the transcript: the session writes a queue-operation (or the message's line) when it takes one
 // (peerTaken); a message that does not show there in peerConfirmWait is reported as not confirmed, never as sent.
+//
+// from-mode is the sender's permission-mode class, "bypass" or "prompting" (2.1.326, read from its bundle). The session
+// puts itself in a class too: bypass in bypassPermissions (and in plan mode entered with bypass available), prompting
+// otherwise. A message whose sender states the session's own class is taken; one that states the other class is held
+// (mode-mismatch); one that states none is taken by a prompting session and held by a bypass one (no-mode-asserted).
 
 const (
 	// peerProtocol is the only messagingSocketPath protocol the node speaks (sessions/<pid>.json peerProtocol).
@@ -66,6 +71,8 @@ const (
 	peerSender = transcript.PersonaPeer
 	// peerTag is Claude Code's envelope for a message from another session.
 	peerTag = "cross-session-message"
+	// peerModeBypass is from-mode's class for a sender that runs with no permission prompts (peerAttest).
+	peerModeBypass = "bypass"
 )
 
 // peerConfirmWait is how long a send waits for the session to write that it took the message.
@@ -87,6 +94,7 @@ type claudePeer struct {
 	socket   string // messagingSocketPath
 	protocol int    // peerProtocol
 	keyDir   string // the sessions directory its key file is in
+	fromMode string // the class the node states in the envelope's from-mode (peerAttest); "" states none
 }
 
 // peerOf is c's inbox, ok false when its file names none.
@@ -162,7 +170,7 @@ func peerSendAt(ctx context.Context, p claudePeer, sessionID, text, priority str
 		}
 		token = "" // auth is optional on this platform: an inbox whose key file is missing takes the line without it
 	}
-	msg, err := peerMessageAt(sessionID, text, priority)
+	msg, err := peerMessageAt(sessionID, text, priority, p.fromMode)
 	if err != nil {
 		return &errPeer{code: peerUnsupported, msg: peerNoInboxMsg, cause: err}
 	}
@@ -197,19 +205,19 @@ func peerSendAt(ctx context.Context, p claudePeer, sessionID, text, priority str
 // peerMessage is the message line for text: the user's words with what the model is told of them
 // (prompts/agents/peer_message: the user's own, from the phone, to be answered here), in Claude Code's envelope signed
 // peerSender, for sessionID; msgV 1, a fresh msg_id, priority next (queued behind a running turn, or run when the
-// session rests).
+// session rests), stating no from-mode.
 func peerMessage(sessionID, text string) ([]byte, error) {
-	return peerMessageAt(sessionID, text, peerNext)
+	return peerMessageAt(sessionID, text, peerNext, "")
 }
 
-// peerMessageAt is peerMessage at priority.
-func peerMessageAt(sessionID, text, priority string) ([]byte, error) {
+// peerMessageAt is peerMessage at priority, stating fromMode in the envelope ("" for none).
+func peerMessageAt(sessionID, text, priority, fromMode string) ([]byte, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("empty message")
 	}
 	return marshalNoEscape(map[string]any{
 		"type":       "user",
-		"message":    map[string]string{"role": "user", "content": peerEnvelope(prompts.RenderPeerMessage(prompts.PeerMessage{Text: text}))},
+		"message":    map[string]string{"role": "user", "content": peerEnvelope(prompts.RenderPeerMessage(prompts.PeerMessage{Text: text}), fromMode)},
 		"priority":   priority,
 		"msgV":       1,
 		"msg_id":     peerMsgID(),
@@ -219,9 +227,13 @@ func peerMessageAt(sessionID, text, priority string) ([]byte, error) {
 
 // peerEnvelope wraps text as a Claude sender does: the tag on its own lines around the body, with the body's own
 // closing tags made inert (</… becomes <\/…, as Claude Code's stt does), which Claude Code checks by writing the
-// envelope again.
-func peerEnvelope(text string) string {
-	return "<" + peerTag + ` from-name="` + peerSender + `">` + "\n" + peerCloseRe.ReplaceAllString(text, `<\$1`) + "\n</" + peerTag + ">"
+// envelope again; from-mode follows from-name when fromMode is set, the order Claude Code writes and parses them in.
+func peerEnvelope(text, fromMode string) string {
+	attrs := ` from-name="` + peerSender + `"`
+	if fromMode != "" {
+		attrs += ` from-mode="` + fromMode + `"`
+	}
+	return "<" + peerTag + attrs + ">" + "\n" + peerCloseRe.ReplaceAllString(text, `<\$1`) + "\n</" + peerTag + ">"
 }
 
 var peerCloseRe = lazyre.New(`(?i)<(/` + peerTag + `)`)
