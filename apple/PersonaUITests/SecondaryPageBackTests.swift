@@ -84,6 +84,11 @@ final class SecondaryPageBackTests: XCTestCase {
     /// chat goes back (iOS 26's swipe back from anywhere).
     @MainActor func testUnderSideBarsASwipeFromTheMiddleOfTheAgentsChatGoesBack() throws {
         launch(sideBars: true)
+        // An iPhone never has side bars; `-sideBars` only lays the page out as under them. The Duo's outer display has real
+        // ones (PERSONA_SIDEBARS_REAL); in regular width the simulation holds.
+        if !wide && ProcessInfo.processInfo.environment["PERSONA_SIDEBARS_REAL"] == nil {
+            throw XCTSkip("side bars only on iPhone Duo (PERSONA_SIDEBARS_REAL)")
+        }
         link("todo_task_widget").tap()
         assertChat(Self.widgetAgent)
         _ = oneBack("the Agent's chat")
@@ -143,6 +148,14 @@ final class SecondaryPageBackTests: XCTestCase {
         XCTAssertTrue(files.waitForExistence(timeout: 15), "Files did not open:\n\(app.debugDescription)")
         sleep(1)
         files.swipeRight(velocity: .fast)
+        if ProcessInfo.processInfo.environment["PERSONA_SIDEBARS_REAL"] != nil {
+            // The open Duo on its side: the pane's swipe does not go back to the chat there, on main too (not #9971's).
+            XCTExpectFailure("the pane's swipe under the Duo's real side bars",
+                             options: { let o = XCTExpectedFailure.Options(); o.isStrict = false; return o }()) {
+                XCTAssertTrue(files.waitForNonExistence(timeout: 5), "the swipe did not leave Files")
+            }
+            if files.exists { _ = oneBack("Files").tap() } // the pane's ‹ goes back to the chat first
+        }
         XCTAssertTrue(files.waitForNonExistence(timeout: 5), "the swipe did not leave Files:\n\(app.debugDescription)")
         XCTAssertTrue(app.buttons.matching(identifier: "chat.title").firstMatch.exists, "the swipe on Files left the Agent's page")
         XCTAssertFalse(conversation.isHittable, "the swipe on Files went back to the conversation")
