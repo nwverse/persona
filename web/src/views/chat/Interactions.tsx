@@ -357,6 +357,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
       answers[q.question] = directLabel;
     }
     try {
+      // The caller owns completion: false keeps the picks for retry, and finally only unlocks the form.
       if (onAnswer) await onAnswer(answers);
       else await resolve(ix, { answers });
     } finally {

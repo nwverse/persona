@@ -7,6 +7,7 @@ import { assistantEntries } from "../../lib/assistant-entries";
 import { getState, reset } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import * as atoms from "../../ui/atoms";
+import { QuestionCard } from "../chat/Interactions";
 import { TaskDecision } from "./TaskDecision";
 
 vi.hoisted(() => {
@@ -135,6 +136,50 @@ describe("expired ask_user questions", () => {
     await flush();
     expect(posts).toHaveLength(2);
     expect(posts[1].body).toEqual({ asked_at: at, answers: { "Which follow-up should run next?": "Docs" } });
+    expect(host.textContent).toContain(t("assistant-decisionrow.answer_recorded"));
+  });
+
+  it("leaves completion to the caller and unlocks the same choice when onAnswer returns false", async () => {
+    const onAnswer = vi.fn<(answers: Record<string, string>) => Promise<boolean>>()
+      .mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    act(() => root.render(<QuestionCard ix={{
+      id: "expired-callback", machine_id: "", session_id: "", kind: "question", tool_name: "ask_user",
+      questions: todo.ask!.questions, created_at: at,
+    }} canApprove onAnswer={onAnswer} />));
+    act(() => choice("Tests").click());
+    await flush();
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith({ "Which follow-up should run next?": "Tests" });
+    expect(choice("Tests").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Tests").disabled).toBe(false);
+    expect(host.textContent).not.toContain(t("assistant-decisionrow.answer_recorded"));
+    act(() => choice("Tests").click());
+    await flush();
+    expect(onAnswer).toHaveBeenCalledTimes(2);
+    expect(onAnswer.mock.calls[1]).toEqual(onAnswer.mock.calls[0]);
+    expect(posts).toEqual([]); // A callback rejection must not fall through to resolving the expired interaction.
+  });
+
+  it.each([409, 503])("retains multiple selections after HTTP %s returns false and retries the identical answer", async (failure) => {
+    todo.ask!.questions![0].multi_select = true;
+    status = failure;
+    mount();
+    act(() => {
+      choice("Docs").click();
+      choice("Tests").click();
+    });
+    const submit = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-interactions.send_answer")}"]`)!;
+    act(() => submit().click());
+    await flush();
+    expect(posts).toHaveLength(1);
+    expect(host.textContent).not.toContain(t("assistant-decisionrow.answer_recorded"));
+    expect(choice("Docs").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Tests").getAttribute("aria-pressed")).toBe("true");
+    expect(submit().disabled).toBe(false);
+    status = 200;
+    act(() => submit().click());
+    await flush();
+    expect(posts).toHaveLength(2);
+    expect(posts[1].body).toEqual(posts[0].body);
     expect(host.textContent).toContain(t("assistant-decisionrow.answer_recorded"));
   });
 

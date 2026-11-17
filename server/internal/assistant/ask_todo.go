@@ -65,13 +65,15 @@ type askTodo struct {
 	AnsweredAt time.Time `json:"answered_at,omitzero"`
 	DroppedAt  time.Time `json:"dropped_at,omitzero"`
 	// Deadline, Reversible and Recommends are the question's deadline, whether it can be undone, and each question's
-	// recommended option (#3127, decision_deadline.go); DueAt is when the deadline was handled (taken by default:
-	// ByDefault, or the owner reminded). Zero: no deadline.
+	// recommended option (#3127, decision_deadline.go). DueAt only records deadline processing: an irreversible
+	// question is reminded, not answered, and still needs the owner's decision.
 	Deadline   time.Time `json:"deadline,omitzero"`
 	Reversible bool      `json:"reversible,omitempty"`
 	Recommends []string  `json:"recommends,omitempty"`
 	DueAt      time.Time `json:"due_at,omitzero"`
-	ByDefault  bool      `json:"by_default,omitempty"`
+	// ByDefault reserves recommendation delivery, including recovery after a lost claim. A failed default clears it
+	// (askDefaultFailed), returning the question to the owner even though DueAt stays set.
+	ByDefault bool `json:"by_default,omitempty"`
 }
 
 // held: an answer of a's is being sent.
@@ -307,7 +309,8 @@ func (s *Service) claimAskTodoChecked(ctx context.Context, id string, answered b
 	}
 	i := slices.IndexFunc(b.list, func(a askTodo) bool { return a.TodoID == id })
 	now := time.Now()
-	if i < 0 || !b.list[i].AnsweredAt.IsZero() || b.list[i].held(now) || !answered && !b.list[i].DroppedAt.IsZero() {
+	if i < 0 || !b.list[i].AnsweredAt.IsZero() || b.list[i].held(now) ||
+		answered && b.list[i].ByDefault || !answered && !b.list[i].DroppedAt.IsZero() {
 		return askTodo{}, false, nil
 	}
 	prev := b.list[i]

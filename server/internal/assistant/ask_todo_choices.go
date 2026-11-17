@@ -51,7 +51,8 @@ func (s *Service) addExpiredQuestionAsks(ctx context.Context, out map[string]tod
 	b.mu.Unlock()
 	for _, a := range records {
 		t, exists := s.todoNow(a.TodoID)
-		if !exists || t.DoneAt != nil || !a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || a.held(time.Now()) || len(a.Questions) == 0 {
+		// A default reserves the answer even after its sending claim expires; DueAt alone may only mean a reminder.
+		if !exists || t.DoneAt != nil || a.ByDefault || !a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || a.held(time.Now()) || len(a.Questions) == 0 {
 			continue
 		}
 		if _, has := out[a.TodoID]; has {
@@ -95,7 +96,7 @@ func (s *Service) chooseExpiredQuestion(ctx context.Context, id, asked, option s
 	t, open := s.todoNow(id)
 	at, err := time.Parse(time.RFC3339Nano, asked)
 	if !exists || !open || t.DoneAt != nil || err != nil || !at.Equal(a.AskedAt) ||
-		!a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || a.held(time.Now()) {
+		a.ByDefault || !a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || a.held(time.Now()) {
 		return acceptResult{}, nil
 	}
 	questions := s.askTodoQuestions(ctx, a)
@@ -143,11 +144,16 @@ func (s *Service) chooseExpiredQuestion(ctx context.Context, id, asked, option s
 		}
 	}()
 	for _, c := range choices {
-		// A retry after a failed relay must not record the same owner answer twice.
+		// The database dedupes on nonempty source_message, not the primary key. Include the choice so an identical
+		// retry is idempotent but a changed answer after a failed relay is still recorded.
 		key := sha256.Sum256([]byte(id + "\x00" + c.Question + "\x00" + c.Choice))
-		row := db.TodoDecisionRow{ID: "dec_ask_" + hex.EncodeToString(key[:16]), TodoID: id,
+		source := hex.EncodeToString(key[:16])
+		row := db.TodoDecisionRow{ID: "dec_ask_" + source, TodoID: id, SourceMessage: "inline-answer:" + source,
 			Question: decisionText(c.Question), Choice: c.Choice, Source: db.DecisionManual, CreatedAt: decisionNow()}
 		inserted, err := s.insertDecision(ctx, st, row)
+		if errors.Is(err, db.ErrTodoNotFound) {
+			break // Deletion after the claim removes the ledger, but the claimed answer still owns the terminal message.
+		}
 		if err != nil {
 			return acceptResult{}, errors.Join(errAcceptStore, err)
 		}
@@ -155,9 +161,8 @@ func (s *Service) chooseExpiredQuestion(ctx context.Context, id, asked, option s
 			s.decisionsChanged(ctx, id, row.CreatedAt)
 		}
 	}
-	if cur, ok := s.todoNow(id); !ok || cur.DoneAt != nil {
-		return acceptResult{}, nil
-	}
+	// Close/drop declines to notify while this claim is held. Always deliver its answer; closeAskTodo preserves an
+	// already-closed or deleted to-do rather than reopening or recreating it.
 	if err := s.returnAskTodoAnswer(ctx, a, t.Title, choices); err != nil {
 		return acceptResult{}, err
 	}
