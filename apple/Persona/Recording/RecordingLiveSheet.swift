@@ -16,12 +16,19 @@ import SwiftUI
 @MainActor @Observable final class RecordingLivePresenter {
     static let shared = RecordingLivePresenter()
     private(set) var serial = 0
+    /// The recording whose End was tapped on the Lock Screen or in the Dynamic Island (#8731 V4), lowercase: its page asks
+    /// "End the Meeting?" (or "Stop Recording?") once it shows, then `endAsked()` clears it.
+    private(set) var endAsking: String?
     @ObservationIgnored private var heldAt: Date?
 
-    func open() {
+    func open(askingEnd: String? = nil) {
         heldAt = nil
+        endAsking = askingEnd
         serial += 1
     }
+
+    /// The page asked (or the recording it named isn't the one running).
+    func endAsked() { endAsking = nil }
 
     func holdOnAppear(now: Date = .now) { heldAt = now }
 
@@ -50,9 +57,8 @@ private struct RecordingLiveSheetPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            // The meeting room is the whole screen (#8731 v2): a meeting app's, not a sheet over the page. Over the tabs, as
-            // the sheet was: nothing in it leaves the tabs' switch room.
-            .fullScreenCover(isPresented: $presented) { RecordingLiveSheet().overTabSwitch() }
+            // The meeting room is the whole screen (#8731 v2): a meeting app's, not a sheet over the page.
+            .fullScreenCover(isPresented: $presented) { RecordingLiveSheet() }
             // A hidden shell page never gets onDisappear: the tab-aware pair keeps one host presenting at a time.
             .onTabVisibility(appear: {
                 visible = true

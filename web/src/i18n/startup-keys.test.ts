@@ -28,7 +28,7 @@ describe("startupMatcher", () => {
     for (const key of [
       "chat-messageactions.translation_failed", "chat-messageactions.done", "chat-messageactions.save_as_prompt",
       "chat-messageactions.fork", "chat-messageactions.fork_chat",
-      "chat-messageactions.select_text",
+      "chat-messageactions.select_text", "chat-messageactions.pick",
       "rewind.menu", "rewind.conversation", "rewind.code_and_conversation", "rewind.confirm_code",
     ]) expect(configured(key), key).toBe(false);
   });

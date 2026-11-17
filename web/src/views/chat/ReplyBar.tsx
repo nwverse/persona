@@ -18,6 +18,7 @@ import { Button, copyText, cx, Dialog, Menu, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { REPLY_BAR_FADE_MS, REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import { isNoHover } from "../../ui/media-query";
+import type { ForwardPick } from "../../lib/forward";
 import type { Action } from "./MessageActions";
 import { TurnUsage } from "./TurnUsage";
 import type { ReplyTranslation } from "../../lib/reply-translation";
@@ -124,7 +125,7 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
 }
 
 /** Menu-only actions and their live disabled reasons load with the existing reply controls, not the transcript. */
-export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, rewindText, messageId, isUser, onDelete, more, onSelectText }: {
+export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, rewindText, messageId, isUser, onDelete, more, onSelectText, pick }: {
   anchor: HTMLElement | { x: number; y: number };
   onClose: () => void;
   primary: Action[];
@@ -136,6 +137,7 @@ export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, r
   onDelete?: () => void;
   more?: boolean;
   onSelectText: () => void;
+  pick?: ForwardPick;
 }) {
   const chat = useChatActions();
   const rewind = isUser ? chat?.rewind : undefined;
@@ -151,6 +153,10 @@ export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, r
     ...deleteActions(onDelete),
   ];
   const items = [...primary, ...extras].map((a, i) => ({ ...a, divider: i === primary.length && i > 0 }));
+  const send = chat?.forward;
+  if (!more && send && pick && !chat?.pick) items.push({
+    key: "pick", label: t("chat-messageactions.pick"), icon: "check", divider: true, onSelect: () => send(pick, true),
+  });
   return (
     <Menu
       anchor={anchor instanceof HTMLElement ? anchor : null}

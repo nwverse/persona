@@ -7,6 +7,7 @@ import { addContext, getContexts, registerComposer, removeContext } from "../../
 import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { MessageActions, messageContextActions } from "./MessageActions";
 import { onDraftEvent } from "../../lib/drafts";
+import type { Item } from "../../lib/types";
 
 const media = vi.hoisted(() => ({ noHover: false }));
 vi.hoisted(() => {
@@ -148,22 +149,67 @@ describe("message context interaction paths", () => {
     await settle();
     expect(labels()).toContain("转发");
     expect(labels()).not.toContain("复制");
+    expect(labels()).not.toContain("多选");
     act(() => host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("contextmenu", {
       bubbles: true, cancelable: true, clientX: 24, clientY: 30,
     })));
     await settle();
     expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
     expect(labels()).toContain("复制");
+    expect(labels().at(-1)).toBe("多选");
     expect(more.getAttribute("aria-expanded")).toBe("false");
     act(() => more.click());
     await settle();
     expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
     expect(labels()).toContain("转发");
     expect(labels()).not.toContain("复制");
+    expect(labels()).not.toContain("多选");
     act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await settle();
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(more.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it.each([
+    ["en", "Select messages"],
+    ["zh-Hans", "多选"],
+    ["ja", "複数選択"],
+  ])("keeps Select messages last in the cold menu in %s and preserves the selected message", async (lang, label) => {
+    await initI18n(lang);
+    const images: Item[] = [{ id: "image-1", seq: 1, role: "user", kind: "image" }];
+    const photos = ["photo-1"];
+    act(() => root.render(
+      <ChatActionsContext.Provider value={chat}>
+        <MessageActions text="Original message" messageId="u1#0" isUser images={images} photos={photos}>
+          <p data-message>Original message</p>
+        </MessageActions>
+      </ChatActionsContext.Provider>,
+    ));
+    act(() => host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, clientX: 24, clientY: 30,
+    })));
+    await settle();
+    const items = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(items.at(-1)?.textContent?.trim()).toBe(label);
+    act(() => items.at(-1)!.click());
+    expect(forward).toHaveBeenCalledExactlyOnceWith({
+      itemId: "u1#0", text: "Original message", isUser: true, ts: undefined, images, photos,
+    }, true);
+  });
+
+  it.each([true, false])("does not offer Select messages without a forwarder or a persisted item (%s)", async (withForward) => {
+    act(() => root.render(
+      <ChatActionsContext.Provider value={{ ...chat, forward: withForward ? forward : undefined }}>
+        <MessageActions text="Original message" itemId={withForward ? undefined : "r1#0"}>
+          <p data-message>Original message</p>
+        </MessageActions>
+      </ChatActionsContext.Provider>,
+    ));
+    act(() => host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, clientX: 24, clientY: 30,
+    })));
+    await settle();
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim())).not.toContain("多选");
   });
 
   it("restores the explicit skill identity when rewinding a selected message", async () => {
