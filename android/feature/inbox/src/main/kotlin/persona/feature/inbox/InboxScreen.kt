@@ -115,6 +115,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     var refreshing by remember { mutableStateOf(false) }
     val pending = remember { mutableStateMapOf<String, Boolean>() }
+    // Not snapshot state. The second tap in this frame must see it before the list recomposes.
+    val inFlight = remember { mutableSetOf<String>() }
     // Selection (#2576): a long-press on a row starts it, Back or the bar's ← ends it.
     var selecting by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var picked by androidx.compose.runtime.saveable.rememberSaveable(stateSaver = androidx.compose.runtime.saveable.listSaver<Set<String>, String>(
@@ -175,6 +177,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val mailTransport by repository.mailTransport.collectAsStateWithLifecycle()
 
     val haptics = rememberHaptics()
+    // Tap-driven row motion only (#9600). A hub refresh changes the rows with the flag clear.
+    val listTapMotion = remember { ListTapMotion() }
     fun refresh(collectNow: Boolean = true) {
         if (refreshing) return
         refreshing = true
@@ -191,13 +195,23 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     // Clean up all / Mark all as seen / Clear all, and their Undo: one request for them all (the hub skips the ones that took new
     // messages since this list), shown at once, then a notice with Undo when something was filed.
-    fun markAll(targets: List<persona.core.contracts.api.InboxDoneTarget>, action: InboxBulkAction, undoable: Boolean = true) {
+    fun markAll(
+        targets: List<persona.core.contracts.api.InboxDoneTarget>, action: InboxBulkAction,
+        undoable: Boolean = true, animate: Boolean = false, after: (() -> Unit)? = null,
+    ) {
         val done = action != InboxBulkAction.Reopen
-        val asked = targets.filter { it.id !in pending }
+        val asked = targets.filter { it.id !in inFlight }
+        // An empty ask must not arm: the flag would catch the next hub push.
         if (asked.isEmpty()) return
-        asked.forEach { pending[it.id] = done; failedCompletions.remove(it.id) }
-        haptics(doneHaptic(done))
-        scope.launch {
+        // The guard is synchronous and not snapshot state, so a second tap in this frame does not
+        // send again. The request still goes out if this screen leaves before the rows move.
+        asked.forEach { inFlight.add(it.id) }
+        fun applyVisual() {
+            asked.forEach { failedCompletions.remove(it.id) }
+            haptics(doneHaptic(done))
+        }
+        fun dropPending() { asked.forEach { pending.remove(it.id); inFlight.remove(it.id) } }
+        suspend fun send() {
             try {
                 val result = repository.bulk(asked, action)
                 // The hub could not write some of them: they are back as they were.
@@ -211,7 +225,52 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { asked.forEach { failedCompletions[it.id] = it to action } }
-            finally { asked.forEach { pending.remove(it.id) } }
+            finally { dropPending() }
+        }
+        // A scope that is already cancelled never runs its launch. Send anyway, and do not leave
+        // the guard set: the screen is gone, so there is nothing to draw.
+        val scopeJob = scope.coroutineContext[kotlinx.coroutines.Job]
+        if (scopeJob != null && !scopeJob.isActive) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.NonCancellable).launch { send() }
+            return
+        }
+        if (!animate) {
+            asked.forEach { pending[it.id] = done }
+            applyVisual()
+            after?.invoke()
+            val job = scope.launch { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { send() } }
+            if (job.isCancelled && !job.isCompleted) {
+                dropPending()
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.NonCancellable).launch { send() }
+            }
+            return
+        }
+        // The large title comes back on this frame, with no spring (InboxView.swift:152-153). The
+        // removal waits until that frame has been laid out, then fades in its new place
+        // (InboxView.swift:632-634). Doing both here draws the fading row on top of the next one.
+        after?.invoke()
+        val job = scope.launch {
+            try {
+                androidx.compose.runtime.withFrameNanos { }
+                androidx.compose.runtime.withFrameNanos { }
+                listTapMotion.arm(ListTapMotionKind.State)
+                asked.forEach { pending[it.id] = done }
+                applyVisual()
+            } finally {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { send() }
+            }
+        }
+        if (job.isCancelled && !job.isCompleted) {
+            dropPending()
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.NonCancellable).launch { send() }
+        }
+    }
+    /** [ListTapMotion.arm], then the list write on the next frame, so the spec is already measured. */
+    fun animateChange(block: () -> Unit) {
+        listTapMotion.arm(ListTapMotionKind.State)
+        scope.launch {
+            androidx.compose.runtime.withFrameNanos { }
+            block()
         }
     }
     fun markDone(id: String, done: Boolean) {
@@ -308,7 +367,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // (done_by=dismissed); over BULK_CONFIRM_AT items or more it asks first, for the items shown when it was asked.
     var confirmBulk by remember { mutableStateOf<List<persona.core.contracts.api.InboxDoneTarget>?>(null) }
     fun cleanAll() {
-        if (bulk.size >= BULK_CONFIRM_AT) confirmBulk = bulk else markAll(bulk, InboxBulkAction.Dismiss)
+        // Clean up all (InboxView.swift:703). Asking first does not move rows yet.
+        if (bulk.size >= BULK_CONFIRM_AT) confirmBulk = bulk else {
+            markAll(bulk, InboxBulkAction.Dismiss, animate = true) // InboxView.swift:703
+        }
     }
     if (showMore) {
         // By source / By time (#2576) sits here rather than in a row of its own over the list (#9053): QuickFilterBar has
@@ -367,7 +429,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             text = bulkConfirmText(res, targets.size, scopeText),
             confirm = res.getQuantityString(R.plurals.inbox_bulk_confirm_clean, targets.size, targets.size) to {
                 confirmBulk = null
-                markAll(targets, InboxBulkAction.Dismiss)
+                markAll(targets, InboxBulkAction.Dismiss, animate = true) // InboxView.swift:703, after the ask
             })
     }
     if (showFilters) {
@@ -375,7 +437,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             JAction(stringResource(R.string.inbox_filter_source, sources.firstOrNull { it.first == source }?.second ?: stringResource(R.string.inbox_all_sources)), PhIcons.Tray) { filterPage = "source" },
             JAction(stringResource(R.string.inbox_filter_kind, kindLabel(res, kind).ifBlank { if (kind == "agent") res.getString(R.string.inbox_kind_agent) else res.getString(R.string.inbox_all_kinds) }), PhIcons.FunnelSimple) { filterPage = "kind" },
             JAction(stringResource(R.string.inbox_filter_clear), enabled = source.isNotEmpty() || kind.isNotEmpty()) {
-                filter(currentFilters.copy(source = "", kind = ""))
+                // Clear Filters (InboxView.swift:768).
+                animateChange { filter(currentFilters.copy(source = "", kind = "")) }
             },
         ))
     }
@@ -384,7 +447,11 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         androidx.compose.foundation.lazy.LazyColumn {
             itemsIndexed(sources) { index, option ->
                 JGroupItem(GroupPosition.of(index, sources.size)) {
-                    JRow(option.second, onClick = { filter(currentFilters.copy(source = option.first)); filterPage = null },
+                    JRow(option.second, onClick = {
+                        // A source chip (InboxView.swift:1263, :1294). A section-bar choice stays instant
+                        // (InboxView.swift:969): the list swaps at once, and that chip passes animated: false (:1292).
+                        animateChange { filter(currentFilters.copy(source = option.first)); filterPage = null }
+                    },
                         trailing = { JRadio(source == option.first, null) })
                 }
             }
@@ -393,7 +460,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     if (filterPage == "kind") JActionSheet(title = stringResource(R.string.inbox_kind), onDismiss = { filterPage = null }, actions =
         listOf("" to res.getString(R.string.inbox_all_kinds), "mention" to res.getString(R.string.inbox_mention_me), "dm" to res.getString(R.string.inbox_kind_dm),
             "group" to res.getString(R.string.inbox_kind_group), "mail" to res.getString(R.string.inbox_source_mail), "agent" to res.getString(R.string.inbox_kind_agent)).map { (value, label) ->
-            JAction(label, checked = kind == value) { filter(currentFilters.copy(kind = value)) }
+            JAction(label, checked = kind == value) {
+                // A kind chip (InboxView.swift:1263, :1294).
+                animateChange { filter(currentFilters.copy(kind = value)) }
+            }
         })
     // Loading shows only while there is nothing to show yet: a row put in over a shown list pushes it down, then goes.
     val loadingFirst = snapshot.loading && snapshot.records.isEmpty() && snapshot.interactions.isEmpty()
@@ -410,9 +480,11 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             val key = jumpTo ?: return@LaunchedEffect
             androidx.compose.runtime.withFrameNanos { }
             androidx.compose.runtime.withFrameNanos { }
-            listIndex.positions[key]?.let { at -> scroll.scrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at) }
+            // Jump to (InboxView.swift:924, :1099) scrolls with Theme.Motion.standard. The row swap itself stays instant.
+            listIndex.positions[key]?.let { at -> scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at) }
             jumpTo = null
         }
+        BindListTapMotion(listTapMotion)
         JListPage(
             title = if (selecting) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_selected_count, picked.size, picked.size)
                 else stringResource(R.string.inbox_title),
@@ -426,12 +498,17 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             onBack = if (selecting) ({ endSelection() }) else null,
             largeTitle = !selecting,
             state = scroll, refreshing = refreshing, onRefresh = { refresh() },
+            listScroll = listTapScroll(listTapMotion),
             actions = if (selecting) ({
                 // Select all: the rows shown now; then Deselect all takes them back out.
                 JTextButton(stringResource(if (allPicked) R.string.inbox_deselect_all else R.string.inbox_select_all), {
                     picked = if (allPicked) picked - visiblePickable.toSet() else picked + visiblePickable
                 }, enabled = visiblePickable.isNotEmpty())
-                JButton(stringResource(R.string.inbox_mark_done), { markAll(pickedTargets, InboxBulkAction.Done); endSelection() },
+                JButton(stringResource(R.string.inbox_mark_done), {
+                    // The title returns at once (InboxView.swift:152-153). The row then fades where
+                    // that title left it (InboxView.swift:632-634).
+                    markAll(pickedTargets, InboxBulkAction.Done, animate = true, after = { endSelection() })
+                },
                     size = JButtonSize.Small, enabled = pickedTargets.isNotEmpty())
                 if (picked.size == 1) JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { pickedMenu = true })
             }) else ({
@@ -448,7 +525,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             }),
         ) {
           listIndex.positions.clear()
-          val keyed = KeyedListScope(this, listIndex.positions)
+          val tapScope = ListTapLazyScope(this, listTapMotion, scroll)
+          val keyed = KeyedListScope(tapScope, listIndex.positions)
           with(keyed) {
             item("filters") {
                 // The section bar (#9053): Needs you's rows in its tone, In progress and FYI's in the neutral one, Done and All none.
@@ -505,7 +583,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         icon = PersonaIcons.filter,
                         action = {
                             JButton(stringResource(R.string.inbox_filter_clear), {
-                                filter(currentFilters.copy(source = "", kind = "", query = ""))
+                                // Clear Filters / Clear Search (InboxView.swift:768).
+                                animateChange { filter(currentFilters.copy(source = "", kind = "", query = "")) }
                             }, kind = JButtonKind.Secondary)
                         },
                     )
@@ -555,7 +634,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             JAction(stringResource(R.string.inbox_conversations_read_all), enabled = !sectionReader.busy,
                                 onClick = { sectionReader.read(group) })
                         group.id == "noise" -> JAction(stringResource(R.string.inbox_clear_all), enabled = !sectionReader.busy,
-                            onClick = { markAll(allTargets(listOf(group)), InboxBulkAction.Done) })
+                            onClick = { markAll(allTargets(listOf(group)), InboxBulkAction.Done, animate = true) }) // InboxView.swift:1143
                         else -> null
                     }
                     // Inside a choice the section's title stays as a heading with its actions and does not fold, as
@@ -569,7 +648,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         trailing = if (!foldable) null else if (group.folded) stringResource(R.string.inbox_expand) else stringResource(R.string.inbox_collapse),
                         open = !group.folded, trailingIsFoldAction = true,
                         onClick = if (!foldable) null else ({
-                            filter(currentFilters.copy(expanded = if (group.id in expanded) expanded - group.id else expanded + group.id))
+                            // The fold animates (InboxView.swift:1127, Done at :1029).
+                            animateChange { filter(currentFilters.copy(expanded = if (group.id in expanded) expanded - group.id else expanded + group.id)) }
                         }),
                         // A section without groups is one group: its tick picks it all, folded or not.
                         leading = if (sectionPickable.isNotEmpty()) ({ InboxGroupTick(sectionPickable, picked, title) { picked = it } }) else null,
@@ -585,7 +665,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             })
                             group.id == "noise" -> ({
                                 JTextButton(stringResource(R.string.inbox_clear_all), {
-                                    markAll(allTargets(listOf(group)), InboxBulkAction.Done)
+                                    markAll(allTargets(listOf(group)), InboxBulkAction.Done, animate = true) // InboxView.swift:1143
                                 }, enabled = !sectionReader.busy)
                             })
                             else -> null
@@ -603,7 +683,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         val pinned by remember(index) { derivedStateOf { scroll.firstVisibleItemIndex >= index } }
                         JSectionHeader(sub.title, if (pinned) Modifier.background(PersonaTheme.palette.background) else Modifier,
                             count = sub.count, sub = true, open = open,
-                            onClick = { setFolds(InboxGroups.toggle(group.id, sub.key, folds)) },
+                            onClick = {
+                                // A group's fold (InboxView.swift:458).
+                                animateChange { setFolds(InboxGroups.toggle(group.id, sub.key, folds)) }
+                            },
                             leading = if (selecting && pickable.isNotEmpty()) ({ InboxGroupTick(pickable, picked, sub.title) { picked = it } }) else null,
                             trailing = if (selecting && n > 0) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_group_picked, n, n) else null)
                     }
@@ -622,6 +705,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             if (showOlder) item("done-older") {
                 InboxOlderRow(history.loading, history.failed) { history.load(olderManagers) }
             }
+            tapScope.commit()
           }
           listIndex.counted = keyed.counted
         }
