@@ -1073,6 +1073,12 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 		params = map[string]any{}
 	}
 	delete(params, "runtime") // every assistant conversation runs on Claude Code's CLI (finishModel)
+	delete(params, "origin")  // only the manager's origin book may attest an Inbox conversation
+	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
+		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
+		// first resumed process is clamped to Plan and its Lark gate cannot fall back to an ordinary conversation.
+		params["origin"] = OriginInbox
+	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false

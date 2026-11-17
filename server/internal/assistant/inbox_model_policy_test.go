@@ -229,6 +229,24 @@ func TestInboxStartForcesPlanAndAttestsOrigin(t *testing.T) {
 	}
 }
 
+// Later sends re-attest the manager's persisted origin. This closes the node-restart window: its in-memory Origin
+// field is not a database column, so the first resumed process must receive Inbox from the manager again. Caller input
+// cannot substitute another origin.
+func TestInboxLaterSendReattestsManagerOrigin(t *testing.T) {
+	h := agentHub(t)
+	const session = "inbox-after-node-restart"
+	h.f.setSessions("server", proto.Session{SessionID: session, Assistant: true, Status: proto.StatusWorking, Cwd: "/work"})
+	h.originSet(t.Context(), "server", session, OriginInbox, "lark:real-item:1", "")
+	params, err := h.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: session,
+		Params: map[string]any{"text": "Continue", "origin": OriginUser, "permission_mode": proto.ModeBypass}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["origin"] != OriginInbox {
+		t.Fatalf("later send origin=%v, want the manager's Inbox attestation", params["origin"])
+	}
+}
+
 // Owner-confirmed reply execution is separate from the model-call guard even while the handling conversation is Inbox.
 func TestInboxOwnerConfirmedReplyRuns(t *testing.T) {
 	h, lark, it := handledHub(t)

@@ -51,8 +51,9 @@ func TestInboxCodexStartupKeyKeepsOrigin(t *testing.T) {
 }
 
 // The built-in Claude CLI really receives Plan mode through its permission-mode control, even when its start asks for
-// bypass. Origin is persisted before later turns so a resume cannot silently return to bypass or lose the manager's
-// policy identity. (Only bypass is a startup flag; other modes use the control request.)
+// bypass. Origin is recorded before the first turn and re-attested by the manager on later sends, so a node restart
+// cannot silently return the conversation to bypass or lose its policy identity. (Only bypass is a startup flag;
+// other modes use the control request.)
 func TestInboxClaudeStartsInPlanAndPersistsOrigin(t *testing.T) {
 	f := cliTest(t)
 	// No model fingerprint: filling the launcher's default execution must not discard the start's attested origin.
