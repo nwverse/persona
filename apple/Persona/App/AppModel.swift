@@ -327,6 +327,7 @@ final class AppModel {
     var selectedTab: AppTab = .assistant {
         didSet {
             DeferredDefaults.set(selectedTab.rawValue, forKey: "app.tab")
+            DevMode.shared.tab(selectedTab) // the screen in front, while Developing Persona records (#9460)
             #if DEBUG
             ShellTrace.shared.note("tab \(oldValue)->\(selectedTab)")
             #endif

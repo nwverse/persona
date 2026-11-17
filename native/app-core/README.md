@@ -37,7 +37,7 @@ emulator results never fill the physical-device column.
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming, and the draft each click leaves (#9238) | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker, inline, math-end and plain-open-fence source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary, 6 explicit math end + 57 boundary expectations and 342 mixed-reply prefixes; plain fence 5 explicit + 31 boundary | Split 21; repair 80 complete objects (#9241); plain fence 5 explicit + 31 boundary (#9563) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241); plain fence 5 explicit + 31 boundary (#9563) | Split NAPI unexecuted; repair and plain-fence NAPI exports committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Ordinary post-overlay + folded complete objects (#9577); no-image/malformed/wrong-expectation controls | NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
 
 `scripts/ci/core.sh` exercises the cargo, C ABI and ArkTS-host columns, including generated-codec and OHOS declaration
 checks. `:core:rustcore:test` is the real host-JNI suite; `:core:data` / `:feature:agents` host tests cover their
@@ -364,9 +364,13 @@ source-derived controls through complete `{text}` objects and wrong-expectation 
 non-drawn preservation.
 The `ohos`-feature NAPI projection exports are `coreProjectSort`, `coreProjectAnswer`, `coreDisplayAnswer`,
 `coreProjectStreamChunks`, `coreProjectStreamRepair` (#9241), `coreProjectPlainOpenFence` (#9563),
-`coreProjectTaskIndex` and `coreProjectTurns`; their
-generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option label, while the other seven take
+`coreProjectViewedImages` (#9577), `coreProjectTaskIndex` and `coreProjectTurns`; their
+generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option label, while the other eight take
 JSON documents.
+`harmony/tests/core-host/viewed-images.test.mjs` (#9577) compares the ordinary complete post-overlay object and the
+source-derived folded object through the real `viewed_images` host projection, including identity, order, malformed,
+no-image and deliberately wrong expectations. It does not reconstruct `FoldImage.ref`, load images or project full
+`ChatLine`s.
 `harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
 all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 73 complete
 turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The

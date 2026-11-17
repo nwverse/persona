@@ -1707,12 +1707,12 @@ static void check_viewed_images(const char *fixtures) {
     jfree(fold_expected);
     jfree(fold_actual);
     jfree(input);
+    JValue *empty_fold_input = jclone(jget(fold_case, "input"));
     jfree(folds);
 
     expect_empty(persona_core_project_viewed_images, "viewed_images", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_viewed_images, "viewed_images", "invalid_json", "not JSON");
     expect_empty(persona_core_project_viewed_images, "viewed_images", "no_work", "{\"items\":[]}");
-    JValue *empty_fold_input = jclone(jget(fold_case, "input"));
     JValue *empty_fold_actual = project_case(persona_core_project_viewed_images, empty_fold_input);
     if (empty_fold_actual) fail("viewed_images", "no_fold_images", "fold without images returned a viewed line");
     jfree(empty_fold_actual);

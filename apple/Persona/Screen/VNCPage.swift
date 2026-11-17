@@ -145,6 +145,7 @@ struct VNCPage: View {
         }
         .background(Color.black.ignoresSafeArea())
         .environment(\.colorScheme, .dark)
+        .devScreen("screen")
         .onAppear {
             session = VNC.hold(ref)
             mode = VNCMode.of(ref)

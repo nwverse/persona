@@ -839,34 +839,38 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
 - **The shell's side rail** (2026-11-07, TestFlight: on the outer screen every button was at the top, out of reach of the hand holding the phone): with bars on the side, the shell's
   top bars (Assistant's, Agents', Messages' when it is on, and the moving bar while the strip slides) become a rail in that column (`ShellSideRail`; `ShellView` reads the edge once with `readsVerticalBarEdge` and
   hands it down as `\.shellRailEdge`; a page whose bar skipped it put the bar back across the top while it was in front, #2318). Following Apple's iPhone Duo guidance (navigation first, then the prominent action, the tab bar below), the face (the drawer) and the page's
-  action (New Chat / New Session / Lark Settings) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol alone in a
-  tap target since #4231, its name spoken and shown large on a long press, the pill gliding down with the strip), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
+  action (New Chat / New Session / Lark Settings) sit low in the column and, since #4231, the switch is the Duo's tab bar above them in the column's lower middle (`ShellSwitch(axis: .vertical)`:
+  each page's symbol over its name, the chosen one on the Theme Color's circle, centred on the status bar, below), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
-- **The Separate layout's switch on both displays** (#4231, the owner, after the design of #4206 drawn on 2026-11-11 / 12): one component,
-  the shell's upright switch (`ShellSwitch(axis: .vertical)`: Assistant, Agents, Messages when it is on, each its symbol alone in a 44 pt
-  tap target, a 52 × 140 pt glass capsule, 52 × 96 pt without Messages), at the bottom-trailing corner in every posture
-  (`TabSwitchLayout`, `apple/Persona/DesignSystem/TabSwitchDock.swift`). The outer display has it at the foot of the shell's rail. On the
-  open Duo `RootTabs` hides the system's tab bar on every tab (`PhoneTabBarHidden`, set once at each tab's root, never toggled) and
-  draws the switch over the tabs (`TabSwitchOverlay`), outside the splits and stacks, so it stays put on a push and a pop: on its side
-  at the foot of the system's column down the right (`ShellSideRail`, outside the content), upright floating over the page's
-  bottom-trailing corner, 12 pt from the edge and its foot level with the composer's. Where the bars are is read in the same update
-  as the tabs (`toolbarVerticalEdge`), so neither starts in the other posture. Upright, what sits at the page's foot leaves it room
-  (`tabSwitchRoom`: the chats' footer and Jump to Latest, a new conversation's composer and Needs You, `floatingFooter`, the Inbox
-  hand-off bar, the Lark, connector and Personal Agent composers, Health's, the Recordings and meeting bars and a meeting's Jump to
-  Latest, Git's commit bar and Files' bar; `tabSwitchBottomBarRoom` for a mail's bottom toolbar and, only while selecting, the Inbox's
-  and Browser Sign-ins'), and the main lists keep room past their last
-  row (`tabSwitchListRoom`); a sheet over the tabs leaves none (`overTabSwitch`). While the keyboard is up the switch fades away
-  (on the outer display too) and the composer takes the whole width back. The counts hang off a segment's corner toward the page:
-  Agents' Needs You, and Persona's as its system tab showed it (`TabBadges.assistant`). Merged (the default where the Duo is open) is
-  unchanged; the iPad keeps the system's tab bar, an ordinary iPhone the top switch. Tests: `TabSwitchLayoutTests` (the placement, the
-  sizes, the rooms, the choice kept), `DuoTabSwitchTests` (UI, each posture: one capsule of symbols at the corner, the count toward the
-  page, each segment's page, the keyboard, Merged and Separate at once and after a relaunch). Built with Xcode 26 the bar edge is never
-  read, so the open Duo on its side gets the floating switch.
+- **The Duo's tab bar on both displays** (#4231, the owner: first the corner design of #4206 drawn on 2026-11-11 / 12, then on
+  2026-11-17, after a tab bar down the side of the outer display, a tab bar like it): in the Separate layout one component,
+  the shell's switch as a tab bar (`ShellSwitch(axis: .vertical)` down the side, `ShellSwitch(bottomBar: true)` along the foot;
+  `TabSwitchLayout`, `apple/Persona/DesignSystem/TabSwitchDock.swift`). Its items are the page's symbol over its name (Assistant,
+  Agents, Messages when it is on; 56 pt each, the default text size at every size, a bar of fixed items), the chosen one's symbol
+  white on a round fill of the Theme Color and its name in it, the others a line symbol over a plain name, all in one glass
+  capsule with a hairline edge and a faint shadow; a page's count is white on red at its symbol's top trailing corner, as the
+  system's tab bar badges (Agents' Needs You, `agentsWaiting`; Persona's, `TabBadges.assistant`; Messages has none, as its tab
+  had none). Where the system's bars run down the side it stands in that column, centred on the status bar (the 84 pt inset
+  less the 14 pt strip at the screen's edge, `Theme.Shell.sideColumnEdge`: the clock is 49 pt from the edge on both displays),
+  in its lower middle: on the outer display's rail above the face and the page's action, which stay at the foot within the
+  thumb's reach (#1057); on the open Duo, with nothing under it, a quarter of the column under it (`Theme.Shell.sideTabBarFoot`). On the open Duo `RootTabs` hides the system's tab bar on every tab (`PhoneTabBarHidden`, set once
+  at each tab's root, never toggled) and draws the bar over the tabs (`TabSwitchOverlay`), outside the splits and stacks, so it
+  stays put on a push and a pop: on its side in the system's column down the right, upright along the window's foot, centred,
+  where iOS puts a tab bar with the bars across the top (there is no side column to stand in; a column of names floating over
+  the page took the composer's width and lay over the chat's newest message). Upright each tab's controller keeps the bar's
+  room at its foot as `additionalSafeAreaInsets.bottom`, as the system's tab bar does (`TabBarRoomProbe`; a SwiftUI safe-area
+  padding did not reach into the split's columns), so lists end above it and the composer stands on it at the whole width.
+  Where the bars are is read in the same update as the tabs (`toolbarVerticalEdge`), so neither starts in the other posture.
+  While the keyboard is up the bar fades away and its room goes. Merged (the default where the Duo is open) is unchanged; the
+  iPad keeps the system's tab bar, an ordinary iPhone the top switch. Tests: `TabSwitchLayoutTests` (the placement, the sizes,
+  the centring and the lower middle, the room, the choice kept), `DuoTabSwitchTests` (UI, each posture: one bar of symbols and
+  names where it belongs, the count at a symbol's corner, each item's page, the keyboard, Merged and Separate at once and after
+  a relaunch). Built with Xcode 26 the bar edge is never read, so the open Duo on its side gets the bar along the foot.
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
   Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
-  system's tab bar gave way to the upright switch, #4231, above. What follows is the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
+  system's tab bar gave way to the Duo's own, #4231, above. What follows is the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
   hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
   (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
   (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
@@ -1014,8 +1018,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   (`agentsListReveal`) scrolls the sidebar to the Agents' heading and leaves the page beside it. `selectedTab` follows
   what is in front, so a relaunch goes back to the Agent's chat that was open.
 - **The Separate layout at regular width** (#4206, the owner's new look; it replaced #6332's pixel-for-pixel tabs and
-  #2623's switch drawn on the open Duo's pages): the system's tab bar at the top on the iPad; on the open Duo the shell's
-  upright switch in its place at the bottom-trailing corner (#4231, "iPhone Duo"), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
+  #2623's switch drawn on the open Duo's pages): the system's tab bar at the top on the iPad; on the open Duo the Duo's own
+  tab bar in its place, down the side column or along the foot (#4231, "iPhone Duo"), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
   and its own page: Persona's tab the head, the main conversation, the pages and Persona's chats (in a list of their own,
   `personaList`), Persona's page beside it; the Agents tab the head and the Agents list, the "Choose an Agent" page beside
   it until an Agent is picked, which then is the page's root, put in place with no push (#8603, as the Sidebar layout's
@@ -2424,6 +2428,12 @@ Source view, code, JSON and logs all stay at 60 fps.
   - Go opens with line numbers;
   - JSON is a tree, with expandable arrays;
   - README is rendered.
+
+## Developing Persona (#9460)
+
+Settings › About's switch that records the device's logs, errors and energy use (MetricKit, thermal state, battery,
+requests and socket frames a minute) and exports them as one zip for an Agent: [developing-persona.md](../operations/developing-persona.md).
+Code in `Persona/DevMode/`; shared code reports through `Shared/DevProbe.swift`.
 
 ## Error reports (#5621)
 
