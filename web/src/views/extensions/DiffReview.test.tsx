@@ -35,7 +35,7 @@ function mount(sent: Sent[], answer: (a: UIAction, v?: Record<string, string>) =
   const r = createRoot(host);
   root = r;
   const view = SHOWCASE["code-review-v5"];
-  const act = (a: UIAction, v?: Record<string, string>) => sent.push([a.id, { ...v, ...a.values }]);
+  const act = (a: UIAction, v?: Record<string, string>) => void sent.push([a.id, { ...v, ...a.values }]);
   const fetch = async (a: UIAction, v?: Record<string, string>) => {
     sent.push([a.id, v]);
     return answer(a, v);
