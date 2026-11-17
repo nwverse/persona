@@ -271,6 +271,16 @@ func TestAutomaticCloseoutSummaryDailyAndDurable(t *testing.T) {
 	if !strings.Contains(text, "Daily automatic-parking summary") || !strings.Contains(text, "keep unchanged waits parked") {
 		t.Fatalf("daily summary asks for ordinary unfinished-work triage: %s", text)
 	}
+	// An unchanged re-park while the supervisor is busy must refresh, not invalidate, its queued daily summary.
+	if _, _, err := s.updateSupervision(ctx, task.ID, func(v *Supervision) bool {
+		v.Reviews[len(v.Reviews)-1].At = v.Reviews[len(v.Reviews)-1].At.Add(time.Minute)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.digestEntry(ctx, g, ""); !ok {
+		t.Fatal("unchanged replacement park invalidated its already queued daily summary")
+	}
 	// Existing durable dedup groups it with other tasks and survives manager reconstruction.
 	st := &memStore{}
 	for i := 0; i < 3; i++ {

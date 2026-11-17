@@ -427,7 +427,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	switch g.Kind {
 	case sigParkedSummary:
 		r := v.parking()
-		if r == nil || r.Automatic == nil || g.Key != g.At.Format(time.DateOnly)+"|"+parkKey(r) ||
+		if r == nil || r.Automatic == nil || g.Key != g.At.Format(time.DateOnly)+"|"+r.Automatic.Dependency ||
 			s.digestTo(s.settings(ctx), superviseSignal{Todo: t.ID}) != g.To {
 			return prompts.SuperviseEntry{}, false
 		}

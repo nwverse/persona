@@ -220,11 +220,19 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		cur, exists := s.todoNow(t.ID)
 		if !exists || cur.DoneAt != nil || v.state(cur) != "" && v.state(cur) != reviewRework || v.Waits != nil ||
 			!v.UpdatedAt.Equal(t.Supervision.UpdatedAt) ||
+			cur.PRURL != t.PRURL || !slices.Equal(cur.PRs, t.PRs) ||
 			!slices.EqualFunc(cur.Agents, t.Agents, func(a, b TodoAgent) bool {
 				return a.MachineID == b.MachineID && a.SessionID == b.SessionID &&
 					(a.ReleasedAt == nil) == (b.ReleasedAt == nil) && (a.DismissedAt == nil) == (b.DismissedAt == nil)
 			}) {
 			return false
+		}
+		if p.Evidence.Kind == "merge_review" {
+			fact := prFacts(cur, p.Evidence.URL)
+			if fact == nil || fact.State != "open" || fact.Draft || fact.Conflicts ||
+				dependency != automaticDependency(p)+"|"+fact.HeadOID+"|"+fact.Review+"|"+fact.Checks {
+				return false
+			}
 		}
 		a := automaticPark{Dependency: dependency, Turn: turn, Count: 1, FirstAt: now.UTC()}
 		if prev := lastAutomatic(v); prev != nil && prev.Dependency == dependency {
@@ -268,7 +276,7 @@ func (s *Service) automaticParkSummary(ctx context.Context, t Todo, now time.Tim
 		to == "" || a.SummaryDay == day && a.SummaryTo == to {
 		return superviseSignal{}, false
 	}
-	return superviseSignal{Todo: t.ID, Kind: sigParkedSummary, Key: day + "|" + parkKey(r),
+	return superviseSignal{Todo: t.ID, Kind: sigParkedSummary, Key: day + "|" + a.Dependency,
 		To: to, At: now}, true
 }
 
@@ -279,7 +287,7 @@ func (s *Service) automaticParksTold(ctx context.Context, list []superviseSignal
 		}
 		_, _, err := s.updateSupervision(ctx, g.Todo, func(v *Supervision) bool {
 			r := v.parking()
-			if r == nil || r.Automatic == nil || g.Key != g.At.Format(time.DateOnly)+"|"+parkKey(r) {
+			if r == nil || r.Automatic == nil || g.Key != g.At.Format(time.DateOnly)+"|"+r.Automatic.Dependency {
 				return false
 			}
 			r.Automatic.SummaryDay, r.Automatic.SummaryTo = g.At.Format(time.DateOnly), g.To
