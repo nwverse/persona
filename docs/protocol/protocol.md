@@ -3212,10 +3212,10 @@ fold expansions like the rest of the item; old nodes send none, and clients that
 | Field | Meaning |
 | --- | --- |
 | `model` | The model the transcript names: Claude Code's `message.model` (never `<synthetic>`), a Codex turn's `turn_context` model; absent when it does not say |
-| `in` | Input not read from the cache: Claude `input_tokens`; Codex `input_tokens - cached_input_tokens` (never below 0), as the usage meter counts it |
+| `in` | Input not read from or written to the cache: Claude `input_tokens`; Codex `input_tokens - cached_input_tokens - cache_write_input_tokens` (never below 0), as the usage meter counts it (`server/internal/tokenuse`) |
 | `out` | Output; Codex's includes reasoning |
 | `cache_read` | Claude `cache_read_input_tokens`; Codex `cached_input_tokens` |
-| `cache_write` | Claude `cache_creation_input_tokens`, every lifetime; Codex none |
+| `cache_write` | Claude `cache_creation_input_tokens`, every lifetime; Codex `cache_write_input_tokens` (0 for OpenAI's models) |
 | `cache_write_1h` | Of `cache_write`, what was written for an hour (`cache_creation.ephemeral_1h_input_tokens`), priced higher than the 5-minute writes |
 | `fast` | The requests ran at Claude Code's fast speed (`usage.speed` `fast`) |
 | `id` | Only on an agent's report: `agent:<agent id>`, a sub-Agent's, each of its nested sub-Agents' and each agent of a workflow run's. Entries with the same `id` and `model` are one agent's: a client counts them once across the chat (the largest of each field), as an agent can be reported on more than one item (its hand-back and its notice; a nested background sub-Agent's own notice to the session as well as its launcher's report) |

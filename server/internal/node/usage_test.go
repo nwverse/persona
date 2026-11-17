@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/tokenuse"
 )
 
 func claudeReply(ts time.Time, id, model string, in, write1h, read, out int) string {
@@ -15,14 +17,28 @@ func claudeReply(ts time.Time, id, model string, in, write1h, read, out int) str
 		ts.Format(time.RFC3339Nano), id, model, in, write1h, read, out, write1h)
 }
 
-// scanFile scans path the way a sweep does, with the stat usageFiles takes of it.
+// scanFile scans path the way a sweep does, with the stat usageFiles takes of it and its agent's adapter
+// (testUsagePath).
 func scanFile(t *testing.T, m *usageMeter, path string, cutoff time.Time) {
+	t.Helper()
+	m.scan(testUsagePath(t, path), cutoff)
+}
+
+// testUsagePath is path as usageFiles lists it: a rollout is Codex's, anything else a Claude Code transcript.
+func testUsagePath(t *testing.T, path string) usagePath {
 	t.Helper()
 	st, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.scan(path, st, cutoff)
+	return usagePath{path, st, testUsageAdapter(path)}
+}
+
+func testUsageAdapter(path string) usageAdapter {
+	if strings.HasPrefix(filepath.Base(path), "rollout-") {
+		return codexUsage{tokenuse.Codex, (*Node).codexHome}
+	}
+	return claudeUsage{}
 }
 
 func TestUsageMeterClaude(t *testing.T) {
@@ -202,7 +218,7 @@ func TestUsageMeterCountsWorkflowAgents(t *testing.T) {
 	listed := 0
 	for _, f := range n.usageFiles(cutoff) {
 		listed++
-		m.scan(f.path, f.st, cutoff)
+		m.scan(f, cutoff)
 	}
 	if listed != 3 {
 		t.Fatalf("listed %d transcripts, want the session's and its two workflow agents' (not the run's journal)", listed)
@@ -255,8 +271,30 @@ func TestUsageSession(t *testing.T) {
 		"/h/.claude/projects/-p/0f1e/subagents/workflows/wf_9c/agent-a2.jsonl":                                 "0f1e",
 		"/h/.codex/sessions/2026/10/29/rollout-2026-10-29T10-00-00-0199a213-81c0-7800-8aa1-bbab2a035a53.jsonl": "0199a213-81c0-7800-8aa1-bbab2a035a53",
 	} {
-		if got := usageSession(path); got != want {
-			t.Errorf("usageSession(%s) = %q, want %q", path, got, want)
+		if got := testUsageAdapter(path).session(path); got != want {
+			t.Errorf("session(%s) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+// A request's later lines that say more (Claude Code up to 2.1.306 wrote the output so far on each content block) add
+// what grew to the request's bucket, not another reply; a copy of the request in another file adds nothing, its later
+// lines included; Claude Code's own error replies count none.
+func TestUsageMeterCountsARequestAtItsMost(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	dir := t.TempDir()
+	grow := claudeReply(now, "m1", "claude-opus-5-5", 2, 0, 100, 5) + claudeReply(now.Add(31*time.Second), "m1", "claude-opus-5-5", 2, 0, 100, 9)
+	orig, fork := filepath.Join(dir, "s1.jsonl"), filepath.Join(dir, "s2.jsonl")
+	apiError := strings.Replace(claudeReply(now, "m2", "claude-opus-5-5", 7, 0, 0, 7), `"type":"assistant"`, `"type":"assistant","isApiErrorMessage":true`, 1)
+	os.WriteFile(orig, []byte(grow+apiError), 0o600)
+	os.WriteFile(fork, []byte(grow), 0o600)
+	m := newUsageMeter()
+	scanFile(t, m, orig, now.Add(-time.Hour))
+	scanFile(t, m, fork, now.Add(-time.Hour))
+	if len(m.buckets) != 1 {
+		t.Fatalf("buckets %+v, want the request's minute only", m.buckets)
+	}
+	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", ""}]; b == nil || b.Requests != 1 || b.Output != 9 || b.Input != 2 || b.CacheRead != 100 {
+		t.Fatalf("bucket = %+v, want one request at its most", b)
 	}
 }
