@@ -24,10 +24,7 @@ type modelExecution struct {
 	// PlanThen: the permission mode a start in plan mode goes on in once its plan is approved (planthen.go); never
 	// part of a fingerprint.
 	PlanThen string `json:"-"`
-	// Runtime: the assistant's runtime, proto.AssistantRuntimeAgentSDK or "" (the CLI; "cli" reads as ""). Omitted
-	// when empty so a fingerprint from before #2455 stays the same.
-	Runtime string `json:",omitempty"`
-	IsMain  bool   `json:",omitempty"`
+	IsMain   bool   `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
 	// setting (#7824). With IsMain it identifies the protected conversations whose recovery is visible and reversible;
 	// worker Agent conversations have neither flag.
@@ -42,6 +39,9 @@ type modelExecution struct {
 	// It changes the execution fingerprint so a role change resumes in a fresh process.
 	SupervisionInstructions string `json:",omitempty"`
 	SupervisionResolved     bool   `json:"-"`
+	// Origin is the conversation's manager-recorded source. It is authorization metadata, not a model choice, so it
+	// never changes the execution fingerprint; the node carries it into session state and model tool calls.
+	Origin string `json:"-"`
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
@@ -77,11 +77,8 @@ func (m modelExecution) checkModel() error {
 }
 
 // executionFingerprint also detects a managed provider changed before the next turn (any of its fields, the #2455 ones
-// included), and the runtime changed: another process, resumed on the same conversation.
+// included): another process, resumed on the same conversation.
 func (n *Node) executionFingerprint(launcher string, m modelExecution) string {
-	if m.Runtime == proto.AssistantRuntimeCLI {
-		m.Runtime = ""
-	}
 	raw, _ := json.Marshal(m)
 	if l, ok := n.managedCatalog(launcher); ok { // as named: the same before and after a withheld one's pull (its Rev)
 		v, _ := json.Marshal(l)
@@ -115,7 +112,6 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		Model                   string  `json:"model"`
 		Effort                  string  `json:"effort"`
 		ModelFingerprint        string  `json:"model_fingerprint"`
-		Runtime                 string  `json:"runtime"`
 		IsMain                  bool    `json:"is_main"`
 		MainCompact             int     `json:"main_compact_window"`
 		SupervisionInstructions *string `json:"supervision_instructions"`
@@ -123,5 +119,5 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain, MainCompactWindow: res.MainCompact}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, IsMain: res.IsMain, MainCompactWindow: res.MainCompact}).withSupervision(res.SupervisionInstructions)
 }

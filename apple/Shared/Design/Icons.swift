@@ -617,6 +617,20 @@ extension Theme {
         static let voiceCaptions = "captions.bubble"
         /// Voice: the voice Persona speaks in.
         static let voiceTimbre = "person.wave.2"
+        /// Call Persona (#9290): a phone call to Persona through the system's call UI, from the main conversation's +.
+        /// An outgoing handset, apart from Voice Chat's `voiceChannel` beside it (the chat's own voice, in the app).
+        static let callPersona = "phone.arrow.up.right"
+        /// The call screen's Speaker: the call's sound on the loudspeaker, a toggle (its round control fills when on), the
+        /// Phone app's glyph for it. Not `voiceSpeaking` (Persona speaking) nor `answersAloud` (the meeting room's answers
+        /// said out loud).
+        static let callSpeaker = "speaker.wave.3"
+        /// The call screen's Audio: picks where the call's sound goes (the system's route picker) when Bluetooth, a car
+        /// or headphones are there; the system's own glyph for it.
+        static let callAudioRoute = "airplay.audio"
+        /// The call screen's Minimize: down to the bar that returns to the call (the call goes on).
+        static let callMinimise = expand
+        /// The voice bar's way back to a system call's full screen (the call screen).
+        static let callExpand = enlarge
         /// Pairing a device or a bot with a one-time code.
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).

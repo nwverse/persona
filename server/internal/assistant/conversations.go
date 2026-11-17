@@ -254,6 +254,10 @@ type relayBook struct {
 	// queued message waits, whatever its rank: the owner's own message always goes before the queue. A restart falls
 	// back on the persisted Spoke presence window (relay_presence.go).
 	ownerTurns map[string]ownerTurn
+	// replacing: the background supervisors being replaced (supervise_round.go backgroundOutgrown), in memory: nothing
+	// starts going into one, and what would go in straight queues, until what waits for it moved to its replacement or
+	// the replacement did not start.
+	replacing map[string]bool
 }
 
 // ownerTurn is one conversation's owner-turn gate (#6394).
@@ -284,7 +288,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 		rs.Spawned = map[string]spawnedConv{}
 	}
 	b.st, b.loaded = rs, true
-	b.sent, b.draining, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]*time.Timer{}
+	b.sent, b.draining, b.replacing, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]bool{}, map[string]*time.Timer{}
 	b.stuck = map[string]relayMsg{}
 	b.ownerTurns = map[string]ownerTurn{}
 	return true
@@ -478,11 +482,21 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
 	}
-	if err := s.call(ctx, machine, DeviceAssistantSend, params, nil); err != nil {
+	// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
+	// and the switch now decide, also for one queued before a restart or a change of the switch, and whatever model runs it.
+	round := s.isBackground(ctx, to) && msg.Tool == superviseTool && !backgroundKeepsContext(s.settings(ctx)) && prompts.IsSuperviseRound(msg.Text)
+	if round {
+		params[superviseRoundParam] = true
+	}
+	var res superviseRoundReply
+	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
 		if msg.Tool == superviseTool && !relayInDoubt(err) { // in doubt, drainRelays lets go once it knows it did not go in
 			s.releasePushes(ctx, to)
 		}
 		return err
+	}
+	if round {
+		s.superviseRoundAnswered(to, res)
 	}
 	s.relayDelivered(ctx, to, msg)
 	return nil
@@ -544,7 +558,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	held := map[string]time.Duration{}
 	now := time.Now()
 	for _, c := range list {
-		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] {
+		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
 			i, wait := b.pickLocked(c.SessionID, now)
 			if i < 0 {
 				held[c.SessionID] = wait
@@ -707,6 +721,7 @@ func conversationName(c proto.Session, main string) string {
 func (s *Service) toolConversationsList(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		Query           string `json:"query"`
+		Tag             string `json:"tag"`
 		IncludeArchived bool   `json:"include_archived"`
 		Limit           int    `json:"limit"`
 	}
@@ -722,6 +737,7 @@ func (s *Service) toolConversationsList(ctx context.Context, self string, args j
 	list, main := s.conversations(ctx, a.IncludeArchived, space)
 	sort.SliceStable(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
 	q := strings.ToLower(strings.TrimSpace(a.Query))
+	tag := strings.TrimSpace(a.Tag)
 	loc := s.location(ctx)
 	var b strings.Builder
 	n := 0
@@ -730,30 +746,36 @@ func (s *Service) toolConversationsList(ctx context.Context, self string, args j
 		if q != "" && !strings.Contains(strings.ToLower(name+"\n"+c.LastText), q) {
 			continue
 		}
+		if tag != "" && !hasTag(c, tag) {
+			continue
+		}
 		if n >= a.Limit {
 			n++
 			continue
 		}
 		n++
-		var tags []string
+		var marks []string
 		if c.SessionID == main {
-			tags = append(tags, "main")
+			marks = append(marks, "main")
 		}
 		if c.SessionID == self {
-			tags = append(tags, "this conversation")
+			marks = append(marks, "this conversation")
 		}
 		if c.Status == proto.StatusWorking || c.Starting {
-			tags = append(tags, "running")
+			marks = append(marks, "running")
 		}
 		if c.Archived {
-			tags = append(tags, "archived")
+			marks = append(marks, "archived")
 		}
 		if c.Agent == "codex" {
-			tags = append(tags, "codex")
+			marks = append(marks, "codex")
 		}
 		fmt.Fprintf(&b, "- %s 「%s」", c.SessionID, name)
-		if len(tags) > 0 {
-			fmt.Fprintf(&b, " [%s]", strings.Join(tags, ", "))
+		if len(marks) > 0 {
+			fmt.Fprintf(&b, " [%s]", strings.Join(marks, ", "))
+		}
+		if c.Tags != nil && len(*c.Tags) > 0 {
+			fmt.Fprintf(&b, " · tags: %s", strings.Join(*c.Tags, ", "))
 		}
 		if !c.UpdatedAt.IsZero() {
 			fmt.Fprintf(&b, " · last active %s (%s)", c.UpdatedAt.In(loc).Format("01-02 15:04"), ago(c.UpdatedAt))
@@ -764,14 +786,24 @@ func (s *Service) toolConversationsList(ctx context.Context, self string, args j
 		b.WriteString("\n")
 	}
 	if n == 0 {
+		var filters []string
 		if q != "" {
-			return fmt.Sprintf("No conversation matches %q.", a.Query), nil
+			filters = append(filters, fmt.Sprintf("query %q", a.Query))
+		}
+		if tag != "" {
+			filters = append(filters, fmt.Sprintf("tag %q", tag))
+		}
+		if len(filters) > 0 {
+			return "No conversation matches " + strings.Join(filters, " and ") + ".", nil
 		}
 		return "No conversations.", nil
 	}
 	head := fmt.Sprintf("%d conversation(s), newest activity first", n)
 	if !a.IncludeArchived {
 		head += " (archived ones left out)"
+	}
+	if tag != "" {
+		head += fmt.Sprintf(" (tag %q)", tag)
 	}
 	if n > a.Limit {
 		head += fmt.Sprintf("; the first %d", a.Limit)
@@ -883,11 +915,18 @@ func (s *Service) toolConversationArchive(ctx context.Context, self string, args
 
 func (s *Service) toolConversationNew(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		Text string `json:"text"`
+		Text string   `json:"text"`
+		Tags []string `json:"tags"`
 	}
 	_ = json.Unmarshal(args, &a)
 	if strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is empty")
+	}
+	// Validate the tags before anything is started: an over-long or over-count call must not leave a conversation
+	// behind it.
+	tags, err := normalizeConversationTags(a.Tags)
+	if err != nil {
+		return "", err
 	}
 	if err := s.dispatchNewConversationGuard(ctx, self); err != nil {
 		return "", err
@@ -912,6 +951,14 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 		return "", err
 	}
 	s.titleNew(c.MachineID, c.SessionID, time.Now())
+	tagNote := ""
+	if len(tags) > 0 {
+		// The conversation already exists: a tag write that fails must not be reported as a failed start.
+		if _, err := s.setConversationTags(sctx, c.MachineID, c.SessionID, tags, titleByAssistant); err != nil {
+			return fmt.Sprintf("Started conversation %s; it is working on the message now and is named after its first turn. It shows up in the app's sidebar. Its tags could not be saved: %v", c.SessionID, err), nil
+		}
+		tagNote = " It is born with tags: " + strings.Join(tags, ", ") + "."
+	}
 	b := &s.relays
 	b.mu.Lock()
 	if s.relayLocked(ctx) {
@@ -921,7 +968,7 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 		s.saveRelayLocked()
 	}
 	b.mu.Unlock()
-	return fmt.Sprintf("Started conversation %s; it is working on the message now and is named after its first turn. It shows up in the app's sidebar.", c.SessionID), nil
+	return fmt.Sprintf("Started conversation %s; it is working on the message now and is named after its first turn. It shows up in the app's sidebar.%s", c.SessionID, tagNote), nil
 }
 
 func (s *Service) toolConversationSend(ctx context.Context, self string, args json.RawMessage) (string, error) {

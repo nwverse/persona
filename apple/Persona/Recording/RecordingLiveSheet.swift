@@ -179,25 +179,23 @@ extension RecordingCapture.State {
     }
 }
 
-/// Hide and Done: a quiet text control at the sheet's top trailing corner, a finger tall without a pill around it.
-struct RecordingSheetCloseButton: View {
-    var title: String
+/// The way out of a recording page, first in its header as on every presented page (#9653): ✕ where the page is done
+/// (the wrap-up, a photo still loading), ⌄ where the recording goes on without it (Hide, as the room's own). A round chip a
+/// finger wide, its mark in the primary ink.
+struct RecordingCornerButton: View {
+    enum Kind { case close, hide }
+    var kind: Kind
     var identifier: String
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            // A finger tall and at least that wide, and as wide as its word: a fixed square (`tapTargetFrame`) cut
-            // "Hide" and "Done" to "…" at the largest text sizes. It grows with the text no further than the sheet's
-            // clock does, so the header row beside it keeps room for the time.
-            Text(title).font(Theme.Font.bodyStrong).foregroundStyle(Theme.accent).lineLimit(1)
-                .fixedSize()
-                .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
-                .frame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
-                .contentShape(.rect)
-                .dynamicTypeSize(...Theme.Recording.timerLargestSize)
+            ThemedIcon(kind == .close ? Theme.Icon.close : Theme.Icon.minimizeRoom).font(Theme.Font.heading).sheetBarLabel()
+                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                .background(Theme.Fill.chip, in: .circle)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(kind == .close ? Text("Close") : Text("Hide"))
         .accessibilityIdentifier(identifier)
     }
 }

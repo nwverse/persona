@@ -15,13 +15,12 @@ import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts }
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
-import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
+import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, seenCopy, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { stateOf } from "./format";
 import { timeMs } from "./times";
 import { NO_PINS, pinsOf, type AgentPins } from "./pins";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
@@ -1064,7 +1063,7 @@ export function savePins(pins: AgentPins): Promise<void> {
   return save("pins", "/pins", pins, pinsSaves);
 }
 
-/** "Mark all as seen": every finished-unread one of these is seen now, in one update of the list (iOS AppModel.markSeen). The
+/** "Mark all as seen": every finished one of these nobody has seen (Unread, Just finished) is seen now, in one update of the list (iOS AppModel.markSeen). The
  * hub pushes the sessions back as seen; the list does not wait for it, and each waits in the seen outbox until it does. */
 export function markSeen(list: Session[]) {
   const keys = new Set<string>();
@@ -1084,7 +1083,7 @@ export function markSeen(list: Session[]) {
     const mark = newMark(s, Date.now(), now);
     if (!mark) continue;
     marks[id] = deliverSeen(s.machine_id, s.session_id, mark);
-    changed.push({ ...s, state: "idle", seen_at: now });
+    changed.push({ ...seenCopy(s), seen_at: now });
   }
   if (!changed.length) return;
   // one update of the list: the marks and the rows they hold seen together
@@ -1577,14 +1576,14 @@ function pageInFront(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
 }
 
-/** Marks every viewed chat that is Unread now. `always`: an opened chat, or the page coming back to the front, tells
+/** Marks every viewed chat that is Unread (or Just finished) now. `always`: an opened chat, or the page coming back to the front, tells
  *  the hub even when this page has it seen already (another device's view, an older seen the hub lost). */
 function seeViewed(always: boolean) {
   if (!viewed.size || !pageInFront()) return;
   for (const id of viewed.keys()) {
     const [mid, sid] = JSON.parse(id) as [string, string];
     const s = getSession(mid, sid);
-    if (always || (s && stateOf(s) === "unread" && !state.seen[id])) markSeenLocally(mid, sid);
+    if (always || (s && unseen(s) && !state.seen[id])) markSeenLocally(mid, sid);
   }
 }
 

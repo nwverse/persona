@@ -554,7 +554,6 @@
         ".jarvis",
         "JARVIS_",
         "jarvis",
-        "jarvis-agent-sdk-runtime",
         "jarvis-context",
         "jarvis-dsh-runtime",
         "jarvis-paseo-runtime",
@@ -1018,7 +1017,6 @@
         "com.jarvis.node",
         "jarvis",
         "jarvis-",
-        "jarvis-agent-sdk-runtime",
         "jarvis-blob",
         "jarvis-check-",
         "jarvis-circuit",
@@ -1055,7 +1053,6 @@
         "X-Jarvis-Op-Id",
         "com.jarvis.node",
         "jarvis",
-        "jarvis-agent-sdk-runtime",
         "jarvis-context",
         "jarvis-dsh-runtime",
         "jarvis-file",
@@ -1129,6 +1126,24 @@
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
         "JARVIS_HOME"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "server/internal/node/powershell_start_test.go": {
+      "reason": "Goldens captured from main's start command, which still names the retained legacy MCP tools and unsets the legacy environment aliases.",
+      "tokens": [
+        "JARVIS_ASSISTANT",
+        "JARVIS_ASSISTANT_BIN",
+        "JARVIS_GUEST",
+        "JARVIS_SESSION_ID",
+        "JARVIS_SPACE",
+        "mcp__jarvis__report_to_supervisor",
+        "mcp__jarvis__task_plan",
+        "mcp__jarvis__task_review",
+        "mcp__jarvis__todo_bind_thread",
+        "mcp__jarvis__todo_decision_add",
+        "mcp__jarvis__todo_decisions"
       ],
       "path_tokens": [],
       "external_refs": []
