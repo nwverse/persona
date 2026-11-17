@@ -1103,7 +1103,7 @@ struct RecapDrawer: View {
             .background(Theme.pageBackground)
             .navigationTitle(items.count > 1 ? String(localized: "While You Were Away · \(items.count)") : String(localized: "While You Were Away"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

@@ -58,11 +58,7 @@ struct ChatExportSheet: View {
             .navigationTitle("Export Image")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { ThemedIcon(Theme.Icon.close) }
-                        .accessibilityLabel("Close")
-                        .accessibilityIdentifier("export.close")
-                }
+                SheetClose(id: "export.close") { dismiss() }
             }
         }
         .task(id: Run(options: options, attempt: attempt)) { await render() }
