@@ -11,6 +11,22 @@ const FAST = { latency: { read: 0, save: 0 } };
 const moduleByKey = (showcase, key) => showcase.modules.find((module) => module.key === key);
 const updateFor = (doc, more) => ({ schema_version: CONFIGURATION_VERSION, id: doc.id, revision: doc.revision, ...more });
 
+/** The strings a person reads in a module document (not ids, keys or stored values). */
+function visibleText(doc) {
+  const out = [doc.title, doc.description ?? ""];
+  for (const group of doc.groups) {
+    out.push(group.title, group.description ?? "");
+    for (const field of group.fields) {
+      out.push(field.title, field.description ?? "", field.disabled_reason ?? "");
+      for (const detail of field.details ?? []) out.push(detail.title, detail.description);
+      if (field.text?.placeholder) out.push(field.text.placeholder);
+      for (const option of [...(field.select?.options ?? []), ...(field.multiselect?.options ?? [])]) out.push(option.title, option.description ?? "");
+    }
+  }
+  for (const notice of Object.values(doc.notices ?? {})) out.push(notice.message);
+  return out.join("\n");
+}
+
 describe("the showcase in every language", () => {
   it("names every scenario and every page string", () => {
     for (const lang of LANGS) {
@@ -63,6 +79,13 @@ describe("the showcase in every language", () => {
     expect(keys("load-fail")).toEqual(["showcase-terminal"]);
     for (const id of ["reject", "conflict", "unconfirmed"]) expect(keys(id), id).toEqual(["showcase-digest"]);
     expect(keys("contract")).toEqual(["showcase-shared"]);
+  });
+
+  it("keeps fixture framing out of the default module text", () => {
+    const text = (lang) => buildShowcase("default", lang, FAST).modules.map((module) => visibleText(module.document)).join("\n").toLowerCase();
+    for (const phrase of ["this example", "mock", "synthetic", "fixture", "showcase", "test data"]) expect(text("en"), `en: ${phrase}`).not.toContain(phrase);
+    for (const phrase of ["此示例", "模拟", "示例", "展示", "测试数据"]) expect(text("zh-Hans"), `zh: ${phrase}`).not.toContain(phrase);
+    for (const phrase of ["この例", "モック", "ショーケース", "サンプル"]) expect(text("ja"), `ja: ${phrase}`).not.toContain(phrase);
   });
 
   it("covers every control kind and select presentation across the full showcase", () => {

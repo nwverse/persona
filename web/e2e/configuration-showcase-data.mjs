@@ -207,7 +207,7 @@ function editorDoc(lang) {
             id: "pinned",
             kind: "multiselect",
             title: T(lang, "Pinned tools", "固定工具", "固定ツール"),
-            description: T(lang, "One or two tools stay at the top; this example has both.", "最多固定两个工具；此示例已固定两个。", "1〜2個のツールを上部に固定できます。この例では2つ固定されています。"),
+            description: T(lang, "One or two tools stay at the top.", "最多固定两个工具。", "1〜2個のツールを上部に固定できます。"),
             default: ["search"],
             multiselect: {
               min_selected: 1,
