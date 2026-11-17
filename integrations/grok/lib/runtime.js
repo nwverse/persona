@@ -27,6 +27,13 @@ export function createGrokRuntime(options = {}) {
   const home = options.home || homedir()
   const grokHome = options.grokHome || process.env.GROK_HOME || join(home, '.grok')
   const launcher = options.launcher || 'grok-chat'
+  // What the apps call it, and the Agent launcher (a Paseo provider running this Grok CLI and account) it runs the
+  // assistant for: only what the person setting it up declares, never guessed from names.
+  const displayName = typeof options.displayName === 'string' && options.displayName.trim() ? options.displayName.trim() : 'Grok'
+  const assistantFor = typeof options.assistantFor === 'string' ? options.assistantFor.trim() : ''
+  if (assistantFor && (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(assistantFor) || assistantFor === launcher)) throw new Error('Unsupported Grok assistant-for launcher')
+  const launcherEntry = (model, models) => ({ name: launcher, agent: 'grok', display_name: displayName, ...(assistantFor ? { assistant_for: assistantFor } : {}),
+    ...(model ? { model } : {}), ...(models ? { models } : {}) })
   const defaultModel = options.model || ''
   const defaultEffort = options.effort || ''
   const defaultMode = options.mode || 'default'
@@ -51,7 +58,7 @@ export function createGrokRuntime(options = {}) {
   })
 
   const rt = createRuntime({ listSessions, items, cursor, item, image, start, send, interrupt, rename: renameSession, close, models, modes, check }, {
-    runtime: 'grok-chat', name: 'Grok', agent: 'grok', launcher, launcherModel: defaultModel,
+    runtime: 'grok-chat', name: 'Grok', agent: 'grok', launcher, launcherModel: defaultModel, launchers: [launcherEntry(defaultModel)],
     assistant: true, answerFirst: 'phone', modelSwitch: true, readonly: true,
     socketPath: options.socketPath, connect: options.connect, log, refreshMs: options.refreshMs || 10_000,
     pushDelayMs: options.pushDelayMs ?? 50, retryMs: options.retryMs,
@@ -121,7 +128,7 @@ export function createGrokRuntime(options = {}) {
       if (option.id === 'reasoning_effort') s.effort = option.currentValue
     }
     selectedModel ||= s.model
-    rt.launchersChanged([{ name: launcher, agent: 'grok', model: defaultModel || selectedModel, models: modelOptions(catalog, defaultModel || selectedModel) }])
+    rt.launchersChanged([launcherEntry(defaultModel || selectedModel, modelOptions(catalog, defaultModel || selectedModel))])
   }
 
   const sessionDir = (s) => s.file ? dirname(s.file) : join(grokHome, 'sessions', encodeURIComponent(s.cwd), s.raw)

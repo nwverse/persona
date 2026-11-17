@@ -38,7 +38,7 @@ struct PersonaApp: App {
                         if let key = model.resolve(path: link.machine + "/" + link.session) { model.open(key) }
                         return
                     }
-                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(askingEnd: RecordingLink.endID(url)); return } // the recording's activity
                     if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }

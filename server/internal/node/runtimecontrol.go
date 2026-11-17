@@ -37,6 +37,9 @@ type runtimeLauncher struct {
 	// not Claude Code, the permission modes a start takes (proto.Launcher's, #8261).
 	DisplayName     string                  `json:"display_name,omitempty"`
 	PermissionModes proto.PermissionModeSet `json:"permission_modes,omitempty"`
+	// AssistantFor: on the runtime's assistant launcher, the Agent launcher it runs the assistant for
+	// (proto.Launcher.AssistantFor).
+	AssistantFor string `json:"assistant_for,omitempty"`
 }
 
 // Bounds on a runtime's launchers. A display name is as long as a provider's may be (the manager's maxDisplayName).
@@ -70,6 +73,9 @@ func cleanLaunchers(list []runtimeLauncher) []runtimeLauncher {
 		seen[l.Name] = true
 		l.Model = clip(l.Model)
 		l.DisplayName = clipTo(l.DisplayName, maxLauncherDisplayName)
+		if !shellcmd.NameRe.MatchString(l.AssistantFor) { // a launcher's name, or none
+			l.AssistantFor = ""
+		}
 		models := make([]proto.AgentModel, 0, min(len(l.Models), maxLauncherModels))
 		for _, m := range l.Models {
 			if len(models) == maxLauncherModels {
@@ -109,7 +115,7 @@ func (h *runtimeConn) launcherList() []runtimeLauncher {
 				entry.Agent = l.Agent
 				entry.Models = l.Models
 				entry.AutoAccept = l.AutoAccept
-				entry.DisplayName, entry.PermissionModes = l.DisplayName, l.PermissionModes
+				entry.DisplayName, entry.PermissionModes, entry.AssistantFor = l.DisplayName, l.PermissionModes, l.AssistantFor
 				break
 			}
 		}

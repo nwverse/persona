@@ -31,6 +31,8 @@ const api = Object.freeze({
   getIsland() { return ipcRenderer.invoke("desktop:island-get"); },
   setIslandEnabled(enabled: boolean) { return ipcRenderer.invoke("desktop:island-set", enabled); },
   setIslandState(state: DesktopIslandState) { ipcRenderer.send("desktop:island-state", state); },
+  setDevDiagnostics(on: boolean) { return ipcRenderer.invoke("desktop:dev-diagnostics-set", on); },
+  readDevDiagnostics() { return ipcRenderer.invoke("desktop:dev-diagnostics-read"); },
 } satisfies DesktopBridge);
 
 contextBridge.exposeInMainWorld("personaDesktop", api);
