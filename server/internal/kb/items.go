@@ -517,8 +517,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 	case KindDoc, KindMeeting, KindEvent:
 		for _, it := range e.Store.Items(kind) {
 			if has(it.Tags) && it.Title != "" {
-				out = append(out, Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
-					Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL})
+				out = append(out, itemEntry(kind, it))
 			}
 		}
 	case KindRecording:
@@ -532,6 +531,13 @@ func (e *Engine) List(kind, tag string) []Entry {
 	}
 	Rank(out)
 	return out
+}
+
+// itemEntry is a document, meeting or event of kind as lists and links show it: Extra is its link, Source the connector
+// that supplied it (#8872).
+func itemEntry(kind string, it *Item) Entry {
+	return Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
+		Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL, Source: it.Source}
 }
 
 // recordingEntry is a recording as lists show it: Extra is the device it was made on, RecordingKind its kind (a

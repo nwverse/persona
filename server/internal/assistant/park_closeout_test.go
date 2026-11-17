@@ -238,7 +238,7 @@ func TestAutomaticCloseoutNewSourceResetsStreak(t *testing.T) {
 
 func TestAutomaticCloseoutSummaryDailyAndDurable(t *testing.T) {
 	input := parkEvidenceArgs("external_event")
-	s, _, task, _, now := automaticFixture(t, automaticCloseout("upstream check run 42 completes", "", input))
+	s, f, task, _, now := automaticFixture(t, automaticCloseout("upstream check run 42 completes", "", input))
 	ctx := context.Background()
 	if handled, _ := s.mechanicalSignal(ctx, superviseSignal{Todo: task.ID, Kind: "idle"}, now); !handled {
 		t.Fatal("external wait was not automatically parked")
@@ -306,6 +306,22 @@ func TestAutomaticCloseoutSummaryDailyAndDurable(t *testing.T) {
 			_, park, _ := strings.Cut(g.Key, "|")
 			g.Key = g.At.Format(time.DateOnly) + "|" + park
 		}
+	}
+	// A fresh background round must retain the summary's informational level and wait instructions.
+	f.mu.Lock()
+	f.hello.Assistant.MachineID = "server"
+	f.mu.Unlock()
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	bg := withBackgroundBG1(t, s, f)
+	if !s.deliverDigest(ctx, s.settings(ctx), bg, []superviseSignal{g}, "", at, time.Time{}) {
+		t.Fatal("daily summary did not reach the background supervisor")
+	}
+	send := lastSendTo(f, bg)
+	text, _ = send["text"].(string)
+	if send[superviseRoundParam] != true || !prompts.IsSuperviseRound(text) ||
+		!strings.Contains(text, `<persona-supervision level="info" />`) ||
+		!strings.Contains(text, "Daily automatic-parking summary") || !strings.Contains(text, "keep unchanged waits parked") {
+		t.Fatalf("fresh background round lost the quiet summary or its round marker: %v\n%s", send, text)
 	}
 }
 
