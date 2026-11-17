@@ -162,6 +162,15 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     private(set) var cancelsEcho = false
     /// The meeting call's player (`callPlayerFormat`), attached once at the start; nil otherwise.
     private(set) var callPlayer: AVAudioPlayerNode?
+    #if DEBUG
+    /// An audio file in place of the microphone (`-openMeetingAudio`, #9417; `RecordingFileInput`): set before `start()`.
+    /// The input is never opened: no tap, no voice processing, and a route change or `turnOnVoiceProcessing` changes
+    /// nothing; the file's buffers go through `process` as the tap's would. The players, when there are any, still play
+    /// through the engine's output.
+    var fileInput: URL?
+    /// The running file input; nil with the microphone.
+    private var fileFeed: RecordingFileInput?
+    #endif
     /// The player of Persona's spoken answers in a room meeting (`MeetingVoicePlayer`, the voice extension's `speak`),
     /// beside the call's, attached with it; nil otherwise.
     private(set) var answerPlayer: AVAudioPlayerNode?
@@ -262,6 +271,9 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
     func start() throws {
         try FileManager.default.createDirectory(at: queue.sync { directory }, withIntermediateDirectories: true)
+        #if DEBUG
+        if let fileInput { try startFile(fileInput); return }
+        #endif
         // Before the formats are read: voice processing changes the input node's format.
         if voiceProcessing { enableVoiceProcessing() }
         attachCallPlayer()
@@ -324,12 +336,46 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
     private static let log = Logger(subsystem: "persona", category: "recording")
 
+    #if DEBUG
+    /// `start()` with `fileInput`: the file's buffers into `process`, the engine running only for the players' output.
+    private func startFile(_ url: URL) throws {
+        let feed = try RecordingFileInput(url: url) { [weak self] buffer, startedAt, capturedUntil in
+            self?.process(buffer, startedAt: startedAt, capturedUntil: capturedUntil)
+        }
+        let converter = AVAudioConverter(from: feed.format, to: outFormat)
+        converter?.downmix = feed.format.channelCount > 1
+        self.converter = converter
+        shared.withLock { $0.longestBuffer = 0 }
+        attachCallPlayer()
+        if callPlayer != nil {
+            engine.prepare()
+            do { try engine.start() } catch { Self.log.notice("file input: no output for the players: \(error.localizedDescription, privacy: .public)") }
+        }
+        noteOpening()
+        fileFeed = feed
+        feed.start()
+        shared.withLock { $0.running = true }
+    }
+    #endif
+
     func pause() {
+        #if DEBUG
+        fileFeed?.pause()
+        #endif
         engine.pause()
         shared.withLock { $0.running = false; $0.level = 0 }
     }
 
     func resume() throws {
+        #if DEBUG
+        if let fileFeed {
+            noteOpening()
+            if callPlayer != nil { try? engine.start() }
+            fileFeed.start()
+            shared.withLock { $0.running = true }
+            return
+        }
+        #endif
         let input = engine.inputNode
         if input.numberOfInputs == 0 { throw RecorderError.noInput }
         noteOpening()
@@ -344,6 +390,13 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     /// Re-creates the tap after the input route or format changed (AVAudioEngineConfigurationChange), keeping the
     /// current segment open.
     func restartAfterConfigurationChange() throws {
+        #if DEBUG
+        // A file in place of the microphone has no input to follow; only the players' output starts again.
+        if fileFeed != nil {
+            if callPlayer != nil { try? engine.start() }
+            return
+        }
+        #endif
         engine.stop()
         removeTap()
         try installTap()
@@ -361,6 +414,9 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     func turnOnVoiceProcessing(running: Bool) throws -> Bool {
         #if os(iOS)
         guard !cancelsEcho else { return true }
+        #if DEBUG
+        if fileFeed != nil { return false } // a file in place of the microphone has no echo to take out
+        #endif
         let began = Date()
         engine.stop()
         removeTap()
@@ -430,6 +486,13 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     /// is logged too, so `takeEvents` after a stop has everything still to register.
     @discardableResult
     func stop() -> Segment? {
+        #if DEBUG
+        // Before the queue's last write: no buffer of the file comes after this.
+        if let fileFeed {
+            fileFeed.stop()
+            engine.stop()
+        }
+        #endif
         if tapInstalled {
             engine.stop()
             removeTap()
