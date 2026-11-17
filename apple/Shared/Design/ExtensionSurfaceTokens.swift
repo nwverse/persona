@@ -23,9 +23,10 @@ nonisolated enum ExtensionSurfaceTokens {
     static let ringNumberMinimumScale = 0.5
     static let ringNumberLargestTypeSize = DynamicTypeSize.xxxLarge
     static let ringLabelMinimumScale = 0.5
-    // Ring rows share a fixed widget canvas with metrics and chart captions; keep every line visible at AX sizes.
-    static let ringContentMinimumScale = 0.5
-    static let ringContentLargestTypeSize = DynamicTypeSize.xxxLarge
+    // Small widgets, medium columns and ring layouts fit metric, bar label and chart text to the fixed widget canvas:
+    // a value shrinks before it is cut short, and every line stays visible at AX sizes.
+    static let canvasContentMinimumScale = 0.5
+    static let canvasContentLargestTypeSize = DynamicTypeSize.xxxLarge
     static let progressTint = Color.accentColor
     static let label = Font.system(.caption)
     static let body = Font.system(.body)
