@@ -6083,6 +6083,29 @@
       },
       "extractionState" : "manual"
     },
+    "%lld left [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld left"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残り %lld 問"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 题"
+          }
+        }
+      }
+    },
     "%lld More Files" : {
       "localizations" : {
         "en" : {
@@ -31068,6 +31091,30 @@
       },
       "extractionState" : "manual"
     },
+    "By Agent · Last 7 Days" : {
+      "comment" : "Token usage page: each coding agent's tokens over the last week",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By Agent · Last 7 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent別 · 過去7日間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Agent · 最近 7 天"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "By App" : {
       "localizations" : {
         "en" : {
@@ -31681,6 +31728,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "默认分支和你自己开着的 PR 的 CI 失败算「需要你」，其他分支的算「知悉即可」。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Collapse [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapse"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折りたたむ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起"
+          }
+        }
+      }
+    },
+    "Connect to %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@に接続しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接到 %1$@？"
           }
         }
       },
@@ -65701,6 +65794,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Expand [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开"
+          }
+        }
+      }
     },
     "Expand All" : {
       "extractionState" : "manual",
@@ -105437,6 +105553,30 @@
         }
       }
     },
+    "Not Split (Before the Update)" : {
+      "comment" : "Token usage page, By Agent: usage the hub kept before it counted each agent apart",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Split (Before the Update)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "区別なし（更新前）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未区分（更新前）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Not Started" : {
       "localizations" : {
         "en" : {
@@ -112532,6 +112672,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "飞书只推结论"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Only connect to a hub you set up yourself or trust. It will see this device and can send it notifications." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only connect to a hub you set up yourself or trust. It will see this device and can send it notifications."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分で設定したハブか、信頼できるハブにだけ接続してください。接続すると、このデバイスを認識し、通知を送れるようになります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只连接你自己搭的或信任的 hub。连接后它能看到这台设备，也能给它发通知。"
           }
         }
       },
@@ -171217,6 +171380,29 @@
         }
       }
     },
+    "This hub is already paired. Connecting again refreshes this device's pairing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub is already paired. Connecting again refreshes this device's pairing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはペアリング済みです。もう一度接続すると、このデバイスのペアリングが更新されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 已经配对过，再连接一次会刷新这台设备的配对。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "This Hub Is Disconnected" : {
       "localizations" : {
         "en" : {
@@ -188417,6 +188603,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%1$@」を使用中"
+          }
+        }
+      }
+    },
+    "View in Chat [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View in Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元のメッセージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看原文"
           }
         }
       }

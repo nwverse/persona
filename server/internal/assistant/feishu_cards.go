@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/deeplink"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -849,25 +850,19 @@ func (s *Service) webBase(ctx context.Context) string {
 
 // sessionLink is a conversation's page in the web app at web; "" when web is.
 func sessionLink(web, machine, session string, assistant bool) string {
-	if web == "" {
-		return ""
-	}
-	return web + sessionPath(machine, session, assistant)
+	return deeplink.Web(web, sessionPath(machine, session, assistant))
 }
 
-// sessionPath is a conversation's path in the web app (web/src/lib/router.ts): a Persona conversation is
+// sessionPath is a conversation's path in the route table (docs/protocol/deep-links.md): a Persona conversation is
 // /persona/<id>, an agent /s/<machine>/<id>.
 func sessionPath(machine, session string, assistant bool) string {
 	if assistant {
-		return "/persona/" + url.PathEscape(session)
+		return deeplink.Conversation(session)
 	}
-	return "/s/" + url.PathEscape(machine) + "/" + url.PathEscape(session)
+	return deeplink.Session(machine, session)
 }
 
-// todoLink is a todo's page in the web app at web, "" when web is.
+// todoLink is a todo's page in the web app at web (/todos/<id>), "" when web is.
 func todoLink(web, id string) string {
-	if web == "" {
-		return ""
-	}
-	return web + "/todos?id=" + url.QueryEscape(id)
+	return deeplink.Web(web, deeplink.Todo(id))
 }
