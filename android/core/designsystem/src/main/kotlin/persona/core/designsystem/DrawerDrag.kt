@@ -61,7 +61,7 @@ import kotlinx.coroutines.launch
  * SwiftUI's initial velocity is the share of the remaining distance per second. Compose's is in value units per
  * second, so a 0..1 progress spring takes `share * (target - progress)`.
  *
- * iOS `Theme.Motion.drawer` (`apple/Shared/Design/Theme.swift:795-797`) does not read Reduce Motion. Android still
+ * iOS `Theme.Motion.drawer` (`apple/Shared/Design/Theme.swift:799-801`) does not read Reduce Motion. Android still
  * settles at once when [PersonaTheme.reduceMotion] is set; whether the spring should run then is an open question.
  */
 internal object DrawerDrag {
@@ -148,7 +148,7 @@ internal object DrawerDrag {
 
     /**
      * How far the sidebar sits below its resting place, in px. `applyToUIKit` (`AssistantSidebar.swift:69`) is
-     * `(1 - progress) * Theme.Motion.drawerLift`, and `drawerLift` is `Theme.Space.s` (`Theme.swift:801`). At rest
+     * `(1 - progress) * Theme.Motion.drawerLift`, and `drawerLift` is `Theme.Space.s` (`Theme.swift:805`). At rest
      * open the offset is zero so no layer is added. At rest closed the sidebar is not composed.
      */
     fun liftPx(progress: Float, fullLiftPx: Float): Float =

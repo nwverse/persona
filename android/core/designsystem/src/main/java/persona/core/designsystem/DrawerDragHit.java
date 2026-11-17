@@ -2,6 +2,8 @@ package persona.core.designsystem;
 
 import android.view.View;
 
+import androidx.annotation.OptIn;
+import androidx.compose.ui.InternalComposeUiApi;
 import androidx.compose.ui.Modifier;
 import androidx.compose.ui.node.LayoutNode;
 
@@ -12,6 +14,7 @@ import androidx.compose.ui.node.LayoutNode;
 final class DrawerDragHit {
     private DrawerDragHit() {}
 
+    @OptIn(markerClass = InternalComposeUiApi.class)
     static boolean hasAndroidView(LayoutNode node) {
         View view = node.getInteropView();
         return view != null;

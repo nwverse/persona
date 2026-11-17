@@ -227,7 +227,7 @@ class DrawerDragShotsTest {
             }
             Snapshot.sendApplyNotifications()
             repeat(2) { rule.mainClock.advanceTimeByFrame() }
-            // The close is the 0.32 s drawer spring (Theme.swift:795-797). 400 ms lets it rest before the next size.
+            // The close is the 0.32 s drawer spring (Theme.swift:799-801). 400 ms lets it rest before the next size.
             rule.mainClock.advanceTimeBy(400)
             val closed = capture()
             val drawer = drawerPx(pose.width)
