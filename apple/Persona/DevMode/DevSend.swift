@@ -78,10 +78,7 @@ struct DevSendSheet: View {
             .navigationTitle(String(localized: "Send To"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Text("Cancel").lineLimit(1).sheetBarLabel() }
-                        .accessibilityIdentifier("dev-send.cancel")
-                }
+                SheetClose(id: "dev-send.cancel") { dismiss() }
             }
         }
         .presentationDetents([.medium, .large])

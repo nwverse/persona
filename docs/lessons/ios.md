@@ -1180,6 +1180,11 @@ Use an invalidation revision as the task key and handle the flag after completio
     anything and `| --: |` drew leading (#3863). The cell aligns itself (`MarkdownTableText.alignments`, passed through the environment like the
     widths; the frame's alignment and `multilineTextAlignment`). Measure in the font the cells draw: tabular digits (`monospacedDigitSystemFont`
     with `FontDigitVariant(.monospaced)`), or a number measured in proportional digits can wrap at its last digit.
+  - A sideways `ScrollView` takes less height when it is offered less, a stack's paragraphs do not: the theme fixes them to their height
+    (`.paragraph`'s `fixedSize(horizontal: false, vertical: true)`), so a reply offered less than it needs gave the whole shortfall to the
+    table, cut under a row with the next paragraph drawn whole right under the cut (#10012). Fix every sideways scroll view in a reply
+    to its content's height the same way (table, code block); `ReplyBlockHeightTests` offers a reply less and compares heights. A
+    widened, narrowed or growing table already resized itself in that test; it did not reproduce on the simulator in the chat itself.
   - 表格尺寸已有共享缓存，不代表布局准备没有重活（2026-11-06，#5730）：先调用 `renderMarkdown()` 再查尺寸缓存，仍会每次序列化整张表。按完整 `MarkdownContent` 保留当前表的源文本和尺寸；字号变化只重测，内容变化同步替换，不能只按宽度或行数判断。
 - 代码高亮缓存超过上限时不能全表清空（2026-11-06，#5730）：用有界 LRU 保留仍在使用的块，键包含代码、语言和字号比例。300 项及 2 MiB 源文本 UTF-8 预算不是整个 `Text` 的内存上限；不把本来就跳过词法分析的 60,000 字节及以上纯文本块放进缓存，避免挤走昂贵的高亮热点。验证字号、内容、语言失效及冷项淘汰，不用帧率中位数代替持续达标。
 - Custom `Layout` `proposal.width` can be `.infinity`; check `isFinite` before `Int(...)` conversion or crash (Lark card columns).
@@ -2880,6 +2885,19 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
 
+## One `import CallKit` gets the build rejected for China (2026-11-16, #9290)
+
+- App Review rejects a build offered in China when any binary in it links `CallKit.framework`. That includes a weak
+  link and an SDK whose only CallKit use is `CXCallObserver`. The app uses LiveCommunicationKit, whose system binary
+  links CallKit itself; that does not count.
+- Checked with Xcode 27.1: a bare `import CallKit`, with nothing from it used, already adds `libswiftCallKit.dylib
+  (weak)` to the binary; using `CXCallObserver` adds `CallKit.framework` as well. `import LiveCommunicationKit` and
+  `import PushKit` add neither. The likely slip is an import for one constant (`CXErrorDomainRequestTransaction`).
+  LiveCommunicationKit's errors carry CallKit's domain strings (`com.apple.CallKit.error.requesttransaction`): compare
+  them as strings.
+- A remote package or a prebuilt framework can link CallKit with no import in our code, and only the built binaries
+  show it. The source and binary guards are in `docs/operations/release.md` ("No CallKit").
+
 ## A page put back beneath a kept item learns of the item from the item's own appearance (2026-11-16, #9053)
 
 A place's kept stack (`ShellPlaces`) comes back as a `NavigationPath`, which can't be read element by element, so the
@@ -2946,3 +2964,4 @@ The screenshot banner hides the chats' bars from captures with a secure text fie
 - In-app pictures differ: `drawHierarchy` and `snapshotView` leave the layer out like a screenshot, `layer.render(in:)` draws it. Anything that photographs the window to animate (the iPad's sidebar drag, `SplitColumnControl`) or to report (DEBUG `RuntimeCLI`) must turn the layer off first (`ScreenshotBanner.beginReveal()`), or it shows the banner on screen; and take that picture with `afterScreenUpdates: true`: a picture of the frame already drawn still left the bar out right after turning it off (`ScreenshotBannerTests`).
 - The view comes out of a `UITextField` with `isSecureTextEntry` (its first subview; iOS 17 renamed its class, so never match the name). Keep the field: setting `isSecureTextEntry` back and forth turns the view's exclusion off and on, measured in place.
 - A view in a second hosting controller inside it takes every touch in its frame: overriding `hitTest` to pass the hosting view's own hits through also dropped the bar's SwiftUI buttons (they hit-test as the hosting view). `accessibilityHidden` on the banner's SwiftUI view left its text in the tree; `accessibilityElementsHidden` on its hosting view removes it.
+- The bar's and the banner's hosting controllers are the same trap as the drawer's sidebar (#4496, above): a copied `colorScheme` is only as new as SwiftUI's last update, and SwiftUI puts the same stale look into the controller's traits. On a phone, the first Agent chat opened drew its header and banner light above the dark chat (2026-11-17, #9829). In a system screenshot that shows as a white banner, and the status bar's text turns dark over it although the app is dark: forcing both hosts light in the simulator gave the same picture. No simulator flow reproduced the stale update (pushes from the list, links, `-showLookBlink`, Home and back, light or dark against the system), so `ScreenshotBannerTests.theBarAndTheBannerFollowTheirWindow` holds a stale page look against the window's. Any view hosted on its own takes its look from its window.

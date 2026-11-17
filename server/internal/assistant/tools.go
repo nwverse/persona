@@ -34,6 +34,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
+	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
@@ -63,6 +64,9 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return proto.TextResult(err.Error(), true)
 	}
 	call.Name = compat.Tool(call.Name)
+	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name); refused {
+		return res
+	}
 	args := call.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
@@ -261,6 +265,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolConversationRename(ctx, self, args)
 	case "conversation_archive", "conversation_unarchive":
 		return s.toolConversationArchive(ctx, self, args, name == "conversation_archive")
+	case "conversation_tags_set":
+		return s.toolConversationTagsSet(ctx, self, args)
 	case "conversation_new":
 		return s.toolConversationNew(ctx, self, args)
 	case "conversation_send":
@@ -609,9 +615,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
 		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
-		if !s.isWorkMachine(am.ID) {
-			prompt += "\n\n" + prompts.RenderTaskHandoff()
-		}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
@@ -640,6 +643,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 			delete(params, "effort") // Model configuration's, not this call's
+		}
+		if !s.isWorkMachine(am.ID) {
+			params["prompt"] = params["prompt"].(string) + "\n\n" + s.taskHandoff(sctx, am.ID, fit)
 		}
 		if note != "" {
 			note = " Note: " + note + "."
@@ -1072,11 +1078,20 @@ func (s *Service) withdrawAskUser(session string) {
 func (s *Service) pendingQuestions() []proto.Interaction {
 	s.loadAskLater(context.Background())
 	s.questions.mu.Lock()
-	defer s.questions.mu.Unlock()
 	out := []proto.Interaction{}
 	for _, q := range s.questions.m {
 		out = append(out, q.ix)
 	}
+	s.questions.mu.Unlock()
+	// Prepared assistant approvals use the interaction queue so clarification
+	// can release the original tool without resolving the card.
+	s.fleet.mu.Lock()
+	for _, p := range s.fleet.interactions {
+		if p.prepared != nil {
+			out = append(out, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
 }
@@ -1097,6 +1112,17 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		return ActionResult{OK: err == nil}, err
 	}
 	if mine, err := s.workAnswer(ctx, a.InteractionID, r); mine {
+		return ActionResult{OK: err == nil}, err
+	}
+	s.fleet.mu.Lock()
+	prepared := s.fleet.interactions[a.InteractionID]
+	isPrepared := prepared != nil && prepared.prepared != nil
+	s.fleet.mu.Unlock()
+	if isPrepared {
+		if !r.Cancel {
+			s.ownerHeard(prepared.ix.SessionID)
+		}
+		err := s.resolveAnswer(ctx, a.InteractionID, r, true, nil, nil)
 		return ActionResult{OK: err == nil}, err
 	}
 	s.questions.mu.Lock()
