@@ -380,7 +380,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	started = true
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: execution, fingerprint: n.executionFingerprint(launcher, execution),
-		instructions: instructions, personaMCPOnly: !legacyMCP, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared()}
+		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared()}
 	if !spare {
 		n.mu.Lock()
 		n.procs[id] = p
