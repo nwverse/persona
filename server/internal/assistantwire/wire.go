@@ -419,9 +419,11 @@ type SessionView struct {
 	MachineID string `json:"machine_id"`
 	SessionID string `json:"session_id"`
 	// Title is "MMDD | kind | topic" or the user's own (titles.go); the main conversation's is always "Persona".
-	Title    string   `json:"title,omitempty"`
-	Archived bool     `json:"archived,omitempty"`
-	Queued   []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
+	Title    string `json:"title,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
+	// Tags are the conversation's user-defined labels (assistant/conversation_tags.go); absent or empty for one without.
+	Tags   []string `json:"tags,omitempty"`
+	Queued []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
 	// Origin is who opened the conversation (docs/protocol/protocol.md "Origin of assistant chats": user, channel, inbox, task, spawned,
 	// lark_agent, extension) and OriginRef what of (the inbox item, the task, the conversation, the channel, the
 	// extension); both "" while it is not known.

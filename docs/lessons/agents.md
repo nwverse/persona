@@ -483,6 +483,14 @@ oh-my-zsh asks "[oh-my-zsh] Would you like to update? [Y/n]" while `~/.zshrc` lo
 
 The node now waits for the new tab's shell to settle before typing (`node/shellsettle.go`): only shells in front of the pane (no `git` or `nvm` an rc file runs) and the screen unchanged for 600 ms, at most 15 s. A question on the last line is never answered for the user: after 20 s the start ends with `shell_waiting` and the tab is kept open for 10 minutes. A typed line the shell still answers for (`rejects` / `rejectedLine` in `node/shellmiss.go`) is typed once more right away instead of waiting out `claudeStartWait`. Avoid fixed sleeps before typing into a fresh shell; read its screen and foreground processes instead.
 
+## Recheck a kept tab after terminal lookup (2026-11-17, #9633)
+
+A stalled Orca Agent can bind its pane while the closer looks up the terminal. A check made before that lookup
+does not protect the recovered Agent. Put the local ownership check inside each close-attempt callback, including
+the callback after a stale handle is refreshed. Hold the node mutex only for the predicate, never across the RPC.
+Recovery uses the existing released-claim/fresh-tab path; a real close failure still stops the retry. This narrows
+the lookup window and does not make the later engine request atomic with binding.
+
 ## "The shell is at rest" needs a screen to read (2026-11-11, #5450)
 
 On a Mac running Orca, starts kept failing after 3 minutes with "the tab's shell had not run it yet", the start line sitting unrun after the prompt. Its echo was printed above the shell's banner too, so it had been typed before the shell started. For the first 40–100 ms after `terminal.create` returns, Orca's `terminal.read` answers `source: "screen-unavailable"` (`orcart.ErrNoScreen`). `settleShell` took any read error to mean "this host cannot read screens" and typed at once. The tty was still canonical, and Orca had been left out of the start file, so the 1400-byte command was cut at 1024 bytes (the echo above the banner is exactly that long) and its Enter was dropped. It looked like it depended on load or on whether the start made a worktree, but it was a race on every start: whether the first settle read came before Orca had a screen.
