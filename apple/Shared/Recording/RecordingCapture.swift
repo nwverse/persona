@@ -294,7 +294,14 @@ final class RecordingCapture {
         self.shortSegments = shortSegments && !day
         self.meetingCall = meetingCall && !day && !rolling
         cancelsEcho = false
+        #if DEBUG
+        // An audio file in place of the microphone (`-openMeetingAudio`, #9417): the microphone isn't asked for. Never for
+        // an all-day recording.
+        let fileInput = day ? nil : RecordingFileInput.requested()
+        let allowed = fileInput != nil ? true : await Self.permission()
+        #else
         let allowed = await Self.permission()
+        #endif
         guard generation == token, state == .starting else { return }
         guard allowed else { failStarting(String(localized: "Allow Persona to use the microphone in Settings")); return }
         if let problem = Self.resourceProblem(starting: true) { failStarting(problem.message); return }
@@ -323,6 +330,9 @@ final class RecordingCapture {
                 writer.callPlayerFormat = Self.callFormat
                 writer.voiceProcessing = echoCancellation
             }
+            #endif
+            #if DEBUG
+            writer.fileInput = fileInput
             #endif
             writer.listener = listeners
             connect(writer)
