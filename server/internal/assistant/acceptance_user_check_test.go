@@ -298,3 +298,40 @@ func TestUserCheckReplacesAnEarlierDecision(t *testing.T) {
 		t.Fatalf("personal Pass after a decision did not complete: %+v, %v", result, err)
 	}
 }
+
+func TestUserCheckFeedbackRoundPersistsAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	for _, via := range []string{"verification card", "task card", "Agent chat"} {
+		t.Run(via, func(t *testing.T) {
+			database := todoTestDB(t)
+			s, f, todo := acceptedForUserCheckOn(t, database)
+			a := askOf(s, todo.ID)
+			switch via {
+			case "verification card":
+				if !s.acceptReply(ctx, "om_feedback", "Please fix the spacing.", false, a.MessageID) {
+					t.Fatal("feedback was not recognized")
+				}
+			case "task card":
+				if _, err := s.routeToTask(ctx, todo.Origin, todo.ID, "Please fix the spacing."); err != nil {
+					t.Fatal(err)
+				}
+			case "Agent chat":
+				s.userSpokeText(ctx, SessionRef{MachineID: "box", SessionID: "s1"}, "Please fix the spacing.")
+			}
+			row, err := database.GetTodo(ctx, todo.ID)
+			if err != nil || row.DoneAt != nil || row.ReopenedAt == nil || !row.ReopenedAt.After(a.AskedAt) {
+				t.Fatalf("feedback did not persist its new work round: %+v, %v", row, err)
+			}
+			restarted := newServiceOn(t, f, database)
+			if err := restarted.ensureTodosLoaded(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := restarted.acceptTry(ctx, todo.ID, a.MessageID); err != nil || result.taken {
+				t.Fatalf("old Pass still accepts rework after a restart: %+v, %v", result, err)
+			}
+			if got := todoNow(restarted, todo.ID); got.DoneAt != nil || got.Stage == "verify" || got.Supervision.state(got) == reviewUserCheck {
+				t.Fatalf("restarted feedback did not remain ongoing: %+v", got)
+			}
+		})
+	}
+}

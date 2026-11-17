@@ -727,3 +727,6 @@ including the verified stage if the todo was already closed.
 Serialize the round change, not an ordinary message's Agent-start wait: a second message must still join the
 Agent already starting (`TestStoppedTaskSecondMessageGoesToTheStartingAgent`), rather than wait behind the
 first sender's action lock.
+Cover the real database too: an ordinary `done: false` edit of an already-open todo intentionally does not advance
+`reopened_at`. Personal-verification feedback must explicitly restart that work round in the store; an in-memory
+timestamp alone lets an old Pass verify the rework after a manager restart.

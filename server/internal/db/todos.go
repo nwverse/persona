@@ -220,13 +220,15 @@ type TodoEdit struct {
 	Title, Notes *string
 	InboxItem    *string
 	Done         *bool
-	SetDue       bool
-	DueAt        *time.Time
-	DueDate      *time.Time
-	SetRemind    bool
-	RemindAt     *time.Time
-	Priority     *string
-	Project      *string
+	// RestartWork starts a new work round when Done is false even if the task was already open.
+	RestartWork bool
+	SetDue      bool
+	DueAt       *time.Time
+	DueDate     *time.Time
+	SetRemind   bool
+	RemindAt    *time.Time
+	Priority    *string
+	Project     *string
 	// Origin: the conversation (or agent) the task belongs to now; a task whose supervisor was handed to another
 	// conversation moves with it (assistant/task_leader.go rehome).
 	Origin *string
@@ -258,7 +260,7 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 				cur.DoneBy, cur.DoneReason = "", ""
 			}
 		} else {
-			if cur.DoneAt != nil {
+			if cur.DoneAt != nil || e.RestartWork {
 				cur.ReopenedAt = &at // the same stretch of work must not close it again
 			}
 			cur.DoneAt = nil

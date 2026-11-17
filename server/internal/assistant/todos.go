@@ -1880,7 +1880,13 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	cur.keepPlan(row)
 	if st := s.todoDB(); st != nil {
 		open := false
-		r, err := st.UpdateTodo(ctx, id, nil, nil, &open, now)
+		var r *db.TodoRow
+		var err error
+		if userCheck {
+			r, err = st.EditTodo(ctx, id, db.TodoEdit{Done: &open, RestartWork: true}, now)
+		} else {
+			r, err = st.UpdateTodo(ctx, id, nil, nil, &open, now)
+		}
 		if err != nil {
 			s.todos.writing.Unlock()
 			return err
