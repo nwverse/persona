@@ -1,7 +1,7 @@
 // "Terminal settings" (iOS TerminalSettingsView, the parts a browser needs): long rows fold or scroll while watching, the key bar,
 // the font size (pinching on iOS; ⌘+ / ⌘− stay the browser's zoom), light / dark apart from the page's (iOS's terminal
 // colors), the cursor (shape, blinking) and the saved commands. Kept in this browser. The renderer is chosen in Settings › Labs
-// (lib/labs.ts); this menu only says what draws this terminal and leads there.
+// (lib/labs.ts); this menu only says what draws this terminal and opens Labs over the page (never away from it).
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cx, EASE } from "../../../ui/atoms";
@@ -11,9 +11,6 @@ import { CURSOR_STYLES } from "../../../lib/terminal-details";
 import { APPEARANCES, setTerminalAppearance, useTerminalAppearance, type TerminalAppearance } from "../../../lib/terminal-appearance";
 import { MOUSE_MODES } from "../../../lib/terminal-mouse";
 import { FONT_SIZES, type FeedView, type TerminalFeed } from "./feed";
-import { navigate } from "../../../lib/router";
-import { SHEET_QUERY, useMedia } from "../../../ui/overlay";
-import { settingsHref } from "../../settings/nav";
 import { t } from "../../../i18n";
 
 const ROW = "flex min-h-10 items-center gap-2.5 px-3";
@@ -68,6 +65,7 @@ export function TerminalOptions({
   keyBar,
   onKeyBar,
   onEditShortcuts,
+  onOpenLabs,
   onClose,
 }: {
   anchor: HTMLElement;
@@ -76,6 +74,8 @@ export function TerminalOptions({
   keyBar: boolean;
   onKeyBar: (on: boolean) => void;
   onEditShortcuts: () => void;
+  /** Labs over the page (the panel's LabsDialog), as Edit shortcuts opens its editor: the menu closes first. */
+  onOpenLabs: () => void;
   onClose: () => void;
 }) {
   const driving = v.control === "active" || v.control === "starting";
@@ -179,7 +179,13 @@ export function TerminalOptions({
         </div>
         <Switch checked={v.cursorBlink} onChange={(on) => feed.setCursorBlink(on)} label={t("session-terminal-terminaloptions.cursor_blink")} />
       </div>
-      <RendererRow v={v} onClose={onClose} />
+      <RendererRow
+        v={v}
+        onOpenLabs={() => {
+          onClose();
+          onOpenLabs();
+        }}
+      />
       <div className="mx-3 my-1 border-t border-line" />
       <button
         type="button"
@@ -197,9 +203,10 @@ export function TerminalOptions({
 }
 
 /** What draws this terminal (it opened with Settings › Labs › Terminal renderer, feed.ts rendererChosen), and the way to
- *  Labs to change it for the next terminal. Not a switch: one per terminal would be a second, separate setting. */
-export function RendererRow({ v, onClose }: { v: Pick<FeedView, "renderer" | "rendererFellBack">; onClose: () => void }) {
-  const phone = useMedia(SHEET_QUERY);
+ *  Labs to change it for the next terminal. Not a switch: one per terminal would be a second, separate setting. Labs opens
+ *  in a dialog over the page rather than navigating to Settings, so the chat beside the terminal (its composer and an
+ *  unsent draft's images, which live only in that component) stays mounted. */
+export function RendererRow({ v, onOpenLabs }: { v: Pick<FeedView, "renderer" | "rendererFellBack">; onOpenLabs: () => void }) {
   const now = v.rendererFellBack
     ? t("session-terminal-terminaloptions.renderer_fell_back")
     : v.renderer === "webgl"
@@ -216,10 +223,8 @@ export function RendererRow({ v, onClose }: { v: Pick<FeedView, "renderer" | "re
       </div>
       <button
         type="button"
-        onClick={() => {
-          onClose();
-          navigate(settingsHref("labs", null, phone));
-        }}
+        aria-haspopup="dialog"
+        onClick={onOpenLabs}
         className="flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-control px-2 text-[12px] font-medium text-accent-ink hover:bg-hover"
       >
         {t("session-terminal-terminaloptions.renderer_open_labs")}

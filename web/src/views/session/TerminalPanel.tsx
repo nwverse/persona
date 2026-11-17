@@ -47,6 +47,7 @@ import { KEYBAR_KEY, savedKeyBar } from "./terminal/keybar-pref";
 import { LinkStatus } from "./terminal/LinkStatus";
 import { ModeToggle } from "./terminal/ModeToggle";
 import { ShortcutsEditor } from "./terminal/Shortcuts";
+import { LabsDialog } from "../settings/Labs";
 import { Surface } from "./terminal/Surface";
 import { TerminalOptions } from "./terminal/TerminalOptions";
 import { UploadStatus } from "./terminal/UploadStatus";
@@ -91,6 +92,7 @@ function PaneTerminal({
   const [keyBar, setKeyBar] = useState(savedKeyBar);
   const [options, setOptions] = useState<HTMLElement | null>(null);
   const [editing, setEditing] = useState(false);
+  const [labs, setLabs] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const [find, dispatchFind] = useReducer(findReducer, FIND_CLOSED);
   const [menu, setMenu] = useState<{ x: number; y: number; selection: boolean } | null>(null);
@@ -367,6 +369,7 @@ function PaneTerminal({
           keyBar={keyBar}
           onKeyBar={chooseKeyBar}
           onEditShortcuts={() => setEditing(true)}
+          onOpenLabs={() => setLabs(true)}
           onClose={() => setOptions(null)}
         />
       )}
@@ -382,6 +385,7 @@ function PaneTerminal({
           width={176}
         />
       )}
+      <LabsDialog open={labs} onClose={() => setLabs(false)} />
       <ShortcutsEditor
         open={editing}
         onClose={() => {

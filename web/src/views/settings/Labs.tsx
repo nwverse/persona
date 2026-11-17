@@ -4,6 +4,7 @@
 import { useId, useState } from "react";
 import { t } from "../../i18n";
 import { LAB_IDS, LABS, useLab, writeLab, type LabDefinition, type LabId, type LabSource, type LabValue } from "../../lib/labs";
+import { Dialog } from "../../ui/atoms";
 import { Segmented } from "../assistant/parts";
 import { Group, Pill, SettingsHint, Switch } from "./SettingsParts";
 
@@ -55,6 +56,18 @@ export function LabsSettings() {
         );
       })}
     </>
+  );
+}
+
+/** Labs over the current page (a sheet on a phone), opened from a feature's own menu (Terminal settings › Renderer): the
+ *  same cards as Settings › Labs, without leaving the page, so nothing open behind it (a chat's draft) is unmounted. */
+export function LabsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} onClose={onClose} title={t("settings-nav.tab_labs")} width={600}>
+      <div data-labs-dialog className="-mb-6">
+        <LabsSettings />
+      </div>
+    </Dialog>
   );
 }
 

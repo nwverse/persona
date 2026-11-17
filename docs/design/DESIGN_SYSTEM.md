@@ -2270,7 +2270,9 @@ line and the control keeps showing the value in effect; a save that worked adds 
 page's sidebar icon is the existing `sparkles` glyph (a dedicated one would not fit the first screen's budget). Why a new row pattern: principle 3 asks every behavior-changing
 setting to say its default, reach and rollback, and a trial needs all four said before someone tries it; a plain `Row`
 hint would put that in one truncated line. Where a feature also has its own options menu (Terminal settings), it shows
-the current value read-only with a button to Labs instead of a second switch, so there is one place to change it.
+the current value read-only with a button that opens the same Labs cards in a `Dialog` over the page (never navigating
+away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a second switch, so there is one
+place to change it.
 
 ## A chosen page that is not there now (#9071)
 
