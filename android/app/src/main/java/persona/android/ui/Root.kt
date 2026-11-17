@@ -1101,6 +1101,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                         sidebar = { sharedSidebar("shared-sidebar-column", foldSidebarColumn) }, hinges = paneHinges,
                                         overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false },
                                         drags = true, detailAtRoot = hosts.current.size <= 1,
+                                        // Unplaced-but-composed Persona must not publish an exclusion on Agents.
+                                        paneShown = shown,
                                         onDragSettle = { value ->
                                             if (currentColumnsOver.value) sidebarOverlayShown.value = value
                                             else setSidebarColumnBeside(value)

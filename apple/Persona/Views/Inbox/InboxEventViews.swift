@@ -594,7 +594,7 @@ struct InboxSuggestionEditor: View {
             .navigationTitle(InboxEventText.kindTitle(suggestion))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
                         let changed = text
