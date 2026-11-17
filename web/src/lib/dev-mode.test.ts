@@ -182,6 +182,27 @@ describe("package", () => {
     expect(energy.files["README.md"]).toContain("Left out by the owner: logs, errors.");
   });
 
+  it("adds the desktop shell's lines by category, and counts its crash dumps without reading them", async () => {
+    const { store, now } = await recorded();
+    const shell = {
+      lines: [
+        '{"kind":"shell_minute","processes":{},"t":"2027-01-15T08:01:00.000Z"}',
+        '{"exit_code":5,"kind":"process_gone","process":"renderer","reason":"crashed","t":"2027-01-15T08:02:00.000Z"}',
+        '{"event":"recording","kind":"shell","t":"2027-01-15T08:00:00.000Z"}',
+      ],
+      crashDumps: 2,
+    };
+    const all = await packageFiles(store, new Set(["logs", "errors", "energy"]), null, { ...device, platform: "desktop" }, now, shell);
+    expect(all.files["desktop.jsonl"].trim().split("\n")).toHaveLength(3);
+    expect(JSON.parse(all.files["manifest.json"]).counts).toMatchObject({ desktop_lines: 3, crash_dumps: 2 });
+    const energy = await packageFiles(store, new Set(["energy"]), null, { ...device, platform: "desktop" }, now, shell);
+    expect(energy.files["desktop.jsonl"]).toContain("shell_minute");
+    expect(energy.files["desktop.jsonl"]).not.toContain("process_gone");
+    expect(JSON.parse(energy.files["manifest.json"]).counts.crash_dumps).toBeUndefined();
+    const browser = await packageFiles(store, new Set(["logs"]), null, device, now, null);
+    expect(browser.files["desktop.jsonl"]).toBeUndefined();
+  });
+
   it("is a zip with its files in a folder of its name", async () => {
     const { store, now } = await recorded();
     const file = await buildPackage(store, new Set(["energy"]), null, device, now);

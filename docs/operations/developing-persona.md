@@ -10,7 +10,7 @@ hub or anyone else unless the owner sends the file, and then only as an ordinary
 | Client | State |
 | --- | --- |
 | iPhone / iPad | #9460: switch, recording, MetricKit, export with Send to Agent and Share File |
-| Web, desktop app | #9617: switch, recording, export with Send to Agent and Download (the desktop app's own main process: planned) |
+| Web, desktop app | #9617: switch, recording, export with Send to Agent and Download; #9675: the desktop app's main process |
 | Android | planned, #9618 |
 | Watch | not in the first version (MetricKit is not available on watchOS) |
 
@@ -75,6 +75,24 @@ first screen's budget. The recorder hooks `fetch`, `history`, `popstate`, `error
 the freeze watch itself and puts them back when the switch goes off; it imports nothing from the first screen's modules
 that they do not already export, so its route word list is a copy of `lib/error-reports.ts`'s (`dev-mode.test.ts` keeps
 them equal). A socket already open when the switch is turned on is counted from its next connection.
+
+## The desktop app (#9675)
+
+The desktop app shows the web page, so its switch, recording and export are the web's. While the switch is on the page
+also tells the shell (`personaDesktop.setDevDiagnostics(true)`; off: `false`, which deletes what the shell kept), and the
+main process records what the page cannot see, in `<user data>/dev-diagnostics/main.jsonl` (2 MB, then moved to
+`main.1.jsonl`; about 4 MB in all): `shell_minute` (each process type's count, CPU percent, idle wakeups a second and
+memory, from `app.getAppMetrics()`, and whether on battery), `power` (suspend, resume, on battery / AC, lock),
+`thermal` (macOS), `process_gone` (a renderer or child process: type, reason, exit code), `window` (unresponsive /
+responsive) and `shell` (recording started, versions). `crashReporter` runs with `uploadToServer: false`: dumps stay on
+the computer; the package only counts those written since recording began (`counts.crash_dumps`).
+
+The export reads the lines with `personaDesktop.readDevDiagnostics()` and adds them as `desktop.jsonl`, by the same
+categories (`shell_minute`, `power`, `thermal` with Energy; `process_gone`, `window` with Errors; the rest with Logs).
+Both operations answer only the hub page's main frame on an http(s) address (`readerAllowed`); a browser or an older
+shell has neither and the package goes without. Code: `desktop/src/dev-diagnostics-core.ts` (lines, rotation, metrics,
+the sender check; tests in `desktop/test/dev-diagnostics.test.ts`), `desktop/src/dev-diagnostics.ts` (Electron wiring,
+installed at the end of `desktop/src/main.ts`), `desktop/src/preload.cts`, `spec/desktop-bridge.d.ts`.
 
 ## The package
 

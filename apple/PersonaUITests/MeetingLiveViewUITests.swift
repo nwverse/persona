@@ -34,8 +34,8 @@ final class MeetingLiveViewUITests: XCTestCase {
     }
 
     /// The room sets topics after a batch of the meeting's lines: the room's Highlights page (#8731 B1) shows them as
-    /// chips, the current one among them, as the hub has them; the Live Activity says "Now: <topic>" on the Lock Screen
-    /// after the role, within its height even for the longest topic beside an answer.
+    /// chips, the current one among them, as the hub has them; the Live Activity says "Topic n / m: <topic>" on the
+    /// Lock Screen after the role (#8731 V4), within its height even for the longest topic beside an answer.
     @MainActor func testTopicsShowOnThePageAndTheLockScreen() throws {
         let hub = try mockHub()
         let app = try meetingPage(hub)
@@ -142,6 +142,13 @@ final class MeetingLiveViewUITests: XCTestCase {
                                "-showMeetingSample", "room-taking-part"]
         app.launchPinned()
         clearLaunchAlerts()
+        if !element(app, "meeting-thread-header").waitForExistence(timeout: 20) {
+            // The Recordings page can lose its push to the main conversation's late pick on a busy Mac: once more, the
+            // chats already fresh from this launch.
+            app.terminate()
+            if let i = app.launchArguments.firstIndex(of: "-openChatsFresh") { app.launchArguments.removeSubrange(i...i + 1) }
+            app.launchPinned()
+        }
         XCTAssertTrue(element(app, "meeting-thread-header").waitForExistence(timeout: 20), "no meeting page:\n\(app.debugDescription)")
         return app
     }

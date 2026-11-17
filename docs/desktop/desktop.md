@@ -73,12 +73,16 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   The shell keeps a state only as long as the page that sent it: when that page is gone (a hub change destroys its
   window, its renderer crashes), the island forgets that page's state, not one a newer page has sent since, and stays
   hidden until a signed-in page sends its own.
-- **Shell**: `desktop/src/island.ts` draws it from a local page (`island.html`, as the setup window), in a frameless,
-  transparent, always-on-top panel that takes no focus and stays on every Space and over full-screen apps, without
-  Electron's default of making the whole app a background one for that (no Dock icon or badge; the e2e checks it). The page's
-  preload (`island-preload.cts`) has two fixed operations: the pointer over it or away, and a clicked row's route. A
-  route is checked as a notification's (`contract.cts`) and must be one of the rows shown. The renderer's state is
-  untrusted input: `island-model.ts` keeps only numbers, known states, the hub's own routes and bounded text.
+- **Shell**: `desktop/src/island.ts` draws it from a local page, in a frameless, transparent, always-on-top panel that
+  takes no focus and stays on every Space and over full-screen apps, without Electron's default of making the whole app
+  a background one for that (no Dock icon or badge; the e2e checks it). The page comes from the shell's own scheme,
+  `persona-island://app/island.html` (`island-page.ts`), which serves its three files (`island.html`, `island.css`,
+  `island.cjs`, in `dist/island/`) and nothing else. It cannot come from `file://`: with
+  `grantFileProtocolExtraPrivileges` off, a packaged app's `file://` does not reach into its asar, the page fails with
+  `ERR_FILE_NOT_FOUND` and the island's window shows nothing. The page's preload (`island-preload.cts`) has two fixed
+  operations: the pointer over it or away, and a clicked row's route. A route is checked as a notification's
+  (`contract.cts`) and must be one of the rows shown. The renderer's state is untrusted input: `island-model.ts` keeps
+  only numbers, known states, the hub's own routes and bounded text.
 - **Where**: Electron does not say where a notch is. The built-in display whose menu bar is taller than a plain one
   (32 pt or more instead of 24) is taken to have one, about 200 pt wide at the top center; the pill is the menu bar's
   height, with 64 pt on each side for a symbol and a count. On another display it is the same pill without the middle,
@@ -113,7 +117,7 @@ Four scenarios run, each in its own profile:
 
 - **Origin root**, against a hub that lists `desktop_unregister`: the hub's sign-in page, sign-in, then the main chat (light and dark), the Agents list, an Agent session with a waiting card, Inbox and To-dos, each captured once the hub's data is in the page's DOM. With the window closed to the tray, a new Needs-you item from the hub must produce a notification request with the session's title, tag and route, the badge the web's own count, and a click must show the window on that session. Locking withdraws the desktop registration with `unregister_desktop`; unlocking registers again.
 - **Reverse-proxy prefix**, against an older hub: the gateway answers only below the prefix and rewrites `<base>` as the hub does, and any request of the page outside the prefix fails the run. Sign-in, the chat and the Agents list load; an in-hub link meant for a new window stays in the window; an off-hub link, an off-hub navigation and the same origin outside the prefix are refused and handed to the system browser. Locking withdraws the registration by closing the socket.
-- **Hub change**, against two independent hub origins, plus **same-origin prefix to parent**, against a prefixed hub and its origin-root parent: the signed-in local window submits Continue for the second hub; the old window is destroyed before the new one loads, its desktop registration is withdrawn, and the new origin-isolated session signs in. Notification permission, presence, a native notification request and both public login-item methods cross the production preload and IPC on the new hub. With the island on, none of the first hub's agents stay in it after its window is gone, and the second hub's arrive once it signs in (observed on every runner; only a Mac draws it). Closing the original local window in the root scenario also leaves those login-item methods working.
+- **Hub change**, against two independent hub origins, plus **same-origin prefix to parent**, against a prefixed hub and its origin-root parent: the signed-in local window submits Continue for the second hub; the old window is destroyed before the new one loads, its desktop registration is withdrawn, and the new origin-isolated session signs in. Notification permission, presence, a native notification request and both public login-item methods cross the production preload and IPC on the new hub. With the island on, none of the first hub's agents stay in it after its window is gone, and the second hub's arrive once it signs in (observed on every runner; only a Mac draws it, and there the island's page, loaded from its scheme, shows the first hub's count on its black pill). Closing the original local window in the root scenario also leaves those login-item methods working.
 
 The driver, `desktop/scripts/e2e-main.mjs`, is Electron's entry point for the run and then loads the unmodified production main module. It is not part of `dist/`, so it is never packaged; it refuses to run packaged or without its switch, gives the hub renderer nothing and adds no IPC channel. It only watches or replaces the outer edge of the main process:
 
@@ -286,6 +290,9 @@ claim](https://github.com/nwverse/persona/issues/6770#issuecomment-6873777179) o
 This audit preserves that old report; it neither re-runs it nor claims that #7442 fixed it. A preconfigured-hub update test
 passing is not first-install acceptance. Do not relax fuses or the existing origin/IPC boundaries to make this evidence look
 green.
+
+The notch island's page failed the same way in every packaged app, not only on a first run: its window was on screen and
+empty. It now loads from its own scheme ("Island at the MacBook notch"); the setup page's path is still the claim's above.
 
 ## Owner actions and decisions still required
 

@@ -421,6 +421,8 @@ export function stackFrames(stack: string | undefined): ErrorFrame[] {
 export function startDevMode(): DevRecorder {
   if (running) return running.recorder;
   watchSockets(); // a socket already open is counted from its next connection
+  // the desktop shell records its main process too (#9675); a browser or an older shell has no such operation
+  void window.personaDesktop?.setDevDiagnostics?.(true).catch(() => {});
   const recorder = new DevRecorder(openStore(), () => Date.now(), webBuild(), document.visibilityState === "hidden", usedMemory);
   setDevSink(recorder);
   recorder.page(pageName());
@@ -539,6 +541,7 @@ export async function setDevMode(on: boolean): Promise<void> {
   const r = running;
   running?.stop();
   running = null;
+  void window.personaDesktop?.setDevDiagnostics?.(false).catch(() => {});
   const store = r?.recorder.store ?? openStore();
   await r?.recorder.flush();
   await store.clear();

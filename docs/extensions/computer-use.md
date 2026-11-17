@@ -1267,6 +1267,18 @@ keeps its notice, `THIRD_PARTY_NOTICES.md`).
   `stop`. Touches: a tap clicks there; one finger scrolls (by the point through Persona Input where it may, with a coast);
   held half a second then dragged, it drags (selects text); held and lifted, the right button; two fingers and pinching as
   in Mouse Mode. The mock hub's `MOCK_PHONE_SCREEN=1` (with `MOCK_SCREEN=fake`) plays a Mac that has it, for screenshots.
+- **Picture in Picture** (#9659): the small window shows what the page shows, the portrait display alone, so it is
+  portrait and shaped like it. Its source's frames are cut to the display at the framebuffer's own pixels (2× on the
+  Mac, so it stays sharp) by `RFBFrameSink`, with the same damage-only copying; the page sets the cut
+  (`RFBSession.cutSmallWindow`), and a new connection or a framebuffer of another size shows all of the picture. The
+  source lies over the display as the page draws it, where the system's transition starts and Restore ends. As the
+  small window takes the Mac, the page closes without sending `stop`: `VNCPiP` keeps its `PhoneScreenLink`, so the
+  display and the window on it stay; Restore hands it back to the page (no second `start`, no window list again), and
+  closing the small window sends `stop` as leaving the mode does. A mode switch, another window (the display may
+  widen) or turning the phone changes the cut, so the small window's shape follows; Mouse and Trackpad Mode keep the
+  whole picture. Only the iPhone changed: the Mac and the node do as before. The iPhone simulators have no Picture in
+  Picture; `VNCTests` checks the source's shape there (`-showPiPSource`) and the system's small window on a stock iPad
+  simulator.
 - **Measured on a Mac** (macOS 26.6, 2026-11-16, a node stand-in driving the signed helper): start 1.7–2.1 s to a 540 ×
   1021 pt display at 2×; place 0.6–0.9 s; switching windows put the previous one back; stop 0.9 s, after which the display
   was gone, the main display's mode unchanged and none of 180 windows had moved.

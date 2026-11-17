@@ -34,6 +34,12 @@ type Launcher struct {
 	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// AssistantFor: on an Assistant launcher, the Agent launcher of this computer it runs the assistant for, as the
+	// runtime declares it (the person who set it up says it is the same agent and account): integrations/grok's
+	// grok-chat for the Paseo provider grok, which only starts Agents. The main chat's picker points that one at it
+	// (docs/integrations/runtimes.md "Assistant"); nothing is ever run on one in place of the other. Older runtimes
+	// leave it out. A string, so Launcher stays comparable.
+	AssistantFor string `json:"assistant_for,omitempty"`
 	// AutoAccept: a runtime's launcher whose agents ask for approval unless a switch is on, which a start in
 	// bypassPermissions turns on (Paseo's Auto Accept: its ACP providers such as Grok, and OpenCode;
 	// docs/integrations/paseo.md). The Agents Persona itself starts on it run with the switch on, as Claude Code's run in
