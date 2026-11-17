@@ -630,11 +630,11 @@ func TestUsageLimitRuleUnknownResetTurnLifetime(t *testing.T) {
 			}
 		}
 		settle("old")
-		time.Sleep(time.Hour - time.Minute) // the bubble's clock
+		time.Sleep(time.Hour - time.Minute) // sleep-ok: the fake clock of a synctest bubble, no wall time
 		if _, bad := s.launcherUnusable(ctx, "l4", "work"); !bad {
 			t.Fatal("the old turn's limit ended before healthStale after the turn")
 		}
-		time.Sleep(2 * time.Minute)
+		time.Sleep(2 * time.Minute) // sleep-ok: the fake clock of a synctest bubble, no wall time
 		if r, bad := s.launcherUnusable(ctx, "l4", "work"); bad {
 			t.Fatalf("the old turn's limit outlived healthStale after the turn: %+v", r)
 		}
@@ -654,7 +654,7 @@ func TestUsageLimitRuleUnknownFamilyKeepsOtherFamilysReset(t *testing.T) {
 		if r := healthState(s, "l4", "work"); !slices.Equal(r.limitModels(), []string{"opus", "sonnet"}) || r.ResetsAt != nil {
 			t.Fatalf("the Sonnet turn was not added: %+v", r)
 		}
-		time.Sleep(healthStale + time.Hour) // the bubble's clock
+		time.Sleep(healthStale + time.Hour) // sleep-ok: the fake clock of a synctest bubble, no wall time
 		if r, bad := s.launcherUnusable(ctx, "l4", "work"); !bad || !r.LimitResets["opus"].Equal(week) {
 			t.Fatalf("Opus's weekly limit ended with Sonnet's evidence: bad=%v %+v", bad, r)
 		}
@@ -669,7 +669,7 @@ func TestUsageLimitRuleUnknownFamilyKeepsOtherFamilysReset(t *testing.T) {
 				t.Fatalf("a Sonnet turn on stale evidence: renewed=%v, rev %d → %d, checked %v → %v", renewed, before.rev, after.rev, before.CheckedAt, after.CheckedAt)
 			}
 		}
-		time.Sleep(time.Until(week.Add(time.Minute)))
+		time.Sleep(time.Until(week.Add(time.Minute))) // sleep-ok: the fake clock of a synctest bubble, no wall time
 		if r, bad := s.launcherUnusable(ctx, "l4", "work"); bad {
 			t.Fatalf("held past every known reset with stale evidence: %+v", r)
 		}
