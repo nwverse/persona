@@ -148,6 +148,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
+        // Developing Persona carries on recording when it was left on (#9460); reads two defaults otherwise.
+        DevMode.shared.launch(tab: UserDefaults.standard.string(forKey: "app.tab").flatMap(AppTab.init(rawValue:)) ?? .assistant)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
         UNUserNotificationCenter.current().delegate = self
         Task { await ExtensionNotificationActions.preserveAndRegister { NotificationActions.categories } }
