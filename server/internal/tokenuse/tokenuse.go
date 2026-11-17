@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The agents, as proto.Session.Agent names them.
+// The agents, as proto.Session.Agent names them (Pi, Omp and Opencode too).
 const (
 	Claude = "claude"
 	Codex  = "codex"
@@ -54,7 +54,10 @@ func (t Tokens) Plus(u Tokens) Tokens {
 type Record struct {
 	Time  time.Time
 	Agent string
-	Model string // "" when the record does not say
+	// Session is the session the request belongs to when the record says it (a database's row); "" for a record in
+	// a session's own file, whose adapter knows it.
+	Session string
+	Model   string // "" when the record does not say
 	// Key tells the request apart: the same key in another file is a copy of it (a fork copies the history it starts
 	// from, timestamps and all), counted once. "<agent>:<the request's id>"; "" when there is no way to tell, counted
 	// as it is.

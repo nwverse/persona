@@ -992,6 +992,8 @@ Run the standalone check from the repository root; no Android SDK needed:
 python3 scripts/app/android_token_baseline.py
 python3 scripts/app/android_token_baseline.py --report /tmp/android-token-report.json
 python3 scripts/app/test_android_token_baseline.py
+python3 scripts/app/android_motion_baseline.py
+python3 scripts/app/test_android_motion_baseline.py
 ```
 
 The baseline is stored in `android/core/designsystem/tools/token-baseline.json`: each file's nonzero hard-coded counts, nothing else (`--report` writes the full counts). The script scans production Kotlin in every module (`android/app`, `android/core/*`, `android/feature/*`, `android/platform/*`; #4209), the design system included, but not the generated `Tokens.kt`, whose literals are the tokens and which `scripts/assets/gen_tokens.py --check` guards. It skips test directories, ignores comments, strings and imports, and recognizes explicit imports and aliases. It counts hard-coded values, token references and adoption rates per module for colors, font sizes and dp; adoption is `token / (token + hard-coded)`, or `null` when there is no usage.
@@ -1005,6 +1007,39 @@ A fifth category, `icon`, counts the Phosphor glyphs pages name directly (`PhIco
 A fourth category, `material3`, counts the Material 3 components pages may not use ([android-design.md](android-design.md) "2.3 Rules for writing pages"): calls to a denied component imported from `androidx.compose.material3`, or written out in full, outside `android/core/designsystem`, which wraps them. `Text`, `MaterialTheme`, `Local*` and `material3.adaptive` are not counted. A wildcard `material3` import outside the design system fails the check outright, with no baseline, since it hides which components a page uses.
 
 Hard-coded counts for each file and category must not exceed the baseline; new files start at zero. Existing code with permitted fixed sizes, such as the terminal, also counts toward the baseline, and new usage is checked too. Reducing hard-coded values in another file does not offset additions in this file. When a change really must be accepted, run `python3 scripts/app/android_token_baseline.py --update-baseline` and review the baseline diff; the normal check never rewrites it. After merging several lanes, run the check first, fix new hard-coded values first, then decide whether to update the baseline. The Swift output is out of scope here.
+
+## Motion literal baseline
+
+`scripts/app/android_motion_baseline.py` counts literal animation specs per production Kotlin file under `android/**/src/main`: `tween` / `spring` / `snap` (empty, typed, positional, or numeric `durationMillis`), `keyframes { }` / `keyframes()`, default `AnimatedVisibility` / `Crossfade` / `AnimatedContent` / `animateContentSize` / `animate*AsState` / one-argument `animateTo` / `updateTransition.animate*`, and default-spec `fadeIn` / `fadeOut` / `expand*` / `shrink*` / `slide*` / `scale*`. Only the duration and spring parameters decide whether a call is token-backed. `Tokens.kt` and `PersonaTheme.kt` are exempt. The baseline is `android/core/designsystem/tools/motion-baseline.json`; a file's count may only go down, and `--update-baseline` refuses a rise or a new file (and checks `version`). CI runs it beside the token checks (`scripts/ci/android.sh`, `scripts/ci/scripts.sh`).
+
+### Motion literal inventory (#9897 recount)
+
+Expanded detector recount (not a baseline raise): existing call sites the old patterns missed. Wire clear iOS matches later; open questions stay open.
+
+| Android site | Kind | iOS counterpart / note |
+| --- | --- | --- |
+| `ChatLinkHost.kt` (`drag.animateTo` ×6) | animateTo-default | Link sheet detents — open: match iOS sheet spring if any |
+| `LarkDocumentReader.kt` (`drag.animateTo` ×4) | animateTo-default | Document reader sheet — open |
+| `Controls.kt` press/thumb `animate*AsState`, reduce `snap()`, infinite `tween` | mixed | Press/thumb: Glass state spring; loops: local |
+| `Page.kt` `tween(180)`, `fadeIn()`/`fadeOut()`, `Crossfade` | mixed | Large-title bar — open vs iOS nav title |
+| `EndpointDrag.kt` `snap()` lift/settle | snap | Settings endpoint reorder — Reduce Motion / settle |
+| `Root.kt` `fadeIn()`/`fadeOut()` | transition-default | Root overlay — open |
+| `Glass.kt` `tween<Float>(900)` / `snap()` | tween/snap | Glass material settle — local duration |
+| `Workflows.kt` / `ChangingText.kt` / `Charts.kt` `tween(duration, …)` | tween | Count/chart motion (`PersonaMotion.count`) — prefer tokens |
+| `PersonaFace.kt` `tween(BLINK_MS)` | tween | Face blink — no shared iOS token |
+| `PageSizedSettingsSheet.kt` `fadeIn/Out(tween(duration))` | tween | Settings sheet — open |
+| `Voice.kt` / `ChatWaiting.kt` / `StructuredContent.kt` pulse `tween` | tween | Local loops |
+| `AssistantTasks.kt` `animateContentSize()`, reduce `snap()` | mixed | Task entry size — open |
+| `ExtensionViewContent.kt` `animateItem(tween…)` | tween | Extension list — open |
+| `AgentsScreen.kt` default `AnimatedVisibility` | AnimatedVisibility-default | Search chrome — open |
+| `ChatScreen.kt` `fadeOut()` exit | transition-default | Interaction feedback — open |
+| `PaneDividers.kt` `spring(Spring.*)` | spring | Pane divider — open |
+| `KeyCaps.kt` `animateFloatAsState` default | animateAsState-default / tween | Key press — open |
+| `HomeChrome.kt` / `ListTapMotion.kt` / `Agent*` reduce `snap()` | snap | Reduce Motion branches |
+| `PageTransitions.kt` `tween(it.standard)` fallback | tween | Non-Glass layout fallback |
+| `ComposerHardware.kt` reduce `snap()` | snap | Reduce Motion |
+
+
 
 ## Design-system slot order
 
