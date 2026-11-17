@@ -501,7 +501,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entry("running").textContent).toBe(label.running);
     expect(entry("needs").textContent).toBe(label.needs);
     expect(host.textContent).toContain(t("assistant-tasks.tray_empty_progress"));
-    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${t("assistant-tasks.tray_just_finished")}1`);
+    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${stateName("just_finished")}1`);
     const finished = host.querySelector("[data-task-slot]")!;
     expect(finished.getAttribute("data-counts-open")).toBe("false");
     expect(finished.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("done");

@@ -34,6 +34,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
+	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
@@ -261,6 +262,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolConversationRename(ctx, self, args)
 	case "conversation_archive", "conversation_unarchive":
 		return s.toolConversationArchive(ctx, self, args, name == "conversation_archive")
+	case "conversation_tags_set":
+		return s.toolConversationTagsSet(ctx, self, args)
 	case "conversation_new":
 		return s.toolConversationNew(ctx, self, args)
 	case "conversation_send":
@@ -571,7 +574,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Effort = ""
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
-		if err := s.checkAgentStart(ctx, am.ID); err != nil {
+		gated, _ := run["launcher"].(string)
+		if err := s.checkAgentStart(ctx, am.ID, s.startLauncher(ctx, gated)); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
@@ -701,7 +705,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Last look on the machine it will really start on (a health detour may have changed am): re-check and hold
 		// its admission slot across the session.start call.
-		release, err := s.admitAgentStart(sctx, am.ID)
+		final, _ := params["launcher"].(string)
+		release, err := s.admitAgentStart(sctx, am.ID, s.startLauncher(ctx, final))
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}

@@ -240,8 +240,8 @@ nonisolated enum CallMain {
         handler.system(perform: kind, for: id, fulfil: fulfil, fail: { action.fail() })
     }
 
-    fileprivate func changed(_ conversation: Conversation) {
-        let state: CallSystemState = switch conversation.state {
+    fileprivate func changed(_ id: UUID, _ lckState: Conversation.State) {
+        let state: CallSystemState = switch lckState {
         case .idle: .idle
         case .joining: .joining
         case .joined: .joined
@@ -250,8 +250,8 @@ nonisolated enum CallMain {
         case .left: .left
         @unknown default: .idle
         }
-        Self.log.notice("call \(conversation.uuid.uuidString, privacy: .public): the system's conversation is \(String(describing: state), privacy: .public)")
-        handler?.system(changed: conversation.uuid, state: state)
+        Self.log.notice("call \(id.uuidString, privacy: .public): the system's conversation is \(String(describing: state), privacy: .public)")
+        handler?.system(changed: id, state: state)
     }
 
     fileprivate func timedOut(_ action: ConversationAction) {
@@ -292,7 +292,9 @@ nonisolated final class PersonaCallsLCKDelegate: ConversationManagerDelegate, @u
     @MainActor weak var system: LCKCallSystem?
 
     nonisolated func conversationManager(_ manager: ConversationManager, conversationChanged conversation: Conversation) {
-        CallMain.run { [weak self] in self?.system?.changed(conversation) }
+        // Only Sendable values cross to the main actor: the conversation object need not be Sendable in every SDK.
+        let id = conversation.uuid, lckState = conversation.state
+        CallMain.run { [weak self] in self?.system?.changed(id, lckState) }
     }
 
     nonisolated func conversationManagerDidBegin(_ manager: ConversationManager) {}

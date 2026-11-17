@@ -91,7 +91,9 @@ struct ChatView: View {
     @State private var filesReveal: String?
     /// Kept when the Files pane swaps back to Chat, so an unfinished remote operation can be seen again.
     @State private var folderTransfers = FolderTransfers()
-    @State private var git: GitStatus?
+    private var git: GitStatus? {
+        session.flatMap { AgentMenuRouting.shared.gitStatus($0) }
+    }
     @State private var menu = MessageMenu()
     /// What Forward To picked (#3807): done once its sheet has gone, as a navigation made while it goes is dropped.
     @State private var forwardPicked: ForwardOutcome?
@@ -100,6 +102,8 @@ struct ChatView: View {
     #if os(iOS)
     /// Select Messages (#3838): the messages picked to forward together, while selecting.
     @State private var pick = MessagePick()
+    /// Export Image (#9468): the picked messages on their way into a picture (`ChatExportSheet`).
+    @State private var exporting: ExportRequest?
     #endif
     #if os(iOS)
     /// Full Page in this chat's system screenshot (#1609).
@@ -415,6 +419,9 @@ struct ChatView: View {
         #if os(macOS)
         .macChatDrop(key) // files dropped anywhere on the page go to the composer (#2113)
         #endif
+        // The header's overlay and the side-bars top under it start a segment of their own (#9709): the chain had grown
+        // two longer at its end, where each slot holds all before it.
+        .stackSegment()
         .overlay(alignment: .top) {
             #if os(macOS)
             if style == .dev { macChrome }
@@ -422,6 +429,11 @@ struct ChatView: View {
             if style == .dev { if sideBars { sideHeader } else { devChrome } }
             #endif
         }
+        #if os(iOS)
+        // The page's top under side bars in a split is the chat's own, not its navigation bar's (`pinsSideTop`).
+        .safeAreaPadding(.top, pinsSideTop ? Theme.Space.xl : 0)
+        .ignoresSafeArea(.container, edges: pinsSideTop ? .top : [])
+        #endif
     }
 
     /// The closeout the header's card shows (#3612, `CloseoutCard`): a stopped agent's own account of its work, on its
@@ -748,9 +760,9 @@ struct ChatView: View {
         // AnyView here, in chatPresentation and in chatLifecycle: the page's modifiers as one type were ~60 levels deep, and the runtime spent
         // about 100 ms building that type's metadata the first time the page drew (cold start, #1337). Each boundary
         // is the same type every time, so nothing below loses its identity or state. Also cut midway here, in
-        // chatLifecycle, chatSurface, paneContent, mainFooter and Composer: unoptimized, each getter reserved a stack
-        // slot for every intermediate of its chain, each holding all before it, and a Debug build's chat page reached
-        // 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
+        // chatLifecycle, chatSurface, paneContent, chatScroll, mainFooter and Composer: unoptimized, each getter
+        // reserved a stack slot for every intermediate of its chain, each holding all before it, and a Debug build's
+        // chat page reached 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
         let activityTop = AnyView(chatPresentation)
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
         #if os(iOS)
@@ -822,6 +834,9 @@ struct ChatView: View {
         }
         .stackSegment()
         .renameSessionAlert($renaming)
+        // The presenters that each hold a binding to a session (rename, link to a todo, close, delete) got one more
+        // with the link sheet: cut in two (#9709, `MainPagesStackTests`).
+        .stackSegment()
         #if os(iOS)
         .sheet(item: Binding(get: { AgentMenuRouting.shared.linkingSession },
                               set: { AgentMenuRouting.shared.linkingSession = $0 })) {
@@ -842,7 +857,10 @@ struct ChatView: View {
                 })
         }
         .stackSegment()
-        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
+        // Presented here, pushed in Knowledge: the ✕ belongs to the sheet (#9653).
+        .sheet(item: $openedKnowledge) { entry in
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
+        }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
         #if DEBUG
@@ -2231,26 +2249,22 @@ struct ChatView: View {
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
     private var panes: [SessionPane] {
         guard let session else { return [.chat] }
-        return AgentMenuFacts.panes(session, git: git)
+        return AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session))
     }
 
     private var paneBadges: [SessionPane: String] {
-        AgentMenuFacts.paneBadges(git)
+        AgentMenuFacts.paneBadges(session.flatMap { AgentMenuRouting.shared.gitStatus($0) })
     }
 
     private var sharedGit: Binding<GitStatus?> {
         Binding(get: { git }, set: { new in
-            git = new
-            AgentMenuRouting.shared.git[key] = new
+            if let session { AgentMenuRouting.shared.store.set(new, for: .init(session: session.key, cwd: session.cwd)) }
         })
     }
 
     private func loadGit() async {
-        guard style == .dev, let cwd = session?.cwd, !cwd.isEmpty, let api = model.api(key.group) else { return }
-        if let s = try? await api.gitStatus(machine: key.machineID, cwd: cwd) {
-            git = s
-            AgentMenuRouting.shared.git[key] = s
-        }
+        guard style == .dev, let session, !session.cwd.isEmpty, let api = model.api(session.group) else { return }
+        await AgentMenuRouting.shared.store.load(.init(session: session.key, cwd: session.cwd), api: api)
     }
 
     /// The chat is an upside-down list (newest first, flipped back on screen), the way chat apps do it: the newest
@@ -3295,13 +3309,17 @@ struct ChatView: View {
             }
         }
         #endif
-        let presented = hooked
+        // The sheets and the rest of the chain start from an erased list (#9709, `MainPagesStackTests`): as one type,
+        // the list's chain with its scroll view and rows was about a hundred levels deep, and the chat pane's first
+        // render built its runtime metadata on top of the page's getters, 515 KB deep in a Debug build.
+        let presented = hooked.stackSegment()
         #if os(macOS)
         .sheet(item: $menu.selecting) { t in SelectableTextSheet(text: t.text, plain: t.plain, quote: menu.selectionQuote(of: t)) }
         #endif
         .sheet(item: $menu.sharing) { m in MessageShareSheet(message: m) }
         #if os(iOS)
         .sheet(item: $menu.forwarding, onDismiss: forwardDone) { d in ForwardSheet(draft: d) { forwardPicked = $0 } }
+        .sheet(item: $exporting) { r in ChatExportSheet(request: r, pick: pick).presentationDetents([.large]) }
         .sheet(item: $forwardNewAgent) { f in
             NewChatView(contextBlock: f.refs.map(\.xml).joined(separator: "\n"), forwarded: f.refs, forwardedImages: f.images,
                         onlyGroup: key.group) { s in
@@ -3491,7 +3509,9 @@ struct ChatView: View {
     private var compactChrome: some View {
         HStack(spacing: 0) {
             Button { back() } label: {
-                ThemedIcon(backSymbol).font(Theme.Font.secondaryStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
+                ThemedIcon(backSymbol).font(Theme.Font.secondaryStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
+                    .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                    .contentShape(.rect) // hit like the ⋯ (#9699)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(backLabel)
@@ -3617,8 +3637,8 @@ struct ChatView: View {
         #if os(iOS)
         if style == .dev, let host { hostedMenuItems(host) }
         if style == .dev, let session {
-            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, panes: panes, paneBadges: paneBadges,
-                                                            currentPane: pane, hosted: host != nil, showsSpace: openSpace != nil,
+            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: pane,
+                                                            hosted: host != nil, showsSpace: openSpace != nil,
                                                             sides: sides),
                                     handlers: agentMenuHandlers)).stackSegment()
         } else if session?.canAttach == true {
@@ -4099,12 +4119,30 @@ struct ChatView: View {
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
 
+    /// Under side bars in a split (the open Duo on its side) the page starts `Theme.Space.xl` from the top whatever its
+    /// navigation bar holds. The bar holds nothing across the top (its actions are in the side column, its title is
+    /// removed) but, with the column folded, the system's Show Sidebar, and that row pushed the header and the chat 58 pt
+    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the system's
+    /// button lies on the title's line at the top left, as on a place. Not while typing: the bar then shows the system's
+    /// title over the content, and the header is only fog. Not in a hosting sheet, which has a bar of its own.
+    private var pinsSideTop: Bool {
+        #if os(iOS)
+        sideBars && split?.sideBars == true && host == nil && !composerTyping
+        #else
+        false
+        #endif
+    }
+
+    /// The list folded under side bars: the system's Show Sidebar at the top left brings it back (#3680), so the side
+    /// column has no second one.
+    private var systemShowsList: Bool { backShowsList && split?.sideBars == true }
+
     /// The header's actions as system toolbar items, for the side column: back on top (a custom one, so it leaves files /
     /// Git for the chat first), then the panes, the terminal and ⋯. Each has a title as well as a symbol: the column
     /// shows the symbol, the overflow menu both.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
-        if !hidesBack {
-            ToolbarItem(placement: .cancellationAction) {
+        if !hidesBack && !systemShowsList {
+            ToolbarItem(placement: .topBarLeading) {
                 // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
             }
@@ -4599,6 +4637,19 @@ struct ChatView: View {
                     if let a = answer { menu.sharing = ShareMessage(text: a.text ?? "", isUser: false, source: menu.source(), date: a.ts, agent: menu.agent()) }
                 }
             }
+            #if os(iOS)
+            // `-showExport replies|all` (#9468): selecting with every reply (or every message) picked, then Export Image.
+            if let what = UserDefaults.standard.string(forKey: "showExport") {
+                Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    let bars = currentLines().compactMap { Self.pickBar($0) }.filter { what == "all" || !$0.isUser }
+                    guard let first = bars.first else { return }
+                    pick.start(first.id)
+                    for b in bars.dropFirst() { _ = pick.toggle(b.id) }
+                    exportPicks()
+                }
+            }
+            #endif
             if UserDefaults.standard.bool(forKey: "showCloseAgent") { // the close confirmation, for screenshots
                 Task { try? await Task.sleep(for: .seconds(3)); closing = session }
             }
@@ -4906,6 +4957,14 @@ struct ChatView: View {
             draft.selects = true
             menu.forwarding = draft
         }
+        // Select Messages (#9468): the long-press bar's row starts selecting with the pressed message picked; a reply's
+        // questions are its turn's messages from the user's side (Include Questions).
+        menu.select = { [pick] id in
+            Keyboard.dismiss()
+            withAnimation(Theme.Motion.standard) { pick.start(id) }
+        }
+        menu.selectable = { id in currentLines().contains { Self.pickBar($0)?.id == id } }
+        pick.readQuestions = { [model, key] in PickQuestions.map(model.chat(key).blocks) }
         #endif
     }
 
@@ -4985,11 +5044,12 @@ struct ChatView: View {
         return true
     }
 
-    /// The footer, or while selecting the bar with Cancel and Forward (N) in its place. The composer's words, quotes and
-    /// pictures are the model's, so it comes back as it was.
+    /// The footer, or while selecting the bar with Cancel, the count, Include Questions and Forward · Copy · Export Image in
+    /// its place. The composer's words, quotes and pictures are the model's, so it comes back as it was.
     @ViewBuilder private var pickOrFooter: some View {
         if pick.on {
-            PickBar(pick: pick, cancel: { withAnimation(Theme.Motion.standard) { pick.end() } }, forward: forwardPicks)
+            PickBar(pick: pick, cancel: { withAnimation(Theme.Motion.standard) { pick.end() } }, forward: forwardPicks,
+                    copy: copyPicks, export: exportPicks, refused: pickRefused)
         } else {
             footer
         }
@@ -5000,16 +5060,56 @@ struct ChatView: View {
         model.toast = Toast(String(localized: "Up to \(ForwardMessage.most) messages at a time"), style: .error)
     }
 
-    /// Forward (N): the picked messages in the chat's order, to Forward To. Selecting ends once a target is picked
-    /// (`forwardDone`); Cancel there comes back to the selection.
-    private func forwardPicks() {
+    /// The picked messages as forwards, in the chat's order; with `questions`, with the questions they bring (#9468).
+    private func pickedDrafts(questions: Bool) -> [ForwardDraft] {
+        let ids = questions ? pick.ids.union(PickQuestions.brought(pick.ids, questions: pick.questions)) : pick.ids
         let shown = Dictionary(currentLines().compactMap { Self.pickBar($0) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let bars = model.chat(key).items.compactMap { pick.ids.contains($0.id) ? shown[$0.id] : nil }
-        guard !bars.isEmpty else { return }
-        let drafts = bars.map { Self.forwardDraft($0, key: key, model: model, menu: menu) }
+        return model.chat(key).items.compactMap { ids.contains($0.id) ? shown[$0.id] : nil }
+            .map { Self.forwardDraft($0, key: key, model: model, menu: menu) }
+    }
+
+    /// Forward: the picked messages (and their questions, with Include Questions) to Forward To. Selecting ends once a
+    /// target is picked (`forwardDone`); Cancel there comes back to the selection.
+    private func forwardPicks() {
+        let drafts = pickedDrafts(questions: pick.include)
+        guard !drafts.isEmpty else { return }
         menu.forwarding = ForwardDraft(pieces: drafts.flatMap(\.pieces), loadImage: drafts[0].loadImage,
                                        share: drafts.count == 1 ? drafts[0].share : nil)
     }
+
+    /// Copy (#9468): the picked messages (and their questions) as text, each its whole, who wrote it over it; then
+    /// selecting ends.
+    private func copyPicks() {
+        let pieces = pickedDrafts(questions: pick.include).flatMap(\.pieces)
+        guard !pieces.isEmpty else { return }
+        Task {
+            do {
+                let messages = try await ChatExportRenderer.messages(pieces)
+                UIPasteboard.general.string = ExportText.copy(messages)
+                Haptics.success()
+                model.toast = Toast(String(localized: "Copied [Selected Messages]"), style: .success)
+                withAnimation(Theme.Motion.standard) { pick.end() }
+            } catch {
+                Haptics.error()
+                model.toast = Toast(error.isOffline ? String(localized: "Can't reach the hub") : error.shown ?? error.localizedDescription,
+                                  style: .error)
+            }
+        }
+    }
+
+    /// Export Image (#9468): the preview of the picked messages as a picture; selecting stays, to export again or forward.
+    private func exportPicks() {
+        let without = pickedDrafts(questions: false), with = pickedDrafts(questions: true)
+        guard let first = with.first else { return }
+        let s = model.session(key)
+        exporting = ExportRequest(title: s?.displayTitle ?? "",
+                                  agent: s?.assistant == true ? model.assistantShownName(in: key) : (s?.agentLabel ?? ""),
+                                  pieces: { questions in (questions ? with : without).flatMap(\.pieces) },
+                                  loadImage: first.loadImage, width: menu.areaWidth > 0 ? menu.areaWidth : Self.phoneWidth)
+    }
+
+    /// A phone's width, for a picture drawn before the chat knows its own.
+    private static let phoneWidth: CGFloat = 393
     #else
     private var pickOrFooter: some View { footer }
     #endif
@@ -5043,8 +5143,7 @@ struct ChatView: View {
         bindMenu()
         menu.selected = nil
         if pane == .git || pane == .files { pane = .chat } // the next agent may live in another directory
-        git = nil
-        AgentMenuRouting.shared.git[key] = nil
+        AgentMenuRouting.shared.store.clear(.init(session: key, cwd: session?.cwd ?? ""))
         position = ScrollPosition(edge: .top)
         model.subscribe(next, by: owner)
         model.show(next, by: owner)
@@ -7231,7 +7330,7 @@ struct SessionInfoSheet: View {
             .navigationTitle("Session Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                SheetClose { dismiss() }
             }
             #endif
         }

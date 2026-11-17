@@ -19,23 +19,25 @@ final class IntentHandler: INExtension, INStartCallIntentHandling {
                  displayName: "Persona", image: nil, contactIdentifier: nil, customIdentifier: "persona")
     }
 
-    func resolveContacts(for intent: INStartCallIntent) async -> [INStartCallContactResolutionResult] {
-        [.success(with: Self.persona)]
+    // The completion-handler forms SiriKit calls (on its own queue), not async witnesses: an async witness of an @objc
+    // protocol is nonisolated(nonsending) under approachable concurrency, which Swift 6.2 (Xcode 26.0) handles less well.
+    func resolveContacts(for intent: INStartCallIntent, with completion: @escaping ([INStartCallContactResolutionResult]) -> Void) {
+        completion([.success(with: Self.persona)])
     }
 
     /// A voice call whatever was asked (FaceTime or video included): Persona has no video.
-    func resolveCallCapability(for intent: INStartCallIntent) async -> INStartCallCallCapabilityResolutionResult {
-        .success(with: .audioCall)
+    func resolveCallCapability(for intent: INStartCallIntent, with completion: @escaping (INStartCallCallCapabilityResolutionResult) -> Void) {
+        completion(.success(with: .audioCall))
     }
 
     /// Not an emergency, voicemail or redial number: a call to Persona.
-    func resolveDestinationType(for intent: INStartCallIntent) async -> INCallDestinationTypeResolutionResult {
-        .success(with: .normal)
+    func resolveDestinationType(for intent: INStartCallIntent, with completion: @escaping (INCallDestinationTypeResolutionResult) -> Void) {
+        completion(.success(with: .normal))
     }
 
     /// The call goes on in the app. No activity of ours: Siri makes one named after the intent, with the intent in its
     /// interaction, which is what the app reads.
-    func handle(intent: INStartCallIntent) async -> INStartCallIntentResponse {
-        INStartCallIntentResponse(code: .continueInApp, userActivity: nil)
+    func handle(intent: INStartCallIntent, completion: @escaping (INStartCallIntentResponse) -> Void) {
+        completion(INStartCallIntentResponse(code: .continueInApp, userActivity: nil))
     }
 }

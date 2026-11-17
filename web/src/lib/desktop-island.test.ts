@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// The island at the MacBook notch (#7669): what the web sends the desktop app. The counts are the Dock badge's; the
-// rows are the agents that need you, then the working ones, newest first, each with its Agents-list line.
+// The island at the MacBook notch (#7669): what the web sends the desktop app. The counts and the rows are of the same
+// agents, the Agents list's: the ones that need you, then the working ones, then the ones that finished unseen, each
+// state's newest first, each with its Agents-list line.
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +17,6 @@ vi.mock("./sessions", () => ({
     lists.completeOn = on;
     return { sessions: on ? lists.complete : [], loaded: on, error: "" };
   },
-  useCounts: () => ({ needs: 2, working: 0, unread: 0 }),
 }));
 
 const s = (id: string, o: Partial<Session>): Session => ({ machine_id: "mac", session_id: id, title: `示例 ${id}`, cwd: "/code", status: "idle", ...o });
@@ -38,7 +38,7 @@ describe("islandState", () => {
     // a child session's question: the Agents list folds it under n3 and shows it on n3's row
     const childCard: Interaction = { id: "ix2", machine_id: "mac", session_id: "c3", folded_under: "n3", kind: "question", questions: [{ question: "先合哪个分支？" } as NonNullable<Interaction["questions"]>[number]] };
     // frozen as the hooks' shared lists are treated: sorting it in place would throw
-    const state = islandState(Object.freeze(sessions), [card, childCard], { needs: 3, working: 2, unread: 1 });
+    const state = islandState(Object.freeze(sessions), [card, childCard]);
     expect(state.rows.map((r) => [r.title, r.state, r.label, r.line])).toEqual([
       ["示例 n3", "needs_you", "需要你", "在问你：先合哪个分支？"],
       ["示例 n2", "needs_you", "需要你", "等你确认发布"],
@@ -48,14 +48,46 @@ describe("islandState", () => {
     ]);
     expect(state.rows.every((r) => r.route.startsWith("/") && !r.route.startsWith("//"))).toBe(true);
     expect(state.rows[0].route).toContain("n3");
+    // the assistant's conversation that needs you is neither a row nor a count: the Agents list leaves it out
     expect([state.needsYou, state.working, state.unread]).toEqual([3, 2, 1]);
     expect(state.summary).toBe("3 个需要你，2 个工作中，1 个完成未看");
   });
 
+  it("counts only the agents it can list: the assistant's conversation at work is neither", () => {
+    const state = islandState([
+      s("w1", { state: "working", updated_at: at(1), activity: "在跑测试" }),
+      s("a1", { state: "working", updated_at: at(2), assistant: true }),
+    ], []);
+    expect(state.rows.map((r) => r.title)).toEqual(["示例 w1"]);
+    expect([state.needsYou, state.working, state.unread]).toEqual([0, 1, 0]);
+  });
+
+  it("lists the ones that finished unseen after the working ones, with what they did", () => {
+    const state = islandState([
+      s("u1", { state: "unread", updated_at: at(9), last_text: "已合并到 main" }),
+      s("w1", { state: "working", updated_at: at(1) }),
+    ], []);
+    expect(state.rows.map((r) => [r.title, r.state, r.label, r.line])).toEqual([
+      ["示例 w1", "working", "工作中", ""],
+      ["示例 u1", "unread", "完成未看", "已合并到 main"],
+    ]);
+    expect([state.needsYou, state.working, state.unread]).toEqual([0, 1, 1]);
+  });
+
+  it("keeps a working agent's place while it works: its updates do not move it", () => {
+    const rows = (sessions: Session[]) => islandState(sessions, []).rows.map((r) => r.title);
+    const w1 = s("w1", { state: "working", state_since: at(1), updated_at: at(8) });
+    const w2 = s("w2", { state: "working", state_since: at(2), updated_at: at(3) });
+    expect(rows([w1, w2])).toEqual(["示例 w2", "示例 w1"]);
+    expect(rows([{ ...w1, updated_at: at(4) }, { ...w2, updated_at: at(9) }])).toEqual(["示例 w2", "示例 w1"]);
+  });
+
   it("lists at most five and says nothing when nothing is going on", () => {
     const many = Array.from({ length: 8 }, (_, i) => s(`w${i}`, { state: "working", updated_at: at(i) }));
-    expect(islandState(many, [], { needs: 0, working: 8, unread: 0 }).rows).toHaveLength(ISLAND_ROWS);
-    expect(islandState([], [], { needs: 0, working: 0, unread: 0 })).toEqual({ needsYou: 0, working: 0, unread: 0, rows: [], summary: "" });
+    const state = islandState(many, []);
+    expect(state.rows).toHaveLength(ISLAND_ROWS);
+    expect(state.working).toBe(8);
+    expect(islandState([], [])).toEqual({ needsYou: 0, working: 0, unread: 0, rows: [], summary: "" });
   });
 
   it("lists every agent the counts count while the island is on, not only a paged hub's first page", async () => {
@@ -65,16 +97,19 @@ describe("islandState", () => {
     lists.complete = [first, s("n2", { state: "needs_you", updated_at: at(2) })];
     const setIslandState = vi.fn();
     Object.defineProperty(window, "personaDesktop", { value: { getIsland: async () => ({ supported: true, enabled: true }), setIslandState }, configurable: true });
-    const sent = () => (setIslandState.mock.lastCall?.[0] as DesktopIslandState).rows.map((r) => r.title);
+    const last = () => setIslandState.mock.lastCall?.[0] as DesktopIslandState;
+    const sent = () => last().rows.map((r) => r.title);
     const root = createRoot(document.createElement("div"));
     // on since the last run: the desktop says so when the web starts
     await act(async () => root.render(createElement(DesktopIslandSignals)));
     expect(lists.completeOn).toBe(true);
     expect(sent()).toEqual(["示例 n2", "示例 n1"]);
+    expect(last().needsYou).toBe(2);
     // turned off in Settings: the complete list is not read, and the desktop keeps the pushed page's rows
     act(() => setIslandOn(false));
     expect(lists.completeOn).toBe(false);
     expect(sent()).toEqual(["示例 n1"]);
+    expect(last().needsYou).toBe(1);
     // the shell gone (the credential stopped working): nothing of this account stays at the notch
     act(() => root.unmount());
     expect(setIslandState).toHaveBeenLastCalledWith({ needsYou: 0, working: 0, unread: 0, rows: [], summary: "" });

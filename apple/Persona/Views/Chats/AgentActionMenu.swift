@@ -16,11 +16,14 @@ nonisolated enum AgentMenuDestination: Hashable, Sendable {
 @MainActor @Observable
 final class AgentMenuRouting {
     static let shared = AgentMenuRouting()
+    let store = AgentGitStatusStore()
     var requests: [SessionKey: AgentMenuDestination] = [:]
-    var git: [SessionKey: GitStatus] = [:]
     var linkingSession: Session?
     func open(_ destination: AgentMenuDestination, at key: SessionKey) { requests[key] = destination }
     func take(_ key: SessionKey) -> AgentMenuDestination? { requests.removeValue(forKey: key) }
+    func gitStatus(_ session: Session) -> GitStatus? {
+        store.status(for: .init(session: session.key, cwd: session.cwd))
+    }
 }
 
 /// What the two Agent menus show. Its equality is deliberately limited to facts that change the menu:
@@ -47,13 +50,12 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     var paneActions: Bool
 
     @MainActor
-    init(session: Session, model: AppModel, panes: [SessionPane]? = nil, paneBadges: [SessionPane: String] = [:],
-         currentPane: SessionPane = .chat, hosted: Bool = false, showsSpace: Bool = true,
+    init(session: Session, model: AppModel, currentPane: SessionPane = .chat, hosted: Bool = false, showsSpace: Bool = true,
          sides: SideSessions? = nil) {
         self.init(session: session,
                   pinned: model.isPinned(session.key), muted: model.isMuted(session.key),
-                  panes: panes ?? AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.git[session.key]),
-                  paneBadges: paneBadges.isEmpty ? AgentMenuFacts.paneBadges(AgentMenuRouting.shared.git[session.key]) : paneBadges,
+                  panes: AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session)),
+                  paneBadges: AgentMenuFacts.paneBadges(AgentMenuRouting.shared.gitStatus(session)),
                   currentPane: currentPane, review: model.features(session.group).contains("git_review") && !session.cwd.isEmpty,
                   preview: !model.isDemo && model.features(session.group).contains(PreviewLogic.feature) && !session.cwd.isEmpty,
                   screen: model.canShowScreen(session.key.machineRef),

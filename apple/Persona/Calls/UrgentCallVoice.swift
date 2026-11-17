@@ -74,7 +74,9 @@ import Speech
                 done.resume()
             }
             sayOver = over
-            speaking = Task { [weak self] in
+            // Main-actor isolation said, not inherited through the continuation's body (Swift 6.2 resolves that
+            // call to another overload than 6.4).
+            speaking = Task { @MainActor [weak self] in
                 await self?.speakOut(text)
                 over()
             }

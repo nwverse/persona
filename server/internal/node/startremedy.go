@@ -1,7 +1,6 @@
 package node
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -107,6 +106,9 @@ func (n *Node) startKeys(ctx context.Context, pane, text string, keys []string) 
 // errStartTabTaken refuses a start named to a kept tab another start holds.
 var errStartTabTaken = refusal("start_tab_taken", "another start is using that kept tab", nil)
 
+// errKeptTabUnavailable leaves a tab that recovered or expired during its close lookup untouched by the retry.
+var errKeptTabUnavailable = errors.New("the kept tab is no longer free")
+
 // keptClaim is a start's hold on a kept tab (claimKeptTab). It is used by one start, from one goroutine.
 type keptClaim struct {
 	n       *Node
@@ -164,17 +166,37 @@ func (c *keptClaim) tab(ctx context.Context) (*host.Created, error) {
 		c.drop()
 		return c.k.created, nil
 	}
-	if org, ok := c.k.launch.(host.Organizer); ok {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		err := org.Close(cctx, c.k.created.Pane, cmp.Or(c.k.ws, c.k.created.SpaceID), c.k.created.SlotID)
-		cancel()
-		if err != nil {
-			c.release()
-			return nil, fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
+	if err := c.closeStalledTab(ctx); err != nil {
+		c.release()
+		if errors.Is(err, errKeptTabUnavailable) {
+			return nil, nil // as above: leave a recovered tab open and start in a new one
 		}
+		return nil, fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
 	}
 	c.drop()
 	return nil, nil
+}
+
+// closeStalledTab closes the kept tab of a stalled Orca start, whose one launch is used, for the user's retry to open a
+// new one. The local free check is repeated after each terminal lookup, just before sending the close: an agent
+// that recovered during lookup is left open (docs/integrations/engines.md "Agents run in a terminal"). This is not
+// atomic with recovery after the check or with runtime execution of the close.
+func (c *keptClaim) closeStalledTab(ctx context.Context) error {
+	o, ok := c.k.launch.(*orcaHost)
+	if !ok {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return o.guardedClose(cctx, c.k.created.Pane, func() error {
+		c.n.mu.Lock()
+		free := c.n.keptTabFreeLocked(c.pane, c.k)
+		c.n.mu.Unlock()
+		if !free {
+			return errKeptTabUnavailable
+		}
+		return nil
+	})
 }
 
 // drop ends the claim with the tab no longer kept: the start runs in it, or closed it.

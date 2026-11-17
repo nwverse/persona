@@ -127,7 +127,8 @@ internal fun MachinesScreen(
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
         summary = if (machineId == null) machineSummaryText(listSummary) else null,
-        onBack = navigator::back, largeTitle = machineId == null,
+        onBack = if (machineId == null && LocalIsSidebarRoot.current) null else navigator::back,
+        largeTitle = machineId == null,
         state = listState,
         actions = {
             if (machineId == null && adds && canAdd) JIconButton(PhIcons.Plus, stringResource(ReadinessActionId.AddComputer.label), addComputer)

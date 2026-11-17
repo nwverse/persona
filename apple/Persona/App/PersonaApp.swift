@@ -17,6 +17,7 @@ struct PersonaApp: App {
                 #if os(iOS)
                 .personaCallCover() // the call to Persona's page and the bar back to it (#9290, CallScreen.swift)
                 .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
+                .overlay { MeetingFloatingWindow() } // a meeting recording with its room put away (#8731 V5)
                 #endif
                 #if DEBUG && os(iOS)
                 .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
@@ -45,7 +46,7 @@ struct PersonaApp: App {
                         if let key = model.resolve(path: link.machine + "/" + link.session) { model.open(key) }
                         return
                     }
-                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(askingEnd: RecordingLink.endID(url)); return } // the recording's activity
                     if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
@@ -321,6 +322,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             AppModel.shared.selectedTab = .assistant
             AppModel.shared.assistantCurrent = nil
         }
+        #if os(iOS)
+        // `-openDictationControl YES`: the Dictate to Persona control's intent, including its cold-start request.
+        if d.bool(forKey: "openDictationControl") { OpenPersonaDictationIntent.open(AppModel.shared) }
+        #endif
         if let id = d.string(forKey: "openAssistantManager") { AppModel.shared.openAssistantManagerWhenListed(id) }
         AppModel.shared.debugShowNewChat = d.bool(forKey: "showNewChat")
         // `-simulateTap <machine>/<session>`: what tapping a push does, 4 s after launch (on another screen by then).

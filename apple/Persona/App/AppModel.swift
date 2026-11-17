@@ -363,7 +363,16 @@ final class AppModel {
     /// The chat a rebuilt list opens again (ChatsView): what the launch had (`dev.openChat`), then what rememberChat
     /// says. Kept here, not read back from UserDefaults: a launch argument of that name cannot be removed, and the
     /// list came back to a chat just closed (#1868).
-    static var rememberedChat: String? = UserDefaults.standard.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
+    static var rememberedChat: String? = savedPlace?.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
+    /// Where a launch reads the place the app was left (`app.tab`, `dev.openChat`, `assistant.current`). None in the app
+    /// hosting unit tests: it starts as a new install does, whatever earlier runs left on the simulator, which changed
+    /// the pages `MainPagesStackTests` measures (#9333). UI tests' target app is not such a host.
+    static var savedPlace: UserDefaults? {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return nil }
+        #endif
+        return .standard
+    }
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
         didSet {
@@ -407,6 +416,8 @@ final class AppModel {
     /// page drawn in that flush read the old conversation, watched it again and never heard of the new one, so New Chat
     /// left the conversation on screen (and #1749's switch did not redraw the page). Stored first, a page drawn while
     /// observers are told reads the new value. Otherwise as `@Observable`'s own setter: an equal value tells no one.
+    /// Dictate to Persona left this for the new assistant conversation's visible starter; it is never persisted.
+    var dictationRequest: DictationRequest?
     @ObservationIgnored private var currentStore: SessionKey?
     var assistantCurrent: SessionKey? {
         get {
@@ -416,6 +427,12 @@ final class AppModel {
         set {
             let old = currentStore
             currentStore = newValue
+            if newValue != old, newValue != nil {
+                #if DEBUG
+                if dictationRequest != nil { ShellTrace.shared.note("dictation request cleared by a conversation") }
+                #endif
+                dictationRequest = nil
+            }
             if newValue != old { withMutation(keyPath: \.assistantCurrent) {} }
             UserDefaults.standard.set(newValue?.path ?? "", forKey: "assistant.current")
             #if DEBUG
@@ -426,7 +443,30 @@ final class AppModel {
             #endif
         }
     }
+    /// Only the main assistant's new-conversation starter may take this exact request. Health leaves it for that page;
+    /// an existing conversation cancels it, and taking it before starting dictation makes failure one-shot too.
+    func takeDictationRequest(_ request: DictationRequest, uploadDest: String?) -> Bool {
+        #if DEBUG
+        ShellTrace.shared.note("dictation take match=\(dictationRequest == request) current=\(assistantCurrent != nil) health=\(uploadDest != nil)")
+        #endif
+        guard dictationRequest == request, uploadDest == nil else { return false }
+        guard assistantCurrent == nil else {
+            dictationRequest = nil
+            return false
+        }
+        dictationRequest = nil
+        return true
+    }
+
     var debugShowNewChat = false
+    /// Explicit New Chat navigation, including Dictate: older refreshes and first-message completions must not replace it.
+    @ObservationIgnored private(set) var assistantNewChat = 0
+    func noteNewAssistantChat() { assistantNewChat += 1 }
+    /// An async hub/manager refresh's fallback, only if no newer New Chat happened while it was away.
+    func selectAssistantMain(after generation: Int) {
+        guard generation == assistantNewChat, assistantCurrent == nil else { return }
+        assistantCurrent = assistantMain
+    }
     /// Bumped whenever another page hands the user to a Persona conversation (`askPersona`): the Persona tab goes back
     /// to its conversation even when it is the one already shown (a pushed Knowledge page would otherwise stay on top).
     var assistantReveal = 0
@@ -530,14 +570,14 @@ final class AppModel {
         }
         #endif
         hubGroup = UserDefaults.standard.string(forKey: Self.hubGroupKey) ?? ""
-        if let raw = UserDefaults.standard.string(forKey: "app.tab"), let tab = AppTab(rawValue: raw) {
+        if let raw = Self.savedPlace?.string(forKey: "app.tab"), let tab = AppTab(rawValue: raw) {
             selectedTab = tab
         }
         // Remembered as `SessionKey.path`: no group in it is the default group.
-        if selectedTab == .chats, let v = UserDefaults.standard.string(forKey: "dev.openChat") {
+        if selectedTab == .chats, let v = Self.savedPlace?.string(forKey: "dev.openChat") {
             openChat = SessionKey(path: v)
         }
-        if let v = UserDefaults.standard.string(forKey: "assistant.current") {
+        if let v = Self.savedPlace?.string(forKey: "assistant.current") {
             assistantCurrent = SessionKey(path: v)
         }
         connection.lives = { [weak self] in self?.links.map(\.live) ?? [] }
@@ -4195,10 +4235,11 @@ final class AppModel {
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
         personas.switchHub(api)
+        let newChat = assistantNewChat
         Task {
             await refreshAssistant()
             await personas.refresh(api)
-            if assistantCurrent == nil { assistantCurrent = assistantMain }
+            selectAssistantMain(after: newChat)
         }
         applyPersonaPalette()
     }
@@ -4227,10 +4268,11 @@ final class AppModel {
             if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
         }
+        let newChat = assistantNewChat
         Task {
             await refreshAssistant()
             readinessChanged()
-            if assistantCurrent == nil { assistantCurrent = assistantMain }
+            selectAssistantMain(after: newChat)
         }
     }
 
@@ -4793,6 +4835,7 @@ nonisolated struct TabBadges: Equatable, Sendable {
 /// Who shows the app's tabs, told of each new one as it is set (`AppModel.tabRouter`): the iPhone's shell.
 @MainActor protocol TabRouter: AnyObject {
     func route(_ tab: AppTab, in model: AppModel)
+    func show(_ page: ShellPage)
 }
 
 /// The Persona conversations of one group, newest first: open and archived (`AppModel.assistantConversations`), and

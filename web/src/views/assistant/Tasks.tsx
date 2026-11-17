@@ -1235,7 +1235,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {/* what just finished, under its own heading and not counted (#8237): how a task ended, instead of a card in the chat */}
             {entries.justFinished.length > 0 && (
               <div data-progress-just-finished className="flex w-full items-center gap-2 px-3 py-2 text-xs text-ink-2">
-                <span className="min-w-0 flex-1 truncate">{t("assistant-tasks.tray_just_finished")}</span>
+                <span className="min-w-0 flex-1 truncate">{stateName("just_finished")}</span>
                 <span className="shrink-0 tabular-nums">{entries.justFinished.length}</span>
               </div>
             )}

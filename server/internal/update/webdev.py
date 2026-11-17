@@ -164,9 +164,6 @@ def build(request):
     run(["npm", "run", "build:development"], web, env)
     shutil.copytree(web / "dist", server / "internal/hub/webdist", dirs_exist_ok=True)
     run(["go", "run", "./internal/webasset/precompress", "internal/hub/webdist"], server, env)
-    bridge = source / "integrations/agent-sdk"
-    run(["npm", "ci", "--no-audit", "--no-fund"], bridge, env)
-    run(["npm", "run", "build"], bridge, env)
     # Runtime assets are build inputs, not a test or release pipeline.
     run(["go", "generate", "./internal/runtimepkg"], server, env)
     flags = (f'-s -w -X main.version={request["version"]} -X main.channel=release '

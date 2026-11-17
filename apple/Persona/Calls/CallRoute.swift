@@ -64,9 +64,11 @@ import os
             let (now, external) = Self.read(AVAudioSession.sharedInstance())
             Task { @MainActor in self?.set(now, external: external) }
         }
-        Task.detached { [weak self] in
-            let (now, external) = Self.read(AVAudioSession.sharedInstance())
-            await MainActor.run { self?.set(now, external: external) }
+        // The read runs detached and captures nothing of this object; only its answer comes back to the main actor
+        // (Swift 6.2 refuses to send `self` into a detached task: "sending 'self' risks causing data races").
+        Task { [weak self] in
+            let (now, external) = await Task.detached { Self.read(AVAudioSession.sharedInstance()) }.value
+            self?.set(now, external: external)
         }
     }
 

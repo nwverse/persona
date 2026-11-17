@@ -855,9 +855,7 @@ private struct AttachPhotoEditor: View {
                     ProgressView().tint(.white)
                 }
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }.accessibilityIdentifier("image-edit-cancel")
-                    }
+                    SheetClose(id: "image-edit-cancel") { dismiss() }
                 }
                 .toolbarBackground(.black, for: .navigationBar)
                 .toolbarColorScheme(.dark, for: .navigationBar)

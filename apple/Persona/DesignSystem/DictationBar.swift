@@ -2,6 +2,23 @@
 import BeautifulUI
 import SwiftUI
 
+/// The bar's start boundary, also allowing a unit test to fail or count a start without opening the microphone.
+@MainActor protocol DictationStarting {
+    var heard: String { get }
+    /// Why a start now would be refused (a live call, #9290 follow-up), nil while it may.
+    var callRefusal: String? { get }
+    func start(hints: [String], update: @escaping (String) -> Void, failed: @escaping (String) -> Void)
+    func finish(settling: Bool) async -> String
+    func stop(settling: Bool)
+}
+
+extension Dictation: DictationStarting {}
+
+extension DictationStarting {
+    /// A stand-in (tests' fakes) asks the gate itself; `Dictation` has its own, which tests can replace.
+    var callRefusal: String? { LiveCallGate.dictationRefusal }
+}
+
 /// The composer's mic tapped (not held): the composer's capsule turns into ChatGPT's dictation bar, [✕] the wave and
 /// ■ ↑. ✕ drops what was heard; ■ puts it into the draft and sends nothing; ↑ puts it into the draft and sends. ■ is
 /// where the mic was, so a second tap there stops without sending (#9619). ■ and ↑ wait for the recognizer's last words
@@ -23,6 +40,8 @@ final class DictationBarModel {
     /// One generator, prepared before it is needed: `Haptics.tap()` makes a new one each time, and the first impact of a
     /// cold one started the haptic engine on the main thread right as the bar moved (100–600 ms frames on a simulator).
     @ObservationIgnored private var haptic: UIImpactFeedbackGenerator?
+    /// The words already joined into the draft, so a disappearing composer cannot append them twice.
+    @ObservationIgnored private var wordsCommitted = false
 
     enum Ending: Equatable { case cancel, stop, send }
 
@@ -40,10 +59,11 @@ final class DictationBarModel {
 
     /// The mic's tap gives no haptic, as before the bar: the bar's own buttons do, and their generator gets ready once
     /// the bar is in (not on the tap's frame, which already carries the bar's spring).
-    func start(_ dictation: Dictation, hints: [String], reduceMotion: Bool) {
+    func start(_ dictation: any DictationStarting, hints: [String], reduceMotion: Bool, onFailure: (() -> Void)? = nil) {
         // A live system call: a note, and the bar never opens (dictation would cut the call's microphone).
         if let refusal = dictation.callRefusal {
             AppModel.shared.toast = Toast(refusal)
+            onFailure?() // as any start that could not begin: the composer takes the keyboard back (#9619)
             return
         }
         run = UUID(); let mine = run
@@ -53,6 +73,7 @@ final class DictationBarModel {
         }
         ending = nil
         slow = false
+        wordsCommitted = false
         withAnimation(reduceMotion ? Theme.Motion.state : Theme.Motion.dictationIn) { on = true }
         // A cancel while the system still asks for the microphone passes the start's turn (`Dictation.stop`): it never
         // listens.
@@ -60,10 +81,11 @@ final class DictationBarModel {
             AppModel.shared.toast = Toast(problem, style: .error)
             guard let self, self.run == mine else { return }
             self.close(.cancel, reduceMotion: reduceMotion)
+            onFailure?()
         })
     }
 
-    func cancel(_ dictation: Dictation, reduceMotion: Bool) {
+    func cancel(_ dictation: any DictationStarting, reduceMotion: Bool) {
         guard on, ending == nil else { return }
         feel()
         run = UUID()
@@ -74,7 +96,7 @@ final class DictationBarModel {
     /// ■ or ↑: the words heard go after the draft. ↑ then sends (`send` says whether it did) and keeps the bar up until
     /// the send has taken the draft (it clears it a moment later, in a task of its own): closed first, the composer
     /// opened into the card for that moment with the words in it, and closed again.
-    func end(_ how: Ending, _ dictation: Dictation, text: Binding<String>, reduceMotion: Bool, send: @escaping () -> Bool) {
+    func end(_ how: Ending, _ dictation: any DictationStarting, text: Binding<String>, reduceMotion: Bool, send: @escaping () -> Bool) {
         guard on, ending == nil, how != .cancel else { return }
         feel()
         run = UUID(); let mine = run
@@ -87,6 +109,7 @@ final class DictationBarModel {
             let words = await dictation.finish(settling: true)
             guard run == mine else { return }
             text.wrappedValue = DictationHold.joined(text.wrappedValue, words)
+            wordsCommitted = true
             if how == .send, send() {
                 let deadline = ContinuousClock.now + Theme.DictationBar.sendWait
                 while !text.wrappedValue.isEmpty, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(8)) }
@@ -98,16 +121,22 @@ final class DictationBarModel {
 
     /// Dictation ended by itself (the recognizer's time limit, an error, the microphone taken): keep what was heard,
     /// as ■ does.
-    func listeningEnded(_ dictation: Dictation, text: Binding<String>, reduceMotion: Bool) {
+    func listeningEnded(_ dictation: any DictationStarting, text: Binding<String>, reduceMotion: Bool) {
         guard on, ending == nil else { return }
         run = UUID()
         text.wrappedValue = DictationHold.joined(text.wrappedValue, dictation.heard)
+        wordsCommitted = true
         close(.stop, reduceMotion: reduceMotion)
     }
 
-    /// Gone without a word (the composer left the screen).
-    func reset() {
+    /// Gone from the screen, including a root-layout replacement: keep the words already heard as an unsent draft.
+    /// Stop/send's asynchronous finish may already have joined them; `wordsCommitted` prevents a second append.
+    func reset(_ dictation: any DictationStarting, text: Binding<String>) {
         run = UUID()
+        if on, !wordsCommitted {
+            text.wrappedValue = DictationHold.joined(text.wrappedValue, dictation.heard)
+            wordsCommitted = true
+        }
         on = false
         ending = nil
         slow = false
