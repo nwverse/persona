@@ -66,7 +66,7 @@ export function SelectMessageText({ open, onClose, text }: { open: boolean; onCl
         </>
       }
     >
-      <div className="max-h-[50vh] overflow-y-auto text-[14px] leading-relaxed whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">{text}</div>
+      <div className="max-h-[50vh] overflow-y-auto text-sm leading-relaxed whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">{text}</div>
     </Dialog>
   );
 }

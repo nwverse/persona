@@ -82,6 +82,10 @@ it("loads message menus and text selection only on intent, preserving the messag
     await settle();
     const dialog = () => document.querySelector('[role="dialog"]')!;
     expect(dialog().textContent).toContain(text);
+    const selection = dialog().querySelector<HTMLElement>(".select-text")!;
+    expect(selection.textContent).toBe(text);
+    expect(selection.classList.contains("text-sm")).toBe(true);
+    expect(selection.classList.contains("whitespace-pre-wrap")).toBe(true);
     const copy = [...dialog().querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent === t("chat-messageactions.copy_all"))!;
     await act(async () => copy.click());
