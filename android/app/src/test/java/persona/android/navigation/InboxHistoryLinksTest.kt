@@ -15,11 +15,16 @@ import persona.core.domain.inbox.InboxBar
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
 import persona.core.navigation.AssistantRoute
+import persona.core.navigation.ChatRoute
 import persona.core.navigation.InboxItemRoute
+import persona.core.navigation.InboxItemUiRoute
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.LarkChatRoute
 import persona.core.navigation.TodosRoute
+import persona.feature.inbox.ConnectorThreadRoute
 import persona.feature.inbox.InboxEventRoute
+import persona.feature.inbox.InboxItemDetailRoute
+import persona.feature.inbox.MailRoute
 import persona.feature.inbox.InboxItemPages
 import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.InboxRecord
@@ -176,18 +181,18 @@ class InboxHistoryLinksTest {
         inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.SwitchRoot), landing, fyi)
         assertEquals(entered, landing.pending)
         val kept = SidebarPageRoots.Step(InboxRoute, listOf(InboxEventRoute("note")), SidebarPageRoots.Move.SwitchRoot)
-        inboxSidebarPicked(kept, landing, inboxRecordOnPath(kept.path, listOf(fyi)))
+        inboxSidebarPicked(kept, landing, inboxRecordOnPath(kept.path, listOf(fyi), landing))
+        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+        inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.DrillDown), landing, fyi)
+        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+        inboxSidebarPicked(SidebarPageRoots.Step(TodosRoute, emptyList(), SidebarPageRoots.Move.SwitchRoot), landing, fyi)
         assertEquals(InboxBar.Landing("fyi", false), landing.pending)
         inboxSidebarPicked(
             SidebarPageRoots.Step(InboxRoute, listOf(InboxItemRoute("missing")), SidebarPageRoots.Move.SwitchRoot),
             landing,
             null,
         )
-        assertEquals("no record: the composed list keeps its choice", InboxBar.Landing("fyi", false), landing.pending)
-        inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.DrillDown), landing, fyi)
-        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
-        inboxSidebarPicked(SidebarPageRoots.Step(TodosRoute, emptyList(), SidebarPageRoots.Move.SwitchRoot), landing, fyi)
-        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+        assertEquals("a kept path with no item enters", entered, landing.pending)
 
         val item = InboxItemRoute("note")
         assertEquals(
@@ -206,5 +211,56 @@ class InboxHistoryLinksTest {
             SidebarPageRoots.Step(InboxRoute, listOf(item), SidebarPageRoots.Move.SwitchRoot),
             compactInboxPick(listOf(AssistantRoute, InboxRoute, item), inFront = false),
         )
+    }
+
+    /** Item pages beyond the two route types, a page above the item, and a history row the snapshot lacks. */
+    @Test fun aKeptItemPageIsFoundUnderADeeperRouteAndAHistoryRowIsRemembered() {
+        val fyi = InboxRecord(InboxItem("note", kind = "dm", title = "Weekly note", tier = "fyi"), feedId = "room", source = "lark")
+        val history = InboxRecord(InboxItem("old", kind = "dm", title = "Old note", tier = "fyi", doneAt = "2026-11-01T10:00:00Z"),
+            feedId = "room", source = "lark")
+        val landing = InboxLanding().apply { land(history) }
+        val entered = InboxBar.Landing("", false)
+        assertEquals(fyi, inboxRecordOnPath(listOf(InboxItemUiRoute("note", "ext", "page")), listOf(fyi), landing))
+        assertEquals(fyi, inboxRecordOnPath(listOf(InboxItemDetailRoute("note")), listOf(fyi), landing))
+        assertEquals(fyi, inboxRecordOnPath(listOf(ConnectorThreadRoute("note")), listOf(fyi), landing))
+        assertEquals(fyi, inboxRecordOnPath(listOf(InboxEventRoute("note"), MailRoute("note")), listOf(fyi), landing))
+        assertEquals(fyi, inboxRecordOnPath(
+            listOf(InboxEventRoute("note"), ChatRoute("machine", "agent")),
+            listOf(fyi),
+            landing,
+        ))
+        assertEquals("the link's read, not the snapshot", history,
+            inboxRecordOnPath(listOf(InboxItemDetailRoute("old")), emptyList(), landing))
+
+        val historyStep = SidebarPageRoots.Step(InboxRoute, listOf(InboxItemDetailRoute("old")), SidebarPageRoots.Move.SwitchRoot)
+        inboxSidebarPicked(historyStep, landing, inboxRecordOnPath(historyStep.path, emptyList(), landing))
+        assertEquals(InboxBar.Landing("done", false), landing.pending)
+
+        val chat = SidebarPageRoots.Step(
+            InboxRoute,
+            listOf(ChatRoute("machine", "waiting")),
+            SidebarPageRoots.Move.SwitchRoot,
+        )
+        inboxSidebarPicked(chat, landing, inboxRecordOnPath(chat.path, listOf(fyi), landing))
+        assertEquals("a waiting-agent chat is not an item", entered, landing.pending)
+    }
+
+    /** A compact Inbox host is [Assistant, Inbox, …]. It wins over a conversation list that also holds one. */
+    @Test fun aCompactInboxHostBeatsTheConversationStack() {
+        val place = listOf(AssistantRoute, InboxRoute, InboxEventRoute("note"))
+        val conversation = listOf(AssistantRoute, InboxRoute, MailRoute("other"))
+        val todos = listOf(TodosRoute)
+        assertEquals(place, inboxHostStack(todos, listOf(conversation, place)))
+        val regular = listOf(InboxRoute, InboxItemRoute("note"))
+        assertEquals(regular, inboxHostStack(todos, listOf(conversation, place, regular)))
+        val landing = InboxLanding().apply {
+            land(InboxRecord(InboxItem("note", kind = "dm", title = "Weekly note", tier = "fyi"), feedId = "room", source = "lark"))
+        }
+        settleLandings(
+            mapOf(AppTab.Persona to todos),
+            mapOf(AppTab.Persona to landing),
+            personaHosts = listOf(conversation, place),
+        )
+        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
     }
 }

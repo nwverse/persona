@@ -92,11 +92,20 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // the stored ones so an early landing never writes the defaults over them); Back from the item returns here. A list
     // already showing the item stays. One moved beside the item it opened goes back when that page closes. An entry
     // ([InboxLanding.enter]) puts the list back as it opens.
-    LaunchedEffect(landing?.pending) {
+    val listActive = LocalInboxListActive.current
+    // A hidden host stays composed and shares this landing. It must not take one meant for the list in front.
+    // [overEntry]: a sidebar return entered (Needs you) and then landed, in one turn. Apply the landing on that
+    // fresh bar, or a list left on All would stay there (InboxBar.landed). iOS lands on a new page
+    // (InboxView.swift:209–212, land at 977–981).
+    LaunchedEffect(landing?.pending, listActive) {
+        if (!listActive) return@LaunchedEffect
         val page = landing?.pendingPage
+        val overEntry = landing?.overEntry == true
         val to = landing?.take() ?: return@LaunchedEffect
         if (to == InboxLanding.ENTERED) { barChosen = ""; barSaved = ""; return@LaunchedEffect }
-        val moved = InboxBar.landed(bar, to)
+        // overEntry follows enter: the fresh bar is Needs you (All only while a search is kept), then the
+        // item's choice is picked. landed() would leave All in place, which a new iOS page does not.
+        val moved = if (overEntry) InboxBar.picked(InboxBar.entered(query), to.choice) else InboxBar.landed(bar, to)
         if (page != null && moved != bar) landing?.moved(page, bar)
         moveBar(moved)
         if (to.openCollapsed) {

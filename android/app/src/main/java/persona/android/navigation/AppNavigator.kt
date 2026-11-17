@@ -401,7 +401,7 @@ private fun NavKey.session(): SessionKey? = when (this) {
 }
 
 /** The item this page displays or processes, without treating an unrelated non-root page as its return target. */
-private fun NavKey.inboxItemId(): String? = when (this) {
+internal fun NavKey.inboxItemId(): String? = when (this) {
     is InboxItemRoute -> itemId
     is InboxItemUiRoute -> itemId
     is InboxEventRoute -> itemId

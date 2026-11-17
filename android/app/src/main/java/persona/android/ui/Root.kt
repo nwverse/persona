@@ -75,6 +75,7 @@ import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
 import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.LocalInboxLanding
+import persona.feature.inbox.LocalInboxListActive
 import persona.feature.inbox.ManagerLinks
 import persona.feature.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
@@ -1143,6 +1144,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                                     LocalDetailKey provides hostDetail,
                                                     LocalAgentsTabSplit provides hostSplit,
                                                     persona.feature.settings.LocalExtensionPageVisible provides hostShown,
+                                                    // Hosts share one landing. Only the list in front takes it.
+                                                    LocalInboxListActive provides hostShown,
                                                 ) {
                                                     NavDisplay(
                                                         backStack = hostStack,

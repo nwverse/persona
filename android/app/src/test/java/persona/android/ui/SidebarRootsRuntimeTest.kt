@@ -82,6 +82,7 @@ import persona.feature.inbox.InboxSnapshot
 import persona.feature.inbox.LarkConversation
 import persona.feature.inbox.LarkPart
 import persona.feature.inbox.LocalInboxLanding
+import persona.feature.inbox.LocalInboxListActive
 import persona.feature.inbox.ReplyDraft
 import persona.feature.inbox.ReplyRequest
 import persona.feature.inbox.ReplyTarget
@@ -441,6 +442,36 @@ class SidebarRootsRuntimeTest {
         }
     }
 
+    /** A list left on All still moves: enter, then land, on the fresh Needs-you bar (InboxView.swift:977–981). */
+    @Test
+    fun aKeptItemLandsOffAll() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        try {
+            val world = world()
+            world.window.noteSize(951f, 673f)
+            val landing = InboxLanding()
+            val action = inboxRow("act", "Approve Friday launch", "action")
+            val fyi = inboxRow("note", "Weekly note", "fyi")
+            val repo = BarInbox(listOf(action, fyi))
+            showInbox(world, landing, repo, regular = true)
+            pick(world, landing, repo, InboxRoute)
+            choice("All").performClick()
+            rule.waitForIdle()
+            choice("All").assertIsSelected()
+            rule.runOnIdle { world.hosts.current.add(InboxEventRoute("note")) }
+            rule.waitForIdle()
+            pick(world, landing, repo, TodosRoute)
+            pick(world, landing, repo, InboxRoute)
+            assertEquals(listOf(InboxRoute, InboxEventRoute("note")), world.hosts.current.toList())
+            rule.runOnIdle { world.hosts.current.removeAt(world.hosts.current.lastIndex) }
+            rule.waitForIdle()
+            choice("FYI").assertIsSelected()
+            rule.onNodeWithText("Weekly note").assertExists()
+        } finally {
+            AssistantManagerChoice.reset()
+        }
+    }
+
     private fun pick(world: World, landing: InboxLanding, repo: BarInbox, key: NavKey, regularNow: Boolean = true) {
         rule.runOnIdle {
             applySidebarDestination(
@@ -535,6 +566,7 @@ private fun Hosts(
         assignPersona = {},
         onBack = onPlaceBack,
     ) { _, stack, hostShown ->
+        CompositionLocalProvider(LocalInboxListActive provides hostShown) {
         NavDisplay(
             backStack = stack,
             modifier = Modifier.fillMaxSize().then(if (hostShown) Modifier else Modifier.unplacedForRuntimeTest()),
@@ -558,6 +590,7 @@ private fun Hosts(
                 entry<ChatRoute> { Text("Chat", Modifier.fillMaxSize()) }
             },
         )
+        }
     }
 }
 

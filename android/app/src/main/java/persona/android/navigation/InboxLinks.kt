@@ -6,7 +6,6 @@ import persona.core.navigation.AssistantRoute
 import persona.core.navigation.InboxItemRoute
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.LarkChatRoute
-import persona.feature.inbox.InboxEventRoute
 import persona.feature.inbox.InboxItemLookupResult
 import persona.feature.inbox.InboxItemPages
 import persona.feature.inbox.InboxLanding
@@ -85,14 +84,19 @@ internal fun settleLandings(
 
 /**
  * The composed Inbox host, or the visible stack when the shell has no separate host list.
- * Prefers a host that starts at the Inbox over a conversation list that also holds one.
- * Null when neither holds the Inbox: [settleLandings] then drops the landing.
+ * [hosts] follows [SidebarRootHosts.allStacks]: the conversation first, then each place host.
+ * A compact place host is `[AssistantRoute, InboxRoute, …]`, so it does not start at the Inbox.
+ * Prefer a place host over the conversation, or `closed` runs against the conversation and a
+ * `returns` page still on the Inbox host counts as gone. Fall back to the conversation only when
+ * no place host holds the Inbox. An empty [hosts] keeps the visible stack. Null when none hold it.
  */
 internal fun inboxHostStack(visible: List<NavKey>, hosts: List<List<NavKey>>): List<NavKey>? {
     if (hosts.isEmpty()) return visible
-    val inboxHosts = hosts.filter { stack -> stack.firstOrNull { it != AssistantRoute } == InboxRoute }
-    inboxHosts.firstOrNull { it.firstOrNull() == InboxRoute }?.let { return it }
-    inboxHosts.firstOrNull()?.let { return it }
+    fun holds(stack: List<NavKey>) = stack.firstOrNull { it != AssistantRoute } == InboxRoute
+    val places = hosts.drop(1).filter(::holds)
+    places.firstOrNull { it.firstOrNull() == InboxRoute }?.let { return it }
+    places.firstOrNull()?.let { return it }
+    hosts.firstOrNull()?.takeIf(::holds)?.let { return it }
     if (InboxRoute in visible) return visible
     return null
 }
@@ -106,14 +110,18 @@ internal fun inboxHostStack(visible: List<NavKey>, hosts: List<List<NavKey>>): L
  * no kept path bumps `inboxEntries`, a kept path calls `broughtBack`.
  *
  * Android keeps the Inbox host composed, so an empty switch also [InboxLanding.enter]s (Needs you).
- * A kept path [InboxLanding.land]s the open item. A list already on All, or already on that item's
- * choice, stays (`InboxBar.landed`). No record for the kept page: the composed list keeps its choice.
+ * A kept path enters, then [InboxLanding.land]s when the page is an item: iOS builds a new list on
+ * Needs you and then lands (`InboxView.swift:209–212`), so a list left on All still moves. No item
+ * on that path (a waiting-agent chat): enter only.
  */
 internal fun inboxSidebarPicked(step: SidebarPageRoots.Step, landing: InboxLanding, item: InboxRecord?) {
     if (step.root != InboxRoute) return
     when (step.move) {
         SidebarPageRoots.Move.None, SidebarPageRoots.Move.PopToRoot -> landing.enter()
-        SidebarPageRoots.Move.SwitchRoot -> if (step.path.isEmpty()) landing.enter() else item?.let(landing::land)
+        SidebarPageRoots.Move.SwitchRoot -> {
+            landing.enter()
+            if (step.path.isNotEmpty()) item?.let(landing::land)
+        }
         SidebarPageRoots.Move.DrillDown -> Unit
     }
 }
@@ -135,14 +143,14 @@ internal fun compactInboxPick(host: List<NavKey>?, inFront: Boolean): SidebarPag
     return SidebarPageRoots.Step(InboxRoute, if (kept) drills else emptyList(), move)
 }
 
-/** The open item on a kept Inbox path: an item route or the event page the list pushes. */
-internal fun inboxRecordOnPath(path: List<NavKey>, records: List<InboxRecord>): InboxRecord? {
-    val id = when (val top = path.lastOrNull()) {
-        is InboxItemRoute -> top.itemId
-        is InboxEventRoute -> top.itemId
-        else -> return null
-    }
-    return records.firstOrNull { it.item.id == id }
+/**
+ * The open item on a kept Inbox path. Walks from the top down and takes the first id [inboxItemId]
+ * knows (the same pages [AppNavigator] treats as an item, including one under a deeper page).
+ * The snapshot wins; [InboxLanding.lastLanded] covers a history or Done item the link already read.
+ */
+internal fun inboxRecordOnPath(path: List<NavKey>, records: List<InboxRecord>, landing: InboxLanding): InboxRecord? {
+    val id = path.asReversed().firstNotNullOfOrNull { it.inboxItemId() } ?: return null
+    return records.firstOrNull { it.item.id == id } ?: landing.lastLanded?.takeIf { it.item.id == id }
 }
 
 /**
@@ -172,7 +180,7 @@ internal fun applySidebarDestination(
             }
             assignPersona(hosts.current)
             pageRoots.adoptVisible(AssistantRoute)
-            inboxSidebarPicked(step, landing, inboxRecordOnPath(step.path, records))
+            inboxSidebarPicked(step, landing, inboxRecordOnPath(step.path, records, landing))
             return
         }
         if (!hosts.showRetainedCompact(key, listOf(key))) {
@@ -186,5 +194,5 @@ internal fun applySidebarDestination(
     val step = pageRoots.select(key, hosts.current.drop(1))
     showHost(step.root, step.stack)
     assignPersona(hosts.current)
-    if (key == InboxRoute) inboxSidebarPicked(step, landing, inboxRecordOnPath(step.path, records))
+    if (key == InboxRoute) inboxSidebarPicked(step, landing, inboxRecordOnPath(step.path, records, landing))
 }
