@@ -688,8 +688,12 @@ func (a assistantRemote) Action(ctx context.Context, act assistantwire.Action) (
 	return res, err
 }
 
-func (a assistantRemote) UserSpoke(_ context.Context, r assistantwire.SessionRef) {
-	a.notify(assistantwire.EventUserSpoke, r)
+func (a assistantRemote) UserSpoke(ctx context.Context, r assistantwire.SessionRef) {
+	a.userSpoke(ctx, assistantwire.UserSpokeParams{SessionRef: r})
+}
+
+func (a assistantRemote) userSpoke(_ context.Context, p assistantwire.UserSpokeParams) {
+	a.notify(assistantwire.EventUserSpoke, p)
 }
 
 func (a assistantRemote) UserStopped(_ context.Context, r assistantwire.SessionRef) {

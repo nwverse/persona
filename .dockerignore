@@ -5,7 +5,7 @@
 !server/
 !web/
 !deploy/docker/
-!integrations/agent-sdk/
+!integrations/antigravity/
 !integrations/claude-code-plugin/
 !integrations/dsh/
 !integrations/paseo/

@@ -25,7 +25,7 @@ final class TodoNotesDictationTests: XCTestCase {
         XCTAssertTrue(newMic.isHittable)
         XCTAssertEqual(newMic.label, "听写")
         shot("todo-new-notes-mic")
-        app.buttons["取消"].tap()
+        app.buttons["sheet-close"].firstMatch.tap()
         XCTAssertTrue(newMic.waitForNonExistence(timeout: 10))
 
         // The detail, as the screenshots open it (`-openTodoTitled`).

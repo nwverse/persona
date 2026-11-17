@@ -170,7 +170,9 @@ What you see is what you share (#7261). Share as Image (iOS `MessageShareCard`, 
 - **Text stays text**: Copy and Share Text keep the message's text as it is.
 - **Several at once** (#9468): Export Image for picked messages (iOS `ChatExportRenderer`, docs/apple/ios.md "Forwarding a message") draws each reply's cards from the same parts (`ShareCardParts`), taking each message whole up to a forward's 20,000 characters instead of the single card's 3,000.
 
-Tests: `ShareCardPartsTests` (iOS), `MessagePictureTest` and `AssistantCardsTest.whatAPictureDraws` (Android). The web has no share-as-image of a message.
+- **On the web** (#9469): Export image for picked messages (`web/src/views/chat/ExportImage.tsx`, docs/web/web.md "Forwarding a message") draws each reply with the chat's own Markdown, so its cards are the chat's cards; nothing on them answers in a picture, and a code block's Copy and a diagram's tools are left out. The web has no share-as-image of a single message.
+
+Tests: `ShareCardPartsTests` (iOS), `MessagePictureTest` and `AssistantCardsTest.whatAPictureDraws` (Android).
 
 ## Examples and stages
 
