@@ -91250,6 +91250,28 @@
         }
       }
     },
+    "Meeting Recording [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting recording"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議を録音中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议录制中"
+          }
+        }
+      }
+    },
     "Meeting Time" : {
       "localizations" : {
         "en" : {
@@ -95218,6 +95240,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "リストに移動：%1$@"
+          }
+        }
+      }
+    },
+    "Move to the Side [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to the Side"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端に寄せる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收到边上"
           }
         }
       }
@@ -116114,6 +116158,28 @@
       },
       "extractionState" : "manual"
     },
+    "Opens the meeting room. [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the meeting room."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議室を開きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开会议室。"
+          }
+        }
+      }
+    },
     "Opens the original message" : {
       "localizations" : {
         "en" : {
@@ -118730,6 +118796,28 @@
         }
       }
     },
+    "Paused [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一時停止中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂停"
+          }
+        }
+      }
+    },
     "Paused by a call" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -119531,6 +119619,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona Is Answering [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona is answering"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が回答中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 在念回答"
+          }
+        }
+      }
     },
     "Persona Link runs outside the desktop session on this computer." : {
       "extractionState" : "manual",
@@ -126837,6 +126947,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "来电安静时段"
+          }
+        }
+      }
+    },
+    "Quiet [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quiet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "静か"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安静中"
           }
         }
       }
@@ -148052,6 +148184,28 @@
         }
       }
     },
+    "Shows the meeting window again. [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the meeting window again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議ウインドウをもう一度表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新显示会议小窗。"
+          }
+        }
+      }
+    },
     "Shows the plan [Plan Sheet]" : {
       "localizations" : {
         "en" : {
@@ -149925,6 +150079,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "部分运动的数据未被 hub 接受，已跳过；之后的运动仍会生成报告。"
+          }
+        }
+      }
+    },
+    "Someone Is Speaking [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Someone is speaking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰かが話しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有人在说话"
           }
         }
       }
@@ -197575,6 +197751,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "弹出了确认卡片，你点了允许。"
+          }
+        }
+      }
+    },
+    "You're Speaking [Meeting Float]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You're speaking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたが話しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在说话"
           }
         }
       }
