@@ -16,7 +16,7 @@ struct MeetingFloatingWindow: View {
     var body: some View {
         if capture.state == .recording || capture.state == .paused, let id = capture.recordingID,
            let entry = library.entry(id), entry.isMeeting {
-            MeetingFloatCard(entry: entry, paused: capture.state == .paused, elapsed: capture.elapsed)
+            MeetingFloatCard(entry: entry, paused: capture.state == .paused)
         }
     }
 }
@@ -25,7 +25,6 @@ struct MeetingFloatingWindow: View {
 private struct MeetingFloatCard: View {
     var entry: RecordingEntry
     var paused: Bool
-    var elapsed: Double
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var place = MeetingFloatPlace.start
@@ -42,7 +41,7 @@ private struct MeetingFloatCard: View {
                               y: top + (bottom - top) * place.height)
             } else {
                 let center = place.center(cardWidth: width, edge: Theme.Size.meetingFloatEdge, width: geo.size.width, top: top, bottom: bottom)
-                MeetingFloatContent(entry: entry, paused: paused, elapsed: elapsed)
+                MeetingFloatContent(entry: entry, paused: paused)
                     .frame(width: width)
                     .position(x: center.x + drag.width, y: center.y + drag.height)
                     // Ahead of the card's own tap: the card follows the finger, so a drag ends on it and its button
@@ -69,7 +68,6 @@ private struct MeetingFloatCard: View {
 private struct MeetingFloatContent: View {
     var entry: RecordingEntry
     var paused: Bool
-    var elapsed: Double
 
     @State private var speaker = MeetingSpeaker.shared
     @State private var call = MeetingCall.shared
@@ -84,7 +82,9 @@ private struct MeetingFloatContent: View {
                         .frame(width: Theme.Size.dot, height: Theme.Size.dot)
                     Text(entry.displayTitle).font(Theme.Font.label).fontWeight(.semibold).lineLimit(1)
                     Spacer(minLength: Theme.Space.xs)
-                    Text(RecordingFormat.clock(elapsed)).font(Theme.Font.label).monospacedDigit()
+                    // The system ticks it, as on the now-recording card: the window over every page doesn't draw again
+                    // four times a second, and both say the same time.
+                    RecordingClock(running: !paused, font: Theme.Font.label)
                         .foregroundStyle(paused ? Color.secondary : Theme.danger)
                 }
                 TimelineView(.periodic(from: .now, by: Theme.Recording.floatTick)) { context in
