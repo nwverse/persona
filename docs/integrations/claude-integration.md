@@ -240,7 +240,13 @@ the Agent's own bookkeeping.
 - **Still asked**: the phone's tools (`phone_*`) and the connectors' (mail and others), which act outside Persona, and
   `dispatch_start` / `dispatch_read`, which start an Agent on another computer on its model and read that computer's
   work: their effects reach past the calling Agent's own task, so they keep the card by default. Every other tool and
-  MCP server is unchanged. Codex Agents have none of these tools.
+  MCP server is unchanged. Codex Agents in ordinary terminals have none of these MCP tools.
+- **Task handoff notes** (#9846): the first message follows the final selected machine, Agent family and launcher
+  source, including a health detour. Known Persona MCP integrations retain their tool guidance, including the
+  Paseo Codex bridge. Known terminal Agents without that integration are given a verified node executable location
+  and the existing `tool task_spawn` arguments when available, without the MCP-only repository tools. Unknown
+  capabilities or missing metadata omit unverified entries and do not block assigned work.
+  This changes guidance only, not scoped CLI authority or the rules protecting hub credentials.
 - **The card's title**: whenever a card is shown for one of Persona's own MCP tools (the ones still asked, or any in a
   session started elsewhere), the manager titles it with the tool's name for people in the user's language
   (`tool_title`, `assistant-tool_titles`: "Report to supervisor · Done", "Note a decision"; the phone's tools as the
