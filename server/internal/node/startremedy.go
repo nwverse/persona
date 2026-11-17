@@ -32,7 +32,7 @@ func (n *Node) keptStartTab(pane string) (keptStart, bool) {
 // plus its deletion in one critical section, so two session.start requests cannot claim the same kept tab.
 func (n *Node) keptStartTabLocked(pane string) (keptStart, bool) {
 	k, ok := n.keptStarts[pane]
-	if !ok || !time.Now().Before(k.until) {
+	if !ok || k.taken || !time.Now().Before(k.until) {
 		return keptStart{}, false
 	}
 	if _, bound := n.panes[pane]; bound {
@@ -80,58 +80,102 @@ func (n *Node) startKeys(ctx context.Context, pane, text string, keys []string) 
 	return nil
 }
 
-// reusedTabKey carries the kept tab a start runs in instead of a new one (withKeptTab), for newTab.
-type reusedTabKey struct{}
+// The lifecycle of a kept tab that a start is named to (session.start's in_pane, #2570, #9534). One owner per step:
+//
+//   - keep: startTabFailed keeps the tab (keepStartTab) with an expiry (expireKeptStart closes it then).
+//   - claim: n.start, sync and async alike, holds it (claimKeptTab) before its own checks. Nothing is closed: a held
+//     tab is only marked taken, so its expiry, start.keys and another start leave it alone (another start is refused).
+//   - use: newTab, the one place a start gets a tab, settles the claim (keptClaim.tab): it starts in the tab, or, for
+//     an Orca tab whose one launch is used (orcaHost.Run), closes it and opens a new one. Every check of the start
+//     ran before newTab, so a refused start never got here.
+//   - roll back: a claim newTab did not settle (the start was refused or failed before a tab), or a close that
+//     failed, puts the tab back as kept with its expiry (keptClaim.release); a failed close also fails the start, so no
+//     new tab opens beside the stalled agent that may still run there.
+//
+// After use the start owns the tab it runs in, as any start does its new tab (startTabFailed keeps or closes it).
 
-// replacedTabKey carries the pane of a kept Orca tab the start cannot run in, for newTab to close before it opens a
-// new one (replaceKeptTab).
-type replacedTabKey struct{}
+// errStartTabTaken refuses a start named to a kept tab another start holds.
+var errStartTabTaken = refusal("start_tab_taken", "another start is using that kept tab", nil)
 
-// reusingKeptTab is ctx for a start in pane, the kept tab of an earlier failed start, when it still is one: the start
-// takes it over (it is no longer kept; this start keeps or closes it as its own, startTabFailed). Else ctx as it is,
-// and the start opens a new tab. An Orca terminal takes one launch (orcaHost.Run): a kept tab whose start already typed
-// its line there (agent_start_stalled) is replaced instead, once the start is checked and about to open its new tab
-// (replaceKeptTab, #9534); one where nothing was typed (shell_waiting, answered with start.keys) is still started in.
-func (n *Node) reusingKeptTab(ctx context.Context, pane string) context.Context {
+// keptClaim is a start's hold on a kept tab (claimKeptTab). It is used by one start, from one goroutine.
+type keptClaim struct {
+	n       *Node
+	pane    string
+	k       keptStart
+	settled bool
+}
+
+// keptClaimKey carries a start's claim from n.start to its newTab (keptClaimOf); it never leaves that start.
+type keptClaimKey struct{}
+
+// keptClaimOf is the claim of the start ctx belongs to, or nil.
+func keptClaimOf(ctx context.Context) *keptClaim {
+	c, _ := ctx.Value(keptClaimKey{}).(*keptClaim)
+	return c
+}
+
+// claimKeptTab holds the kept tab on pane for a start. nil, nil: pane is "" or not a kept tab (any more), and the
+// start opens a new tab. A tab another start holds is refused.
+func (n *Node) claimKeptTab(pane string) (*keptClaim, error) {
 	if pane == "" {
-		return ctx
+		return nil, nil
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if k, ok := n.keptStarts[pane]; ok && k.taken {
+		return nil, errStartTabTaken
+	}
 	k, ok := n.keptStartTabLocked(pane)
 	if !ok {
-		return ctx
+		return nil, nil
 	}
-	if o, isOrca := k.launch.(*orcaHost); isOrca && !o.launchable(k.created.Pane) {
-		return context.WithValue(ctx, replacedTabKey{}, pane)
-	}
-	delete(n.keptStarts, pane)
-	return context.WithValue(ctx, reusedTabKey{}, k.created)
+	k.taken = true
+	n.keptStarts[pane] = k
+	return &keptClaim{n: n, pane: pane, k: k}, nil
 }
 
-// replaceKeptTab closes the kept tab on pane before a start opens the new tab that replaces it. newTab calls it after
-// the start's checks, so a refused start leaves the tab kept. A tab that will not close fails the start and stays kept
-// (its expiry still closes it): its stalled agent may still run, and a second one beside it would not be noticed.
-func (n *Node) replaceKeptTab(ctx context.Context, pane string) error {
-	n.mu.Lock()
-	k, ok := n.keptStartTabLocked(pane)
-	if ok {
-		delete(n.keptStarts, pane)
+// tab settles the claim for newTab: the kept tab to start in, or nil, nil once it is closed for a new one (an Orca
+// tab whose one launch is used). A tab that did not close is released (still kept) and its error returned.
+func (c *keptClaim) tab(ctx context.Context) (*host.Created, error) {
+	if c == nil || c.settled {
+		return nil, nil
 	}
-	n.mu.Unlock()
-	org, closes := k.launch.(host.Organizer)
-	if !ok || !closes { // expired or taken meanwhile: a new tab, as for a pane not kept
-		return nil
+	if o, isOrca := c.k.launch.(*orcaHost); !isOrca || o.launchable(c.k.created.Pane) {
+		c.drop()
+		return c.k.created, nil
 	}
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	if err := org.Close(cctx, k.created.Pane, cmp.Or(k.ws, k.created.SpaceID), k.created.SlotID); err != nil {
-		n.mu.Lock()
-		n.keptStarts[pane] = k
-		n.mu.Unlock()
-		// Its own timer may have fired while it was taken; expireKeptStart acts once for this until.
-		time.AfterFunc(time.Until(k.until), func() { n.expireKeptStart(pane, k.until) })
-		return fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
+	if org, ok := c.k.launch.(host.Organizer); ok {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		err := org.Close(cctx, c.k.created.Pane, cmp.Or(c.k.ws, c.k.created.SpaceID), c.k.created.SlotID)
+		cancel()
+		if err != nil {
+			c.release()
+			return nil, fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
+		}
 	}
-	return nil
+	c.drop()
+	return nil, nil
+}
+
+// drop ends the claim with the tab no longer kept: the start runs in it, or closed it.
+func (c *keptClaim) drop() {
+	c.settled = true
+	c.n.mu.Lock()
+	delete(c.n.keptStarts, c.pane)
+	c.n.mu.Unlock()
+}
+
+// release ends an unsettled claim with the tab kept again until its expiry (a timer for it: its own may have fired
+// while it was held; expireKeptStart acts once for that expiry). Safe on nil and after tab.
+func (c *keptClaim) release() {
+	if c == nil || c.settled {
+		return
+	}
+	c.settled = true
+	k := c.k
+	k.taken = false
+	c.n.mu.Lock()
+	c.n.keptStarts[c.pane] = k
+	c.n.mu.Unlock()
+	time.AfterFunc(time.Until(k.until), func() { c.n.expireKeptStart(c.pane, k.until) })
 }

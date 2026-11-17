@@ -393,13 +393,8 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	if c := adoptedPane(ctx); c != nil { // "Run Agent Here": the pane the user picked, not a new tab (panes_actions.go)
 		return c, nil
 	}
-	if c, ok := ctx.Value(reusedTabKey{}).(*host.Created); ok && c != nil { // a failed start's kept tab (startremedy.go)
-		return c, nil
-	}
-	if pane, ok := ctx.Value(replacedTabKey{}).(string); ok { // a kept tab this start cannot run in (startremedy.go)
-		if err := n.replaceKeptTab(ctx, pane); err != nil {
-			return nil, err
-		}
+	if c, err := keptClaimOf(ctx).tab(ctx); err != nil || c != nil { // a failed start's kept tab (startremedy.go)
+		return c, err
 	}
 	var created *host.Created
 	var err error
