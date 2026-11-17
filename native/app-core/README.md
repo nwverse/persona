@@ -33,7 +33,7 @@ emulator results never fill the physical-device column.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `continuity` | 38 cases / 94 steps, including #8227 duplicate-key snapshot restoration | Full runtime corpus | Generic runtime C ABI is linked and exported; fixture replay is through SwiftPM | Full corpus through the real C XCFramework on macOS (#7160, #8972); native Store replay also exists | Full generated-codec / registry replay | Not measured; OHOS feature compiles, no loaded NAPI module | Native / native + DEBUG shadow (#7448) / native; iOS production shadow is unmerged #8970 | Android x86_64 packaged emulator replay passed; contributor-reported arm64 / 4 KiB benchmark exists, not independently rerun; physical 16 KiB acceptance blocked |
 | `transport` / `wire_envelope` | 17 wire cases plus the 64 source-derived Envelope cases and nested-scalar regressions (#8955, #8995, #9082, #9187) | Full wire runtime plus diagnostic Envelope replay | Partial: `persona_core_transport_frame` covers the shared-scalar gate and Other routing, not the complete wire corpus | No raw-transport Swift binding/replay implemented; generic action codecs are not a full wire replay | Full wire decoder plus selected production Envelope refusals | Generic runtime NAPI unexecuted; separate wire/Envelope NAPI projection not implemented | Native everywhere; no production client sends `WirePayload` | No domain-specific physical run; acceptance blocked |
-| `sort` / `state` / `recents` | 30 sort, 13 state and 21 recents cases | Sort 30; state/recents not implemented | Sort smoke only; state/recents not implemented | Sort 30 on macOS (#8952); state/recents not implemented | Sort 30 + state 13; recents 11 conversation + 10 setup (#9584) | Sort/recents exports committed, actual NAPI not measured; state has no NAPI export | Native / native + DEBUG sort shadow (#8954) / **core Agents-list sort in production** (#8957, #8966, #9066); no state/recents migration | No domain-specific physical run; acceptance blocked |
+| `sort` / `state` / `recents` | 30 sort, 13 state and 21 recents cases | Sort 30 + state 13 (#9691); recents not implemented | Sort smoke; recents 11 conversation + 10 setup (#9654); state not implemented | Sort 30 on macOS (#8952); state/recents not implemented | Sort 30 + state 13; recents 11 conversation + 10 setup (#9584) | Sort/recents exports committed, actual NAPI not measured; state has no NAPI export | Native / native + DEBUG sort shadow (#8954) / **core Agents-list sort in production** (#8957, #8966, #9066); no state/recents migration | No domain-specific physical run; acceptance blocked |
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming, and the draft each click leaves (#9238) | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker, inline, math-end and plain-open-fence source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary, 6 explicit math end + 57 boundary expectations and 342 mixed-reply prefixes; plain fence 5 explicit + 31 boundary | Split 21; repair 80 complete objects (#9241); plain fence 5 explicit + 31 boundary (#9563) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241); plain fence 5 explicit + 31 boundary (#9563) | Split NAPI unexecuted; repair and plain-fence NAPI exports committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
@@ -99,7 +99,10 @@ applied by the client (73 complete turn objects across the 54 non-empty cases), 
 `persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
 `persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
 folded line, plus `persona_core_transport_frame` for the shared-scalar Envelope gate and Other routing (20 named
-refusals). The latter is not the full 17-case wire corpus. Expected objects
+refusals). The latter is not the full 17-case wire corpus. `persona_core_project_recents` (#9654) dispatches the
+existing fixture-facing operations and compares all 11 conversation + 10 setup complete expected objects directly
+from the unchanged JSON. The shown operation receives its existence predicate as an explicit `existing` string list;
+there is no storage or clock. Expected objects
 are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
 exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
 A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
@@ -107,7 +110,11 @@ consume the C ABI; it is not a Swift importer, Apple ABI, NAPI/HAP, physical-dev
 inputs and the executable stay under the ignored `native/app-core/target/` directory.
 
 Android's `:core:rustcore` tests build a host copy of
-the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
+the library and replay the same continuity, transport, sort, state and static-turn fixtures through the real JNI
+binding. `StateBindingFixtureTest` (#9691) compares the exact two `session_state` and eleven `hub_state` complete
+expected objects through `NativeBridge.projectState`. The pure fixture adapter in `persona_core::state` is shared with
+the ArkTS host helper; no second state machine, persisted client state or production adapter is introduced. The JNI
+entry is debug/test-only and excluded from the Release Android export. The
 turn replay compares complete expected `turns` arrays using the checked-in `spec/fixtures/lines/ios/differences.json`.
 Its 57 cases include three that compare empty arrays only; they do not verify layout. It does not compare rendered
 lines, execute Swift or connect a production Android adapter. The operation replay (#8815) additionally drives
@@ -349,7 +356,8 @@ a release upload.
 The ArkTS host tests live outside the portable `harmony/tests/*.test.mjs` glob, because the replay needs the helper
 binary; a missing helper or too-old Node fails the test rather than skipping it. `harmony/tests/core-host/sort.test.mjs`
 replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
-The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
+The state command shares `persona_core::state::project_fixture` with the real Kotlin/JNI consumer (#9691), which calls
+`session_state` and `AgentState::from_hub`; expectations come only
 from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
 `harmony/tests/core-host/projections.test.mjs` (#8937) replays the current 15 answer + 9 display_answer,
 21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command; #9233 added

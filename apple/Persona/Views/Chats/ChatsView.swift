@@ -970,7 +970,7 @@ private struct AgentsList: View {
     /// A card on no session, open in a sheet of its own (#4059): it has no chat to go to.
     @State private var answering: Interaction?
     /// The long-press menu's actions on a row (not observed: see `AgentRowMenu`).
-    @State private var rowActions = AgentRowMenu.Actions()
+    @State private var rowActions = AgentMenuHandlers()
     @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
@@ -1230,6 +1230,10 @@ private struct AgentsList: View {
                                       }
                                   })
 
+        #if os(iOS)
+        let _ = bindAgentMenuActions()
+        #endif
+
         // The list and the chain below are erased in a few places (#6735). Unoptimized, a function reserves a stack slot on
         // entry for every opaque intermediate of a modifier chain, each holding everything before it: ~45 modifiers
         // over the List made `observedAgentList` reserve 422 KB, and a Debug build on an iPhone (a 1 MB main-thread
@@ -1245,6 +1249,23 @@ private struct AgentsList: View {
                 openFromList(adopted.key)
             }
     }
+
+    #if os(iOS)
+    private func bindAgentMenuActions() {
+        rowActions.navigate = { current, destination in
+            switch destination {
+            case .space:
+                if let space = current.spaceKey { openFromList(SpaceRoute(id: space)) }
+            default:
+                AgentMenuRouting.shared.open(destination, at: current.key)
+                openFromList(current.key)
+            }
+        }
+        rowActions.openTodo = { session in
+            if let id = session.todo?.id { openFromList(TodoDetailRoute(id: id)) }
+        }
+    }
+    #endif
 
     // Opaque helper boundaries keep the same List/modifier tree while allowing
     // the minimum compiler to solve each expression independently.
@@ -2601,11 +2622,16 @@ private struct AgentsList: View {
     // MARK: Recently active
 
     private func workspaceAgentMenu(_ s: Session) -> AgentRowMenu {
-        AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
+        #if os(iOS)
+        return AgentRowMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions)
+        #else
+        return AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
                      live: s.state.isLive, terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose,
                      attachable: s.canAttach, deletable: s.canDelete,
                      paneActions: NodeMenu.offersPaneActions(s), actions: rowActions)
+        #endif
     }
+
 
     @ViewBuilder private func worktreeMenu(_ worktree: RepoTree.Worktree, agent: Session? = nil) -> some View {
         if let target = worktree.workspace {
@@ -3455,7 +3481,13 @@ private struct AgentsList: View {
                 }
             }
             #endif
-            .contextMenu { AgentRowMenu(s, model: model, actions: rowActions).equatable() }
+            .contextMenu { () -> AnyView in
+                #if os(iOS)
+                AnyView(AgentActionMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions).equatable())
+                #else
+                AnyView(AgentRowMenu(s, model: model, actions: rowActions).equatable())
+                #endif
+            }
     }
 
     /// iOS and visionOS: rows do not swipe (a sideways drag pages the shell, #1244) and end in their time, not the system's
@@ -5626,9 +5658,9 @@ enum AgentsNeedsYou {
 /// The Separate layout's tabs at regular width (#8596): the system's tab bar floats across the top, and the split already
 /// makes its room in its columns (64 pt on an iPad). The tab's own top safe area held that room a second time for a tab
 /// first shown after a switch, until UIKit let it go: it did for the Persona tab within a moment, never for the Agents
-/// tab, whose column head sat 64 pt lower. This takes the part of the tab's top safe area beyond the window's own (the
-/// status bar's) back off the tab's hosting controller, so the room is made once, by the split, on both tabs; where UIKit
-/// let it go already there is nothing to take off.
+/// tab, whose column head sat 64 pt lower. This takes the part of the tab's top safe area beyond the window root's own
+/// (the status bar's, and the room the return-to-call bar takes there, #9290) back off the tab's hosting controller, so
+/// the room is made once, by the split, on both tabs; where UIKit let it go already there is nothing to take off.
 private struct TabBarRoomOnce: UIViewRepresentable {
     func makeUIView(context: Context) -> Reader {
         let v = Reader()
@@ -5664,9 +5696,11 @@ private struct TabBarRoomOnce: UIViewRepresentable {
                 .compactMap({ $0 as? UISplitViewController }).first,
                   let tab = split.parent, tab.parent is UITabBarController else { return }
             self.tab = tab
-            // The top the tab's controller is given before this one's own change, against the window's own top.
+            // The top the tab's controller is given before this one's own change, against the window root's top: the
+            // window's own, and the call bar's room the root adds (`CallBarRoom`), which every page keeps.
             let given = tab.view.safeAreaInsets.top - tab.additionalSafeAreaInsets.top
-            let extra = max(0, given - window.safeAreaInsets.top)
+            let rootTop = window.safeAreaInsets.top + (window.rootViewController?.additionalSafeAreaInsets.top ?? 0)
+            let extra = TabBarExtraRoom.extra(given: given, rootTop: rootTop)
             if abs(tab.additionalSafeAreaInsets.top + extra) > 0.5 { tab.additionalSafeAreaInsets.top = -extra }
         }
 
@@ -5674,5 +5708,11 @@ private struct TabBarRoomOnce: UIViewRepresentable {
             if let tab, tab.additionalSafeAreaInsets.top != 0 { tab.additionalSafeAreaInsets.top = 0 }
         }
     }
+}
+
+/// The tab bar's second room (`TabBarRoomOnce`): what a tab's controller is given at the top beyond the window root's
+/// top (the status bar, and the return-to-call bar's room the root adds: never taken back, #9290).
+nonisolated enum TabBarExtraRoom {
+    static func extra(given: CGFloat, rootTop: CGFloat) -> CGFloat { max(0, given - rootTop) }
 }
 #endif

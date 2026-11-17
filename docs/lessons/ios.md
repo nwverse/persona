@@ -134,6 +134,10 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
 
+## A bar button's color goes on its label, not on the button (2026-11-17, #9653)
+
+In an iOS 26 toolbar, `.foregroundStyle(Color.primary)` on a `ToolbarItem`'s `Button` is ignored: the bar draws the button's label in the app's tint. Settings' ✕ carried that modifier from 11-01 and still showed in the orange accent. Style the label inside the button (`Text(…).sheetBarLabel()`, `ThemedIcon(…).sheetBarLabel()`, as `SheetClose` does). The system's own close button (`Button(role: .close)` with no label) is no way out of this: it draws its ✕ in the tint too (blue on the extension Update sheet, 11-17). Check a bar's colors in a screenshot, dark included, not in the code.
+
 ## A UI test cannot see a label that is cut (#9121)
 
 The Agents capsule drew a filter that was neither chosen nor in the strip's middle as its first two characters and an ellipsis (「工作…」), while VoiceOver and `XCUIElement.label` read the whole name: the button carries its own accessibility label, so the drawn text is not in the accessibility tree and a UI test that asserts labels passes whatever is painted. A width check does not catch it either, since three Chinese or Japanese characters and two characters with an ellipsis take the same room. Guard what is drawn by its pixels: `FilterCapsuleTests` renders a chip and the bare name with `ImageRenderer`, crops both to the ink and compares them, after checking that the comparison tells 「工作中」 from 「工作…」. Screenshots in every shipped language are the other evidence.
@@ -605,6 +609,16 @@ page and the newest message stays over the composer. A fade drawn by the footer 
 - Give a sideways scroll view inside a column `.clipped()` (before its background) when nothing in it should reach past
   its frame. `CodeBlockOverflowUITests` checks the strip beside a code block for drawn text; run it on the Duo simulator,
   folded or open on its side (Device Hub folds it; `simctl io … screenshot --display=1` captures the outer display).
+
+## The system's Show Sidebar takes a row of the page's bar under side bars (2026-11-17)
+
+- On the open iPhone Duo on its side a page's navigation bar puts its items in the side column, but a split's Show
+  Sidebar (shown while the column is folded) stays at the top left, in a row of its own: the bar grew from 24 to 82 pt
+  and the page's top safe area with it. A place has its title in that row and saw nothing; an Agent's chat draws its own
+  header under the bar (its system title removed), so the header and the chat dropped 58 pt as the column folded.
+- A page that draws its own top under side bars must not take it from the bar's height: the chat sets its own
+  (`ChatView.pinsSideTop`, the empty bar's 24 pt), and the system's button lies on the title's line. Check a page under
+  side bars with the column out *and* folded: `SidebarRootsUITests.testFoldingTheSidebarKeepsTheChatsTop`.
 
 ## A split's detail stack shares its modifiers only with its root page (#3680)
 
@@ -2059,10 +2073,13 @@ no initial Working row so the message shifted by one row, and pending local remo
 - With a taller card the conversation overflows and the Agents header folds to its slim bar. XCUITest reports that bar's
   back button as the 8 x 13 pt chevron and not hittable: a known limit of these tests, so
   `PendingCardsTests.testLoneQuestionShowsEveryOption` checks it on screen and taps it by its coordinate. It is not a
-  way around the button itself: the slim bar's back is a plain button without `.contentShape(.rect)` (`ChatView`'s
-  `compactChrome`), so its real touch area may be little more than the chevron. That is on `main` and not fixed here.
+  way around the button itself. The slim bar's back was a plain button without `.contentShape(.rect)` (`ChatView`'s
+  `compactChrome`), so its touch area was little more than the chevron; fixed in #9699 (a 44 x 44 pt square like the ⋯).
 - `-ui.scheme light|dark` makes the app icon follow the appearance, and SpringBoard's "You have changed the icon"
   alert covers the screenshot and takes taps: dismiss it through `com.apple.springboard` after launch.
+  Or keep the icon as it is with `-showSameIcon YES` (DEBUG, #9506): no switch, no alert. Without either, the first
+  launch after a Light & Dark change also left the app's main thread busy for 30 s in a UI test ("Unable to perform
+  work on main run loop"), and the next test class, launched in the other look, timed out on its queries the same way.
 
 ## One scroll in a pending card, its answers outside it (2026-11-13, #6605)
 
@@ -2863,6 +2880,19 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
 
+## One `import CallKit` gets the build rejected for China (2026-11-16, #9290)
+
+- App Review rejects a build offered in China when any binary in it links `CallKit.framework`. That includes a weak
+  link and an SDK whose only CallKit use is `CXCallObserver`. The app uses LiveCommunicationKit, whose system binary
+  links CallKit itself; that does not count.
+- Checked with Xcode 27.1: a bare `import CallKit`, with nothing from it used, already adds `libswiftCallKit.dylib
+  (weak)` to the binary; using `CXCallObserver` adds `CallKit.framework` as well. `import LiveCommunicationKit` and
+  `import PushKit` add neither. The likely slip is an import for one constant (`CXErrorDomainRequestTransaction`).
+  LiveCommunicationKit's errors carry CallKit's domain strings (`com.apple.CallKit.error.requesttransaction`): compare
+  them as strings.
+- A remote package or a prebuilt framework can link CallKit with no import in our code, and only the built binaries
+  show it. The source and binary guards are in `docs/operations/release.md` ("No CallKit").
+
 ## A page put back beneath a kept item learns of the item from the item's own appearance (2026-11-16, #9053)
 
 A place's kept stack (`ShellPlaces`) comes back as a `NavigationPath`, which can't be read element by element, so the
@@ -2920,3 +2950,13 @@ the root in front (no move, or a pop to it) bumps the counter there. Reviewers c
   window after the new one came in, handed the pin the outgoing scroll view. The probe now takes the list only on its way in.
 - XCUITest's frame of a text in a misplaced list can be thousands of points off the screen while the probe says the line
   is drawn: check the probe's numbers, not only frames.
+
+## What a screenshot leaves out, and what a simulator check sees (2026-11-17, #9508)
+
+The screenshot banner hides the chats' bars from captures with a secure text field's drawing view (docs/apple/ios.md "Screenshot banner"). Checking it, and living with it:
+
+- `simctl io … screenshot`, `recordVideo` and Simulator's Save Screen read the display's frame buffer: they always show what is on screen, the bar, so they prove nothing about captures. `XCUIScreen.main.screenshot()` is the system's own capture, taken outside the app: there the bar is gone and the banner shows. Xcode 27.1 here ships no Simulator.app, so its Device › Trigger Screenshot was not available; SimulatorKit's HID button events and an accessibility-server screenshot request did nothing.
+- In-app pictures differ: `drawHierarchy` and `snapshotView` leave the layer out like a screenshot, `layer.render(in:)` draws it. Anything that photographs the window to animate (the iPad's sidebar drag, `SplitColumnControl`) or to report (DEBUG `RuntimeCLI`) must turn the layer off first (`ScreenshotBanner.beginReveal()`), or it shows the banner on screen; and take that picture with `afterScreenUpdates: true`: a picture of the frame already drawn still left the bar out right after turning it off (`ScreenshotBannerTests`).
+- The view comes out of a `UITextField` with `isSecureTextEntry` (its first subview; iOS 17 renamed its class, so never match the name). Keep the field: setting `isSecureTextEntry` back and forth turns the view's exclusion off and on, measured in place.
+- A view in a second hosting controller inside it takes every touch in its frame: overriding `hitTest` to pass the hosting view's own hits through also dropped the bar's SwiftUI buttons (they hit-test as the hosting view). `accessibilityHidden` on the banner's SwiftUI view left its text in the tree; `accessibilityElementsHidden` on its hosting view removes it.
+- The bar's and the banner's hosting controllers are the same trap as the drawer's sidebar (#4496, above): a copied `colorScheme` is only as new as SwiftUI's last update, and SwiftUI puts the same stale look into the controller's traits. On a phone, the first Agent chat opened drew its header and banner light above the dark chat (2026-11-17, #9829). In a system screenshot that shows as a white banner, and the status bar's text turns dark over it although the app is dark: forcing both hosts light in the simulator gave the same picture. No simulator flow reproduced the stale update (pushes from the list, links, `-showLookBlink`, Home and back, light or dark against the system), so `ScreenshotBannerTests.theBarAndTheBannerFollowTheirWindow` holds a stale page look against the window's. Any view hosted on its own takes its look from its window.

@@ -225,6 +225,15 @@ refresh replaces it, including removals. There is no new setting or model depend
     shorten the name, not the number. Closing a Paseo Agent offers to remove its own worktree as for herdr (#6297): `worktree/status` calls it
     Persona's when it is the folder of a worktree workspace Paseo made, and `worktree/remove` archives that workspace through Paseo with Delete
     worktree's guards (below).
+  - **Creation keeps project identity** (#9726): an explicitly selected workspace supplies its own project ID. With a directory alone,
+    the bridge reads the active projects and compares physical paths for the directory, Git checkout and main checkout. A unique match
+    is passed as `source.projectId`; names and remote URLs are never used to merge independent clones. Multiple matching projects or a
+    failed/malformed project list stop creation. Only a successful list with no match allows Paseo to allocate a project.
+    A direct Agent start that needs a new workspace uses the same resolver: since `agent.create.request` has no project ID, the bridge
+    creates a directory workspace with that ID first, then starts the Agent in it. This stays inside the existing pending-start flow;
+    retries reuse its creation key. If the Agent fails later, the directory workspace remains available for retry.
+    Existing groups and sessions are preserved: Paseo 0.16's public workspace commands/protocol have no move or reparent operation.
+    This prevents future duplicates; it does not migrate previously duplicated project groups.
   - **Terminals for a Paseo Agent's folder**: a Paseo workspace has no terminal, so Open Terminal Here and a dev server's Start for one of its
     Agents open in the terminal engine's workspace that holds the folder, else in a new workspace there, never in one that only happens to be first;
     the web and iOS offer Start only for sessions with a terminal. For that, Open Terminal Here sends the Agent's Paseo workspace with the folder
@@ -323,7 +332,10 @@ launcher ran on another account, and a provider added in Persona never applied i
   App). The login shell's launchers, the providers added in Persona and plain `claude` are not offered: Paseo would run one of
   its own in their place. The node answers `launchers.list` for that host (`host_runtime`), and the manager adds nothing to it
   (`docs/protocol/protocol.md`, `launchers.list`). The main chat's menu still lists the computer's own launchers: the assistant
-  runs them on the command line, whatever the engine.
+  runs them on the command line, whatever the engine. Paseo's providers are not among them (the Paseo runtime does not declare
+  the assistant): the menu shows each as unavailable, "Can start Agents … but can't run assistant chats". Where an assistant
+  runtime on the computer declares it runs the assistant for one (the Grok companion's `--assistant-for grok`,
+  `integrations/grok/README.md`), that entry names it instead ("For assistant chats, choose Grok"); the user picks it.
 - **A name both have is Paseo's provider there.** On such a computer a launcher of the login shell's (or one added in Persona)
   named like a Paseo provider means that provider: its models, its Test in Settings › Models, its start options and the
   start. In a terminal engine the shell's launcher of that name runs, as before.

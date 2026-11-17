@@ -90,14 +90,10 @@ struct SettingsView: View {
                 plugins = nil
             }
             .pageToolbar {
-                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ChatGPT's × to close it.
+                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ✕ at the leading corner, as every presented
+                    // page (#9653); Esc closes it too: a phone's full-screen cover has no swipe down.
                     if shell != nil || inSheet {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
-                                .foregroundStyle(Color.primary)
-                                .keyboardShortcut(.cancelAction) // Esc closes it too: a phone's full-screen cover has no swipe down
-                                .accessibilityIdentifier("settings-close")
-                        }
+                        SheetClose(id: "settings-close") { model.shellSettings = false }
                     }
                 }
                 .navigationTitle("Settings")
@@ -158,9 +154,9 @@ struct SettingsView: View {
                 }
                 #if os(iOS)
                 settingsLink(.knowledgeSelection, "Knowledge Selection", Theme.Icon.knowledge, id: "settings-knowledge-selection")
-                if MeetingAttendees.offered(model) {
-                    settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings", value: MeetingAttendees.defaultRole(model).title)
-                }
+                // Every iPhone: the calendar reminder is the phone's (#8731 G2); the role shows where the hub offers one.
+                settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings",
+                             value: MeetingAttendees.offered(model) ? MeetingAttendees.defaultRole(model).title : "")
                 #endif
                 settingsLink(.agents, "Agent", Theme.Icon.options, id: "settings-agents")
                 NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
@@ -1236,7 +1232,7 @@ private struct PairSheetChrome: ViewModifier {
             .navigationTitle("Connect Hub")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await connect() } } label: { if connecting { ProgressView() } else { Text("Connect [V N C Page a55741]") } }
                         .disabled(connecting || (!passwordMode && token.isEmpty) || url.isEmpty)

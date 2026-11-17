@@ -60,6 +60,8 @@ source-runtime support.
 Missing `stream`, even with UI version 7, means snapshot-only. Future handlers must authorize the contribution and
 fit the complete View to supported components and UI version. Widgets/system surfaces continue using snapshots.
 `Section.key` is optional for legacy Views (`x-since: 7`); stream sections and components require bounded keys.
+Snapshot Views accept `progress.style` (`bar` or `ring`, omitted means `bar`) as an unversioned drawing hint;
+the closed native stream progress overlay does not accept it, including an explicit `bar`.
 
 - `UIStreamRequest` has a required `request` discriminator, `protocol: 1` and `request_id`. Requests are `open`,
   `close`, `suspend`, `resume`, `event` and `snapshot`. Open carries extension/contribution, context and bounded

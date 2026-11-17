@@ -149,8 +149,13 @@ struct VNCPage: View {
         .onAppear {
             session = VNC.hold(ref)
             mode = VNCMode.of(ref)
-            #if os(iOS) || os(visionOS)
+            #if os(iOS)
+            // Back from the small window (Restore): the Phone Screen it kept on the Mac, its window still there.
+            if phone == nil { phone = VNCPiP.shared.takePhone(ref) ?? PhoneScreenLink(ref: ref) }
+            #elseif os(visionOS)
             if phone == nil { phone = PhoneScreenLink(ref: ref) }
+            #endif
+            #if os(iOS) || os(visionOS)
             display = VNCDisplayChoice.of(ref)
             // Picture defaults to video on a Mac whose node offers it (it falls back to VNC by itself when it can't show);
             // a saved choice always wins.
@@ -191,9 +196,12 @@ struct VNCPage: View {
         .onDisappear {
             #if os(iOS)
             VNCPiP.shared.pagePicture(nil)
+            // Phone Screen stays on the Mac while the small window has this Mac, which shows its portrait display; else
+            // it ends (the Mac puts its windows back and lets the display go) and the small window shows all of the picture.
+            let kept = phone.map { VNCPiP.shared.keepPhone($0) } ?? false
+            if !kept { session?.cutSmallWindow(nil) }
             VNCPiP.shared.pageGone(ref)
-            #endif
-            #if os(iOS) || os(visionOS)
+            #elseif os(visionOS)
             phone?.stop() // the Mac puts its windows back and lets the display go
             #endif
             VNC.release(ref)
@@ -255,8 +263,16 @@ struct VNCPage: View {
         // Phone Screen (#9314): on while the mode is and the screen is live, for this connection at the picture's shape.
         .task(id: phoneWant) {
             guard let phone else { return }
-            if let w = phoneWant { phone.start(pair: w.pair, size: w.size) } else { phone.stop() }
+            // A page just opened on a Phone Screen that is on (Restore from the small window, #9659) has not read the
+            // picture's shape yet: the Mac's display and window stay until it has.
+            if let w = phoneWant { phone.start(pair: w.pair, size: w.size) } else if !phoneShapePending { phone.stop() }
         }
+        #endif
+        #if os(iOS)
+        // The small window shows what the page does in Phone Screen: the portrait display alone, at its own pixels.
+        .onChange(of: smallWindowCut) { _, cut in session?.cutSmallWindow(cut?.rect) }
+        #endif
+        #if os(iOS) || os(visionOS)
         .onChange(of: phone?.phase) { _, phase in
             // Up for the first time with nothing on it: the window list, to pick what goes there.
             if phase == .on, phone?.placed == nil { phoneWindows = true }
@@ -897,6 +913,9 @@ struct VNCPage: View {
         return PhoneWant(pair: pair, size: shape.size)
     }
 
+    /// Phone Screen is the mode but this page has not read the picture's shape yet (it has just opened).
+    private var phoneShapePending: Bool { activeMode == .phone && phoneShape == nil }
+
     struct PhoneShape: Equatable {
         var size: CGSize
         var railed: Bool
@@ -913,6 +932,19 @@ struct VNCPage: View {
     struct PhoneWant: Equatable {
         var pair: String
         var size: CGSize
+    }
+
+    /// The part of the picture the small window shows (#9659): in Phone Screen, its display as the page shows it; nil: all of it
+    /// (Mouse and Trackpad Mode, one display chosen or not). For this connection and framebuffer: a new one cuts again.
+    private var smallWindowCut: SmallWindowCut? {
+        guard activeMode == .phone, let s = session, let d = shownDisplay else { return nil }
+        return SmallWindowCut(rect: d.frame, framebuffer: s.size, pair: s.pair)
+    }
+
+    struct SmallWindowCut: Equatable {
+        var rect: CGRect
+        var framebuffer: CGSize
+        var pair: String?
     }
 
     /// The line under the bars while Phone Screen starts, waits for the picture or can't start.
@@ -1152,9 +1184,7 @@ struct VNCHelp: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { ThemedIcon(Theme.Icon.close) }.accessibilityIdentifier("vnc-help-close")
-                }
+                SheetClose(id: "vnc-help-close") { dismiss() }
             }
         }
         .accessibilityIdentifier("vnc-help-page")

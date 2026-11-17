@@ -160,7 +160,7 @@ class AssistantSettingsStateTest {
     @Test fun recentTaskChatsSwitchUpdatesAtOnceAndRollsBack() = runTest {
         val seen = mutableListOf<Boolean?>()
         val api = FakeApi()
-        val state = AssistantSettingsState(api, Zone(), recentTaskChatsChanged = { seen += it })
+        val state = AssistantSettingsState(api, Zone(), recentTaskChatsChanged = { { value -> seen += value } })
         state.load()
         state.setRecentTaskChats(true)
         assertTrue("an older hub has no switch", api.updates.isEmpty())
@@ -179,8 +179,12 @@ class AssistantSettingsStateTest {
 
     @Test fun recentTaskChatsRestoresSnapshotWhenWriteIsCancelled() = runTest {
         val seen = mutableListOf<Boolean?>()
+        var captures = 0
         val api = FakeApi().apply { config = config.copy(recentTaskChats = false) }
-        val state = AssistantSettingsState(api, Zone(), recentTaskChatsChanged = { seen += it })
+        val state = AssistantSettingsState(api, Zone(), recentTaskChatsChanged = {
+            captures++
+            { value -> seen += value }
+        })
         state.load()
         val updateStarted = CompletableDeferred<Unit>()
         val never = CompletableDeferred<Unit>()
@@ -196,6 +200,7 @@ class AssistantSettingsStateTest {
         assertTrue("the write was cancelled", writing.isCancelled)
         assertEquals("cancellation restores the previous setting", false, state.state.value.config?.recentTaskChats)
         assertEquals("cancellation restores the shared Recent snapshot", false, seen.last())
+        assertEquals("one write reuses its captured snapshot updater", 1, captures)
     }
 
     @Test fun recentTaskChatsSerializesConfigLoadStartedBeforeWrite() = runTest {
@@ -245,8 +250,10 @@ class AssistantSettingsStateTest {
         val api = FakeApi().apply { config = config.copy(recentTaskChats = false) }
         var callbacks = 0
         val state = AssistantSettingsState(api, Zone(), recentTaskChatsChanged = {
-            callbacks++
-            if (callbacks == 2) error("pairing closed")
+            { _ ->
+                callbacks++
+                if (callbacks == 2) error("pairing closed")
+            }
         })
         state.load()
         state.setRecentTaskChats(true)

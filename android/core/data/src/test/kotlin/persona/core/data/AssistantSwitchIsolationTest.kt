@@ -106,6 +106,26 @@ class AssistantSwitchIsolationTest {
         assertEquals(true, repository.assistant.value.recentTaskChats)
     }
 
+    @Test fun recentTaskChatsUpdaterKeepsRollbackWithOriginalManager() = runTest {
+        val transport = Transport().apply { read = { config(it, recentTaskChats = it != null) } }
+        val repository = RealAssistantRepository(Connection(transport), Sessions(), backgroundScope)
+        runCurrent()
+        assertEquals(false, repository.assistant.value.recentTaskChats)
+        val update = repository.recentTaskChatsUpdater()
+        update(true)
+        AssistantManagerChoice.pick("work")
+        runCurrent()
+        assertEquals(true, repository.assistant.value.recentTaskChats)
+
+        update(false)
+
+        assertEquals("A's rollback must not rewrite B", true, repository.assistant.value.recentTaskChats)
+        transport.read = { manager -> if (manager == null) throw IOException("offline") else config(manager, recentTaskChats = true) }
+        AssistantManagerChoice.pick(null)
+        runCurrent()
+        assertEquals("A's cached optimistic value is rolled back too", false, repository.assistant.value.recentTaskChats)
+    }
+
     @Test fun mainLookupPinsTheReturnedConversationBeforePageSwitchAndSend() = runTest {
         val repository = RealAssistantRepository(Connection(Transport()), Sessions(), backgroundScope)
         assertEquals(SessionKey("mac", "work-main"), repository.mainConversationOf("work"))

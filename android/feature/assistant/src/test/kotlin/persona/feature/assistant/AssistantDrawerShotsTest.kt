@@ -487,7 +487,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onSettings = {}, onArchive = {}, onLeader = {}, onRename = {})
+                        onInfo = {}, onNew = {}, onSettings = {}, onArchive = {}, onLeader = {}, onRename = {}, onEditTags = {})
                 }
             }
         }
@@ -507,6 +507,7 @@ class AssistantDrawerShotsTest {
         rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
         rule.onAllNodesWithText("归档").assertCountEquals(0)
         rule.onAllNodesWithText("重命名…").assertCountEquals(0)
+        rule.onAllNodesWithText("编辑标签…").assertCountEquals(0)
         rule.onAllNodesWithText("结束…").assertCountEquals(0)
         rule.onNodeWithText("拷贝会话 ID").performClick()
         // An ordinary Recent row keeps the same management actions.
@@ -514,6 +515,7 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("设为常驻").assertExists()
         rule.onNodeWithText("归档").assertExists()
         rule.onNodeWithText("重命名…").assertExists()
+        rule.onNodeWithText("编辑标签…").assertExists()
         rule.onNodeWithText("结束…").assertExists()
     }
 

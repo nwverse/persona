@@ -85,7 +85,7 @@ private fun AssistantSettingsDetails(
     val sender by rememberUpdatedState(LocalAssistantHost.current?.mainSender)
     val controller = remember(management, conversations) {
         AssistantSettingsState(management.settingsApi(), StoredTimezoneChoice(context), mainChanged = { sender?.mainChanged() },
-            recentTaskChatsChanged = { conversations?.updateRecentTaskChats(it) }) { moved() }
+            recentTaskChatsChanged = { conversations?.recentTaskChatsUpdater() ?: { _ -> } }) { moved() }
     }
     val state by controller.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()

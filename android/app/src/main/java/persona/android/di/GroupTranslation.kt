@@ -285,6 +285,7 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun compactConversation(session: SessionKey) = source.compactConversation(names.raw(session))
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
         override suspend fun unarchiveConversation(session: SessionKey) = source.unarchiveConversation(names.raw(session))
+        override suspend fun setConversationTags(session: SessionKey, tags: List<String>) = source.setConversationTags(names.raw(session), tags)
         override suspend fun archivedConversations() = source.archivedConversations().map(names::session)
         override suspend fun searchChats(query: String, limit: Int) = source.searchChats(query, limit)?.let { answer ->
             answer.copy(results = answer.results.map { result ->
@@ -352,6 +353,7 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()
         override suspend fun updateRecentTaskChats(value: Boolean?) = source.updateRecentTaskChats(value)
+        override suspend fun recentTaskChatsUpdater() = source.recentTaskChatsUpdater()
         override suspend fun startConversation() = names.key(source.startConversation())
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
         override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))

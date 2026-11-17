@@ -67,4 +67,6 @@ interface AssistantRepository {
     suspend fun refresh()
     /** Apply the setting's optimistic value or rollback to the selected snapshot, when the implementation supports it. */
     suspend fun updateRecentTaskChats(value: Boolean?) {}
+    /** Capture the selected assistant for one optimistic write and its later outcome. */
+    suspend fun recentTaskChatsUpdater(): suspend (Boolean?) -> Unit = { updateRecentTaskChats(it) }
 }

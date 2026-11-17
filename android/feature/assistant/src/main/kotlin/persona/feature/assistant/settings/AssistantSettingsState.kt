@@ -179,7 +179,7 @@ internal class AssistantSettingsState(
      * to the main conversation goes to that one, an ordinary conversation now.
      */
     private val mainChanged: suspend () -> Unit = {},
-    private val recentTaskChatsChanged: suspend (Boolean?) -> Unit = {},
+    private val recentTaskChatsChanged: suspend () -> suspend (Boolean?) -> Unit = { {} },
     /** After a move: the conversation list now comes from the other machine. */
     private val onMoved: suspend () -> Unit = {},
 ) {
@@ -323,31 +323,33 @@ internal class AssistantSettingsState(
         if (!ok) set { copy(config = this.config?.copy(mainBackgroundFolded = !on)) }
     }
 
-    /** Show scheduled task chats in Recent: update the shared snapshot at once and restore it if the write fails or is cancelled. */
+    /** Show scheduled task chats in Recent: bind one snapshot updater for the write and every later outcome. */
     suspend fun setRecentTaskChats(on: Boolean) = recentTaskChatsLock.withLock {
         val config = state.value.config ?: return@withLock
         val was = config.recentTaskChats ?: return@withLock
         if (state.value.busy || was == on) return@withLock
         set { copy(config = config.copy(recentTaskChats = on)) }
         var applied = on
+        var updateRecent: suspend (Boolean?) -> Unit = {}
         val ok = try {
             perform(SettingsText(R.string.assistant_settings_save_failed)) {
-                recentTaskChatsChanged(on)
+                updateRecent = recentTaskChatsChanged()
+                updateRecent(on)
                 val updated = api.updateConfig(AssistantConfigUpdate(recentTaskChats = on))
                 applied = updated.recentTaskChats ?: on
                 set { copy(config = updated.copy(recentTaskChats = applied)) }
             }
         } catch (cancelled: CancellationException) {
             set { copy(config = this.config?.copy(recentTaskChats = was)) }
-            withContext(NonCancellable) { quietly { recentTaskChatsChanged(was) } }
+            withContext(NonCancellable) { quietly { updateRecent(was) } }
             throw cancelled
         }
         if (!ok) {
             set { copy(config = this.config?.copy(recentTaskChats = was)) }
-            quietly { recentTaskChatsChanged(was) }
+            quietly { updateRecent(was) }
         } else {
             // The hub accepted the write; a local snapshot sync failure is not a refusal and must not roll it back.
-            quietly { recentTaskChatsChanged(applied) }
+            quietly { updateRecent(applied) }
         }
     }
 

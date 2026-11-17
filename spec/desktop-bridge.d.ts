@@ -44,7 +44,7 @@ export interface DesktopIslandRow {
   readonly route: string;
 }
 
-/** What the island shows: the counts the Overview and the Dock badge count, and the first rows, most urgent first. */
+/** What the island shows: the Agents by state as the Agents list counts them, and the first rows, most urgent first. */
 export interface DesktopIslandState {
   readonly needsYou: number;
   readonly working: number;
@@ -76,4 +76,10 @@ export interface DesktopBridge {
   setIslandEnabled?(enabled: boolean): Promise<DesktopIsland>;
   /** The island's state; the shell keeps the latest and ignores it while the island is off. */
   setIslandState?(state: DesktopIslandState): void;
+  /** Developing Persona (#9675): the shell records its main process while the page's switch is on; off deletes what it
+   *  kept. Absent in shells before it. */
+  setDevDiagnostics?(on: boolean): Promise<{ on: boolean }>;
+  /** What the shell kept, as JSON lines of code-chosen words and numbers, and how many crash dumps it has kept on this
+   *  computer since (counted, never read). */
+  readDevDiagnostics?(): Promise<{ lines: string[]; crashDumps: number }>;
 }

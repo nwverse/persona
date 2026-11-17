@@ -248,13 +248,20 @@ class RealAssistantRepository(
     override suspend fun refresh() = refresh(request())
 
     override suspend fun updateRecentTaskChats(value: Boolean?) {
+        recentTaskChatsUpdater()(value)
+    }
+
+    override suspend fun recentTaskChatsUpdater(): suspend (Boolean?) -> Unit {
         val request = request()
-        lock.withLock {
-            if (!selected(request)) return
-            ++refreshVersion
-            val updated = current.value.copy(recentTaskChats = value)
-            current.value = updated
-            cached[request.key] = updated
+        return { value ->
+            lock.withLock {
+                val selected = selected(request)
+                val snapshot = if (selected) current.value else cached[request.key] ?: return@withLock
+                if (selected) ++refreshVersion
+                val updated = snapshot.copy(recentTaskChats = value)
+                cached[request.key] = updated
+                if (selected) current.value = updated
+            }
         }
     }
 
