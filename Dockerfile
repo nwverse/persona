@@ -61,8 +61,10 @@ COPY --from=web /src/web/dist/ internal/hub/webdist/
 # Its hashed assets kept gzipped, as the hub sends them (docs/web/web.md "Precompressed assets").
 RUN go run ./internal/webasset/precompress internal/hub/webdist
 # The runtime packages personad carries and keeps its runtimes on (docs/integrations/runtimes.md "Auto-update"): the DSH plugin's and
-# the pi extension's, the Paseo bridge's and the Agent SDK bridge's code.
+# the pi extension's, the Paseo bridge's and the Agent SDK bridge's code, and the Persona plugin for Claude Code (runtimepkg's
+# Assets, #9626). scripts/test/test_docker_runtime_packages.py checks every directory runtimepkg reads is here and in .dockerignore.
 COPY integrations/agent-sdk/ /src/integrations/agent-sdk/
+COPY integrations/claude-code-plugin/ /src/integrations/claude-code-plugin/
 COPY integrations/dsh/ /src/integrations/dsh/
 COPY integrations/paseo/ /src/integrations/paseo/
 COPY integrations/pi/ /src/integrations/pi/

@@ -6,6 +6,7 @@
 !web/
 !deploy/docker/
 !integrations/agent-sdk/
+!integrations/claude-code-plugin/
 !integrations/dsh/
 !integrations/paseo/
 !integrations/pi/
