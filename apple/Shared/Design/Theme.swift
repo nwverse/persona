@@ -988,7 +988,7 @@ nonisolated enum Theme {
         static let blue = Color(light: 0x2E6FD0, dark: 0x5B9BFF)
         static let orange = Color(light: 0xB35400, dark: 0xFF9F0A)
         static let green = Color(light: 0x1D7A4C, dark: 0x4CC38A)
-        static let purple = Color(light: 0x7A5AF8, dark: 0x9D8BFF)
+        static let purple = Palette.purple
         /// System indigo.
         static let indigo = Color(light: 0x5856D6, dark: 0x5E5CE6)
         /// Health's heart (the health space, docs/assistant/health.md).

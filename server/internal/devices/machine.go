@@ -648,6 +648,9 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		snapshot.peer, snapshot.revision = p, m.sessionRevision
 		m.mu.Unlock()
 	}
+	if nodeHas(info, nodeproto.OwnerControls) {
+		method = ownerControlMethod(ctx, method)
+	}
 	return p.Call(ctx, method, params, out)
 }
 

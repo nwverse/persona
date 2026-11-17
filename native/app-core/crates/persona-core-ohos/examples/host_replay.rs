@@ -361,53 +361,10 @@ fn transport_json(kind: u8, body: &[u8]) -> Vec<u8> {
 
 /// The fixture's state decoder, reached by the host rather than by a production NAPI export.
 fn state_json(bytes: &[u8]) -> Result<String, String> {
-    let input: serde_json::Value =
+    let input: persona_core::state::FixtureInput =
         serde_json::from_slice(bytes).map_err(|_| "state: input is not valid JSON".to_owned())?;
-    let object = input.as_object().ok_or("state: input is not an object")?;
-    if object.len() != 2 || !object.contains_key("kind") || !object.contains_key("input") {
-        return Err("state: expected exactly kind and input".into());
-    }
-    let kind = object["kind"].as_str().ok_or("state: kind is not a string")?;
-    let input = &object["input"];
-    match kind {
-        "session_state" => {
-            let sessions: Vec<persona_core::state::ClientSession> =
-                serde_json::from_value(input["sessions"].clone())
-                    .map_err(|_| "session_state: sessions does not decode".to_owned())?;
-            let rows: Vec<_> = sessions.iter().map(persona_core::state::session_state).collect();
-            serde_json::to_string(&serde_json::json!({"sessions": rows})).map_err(|e| e.to_string())
-        }
-        "hub_state" => {
-            let session = input.get("session").ok_or("hub_state: session is missing")?;
-            let status = session
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("hub_state: status is not a string")?;
-            let pending_interactions = session
-                .get("pending_interactions")
-                .and_then(serde_json::Value::as_i64)
-                .ok_or("hub_state: pending_interactions is not an integer")?;
-            let timestamp = |value: &serde_json::Value| -> Result<Option<i128>, String> {
-                if value.is_null() {
-                    return Ok(None);
-                }
-                let text = value.as_str().ok_or("hub_state: timestamp is not a string or null")?;
-                persona_core::state::utc_timestamp(text)
-                    .map(Some)
-                    .ok_or("hub_state: invalid timestamp".into())
-            };
-            let updated_at = timestamp(session.get("updated_at").unwrap_or(&serde_json::Value::Null))?;
-            let seen_at = timestamp(input.get("seen_at").unwrap_or(&serde_json::Value::Null))?;
-            let state = persona_core::state::AgentState::from_hub(&persona_core::state::HubSession {
-                status,
-                pending_interactions,
-                updated_at,
-                seen_at,
-            });
-            serde_json::to_string(&serde_json::json!({"state": state.as_str()})).map_err(|e| e.to_string())
-        }
-        _ => Err("state: unknown projection kind".into()),
-    }
+    let projection = persona_core::state::project_fixture(&input)?;
+    serde_json::to_string(&projection).map_err(|e| e.to_string())
 }
 
 /// A pure JSON projection, mirroring the NAPI export's input and result contract. `display_answer` is the exception:

@@ -537,7 +537,9 @@ Phase 3 lands in several PRs.
     (#9584) with complete expected objects and generated declaration drift checks, but no real NAPI invocation. The
     independently compiled Linux C11 client also replays all 21 recents complete objects through
     `persona_core_project_recents` (#9654), including wrong expectations, malformed operations and invalid UTF-8.
-    Neither domain has a production migration or separate SwiftPM replay.
+    Real Kotlin/JNI `projectState` (#9691) replays all 13 state complete objects through the same pure fixture adapter
+    as the ArkTS host, with malformed/wrong-shaped inputs and wrong expectations rejected. Neither domain has a
+    production migration or separate SwiftPM replay.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
   - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build`.

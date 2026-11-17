@@ -189,6 +189,19 @@ test('failed or unacknowledged native rename keeps the old title and native reco
   }
 })
 
+test('the assistant launcher is named for people and says only the Agent launcher it was set up for', async (t) => {
+  const plain = await fixture(t)
+  assert.deepEqual(plain.node.hello.launchers, [{ name: 'grok-chat', agent: 'grok', display_name: 'Grok', model: 'fast-model' }])
+  const f = await fixture(t, { displayName: 'Grok assistant', assistantFor: 'grok' })
+  assert.deepEqual(f.node.hello.launchers, [{ name: 'grok-chat', agent: 'grok', display_name: 'Grok assistant', assistant_for: 'grok', model: 'fast-model' }])
+  await f.start()
+  const changed = await until('launchers with models', () => f.node.all('runtime.launchers').at(-1)?.launchers?.[0]?.models)
+  assert.equal(f.node.last('runtime.launchers').launchers[0].assistant_for, 'grok')
+  assert.equal(f.node.last('runtime.launchers').launchers[0].display_name, 'Grok assistant')
+  assert.ok(changed.some((m) => m.id === 'fast-model'))
+  for (const assistantFor of ['bad name!', 'grok-chat']) assert.throws(() => createGrokRuntime({ acp: new FakeAcp(), assistantFor }), /assistant-for/)
+})
+
 test('assistant startup selects exact model/effort and forwards context, images and scoped tools', async (t) => {
   const f = await fixture(t)
   assert.equal(f.node.hello.caps.assistant, true)
