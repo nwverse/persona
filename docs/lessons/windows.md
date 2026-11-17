@@ -29,6 +29,8 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **Environment-variable values can contain spaces**: Whitespace-splitting regexes such as `envVarRe` are for `ps -E`; they truncate `C:\Users\A B\.claude`. On Windows, fetch the complete value by name (`pickEnv`); names are case-insensitive.
 - **There is no “foreground process group” or “suspended” state**: On Windows, the Orca host considers claude / codex foreground when its parent-process chain contains no agent process for the same pane. See [windows.md](../operations/windows.md) (“Orca”).
 - **PIDs are reused quickly and do not increase monotonically**: Sorting by PID to put wrappers first does not work on Windows. Sort by start time; when walking the parent chain, require ancestors to have started before the current process.
+- **Git Bash breaks the process tree**: MSYS2 emulates `fork`, and for `cd x && cmd` the forked bash that runs `cmd` as a new Windows process exits, so `cmd`'s parent pid names a process that is gone. A walk down from the agent (port discovery) or up to it misses everything below that point, and whether it happens depends on the command line: a lone `python -m http.server` keeps its chain, `cd dir && npx …` loses it (#9815).
+  Claude Code's Bash tool is Git Bash on Windows, so this is the usual case, not an edge. A process's engine pane variables (`ORCA_PANE_KEY`, `HERDR_PANE_ID`…) survive it: MSYS passes the environment through its fork and exec. Use them where the tree comes up empty.
 
 ## Paths the hub reads
 
@@ -135,6 +137,9 @@ See [windows.md](../operations/windows.md) ("Codex") and [codex.md](../integrati
   `orcart` selects the transport by platform: on Windows, `named-pipe` first (`tailscale/go-winio` for dialing), then `unix`; on other platforms, only `unix`. The protocol (one JSON per line) is unchanged.
 - Orca terminals have `ORCA_PANE_KEY` / `ORCA_AGENT_PANE`, just like macOS, plus `ORCA_USER_DATA_PATH` (`%APPDATA%\orca`).
 - Paths in the `topologyRevisions` keys of `terminal.list` mix separators (`C:/Users/…` and `C:\Users\…` on the same computer). Do not compare them directly to `worktreePath` as strings.
+- **Orca's terminals run Windows PowerShell 5.1 unless the user changed Orca's `terminalWindowsShell`**. A POSIX line typed there (`cd -- '…' && …`, `'\''` quoting) leaves no error in any log: PowerShell rejects `&&`, or an odd count of quotes leaves it at its `>>` continuation prompt, and the node waits for an Agent that never starts (#9810).
+  Open the terminal in the shell you type for instead of translating the quoting: `terminal.create` takes `shell` (`git-bash`, `powershell.exe`, `pwsh.exe`, `cmd.exe`, `wsl.exe`), and only a runtime that advertises `terminal.create-shell-selection.v1` in `status.get` honours it; an older one ignores the field and starts its default.
+  The fake runtime (`orcarttest`) has no shell, so unit tests cannot show this: check a change to what the node types into Orca against the real Orca on Windows.
 
 ## herdr
 
