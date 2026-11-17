@@ -805,7 +805,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
     main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
     same chat pushed from inside another page (a waiting Agent on the main conversation, Inbox's) has ‹, which goes back to that page. On iPhone Duo open on its side the chat has
-    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back.
+    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back, and the side column has no second one
+    (`ChatView.systemShowsList`). That button sits in a row of the bar of its own, so the chat's page starts `Theme.Space.xl` from the top whatever the bar holds
+    (`ChatView.pinsSideTop`): folded or out, the header and the chat stay where they are, and the button lies on the title's line, as on a place.
   - The Separate layout's tabs at regular width (#8596): the split makes the floating tab bar's room in its columns, and UIKit held it a second time in the tab's own top safe
     area for a tab first shown after a switch (the Agents tab's column head 64 pt lower). `TabBarRoomOnce` (ChatsView) takes the tab's top beyond the window's own back off.
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
