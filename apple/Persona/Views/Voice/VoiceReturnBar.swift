@@ -25,19 +25,14 @@ struct VoiceReturnPill: View {
                 } else {
                     CallAssistantFace(assistant: assistant, size: side)
                 }
-                HStack(spacing: Theme.Space.xs) {
-                    Text(verbatim: conversation?.title ?? assistant.name)
-                    Text(verbatim: "·") // i18n-ignore: a separator
-                        .accessibilityHidden(true)
+                // The name cut in the middle, the time never (`CallBarWords`, #9887 polish).
+                CallBarWords(title: conversation?.title ?? assistant.name) {
                     if let since = chat.connectedAt {
                         Text(since, style: .timer).monospacedDigit()
                     } else {
                         Text("Connecting…")
                     }
                 }
-                .font(Theme.Font.secondaryStrong)
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
                 if chat.held {
                     ThemedIcon(Theme.Icon.pause).font(Theme.Font.captionStrong).foregroundStyle(Theme.caution)
                         .accessibilityHidden(true)

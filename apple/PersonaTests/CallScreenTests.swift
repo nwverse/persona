@@ -199,6 +199,128 @@ struct CallScreenTests {
         shot(window, "call-held-resume-\(Int(size.width))x\(Int(size.height))-ax")
     }
 
+    // MARK: Long texts (#9887 polish)
+
+    /// An Agent session's long title, a long answer and a long reason, as `CallScreenTests.testTheLongTexts` (UI) has them.
+    private static let longName = "重构支付服务的订单对账模块并补齐集成测试和回归用例" // i18n-ignore: a test's sample title
+    private static let longCaption = "我看了一下，对账模块的问题出在部分退款的金额汇总上，昨晚的批次里有十七笔对不上。" // i18n-ignore: a test's sample answer
+        + "这几笔的流水号和订单号我已经整理好，放在会话里了。修复的办法是按支付渠道分别汇总，再补一组覆盖部分退款的集成测试。" // i18n-ignore: a test's sample answer
+        + "回归用例我列了二十条，全部跑完大约要四十分钟。要不要我现在就开始改？" // i18n-ignore: a test's sample answer
+    private static let longReason = "这台电脑上的语音扩展一直没有响应，已经自动重试了三次仍然失败，请确认电脑在线后再打一次" // i18n-ignore: a test's sample reason
+
+    /// The page at `size` and `type` in a window of exactly that room, its elements as XCUITest reads them once it has
+    /// measured itself (the orb's room: its second layout).
+    private func hosted(_ view: some View, _ size: CGSize, _ type: DynamicTypeSize, ids: [String]) async throws -> (UIWindow, [String: RuntimeCLI.Element]) {
+        try automation(true)
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: CGPoint(x: 0, y: 100), size: size)
+        let host = UIHostingController(rootView: view.dynamicTypeSize(type).environment(AppModel.shared))
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.isHidden = false
+        window.layoutIfNeeded()
+        func found() -> [String: RuntimeCLI.Element] {
+            try? automation(true)
+            var out: [String: RuntimeCLI.Element] = [:]
+            for e in RuntimeCLI.elements(matching: [:]) where ids.contains(e.id) && RuntimeCLI.view(of: e.object)?.window === window {
+                out[e.id] = e
+            }
+            return out
+        }
+        var elements = found()
+        for _ in 0..<30 where elements.count < ids.count {
+            try? await Task.sleep(for: .milliseconds(100))
+            elements = found()
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        return (window, found())
+    }
+
+    /// How tall `text` is, whole, at `width`: what a line that is never cut takes.
+    private func wholeHeight(_ text: some View, width: CGFloat, _ type: DynamicTypeSize) -> CGFloat {
+        let host = UIHostingController(rootView: text.dynamicTypeSize(type))
+        return host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
+    }
+
+    /// A long Agent title, a long answer and a long reason (#9887 polish): VoiceOver hears each whole (their labels are
+    /// the whole texts), the reason's line is as tall as all of it (never cut), the name and the line stay between
+    /// Minimize and the controls and the caption begins there, the controls on the page: an iPhone 17 Pro's room under
+    /// its status bar at the default and the largest interface text size, and a short phone's (an iPhone SE's) at the
+    /// largest.
+    @Test(arguments: zip([CGSize(width: 402, height: 812), CGSize(width: 402, height: 812), CGSize(width: 375, height: 647)],
+                         [DynamicTypeSize.large, .xxxLarge, .xxxLarge]))
+    func theLongTextsStayWhole(window size: CGSize, type: DynamicTypeSize) async throws {
+        defer { try? automation(false) }
+        let rig = CallRig()
+        let controls = ["call-minimise", "call-mute", "call-speaker", "call-end"]
+        for ended in [false, true] {
+            rig.calls.showSample(ended ? .ended : .connected, name: Self.longName, caption: Self.longCaption, reason: Self.longReason)
+            let call = try #require(rig.calls.ownerCall)
+            let words = ["call-title", ended ? "call-state" : "call-duration"] + (ended ? [] : ["call-caption"])
+            let (window, found) = try await hosted(CallScreen(call: call), size, type, ids: controls + words)
+            defer { window.isHidden = true }
+            let what = "\(ended ? "ended" : "connected") at \(size), \(type)"
+            #expect(found["call-title"]?.label == Self.longName, "the name is not whole for VoiceOver (\(what))")
+            if !ended { #expect(found["call-caption"]?.label == Self.longCaption, "the caption is not whole for VoiceOver (\(what))") }
+            let page = window.frame.insetBy(dx: -0.5, dy: -0.5)
+            for id in controls {
+                let frame = try #require(found[id]?.frame, "\(id) is not on the page (\(what))")
+                #expect(page.contains(frame), "\(id) at \(frame) is outside the window \(window.frame) (\(what))")
+            }
+            let top = try #require(found["call-minimise"]).frame.maxY - 0.5
+            let bottom = controls.dropFirst().compactMap { found[$0]?.frame.minY }.min() ?? page.maxY
+            // The name and the line whole between Minimize and the controls; the caption at least begins there (on a
+            // short phone at the largest size the middle scrolls for its last lines: it is whole in the details).
+            for id in words {
+                let frame = try #require(found[id]?.frame, "\(id) is not on the page (\(what))")
+                let end = id == "call-caption" ? frame.minY : frame.maxY
+                #expect(frame.minY >= top && end <= bottom + 0.5, "\(id) at \(frame) is not between Minimize and the controls (\(what))")
+            }
+            if ended {
+                let line = try #require(found["call-state"])
+                #expect(line.label.contains(Self.longReason), "the reason is not whole for VoiceOver: \(line.label)")
+                let whole = wholeHeight(CallStateWords(line: .ended(note: Self.longReason)).font(Theme.Font.body), width: line.frame.width + 1, type)
+                #expect(line.frame.height >= whole - 1, "the reason's line is cut: \(line.frame.height) of \(whole) (\(what))")
+            }
+            shot(window, "call-long-\(ended ? "ended" : "connected")-\(Int(size.width))x\(Int(size.height))-\(type)")
+        }
+    }
+
+    /// The bar back to a minimised call with a long name (#9887 polish): VoiceOver hears the name whole and the time,
+    /// and the bar stays inside the page's width; the name is cut in the middle where it has to be, the time never.
+    @Test(arguments: [DynamicTypeSize.large, .xxxLarge])
+    func theBarKeepsTheTimeAndTheWholeName(type: DynamicTypeSize) async throws {
+        defer { try? automation(false) }
+        let rig = CallRig()
+        rig.calls.showSample(.connected, name: Self.longName)
+        let call = try #require(rig.calls.ownerCall)
+        let size = CGSize(width: 402, height: 120)
+        let bar = CallReturnPill(call: call) {}.padding(.horizontal, Theme.Space.page)
+        let (window, found) = try await hosted(bar, size, type, ids: ["call-return-bar"])
+        defer { window.isHidden = true }
+        let element = try #require(found["call-return-bar"], "no bar (\(type))")
+        #expect(element.label.hasPrefix(Self.longName), "the bar's name is not whole for VoiceOver: \(element.label)")
+        #expect(element.label.contains(":"), "the bar's time is not there: \(element.label)")
+        #expect(window.frame.insetBy(dx: -0.5, dy: -0.5).contains(element.frame), "the bar at \(element.frame) is wider than the page")
+        let words = try Self.code("Persona/Calls/CallScreen.swift")
+        let barWords = try #require(words.range(of: "struct CallBarWords"))
+        let body = String(words[barWords.upperBound...].prefix(700))
+        #expect(body.contains(".truncationMode(.middle)") && body.contains(".fixedSize()"), "the name is not cut in the middle, or the time may be cut")
+        let voice = try Self.code("Persona/Views/Voice/VoiceReturnBar.swift")
+        #expect(voice.contains("CallBarWords(title:"), "the voice chat's bar has its own words")
+        shot(window, "call-long-bar-\(type)")
+    }
+
+    /// The name takes two lines at the regular text sizes and three from xLarge up (as much of a long title as two hold
+    /// at the default size), the caption more than the two that cut a long answer, and none once the call is over.
+    @Test func theNameAndTheCaptionTakeTheirLines() {
+        #expect(CallScreen.nameLines(.medium) == 2 && CallScreen.nameLines(.large) == 2)
+        #expect(CallScreen.nameLines(.xLarge) == 3 && CallScreen.nameLines(.xxxLarge) == 3)
+        #expect(Theme.Call.captionLines > 2 && Theme.Call.nameShrink < 1)
+        #expect(CallScreenState.Line.ended(note: "x").isEnded && !CallScreenState.Line.calling.isEnded, "the caption goes once it is over")
+    }
+
     /// The hosted page's picture, for a person to look at (`PERSONA_SHOTS`, as the UI tests').
     private func shot(_ window: UIWindow, _ name: String) {
         guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }

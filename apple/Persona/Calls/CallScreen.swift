@@ -20,6 +20,9 @@ nonisolated struct CallScreenState: Equatable, Sendable {
         case reconnecting
         /// Over, and why in a line (nil: hung up).
         case ended(note: String?)
+
+        /// Over: no more words come, so the caption and its room go (why it ended gets the room).
+        var isEnded: Bool { if case .ended = self { true } else { false } }
     }
 
     var line: Line
@@ -50,16 +53,19 @@ nonisolated struct CallScreenState: Equatable, Sendable {
     }
 }
 
-/// The call to Persona's page: Minimize at the top; the assistant in the middle, its own look (moving with the call, a
-/// ring of the voice's level around it: `CallAvatar`), its name, one line of where the call is and its latest words; the
-/// round controls at the bottom. VoiceOver's escape minimises. When the call ends its line says why for a moment (the
-/// call stays `PersonaCalls.endedStays`), then the page goes. Minimize and the controls always keep their room: the
-/// middle takes what they leave (`CallScreenMiddle`).
+/// The call to Persona's page, laid out as the Phone app's in-call screen: Minimize at the top; in the top third the
+/// assistant, its own look (moving with the call, a ring of the voice's level around it: `CallAvatar`), its name and
+/// right under it where the call is, then its latest words; the round controls low, End centred at the bottom.
+/// VoiceOver's escape minimises. When the call ends its line says why for a moment (the call stays
+/// `PersonaCalls.endedStays`), then the page goes. Minimize and the controls always keep their room: the middle takes
+/// what they leave (`CallScreenMiddle`). A tap on the name or the caption opens their whole text (`CallDetailsSheet`).
 struct CallScreen: View {
     let call: PersonaCall
     @State private var calls = PersonaCalls.shared
     /// The page's height, for the orb's size (`orbSize`).
     @State private var height: CGFloat = 0
+    /// The call's details, open, and what was tapped to open them.
+    @State private var details: CallDetailsSheet.Opened?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -69,7 +75,7 @@ struct CallScreen: View {
                 minimise
                 Spacer(minLength: 0)
             }
-            CallScreenMiddle(call: call, state: state, page: height)
+            CallScreenMiddle(call: call, state: state, page: height) { details = $0 }
             CallScreenControls(call: call, route: calls.route)
         }
         .padding(.horizontal, Theme.Space.page)
@@ -84,6 +90,13 @@ struct CallScreen: View {
         .accessibilityAction(.escape) { calls.minimise() }
         .accessibilityIdentifier("call-screen")
         .modifier(CallAnnouncements(state: state))
+        .sheet(item: $details) { opened in CallDetailsSheet(call: call, opened: opened) }
+    }
+
+    /// How many lines the name takes at `size` before it is shortened (`Theme.Call`): more at the larger text sizes, so
+    /// they show about as much of a long title as the default size does.
+    static func nameLines(_ size: DynamicTypeSize) -> Int {
+        size >= Theme.Call.nameLargeFrom ? Theme.Call.nameLinesLarge : Theme.Call.nameLines
     }
 
     /// The assistant's size at the default text size (`CallAvatar` grows it by `scale`): `callAvatar`, but at most
@@ -129,59 +142,94 @@ struct CallScreen: View {
     }
 }
 
-/// The middle of the call screen: the assistant, its name, the call's line and the latest caption, in the height Minimize
-/// and the controls leave it, centred. The face gives way to the words (`CallScreen.avatarSize`), down to the voice bar's
-/// orb's size and then altogether (a short phone at the largest text size); where the words alone do not fit, they
-/// scroll, and the controls stay. The caption keeps its two lines' room, so nothing moves as the assistant's words come.
+/// The middle of the call screen, in the height Minimize and the controls leave it, from its top: the assistant, its
+/// name and the call's line right under it, then the latest caption, which takes the room left over the controls. The
+/// name and the line come first; the caption has at least `Theme.Call.captionLines` lines' room (kept while it is empty
+/// or short, so nothing moves as the assistant's words come); the face gives way to them (`CallScreen.avatarSize`), down
+/// to the voice bar's orb's size and then altogether (a short phone at the largest text size); what the face leaves the
+/// caption has too. Where the words alone do not fit, they scroll, and the controls stay. Once the call is over the
+/// caption goes, and why it ended has its room. The heights it goes by (the middle's, the words', a caption line's)
+/// follow the page and the text size, never what is drawn from them (docs/apple/performance.md P7).
 private struct CallScreenMiddle: View {
     let call: PersonaCall
     let state: CallScreenState
     /// The page's height (the orb takes a share of it at most).
     let page: CGFloat
-    /// The height the middle has, and what its words take of it.
+    /// The name or the caption tapped: their whole text.
+    let open: (CallDetailsSheet.Opened) -> Void
+    /// The height the middle has, what the name and the line take of it, and the caption's least room.
     @State private var room: CGFloat = 0
-    @State private var words: CGFloat = 0
+    @State private var who: CGFloat = 0
+    @State private var least: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let free = room > 0 ? room - words - Theme.Space.l : .infinity
+        let scale = Theme.sizeScale(typeSize)
+        let ended = state.line.isEnded
+        let caption = ended ? 0 : least + Theme.Space.section
+        let free = room > 0 ? room - who - caption - Theme.Space.l : .infinity
+        let size = CallScreen.avatarSize(page: page, free: free, scale: scale)
         ScrollView {
-            VStack(spacing: Theme.Space.l) {
-                if let size = CallScreen.avatarSize(page: page, free: free, scale: Theme.sizeScale(typeSize)) {
-                    CallScreenAvatar(call: call, phase: state.orb, size: size)
-                }
+            VStack(spacing: Theme.Space.section) {
                 VStack(spacing: Theme.Space.l) {
+                    if let size {
+                        CallScreenAvatar(call: call, phase: state.orb, size: size)
+                    }
                     VStack(spacing: Theme.Space.s) {
-                        // Who the call is with (`PersonaCall.title`): the assistant's name for the main conversation, as
-                        // the system's call UI and Recents show it; another conversation's title, and whose it is under it
-                        // (#9887 one button).
-                        Text(verbatim: call.title)
-                            .font(Theme.Font.display)
-                            .lineLimit(1)
-                            .accessibilityAddTraits(.isHeader)
-                            .accessibilityIdentifier("call-title")
-                        if let detail = call.conversation?.detail {
-                            Text(verbatim: detail)
-                                .font(Theme.Font.secondary)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .accessibilityIdentifier("call-detail")
-                        }
+                        CallScreenName(call: call, lines: CallScreen.nameLines(typeSize)) { open(.name) }
                         CallStateLine(line: state.line)
                     }
-                    CallCaptionLine(call: call)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                        if abs(who - h) >= 1 { who = h }
+                    }
                 }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                    if abs(words - h) >= 1 { words = h }
+                if !ended {
+                    let face = size.map { $0 * scale + Theme.Space.l } ?? 0
+                    let left = (room - face - who - Theme.Space.section).rounded(.down)
+                    CallCaptionLine(call: call, height: room > 0 && least > 0 ? max(least, left) : nil,
+                                    least: { h in if abs(least - h) >= 1 { least = h } }) { open(.caption) }
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: room)
+            .frame(maxWidth: .infinity, minHeight: room, alignment: .top)
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicators(.hidden)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(room - h) >= 1 { room = h }
         }
+    }
+}
+
+/// Who the call is with (`PersonaCall.title`): the assistant's name for the main conversation, as the system's call UI
+/// and Recents show it; another conversation's title, and whose it is under it (#9887 one button). The name wraps to
+/// `lines`, shrinking a little first, then its end is cut; whose it is stays one line, cut in the middle (an agent's and
+/// a machine's names, both ends tell). VoiceOver reads both whole, and a tap opens them whole (`CallDetailsSheet`).
+private struct CallScreenName: View {
+    let call: PersonaCall
+    let lines: Int
+    let open: () -> Void
+
+    var body: some View {
+        VStack(spacing: Theme.Space.s) {
+            Text(verbatim: call.title)
+                .font(Theme.Font.display)
+                .lineLimit(lines)
+                .minimumScaleFactor(Theme.Call.nameShrink)
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityAction(named: Text("Call Details"), open)
+                .accessibilityIdentifier("call-title")
+            if let detail = call.conversation?.detail {
+                Text(verbatim: detail)
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("call-detail")
+            }
+        }
+        .contentShape(.rect)
+        .onTapGesture(perform: open)
     }
 }
 
@@ -206,29 +254,18 @@ private struct CallScreenAvatar: View {
     }
 }
 
-/// The one line under the name: Calling…, Connecting…, the running time, On Hold, Reconnecting…, or how it ended.
+/// The line under the name: Calling…, Connecting…, the running time, On Hold, Reconnecting…, or how it ended. It
+/// wraps, whole: why a call ended can be a long sentence.
 struct CallStateLine: View {
     let line: CallScreenState.Line
 
     var body: some View {
-        Group {
-            switch line {
-            case .calling: Text("Calling… [Call Screen]")
-            case .connecting: Text("Connecting…")
-            case .duration(let since):
-                Text(since, style: .timer)
-                    .monospacedDigit()
-            case .onHold: Text("On Hold [Call Screen]")
-            case .reconnecting: Text("Reconnecting…")
-            case .ended(let note):
-                if let note, !note.isEmpty { Text("Call ended · \(note)") } else { Text("Call ended") }
-            }
-        }
-        .font(Theme.Font.body)
-        .foregroundStyle(.secondary)
-        .lineLimit(2)
-        .multilineTextAlignment(.center)
-        .accessibilityIdentifier(Self.isDuration(line) ? "call-duration" : "call-state")
+        CallStateWords(line: line)
+            .font(Theme.Font.body)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(Self.isDuration(line) ? "call-duration" : "call-state")
     }
 
     private static func isDuration(_ line: CallScreenState.Line) -> Bool {
@@ -236,22 +273,60 @@ struct CallStateLine: View {
     }
 }
 
-/// Persona's latest words (or the owner's, as they come), two lines at most: the call stays useful when looked at.
+/// The words of the call's line, for the page and the call's details.
+struct CallStateWords: View {
+    let line: CallScreenState.Line
+
+    var body: some View {
+        switch line {
+        case .calling: Text("Calling… [Call Screen]")
+        case .connecting: Text("Connecting…")
+        case .duration(let since):
+            Text(since, style: .timer)
+                .monospacedDigit()
+        case .onHold: Text("On Hold [Call Screen]")
+        case .reconnecting: Text("Reconnecting…")
+        case .ended(let note):
+            if let note, !note.isEmpty { Text("Call ended · \(note)") } else { Text("Call ended") }
+        }
+    }
+}
+
+/// Persona's latest words (or the owner's, as they come), in the room the middle gives them: at least
+/// `Theme.Call.captionLines` lines, as many more as the page has, cut at the end. The call stays useful when looked at.
 /// Its own view: captions change with every word, and only this redraws. VoiceOver does not hear them as they come
-/// (they would talk over the voice); they read when touched.
+/// (they would talk over the voice); they read whole when touched. A tap opens every caption of the call
+/// (`CallDetailsSheet`).
 private struct CallCaptionLine: View {
     let call: PersonaCall
+    /// The room it has; nil until the middle has measured itself (then `captionLines` lines).
+    let height: CGFloat?
+    /// Its least room, `captionLines` lines of its font at this text size, measured for the middle.
+    let least: (CGFloat) -> Void
+    let open: () -> Void
 
     var body: some View {
         let text = caption
         Text(text ?? " ")
             .font(Theme.Font.secondary)
             .foregroundStyle(.secondary)
-            .lineLimit(2, reservesSpace: true)
+            .lineLimit(height == nil ? Theme.Call.captionLines : nil)
             .multilineTextAlignment(.center)
             .frame(maxWidth: Theme.Size.readable)
+            .frame(height: height, alignment: .top)
+            .overlay(alignment: .top) {
+                Text(verbatim: " ")
+                    .font(Theme.Font.secondary)
+                    .lineLimit(Theme.Call.captionLines, reservesSpace: true)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { least($0) }
+            }
             .opacity(text == nil ? 0 : 1)
+            .contentShape(.rect)
+            .onTapGesture { if text != nil { open() } }
             .accessibilityHidden(text == nil)
+            .accessibilityAction(named: Text("Call Details"), open)
             .accessibilityIdentifier("call-caption")
     }
 
@@ -358,9 +433,10 @@ private struct CallAnnouncements: ViewModifier {
 // MARK: The bar back to a minimised call
 
 /// While the call to Persona is on and its page minimised: a pill at the top of every page, under the status bar, in
-/// the positive role's tint (a call that is on), the assistant's small face, "<name> · 03:12" and a mark for muted or on
-/// hold. A tap opens the call screen again. Nothing else: hanging up is on the page, the voice bar and the system's call
-/// UI. It lives in the call's own window (`CallWindow`), over every page and sheet, and the pages under it get its room.
+/// the positive role's tint (a call that is on), the assistant's small face, "<name> · 03:12" (the name cut in the
+/// middle where it has to be, the time never: `CallBarWords`) and a mark for muted or on hold. A tap opens the call
+/// screen again. Nothing else: hanging up is on the page, the voice bar and the system's call UI. It lives in the call's
+/// own window (`CallWindow`), over every page and sheet, and the pages under it get its room.
 struct CallReturnPill: View {
     let call: PersonaCall
     let open: () -> Void
@@ -381,15 +457,9 @@ struct CallReturnPill: View {
                 } else {
                     CallAssistantFace(assistant: call.assistant, size: side)
                 }
-                HStack(spacing: Theme.Space.xs) {
-                    Text(verbatim: call.title)
-                    Text(verbatim: "·") // i18n-ignore: a separator
-                        .accessibilityHidden(true)
+                CallBarWords(title: call.title) {
                     CallBarLine(line: state.line)
                 }
-                .font(Theme.Font.secondaryStrong)
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
                 if call.held {
                     ThemedIcon(Theme.Icon.pause).font(Theme.Font.captionStrong).foregroundStyle(Theme.caution)
                         .accessibilityHidden(true)
@@ -408,6 +478,31 @@ struct CallReturnPill: View {
         .accessibilityHint("Returns to the call")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("call-return-bar")
+    }
+}
+
+/// A call bar's words (#9887 polish): who the call is with, then "·" and the running time (or where the call is). The
+/// time is never cut; the name takes what is left, cut in the middle where it has to be (both ends of a long title tell
+/// more than its start alone). VoiceOver reads the name whole. The minimised call's bar and the voice chat's.
+struct CallBarWords<Line: View>: View {
+    let title: String
+    @ViewBuilder let line: Line
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Text(verbatim: title)
+                .truncationMode(.middle)
+                .accessibilityIdentifier("call-bar-title")
+            Group {
+                Text(verbatim: "·") // i18n-ignore: a separator
+                    .accessibilityHidden(true)
+                line
+            }
+            .fixedSize()
+        }
+        .font(Theme.Font.secondaryStrong)
+        .foregroundStyle(Color.primary)
+        .lineLimit(1)
     }
 }
 

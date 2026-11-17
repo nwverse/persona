@@ -32034,6 +32034,29 @@
         }
       }
     },
+    "Call Details" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call Details"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話の詳細"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话详情"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Call Handle" : {
       "extractionState" : "manual",
       "localizations" : {

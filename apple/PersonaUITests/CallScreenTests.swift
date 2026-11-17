@@ -174,18 +174,41 @@ final class CallScreenTests: XCTestCase {
 
     /// The long texts on the connected call screen, the ended one, the bar over the main conversation and the urgent call's
     /// page, at the app's own text size and the largest (`long-<what>[-ax].png`): the screenshots before and after the
-    /// layout's polish. The urgent page needs the mock's call too (MOCK_URGENT_CALL=1).
+    /// layout's polish. Each whole for VoiceOver; a tap on the name opens the call's details with the whole name and the
+    /// answer (`long-details[-ax].png`). The urgent page needs the mock's call too (MOCK_URGENT_CALL=1).
     @MainActor func testTheLongTexts() throws {
         for largest in [false, true] {
             let suffix = largest ? "-ax" : ""
             for state in ["connected", "ended"] {
                 let app = try sample(state, largest: largest, args: Self.main + Self.longTexts)
+                XCTAssertEqual(element(app, "call-title").label, Self.longName, "\(state): the name is not whole for VoiceOver")
+                if state == "ended" {
+                    XCTAssertTrue(element(app, "call-state").label.contains(Self.longReason), "the reason is not whole: \(element(app, "call-state").label)")
+                } else {
+                    XCTAssertEqual(element(app, "call-caption").label, Self.longCaption, "the caption is not whole for VoiceOver")
+                }
                 shot("long-\(state)\(suffix)", app)
+                if state == "connected" {
+                    element(app, "call-title").tap()
+                    XCTAssertTrue(element(app, "call-details").waitForExistence(timeout: 5), "the name did not open the call's details\n\(app.debugDescription)")
+                    XCTAssertEqual(element(app, "call-details-title").label, Self.longName, "the details do not have the whole name")
+                    // The answer's row in the details (Persona's name and the words, one element), not the screen's caption.
+                    let answer = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND identifier != %@",
+                                                                                          Self.longCaption, "call-caption")).firstMatch
+                    XCTAssertTrue(answer.exists, "the details do not have the whole answer\n\(app.debugDescription)")
+                    Thread.sleep(forTimeInterval: 1)
+                    shot("long-details\(suffix)", app)
+                    app.buttons["call-details-close"].tap()
+                    XCTAssertTrue(element(app, "call-details").waitForNonExistence(timeout: 5), "the details did not close")
+                    XCTAssertTrue(element(app, "call-screen").exists, "closing the details left the call screen")
+                }
                 app.terminate()
             }
             let app = try sample("connected", largest: largest, args: Self.main + Self.longTexts)
             app.buttons["call-minimise"].tap()
-            XCTAssertTrue(app.buttons["call-return-bar"].waitForExistence(timeout: 10), "no bar back to the call\n\(app.debugDescription)")
+            let bar = app.buttons["call-return-bar"]
+            XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call\n\(app.debugDescription)")
+            XCTAssertTrue(bar.label.hasPrefix(Self.longName), "the bar's name is not whole for VoiceOver: \(bar.label)")
             Thread.sleep(forTimeInterval: 1.5)
             shot("long-bar\(suffix)", app)
             app.terminate()
@@ -193,6 +216,7 @@ final class CallScreenTests: XCTestCase {
             let urgent = try launch(Self.main + ["-showUrgentCallSample", "YES", "-showUrgentCallSampleTitle", Self.longUrgentTitle],
                                     largest: largest)
             XCTAssertTrue(urgent.buttons["urgentCall.hangUp"].waitForExistence(timeout: 30), "no urgent call page\n\(urgent.debugDescription)")
+            XCTAssertEqual(element(urgent, "urgentCall.title").label, Self.longUrgentTitle, "the urgent call's title is not whole")
             Thread.sleep(forTimeInterval: 1.5)
             shot("long-urgent\(suffix)", urgent)
             urgent.terminate()

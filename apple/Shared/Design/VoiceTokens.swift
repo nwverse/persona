@@ -67,6 +67,23 @@ nonisolated extension Theme.Size {
 }
 
 nonisolated extension Theme {
+    /// The words of a system call's pages (#9887 polish, docs/design/DESIGN_SYSTEM.md "Call screen"): how many lines
+    /// each takes before it is shortened, and how far it may shrink first. What is shortened stays whole for VoiceOver
+    /// and in the call's details (`CallDetailsSheet`), which a tap on the name or the caption opens.
+    enum Call {
+        /// Who the call is with, under the assistant: two lines at the regular text sizes, three from `nameLargeFrom`
+        /// up (about as much of a long title as two lines hold at the default size), each shrinking to `nameShrink`
+        /// before its end is cut. A long Agent title reads whole at the default size.
+        static let nameLines = 2
+        static let nameLinesLarge = 3
+        static let nameLargeFrom = DynamicTypeSize.xLarge
+        static let nameShrink: CGFloat = 0.8
+        /// The latest caption's least room, in lines, kept while it is empty or short (nothing moves as words come); it
+        /// takes more where the page has it (what the assistant's face leaves), then is cut at the end; the rest is in
+        /// the call's details.
+        static let captionLines = 4
+    }
+
     /// The voice conversation's cues (docs/assistant/voice.md 1.2 A / I / M, 6.6): a short sound through the voice's own player (so
     /// echo cancellation takes it out of the microphone too) and a tap on the hand. Played on a change the user did not
     /// make on the screen: connected, a card that wants a tap, the connection picked up again. Quiet beside the voice, and
