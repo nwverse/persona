@@ -122,16 +122,17 @@ private struct MeetingFloatContent: View {
         #endif
         let personaSpeaking = speaker.speaking != nil || call.call(for: entry.id)?.speaking == true
         let next = MeetingFloatSpeaker.next(level: RecordingCapture.shared.inputLevel, personaSpeaking: personaSpeaking,
-                                            paused: paused, headset: headset, gate: gate.value,
+                                            paused: paused, headset: headset, gate: gate.value ?? MeetingFloatSpeaker.Gate(),
                                             now: date.timeIntervalSinceReferenceDate, onLevel: Theme.Recording.floatVoiceOn,
                                             offLevel: Theme.Recording.floatVoiceOff, hold: Theme.Recording.floatVoiceHold)
         gate.value = next.gate
         return next.speaker
     }
 
-    /// The voice gate between the clock's looks: not observed, so keeping it redraws nothing.
+    /// The voice gate between the clock's looks: not observed, so keeping it redraws nothing. Nil until the first look,
+    /// so making the box costs nothing (P3).
     private final class GateBox {
-        var value = MeetingFloatSpeaker.Gate()
+        var value: MeetingFloatSpeaker.Gate?
     }
 }
 
