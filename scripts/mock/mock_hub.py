@@ -5701,9 +5701,11 @@ def meeting_receipt(h, kind, raw, run):
 # the meeting to an Agent listed here as the owner's own message, after its checks (503, 404 / 410, 400, 409
 # meeting_running, 409 no_material), and keeps each try in MEETING_HANDOFFS (oldest first, the last 20), shown as
 # detail.meta.handoffs. As attending's rules: a Persona conversation is not_agent; Allow All or a machine not listed
-# not_allowed; offline, interrupted, a subagent or a row not listed unavailable. MOCK_HANDOFF_FAIL=<problem> keeps every
-# try that passes them as failed with that problem (send_failed, unavailable…), for the page's failed row.
+# not_allowed; offline, interrupted, a subagent or a row not listed unavailable. MOCK_HANDOFF_FAIL=<problem>, or POST
+# /mock/meeting_handoff {"fail": "<problem>"} ("" for none), keeps every try that passes them as failed with that problem
+# (send_failed, unavailable…), for the page's failed row.
 MEETING_HANDOFFS = {}
+HANDOFF_FAIL = [os.environ.get("MOCK_HANDOFF_FAIL", "")]
 MEETING_HANDOFFS_KEPT = 20
 
 
@@ -5716,11 +5718,16 @@ def handoff_problem(mid, sid):
     if row.get("permission_mode") == "bypassPermissions": return "not_allowed"
     if row.get("assistant"): return "not_agent"
     if row.get("is_subagent") or row.get("status") in ("offline", "interrupted"): return "unavailable"
-    return os.environ.get("MOCK_HANDOFF_FAIL", "")
+    return HANDOFF_FAIL[0]
 
 
 def meeting_handoff_route(h, method, p):
-    """POST /api/v1/recordings/{id}/handoff (#8852)."""
+    """POST /api/v1/recordings/{id}/handoff (#8852), and /mock/meeting_handoff."""
+    if p == "/mock/meeting_handoff":
+        if method == "POST":
+            body = json.loads(getattr(h, "last_body", b"") or b"{}")
+            if isinstance(body.get("fail"), str): HANDOFF_FAIL[0] = body["fail"]
+        return h.send_json({"fail": HANDOFF_FAIL[0], "meetings": MEETING_HANDOFFS}) or True
     hit = re.fullmatch(r"/api/v1/recordings/([^/]+)/handoff", p)
     if not hit: return False
     rid = hit.group(1).lower()

@@ -67,6 +67,16 @@ class MeetingHandoffMockTests(Handoff, unittest.TestCase):
             self.assertEqual((out["state"], out["problem"]), ("failed", problem), body)
         self.assertEqual([h["problem"] for h in self.kept(rid)], ["not_agent", "not_allowed", "unavailable"])
 
+    def test_failing_on_request(self):
+        rid = str(uuid.uuid4())
+        self.upload(rid, segments=LINES, complete=True, ended_at=ENDED)
+        self.call("POST", "/mock/meeting_handoff", {"fail": "send_failed"})
+        try:
+            self.assertEqual(self.handoff(rid, transcript=True)[1]["handoff"]["problem"], "send_failed")
+        finally:
+            self.call("POST", "/mock/meeting_handoff", {"fail": ""})
+        self.assertEqual(self.handoff(rid, transcript=True)[1]["handoff"]["state"], "sent")
+
 
 class FailingSendMockTests(Handoff, unittest.TestCase):
     @classmethod
