@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 // router.ts listens to popstate at load (no window in node); links.ts only needs navigate from it.
-vi.mock("./router", async (importOriginal) => ({ parse: (await importOriginal<typeof import("./router")>()).parse, navigate: vi.fn(), routeAt: () => null }));
+vi.mock("./router", async (importOriginal) => {
+  const router = await importOriginal<typeof import("./router")>();
+  return { parse: router.parse, routePath: router.routePath, navigate: vi.fn(), routeAt: () => null };
+});
 vi.mock("./api", () => ({ api: vi.fn(), enc: encodeURIComponent, getToken: () => "tok", ApiError: class extends Error {} }));
 
 import { api } from "./api";
@@ -95,18 +98,15 @@ describe("where a link opens", () => {
   });
 
   it("opens app links to every page of the route table (docs/protocol/deep-links.md, #9930)", () => {
-    expect(linkRoute("persona://open/s/macbook/abc-1?at=m1")).toEqual({ kind: "session", mid: "macbook", sid: "abc-1", at: "m1" });
-    expect(linkRoute("persona://open/persona/c-1?hub=h1")).toEqual({ kind: "conversation", sid: "c-1" });
-    expect(linkRoute("persona://open/todos/t-1")).toEqual({ kind: "task", id: "t-1" });
-    expect(linkRoute("persona://task/t-1")).toEqual({ kind: "task", id: "t-1" });
-    expect(linkRoute("persona://kb/docs/a/b")).toEqual({ kind: "page", path: "/kb/docs/a%2Fb" });
-    expect(linkRoute("persona://settings/extensions/gh")).toEqual({ kind: "page", path: "/settings?tab=extensions&extension=gh" });
-    expect(linkRoute("persona://open?route=%2Finbox")).toEqual({ kind: "page", path: "/inbox" });
-    expect(linkHref("persona://open/inbox/i-1")).toBe("/inbox/i-1");
-    expect(opensInApp("persona://open/kb")).toBe(true);
-    // malformed or no page: nothing
-    for (const bad of ["persona://open//evil.example/x", "persona://open:8080/s/m/s", "persona://open/admin", "persona://open?route=https%3A%2F%2Fevil.example", "persona://open"]) {
-      expect(linkRoute(bad).kind, bad).toBe("none");
+    // an Agent's, as persona://session links always did; the table's other pages are read when opened (lib/deep-links.ts)
+    expect(linkRoute("persona://session/macbook/abc-1?at=m1")).toEqual({ kind: "session", mid: "macbook", sid: "abc-1", at: "m1" });
+    expect(linkHref("persona://session/macbook/abc-1?at=m1")).toBe("/s/macbook/abc-1?at=m1");
+    for (const app of ["persona://open/inbox/i-1", "persona://task/t-1", "persona://kb/docs/a", "persona://settings/extensions/gh", "persona://extension/w/today"]) {
+      expect(linkRoute(app), app).toEqual({ kind: "app", url: app });
+      expect(opensInApp(app), app).toBe(true);
+    }
+    for (const none of ["persona://open:8080/s/m/s", "persona://pair?url=x", "persona://ask?text=hi", "persona://session/macbook"]) {
+      expect(linkRoute(none).kind, none).toBe("none");
     }
   });
 

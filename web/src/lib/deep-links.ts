@@ -8,6 +8,7 @@
 // Kept free of the pages' own modules (settings, knowledge): lib/links.ts, on the first screen, uses it.
 import { APP_SCHEMES, assistantPath } from "./compatibility";
 import { stripBase } from "./base";
+import type { LinkRoute } from "./links";
 
 export type DeepPage =
   | { page: "persona" }
@@ -227,5 +228,22 @@ export function pagePath(p: DeepPage): string {
     }
     case "extension":
       return withQuery(`/extension/${enc(p.extension)}/${enc(p.ui)}`, [["state", p.state]]);
+  }
+}
+
+/** Where an app link goes, as lib/links.ts opens it: an Agent's conversation in place (as persona://session links
+ *  always did), a task, a conversation, or any other page of the table in place; null when it names no page. */
+export function appRoute(url: string): Extract<LinkRoute, { kind: "session" | "task" | "conversation" | "page" }> | null {
+  const p = appLinkPage(url);
+  if (!p) return null;
+  switch (p.page) {
+    case "session":
+      return { kind: "session", mid: p.machine, sid: p.session, ...(p.at ? { at: p.at } : {}) };
+    case "conversation":
+      return { kind: "conversation", sid: p.id, ...(p.machine ? { mid: p.machine } : {}), ...(p.manager ? { manager: p.manager } : {}), ...(p.at ? { at: p.at } : {}) };
+    case "todo":
+      return { kind: "task", id: p.id };
+    default:
+      return { kind: "page", path: pagePath(p) };
   }
 }
