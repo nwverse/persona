@@ -951,12 +951,12 @@ project it is filed under, who filed it, since when, and when it ended (it left 
 deleted). Extensions granted `leaders.read` are told each change once (`leader.changed`), and the hub reports from the
 task ledger, with no model call (`leader_reports.go`, `leader.report`): `reached` when a review accepts a leader's task,
 `decision` when a review needs the owner, and `stuck` when, by the To-dos SOP's Go copy (`todo_triage.go`), the task sits
-in Waiting on you or stopped unfinished with no move for 24 hours. Stuck is told at most once a day, and only by the
+in Waiting on you or stopped unfinished with no move for max(2 hours, `expect_minutes` × 1.5); a missing estimate uses 2 hours. Stuck is told at most once a day, and only by the
 10-minute loop, because it asks the agents' machines. What was told is kept in `assistant.leader_reports`, so a restart
 tells nothing again. Reviews from before reports started on the hub are not told. A stuck task is also one
 main-chat entry (`leader_stuck`, a supervision signal to the main chat naming the direction, which the secretary turns
 into one visible line with no push), and the morning and evening briefings' facts carry one line per leader (its open
-tasks, those waiting for the owner, those stuck over a day, and its leader's summary of the day) (#3609).
+tasks, those waiting for the owner, those past that stuck threshold, and its leader's summary of the day) (#3609).
 
 **The prompts (P1, #3609).** The main chat's context lists the current directions (id and name) and its CLAUDE.md
 makes it the secretary: it routes work to a direction with `task_plan supervisor`, records what the owner wants an
