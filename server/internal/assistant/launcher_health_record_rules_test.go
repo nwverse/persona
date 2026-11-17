@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -347,5 +348,172 @@ func TestUsageLimitRuleTurnLimitKeepsItsFamilysReset(t *testing.T) {
 	s.recordHealth(ctx, "l4", "work", healthResult{ok: true, model: "claude-sonnet-4-5", source: healthSourceCheck})
 	if rec := healthState(s, "l4", "work"); rec.ResetsAt == nil || !rec.ResetsAt.Equal(mid) || !slices.Equal(rec.limitModels(), []string{"opus"}) {
 		t.Fatalf("the turn's later Opus reset was dropped: %+v", rec)
+	}
+}
+
+// Fourth review's counterexamples and the persisted format.
+
+func reloadHealthService(t *testing.T, s *Service, f *fakeHub) *Service {
+	t.Helper()
+	store := s.store()
+	return withSettings(t, f, New(Options{Hub: f, Store: func() Store { return store }, Logf: testLogf(t)}))
+}
+
+// limit_resets and the unknown resets survive a restart; rev does not, and a probe in the new process compares against
+// the version it read there.
+func TestUsageLimitRuleRestartKeepsFamilyResets(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	reset := time.Now().UTC().Add(7 * 24 * time.Hour)
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Opus limit", resetsAt: &reset, source: healthSourceSession})
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", source: healthSourceSession})
+	restarted := reloadHealthService(t, s, f)
+	loaded := healthState(restarted, "l4", "work")
+	if loaded.rev != 0 || !slices.Equal(loaded.limitModels(), []string{"opus", "sonnet"}) || !loaded.LimitResets["opus"].Equal(reset) || loaded.ResetsAt != nil {
+		t.Fatalf("reloaded: %+v", loaded)
+	}
+	partial := restarted.recordHealth(ctx, "l4", "work", healthResult{ok: true, model: "claude-opus-4-1", source: healthSourceCheck, observed: &loaded})
+	if partial.rev == 0 || !partial.unusable() || !slices.Equal(partial.limitModels(), []string{"sonnet"}) || partial.ResetsAt != nil {
+		t.Fatalf("a current pass after the restart: %+v", partial)
+	}
+	if stale := restarted.recordHealth(ctx, "l4", "work", healthResult{ok: true, model: "claude-sonnet-4-5", source: healthSourceCheck, observed: &loaded}); !stale.unusable() || stale.rev != partial.rev {
+		t.Fatalf("a pass against the version before was taken: %+v", stale)
+	}
+}
+
+// A record persisted with resets_at but no limit_resets (main's format: no limit_models either) keeps its reset for
+// each family through a bare failure. The variant with limit_models was written only by this PR's first commit,
+// never by main; the same rule reads it.
+func TestUsageLimitRuleLegacyResetSurvivesBareFailure(t *testing.T) {
+	for name, models := range map[string][]string{"main": nil, "first commit": {"opus"}} {
+		t.Run(name, func(t *testing.T) {
+			s, f := launcherHealthHub(t)
+			ctx := context.Background()
+			reset := time.Now().UTC().Add(7 * 24 * time.Hour)
+			legacy := map[string]any{"machine": "l4", "launcher": "work", "state": healthFailing, "kind": errKindUsageLimit,
+				"error": "You've hit your Opus limit", "checked_at": time.Now().UTC().Add(-time.Minute), "source": healthSourceSession, "resets_at": reset}
+			if models != nil {
+				legacy["limit_models"] = models
+			}
+			if err := s.store().PutSetting(ctx, launchersHealthKey, map[string]any{"records": []any{legacy}}); err != nil {
+				t.Fatal(err)
+			}
+			reloaded := reloadHealthService(t, s, f)
+			after := reloaded.recordHealth(ctx, "l4", "work", healthResult{err: "usage limit reached", source: healthSourceCheck})
+			editHealth(reloaded, "l4", "work", func(r *LauncherHealth) { r.CheckedAt = time.Now().Add(-healthStale - time.Minute) })
+			if _, bad := reloaded.launcherUnusable(ctx, "l4", "work"); after.ResetsAt == nil || !after.ResetsAt.Equal(reset) || !after.LimitResets["opus"].Equal(reset) || !bad {
+				t.Fatalf("a bare failure dropped the persisted reset: %+v, still refused %v", after, bad)
+			}
+		})
+	}
+}
+
+// A turn that repeats a family's known limit is nothing new, whatever another family's reset: it neither refreshes
+// the evidence nor delays the next probe.
+func TestUsageLimitRuleDuplicateTurnWithUnknownSibling(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newStorelessService)
+	ctx := context.Background()
+	reset := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Opus limit", resetsAt: &reset, source: healthSourceSession})
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "You've hit your Sonnet limit", source: healthSourceSession})
+	editHealth(s, "l4", "work", func(r *LauncherHealth) { r.CheckedAt = time.Now().Add(-time.Minute) })
+	before := healthState(s, "l4", "work")
+	f.setSessions("l4", proto.Session{SessionID: "dup", Launcher: "work", Status: proto.StatusIdle, State: proto.StateUnread,
+		UpdatedAt: time.Now().Add(-time.Minute), TurnError: "You've hit your Opus limit", TurnErrorKind: proto.TurnErrorUsageLimit, TurnErrorResetsAt: &reset})
+	s.launcherLimitTurnSettled(ctx, "l4", "dup")
+	after := healthState(s, "l4", "work")
+	f.checks["l4/work"] = proto.LauncherCheck{OK: true, Model: "claude-opus-4-1"}
+	s.launcherUnusableNow(ctx, "l4", "work")
+	if after.rev != before.rev || !after.CheckedAt.Equal(before.CheckedAt) || checkedCount(f, "l4/work") != 1 {
+		t.Fatalf("a repeated Opus turn refreshed the record (rev %d → %d) and held off the probe (%d probes)", before.rev, after.rev, checkedCount(f, "l4/work"))
+	}
+}
+
+// The fold rows of the design table (docs/server/launcher-health.md, "Usage-limit record rules"), one case each.
+func TestUsageLimitRuleFoldTable(t *testing.T) {
+	now := time.Now().UTC()
+	past, h1, d3 := now.Add(-time.Minute), now.Add(time.Hour), now.Add(72*time.Hour)
+	at := func(t time.Time) *time.Time { return &t }
+	type limit struct {
+		families []string
+		resets   map[string]time.Time
+		agg      *time.Time
+	}
+	for _, tc := range []struct {
+		name    string
+		rec     LauncherHealth
+		event   limit
+		want    limit
+		changed bool
+	}{
+		{"no family, later reset", LauncherHealth{ResetsAt: at(h1)}, limit{agg: at(d3)}, limit{agg: at(d3)}, true},
+		{"no family, unknown learns reset", LauncherHealth{}, limit{agg: at(h1)}, limit{agg: at(h1)}, true},
+		{"no family, unknown says nothing", LauncherHealth{ResetsAt: at(h1)}, limit{}, limit{agg: at(h1)}, false},
+		{"bare later reset moves known resets only", LauncherHealth{LimitModels: []string{"opus", "sonnet"}, LimitResets: map[string]time.Time{"opus": h1}},
+			limit{agg: at(d3)}, limit{[]string{"opus", "sonnet"}, map[string]time.Time{"opus": d3}, nil}, true},
+		{"bare earlier reset says nothing", LauncherHealth{LimitModels: []string{"opus"}, LimitResets: map[string]time.Time{"opus": d3}, ResetsAt: at(d3)},
+			limit{agg: at(h1)}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, false},
+		{"bare unknown says nothing", LauncherHealth{LimitModels: []string{"opus"}, LimitResets: map[string]time.Time{"opus": d3}, ResetsAt: at(d3)},
+			limit{}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, false},
+		{"new family with unknown reset", LauncherHealth{LimitModels: []string{"opus"}, LimitResets: map[string]time.Time{"opus": h1}, ResetsAt: at(h1)},
+			limit{families: []string{"sonnet"}}, limit{[]string{"opus", "sonnet"}, map[string]time.Time{"opus": h1}, nil}, true},
+		{"own family, later reset", LauncherHealth{LimitModels: []string{"opus"}, LimitResets: map[string]time.Time{"opus": h1}, ResetsAt: at(h1)},
+			limit{[]string{"opus"}, nil, at(d3)}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, true},
+		{"own family, earlier reset", LauncherHealth{LimitModels: []string{"opus"}, LimitResets: map[string]time.Time{"opus": d3}, ResetsAt: at(d3)},
+			limit{[]string{"opus"}, nil, at(h1)}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, false},
+		{"own family, unknown reset", LauncherHealth{LimitModels: []string{"opus"}, LimitResets: map[string]time.Time{"opus": h1}, ResetsAt: at(h1)},
+			limit{families: []string{"opus"}}, limit{[]string{"opus"}, map[string]time.Time{"opus": h1}, at(h1)}, false},
+		{"unknown family learns its reset", LauncherHealth{LimitModels: []string{"opus", "sonnet"}, LimitResets: map[string]time.Time{"opus": h1}},
+			limit{[]string{"sonnet"}, nil, at(d3)}, limit{[]string{"opus", "sonnet"}, map[string]time.Time{"opus": h1, "sonnet": d3}, at(d3)}, true},
+		{"passed reset named again is a new limit", LauncherHealth{LimitModels: []string{"opus", "sonnet"}, LimitResets: map[string]time.Time{"opus": past}},
+			limit{families: []string{"opus"}}, limit{[]string{"opus", "sonnet"}, nil, nil}, true},
+		{"no-family limit named: its reset is a floor", LauncherHealth{ResetsAt: at(d3)},
+			limit{[]string{"opus"}, nil, at(h1)}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, true},
+		{"no-family limit named with unknown reset", LauncherHealth{ResetsAt: at(d3)},
+			limit{families: []string{"opus"}}, limit{[]string{"opus"}, nil, nil}, true},
+		{"main's format, nothing new", LauncherHealth{Error: "You've hit your Opus limit", ResetsAt: at(d3)},
+			limit{[]string{"opus"}, nil, at(d3)}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, false},
+		{"first commit's format, bare failure", LauncherHealth{LimitModels: []string{"opus"}, ResetsAt: at(d3)},
+			limit{}, limit{[]string{"opus"}, map[string]time.Time{"opus": d3}, at(d3)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tc.rec
+			rec.Kind = errKindUsageLimit
+			changed := foldLimit(&rec, tc.event.families, tc.event.agg)
+			if changed != tc.changed || !slices.Equal(rec.LimitModels, tc.want.families) ||
+				!maps.EqualFunc(rec.LimitResets, tc.want.resets, time.Time.Equal) || !sameReset(rec.ResetsAt, tc.want.agg) {
+				t.Fatalf("changed=%v models=%v resets=%v reset=%v; want changed=%v %+v", changed, rec.LimitModels, rec.LimitResets, rec.ResetsAt, tc.changed, tc.want)
+			}
+		})
+	}
+}
+
+// The event rows of the design table: what advances the record's rev and check time, and what is dropped.
+func TestUsageLimitRuleEventRevisions(t *testing.T) {
+	s, _ := launcherHealthHubOn(t, newStorelessService)
+	ctx := context.Background()
+	reset := time.Now().Add(time.Hour)
+	seedUsageLimit(t, s, "l4", "You've hit your Opus limit", &reset)
+	step := func(name string, r healthResult, advances, fresh bool) LauncherHealth {
+		t.Helper()
+		before := healthState(s, "l4", "work")
+		after := s.recordHealth(ctx, "l4", "work", r)
+		if (after.rev != before.rev) != advances || !after.CheckedAt.Equal(before.CheckedAt) != fresh {
+			t.Fatalf("%s: rev %d → %d, checked %v → %v; want advance=%v fresh=%v", name, before.rev, after.rev, before.CheckedAt, after.CheckedAt, advances, fresh)
+		}
+		return after
+	}
+	older := LauncherHealth{CheckedAt: time.Now().Add(-time.Hour)}
+	step("older failure, nothing new", healthResult{err: "You've hit your Opus limit", source: healthSourceCheck, observed: &older}, false, false)
+	if r := step("older failure, new family", healthResult{err: "You've hit your Sonnet limit", source: healthSourceCheck, observed: &older}, true, false); !slices.Equal(r.limitModels(), []string{"opus", "sonnet"}) {
+		t.Fatalf("older failure's family: %+v", r)
+	}
+	step("older pass", healthResult{ok: true, model: "claude-opus-4", source: healthSourceCheck, observed: &older}, false, false)
+	step("timeout", healthResult{err: "context deadline exceeded", source: healthSourceCheck}, false, false)
+	step("pass of no limited family", healthResult{ok: true, model: "claude-haiku-4", source: healthSourceCheck}, false, false)
+	step("current failure", healthResult{err: "You've hit your Opus limit", source: healthSourceCheck}, true, true)
+	step("pass of one family", healthResult{ok: true, model: "claude-opus-4", source: healthSourceCheck}, true, true)
+	if r := step("pass of the last family", healthResult{ok: true, model: "claude-sonnet-4-5", source: healthSourceCheck}, true, true); r.State != healthOK || r.LimitModels != nil || r.LimitResets != nil || r.ResetsAt != nil {
+		t.Fatalf("after the last family's pass: %+v", r)
 	}
 }

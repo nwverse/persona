@@ -39,22 +39,62 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   If it fails again, or the machine cannot answer, the usual reroute applies. Concurrent starts for the same machine × launcher wait for one probe (single flight), and a probe is not repeated
   within 30 seconds (`healthRecheckThrottle`), so a burst of starts does not turn into a burst of probes. This also covers the case where periodic checks are off: no manual button is needed.
   A `usage_limit` is also rechecked (#9386), whether its reset is known or not: quota can recover before `resets_at`, so a passing probe clears it early. Fresh limit evidence waits 30 seconds before any on-demand probe; subsequent attempts share the same throttle. A failed probe still refuses a fixed-machine start without launching an Agent.
-  The record's usage-limit evidence (`limit_models`: the model families whose own limit is used up, none for a limit that names no family; `limit_resets`: each family's reset when known; `resets_at`: the limit's reset, with families the latest of theirs and unknown while any family's is) changes only by these rules:
-
-  | Evidence | What it may change |
-  | --- | --- |
-  | A new usage-limit failure (a probe, a start, an Agent's turn) | Error text and check time; adds the families it names, each with its own reset: a known reset only gets later, an unknown one stays unknown whatever another family's is. Words that name no family or reset ("usage limit reached") take nothing away. |
-  | An older result (a probe that read an earlier version of the record) | A usage-limit failure only adds families and later resets to a limit in force, and that makes a new version. Anything else of it, a pass included, is dropped. |
-  | A pass (a probe, the apps' Test) taken against the current record | Clears the families of the model that answered; a limit that names no family clears on any answer. Families it does not cover stay limited, and the next probe asks for one of them. |
-  | Any other failure (timeout, auth, terminal) while a limit is in force | Nothing: it did not reach the quota. |
-
-  A probe for a family limit requests that family; an older node or runtime that ignores the model answers with another family and clears nothing. A probe's result counts as current only against the version of the record it read (its check time and an in-memory revision that every change advances), compared under the record's lock. Admission rereads the published record rather than trusting the raw probe answer.
+  The record keeps what is known of the limit per model family and changes only by the rules in "Usage-limit record rules" below.
+  A probe for a family limit requests that family; an older node or runtime that ignores the model answers with another family and clears nothing. A probe's result counts as current only against the version of the record it read, compared under the record's lock. Admission rereads the published record rather than trusting the raw probe answer.
   `not_in_terminal` is not rechecked this way: the probe's login shell cannot reproduce the terminal's failure; only a real successful start clears it.
 - An Agent's own usage limit is recorded too (#1710, source `session`): when a turn ends on the subscription's usage limit (`docs/assistant/agent-work.md` "Usage limits") with a reset still ahead,
   and the session names its launcher, that launcher on that computer is marked `usage_limit` until the reset. Nothing runs for it: no check (it would spend a request to be refused) and no repair.
   The main chat's conversations count as well (they run the computer's launcher under the same sign-in). Each turn a background task wakes meets the same limit again; it is recorded once.
 - Stored in the settings key `launchers.health` (Postgres), one entry per computer × launcher: success / failure, error text (redacted, truncated), error category,
   check time, consecutive failure count, repair log, state. It survives hub restarts.
+
+## Usage-limit record rules
+
+A `usage_limit` record (#9386) keeps what is known of the subscription's limit per model family, and changes only by these rules (`recordHealth`, `foldLimit`, `launcherLimitTurnSettled`). A limit is **in force** while the record refuses starts (`unusable`).
+
+**Each family's state.** Families are `opus`, `sonnet`, `haiku`, as the limit's words name them ("You've hit your Opus limit").
+
+| State | Stored as | Effect |
+| --- | --- | --- |
+| Limited, reset known and ahead | in `limit_models`; `limit_resets[f]` = t > now | Holds until t, unless a probe of that family passes first |
+| Limited, reset unknown | in `limit_models`; no `limit_resets[f]` | Holds until a probe of that family passes |
+| Limited, reset known and past | in `limit_models`; `limit_resets[f]` ≤ now | Over as far as the record's reset goes. A new failure naming it is a new limit: the old reset is dropped first |
+| A limit that names no family | `limit_models` empty; `resets_at` known or not | Any model's answer clears it |
+
+**The record.** `resets_at` is the latest of the families' resets, and unknown while any family's reset is unknown; with no family, it is the limit's own reset. A limit with a known `resets_at` holds until then; with an unknown one, until 6 hours (`healthStale`) after the latest evidence. Either way an on-demand probe can clear it early, at most once per 30 seconds (`healthRecheckThrottle`) after the latest evidence. A probe asks for the first limited family.
+
+**Events.** "Fold" is the merge in the next table.
+
+| Event | Limit in force | What changes | rev, check time |
+| --- | --- | --- | --- |
+| A usage-limit failure: probe (current), start, an Agent's turn | no | The record becomes this limit: the families named, each with the failure's reset when known; no family: `resets_at` is the failure's reset | advance, now |
+| A usage-limit failure: probe (current), start | yes | Fold; error text, source and failure count updated (a fresh refusal is new evidence even when the fold changes nothing) | advance, now |
+| A usage-limit failure: an Agent's turn | yes | Fold; when the fold changes nothing, **nothing**. This is the dedupe: the turn is judged by the families it names, not by unrelated families | advance and now only on a change |
+| A usage-limit failure: probe that read an older version | yes | Fold only (error text and check time kept) | advance on a change; check time kept |
+| The same | no | Dropped | none |
+| A pass: probe (current) or the apps' Test | yes | Removes the families the answering model belongs to, with their resets; for a limit that names no family, everything. Nothing left: the record is `ok`. Covering no limited family: nothing | advance, now (on a change) |
+| A pass: probe that read an older version | any | Dropped | none |
+| Any other failure (timeout, auth, terminal) | yes | Nothing: it never reached the quota | none |
+| Any other current result | no | The general rules (the record is replaced) | advance, now |
+
+**Fold** (a failure naming families F with reset R, R possibly unknown, into the limit in force).
+
+| Case | Result |
+| --- | --- |
+| F names families | Each f in F is added. If f's known reset has passed, it is dropped. With R known, f's reset becomes the later of its own and R. With R unknown, f keeps its known reset, or stays unknown. Families not in F are untouched. |
+| F names families; the limit in force names none | As above, the old limit's known reset applies to F as a floor when R is known. With R unknown, F's resets are unknown |
+| F empty ("usage limit reached"); the limit names families | Families unchanged. With R known, every known family reset becomes the later of its own and R. Unknown resets stay unknown |
+| F empty; the limit names none | `resets_at` becomes the later of the two. An unknown one becomes R; an unknown R changes nothing |
+
+Nothing is ever taken away by a failure. "No new information" means the fold changes neither the families, nor any family's reset, nor `resets_at`. It is compared as read (`limitModels`, `limitResets`), so loading an older format counts as no change.
+
+**Versions.** `rev` is a counter in the hub's memory. Every `recordHealth` write that changes a record advances it: every write in the events table marked "advance". It is not stored, so a restart starts again at 0, and probes in flight end with the process. A probe keeps the record it read. Its result is current only when both the check time and `rev` still match; otherwise it is an "older version" row. Deleting a record (a launcher's setup changed) is caught by the check time. `setHealthState` changes only records that are not usage limits.
+
+**Stored fields and older formats.**
+- Stored: `kind`, `error`, `checked_at`, `source`, `resets_at`, `limit_models`, `limit_resets`. `rev` is not stored.
+- `main` before this change (9489ee4c81 and earlier) wrote neither `limit_models` nor `limit_resets`. When read, the families come from the error's words, each with `resets_at` as its reset.
+- One rule reads it: no `limit_resets` and a known `resets_at` give every family that reset. In the current format the combination never arises with families: `resets_at` is known only when every family's reset is, and those are in `limit_resets`.
+- This PR's first commit (a6d5d78dfb) wrote `limit_models` without `limit_resets`. It was never merged to `main` nor deployed; the same rule happens to read it.
 
 ## Error categories (`classifyLauncherError`)
 

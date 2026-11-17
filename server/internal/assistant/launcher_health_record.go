@@ -42,7 +42,8 @@ func limitFamiliesLeft(families []string, model string) []string {
 // unknown reset stays unknown, whatever another family's is; a limit naming no family makes the known resets no
 // earlier. It says whether dst changed.
 func foldLimit(dst *LauncherHealth, families []string, reset *time.Time) (changed bool) {
-	have, resets, agg := slices.Clone(dst.limitModels()), dst.limitResets(), dst.ResetsAt
+	had, hadResets := dst.limitModels(), dst.limitResets()
+	have, resets, agg := slices.Clone(had), maps.Clone(hadResets), dst.ResetsAt
 	switch {
 	case len(families) == 0 && len(have) == 0:
 		agg = laterReset(agg, reset)
@@ -72,7 +73,8 @@ func foldLimit(dst *LauncherHealth, families []string, reset *time.Time) (change
 	if len(resets) == 0 {
 		resets = nil
 	}
-	changed = !slices.Equal(have, dst.LimitModels) || !maps.Equal(resets, dst.LimitResets) || !sameReset(agg, dst.ResetsAt)
+	// Compared as read (limitModels, limitResets), so a record of an older format that learns nothing is unchanged.
+	changed = !slices.Equal(have, had) || !maps.EqualFunc(resets, hadResets, time.Time.Equal) || !sameReset(agg, dst.ResetsAt)
 	dst.LimitModels, dst.LimitResets, dst.ResetsAt = have, resets, agg
 	return changed
 }
@@ -118,16 +120,9 @@ const terminalBlockedReason = "not available in this computer's terminal: its sh
 
 // recordHealth keeps r as launcher's latest on machine; the apps are told when its state changes.
 //
-// A usage limit in force is taken back only by evidence that shows it over (#9386):
-//   - a new failure on the limit adds the model families its words name, each with its own reset (foldLimit): a
-//     known reset only gets later, an unknown one stays unknown, and the record's reset is the latest of them,
-//     unknown while any is; words that name neither ("usage limit reached") take nothing away;
-//   - an older result (a probe that read an earlier version of the record: another check time or rev) only adds
-//     families and later resets to a limit in force, which makes a new version; the rest of it is dropped, a pass
-//     included;
-//   - a pass (a probe, the apps' Test) clears the families its answering model belongs to, all of a limit that names
-//     none; families it does not cover stay limited;
-//   - another failure did not reach the quota and leaves the limit as it is.
+// A usage limit in force changes only by the design table in docs/server/launcher-health.md ("Usage-limit record
+// rules", #9386): a failure folds into it (foldLimit), a pass clears its answering model's families, an older result
+// only folds, any other failure leaves it, and every change advances the record's rev.
 func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r healthResult) LauncherHealth {
 	b := &s.health
 	b.mu.Lock()
@@ -420,15 +415,11 @@ func (s *Service) launcherLimitTurnSettled(ctx context.Context, machine, sid str
 	if now := time.Now(); !ok || !reset.After(now) || reset.Sub(now) > healthLimitMax {
 		return
 	}
-	if r, found := s.launcherHealth(ctx, machine, sess.Launcher); found {
-		at, limited := r.limitReset()
-		known := r.limitResets()
-		if limited && !at.Before(reset) && !slices.ContainsFunc(limitFamilies(lim.TurnError), func(f string) bool {
-			t, ok := known[f]
-			return !ok || t.Before(reset)
-		}) {
-			return // known already (each turn a background task wakes meets it again)
-		}
+	// Nothing new for the limit in force (foldLimit changes nothing on the families the turn names): each turn a
+	// background task wakes meets it again, and refreshing the evidence would hold off the next probe.
+	if r, found := s.launcherHealth(ctx, machine, sess.Launcher); found && r.Kind == errKindUsageLimit && r.unusable() &&
+		!foldLimit(&r, limitFamilies(lim.TurnError), &reset) {
+		return
 	}
 	s.recordHealth(ctx, machine, sess.Launcher, healthResult{err: lim.TurnError, source: healthSourceSession, kind: errKindUsageLimit, resetsAt: &reset})
 }

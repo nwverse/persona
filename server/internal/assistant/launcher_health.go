@@ -115,7 +115,8 @@ type LauncherHealth struct {
 	// LimitModels: Kind is errKindUsageLimit and these model families' own limits are used up (opus, sonnet, haiku);
 	// none: the limit names no family, and any model's answer shows it is over (recordHealth's merge rules).
 	LimitModels []string `json:"limit_models,omitempty"`
-	// LimitResets: when each of LimitModels resets, for those whose reset is known.
+	// LimitResets: when each of LimitModels resets, for those whose reset is known. Without it a known ResetsAt is every
+	// family's reset (limitResets: records from before it).
 	LimitResets map[string]time.Time `json:"limit_resets,omitempty"`
 	// rev is the record's version in this hub (healthBook.rev): a probe's result is current only against the version
 	// it read.
@@ -336,14 +337,17 @@ func (r LauncherHealth) limitModels() []string {
 	return limitFamilies(r.Error)
 }
 
-// limitResets are the known resets of r's limitModels, a copy; a record from before limit_resets has ResetsAt for
-// each.
+// limitResets are the known resets of r's limitModels, a copy. A record without limit_resets has its known resets_at
+// for each family: main's format (no limit_models either, the families in its error's words). A record that has
+// families and no limit_resets has no resets_at but from that format, since every family's reset is known whenever
+// resets_at is (familiesReset).
 func (r LauncherHealth) limitResets() map[string]time.Time {
-	out := map[string]time.Time{}
-	if len(r.LimitModels) > 0 {
-		maps.Copy(out, r.LimitResets)
-	} else if r.ResetsAt != nil {
-		for _, f := range limitFamilies(r.Error) {
+	out := maps.Clone(r.LimitResets)
+	if out == nil {
+		out = map[string]time.Time{}
+	}
+	if len(out) == 0 && r.ResetsAt != nil {
+		for _, f := range r.limitModels() {
 			out[f] = *r.ResetsAt
 		}
 	}
