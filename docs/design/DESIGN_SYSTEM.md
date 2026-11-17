@@ -559,6 +559,13 @@ on-demand model panel, not the everyday Assistant home (#6887).
   image route (`remote_images`, docs/protocol/protocol.md "Remote images (#9473)") at the size drawn; what other
   people wrote (the Inbox's Lark, GitHub and connector threads, `asksBeforePictures()`) keeps each run its size with
   Load Image over it until tapped, since a picture there may be a tracking pixel.
+  The web (#9475) draws the same rules: `ui/ReplyImages.tsx` (a chunk of its own with the step that lifts a run out of
+  its paragraph, `ui/reply-images-plugin.ts`, loaded with a reply's first picture), rules in `lib/reply-image-layout.ts`;
+  a lone picture is 300 px tall (240 px in a narrow window), a run at most 480 px wide, the turn images' 10 px radius
+  and `shadow-hairline`, `bg-field` while it loads, sizes as inline styles (no new utility classes on the first
+  screen). Markdown rendered with `askImages` (Inbox connector and Lark threads) keeps a run its size with Load image
+  over it; a hub without `remote_images` keeps every picture behind a click (#8162's gate), loaded from its host with
+  no Referer.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
