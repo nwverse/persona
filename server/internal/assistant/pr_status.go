@@ -12,15 +12,16 @@ import (
 // TodoPRStatus keeps forge observations beside the existing stage/delivery. A ready,
 // open PR with no working Agent is a view of that state, not another task lifecycle.
 type TodoPRStatus struct {
-	URL       string    `json:"url"`
-	HeadOID   string    `json:"head_oid,omitempty"`
-	State     string    `json:"state"`
-	Draft     bool      `json:"draft"`
-	Own       bool      `json:"own,omitempty"`
-	Review    string    `json:"review"`
-	Checks    string    `json:"checks"`
-	Conflicts bool      `json:"conflicts"`
-	CheckedAt time.Time `json:"checked_at"`
+	URL                string     `json:"url"`
+	HeadOID            string     `json:"head_oid,omitempty"`
+	State              string     `json:"state"`
+	Draft              bool       `json:"draft"`
+	Own                bool       `json:"own,omitempty"`
+	Review             string     `json:"review"`
+	ChangesRequestedAt *time.Time `json:"changes_requested_at,omitempty"`
+	Checks             string     `json:"checks"`
+	Conflicts          bool       `json:"conflicts"`
+	CheckedAt          time.Time  `json:"checked_at"`
 }
 
 type prStatusForge interface {
@@ -67,31 +68,40 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	if pr.Head.SHA == "" {
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
 	}
-	var reviews []struct {
-		State string `json:"state"`
-		User  struct {
+	type review struct {
+		State       string    `json:"state"`
+		CommitID    string    `json:"commit_id"`
+		SubmittedAt time.Time `json:"submitted_at"`
+		User        struct {
 			Login string `json:"login"`
 		} `json:"user"`
 	}
+	var reviews []review
 	// An incomplete review page cannot prove approval; retain a conservative label.
 	if err := g.get(ctx, path+"/reviews?per_page=100", &reviews); err != nil {
 		return TodoPRStatus{}, err
 	}
-	latest := map[string]string{}
+	latest := map[string]review{}
 	for _, r := range reviews {
 		switch r.State {
 		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
-			latest[r.User.Login] = r.State
+			latest[r.User.Login] = r
 		}
 	}
-	for _, state := range latest {
-		if state == "APPROVED" {
+	for _, r := range latest {
+		if r.State == "APPROVED" {
 			out.Review = "approved"
 		}
 	}
-	for _, state := range latest {
-		if state == "CHANGES_REQUESTED" {
+	for _, r := range latest {
+		if r.State == "CHANGES_REQUESTED" {
 			out.Review = "changes_requested"
+			// A local poll time cannot date a review. A full page may omit its later dismissal or approval.
+			if len(reviews) < 100 && strings.TrimSpace(r.User.Login) != "" && r.CommitID == pr.Head.SHA && !r.SubmittedAt.IsZero() &&
+				(out.ChangesRequestedAt == nil || r.SubmittedAt.After(*out.ChangesRequestedAt)) {
+				at := r.SubmittedAt.UTC()
+				out.ChangesRequestedAt = &at
+			}
 		}
 	}
 	if out.Review != "changes_requested" && len(pr.Reviewers)+len(pr.Teams) > 0 {
@@ -358,9 +368,10 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigPRConflict, Key: status.URL + "@" + status.HeadOID,
 			Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
 	}
-	if terminal && held != nil && (wasOpen || legacyHold || held.Evidence != nil) {
+	reviewChange := parkReviewChangeRequested(held, status)
+	if held != nil && (terminal && (wasOpen || legacyHold || held.Evidence != nil) || reviewChange) {
 		// Typed waits reconcile terminal facts even after a failed ledger write or a restart. Legacy parks retain
-		// their transition/stage gate. Neither path may resolve a newer park or a PR that has since reopened.
+		// their transition/stage gate. A new changes-request review is actionable before other PRs resolve.
 		v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			p := v.parking()
 			if p == nil || !p.At.Equal(held.At) {
@@ -370,7 +381,16 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
 				return false
 			}
-			if f := prFacts(now, status.URL); f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) || !parkPRsResolved(now, p, status.URL) {
+			f := prFacts(now, status.URL)
+			if f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) {
+				return false
+			}
+			if terminal {
+				if !parkPRsResolved(now, p, status.URL) {
+					return false
+				}
+			} else if f.HeadOID != status.HeadOID || !parkReviewChangeRequested(p, *f) ||
+				!f.ChangesRequestedAt.Equal(*status.ChangesRequestedAt) {
 				return false
 			}
 			v.State = reviewPending
@@ -380,13 +400,26 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			return err
 		}
 		if changed {
-			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
+			detail := "PR " + status.State + ": " + status.URL
+			if reviewChange {
+				detail = "PR changes requested: " + status.URL
+			}
+			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: detail})
 		}
 	}
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	return nil
+}
+
+// parkReviewChangeRequested dates an active current-head review, not the poll, against this typed wait. Ambiguous
+// same-second provider times stay parked rather than attributing a possibly pre-park review to a newer wait.
+func parkReviewChangeRequested(r *TaskReview, status TodoPRStatus) bool {
+	return r != nil && !r.At.IsZero() && r.Evidence != nil && parkWaitsOnPR(r, status.URL) &&
+		status.State == "open" && status.HeadOID != "" && status.Review == "changes_requested" &&
+		status.ChangesRequestedAt != nil && status.ChangesRequestedAt.After(r.At) &&
+		!status.CheckedAt.IsZero() && !status.ChangesRequestedAt.After(status.CheckedAt)
 }
 
 // stagePR is the PR task id's stage holds now ("" when none).
