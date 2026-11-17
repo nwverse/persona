@@ -44,6 +44,9 @@
   "Persona\/Views\/Chat\/AttachSheet.swift" : {
     "ownClose" : 1
   },
+  "Persona\/Views\/Chat\/ChatExportSheet.swift" : {
+    "ownClose" : 1
+  },
   "Persona\/Views\/Chat\/ChatPlan.swift" : {
     "trailingClose" : 1
   },
