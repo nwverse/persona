@@ -45,7 +45,9 @@ private struct MeetingFloatCard: View {
                 MeetingFloatContent(entry: entry, paused: paused, elapsed: elapsed)
                     .frame(width: width)
                     .position(x: center.x + drag.width, y: center.y + drag.height)
-                    .gesture(DragGesture(minimumDistance: Theme.Space.s)
+                    // Ahead of the card's own tap: the card follows the finger, so a drag ends on it and its button
+                    // would take the lift as a tap and open the room (a held press began the button's first).
+                    .highPriorityGesture(DragGesture(minimumDistance: Theme.Space.s)
                         .updating($drag) { value, state, _ in state = value.translation }
                         .onEnded { value in
                             let end = CGPoint(x: center.x + value.translation.width, y: center.y + value.translation.height)
