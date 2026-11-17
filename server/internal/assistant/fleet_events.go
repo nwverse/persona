@@ -177,7 +177,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		// carries no list to mark.
 		if tools, ok := out["tools"].([]proto.Tool); ok {
 			deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
-			out["tools"] = s.withToolLoading(ctx, tools, deferring)
+			out["tools"] = s.withToolLoading(ctx, p.SessionID, tools, deferring)
 		}
 		return out, true, nil
 	case "mcp.call":
