@@ -2182,7 +2182,7 @@ struct ChatView: View {
                     .accessibilityHidden(!terminalShown)
             }
             if pane == .git {
-                GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview,
+                GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: sharedGit, review: openReview,
                         commentKey: session?.canSend == false ? nil : key).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             } else if pane == .files {
@@ -2200,7 +2200,7 @@ struct ChatView: View {
                     .padding(.top, style == .dev ? chrome.height - min(chrome.collapse, chrome.maxCollapse) : 0)
             } else { chatPane.stackSegment() }
         // Files and Git come in from the right (a swipe to the left), the chat back from the left.
-        case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview,
+        case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: sharedGit, review: openReview,
                         commentKey: session?.canSend == false ? nil : key).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         case .files: FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key,
@@ -2230,21 +2230,27 @@ struct ChatView: View {
 
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
     private var panes: [SessionPane] {
-        var p: [SessionPane] = [.chat]
-        if session?.canTerminal == true { p.append(.terminal) }
-        if git?.isRepo == true { p.append(.git) }
-        if !(session?.cwd ?? "").isEmpty { p.append(.files) }
-        return p
+        guard let session else { return [.chat] }
+        return AgentMenuFacts.panes(session, git: git)
     }
 
     private var paneBadges: [SessionPane: String] {
-        guard let n = git?.files.count, let text = CountBadge.text(n) else { return [:] }
-        return [.git: text]
+        AgentMenuFacts.paneBadges(git)
+    }
+
+    private var sharedGit: Binding<GitStatus?> {
+        Binding(get: { git }, set: { new in
+            git = new
+            AgentMenuRouting.shared.git[key] = new
+        })
     }
 
     private func loadGit() async {
         guard style == .dev, let cwd = session?.cwd, !cwd.isEmpty, let api = model.api(key.group) else { return }
-        if let s = try? await api.gitStatus(machine: key.machineID, cwd: cwd) { git = s }
+        if let s = try? await api.gitStatus(machine: key.machineID, cwd: cwd) {
+            git = s
+            AgentMenuRouting.shared.git[key] = s
+        }
     }
 
     /// The chat is an upside-down list (newest first, flipped back on screen), the way chat apps do it: the newest
@@ -5038,6 +5044,7 @@ struct ChatView: View {
         menu.selected = nil
         if pane == .git || pane == .files { pane = .chat } // the next agent may live in another directory
         git = nil
+        AgentMenuRouting.shared.git[key] = nil
         position = ScrollPosition(edge: .top)
         model.subscribe(next, by: owner)
         model.show(next, by: owner)
