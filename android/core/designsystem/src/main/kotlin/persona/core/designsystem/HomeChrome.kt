@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.Composable
@@ -265,9 +267,27 @@ fun JSidebarColumn(
     // window) composed the Assistant route twice in one frame. The pictures record `panes` only. The overlay is a
     // sibling, drawn above them (`SplitColumnControl.swift:204`).
     val gesture = if (drag != null) drag.gestureModifier(width, shown, detailAtRoot, overlay) else Modifier
+    // While the column is hidden and the detail is at its root, reclaim the open-zone strip so system Back does
+    // not take it (`SplitColumnControl.swift:132-137`, `:160-169`). A pushed detail keeps Back (no exclusion).
+    val density = LocalDensity.current
+    val excludeEdge = if (drag != null && !shown && detailAtRoot) {
+        val stripPx = with(density) { (Tokens.MinTouch.ios / 2).toPx() }
+        val bandPx = with(density) { RootEdgeExclusion.heightDp.dp.toPx() }
+        Modifier.systemGestureExclusion { coordinates ->
+            RootEdgeExclusion.rect(
+                active = true,
+                stripWidthPx = stripPx,
+                layoutWidthPx = coordinates.size.width.toFloat(),
+                layoutHeightPx = coordinates.size.height.toFloat(),
+                bandHeightPx = bandPx,
+            ) ?: Rect.Zero
+        }
+    } else {
+        Modifier
+    }
     // [progress] is this frame's layout. The picture waits until that value has caught up (`SplitColumnControl.swift:216-231`).
     val record = if (drag != null) drag.recordModifier(progress) else Modifier
-    Box(modifier.fillMaxSize().then(gesture)) {
+    Box(modifier.fillMaxSize().then(excludeEdge).then(gesture)) {
         Box(Modifier.fillMaxSize().then(record)) { panes() }
         if (drag != null) ColumnDragOverlay(drag, drag.pagePicture, drag.columnPicture, drag.step)
     }

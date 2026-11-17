@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -19,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -42,6 +44,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -101,13 +104,17 @@ internal object DrawerDrag {
     fun takes(dx: Float, dy: Float, isOpen: Boolean): Boolean = abs(dx) > abs(dy) && (isOpen || dx > 0f)
 
     /**
-     * A down in the system back-gesture inset is not the drawer's. iOS has no such inset on the Assistant root; it
-     * refuses the gesture when a page is pushed (`DrawerPan`, `AssistantSidebar.swift:505-509`). Android's gesture
-     * navigation owns both edges even at the root (`docs/design/DESIGN_SYSTEM.md` 4.2: the pan yields to the system).
-     * Consuming that inset would swallow Back. A zero inset (three-button navigation) yields nothing.
+     * A down in the trailing system back-gesture inset is not the drawer's. The leading edge at a root is claimed
+     * with [RootEdgeExclusion] (#9803), matching iOS where there is no Back at the Assistant root
+     * (`SwipeBack.swift:11-16`; `DrawerPan` covers the whole page, `AssistantSidebar.swift:153-154`). A pushed page
+     * keeps the drag off (`DrawerPan`, `AssistantSidebar.swift:505-509`). The right edge stays with system Back
+     * (open in #9803). A zero trailing inset (three-button navigation) yields nothing.
+     *
+     * [leadingPx] is unused: kept so call sites that still pass the left inset stay source-compatible.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun inSystemBackInset(x: Float, leadingPx: Float, trailingPx: Float, widthPx: Float): Boolean =
-        (leadingPx > 0f && x < leadingPx) || (trailingPx > 0f && x > widthPx - trailingPx)
+        trailingPx > 0f && x > widthPx - trailingPx
 
     /** Why a drag was refused, the words `DrawerPan` records (`AssistantSidebar.swift:484-527`). */
     enum class Decision { Take, Direction, Pushed, SwipeRow, SidewaysScroller, SystemBack, Child }
@@ -311,8 +318,26 @@ internal fun rememberPhoneDrawerDrag(
         runtime.live = false
     }
 
+    // At a root with the drawer closed, reclaim the left system-gestures strip so a finger there opens the
+    // drawer (`SwipeBack.swift:11-16`, `AssistantSidebar.swift:153-154`). Opened, pushed, or drag off: no exclusion.
+    val bandHeightPx = with(density) { RootEdgeExclusion.heightDp.dp.toPx() }
+    val excludeEdge = if (dragEnabled && !opened) {
+        val leadingPx = runtime.leadingPx
+        Modifier.systemGestureExclusion { coordinates ->
+            RootEdgeExclusion.rect(
+                active = true,
+                stripWidthPx = leadingPx,
+                layoutWidthPx = coordinates.size.width.toFloat(),
+                layoutHeightPx = coordinates.size.height.toFloat(),
+                bandHeightPx = bandHeightPx,
+            ) ?: Rect.Zero
+        }
+    } else {
+        Modifier
+    }
     val modifier = Modifier
         .onGloballyPositioned { runtime.originInRoot = it.positionInRoot() }
+        .then(excludeEdge)
         .then(DrawerDragElement(runtime, dragEnabled))
     return PhoneDrawerDrag(
         progressOf = { runtime.shown },

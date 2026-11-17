@@ -72,11 +72,15 @@ class DrawerDragTest {
         assertEquals(DrawerDrag.Decision.SwipeRow, decide(dx = -20f, isOpen = true, onSwipeRow = true, childOwns = true))
     }
 
-    @Test fun systemInsetIsOnlyTheNonZeroEdges() {
-        assertTrue(DrawerDrag.inSystemBackInset(10f, 48f, 48f, 360f))
+    @Test fun trailingInsetStillRefusesAndLeadingDoesNot() {
+        // Left edge at a root is the drawer's (#9803); only the trailing system-back inset refuses.
+        assertFalse(DrawerDrag.inSystemBackInset(10f, 48f, 48f, 360f))
         assertFalse(DrawerDrag.inSystemBackInset(80f, 48f, 48f, 360f))
         assertTrue(DrawerDrag.inSystemBackInset(330f, 48f, 48f, 360f))
         assertFalse(DrawerDrag.inSystemBackInset(10f, 0f, 0f, 360f))
+        // A pushed page still refuses via atRoot, not the left inset (`AssistantSidebar.swift:505-509`).
+        assertEquals(DrawerDrag.Decision.Pushed, decide(dx = 20f, atRoot = false, inSystemBack = false))
+        assertEquals(DrawerDrag.Decision.Take, decide(dx = 20f, atRoot = true, inSystemBack = false))
     }
 
     @Test fun liftAndHairlineMatchTheIphoneAndStayExactAtRest() {
