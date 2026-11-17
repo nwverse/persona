@@ -21,6 +21,9 @@ struct MeetingPage: View {
     /// After mode, pushed where Back doesn't return to the recording's page (the minutes push opens it over Recordings,
     /// #3862 phase 6): Open Minutes / Open Recording push that page, as in the sheet, with no Done.
     var opensRecording = false
+    /// After mode, opened by Talk about this meeting (#3862 phase 6): the conversation part first, there even before a
+    /// follow-up exists (#8731 V3).
+    var talks = false
 
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -58,7 +61,7 @@ struct MeetingPage: View {
     @State private var opening = false
     /// After the meeting, in one screen (#8731 V3): the part under the summary, the map full screen, the minutes' cards
     /// (worked out when the minutes change, P4) and the transcript's rows.
-    @State private var afterPart: MeetingAfterPart = .minutes
+    @State private var afterPart: MeetingAfterPart?
     @State private var mapFull = false
     @State private var minutesCards: RecordingMinutesCards.Summary?
     @State private var transcriptItems: [RecordingTimeline.Item] = []
@@ -524,7 +527,9 @@ struct MeetingPage: View {
         // conversation follows its newest end, as the thread did; the other parts open at the top. With the keyboard up the
         // conversation takes the screen under a one-line status, as before.
         let parts = afterParts(entry)
-        let part = parts.contains(afterPart) ? afterPart : .minutes
+        // The part picked; until one is, Conversation when Talk about this meeting opened the page, else Minutes.
+        let picked = afterPart ?? (talks ? .conversation : .minutes)
+        let part = parts.contains(picked) ? picked : .minutes
         VStack(spacing: Theme.Space.s) {
             if writing {
                 statusLine(entry)
@@ -536,7 +541,7 @@ struct MeetingPage: View {
             } else if part == .conversation {
                 scroller {
                     VStack(alignment: .leading, spacing: Theme.Space.l) {
-                        afterOverview(entry, parts: parts)
+                        afterOverview(entry, parts: parts, part: part)
                         thread(entry)
                     }
                     .padding(.horizontal, Theme.Space.page)
@@ -545,7 +550,7 @@ struct MeetingPage: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Space.l) {
-                        afterOverview(entry, parts: parts)
+                        afterOverview(entry, parts: parts, part: part)
                         afterPartContent(entry, part)
                     }
                     .padding(.horizontal, Theme.Space.page)
@@ -590,11 +595,11 @@ struct MeetingPage: View {
     /// follow-up has one (the composer writes to it).
     private func afterParts(_ entry: RecordingEntry) -> [MeetingAfterPart] {
         MeetingAfterPart.shown(photos: entry.roomMeeting && entry.attendance?.photos == true,
-                               conversation: entry.roomMeeting || conversation.followupKey(id) != nil)
+                               conversation: talks || entry.roomMeeting || conversation.followupKey(id) != nil)
     }
 
     /// The top of the screen: why it ended badly (when it did), the facts, the summary, the to-dos, the map, the parts.
-    @ViewBuilder private func afterOverview(_ entry: RecordingEntry, parts: [MeetingAfterPart]) -> some View {
+    @ViewBuilder private func afterOverview(_ entry: RecordingEntry, parts: [MeetingAfterPart], part: MeetingAfterPart) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             if let captureError {
                 NoticeBanner(text: captureError, tone: .danger)
@@ -611,7 +616,9 @@ struct MeetingPage: View {
             }
             let topics = MeetingAfterMap.topics(minutes: minutes.ready, live: conversation.meeting(id).topics)
             if !topics.isEmpty { MeetingMapCard(topics: topics) { mapFull = true } }
-            MeetingTabRow(pages: parts, page: $afterPart, title: \.title) { "meeting-after-tab-\($0.rawValue)" }
+            MeetingTabRow(pages: parts, page: Binding(get: { part }, set: { afterPart = $0 }), title: \.title) {
+                "meeting-after-tab-\($0.rawValue)"
+            }
         }
     }
 

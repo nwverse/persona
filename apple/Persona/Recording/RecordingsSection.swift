@@ -1231,7 +1231,7 @@ struct RecordingDetailView: View {
                     .accessibilityIdentifier("recording-private")
                 }
                 if showsThread {
-                    NavigationLink { MeetingPage(id: id, mode: .after) } label: {
+                    NavigationLink { MeetingPage(id: id, mode: .after, talks: true) } label: {
                         // Drawn as the Private Meeting row beside it: in the style's icon language.
                         Label { Text("Talk about this meeting").lineLimit(1) } icon: {
                             ThemedIcon(Theme.Icon.conversation)
