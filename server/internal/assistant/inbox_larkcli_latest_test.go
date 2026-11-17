@@ -70,7 +70,7 @@ func TestLarkCLIDMTriageSeparatesLatestMessageFromResolvedHistory(t *testing.T) 
 				if !strings.Contains(call.User, "另一方是人") || !strings.Contains(call.User, "（@了我）") {
 					t.Fatalf("the DM or owner-mention identity was lost:\n%s", call.User)
 				}
-				for _, rule := range []string{"较早的回复不能证明本次新消息已解决", "[Image: ...] 只是未读取的图片占位"} {
+				for _, rule := range []string{"较早的回复不能证明同一事项后来出现的新请求已解决", "[Image: ...] 只是未读取的图片占位"} {
 					if !strings.Contains(call.System, rule) {
 						t.Fatalf("the triage criteria lost %q:\n%s", rule, call.System)
 					}

@@ -2664,3 +2664,7 @@ keep an original attachment and a live triage readback as separate acceptance ev
 Keep the newest-preview field in the triage input paths, including the no-write triage preview. The generic
 item builder also feeds drafts, task judging and handling conversations: adding triage labels there changes all
 those inputs. Compare those callers' rendered input bytes, not just triage's golden output.
+
+The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
+requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
+and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
