@@ -95,26 +95,44 @@ internal fun <T> drawerSpec(style: AppStyle, reduceMotion: Boolean): FiniteAnima
     else -> tween(Motions.of(style).standard)
 }
 
-/** The sidebar stays behind a full-size page that moves aside; opening it never changes navigation. */
+/**
+ * The sidebar stays behind a full-size page that moves aside; opening it never changes navigation.
+ * On a phone, [dragEnabled] lets the page follow a finger the way `DrawerPan` does
+ * (`apple/Persona/Views/Assistant/AssistantSidebar.swift`). [onOpen] runs when that drag settles open.
+ */
 @Composable
 fun JShellDrawer(
     opened: Boolean,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    dragEnabled: Boolean = false,
+    onOpen: () -> Unit = {},
     drawer: @Composable () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    val progress by animateFloatAsState(if (opened) 1f else 0f,
-        drawerSpec(), label = "home-drawer")
+    val drag = rememberPhoneDrawerDrag(opened, onOpen, onDismiss, dragEnabled)
+    val progress = drag.progress
     val palette = PersonaTheme.palette
     val density = LocalDensity.current
     val shape = RoundedCornerShape(HomeTokens.drawerPageRadius)
     val close = stringResource(R.string.designsystem_close)
-    BoxWithConstraints(modifier.fillMaxSize().background(sidebarBackground())) {
+    // Hairline fades with progress (`DrawerPageMotion`, AssistantSidebar.swift:421). At rest it is the same line as before.
+    val hairline = DrawerDrag.hairlineAlpha(progress, palette.line.alpha)
+    val edge = if (hairline == null) Modifier else Modifier.border(
+        Tokens.Space.Standard.xxs / 2,
+        if (progress >= 1f) palette.line else palette.line.copy(alpha = hairline),
+        shape,
+    )
+    // Gesture modifier stays inside the background so it does not sit in the layer that casts the page shadow.
+    BoxWithConstraints(modifier.fillMaxSize().background(sidebarBackground()).then(drag.modifier)) {
         val drawerWidth = (maxWidth * HomeTokens.drawerFraction).coerceAtMost(HomeTokens.drawerMaximum)
+        drag.widthPx = with(density) { drawerWidth.toPx() }
+        // The sidebar rises as the page slides off it (`AssistantSidebar.swift:69`, `Theme.Motion.drawerLift`).
+        val lift = DrawerDrag.liftPx(progress, with(density) { Tokens.Space.s.toPx() })
+        val sidebarLift = if (lift == 0f) Modifier else Modifier.graphicsLayer { translationY = lift }
         HardwareShortcutHost(Modifier.fillMaxSize()) {
             if (opened || progress > 0f) {
-                Box(Modifier.width(drawerWidth).fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
+                Box(Modifier.width(drawerWidth).fillMaxHeight().then(sidebarLift).statusBarsPadding().navigationBarsPadding()) {
                     androidx.compose.runtime.CompositionLocalProvider(LocalHomeDrawer provides (PersonaTheme.style == AppStyle.Glass)) { drawer() }
                 }
             }
@@ -125,7 +143,7 @@ fun JShellDrawer(
                 shadowElevation = with(density) { HomeTokens.drawerShadow.toPx() } * progress
                 ambientShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
                 spotShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
-            }.then(if (progress > 0f) Modifier.border(Tokens.Space.Standard.xxs / 2, palette.line, shape) else Modifier)) {
+            }.then(edge)) {
                 // A closed drawer must not override a descendant overlay's focus restriction.
                 Box(Modifier.fillMaxSize().then(if (opened)
                     Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)) { content() }
