@@ -148,6 +148,12 @@ func (n *Node) typeStart(ctx context.Context, launch host.Launcher, created *hos
 // typeStartMode is typeStart with closeOnError controlling only its own failure cleanup. Work agents keep the terminal
 // on every error because launch.Run cannot prove an accepted command did not run; other starts retain closeNewTab.
 func (n *Node) typeStartMode(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, closeOnError bool, shells ...string) (*typedStart, error) {
+	if err := windowsPaneShellError(shells...); err != nil {
+		if closeOnError {
+			n.closeNewTab(ctx, launch, created, ws)
+		}
+		return nil, err
+	}
 	useStartFile := n.typesStartFile(launch, shells...)
 	t := &typedStart{launch: launch, created: created, line: cmd}
 	bash := ""

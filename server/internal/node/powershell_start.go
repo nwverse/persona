@@ -1,18 +1,83 @@
 package node
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // windowsPowerShellPane identifies a pane that reads PowerShell while its Agent start file is read by Git Bash.
-// The Windows platform files map powershell.exe and pwsh.exe to this value; other platforms never produce it.
-const windowsPowerShellPane = "windows-powershell"
+// windowsCmdPane identifies cmd.exe, which cannot read either the POSIX line or the PowerShell handoff.
+// The Windows platform files produce these values; other platforms never produce them.
+const (
+	windowsPowerShellPane = "windows-powershell"
+	windowsCmdPane        = "windows-cmd"
+)
 
-// windowsPowerShellProgram reports whether a reported shell program is Windows PowerShell or PowerShell 7.
-// It uses slash normalization rather than filepath.Base so the same pure check runs in tests on every OS.
-func windowsPowerShellProgram(shell string) bool {
+// windowsShellName normalizes a Windows shell program without depending on the test machine's path semantics.
+func windowsShellName(shell string) string {
 	shell = strings.ReplaceAll(shell, `\`, "/")
 	shell = shell[strings.LastIndex(shell, "/")+1:]
-	shell = strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(shell), "-"), ".exe")
+	return strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(shell), "-"), ".exe")
+}
+
+// windowsPowerShellProgram reports whether a reported shell program is Windows PowerShell or PowerShell 7.
+func windowsPowerShellProgram(shell string) bool {
+	shell = windowsShellName(shell)
 	return shell == "powershell" || shell == "pwsh"
+}
+
+// windowsShellProgram is shellProgram for Windows names, including cmd.exe. The last foreground program must pass it
+// before its answer can replace config. Other programs fall through to config rather than being guessed as shells.
+func windowsShellProgram(shell string) bool {
+	name := windowsShellName(shell)
+	return name == "cmd" || shells[name]
+}
+
+// windowsPaneShellKind canonicalizes known Windows shells so the existing takesAssign and start-line choices see the
+// same shell name on every OS. Unknown programs keep their original value and retain main's direct-command behavior.
+func windowsPaneShellKind(shell string) string {
+	name := windowsShellName(shell)
+	switch {
+	case name == "powershell" || name == "pwsh":
+		return windowsPowerShellPane
+	case name == "cmd":
+		return windowsCmdPane
+	case shells[name]:
+		return name
+	default:
+		return shell
+	}
+}
+
+// windowsForegroundUsable says whether the foreground answer can select the pane shell: its innermost/last program is
+// a shell the node knows. An error or empty answer reaches this as nil and therefore falls through to config.
+func windowsForegroundUsable(foreground []string) bool {
+	return len(foreground) > 0 && windowsShellProgram(foreground[len(foreground)-1])
+}
+
+// windowsPaneShellDecision is the pure Windows source order: host report, usable foreground, herdr config, then
+// PowerShell (herdr's default). The Windows integration supplies config only for classic herdr and only when needed.
+func windowsPaneShellDecision(hostShell string, foreground []string, configShell string) []string {
+	if hostShell != "" {
+		return []string{windowsPaneShellKind(hostShell)}
+	}
+	if windowsForegroundUsable(foreground) {
+		// Only the innermost process receives the typed line. Keeping an ancestor PowerShell in this new-pane
+		// answer would also make takesAssign reject the whole stack and lose the start file's environment prefix.
+		return []string{windowsPaneShellKind(foreground[len(foreground)-1])}
+	}
+	if configShell != "" {
+		return []string{windowsPaneShellKind(configShell)}
+	}
+	return []string{windowsPowerShellPane}
+}
+
+// windowsPaneShellError refuses cmd.exe before a start file or pane input can be produced.
+func windowsPaneShellError(shells ...string) error {
+	if len(shells) > 0 && shells[len(shells)-1] == windowsCmdPane {
+		return errors.New("the pane shell cmd.exe cannot start an Agent; PowerShell or Git Bash is required")
+	}
+	return nil
 }
 
 // powerShellPane reports whether the foreground pane shell reads PowerShell and therefore needs a PowerShell outer

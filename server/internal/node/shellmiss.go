@@ -312,11 +312,20 @@ var (
 	powerShellParseError = lazyre.New(`^(?:ParserError:|.*:\s*ParserError:|.*\bUnexpected token\b)`)
 )
 
-// mayBeRejected: the screen has a word of a shell's parse error or ends on a continuation prompt.
+// mayBeRejected: the screen has a word of a POSIX shell's parse error or ends on a continuation prompt.
 func mayBeRejected(screen string) bool {
 	return strings.Contains(screen, "parse error") || strings.Contains(screen, "syntax error") ||
-		strings.Contains(screen, "quotes are not balanced") || strings.Contains(screen, "ParserError") ||
-		strings.Contains(screen, "Unexpected token") || shellContinuation.MatchString(lastLine(screen))
+		strings.Contains(screen, "quotes are not balanced") || shellContinuation.MatchString(lastLine(screen))
+}
+
+// mayBeRejected adds PowerShell's words only for a start that actually typed the PowerShell handoff. In particular,
+// JavaScript's ordinary "Unexpected token" output cannot cause an extra full-screen read for a POSIX start.
+func (p *startProbe) mayBeRejected(screen string) bool {
+	if mayBeRejected(screen) {
+		return true
+	}
+	return p != nil && p.firstWord == "&" &&
+		(strings.Contains(screen, "ParserError") || strings.Contains(screen, "Unexpected token"))
 }
 
 // rejectedLine is the line of screen saying the shell did not take the start's typed line as it was: a parse error

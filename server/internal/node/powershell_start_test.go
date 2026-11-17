@@ -148,6 +148,86 @@ func TestWindowsPowerShellProgram(t *testing.T) {
 	}
 }
 
+func TestWindowsPaneShellDecision(t *testing.T) {
+	bash := `C:\Program Files\Git\bin\bash.exe`
+	for _, tc := range []struct {
+		name       string
+		host       string
+		foreground []string
+		config     string
+		want       []string
+	}{
+		{"host PowerShell wins", "POWERSHELL.EXE", []string{bash}, "cmd.exe", []string{windowsPowerShellPane}},
+		{"host Bash wins", bash, []string{"pwsh.exe"}, "cmd.exe", []string{"bash"}},
+		{"foreground PowerShell wins over config", "", []string{`C:\Program Files\PowerShell\7\pwsh.exe`}, bash, []string{windowsPowerShellPane}},
+		{"foreground innermost Bash wins over config", "", []string{"powershell.exe", bash}, "cmd.exe", []string{"bash"}},
+		{"foreground cmd", "", []string{"powershell.exe", `C:\Windows\System32\CMD.EXE`}, bash, []string{windowsCmdPane}},
+		{"foreground error falls through to config", "", nil, bash, []string{"bash"}},
+		{"empty foreground falls through to config", "", []string{}, bash, []string{"bash"}},
+		{"unknown foreground falls through to config", "", []string{"powershell.exe", "node.exe"}, bash, []string{"bash"}},
+		{"config cmd", "", nil, `C:\Windows\System32\cmd.exe`, []string{windowsCmdPane}},
+		{"unknown config keeps direct behavior", "", nil, "unknown-program.exe", []string{"unknown-program.exe"}},
+		{"PowerShell default", "", nil, "", []string{windowsPowerShellPane}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := windowsPaneShellDecision(tc.host, tc.foreground, tc.config); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("decision = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWindowsPaneShellDecisionGitBashNames(t *testing.T) {
+	for _, shell := range []string{
+		"bash", "BASH.EXE", "-bash.exe",
+		`C:\Program Files\Git\bin\bash.exe`,
+		`C:/Program Files/Git/BIN/BaSh.ExE`,
+	} {
+		if got := windowsPaneShellDecision("", nil, shell); !reflect.DeepEqual(got, []string{"bash"}) {
+			t.Errorf("%q: decision = %q, want bash", shell, got)
+		}
+	}
+}
+
+// origin/main with an unreported Windows pane typed cmd directly without an environment prefix. With a reported bash
+// it used agentCommand plus startScript/startLine: this config result must reproduce those exact bytes, not the
+// PowerShell handoff and not a newly invented Bash line. Both literals are goldens from origin/main's old code path.
+func TestWindowsConfigGitBashUsesMainReportedBashBytes(t *testing.T) {
+	n, _ := testNode(t)
+	n.dir = "/tmp/node dir"
+	const cmd = "claude --session-id 0e000000-0000-4000-8000-0000000000aa"
+	const path = `/tmp/node dir/agent start.sh`
+	const anchor = "session id"
+	const mainTyped = `. '/tmp/node dir/agent start.sh' && true 'session id'`
+	const mainFile = "command rm -f -- '/tmp/node dir/agent start.sh'\n" +
+		"unset PERSONA_ASSISTANT JARVIS_ASSISTANT PERSONA_ASSISTANT_BIN JARVIS_ASSISTANT_BIN " +
+		"PERSONA_SESSION_ID JARVIS_SESSION_ID PERSONA_SPACE JARVIS_SPACE PERSONA_GUEST JARVIS_GUEST " +
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW ENABLE_TOOL_SEARCH CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH " +
+		"CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET " +
+		"CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_EFFORT CLAUDE_PID CLAUDE_PLUGIN_DATA && " +
+		"PERSONA_HOME='/tmp/node dir' claude --session-id 0e000000-0000-4000-8000-0000000000aa\n"
+	shells := windowsPaneShellDecision("", nil, `C:\Program Files\Git\bin\BASH.EXE`)
+	if unreported := n.agentCommand(cmd, shellQuote, ""); unreported != cmd {
+		t.Fatalf("main's unreported direct command changed: %q", unreported)
+	}
+	reportedBashFile := startScript(path, n.agentCommand(cmd, shellQuote, "bash"))
+	if reportedBashFile != mainFile {
+		t.Fatalf("origin/main reported-bash golden no longer matches the old path:\n%q\nwant:\n%q", reportedBashFile, mainFile)
+	}
+	if got := startScript(path, n.agentStartCommand(cmd, shellQuote, shells...)); got != mainFile {
+		t.Fatalf("configured Git Bash start file:\n%q\nwant origin/main reported-bash bytes:\n%q", got, mainFile)
+	}
+	if !n.typesStartFile(&herdrHost{}, shells...) {
+		t.Fatal("configured Git Bash did not select main's reported-bash start file")
+	}
+	if got := startLine(path, anchor, "bash"); got != mainTyped {
+		t.Fatalf("origin/main reported-bash typed golden changed: %q", got)
+	}
+	if got := startLineChoice(cmd, path, anchor, powerShellTestBash, true, shells...); got != mainTyped {
+		t.Fatalf("typed = %q, want origin/main reported-bash %q", got, mainTyped)
+	}
+}
+
 func TestPowerShellPaneUsesTheForegroundShell(t *testing.T) {
 	bash := `C:\Program Files\Git\bin\bash.exe`
 	for _, tc := range []struct {
@@ -320,7 +400,7 @@ func TestPowerShellStartParseErrorIsRetyped(t *testing.T) {
 			"\n     | The string is missing the terminator: '.\n     + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString\n", "ParserError:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if !mayBeRejected(tc.screen) {
+			if !probe.mayBeRejected(tc.screen) {
 				t.Fatal("the parser error did not trigger a full-screen check")
 			}
 			if got := probe.rejectedLine(tc.screen); got != tc.want {
@@ -330,6 +410,26 @@ func TestPowerShellStartParseErrorIsRetyped(t *testing.T) {
 	}
 	if got := probe.rejectedLine("ParserError:\nPS> " + line); got != "" {
 		t.Fatalf("an error before the typed line was accepted: %q", got)
+	}
+}
+
+func TestPowerShellParseTriggerIsLimitedToPowerShellStarts(t *testing.T) {
+	for _, screen := range []string{"SyntaxError: Unexpected token }", "ParserError: ordinary agent output"} {
+		if mayBeRejected(screen) {
+			t.Fatalf("main's POSIX predicate changed for %q", screen)
+		}
+		probe := &startProbe{anchor: startID}
+		probe.typed(&typedStart{line: `. '/tmp/agent start.sh' && true '` + startID + `'`})
+		if probe.mayBeRejected(screen) {
+			t.Fatalf("a POSIX start would make an extra full-screen read for %q", screen)
+		}
+		probe.typed(&typedStart{line: powerShellStartLine(powerShellTestBash, `C:\start.sh`, startID)})
+		if !probe.mayBeRejected(screen) {
+			t.Fatalf("a PowerShell start did not recognize its parser error %q", screen)
+		}
+	}
+	if !mayBeRejected("zsh: parse error near `done'") {
+		t.Fatal("the existing POSIX parse-error predicate was lost")
 	}
 }
 
@@ -384,5 +484,33 @@ func TestTypeStartPowerShellMissingGitBash(t *testing.T) {
 	}
 	if calls := f.trace("pane.send_input"); len(calls) != 0 {
 		t.Fatalf("typed without Git Bash: %v", calls)
+	}
+}
+
+func TestTypeStartWindowsCmdIsRefusedBeforeFileOrInput(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		shells []string
+	}{
+		{"host", windowsPaneShellDecision("cmd.exe", nil, "")},
+		{"foreground", windowsPaneShellDecision("", []string{"powershell.exe", "cmd.exe"}, "")},
+		{"config", windowsPaneShellDecision("", nil, `C:\Windows\System32\cmd.exe`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, f, _ := herdrNode(t)
+			n.dir = t.TempDir()
+			created := &host.Created{Pane: host.PaneRef{Kind: host.Herdr, ID: "w1:p2"}, SlotID: "w1:t2", SpaceID: "w1"}
+			typed, err := n.typeStartMode(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), created, "w1", startID, "claude", false, tc.shells...)
+			const want = "the pane shell cmd.exe cannot start an Agent; PowerShell or Git Bash is required"
+			if err == nil || err.Error() != want || typed != nil {
+				t.Fatalf("typed = %#v, err = %v, want %q", typed, err, want)
+			}
+			if left, _ := filepath.Glob(filepath.Join(n.dir, startScriptPrefix+"*")); len(left) != 0 {
+				t.Fatalf("cmd.exe created a start file: %v", left)
+			}
+			if calls := f.trace("pane.send_input"); len(calls) != 0 {
+				t.Fatalf("cmd.exe received pane input: %v", calls)
+			}
+		})
 	}
 }
