@@ -174,6 +174,9 @@ const (
 // HandoffApprover is set by the hub on a card's answer from a device that may approve a hand-off card; Human on a new
 // conversation a person's own app opens.
 type HTTPRequest struct {
+	// OwnerAnswer is the hub's verified full-device provenance for a relayed card answer.
+	// It never comes from HTTP headers or the resolution body.
+	OwnerAnswer     bool                       `json:"owner_answer,omitempty"`
 	Caller          *devicewire.Caller         `json:"caller,omitempty"`
 	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
 	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
