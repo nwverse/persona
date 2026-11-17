@@ -1,0 +1,26 @@
+{
+  "kind": "pure lexical Windows path fixture on Linux, not native Windows",
+  "goVersion": "go version go1.27.3 linux/amd64",
+  "inputsSHA256": {
+    "src/internal/filepathlite/path.go": "dd1a0138328d6353d089d6ba8e04905d9e951bedfef1b85913c64de2ca2fd223",
+    "src/internal/filepathlite/path_windows.go": "71db3a5186f770fb41318666a2fafa4aa36bdcea28bdd8147a18db6dcfd4113f",
+    "src/path/filepath/path.go": "4c293f799c5b0ca60d54b747881f439dc6bec7caff4fa8d2a9569ba9be720b4e",
+    "src/path/filepath/path_windows.go": "96c1af1caace59a146241f5a48a700a142f2e5520f932fb2fc6376ce5a94ed81",
+    "server/internal/workspacenaming/naming.go": "b0b294ffd1fdc1a8e292c5630d53fbd8b4dae18c37ab57fbdf7e6150d41db611",
+    "server/internal/workspacenaming/naming_windows_test.go": "77e4ff054b7ff1709229a472904eee1cb407465cd317a69838347073392580b6"
+  },
+  "resolverChange": "filepath import only",
+  "testChange": "filename only, to execute the Windows table in the fixture",
+  "pathFunctionChanges": [
+    "stringslite -> strings",
+    "filepathlite.VolumeNameLen -> same copied volumeNameLen",
+    "os.IsPathSeparator -> same copied Windows IsPathSeparator",
+    "bytealg.CountString -> strings.Count with a one-byte separator"
+  ],
+  "excluded": [
+    "Windows kernel and filesystem",
+    "Node authorization and RPC",
+    "Git",
+    "OS path permissions and symlinks"
+  ]
+}

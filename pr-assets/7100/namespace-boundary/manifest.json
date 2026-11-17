@@ -1,0 +1,84 @@
+{
+  "sourceCommit": "19ff4ef7fe883e6a9320d41381cac5f7a6e22371",
+  "sourceTree": "4652579d7acd7fcb75d32c5d25e6d935c6c28f4d",
+  "webTree": "84639028522b91f1e100c148bdc4a74758555328",
+  "serverTree": "12a14ff72c539f6716dc86e96d437650b3a2ac42",
+  "capture": "Production Vite preview with isolated real Manager/PostgreSQL, synthetic Node and unrelated routes",
+  "viewports": [
+    {
+      "width": 1440,
+      "height": 1200
+    },
+    {
+      "width": 390,
+      "height": 1200,
+      "isMobile": true,
+      "hasTouch": true
+    }
+  ],
+  "largeText": "Application --text-scale:2 on the 390px view. Recovered full-editor crops use a 6000px-high viewport to paint content-visibility rows. Not browser/OS zoom.",
+  "images": [
+    {
+      "file": "chunk-failed-dark-1440.png",
+      "sha256": "8f9fe9b330b099bbd330d80b0d81490691fe4aeb8c9f1609c416744f412852ca",
+      "bytes": 43598
+    },
+    {
+      "file": "chunk-failed-dark-390-large.png",
+      "sha256": "9d38c47488bec52b4b30bed953532d0acef7f915ccacbfc18e70a82a8ea27636",
+      "bytes": 101817
+    },
+    {
+      "file": "chunk-failed-dark-390.png",
+      "sha256": "71e491756f0eb9fabb3f3ccac6016b2c79053c14ee82a3e099f58d8d758d7e7f",
+      "bytes": 41302
+    },
+    {
+      "file": "chunk-failed-light-1440.png",
+      "sha256": "d9c8164258a6f7dd9ae4116f4d8c7fe9652d60d9d84347ef213916581321b623",
+      "bytes": 42741
+    },
+    {
+      "file": "chunk-failed-light-390-large.png",
+      "sha256": "c7d2aded823711d2f1aad07f2b1e196f7574deb6b4f56d9733197cad600347f8",
+      "bytes": 100113
+    },
+    {
+      "file": "chunk-failed-light-390.png",
+      "sha256": "5767b66c66ec302193ce0ef8b6ac4aef7c973dce40969775661df486d7df41f3",
+      "bytes": 40216
+    },
+    {
+      "file": "chunk-recovered-dark-1440.png",
+      "sha256": "35e083e4d50d9ce7002480696137aa20e62aaef7a35baaf2e896b110d94abbb1",
+      "bytes": 80946
+    },
+    {
+      "file": "chunk-recovered-dark-390-large.png",
+      "sha256": "51c238ac716121ab7b72a860f5baaabdc292c4e6dbae2f3d833ed2aa62c79f33",
+      "bytes": 192258
+    },
+    {
+      "file": "chunk-recovered-dark-390.png",
+      "sha256": "95a1808a4d167d9dba2baa6514a261369c375202062f2c08fd5da73503525a8f",
+      "bytes": 79758
+    },
+    {
+      "file": "chunk-recovered-light-1440.png",
+      "sha256": "eb2eabd0854d322fbbd5f71e7e5fa2cf37bc96da37aac2c4f9de5774f4c3795f",
+      "bytes": 79969
+    },
+    {
+      "file": "chunk-recovered-light-390-large.png",
+      "sha256": "5ae0a7c2dc63722ea192157c9fb0bda1bd81c4320e9baac6d75a9144109907c1",
+      "bytes": 189584
+    },
+    {
+      "file": "chunk-recovered-light-390.png",
+      "sha256": "b021a2399116b037bcdf3f3429670ec829b69bb4a7acc3ad5e12ec007bed02f8",
+      "bytes": 78562
+    }
+  ],
+  "independentApproval": false,
+  "humanApproval": false
+}

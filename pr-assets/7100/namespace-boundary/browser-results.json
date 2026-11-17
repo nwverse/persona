@@ -1,0 +1,38 @@
+[
+  {
+    "scheme": "light",
+    "width": 1440,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-ChVDO5L8.js"
+    ],
+    "pageErrors": []
+  },
+  {
+    "scheme": "light",
+    "width": 390,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-ChVDO5L8.js"
+    ],
+    "pageErrors": []
+  },
+  {
+    "scheme": "dark",
+    "width": 1440,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-ChVDO5L8.js"
+    ],
+    "pageErrors": []
+  },
+  {
+    "scheme": "dark",
+    "width": 390,
+    "imports": 2,
+    "failedURLs": [
+      "/assets/WorkspaceNaming-ChVDO5L8.js"
+    ],
+    "pageErrors": []
+  }
+]
