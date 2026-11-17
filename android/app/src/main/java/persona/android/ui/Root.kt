@@ -930,11 +930,19 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                     val foldSidebarColumn: (() -> Unit)? =
                                         if (showsSidebarColumnFoldButton(regular, columnsOver)) ({ setSidebarColumnBeside(false) }) else null
                                     // One sidebar owner outside the entry stack survives root → Inbox → detail → Back.
+                                    // Assistant history drags (`AssistantView.swift:149`). A pushed page, including Inbox, keeps the edge
+                                    // for Back (`SplitColumnControl.swift:137`, `:160-169`). Settings is a sheet and has no column drag.
                                     AssistantPaneFrame(regular, policy.keepSharedSidebar,
                                         shown = if (columnsOver) sidebarOverlayShown.value else sidebarColumnShown.value,
                                         modifier = if (shown) Modifier else Modifier.unplaced(),
                                         sidebar = { sharedSidebar("shared-sidebar-column", foldSidebarColumn) }, hinges = paneHinges,
-                                        overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false }, content = display)
+                                        overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false },
+                                        drags = true, detailAtRoot = stacks.getValue(tab).size <= 1,
+                                        onDragSettle = { value ->
+                                            if (currentColumnsOver.value) sidebarOverlayShown.value = value
+                                            else setSidebarColumnBeside(value)
+                                        },
+                                        content = display)
                                 } else display()
                             }
                         }

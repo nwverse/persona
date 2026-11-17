@@ -127,7 +127,7 @@ function HubUpdates() {
       toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setSavingAuto(false); }
   };
-  const setSource = async (source: "release" | "web-dev") => {
+  const setSource = async (source: "release" | "beta" | "web-dev") => {
     setSavingSource(true);
     try { apply(await setHubUpdateSettings({ source })); }
     catch (e) { toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error"); }
@@ -188,13 +188,15 @@ function HubUpdates() {
           <Row label={t("settings-hubsettings.source")} stackOnNarrow>
             <select aria-label={t("settings-hubsettings.source")} className={settingsInputClass}
               value={status.source ?? "release"} disabled={working || checking || starting || savingSource || savingAuto}
-              onChange={(e) => void setSource(e.target.value as "release" | "web-dev")}>
+              onChange={(e) => void setSource(e.target.value as "release" | "beta" | "web-dev")}>
               <option value="release">{t("lib-hub-update.channel_release")}</option>
+              <option value="beta">{t("settings-hubsettings.beta_channel")}</option>
               <option value="web-dev" disabled={!status.development.configured}>{t("settings-hubsettings.web_dev")}</option>
             </select>
           </Row>
           {!status.development.configured && <SettingsHint>{t("settings-hubsettings.dev_setup")}</SettingsHint>}
         </>}
+        {status.source === "beta" && <SettingsHint>{t("settings-hubsettings.beta_scope")}</SettingsHint>}
         {status.source === "web-dev" && <>
           <SettingsHint>{t("settings-hubsettings.dev_scope")}</SettingsHint>
           <Row label={t("settings-hubsettings.branch")} wrapValue>{status.development?.branch}</Row>
