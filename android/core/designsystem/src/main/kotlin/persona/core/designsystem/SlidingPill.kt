@@ -64,6 +64,7 @@ internal fun GlassSlidingPill(
     count: Int,
     color: Color,
     modifier: Modifier = Modifier,
+    segmentModifier: (Int) -> Modifier = { Modifier },
     segment: @Composable (Int) -> Unit,
 ) {
     val reduce = PersonaTheme.reduceMotion
@@ -103,7 +104,9 @@ internal fun GlassSlidingPill(
                         .testTag("sliding-pill").semantics { hideFromAccessibility() },
                 )
             }
-            repeat(count) { index -> Box { segment(index) } }
+            // [segmentModifier] goes on the box this layout places, so a modifier that reads the segment's place in the
+            // row (`revealWhenSelected`) sees where it sits, not 0 inside its own box.
+            repeat(count) { index -> Box(segmentModifier(index)) { segment(index) } }
         },
     ) { measurables, constraints ->
         // Read here, not in composition: a tap then invalidates measure, not the whole control.

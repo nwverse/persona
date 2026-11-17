@@ -60,7 +60,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -1405,9 +1405,9 @@ if os.environ.get("MOCK_MANUAL_HERDR"):
         sess("studio", "a2917000-0000-4000-8000-000000000002", "整理下载文件夹", "/Users/me/Downloads", "done", "idle",
              "downloads", 7, "tidy", 1, 25, "按类型分好了。", started_by_persona=False),
     ]
-# MOCK_WORK=1: stopped agents the hub triaged (docs/assistant/agent-work.md): one done with its conclusion, one waiting for a
-# deploy the hub will wake it after, one cut off by a 503 the hub retries, one waiting for the user's decision on a card;
-# Settings › Session triage reads and writes TRIAGE.
+# MOCK_WORK=1: stopped agents the hub triaged (docs/assistant/agent-work.md): one done with its conclusion that nobody has
+# looked at yet (Just finished, #9751), one waiting for a deploy the hub will wake it after, one cut off by a 503 the hub
+# retries, one waiting for the user's decision on a card; Settings › Session triage reads and writes TRIAGE.
 TRIAGE = {"enabled": bool(os.environ.get("MOCK_WORK")), "auto_continue": bool(os.environ.get("MOCK_WORK")),
           "wake": bool(os.environ.get("MOCK_WORK")), "decide": bool(os.environ.get("MOCK_WORK"))}
 if os.environ.get("MOCK_WORK"):
@@ -1416,7 +1416,8 @@ if os.environ.get("MOCK_WORK"):
     SESSIONS += [
         sess("server", "a9000000-0000-4000-8000-000000000001", "登录页崩溃", "/home/me/code/app", "done", "idle", "app", 7, "fix", 1, 4,
              "修好了，PR 已合并，测试全过。还有一个小的样式问题，要我顺便改吗？",
-             work={"phase": "done", "line": "已合并 PR #12，测试全过", "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/12"}]}),
+             work={"phase": "done", "line": "已合并 PR #12，测试全过", "just_finished": True,
+                   "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/12"}]}),
         sess("server", "a9000000-0000-4000-8000-000000000002", "线上回归", "/home/me/code/app", "done", "idle", "app", 7, "e2e", 2, 6,
              "已经触发部署，部署完我再跑线上测试。",
              work={"phase": "blocked", "on": "external", "line": "等部署跑完再跑线上测试", "wait": "部署跑完", "then": "跑线上测试",
@@ -1999,6 +2000,8 @@ if os.environ.get("MOCK_TAB_PANES"):
             elif _s["session_id"] == PANES_REVIEW:
                 _s.update(last_text="有两处会吞掉错误，先跑一遍现有的测试确认。", pending_interactions=1)
 ORIG_STATE = {s["session_id"]: (s["state"], s["status"]) for s in SESSIONS}
+# Just finished rows (#9751) as they started, so /mock/reset brings back a mark a seen took off
+ORIG_JUST_FINISHED = {s["session_id"] for s in SESSIONS if (s.get("work") or {}).get("just_finished")}
 SEEN = []  # session ids marked seen (GET /mock/seen)
 SESSION_CLOSE = {"fail": False, "attempts": [], "closed": [], "interactions": []}
 # GET /mock/send-fail?on=1: sends to sessions fail (502) until ?on=0, as MOCK_SEND_FAIL=1 makes them for the whole run.
@@ -2016,6 +2019,11 @@ def mark_seen(sid):
     for s in SESSIONS + ASSISTANT:
         if s["session_id"] == sid and s["state"] == "unread":
             s.update(state="idle", status="idle", seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            changed = s["machine_id"]
+        elif s["session_id"] == sid and (s.get("work") or {}).get("just_finished"):
+            # Just finished (#9751): the hub drops the mark once the turn is seen
+            s.update(work={k: v for k, v in s["work"].items() if k != "just_finished"},
+                     seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             changed = s["machine_id"]
     # The hub pushes the machine's list when a session's state changes: that is how the app knows a seen sent over the
     # socket landed (SeenOutbox, #1588). Without it the app sends every one again over HTTP 5 s later (#2061).
@@ -18694,6 +18702,11 @@ def paged_sessions(query):
     # exclude_pane_source=<origin>
     waiting = query.get("waiting", [""])[0]
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
+    # sessions_just_finished (#9751): just_finished=0|1, the seen rows whose done turn nobody looked at, or the others
+    just = query.get("just_finished", [""])[0]
+
+    def just_finished(s):
+        return state_of(s) == "idle" and bool((s.get("work") or {}).get("just_finished"))
 
     def matching(rows):
         rows = [s for s in rows if (not agents_only or agent_row(s))
@@ -18706,6 +18719,7 @@ def paged_sessions(query):
                 and (not spaces or [s["machine_id"], s.get("space_id") or s.get("workspace_id", "")] in spaces)
                 and (not todo or (s.get("todo") or {}).get("id", "") == ("" if todo == "none" else todo))
                 and (not waiting or bool(s.get("background_waiting")) == (waiting in ("1", "true")))
+                and (not just or just_finished(s) == (just in ("1", "true")))
                 and (not origin or pane_origin(s) == origin) and (not not_origin or pane_origin(s) != not_origin)
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
         rows.sort(key=LIST_TUPLE)
@@ -18721,6 +18735,9 @@ def paged_sessions(query):
         waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
         if waits:
             counts["background_waiting"] = waits
+        finished = sum(1 for s in rows if just_finished(s))
+        if finished:
+            counts["just_finished"] = finished
         for s in rows:
             if roots and not s.get("assistant") and state_of(s) != "offline":
                 active = counts["active_agents_by_machine"]
@@ -26243,6 +26260,8 @@ class H(BaseHTTPRequestHandler):
             for x in SESSIONS:
                 if x["session_id"] in ORIG_STATE:
                     x["state"], x["status"] = ORIG_STATE[x["session_id"]]
+                if x["session_id"] in ORIG_JUST_FINISHED and x.get("work"):
+                    x["work"] = {**x["work"], "just_finished": True}
                 activity = ORIG_ACTIVITY.get((x["machine_id"], x["session_id"]))
                 if activity:
                     x.update(activity)
@@ -31165,6 +31184,73 @@ if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
     for _name in ("claude-aster", "claude-max", "claude-desktop"):
         LAUNCHER_MODELS[_name] = dict(LAUNCHER_MODELS["claude"])
 
+# MOCK_MODEL_FAMILIES=1: realistic long model lists from several model families (Claude, GPT, Gemini, GLM, DeepSeek) across
+# claude-max, codex, a mixed-vendor gateway, work-claude and Antigravity, to screenshot the web model panel with.
+if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_FAMILIES") == "1":
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "claude-max", "model": "opus", "agent": "claude", "source": "persona"},
+        {"name": "codex", "model": "gpt-6.1-sol", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+        {"name": "aster", "display_name": "本机网关 aster", "model": "opus", "agent": "claude", "source": "persona"},
+        {"name": "work-claude", "model": "sonnet", "agent": "claude", "source": "persona"},
+        {"name": "agy", "model": "默认", "agent": "agy", "agent_type": "agy", "source": "persona"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "claude-max"
+    _GW_EFFORTS = ["low", "medium", "high"]
+    _CODEX_EFFORTS = ["low", "medium", "high", "xhigh"]
+
+    def _claude_row(mid, name, desc, resolved=None, default=False, efforts=_CLAUDE_EFFORTS):
+        row = {"id": mid, "name": name, "description": desc}
+        if resolved: row["resolved"] = resolved
+        if default: row["default"] = True
+        if efforts: row["efforts"] = efforts
+        return row
+
+    _opus_desc, _fable_desc, _sonnet_desc = "Best for everyday, complex tasks", "Most capable for your hardest and longest-running tasks", "Efficient for routine tasks"
+    LAUNCHER_MODELS["claude-max"] = {"agent": "claude", "models": [
+        _claude_row("default", "Default (recommended)", "Opus 5.5 · Best for everyday, complex tasks", "claude-opus-5-5", True),
+        _claude_row("opus", "Opus 5.5", "For complex work and everyday tasks", "claude-opus-5-5"),
+        _claude_row("fable", "Fable 5.2", "For your toughest challenges", "claude-fable-5-2"),
+        _claude_row("sonnet", "Sonnet 5.5", "Most efficient for simpler tasks", "claude-sonnet-5-5"),
+        _claude_row("haiku", "Haiku 5.5", "Fastest for quick answers", "claude-haiku-5-5", efforts=None),
+        _claude_row("claude-fable-5-1", "Fable 5.1", _fable_desc),
+        _claude_row("claude-haiku-4-5-20251001", "Haiku 4.5", "Fastest for quick answers", efforts=None),
+        _claude_row("claude-sonnet-5", "Sonnet 5", _sonnet_desc),
+        _claude_row("claude-opus-5", "Opus 5", _opus_desc),
+        _claude_row("claude-fable-5", "Fable 5", _fable_desc),
+        _claude_row("claude-opus-4-8", "Opus 4.8", _opus_desc),
+        _claude_row("claude-opus-4-7", "Opus 4.7", _opus_desc),
+        _claude_row("claude-opus-4-6", "Opus 4.6", _opus_desc),
+        _claude_row("claude-sonnet-4-6", "Sonnet 4.6", _sonnet_desc),
+    ]}
+    _codex_rows = [("gpt-6.1-sol", "gpt-6.1-sol", "Latest frontier model for coding"),
+                   ("gpt-6-astra", "gpt-6-astra", "Strongest reasoning for long agentic work"),
+                   ("gpt-6.1-terra", "GPT-6.1 Terra", "Balanced for everyday coding"),
+                   ("gpt-6-sol", "gpt-6-sol", "Frontier model for coding"),
+                   ("gpt-6-luna", "gpt-6-luna", "Fast and light for quick edits"),
+                   ("gpt-5.6-sol", "gpt-5.6-sol", "Previous frontier model for coding"),
+                   ("gpt-5.6-terra", "gpt-5.6-terra", "Previous balanced model"),
+                   ("gpt-5.6-luna", "gpt-5.6-luna", "Previous fast and light model")]
+    LAUNCHER_MODELS["codex"] = {"agent": "codex", "models": [
+        dict({"id": i, "name": n, "description": d, "efforts": _CODEX_EFFORTS, "default_effort": "medium"}, **({"default": True} if i == "gpt-6.1-sol" else {}))
+        for i, n, d in _codex_rows]}
+    LAUNCHER_MODELS["aster"] = {"agent": "claude", "models": [
+        _claude_row("default", "Default (recommended)", "Use the default model (currently claude-opus-5-5)", "claude-opus-5-5", True, _GW_EFFORTS),
+        _claude_row("opus", "Opus 5.5", "Opus 5.5 · Best for everyday, complex tasks", "claude-opus-5-5", efforts=_GW_EFFORTS),
+        _claude_row("sonnet", "Sonnet 5.5", "Sonnet 5.5 · Fast and capable", "claude-sonnet-5-5", efforts=_GW_EFFORTS),
+    ] + [_claude_row(i, i, "From gateway", efforts=None if i.startswith(("gemini", "glm", "deepseek")) else _GW_EFFORTS)
+         for i in ("gemini-3.8-pro", "gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.5-pro", "gemini-3.5-flash",
+                   "gemini-3-pro-preview", "gemini-2.5-flash", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "claude-opus-4-8",
+                   "glm-5.3", "deepseek-v4")]}
+    LAUNCHER_MODELS["work-claude"] = {"agent": "claude", "models": [
+        _claude_row("default", "Default (recommended)", "Use the default model (currently claude-sonnet-5-5)", "claude-sonnet-5-5", True),
+        _claude_row("sonnet", "Sonnet 5.5", "Sonnet 5.5 · Fast and capable", "claude-sonnet-5-5"),
+        _claude_row("haiku", "Haiku 5.5", "Haiku 5.5 · Fastest for quick answers", "claude-haiku-5-5", efforts=None),
+        _claude_row("claude-sonnet-5", "Sonnet 5", _sonnet_desc),
+        _claude_row("claude-sonnet-4-6", "Sonnet 4.6", _sonnet_desc),
+        _claude_row("gemini-3.8-flash", "gemini-3.8-flash", "From gateway", efforts=None),
+    ]}
+    LAUNCHER_MODELS["agy"] = {"agent": "agy", "models": [{"id": "默认", "name": "默认", "default": True}]}
+
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
@@ -31254,6 +31340,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
+MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

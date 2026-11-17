@@ -62,10 +62,10 @@ func runRelease(args []string) error {
 		if err != nil {
 			return err
 		}
+		m.Channel = *channel
 		if err := m.ValidateChannel(*channel); err != nil {
 			return err
 		}
-		m.Channel = *channel
 		// What it describes has to be the build it was told: binaries from an earlier run with another build number
 		// would make every hub refuse the release after downloading it (#4522).
 		if err := update.VerifyRelease(context.Background(), *dir, m); err != nil {

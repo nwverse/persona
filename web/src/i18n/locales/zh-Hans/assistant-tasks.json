@@ -172,7 +172,6 @@
   "agent_stopped": "已停",
   "todo_chip": "待办：{state}",
   "todo_waiting_merge": "等合并",
-  "tray_just_finished": "刚做完待看",
   "start_cause_connection_lost": "和这台电脑的连接断了",
   "start_cause_offline": "这台电脑现在离线",
   "start_cause_timed_out": "启动太久，超时了",

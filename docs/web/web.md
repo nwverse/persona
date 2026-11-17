@@ -459,7 +459,8 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     A worktree disclosure folds its contents; its title opens the first direct Agent, including a pinned one, or selects an empty workspace. Selecting a workspace from another navigation surface reveals its ancestors without opening its own contents. Selection and fold identity survive rename and never carry into another credential or manager. The **N children** chip separately folds descendants; its status counts summarize direct child subtrees with Agents. Main checkouts keep their home marker and sort first.
     When discovery is unsupported, the existing session-only projection remains available. Host-reported `worktree`, `repo_root` and `branch` determine Git placement. A tree is labelled with its branch, else its folder (the main checkout: the repository's); when the host place names its sessions carry (`slot_name` without a `slot_id`: a Paseo workspace's title) agree on one, a linked tree takes that name instead, with the branch kept in its tooltip and its key still its path (#4497). The main checkout and Orca's trees keep their names. Trees are ordered by the name they show, then by their key (two workspaces can have one title). Older Orca sessions teach exact `<project id>::<worktree path>` identities and same-project parent edges; other sources may join known paths on complete directory segments, except below `.worktrees/`, `.claude/worktrees/` and `.herdr/worktrees/`. Without verified placement, the existing path inference supplies repo/worktree grouping. This fallback cannot recover empty catalog entries or cross-project parent relationships.
   - **By project** keeps the original herdr order (machine → workspace → tab); quiet spaces go into **Idle Spaces**. Spaces with a loop, background work or running subagents are never folded away.
-  - **By status** matches iOS `AgentListOrder`: needs you → done, not seen → awaiting your reply → working → waiting to wake → muted → seen; only non-empty groups are shown, and seen is folded by default.
+  - **By status** matches iOS `AgentListOrder`: needs you → done, not seen → awaiting your reply → working → waiting in the background → just finished → waiting to wake → muted → seen; only non-empty groups are shown, and seen is folded by default.
+    **Just finished** (#9751, `justFinished` in `lib/agent-groups.ts`): a turn the hub's triage found done before anybody looked, for three hours (`work.just_finished`, `../protocol/agent-states.md` "Just finished"); it is not quiet, so its space stays out of **Idle Spaces** and the idle folds; its row draws a plain unread-green dot, says "Just finished" and keeps the ✓ conclusion line; opening it or Mark all as seen takes it out at once (`lib/seen-outbox.ts`). The paged list by status draws the same section on a hub with `sessions_just_finished` (`state=idle&just_finished=1`, open by default, Seen's number without it, `lib/session-groups.ts`); in the other paged groupings its rows sort by time, so they stay near the top, with the same mark.
     Mutes come from the hub's `/mutes`; needs-you items are not demoted by muting, and ordinary seen items still go under seen. Agents with notifications turned on individually inside a project do not count as muted.
     Within a group, items are sorted by time descending, ties by session ID; working ones by `state_since` (falling back to `updated_at`), so they do not move with every line of output.
     Rows in status groups add project context, and the machine name when there are several machines.
@@ -2077,6 +2078,20 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   are listed, then **Show all N models** (显示全部 N 个; N 件をすべて表示), which opens that provider's view. A row whose name
   is cut short shows the whole model ID as its second line (monospace, wrapping, two lines at most); on a touch screen,
   which has no tooltips, every row whose name is not its ID shows the ID there instead of the provider's name.
+- **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
+  runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
+  order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
+  thinking levels and release channels such as `-medium` or `-preview` are not tiers). The family is read from the
+  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
+  (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
+  families. Vendors come in the order the list first names them, other families by first mention. Within a family the
+  newest version leads (every row of it, a 1M-context one too) and says **Latest** (最新; 最新) when older ones exist; the
+  older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
+  opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
+  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
+  has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
+  per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
+  buried the newest of each family (the user's ask, 2026-11-17).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
@@ -2170,7 +2185,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   and a lazy-loaded status strip above the composer names the actual and configured launchers and opens the existing
   **New main chat…** dialog (#4662). The Main chat settings editor shows the same explanation from its provider draft.
   A same-kind default, an unloaded launcher list, an unknown default or a conversation pick shows no strip.
-- **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
+- **Tests**: `lib/model-families.test.ts` (families from IDs, order, folding, what never folds, the newest under a
+  search), `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
   send refusals are the switch's), `lib/assistant-panel.test.ts` (a Persona chat's setup and where it comes from, its pill,
@@ -2183,7 +2199,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   (the footer and context row), `ChatView.awaiting.test.tsx` (a refused switch keeps the words in the box), `ChatView.chrome-renders.test.tsx` (the
   pill on both composers),
   `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the mock's `MOCK_MODEL_PANEL_USAGE=1`
-  scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
+  scenario supplies synthetic weekly windows without reading a real account; `MOCK_MODEL_PICK=1 MOCK_MODEL_FAMILIES=1` gives a Persona chat long lists of several families (a Claude account with
+  every pinned version, Codex's GPT lines, a gateway mixing Claude, GPT, Gemini and others); `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
   the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own;
   its `gpt-5.5-codex` catalog row advertises Fast for the new-chat checks, while `gpt-5.5` is the negative control; a

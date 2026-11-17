@@ -80,6 +80,40 @@ class InboxHistoryLinksTest {
         assertEquals(InboxDestination.Failed, resolve(InboxItemRoute("history"), LookupInbox(null, IOException("offline"))))
     }
 
+    /** #9053: the item a link opens moves the Inbox list to where it is, listed, read by id, or a chat's current item. */
+    @Test fun theItemALinkOpensLandsTheList() = runTest {
+        val done = InboxRecord(InboxItem("history", kind = "dm", title = "Historical event", doneAt = "2026-11-01T10:00:00Z"),
+            feedId = "room", source = "lark")
+        val collapsed = InboxRecord(InboxItem("note", kind = "dm", title = "A notice", tier = "noise"), feedId = "notices", source = "lark")
+        val landing = persona.feature.inbox.InboxLanding()
+        inboxDestinationWithLookup(InboxItemRoute("history"), emptyList(), true, InboxItemPages(), LookupInbox(done), found = landing::land)
+        assertEquals(persona.core.domain.inbox.InboxBar.Landing("done", false), landing.take())
+        inboxDestinationWithLookup(InboxItemRoute("note"), listOf(collapsed), true, InboxItemPages(), LookupInbox(null), found = landing::land)
+        assertEquals(persona.core.domain.inbox.InboxBar.Landing("all", true), landing.take())
+        inboxDestinationWithLookup(LarkChatRoute("notices"), listOf(collapsed), true, InboxItemPages(), LookupInbox(null), found = landing::land)
+        assertEquals(persona.core.domain.inbox.InboxBar.Landing("all", true), landing.take())
+        // Nothing found, nothing moves.
+        inboxDestinationWithLookup(InboxItemRoute("gone"), emptyList(), true, InboxItemPages(), LookupInbox(null), found = landing::land)
+        assertNull(landing.take())
+    }
+
+    /**
+     * #9053: a stack that let go of its Inbox list (the drawer, a link home) drops the landing nobody took, so a list
+     * entered later opens on Needs you; a stack still holding the list under the item keeps it for Back. (Putting a
+     * choice back when a page opened beside the list closes: InboxSectionBarTest.)
+     */
+    @Test fun aLandingNobodyTookIsDropped() {
+        val done = InboxRecord(InboxItem("history", kind = "dm", title = "Historical event", doneAt = "2026-11-01T10:00:00Z"),
+            feedId = "room", source = "lark")
+        val landings = persona.core.navigation.AppTab.entries.associateWith { persona.feature.inbox.InboxLanding().apply { land(done) } }
+        settleLandings(mapOf(
+            persona.core.navigation.AppTab.Persona to listOf(persona.core.navigation.AssistantRoute),
+            persona.core.navigation.AppTab.Agents to listOf(persona.core.navigation.AgentsRoute, persona.core.navigation.InboxRoute, InboxItemRoute("history")),
+        ), landings)
+        assertNull(landings.getValue(persona.core.navigation.AppTab.Persona).pending)
+        assertEquals(persona.core.domain.inbox.InboxBar.Landing("done", false), landings.getValue(persona.core.navigation.AppTab.Agents).pending)
+    }
+
     @Test fun loadingWaitsAndAChatLinkSkipsTheItemLookup() = runTest {
         val inbox = LookupInbox(null, IOException("must not be called"))
         assertNull(resolve(InboxItemRoute("history"), inbox, loaded = false))
