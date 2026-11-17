@@ -663,24 +663,50 @@ func (s *Service) taskJudging(todo string, n int) {
 // look that could not finish (the node did not answer, the judgment did not land) is tried again on the next tick and
 // then ever later while the row stays as it is (turnRetryIn). A usage limit that is waited out is not looked at until
 // the wait is over (its turn goes on then), nor an agent whose computer is not connected. What a manager before this
-// one left untold is told from the ledger alone.
+// one left untold is told from the ledger alone. A recorded event's recipient is recovered before the newest peer,
+// independently of whether that peer is still working.
 func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session) {
 	agents = currentTaskAgents(agents, supersededAgents(t, agents))
 	probe := make([]proto.Session, len(agents))
 	var last proto.Session
 	now := time.Now()
+	waiting := false
 	for i, c := range agents {
 		if probe[i] = c; c.Status == proto.StatusUnknown {
 			probe[i].Status = proto.StatusIdle // the transcript says whether it stopped
 		}
 		if limitTakenUp(c, now) {
-			return // its CLI or the manager goes on after the reset (usage_limit.go): no end to take up until then
+			waiting = true // another Agent's wait must not hide a recorded event recipient
 		}
 		if last.SessionID == "" || c.UpdatedAt.After(last.UpdatedAt) {
 			last = c
 		}
 	}
-	if !taskAgentsSettled(t, probe) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	if !s.turnsLocked(ctx) {
+		b.mu.Unlock()
+		return
+	}
+	pendingRecipient := false
+recipients:
+	for i, c := range agents {
+		ref := SessionRef{MachineID: c.MachineID, SessionID: c.SessionID}
+		retry, retrying := b.retry[t.ID]
+		// A closed row can still need its settlement read retried.
+		if b.closed[ref] == lookOf(c) && (!retrying || retry.look != lookOf(c)) ||
+			!taskAgentSettled(probe[i]) || limitTakenUp(c, now) {
+			continue
+		}
+		for _, e := range b.doc.InboxEvents {
+			if e.Todo == t.ID && e.Machine == c.MachineID && e.Session == c.SessionID {
+				last, pendingRecipient = c, true
+				break recipients
+			}
+		}
+	}
+	b.mu.Unlock()
+	if !pendingRecipient && (waiting || !taskAgentsSettled(t, probe)) {
 		return // one works, waits, or is not listed: its end comes later, by itself or by this look
 	}
 	var conn time.Time
@@ -688,7 +714,6 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		conn = s.devs.ConnectedAt(last.MachineID) // a node that connected again is looked at whatever could not finish before
 	}
 	look := lookOf(last)
-	b := &s.tasks.turns
 	b.mu.Lock()
 	if !s.turnsLocked(ctx) {
 		b.mu.Unlock()
@@ -751,7 +776,7 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 	}()
 }
 
-// recoverTurn reads the transcript of supervised task t's last agent and takes up a closed turn the ledger does not
+// recoverTurn reads the transcript of supervised task t's selected agent and takes up a closed turn the ledger does not
 // have, through settleTurn: the end's own checks first, then the start nobody heard, then the receipt, the judgment
 // and the signal. A turn the ledger has but that is not judged yet is judged (resumeTurn); one it has with no name
 // gets its name (sameUnnamed). looked: the row needs no second look while it stays as it is; false has the sweep try
@@ -786,7 +811,16 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 	if !ok || current.DoneAt != nil || current.Supervision == nil {
 		return true
 	}
+	if s.taskInboxRecipient(ctx, t.ID, last.MachineID, last.SessionID) {
+		if current.AgentAborted(last.MachineID, last.SessionID) || s.meetingTurnNow(last.MachineID, last.SessionID) {
+			return true
+		}
+		if s.endHeld(ctx, last.MachineID, last.SessionID) {
+			return false
+		}
+	}
 	if known && e.of(last, end) {
+		s.taskInboxTurnEnded(ctx, current, last, items, silentTurn(items))
 		if e.settled() {
 			return true
 		}
@@ -813,7 +847,8 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 		s.turnSeen(ctx, t.ID, last, end)
 		return true
 	}
-	switch s.settleTurn(ctx, last.MachineID, last.SessionID, t.ID) {
+	settled := s.settleTurn(ctx, last.MachineID, last.SessionID, t.ID)
+	switch settled {
 	case settleRefused:
 		// Its end is refused as the task stands (cancelled, its agent let go, a meeting's turn), and nothing was
 		// changed for it. Kept as seen: not read again, and not taken up when the task changes later.
@@ -824,7 +859,8 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 	}
 	now, ok := s.turnOf(ctx, t.ID)
 	if !ok || !now.of(last, end) {
-		return false // not taken: an agent works or waits again, the node did not answer, another look is at it
+		// A recipient may settle its event while a peer still works, without closing the task's stretch.
+		return settled == settleTaken && s.taskInboxTurnEnded(ctx, current, last, items, silentTurn(items))
 	}
 	return now.State != turnDone || now.Judged != nil // a judgment that did not land is asked again (resumeTurn)
 }

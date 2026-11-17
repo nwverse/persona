@@ -66,6 +66,21 @@ func (s *Service) recordTaskInboxEvent(ctx context.Context, e taskInboxEvent) (d
 	return duplicate, err
 }
 
+func (s *Service) taskInboxRecipient(ctx context.Context, todo, machine, session string) bool {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsLocked(ctx) {
+		return false
+	}
+	for _, e := range b.doc.InboxEvents {
+		if e.Todo == todo && e.Machine == machine && e.Session == session {
+			return true
+		}
+	}
+	return false
+}
+
 func inboxUnhandledSignal(e taskInboxEvent) superviseSignal {
 	in := e.Inbox
 	in.ToAgent = "unhandled"
@@ -105,6 +120,7 @@ func (s *Service) recoverTaskInboxEvents(ctx context.Context) {
 // taskInboxTurnEnded handles only server-recorded deliveries to this recipient,
 // not a task's unrelated owner input, an old answer, or a user's explicit stop.
 func (s *Service) taskInboxTurnEnded(ctx context.Context, t Todo, last proto.Session, items []proto.Item, silent bool) bool {
+	_, items = splitLastTurn(items)
 	for _, it := range items {
 		if it.Kind == proto.KindNotice && it.Text == userStoppedNotice {
 			return false // an explicit stop neither acknowledges nor retries its event

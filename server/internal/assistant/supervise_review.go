@@ -607,8 +607,19 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 	if len(agents) == 0 {
 		return "", errors.New("the task has no agent")
 	}
+	if event != nil && event.Retried {
+		agents = slices.DeleteFunc(agents, func(c proto.Session) bool {
+			return c.MachineID != event.Machine || c.SessionID != event.Session
+		})
+		if len(agents) == 0 {
+			return "", errors.New("the event's agent is no longer available")
+		}
+	}
 	live, _ := liveTaskAgents(agents)
 	if len(live) == 0 { // stopped agents are read-only (#4754): Persona's follow-ups start nothing (tasks_successor.go)
+		if event != nil && event.Retried {
+			return "", errors.New("the event's agent is stopped and read-only")
+		}
 		return "", errTaskAgentsStopped
 	}
 	c := pickTaskAgent(live)
@@ -625,7 +636,9 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 			return db.ErrTodoCompleted
 		}
 		if event != nil {
-			event.Machine, event.Session = c.MachineID, c.SessionID
+			if !event.Retried {
+				event.Machine, event.Session = c.MachineID, c.SessionID
+			}
 			duplicate, err := s.recordTaskInboxEvent(ctx, *event)
 			if err != nil {
 				return err

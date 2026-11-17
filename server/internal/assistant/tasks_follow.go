@@ -385,7 +385,24 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
 	agents = s.rowsProven(agents) // an unknown status whose transcript showed the turn closed is a stopped agent (task_turns.go)
+	var inboxRecipient proto.Session
+	if s.taskInboxRecipient(ctx, t.ID, machine, sid) {
+		for _, c := range agents {
+			if c.MachineID == machine && c.SessionID == sid {
+				inboxRecipient = c
+				break
+			}
+		}
+	}
 	if !reached || !taskAgentsSettled(t, agents) {
+		// An event belongs to one Agent's turn, not the aggregate task's completion.
+		if taskAgentSettled(inboxRecipient) && !limitTakenUp(inboxRecipient, time.Now()) {
+			items, read := s.lastTurnItems(ctx, machine, sid)
+			if _, closed := turnEndOf(items); read && closed &&
+				s.taskInboxTurnEnded(ctx, t, inboxRecipient, items, silentTurn(items)) {
+				return settleTaken
+			}
+		}
 		return settleLater
 	}
 	agents = currentTaskAgents(agents, supersededAgents(t, agents)) // not an agent it was handed over from (#6483)
@@ -418,6 +435,9 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 			cut = c
 			cut.TurnError, cut.TurnErrorKind = text, kind
 		}
+	}
+	if inboxRecipient.SessionID != "" {
+		last = inboxRecipient // another Agent's newer timestamp cannot choose this event's transcript
 	}
 	var items []proto.Item
 	read := false
