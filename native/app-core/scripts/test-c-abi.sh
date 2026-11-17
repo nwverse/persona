@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Compile an independent C client against the exact release library and check its dynamic C exports (#8560).
+# Compile an independent C client against the exact release library and check its dynamic C exports (#8560, #8912).
+# The client replays the unchanged spec fixtures through every pure C projection: sort's empty_list, answer and
+# display_answer (15 + 9 cases), stream_chunks (21), stream_repair (80 complete objects, #9241),
+# plain_open_fence (5 explicit + 31 source-derived expectations, #9563), turns (57 static
+# cases with the checked-in current-iOS overlay applied by the client), task_index (5 complete expected objects plus
+# the background receipt), viewed_images
+# (ordinary post-overlay and source-derived folded complete objects, #9017), and all 21 recents fixture objects (#9654).
+# Malformed inputs
+# must return empty buffers and a deliberately wrong expectation must be detected, per domain.
 # This is Linux host ABI evidence only, not Swift importer, Apple ABI, NAPI, device or performance evidence.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -11,17 +19,13 @@ NM_BIN=${NM:-nm}
 command -v "$CC_BIN" >/dev/null 2>&1 || { printf 'test-c-abi: FAIL C compiler not found: %s\n' "$CC_BIN" >&2; exit 2; }
 command -v "$NM_BIN" >/dev/null 2>&1 || { printf 'test-c-abi: FAIL nm not found: %s\n' "$NM_BIN" >&2; exit 2; }
 [ -f "$RELEASE" ] || { printf 'test-c-abi: FAIL build the exact release library first: %s\n' "$RELEASE" >&2; exit 2; }
+[ -f "$WORK/tests/c_abi_smoke.c" ] || { printf 'test-c-abi: FAIL missing C client source\n' >&2; exit 2; }
+[ -d "$ROOT/spec/fixtures/lines/ios" ] || { printf 'test-c-abi: FAIL missing fixture corpus: %s\n' "$ROOT/spec/fixtures" >&2; exit 2; }
 mkdir -p "$OUT"
-python3 -I -c 'import json,pathlib,sys
-root=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2])
-doc=json.loads((root/"spec/fixtures/sort/filters.json").read_text())
-case=next(c for c in doc["cases"] if c["name"]=="empty_list")
-(out/"empty-list.json").write_text(json.dumps(case["input"],ensure_ascii=False,separators=(",",":")))
-(out/"expected.json").write_text(json.dumps(case["expected"],ensure_ascii=False,separators=(",",":")))' "$ROOT" "$OUT"
 "$CC_BIN" -std=c11 -Wall -Wextra -Werror -pedantic \
   -I"$WORK/crates/persona-core-ffi/include" "$WORK/tests/c_abi_smoke.c" \
   -L"$WORK/target/release" -Wl,-rpath,"$WORK/target/release" -lpersona_core -o "$OUT/c_abi_smoke"
-"$OUT/c_abi_smoke" "$OUT/empty-list.json" "$OUT/expected.json"
+"$OUT/c_abi_smoke" "$ROOT/spec/fixtures"
 "$NM_BIN" -D --defined-only "$RELEASE" > "$OUT/exports.txt"
 python3 -I -c 'import pathlib,re,sys
 header=pathlib.Path(sys.argv[1]).read_text()

@@ -9,6 +9,7 @@ export class TranscriptModel {
   private reducer: TranscriptReducer = new TranscriptReducer();
   private sync: TranscriptSync = new TranscriptSync(this.reducer);
   private active: boolean = true;
+  private historyReady: boolean = false;
   private fillRunning: boolean = false;
   private refreshing: boolean = false;
   private refreshAgain: boolean = false;
@@ -18,11 +19,11 @@ export class TranscriptModel {
   private readonly repository: HubRepository;
   private readonly local: LocalStore;
   private readonly key: string;
-  private readonly publish: (items: readonly TranscriptItem[], hasMore: boolean) => void;
+  private readonly publish: (items: readonly TranscriptItem[], hasMore: boolean, historyReady: boolean) => void;
   private readonly failure: (error: Error) => void;
 
   constructor(row: ResourceRow, repository: HubRepository, local: LocalStore, key: string,
-    publish: (items: readonly TranscriptItem[], hasMore: boolean) => void, failure: (error: Error) => void) {
+    publish: (items: readonly TranscriptItem[], hasMore: boolean, historyReady: boolean) => void, failure: (error: Error) => void) {
     this.row = row; this.repository = repository; this.local = local; this.key = key; this.publish = publish; this.failure = failure;
   }
   private path(query: string): string {
@@ -59,7 +60,7 @@ export class TranscriptModel {
     try {
       const data = await this.repository.call(this.path('lines=80&fold_work=1&lazy_images=1'));
       if (!this.active) return;
-      await this.drive(this.sync.settle(this.reducer.latest(this.batch(data)))); this.emit();
+      await this.drive(this.sync.settle(this.reducer.latest(this.batch(data)))); this.historyReady = Wire.has(data, 'has_more'); this.emit();
     } catch (error) { if (this.active) this.failure(error as Error); }
     finally {
       this.refreshing = false;
@@ -122,7 +123,7 @@ export class TranscriptModel {
         try {
           const data = await this.repository.call(this.path('before_seq=' + action.beforeSeq + '&lines=80&fold_work=1&lazy_images=1'));
           if (!this.active) return;
-          const batch = this.batch(data); this.sync.older(batch.items, batch.hasMore === true); this.emit();
+          const batch = this.batch(data); this.sync.older(batch.items, batch.hasMore === true); this.historyReady = Wire.has(data, 'has_more'); this.emit();
         } catch (error) { this.sync.finishOlder(); if (error instanceof Error) throw error; throw new Error('failed'); }
       } else if (action.kind === 'fetch_range') {
         try {
@@ -150,7 +151,7 @@ export class TranscriptModel {
 
   private emit(): void {
     if (!this.active) return;
-    this.publish(this.reducer.items, this.reducer.hasMore === true);
+    this.publish(this.reducer.items, this.reducer.hasMore === true, this.historyReady);
     this.local.put('transcript:' + this.key, boundedTranscriptCache(this.reducer.snapshot())).catch((error: Error) => { if (this.active) this.failure(error); });
   }
   close(): void {

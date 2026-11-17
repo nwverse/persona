@@ -122,6 +122,35 @@ test('a non-items frame is Other and a refused page returns only its code and de
   await core.end();
 });
 
+test('production transport rejects shared scalar keys before Other routing (#8995)', {timeout: 60_000}, async () => {
+  // These expected outcomes were hand-derived from current iOS ServerEvent.Envelope in #8955; they are not generated
+  // from the Rust decoder. Full nested Fleet / Item parity remains outside this production scalar gate.
+  const cases = [
+    {body: '{"type":"items","machine_id":"m1","session_id":"s1","rows":"24"}', code: 'wrong_type', detail: 'rows'},
+    {body: '{"type":"inbox","items":{}}', code: 'wrong_type', detail: 'items'},
+    {body: '{"type":"future_event","backlog":"yes"}', code: 'wrong_type', detail: 'backlog'},
+    {body: '{"type":"hello","from_seq":"8"}', code: 'wrong_type', detail: 'from_seq'},
+    {body: '{"type":"inbox","status":7}', code: 'wrong_type', detail: 'status'},
+    // Source-undetermined: mixed rows/history failure must be refused, but no exact Foundation first error is claimed.
+    {body: '{"type":"hello","items":[],"rows":"bad","history":"\\ud83d"}', code: 'malformed_json'},
+    {body: '{"type":"hello","items":[],"args":1e999,"rows":"bad"}', code: 'malformed_json'},
+  ];
+  const core = startCore();
+  for (const fixture of cases) {
+    const decoded = await core.transport(PayloadKind.frame, fixture.body);
+    assert.equal(decoded.error?.code, fixture.code, fixture.body);
+    if (fixture.code === 'malformed_json') {
+      assert.match(decoded.error.detail, /^line [0-9]+ column [0-9]+$/, 'position-only detail, never payload content');
+      assert.ok(!decoded.error.detail.includes('1e999'), 'the raw number is not repeated');
+    } else {
+      assert.equal(decoded.error?.detail, fixture.detail, fixture.body);
+    }
+  }
+  assert.deepEqual(await core.transport(PayloadKind.frame, '{"type":"future_event","unknown":1.5}'),
+    {accepted: true, frame: 'other'});
+  await core.end();
+});
+
 function rawArray(raws) {
   return '[' + raws.join(',') + ']';
 }

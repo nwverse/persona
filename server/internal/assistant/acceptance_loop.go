@@ -42,11 +42,12 @@ func (s *Service) acceptLoop(ctx context.Context) {
 	}
 }
 
-// retryAcceptance posts the card of each ask still waiting for one (acceptCardDue), under the round's key, so a try that
-// landed unseen is not posted twice. The round guards are a reminder's: an ask whose todo is gone or ended without the
-// hub's auto-judge, or that is from before its latest reopen, is dropped, never posted. With the bot off or its reports
-// off no card is due, and past acceptPostWindow none is tried: either way the ask stays card-less (NoCard), still
-// listed. A status that cannot be read, or a send that fails, waits for the next tick.
+// retryAcceptance posts the card of each ask still waiting for one (acceptCardDue, one its supervisor passed included,
+// #9253), under the round's key, so a try that landed unseen is not posted twice. The round guards are a reminder's: an
+// ask whose todo is gone or ended without the hub's auto-judge, that is from before its latest reopen, or whose
+// supervisor's pass no longer stands, is dropped, never posted. With the bot off or its reports off no card is due, and
+// past acceptPostWindow none is tried: either way the ask stays card-less (NoCard), still listed while it waits for the
+// owner. A status that cannot be read, or a send that fails, waits for the next tick.
 func (s *Service) retryAcceptance(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -118,8 +119,8 @@ func (s *Service) retryAcceptance(now time.Time) {
 		var done *acceptAsk
 		if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
 			a.MessageID, a.Messages = mid, append(a.Messages, mid)
-			if !a.AcceptedAt.IsZero() {
-				c := *a // passed while the card went out: it says so too
+			if cp.AcceptedAt.IsZero() && !a.AcceptedAt.IsZero() {
+				c := *a // passed while the card went out: it says so too (one passed before says so already)
 				done = &c
 			}
 		} else if a != nil {
@@ -244,8 +245,9 @@ func (s *Service) briefingClock(ctx context.Context) (int, int) {
 	return acceptMorningHour, 0
 }
 
-// snapshotUnaccepted are the deployed tasks still waiting for the user to check them, the oldest eight, and how many
-// there are (the snapshot's "waiting for the user to verify", which the morning briefing brings up).
+// snapshotUnaccepted are the deployed tasks still waiting for the user to check them, oldest first, and how many there
+// are (the snapshot's "waiting for the user to verify", which the morning briefing brings up; scopeSnapshot shows a
+// conversation the oldest snapshotAcceptLimit of its own).
 func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([]prompts.SnapshotAccept, int) {
 	b := &s.accept
 	b.mu.Lock()
@@ -281,10 +283,8 @@ func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([
 			continue
 		}
 		total++
-		if len(out) < 8 { // the oldest eight; the total says how many more
-			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
-				Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc)})
-		}
+		out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
+			Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc), Owner: todoOwner(t)})
 	}
 	if len(ended) > 0 {
 		b.mu.Lock()

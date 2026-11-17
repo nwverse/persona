@@ -1,4 +1,8 @@
+import { IconActions } from '../design/IconActions';
+import { LengthMetrics } from '@kit.ArkUI';
 import { DeviceLook, DeviceLookAvatar } from '../models/DeviceLook';
+import { Colors } from '../design/Colors';
+import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 
@@ -26,7 +30,7 @@ export struct DeviceLookPicker {
   }
   @Builder avatarImage(avatar: DeviceLookAvatar) {
     Image(avatar.isBuiltin() ? $r('app.media.foreground') : avatar.imageUri()).sourceSize({ width: 256, height: 256 })
-      .width(56).height(56).objectFit(ImageFit.Cover).borderRadius(28).accessibilityLevel('no')
+      .width(Tokens.avatarChoice).height(Tokens.avatarChoice).objectFit(ImageFit.Cover).borderRadius(Tokens.avatarChoice / 2).accessibilityLevel('no')
   }
   build() {
     ListItemGroup({ header: (): void => this.avatarHeader() }) {
@@ -36,25 +40,26 @@ export struct DeviceLookPicker {
             this.avatarImage(avatar)
             Text(this.avatarLabel(avatar)).fontSize(Tokens.body).layoutWeight(1)
             Radio({ value: avatar.optionKey(), group: 'persona-device-avatars' }).checked(this.model.avatarKey === avatar.optionKey())
+              .radioStyle({ checkedBackgroundColor: Colors.action, uncheckedBorderColor: Colors.secondary, indicatorColor: Colors.onAction })
               .enabled(this.active && this.model.ready && !this.model.busy).accessibilityText(this.avatarLabel(avatar))
               .onChange((checked: boolean) => { if (checked) this.selectAvatar(avatar.optionKey()); })
-          }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset)
+          }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset })
         }.onClick(() => this.selectAvatar(avatar.optionKey())).id('device-look-avatar-' + avatar.optionKey())
       }, (avatar: DeviceLookAvatar) => avatar.optionKey())
       ListItem() {
-        Row({ space: Tokens.inset }) {
-          Text(tr('device_look_accent_heading')).fontSize(Tokens.body).layoutWeight(1)
-          Select(this.accentChoices()).selected(this.accentIndex()).value(this.accentLabel(this.model.accentId)).enabled(this.active && this.model.ready)
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.inset), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('device_look_accent_heading')).fontSize(Tokens.body).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select(this.accentChoices()).attributeModifier(SelectStyles.inline).selected(this.accentIndex()).value(this.accentLabel(this.model.accentId)).enabled(this.active && this.model.ready)
             .onSelect((index: number) => { const id = this.model.accentOptions()[index]; if (this.active && id) this.onAccentSelected(id); })
-            .id('device-look-accent')
-        }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset)
+            .constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).id('device-look-accent')
+        }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset })
       }
       if (this.model.busy || !this.model.ready) ListItem() { LoadingProgress().width(Tokens.touch).height(Tokens.touch) }
       if (this.model.error) ListItem() {
         Row({ space: Tokens.gap }) {
           Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).layoutWeight(1)
-          Button(tr('retry')).enabled(this.active).onClick(() => this.onRefresh())
-        }.padding(Tokens.inset).width('100%')
+          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).enabled(this.active).onClick(() => this.onRefresh())
+        }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
     }
   }

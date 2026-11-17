@@ -184,6 +184,9 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   node rejects a second process with the same id (`runtime_conflict`). If a runtime changes its id but still runs the same kind of Agent, set `agent` to that Agent (a renamed DSH sets `dsh`), and session rows carry `agent_label`.
 - Session ids are unique on the machine, at most 128 characters, and can't be paths. `launcher` names shouldn't clash with launchers in `~/.zshrc` (on a clash the shell's wins and the runtime's isn't listed, except where every start goes to the runtime as an engine with `caps.same_kind`: there its own wins);
   if two runtimes' launchers clash, only the one that connected first provides it.
+  The ordinary `agy` executable discovered on PATH is a terminal fallback, not an explicit shell override: its connected
+  companion supplies the launcher, models and assistant support. An actual alias, function or helper definition of that
+  name keeps shell precedence. Discovery provenance stays inside the node and adds no wire field (#9181).
 
 ## Minimal example
 
@@ -213,7 +216,8 @@ on watch it receives `transcript: true` and only pushes streaming text (the SDK 
 and node switches over automatically once the file appears. A daemon can't do this (it would read other sessions on the machine).
 
 Three things stay the runtime's word on such a row. Its own `background` list is kept beside the background tasks the transcript shows (#4494): work the runtime started for the
-session outside Claude Code. Its `model` decides the context window when it names a 1M variant (`…[1m]`, #4496): Claude Code writes the id without the suffix into the
+session outside Claude Code. If both sources name the same task ID, it counts once and the transcript keeps its richer local details
+(including its output file, #9320). Its `model` decides the context window when it names a 1M variant (`…[1m]`, #4496): Claude Code writes the id without the suffix into the
 transcript, and a gateway writes an id of its own, so the transcript alone reads as 200K, or as no window. A window the transcript records itself keeps the transcript's word,
 and so does a session answering as another model: after a refusal's fallback, or when the reply came from a Claude model that is not the one the runtime names. And its `title`
 (#8133): where the transcript records no title (a custom or an AI one), node takes a terminal session's title for its first prompt (`title_source: "prompt"`, which Persona's
@@ -289,11 +293,13 @@ workspace catalog lists them with or without sessions in them, its sessions sit 
 worktree as one of them. It implements `createWorkspace` and `prepareWorkspace` (the SDK then declares `caps.workspaces`)
 and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (`docs/protocol/protocol.md` ("Runtime ↔ node")).
 
-- **A row** is `{workspace_id, title?, cwd, kind, branch?, space_id?, space_name?, repo_root?, owned?}`. `workspace_id` is
+- **A row** is `{workspace_id, title?, cwd, kind, branch?, space_id?, space_name?, repo_root?, owned?, pinned_at?}`. `workspace_id` is
   what its sessions name in their own `workspace_id` (the session id rule); `cwd` is absolute; `kind` is `checkout` (a
   repository's main checkout), `worktree` (a linked worktree) or `folder` (no repository; anything else counts as one);
   `space_id` / `space_name` are the space its sessions are grouped in; `repo_root` is the repository's main checkout;
-  `owned` says the runtime made the checkout and removes it with the workspace. At most 2000 rows; invalid ones are dropped.
+  `owned` says the runtime made the checkout and removes it with the workspace. Optional `pinned_at` is the host's native
+  workspace pin time (RFC3339), separate from Persona's session/project pins; absent, cleared or invalid means unpinned.
+  A changed timestamp or an unpin is part of the next full push. At most 2000 rows; invalid ones are dropped.
 - **Only an engine's count**: the node uses the list while the runtime is one of the computer's enabled engines (Paseo) on
   its own socket; a runtime that is connected but not enabled makes, lists and deletes no workspaces. Its rows are then `workspaces.list` rows whose `source` is the runtime id (`project_id` its `space_id`, `is_main`
   true for a checkout, `workspace_kind` `git` or `folder`), and its session rows keep their `workspace_id`. Any other
@@ -355,8 +361,8 @@ To avoid going to the computer and clicking every time, the plugin is split into
 - **Another kind of host: one that reloads by itself (pi)**: pi reads extensions from disk on reload and doesn't cache modules, so it doesn't need the loader layer. The extension is installed from a fixed path in the store,
   `<store>/current/…` (`current` is a symlink to `<hash>`, replaced by rename via `installCurrent`). On an offer it fetches the package, installs it as the new `current`,
   and when idle asks the host to reload (pi uses a command the extension registers itself); the new version's host connects to node with the same process identity (`createRuntime`'s `instance`) and replaces the old one.
-  A long-running standalone process (pi's companion process) exits after installing and is brought back up by launchd / systemd. `selfPackage(import.meta.url, name)` tells a module which package it's running from
-  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Automatic updates").
+  A long-running standalone process (pi's and Antigravity's `companion.mjs`) exits once idle after installing and is brought back up by launchd / systemd (`--no-update` opts out). `selfPackage(import.meta.url, name)` tells a module which package it's running from
+  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Automatic updates") and "Antigravity CLI" below.
 - An implementation module that can be swapped exports `api` (`LOADER_API`, currently 1) and `start(host)`, returning `{stop, busy, fetchPackage}` (the methods of the same name on `createRuntime`).
   `host` holds the loader's `context` (for DSH, `{ctx, config}`) plus the `package` and `onUpdate` to pass to `createRuntime`. To add such a runtime: register its files in both lists,
   and change the entry point the host loads to `createLoader`.
@@ -412,6 +418,11 @@ A runtime that declares `caps.assistant` must:
 4. Give `context` to the model before the user's text and don't show it in the chat (a `<persona-context>` block without attributes; context quoted from the phone has attributes and is shown as usual).
 5. Set its own permissions per `mode` (plan = read-only); changes inside `memory_dir` aren't asked about outside plan mode.
 
+The assistant launcher's entry in `launchers` may also carry `assistant_for`: the name of an Agent launcher on the same computer that runs the same agent with the same
+account but can't run the assistant itself (a Paseo provider; the Grok companion's `--assistant-for grok`, `integrations/grok/README.md`). The person setting the runtime up
+declares it; nothing guesses it from names. `launchers.list` passes it on only for the launcher that runs the assistant, and the main chat's picker then points that
+launcher at this one (`unavailable[].instead`, [model-config.md](../assistant/model-config.md) "A conversation's own model"). Nothing is ever run on one in place of the other.
+
 Model and reasoning effort are up to the runtime (DSH picks them in its Web GUI); Persona's model config doesn't pick a specific model for such launchers. DSH's approach is in `docs/integrations/dsh.md` ("Assistant"),
 end to end in `integrations/dsh/e2e/assistant.mjs`.
 
@@ -423,6 +434,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
@@ -443,10 +455,17 @@ that result. Rejected ACP prompts also publish their failure through the session
 The history token includes the error format so connected clients refresh items cached before this representation.
 
 The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
-start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
+start `node integrations/antigravity/companion.mjs` from the repository root, or install into the runtime package store
+with `node integrations/antigravity/install.mjs` and supervise
+`node ~/.persona/runtime-packages/persona-antigravity-runtime/current/antigravity/companion.mjs` under launchd / systemd.
+When run from that store without `--no-update`, the companion reports `persona-antigravity-runtime` in `runtime.hello`,
+installs the version `personad` carries as the new `current` ("Auto-update (optional)" above), waits for active ACP turns,
+availability probes, rewinds and phone permission cards to finish, then stops `agy acp` and exits so its supervisor restarts
+it on the new code; direct launches outside the store leave self-update off. The companion connects to the node's runtime
 socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
 serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
-with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executable, CLI data directory and node socket.
+with ACP support; `--agy-bin`, `--agy-dir`, `--socket` and `--no-update` override the executable, CLI data directory, node
+socket and automatic updates.
 Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
 five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
 (`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
@@ -498,6 +517,13 @@ and nanosecond modification/change times, bounded to 16 files and 64 MiB of sour
 last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
 
 ### Shared runtime behavior
+
+Antigravity item identities include native creation time and the replacement branch's generation (#9410). Native
+step indices remain pagination sequences, not globally reusable item or tool-call IDs: after rewind a repeated input
+must not inherit the abandoned branch's pending-send binding or reply cache. Retained prefix records and same-step
+completion updates keep their identities. The history scope includes `:step-ids-v2` to discard older numeric-only
+item caches; full-item lookup resolves only the current branch's exact ID. Identity metadata is computed with parsed
+records, kept outside native JSON and reused by list, push, page and full-item reads.
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".

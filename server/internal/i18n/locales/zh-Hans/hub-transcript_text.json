@@ -121,5 +121,18 @@
   "card_progress": "进度",
   "card_of_goal": "{done} {value} / 目标 {goal}",
   "card_over": "超出",
-  "card_other": "其他"
+  "card_other": "其他",
+  "paseo_ui_card": "卡片",
+  "paseo_ui_columns_cut": "显示 {total} 列中的 {shown} 列",
+  "paseo_ui_rows_cut": "显示 {total} 行中的前 {shown} 行",
+  "paseo_ui_series_cut": "显示 {total} 组数据中的 {shown} 组",
+  "paseo_ui_points_cut": "显示 {total} 个点中的前 {shown} 个",
+  "paseo_ui_series": "系列 {n}",
+  "paseo_ui_state_done": "已完成",
+  "paseo_ui_state_doing": "进行中",
+  "paseo_ui_state_todo": "待办",
+  "paseo_ui_state_blocked": "受阻",
+  "paseo_ui_state_skipped": "已跳过",
+  "paseo_ui_reply_with": "可直接回复以下任一项：",
+  "omp_stopped": "这个 omp 会话已停止。现在只能在电脑上接着它（omp --resume），这里还不能给它发消息。"
 }

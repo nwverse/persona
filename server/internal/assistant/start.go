@@ -60,7 +60,7 @@ func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) strin
 	hello := s.hello(ctx)
 	d := prompts.AssistantClaudeMD{Owner: strings.TrimSpace(hello.Owner), Notes: s.notes(ctx), ExtraDirs: s.kbExtraDirs(ctx),
 		KnowledgeDir: s.kb.dir, LarkCLI: larkCLI, Language: answerLanguage(hello.Locale),
-		BackgroundSupervisor: s.backgroundOn(s.settings(ctx))}
+		BackgroundSupervisor: s.backgroundOn(s.settings(ctx)), UrgentCall: s.urgentPrompt(ctx)}
 	devices := s.devices(ctx)
 	if i := slices.IndexFunc(devices, func(d Device) bool { return d.ID == here }); i >= 0 {
 		d.OnHub = devices[i].Kind == "local"
@@ -429,7 +429,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
-		Origin: p.Origin, OriginRef: p.OriginRef})
+		Origin: p.Origin, OriginRef: p.OriginRef, NewSessionID: p.NewSessionID})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
@@ -488,6 +488,11 @@ func (s *Service) loadHandoff(ctx context.Context) mainHandoff {
 		var h mainHandoff
 		if ok, err := st.Setting(ctx, mainHandoffKey, &h); err != nil || !ok {
 			return mainHandoff{}
+		}
+		// A previously prepared handoff can contain verbatim turns. Deleting its
+		// source must not replay them into the next main conversation.
+		if h.From != "" && s.conversationAvailable(ctx, h.MachineID, h.From) != nil {
+			return mainHandoff{Pick: h.Pick}
 		}
 		return h
 	}
@@ -992,6 +997,9 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 // messageParams is SendParams for a message that is the owner's own (owner), or one the manager writes in their
 // place (a channel's "answer again"), which preempts nothing.
 func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (map[string]any, error) {
+	if err := s.conversationAvailable(ctx, p.MachineID, p.SessionID); err != nil {
+		return nil, err
+	}
 	if p.Params == nil {
 		p.Params = map[string]any{}
 	}
@@ -1121,8 +1129,10 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 // …/conversations/{id}/model, model_pick.go), its effort under the message's own: that is the user's choice for the
 // conversation, so it is never replaced; a pick that can't run here refuses the message, saying why in lang.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
+	ctx = withLauncherPurpose(ctx, "assistant")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
@@ -1130,7 +1140,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid) ||
-		s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+		s.startedByTask(sid) || s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
 	// The owner-visible recovery rule (#7824) covers the main conversation and the leader/background supervisors, but
 	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
 	// ones so it can publish and persist the model-recovery marker only for them.
@@ -1187,14 +1197,20 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		}
 	}
 	pickedLauncher := l != ""
+	// The background supervisor runs under its own purpose (which follows Main chat until it is set apart), whoever
+	// writes to it: the hub's relays already do (backgroundModel), so a message typed to it must too.
+	purpose := "assistant"
+	if s.isBackground(ctx, sid) {
+		purpose = purposeSupervise
+	}
 	if pickedLauncher {
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
 		}
-	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
+	} else if err := s.applyModel(ctx, purpose, p); err != nil {
 		return err
 	}
-	_, err := s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
 	return err
 }
 
@@ -1209,6 +1225,14 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 		return err
 	}
 	return s.applyPick(ctx, p, pick)
+}
+
+// startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current
+// conversation (a task's "New chat next time", a deleted task): it follows the setting like the current one, which is
+// what the apps show for every conversation of that origin (#9248).
+func (s *Service) startedByTask(sid string) bool {
+	o, ok := s.conversationOrigins()
+	return ok && o[sid].origin == OriginTask
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

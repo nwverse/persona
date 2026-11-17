@@ -83,6 +83,35 @@ export interface Task {
   run_machine_id?: string;
   run_session_id?: string;
   run_launcher?: string;
+  /** Read-only (#8045): the kinds of task this task's own runs may start without the plan card, each a trust key
+   *  ("machine|folder|read" or "…|edit", as Settings › Assistant's remembered rules). Only the owner adds to it, by
+   *  ticking it on one of its runs' cards; the editor shows it and removes kinds (DELETE …/start-grant), never saves it. */
+  start_grant?: StartGrant | null;
+}
+
+export interface StartGrant {
+  kinds: string[];
+  granted_at?: string;
+}
+
+/** One kind of a start grant, as the editor names it: the computer, the folder (it covers the folders under it), and
+ *  whether the tasks only read. A key whose computer and folder can't be told apart (one of them holds "|") keeps it
+ *  whole as the place, with no computer. */
+export interface GrantKind {
+  key: string;
+  machine: string;
+  folder: string;
+  readonly: boolean;
+}
+
+export function grantKinds(task: Pick<Task, "start_grant">): GrantKind[] {
+  return (task.start_grant?.kinds ?? []).filter((key) => typeof key === "string" && key).map((key) => {
+    const parts = key.split("|");
+    const mode = parts.length > 1 ? parts[parts.length - 1] : "";
+    const readonly = mode === "read";
+    if (parts.length === 3 && (mode === "read" || mode === "edit")) return { key, machine: parts[0], folder: parts[1], readonly };
+    return { key, machine: "", folder: mode === "read" || mode === "edit" ? parts.slice(0, -1).join("|") : key, readonly };
+  });
 }
 
 export interface Run {

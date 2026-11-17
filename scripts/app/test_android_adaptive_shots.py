@@ -2,6 +2,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -28,6 +29,7 @@ class FakeAdb:
         self.ui_failures = 0
         self.png_frames = []
         self.ui_text = ""
+        self.probe_text = ""
         self.window = {
             "widthDp": 600, "heightDp": 480, "widthPx": 1200, "heightPx": 960,
             "densityDpi": 320, "orientation": "landscape", "taskId": 42, "bounds": (0, 0, 1200, 960),
@@ -67,6 +69,8 @@ class FakeAdb:
             return '<hierarchy><node resource-id="field" text="%s" content-desc="" class="EditText" bounds="[0,0][10,10]" focused="true" /></hierarchy>' % self.ui_text
         if arguments[:2] == ("cat", "/proc/uptime"):
             return "100.00 100.00\n"
+        if arguments == ("run-as", APP_ID, "cat", shots.PROBE_PATH):
+            return self.probe_text
         if arguments[:2] == ("run-as", APP_ID) and "cat" in arguments and any(arg.endswith("shell-position.json") for arg in arguments):
             return '{"tab":"Agents","chats":{"Agents":{"machineId":"machine","sessionId":"session"}}}'
         if arguments[:2] == ("run-as", APP_ID) and "shell-position.json" in arguments:
@@ -90,7 +94,85 @@ def make_runner(adb, output, document=None, reset=False):
         return shots.AdaptiveRunner(adb, document or scenario(), output, "light", reset=reset)
 
 
+def composer_probe():
+    return {"fieldVersion": 1, "session": "test-session", "pid": 42, "updatedAtNanos": 100_000_000_000,
+            "pages": {"chat:machine/session": {"updatedAtNanos": 100_000_000_000,
+                                               "composer": {"draftLoaded": True}}}}
+
+
 class AdaptiveShotsTest(unittest.TestCase):
+    def test_embedded_assistant_waits_for_its_live_composer_without_a_root_chat(self):
+        adb = FakeAdb()
+        adb.probe_text = json.dumps(composer_probe())
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(adb, output)
+            runner.read_navigation = mock.Mock(return_value=("Persona", None))
+            runner.wait_ready({"session": "machine/session", "conversationKind": "assistant", "timeout": 0.01})
+            runner.read_navigation.assert_not_called()
+            self.assertIn(["run-as", APP_ID, "cat", shots.PROBE_PATH], adb.commands)
+
+    def test_embedded_assistant_keeps_live_chat_identity_and_draft_guards(self):
+        for failure in ("wrong-chat", "missing-composer", "unloaded", "wrong-pid", "stale", "stale-page"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as output:
+                probe = composer_probe()
+                page = probe["pages"]["chat:machine/session"]
+                if failure == "wrong-chat":
+                    probe["pages"] = {"chat:other/session": page}
+                elif failure == "missing-composer":
+                    del page["composer"]
+                elif failure == "unloaded":
+                    page["composer"]["draftLoaded"] = False
+                elif failure == "wrong-pid":
+                    probe["pid"] = 43
+                elif failure == "stale":
+                    probe["updatedAtNanos"] = 0
+                else:
+                    page["updatedAtNanos"] = 0
+                adb = FakeAdb()
+                adb.probe_text = json.dumps(probe)
+                runner = make_runner(adb, output)
+                runner.read_navigation = mock.Mock(return_value=("Persona", None))
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "composer draft"):
+                    runner.wait_ready({"session": "machine/session", "conversationKind": "assistant", "timeout": 0.01})
+
+    def test_agent_keeps_its_root_chat_gate_before_reading_the_composer(self):
+        for kind in (None, "agent"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                adb.probe_text = json.dumps(composer_probe())
+                runner = make_runner(adb, output)
+                runner.read_navigation = mock.Mock(return_value=("Persona", None))
+                step = {"session": "machine/session", "timeout": 0.01}
+                if kind is not None:
+                    step["conversationKind"] = kind
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "selected session"):
+                    runner.wait_ready(step)
+                runner.read_navigation.assert_called()
+                self.assertNotIn(["run-as", APP_ID, "cat", shots.PROBE_PATH], adb.commands)
+
+    def test_navigation_reads_default_and_explicit_tabs(self):
+        chat = {"machineId": "machine", "sessionId": "session"}
+        cases = [
+            ({}, ("Persona", None)),
+            ({"chats": {"Persona": chat}}, ("Persona/chat", "machine/session")),
+            ({"tab": "Agents", "chats": {"Agents": chat}}, ("Agents/chat", "machine/session")),
+        ]
+        for position, expected in cases:
+            with self.subTest(position=position), tempfile.TemporaryDirectory() as output:
+                runner = make_runner(FakeAdb(), output)
+                runner.shell_ready = mock.Mock(return_value="shell-position.json")
+                runner.adb.shell = mock.Mock(return_value=json.dumps(position))
+                self.assertEqual(expected, runner.read_navigation())
+
+    def test_navigation_rejects_explicit_invalid_tabs(self):
+        for tab in (None, "", False, 1):
+            with self.subTest(tab=tab), tempfile.TemporaryDirectory() as output:
+                runner = make_runner(FakeAdb(), output)
+                runner.shell_ready = mock.Mock(return_value="shell-position.json")
+                runner.adb.shell = mock.Mock(return_value=json.dumps({"tab": tab}))
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "shell position has no route tab"):
+                    runner.read_navigation()
+
     def test_steps_never_restart_and_each_theme_may_clear_once(self):
         document = scenario([{"step": "launch"}, {"step": "open", "tab": "Agents"},
                              {"step": "rotate"}, {"step": "capture", "name": "one", "state": "flat"}])
@@ -156,6 +238,21 @@ class AdaptiveShotsTest(unittest.TestCase):
             shots.parse_persona_task(OTHER_TASK_DUMP, APP_ID)
         with self.assertRaisesRegex(shots.AdaptiveFailure, "resumed"):
             shots.parse_persona_task(TASK_DUMP.replace("topResumedActivity", "otherActivity"), APP_ID)
+
+    def test_current_task_accepts_the_dumpsys_star_prefix(self):
+        dump = """  * Task{abcdef #42 I=com.example.persona.shots/persona.android.MainActivity}
+    mBounds=Rect(0, 0 - 1200, 960)
+    CurrentConfiguration: {1.0 320dpi sw600dp w600dp h480dp}
+    ActivityRecord{fedcba com.example.persona.shots/persona.android.MainActivity t42}
+  * Task{ffffff #43 I=com.example.other}
+    mBounds=Rect(0, 0 - 10, 10)
+  topResumedActivity=ActivityRecord{fedcba com.example.persona.shots/persona.android.MainActivity t42}
+"""
+        task = shots.parse_persona_task(dump, APP_ID)
+        self.assertEqual(42, task.task_id)
+        self.assertEqual((0, 0, 1200, 960), task.bounds)
+        self.assertEqual((600, 600, 480), task.configuration_dp)
+        self.assertNotIn("com.example.other", task.block)
 
     def test_rotation_and_current_display_dimensions_are_real_evidence(self):
         adb = FakeAdb()
@@ -395,6 +492,18 @@ class AdaptiveShotsTest(unittest.TestCase):
             runner.tap({"resource-id": "field", "timeout": 0.1})
             self.assertEqual(2, runner.ui_tree.call_count)
 
+    def test_tap_index_picks_one_of_several_rows_with_the_same_label(self):
+        nodes = shots.parse_ui_nodes(
+            b'<hierarchy><node text="Direct" bounds="[0,0][10,10]" /><node text="Direct" bounds="[0,20][10,30]" /></hierarchy>')
+        with tempfile.TemporaryDirectory() as output:
+            adb = FakeAdb()
+            runner = make_runner(adb, output)
+            runner.ui_tree = mock.Mock(return_value=nodes)
+            runner.tap({"text": "Direct", "index": 1, "timeout": 0.1})
+            self.assertEqual({"type": "tap", "x": 5, "y": 25}, runner.action_log[-1])
+            with self.assertRaises(shots.AdaptiveFailure):
+                runner.tap({"text": "Direct", "timeout": 0.1})
+
     def test_route_override_does_not_require_a_shell_checkpoint(self):
         with tempfile.TemporaryDirectory() as output:
             runner = make_runner(FakeAdb(), output)
@@ -505,6 +614,34 @@ cleanup_shots
             self.assertIn(["wm", "density", "reset"], adb.commands)
             self.assertIn(["emu", "posture", "3"], adb.commands)
 
+    def test_text_preserves_literal_percent_s_after_android_decoding(self):
+        for text in ("%s", "100%sure", "%s%s", "%%s", "%ss", "literal %s and spaces",
+                     " %s  %s ", "'%s'; $(echo unsafe) & `echo unsafe` \\\"",
+                     "hello world", "100% safe", "".join(chr(code) for code in range(32, 127))):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                runner = make_runner(adb, output)
+                runner.text({"text": text})
+                commands = [command for command in adb.commands if command[:2] == ["input", "text"]]
+                arguments = [shlex.split(command[2]) for command in commands]
+                self.assertTrue(all(len(argument) == 1 for argument in arguments))
+                # Android InputShellCommand.sendText decodes %s after the remote shell removes quotes.
+                received = "".join(argument[0].replace("%s", " ") for argument in arguments)
+                self.assertEqual(text, received)
+                if "%s" not in text:
+                    self.assertEqual(1, len(commands))
+                self.assertEqual([{"type": "text", "length": len(text), "ascii": True}],
+                                 [action for action in runner.action_log if action["type"] == "text"])
+
+    def test_text_rejects_invalid_input_before_any_text_command(self):
+        for text in (None, 17, "", "中文", "valid%s\ninvalid", "valid%s\tinvalid", "\x7f"):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                runner = make_runner(adb, output)
+                with self.assertRaises(shots.AdaptiveFailure):
+                    runner.text({"text": text})
+                self.assertFalse(any(command[:2] == ["input", "text"] for command in adb.commands))
+
     def test_scenario_validation_and_ascii_input_boundaries(self):
         document = scenario()
         document["manifestId"] = "r1-adaptive-window"
@@ -512,10 +649,32 @@ cleanup_shots
         invalid = scenario([{"step": "launch", "tab": "Agents"}, {"step": "rotate"}, {"step": "open", "tab": "Agents"}])
         with self.assertRaisesRegex(shots.AdaptiveFailure, "cannot restore"):
             shots.validate_scenario(invalid)
-        self.assertEqual("hello%sworld", shots.ascii_input_argument("hello world"))
+        self.assertEqual(["hello%sworld"], shots.ascii_input_arguments("hello world"))
         for text in ("中文", "line\nfeed", ""):
             with self.subTest(text=text), self.assertRaises(shots.AdaptiveFailure):
-                shots.ascii_input_argument(text)
+                shots.ascii_input_arguments(text)
+
+    def test_stack_navigation_preserves_legacy_scenes_by_default(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.read_stack_probe = mock.Mock(return_value={"route": "inbox/mail", "selectedKey": "mail-item"})
+            self.assertEqual(("Agents/chat", "machine/session"), runner.read_navigation())
+            runner.read_stack_probe.assert_not_called()
+
+    def test_stack_navigation_is_used_only_when_scene_opts_in(self):
+        document = scenario()
+        document["requires"]["stackProbe"] = True
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output, document)
+            runner.read_stack_probe = mock.Mock(return_value={"route": "inbox/mail", "selectedKey": "mail-item"})
+            runner.route_override = "inbox"
+            runner.selected_key_override = "override"
+            self.assertEqual(("inbox/mail", "mail-item"), runner.read_navigation())
+            self.assertIsNone(runner.route_override)
+            self.assertIsNone(runner.selected_key_override)
+        document["requires"]["stackProbe"] = "yes"
+        with self.assertRaisesRegex(shots.AdaptiveFailure, "stackProbe"):
+            shots.validate_scenario(document)
 
 
 if __name__ == "__main__":

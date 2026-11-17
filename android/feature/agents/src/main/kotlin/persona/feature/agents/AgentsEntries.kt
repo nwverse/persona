@@ -51,6 +51,10 @@ interface AgentsDependencies {
     fun tasks(): persona.core.domain.tasks.TasksStore? = null
     fun hubUpdates(): persona.core.contracts.api.HubUpdates? = null
     fun machines(): MachineManagement?
+    fun listAdapter(): persona.core.data.AgentListAdapter = persona.core.data.AgentListAdapters.create()
+    /** The current Agent chat and the id the shell captured as Unread on entry, before its read receipt could arrive. */
+    fun visibleChat(): kotlinx.coroutines.flow.StateFlow<persona.core.contracts.SessionKey?> = kotlinx.coroutines.flow.MutableStateFlow(null)
+    fun heldChat(): kotlinx.coroutines.flow.StateFlow<persona.core.contracts.SessionKey?> = kotlinx.coroutines.flow.MutableStateFlow(null)
 }
 
 /** Supply one immutable pairing scope; close callbacks synchronize navigation and notifications. */
@@ -81,6 +85,8 @@ fun EntryProviderScope<NavKey>.agentsEntries(
     connectionSettingsContent: @Composable () -> Unit = { PlaceholderScreen(stringResource(R.string.agents_connection_settings)) },
     /** Whether a hub lists terminal panes (feature terminal_panes): the list menu then opens "Terminal". */
     terminalPanes: kotlinx.coroutines.flow.Flow<Boolean> = flowOf(false),
+    /** Only the list's picks may replace an overlaid root detail; shared destinations use [navigator]. */
+    listNavigator: Navigator = navigator,
 ) {
     entry<AgentsRoute> {
         val context = LocalContext.current.applicationContext
@@ -104,7 +110,8 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             val model = viewModel(key = "agents:${wiring.scope}:${operations?.operations?.scope.orEmpty()}") {
                 AgentsViewModel(dependencies.sessions(), dependencies.interactions(), dependencies.connection(), dependencies.sender(), dependencies.preferences(), operations, wiring.mainSender,
                     wiring.scope.ifEmpty { operations?.operations?.scope.orEmpty() }, renamer, tasksStore, hubUpdates = dependencies.hubUpdates(), machineManagement = dependencies.machines(),
-                    hubGroups = dependencies.groups(), listContext = kotlinx.coroutines.Dispatchers.Default, archiveService = wiring.archives)
+                    hubGroups = dependencies.groups(), listContext = kotlinx.coroutines.Dispatchers.Default, archiveService = wiring.archives,
+                    listAdapter = dependencies.listAdapter(), visibleChat = dependencies.visibleChat(), heldChat = dependencies.heldChat())
                     .also { it.machine(initialMachine); it.show(assistant) }
             }
             val source = LocalAgentsDraftSource.current
@@ -137,7 +144,7 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             }
             val groups by dependencies.groups().groups.collectAsStateWithLifecycle()
             val panes by terminalPanes.collectAsStateWithLifecycle(false)
-            AgentsScreen(model, navigator, metadata.copy(rows = rows), creationModel, onMachineSelected, groups, panes)
+            AgentsScreen(model, listNavigator, metadata.copy(rows = rows), creationModel, onMachineSelected, groups, panes)
         }
     }
     entry<ConnectionSettingsRoute> { connectionSettingsContent() }

@@ -234,6 +234,8 @@ export interface WorktreeAdded {
   path: string;
   branch: string;
   root: string;
+  /** The workspace a runtime engine made for it (Paseo, #8856); absent for a worktree a terminal host makes. */
+  workspace_id?: string;
 }
 
 /** The branch a new agent's worktree gets, as the node names it: persona/<its name as a slug, 40 at most>, "agent"

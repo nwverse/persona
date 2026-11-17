@@ -9,7 +9,7 @@ import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 // to them, as every other source is: a stopped Agent's row says read and terminal only (#4754). A native row without
 // them (every row from an older node) keeps its existing behavior: it may do everything.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
-  if (!s) return false;
+  if (!s || s.deleted) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
   if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
   if (!s.source_kind && !s.capabilities) return true;
@@ -41,6 +41,14 @@ export function isStoppedAgent(s: Session | undefined): boolean {
  *  policy. A nonempty session id still requires its real session metadata. */
 export function interactionCanAnswer(ix: Pick<Interaction, "session_id">, session: Session | undefined): boolean {
   return ix.session_id === "" || sessionCan(session, "approve");
+}
+
+/** Why this page can't answer a card (#7497), as iOS (#6868) and Android (`approvalBlockedReason`) say it: null when it
+ *  can; "attach" when linking the session live would let it (a Codex thread Persona hasn't joined yet); else "computer",
+ *  an unknown session included. */
+export function answerBlock(ix: Pick<Interaction, "session_id">, session: Session | undefined): "attach" | "computer" | null {
+  if (interactionCanAnswer(ix, session)) return null;
+  return sessionCan(session, "attach") ? "attach" : "computer";
 }
 
 // The node writes some reasons with their own "View only: " in Chinese, which the subtitle adds already (#7803;

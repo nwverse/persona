@@ -31,6 +31,10 @@ MANIFEST = '''N: android=http://schemas.android.com/apk/res/android (line=2)
 
 
 BRIDGE = "persona.core.designsystem.MarkdownRenderer$Bridge"
+LOOKAHEAD = "androidx.compose.ui.node.LookaheadDelegate"
+LOOKAHEAD_IMPL = "androidx.compose.ui.node.InnerNodeCoordinator$LookaheadDelegateImpl"
+BASELINE_OWNER = ("getAlignmentLinesOwner", "()Landroidx/compose/ui/node/AlignmentLinesOwner;")
+BASELINE_CALCULATION = ("calculateAlignmentLine", "(Landroidx/compose/ui/layout/AlignmentLine;)I")
 SSH_ALGORITHMS = ("persona.core.hub.tunnel.TinkX25519", "persona.core.hub.tunnel.TinkEd25519", "com.jcraft.jsch.DH25519",
                   "com.jcraft.jsch.UserAuthPublicKey", "com.jcraft.jsch.jce.AES128GCM")
 
@@ -56,6 +60,8 @@ def kept_release():
         "androidx.core.app.CoreComponentFactory": DexClass("android.app.AppComponentFactory", methods=set(init)),
         "persona.android.MainActivity": DexClass("android.app.Activity", methods=set(init)),
         "androidx.startup.InitializationProvider": DexClass("android.content.ContentProvider", methods=set(init)),
+        LOOKAHEAD: DexClass("java.lang.Object", methods={BASELINE_OWNER}),
+        LOOKAHEAD_IMPL: DexClass("java.lang.Object", methods={BASELINE_CALCULATION}),
         "androidx.work.WorkManagerInitializer": DexClass("java.lang.Object", methods=set(init)),
         BRIDGE: DexClass("java.lang.Object", methods=set(shrink.REQUIRED_MEMBERS[BRIDGE])),
         "persona.core.hub.HubFailure": DexClass(
@@ -97,6 +103,10 @@ class ShrinkGuardTests(unittest.TestCase):
     def test_each_removed_keep_stops_the_release(self):
         manifest = shrink.manifest_classes(MANIFEST)
         cases = {
+            "baseline owner": (lambda c: c[LOOKAHEAD].methods.clear(),
+                               "LookaheadDelegate.getAlignmentLinesOwner()Landroidx/compose/ui/node/AlignmentLinesOwner;: removed"),
+            "baseline calculation": (lambda c: c[LOOKAHEAD_IMPL].methods.clear(),
+                                     "LookaheadDelegateImpl.calculateAlignmentLine(Landroidx/compose/ui/layout/AlignmentLine;)I: removed"),
             "Bridge.done": (lambda c: c[BRIDGE].methods.discard(("done", "(ILjava/lang/String;)V")),
                             f"{BRIDGE}.done(ILjava/lang/String;)V: removed"),
             "hub failure status": (lambda c: c["persona.core.hub.HubFailure"].methods.discard(
@@ -154,7 +164,8 @@ class ShrinkGuardTests(unittest.TestCase):
         rules = [line.strip() for line in (android / "app/proguard-rules.pro").read_text().splitlines()]
         for rule in ("-dontobfuscate", "-keepattributes SourceFile,LineNumberTable",
                      "-keepattributes InnerClasses,EnclosingMethod",
-                     "-keepnames class * extends java.lang.Throwable"):
+                     "-keepnames class * extends java.lang.Throwable",
+                     "-keepnames class persona.core.hub.HttpChatComposerService"):
             self.assertIn(rule, rules)
         # Optimizing saves 13.7 MB: with -dontoptimize the APK is 33.2 MB again (#2840).
         self.assertNotIn("-dontoptimize", rules)

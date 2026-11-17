@@ -33,11 +33,22 @@ val sdk = providers.environmentVariable("ANDROID_HOME")
     })
 val resolvedSdk = requireNotNull(sdk.orNull) { "Set ANDROID_HOME or ANDROID_SDK_ROOT to package the Android core" }
 val ndkVersion = "29.0.14206865"
+// NDK 29 ships darwin-x86_64 on macOS, including Apple silicon, and linux-x86_64 on Linux.
+val hostOs = org.gradle.internal.os.OperatingSystem.current()
+val ndkHostTag = when {
+    hostOs.isMacOsX -> "darwin-x86_64"
+    hostOs.isLinux -> "linux-x86_64"
+    else -> error("Unsupported NDK host OS '${hostOs.name}' (expected macOS or Linux)")
+}
 
 abstract class BuildAndroidCore : Exec() {
     @get:OutputDirectory abstract val jniDirectory: DirectoryProperty
     @get:OutputDirectory abstract val symbolsDirectory: DirectoryProperty
     @get:OutputDirectory abstract val reportsDirectory: DirectoryProperty
+    @get:Input abstract val cargoFeatures: Property<String>
+    @get:Input abstract val cargoTargetDirectory: Property<String>
+    @get:Input abstract val ndkHost: Property<String>
+
 
     override fun exec() {
         val sdk = requireNotNull(System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")) {
@@ -46,16 +57,36 @@ abstract class BuildAndroidCore : Exec() {
         require(File("$sdk/ndk/29.0.14206865/source.properties").isFile) {
             "Install Android NDK 29.0.14206865 before building the shared core"
         }
+        val prebuilt = "$sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/${ndkHost.get()}"
+        require(File(prebuilt).isDirectory) {
+            "NDK 29.0.14206865 prebuilt host tools are missing: $prebuilt"
+        }
+        environment("PERSONA_ANDROID_CARGO_FEATURES", cargoFeatures.get())
+        environment("CARGO_TARGET_DIR", cargoTargetDirectory.get())
+        commandLine("bash", workingDir.resolve("scripts/build-android.sh").absolutePath)
+        args(jniDirectory.get().asFile.absolutePath, symbolsDirectory.get().asFile.absolutePath, reportsDirectory.get().asFile.absolutePath)
         super.exec()
+        if (cargoFeatures.get() == "release-android") {
+            val process = ProcessBuilder(
+                "python3", "-I", workingDir.resolve("scripts/check-android-sort-shadow.py").absolutePath,
+                jniDirectory.get().asFile.absolutePath,
+                "$prebuilt/bin/llvm-readelf",
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            val exit = process.waitFor()
+            output.lineSequence().filter { it.isNotEmpty() }.forEach(logger::lifecycle)
+            check(exit == 0) { "Release sort-shadow native export check failed\n$output" }
+        }
     }
 }
-val buildAndroidCore by tasks.registering(BuildAndroidCore::class) {
-    description = "Builds stripped and symbol-retaining arm64-v8a and x86_64 Rust libraries with the pinned NDK."
+tasks.withType<BuildAndroidCore>().configureEach {
     inputs.files(coreInputs).withPropertyName("rustCore").withPathSensitivity(PathSensitivity.RELATIVE)
+    ndkHost.set(ndkHostTag)
     inputs.property("ndkVersion", ndkVersion)
-    inputs.property("ndkHost", "linux-x86_64")
+    inputs.property("cargoFeatures", cargoFeatures)
+    inputs.property("cargoTargetDirectory", cargoTargetDirectory)
     val ndkRoot = "$resolvedSdk/ndk/$ndkVersion"
-    val llvm = "$ndkRoot/toolchains/llvm/prebuilt/linux-x86_64"
+    val llvm = "$ndkRoot/toolchains/llvm/prebuilt/$ndkHostTag"
     inputs.files(fileTree("$ndkRoot/sysroot") { include("**/*") })
         .withPropertyName("ndkSysroot").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.files(fileTree(llvm) {
@@ -67,18 +98,30 @@ val buildAndroidCore by tasks.registering(BuildAndroidCore::class) {
         fileTree("$rustSysroot/lib/rustlib/x86_64-linux-android/lib") { include("**/*") },
         "$rustSysroot/bin/rustc", "$rustSysroot/bin/cargo")
         .withPropertyName("rustToolchain").withPathSensitivity(PathSensitivity.RELATIVE)
-    outputs.dirs(nativeOutput, nativeReports, nativeSymbols)
-    jniDirectory.set(nativeOutput)
-    symbolsDirectory.set(nativeSymbols)
-    reportsDirectory.set(nativeReports)
-    // Gradle discovers an explicit SDK from ANDROID_HOME/ANDROID_SDK_ROOT or the command-line sdk.dir.
-    // No machine-specific local.properties or global Cargo configuration is read by build-android.sh.
     environment("ANDROID_HOME", resolvedSdk)
     environment("ANDROID_NDK_HOME", "$resolvedSdk/ndk/$ndkVersion")
     workingDir(coreWorkspace)
-    commandLine("bash", coreWorkspace.file("scripts/build-android.sh").asFile.absolutePath,
-        nativeOutput.get().asFile.absolutePath, nativeSymbols.get().asFile.absolutePath, nativeReports.get().asFile.absolutePath)
+    outputs.dirs(jniDirectory, symbolsDirectory, reportsDirectory)
     outputs.cacheIf { true }
+}
+
+val buildAndroidReleaseCore by tasks.registering(BuildAndroidCore::class) {
+    description = "Builds Release native libraries without the DEBUG-only Agents-list sort JNI export."
+    cargoFeatures.set("release-android")
+    cargoTargetDirectory.set(coreWorkspace.file("target/android-release").asFile.absolutePath)
+    jniDirectory.set(layout.buildDirectory.dir("native/releaseJni"))
+    symbolsDirectory.set(layout.buildDirectory.dir("native/releaseSymbols"))
+    reportsDirectory.set(layout.buildDirectory.dir("reports/releaseNative"))
+    // Same reviewed NDK/toolchain inputs as the debug build; only this feature and output directory differ.
+    outputs.cacheIf { true }
+}
+val buildAndroidCore by tasks.registering(BuildAndroidCore::class) {
+    description = "Builds stripped and symbol-retaining arm64-v8a and x86_64 Rust libraries with the pinned NDK."
+    cargoFeatures.set("")
+    cargoTargetDirectory.set(coreWorkspace.file("target/android").asFile.absolutePath)
+    jniDirectory.set(nativeOutput)
+    symbolsDirectory.set(nativeSymbols)
+    reportsDirectory.set(nativeReports)
 }
 
 android {
@@ -171,7 +214,9 @@ androidComponents {
         }
     }
     onVariants { variant ->
-        variant.sources.jniLibs?.addGeneratedSourceDirectory(buildAndroidCore) { it.jniDirectory }
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(
+            if (variant.name == "release") buildAndroidReleaseCore else buildAndroidCore,
+        ) { task -> task.jniDirectory }
         variant.sources.assets?.addGeneratedSourceDirectory(prepareCoreLicenses) { it.outputDirectory }
         if (variant is HasAndroidTest) {
             variant.androidTest?.proguardFiles?.add(layout.projectDirectory.file("proguard-androidTest.pro"))

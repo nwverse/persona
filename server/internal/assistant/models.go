@@ -144,6 +144,8 @@ var modelPurposes = []ModelPurpose{
 	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // New chat: a direction or a quick chat (route.go)
 	{ID: "agent.title", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "todo.title", Group: "group_processing", Kind: "api", Parent: "kb"}, // a task's todo (assistant/todo_titles.go)
+	// A meeting or note named while it records (kb/recording_title.go, #8873): a few short calls a recording.
+	{ID: purposeMeetingTitle, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// Drafting a source subscription's recipe, called by the manager (models.purpose_complete, #2040).
 	{ID: assistantwire.PurposeSubscriptionRecipe, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// Answers to the questions asked in an attended meeting (meeting_ask.go): one call with no tools, from meeting material only.

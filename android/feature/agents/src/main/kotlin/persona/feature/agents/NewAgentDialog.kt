@@ -225,7 +225,8 @@ private fun LazyListScope.newAgentItems(
         }
         newAgentWorkspaceItems(state, editable, model::pickWorkspace)
     }
-    // A branch and a checkout of its own (#4532, iOS NewAgentWorktreeSection), for a folder in a Git repository.
+    // A branch and a checkout of its own (#4532, iOS NewAgentWorktreeSection), for a folder in a Git repository or a
+    // Paseo workspace picked in one (#8856).
     state.repo?.takeIf { state.worktreeOffered }?.let { repo -> item("worktree") {
         val suggested = AgentWorktree.branch(AgentWorktree.nameHint(state.prompt, state.selection.cwd))
         JSectionHeader(stringResource(R.string.agents_worktree_title))

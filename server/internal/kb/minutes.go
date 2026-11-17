@@ -53,6 +53,10 @@ type Minutes struct {
 	// localized dates and show When only without them (minutes from an older hub).
 	Start time.Time `json:"start,omitzero"`
 	End   time.Time `json:"end,omitzero"`
+
+	// modelTitle is the title the model wrote for them (titleLine; "" none), which settles the recording's AITitle
+	// when they are stored (#8873); never in minutes.json.
+	modelTitle string
 }
 
 // MinutesItem is a decision or an open question; At is seconds from the recording's start (a segment's start, or the
@@ -886,7 +890,7 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		return sec, 0, ok
 	}
 	m := &Minutes{Title: cmp.Or(r.Title, calendarTitle(r), plainLine(a.Title), untitledMinutes(r, zone, lang)),
-		When: minutesWhen(r, zone), Language: string(lang)}
+		When: minutesWhen(r, zone), Language: string(lang), modelTitle: titleLine(a.Title)}
 	m.Start, m.End = minutesSpan(r, zone)
 	if r.Calendar != nil && r.Calendar.Location != "" {
 		m.Where = r.Calendar.Location
@@ -1291,6 +1295,10 @@ func (e *Engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, fin
 	}
 	quiet := cur.quietMinutes()
 	cur.MinutesVersion = m.Version
+	if m.modelTitle != "" { // the minutes' title is the recording's from now on, unless someone named it (NameSource)
+		cur.AITitle, cur.AITitleFrom = m.modelTitle, AITitleMinutes
+		cur.Name = e.recordingName(cur)
+	}
 	cur.clearMinutesFailures()
 	if cur.MinutesAsks == r.MinutesAsks { // else asked again meanwhile (the user, a photo): made again at the next round
 		cur.MinutesRev = r.Revision
@@ -1303,6 +1311,10 @@ func (e *Engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, fin
 	drop := final && cur.MinutesAsks == r.MinutesAsks
 	err = st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false)
 	st.notify(KindRecording, cur.ID, "summary")
+	if err == nil && m.modelTitle != "" {
+		st.notify(KindRecording, cur.ID, "metadata")
+		e.index(KindRecording, cur.ID, cur.Name, cur.Tagging, cur.OneLine, cur.StartedAt)
+	}
 	snap := *cur
 	st.recMu.Unlock()
 	if photos {

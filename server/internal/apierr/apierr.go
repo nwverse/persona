@@ -76,6 +76,10 @@ func Body(status int, code string, err error) map[string]any {
 	}
 	body := map[string]any{"error": err.Error(), "code": code}
 	switch code {
+	case "search_changed":
+		body["retryable"] = true
+	case "conversation_deleted", "conversation_protected", "conversation_busy":
+		body["retryable"], body["delivered"] = false, "none"
 	case "invalid_token", "forbidden", "bad_request", "not_found", "method_not_allowed", "gone":
 		body["retryable"] = false
 	case "input_draft", "dialog_open", "prompt_changed":
@@ -134,8 +138,8 @@ func NodeCode(err error) string {
 	return "internal"
 }
 
-// Call writes the error of a call that went to a machine's node (or further): offline is 503, a refusal the node
-// coded is 409 with its details, anything else 502.
+// Call writes the error of a call that went to a machine's node (or further): offline is 503, a session or file the
+// node says is not there (not_found) 404, any other refusal the node coded 409 with its details, anything else 502.
 func Call(w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
 	if errors.Is(err, ErrOffline) {
@@ -144,6 +148,12 @@ func Call(w http.ResponseWriter, err error) {
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code != "" {
 		switch re.Code {
+		case "conversation_deleted":
+			status = http.StatusGone
+		case proto.CodeNotFound: // no such session or file there: the client asked for something that is not (#9551)
+			status = http.StatusNotFound
+		case "conversation_protected":
+			status = http.StatusBadRequest
 		case "internal", "node_unreachable", "timeout":
 			status = http.StatusBadGateway
 		case proto.CodeTerminalNotReady: // the node's new tab would not take the start command; nothing ran
@@ -196,6 +206,13 @@ func CallStatus(w http.ResponseWriter, status int, err error) {
 		if _, hasDetail := body["detail"]; !hasDetail {
 			body["detail"] = re.Message
 		}
+	} else if l := i18n.OfWriter(w); re != nil && code == proto.CodeNotFound && l != "" {
+		// What the node says is not there (#9551): a summary in the request's language, its words (which session,
+		// which file) the detail. Only here: the hub's own 404s keep the words they wrote.
+		if _, hasDetail := body["detail"]; !hasDetail {
+			body["detail"] = re.Message
+		}
+		body["error"] = i18n.T(l, "http-status.not_found")
 	} else if _, explained := codeActions[code]; !explained {
 		localizeFailure(body, status, err, i18n.OfWriter(w))
 	}
@@ -264,6 +281,7 @@ var rpcFailureKeys = map[string]string{
 	"peer_unreachable": "rpc-errors.peer_unreachable",
 	"peer_too_long":    "rpc-errors.peer_too_long",
 	"peer_unconfirmed": "rpc-errors.peer_unconfirmed",
+	"peer_held":        "rpc-errors.peer_held", // a bypass permissions session holds it for approval at the computer
 	"peer_command":     "rpc-errors.peer_command",
 	// a desktop app session nothing runs, which the app did not open in time (node/claudedesktop_open.go)
 	"desktop_open_failed": "rpc-errors.desktop_open_failed",
@@ -284,6 +302,9 @@ var rpcFailureKeys = map[string]string{
 	"agent_stopped":      "rpc-errors.agent_stopped",
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",
 	"stop_not_saved":     "rpc-errors.stop_not_saved",
+	// a message to an omp session the node cannot resume: one not running with no known file, or a stopped one listed
+	// from omp's session files (node/control.go, node/ompcalls.go)
+	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
 	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
 	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)

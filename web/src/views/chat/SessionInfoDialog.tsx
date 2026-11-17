@@ -6,6 +6,7 @@ import { api, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, shortPath } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { effortTitle, listedModeOption, listedModesOf, modeTitle } from "../../lib/session-actions";
+import { formatTokens } from "../../lib/tokens";
 import type { Session } from "../../lib/types";
 import { Button, copyText, cx, Dialog, Loading } from "../../ui/atoms";
 import { t } from "../../i18n";
@@ -33,7 +34,9 @@ interface SessionInfo {
   last_activity?: string;
 }
 
-const count = (n?: number) => (n === undefined ? "" : n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}K` : String(n));
+// Token counts as the Machines page and the apps write them (1.2K, 1.23M: lib/tokens.ts) with a localized unit; "" for a
+// count nobody gave.
+const tokens = (n?: number) => (n === undefined ? "" : t("chat-sessioninfo.tokens", { value: formatTokens(n) }));
 
 // How it runs, how much it used, where it lives; ids and the resume command copy.
 export function SessionInfoDialog({ session, machineName, open, onClose }: { session: Session; machineName: string; open: boolean; onClose: () => void }) {
@@ -59,7 +62,7 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
   const groups: { title: string; rows: [string, string | undefined, boolean?][] }[] = info
     ? [
         { title: t("chat-sessioninfo.group_run"), rows: [[t("chat-sessioninfo.model"), info.model], [t("chat-sessioninfo.launcher"), info.launcher || session.launcher], [t("chat-sessiondialogs.permission_mode"), mode], [t("chat-sessioninfo.effort"), effortTitle(info.effort)], [t("chat-sessioninfo.version"), info.version, true]] },
-        { title: t("chat-sessioninfo.group_usage"), rows: [[t("chat-sessioninfo.context"), count(counted?.context_tokens) && `${count(counted?.context_tokens)} tokens`], [t("chat-sessioninfo.output"), count(counted?.output_tokens) && `${count(counted?.output_tokens)} tokens`], [t("chat-sessioninfo.turns"), counted?.turns !== undefined ? String(counted.turns) : ""], [t("chat-sessioninfo.compaction"), counted?.compactions ? t("chat-sessioninfo.compactions", { count: counted.compactions }) : ""], [t("chat-sessioninfo.started"), info.started_at && ago(info.started_at)], [t("chat-sessioninfo.last_activity"), info.last_activity && ago(info.last_activity)]] },
+        { title: t("chat-sessioninfo.group_usage"), rows: [[t("chat-sessioninfo.context"), counted?.context_tokens ? tokens(counted.context_tokens) : ""], [t("chat-sessioninfo.output"), tokens(counted?.output_tokens)], [t("chat-sessioninfo.turns"), counted?.turns !== undefined ? String(counted.turns) : ""], [t("chat-sessioninfo.compaction"), counted?.compactions ? t("chat-sessioninfo.compactions", { count: counted.compactions }) : ""], [t("chat-sessioninfo.started"), info.started_at && ago(info.started_at)], [t("chat-sessioninfo.last_activity"), info.last_activity && ago(info.last_activity)]] },
         { title: t("chat-sessioninfo.group_location"), rows: [[t("chat-sessioninfo.machine"), machineName], [t("chat-sessiondialogs.folder"), info.cwd ? shortPath(info.cwd) : undefined, true], [t("chat-sessioninfo.branch"), info.git_branch, true], [t("chat-sessioninfo.transcript"), info.transcript_path ? shortPath(info.transcript_path) : undefined, true]] },
       ]
     : [];

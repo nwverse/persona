@@ -40,6 +40,10 @@ type PlanTask struct {
 	Title   string `json:"title"`
 	Prompt  string `json:"prompt"`
 	Machine string `json:"machine"`
+	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
+	InboxItem string `json:"inbox_item,omitempty"`
+	// InboxHandoff is the hub-owned operation validated when the plan was made.
+	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
 	Cwd           string `json:"cwd"`
@@ -71,6 +75,14 @@ type PlanTask struct {
 	// OwnerStarted: the owner tapped Start on the plan's card (POST …/start), as against the hub starting it without
 	// asking; the hub's, never what a tool call or an edit says. What a suggested rule counts (rule_suggest.go, #4929).
 	OwnerStarted bool `json:"owner_started,omitempty"`
+	// Schedule and ScheduleTitle: the scheduled task whose own round planned this (#8045), so its card can offer to let
+	// that schedule start this kind by itself. The hub's: set from the round the hub started, never from a tool call
+	// or an edit.
+	Schedule      string `json:"schedule,omitempty"`
+	ScheduleTitle string `json:"schedule_title,omitempty"`
+	// ScheduleBasis: the schedule's prompt and target when its round planned this (Task.grantBasis): a grant on Start
+	// applies only while they are the same.
+	ScheduleBasis string `json:"schedule_basis,omitempty"`
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
@@ -83,10 +95,11 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal         string   `json:"goal,omitempty"`
-	OutOfBounds  []string `json:"out_of_bounds,omitempty"`
-	Continues    string   `json:"continues,omitempty"`
-	ContinuesWhy string   `json:"continues_why,omitempty"`
+	Goal          string   `json:"goal,omitempty"`
+	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
+	Continues     string   `json:"continues,omitempty"`
+	ContinuesWhy  string   `json:"continues_why,omitempty"`
+	ScopeRevision string   `json:"scope_revision,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
@@ -102,6 +115,11 @@ type PlanTask struct {
 	// this task is a worker of; the hub's, never what a tool call or an edit says.
 	Role   string `json:"role,omitempty"`
 	Parent string `json:"parent,omitempty"`
+	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
+	// (todo_pieces.go), checked when the plan is made and written on the to-do when the task starts; left out, a task on
+	// a to-do (todo_id) keeps that to-do's own. Not what the apps send back with an edit.
+	PartOf string   `json:"part_of,omitempty"`
+	After  []string `json:"after,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
@@ -140,6 +158,9 @@ type PlanTask struct {
 	// repoOf: the machine NUL folder Repo was resolved for, so that admission resolves again only when the folder
 	// that runs is another one.
 	repoOf string
+	// grantSchedule: the owner ticked "let this scheduled task start these" on Start; the kind is added to that
+	// schedule's StartGrant once admission fixed the folder that runs, as rememberKind is (schedule_grant.go).
+	grantSchedule string
 	// rememberKind: the owner ticked "start these directly" on Start; the kind is remembered once the task's
 	// workspace is admitted, from the repository that actually runs (startTaskAgent).
 	rememberKind bool
@@ -266,8 +287,8 @@ type tasksState struct {
 	retrying map[string]*taskStart
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
 	outcomes map[string]time.Time
-	// reusing: the todos a started plan took over (PlanTask.ReuseTodo) whose agent is not linked yet, so that a second
-	// plan cannot take the same todo in that gap (takeTodoForTask).
+	// reusing holds taken-over todos and newly created Inbox tasks until their first Agent is linked or failed.
+	// Another plan cannot take a task while its source binding or first start is still being admitted.
 	reusing map[string]bool
 	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome; the tests wait on them).
 	outcomeRuns sync.WaitGroup
@@ -571,10 +592,24 @@ func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*T
 // planStartsAtOnce: every task only reads, was asked for by the user in this turn (while start_requested_tasks is on),
 // or is a kind the user said to start without asking (its directory or one it is under, task_trust_scope.go).
 func (s *Service) planStartsAtOnce(ctx context.Context, tasks []PlanTask) bool {
+	return s.planStartsAtOnceUnder(ctx, tasks, nil)
+}
+
+// planStartsAtOnceUnder is planStartsAtOnce in a scheduled round whose schedule's grant may start more (granted, read
+// only when a task needs it; nil: none, schedule_grant.go). started says which tasks the grant alone lets start.
+func (s *Service) planStartsAtOnceUnder(ctx context.Context, tasks []PlanTask, granted func() func(PlanTask) bool) bool {
 	trusted := s.trustCover(ctx)
 	requested := s.startRequestedTasks(ctx)
+	var cover func(PlanTask) bool
 	for _, t := range tasks {
-		if !t.Readonly && !(requested && t.UserRequested) && !trustedTask(trusted, t) {
+		if t.Readonly || (requested && t.UserRequested) || trustedTask(trusted, t) {
+			continue
+		}
+		if cover == nil && granted != nil {
+			cover = granted()
+			granted = nil
+		}
+		if cover == nil || !cover(t) {
 			return false
 		}
 	}
@@ -754,6 +789,8 @@ func (s *Service) taskRoutes() {
 		var in struct {
 			Tasks    []PlanTask `json:"tasks"`
 			Remember bool       `json:"remember"`
+			// ScheduleGrant: let the scheduled task whose round made this plan start these kinds by itself (#8045).
+			ScheduleGrant bool `json:"schedule_grant"`
 		}
 		if r.ContentLength != 0 {
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
@@ -761,7 +798,11 @@ func (s *Service) taskRoutes() {
 				return
 			}
 		}
-		p, err := s.startPlan(ownerStart(r.Context()), r.PathValue("id"), in.Tasks, in.Remember)
+		ctx := ownerStart(r.Context())
+		if in.ScheduleGrant {
+			ctx = scheduleGranting(ctx)
+		}
+		p, err := s.startPlan(ctx, r.PathValue("id"), in.Tasks, in.Remember)
 		if err != nil {
 			planErr(w, err)
 			return
@@ -859,7 +900,7 @@ func (s *Service) taskRoutes() {
 		if paginated {
 			out["next_cursor"] = nextCursor
 		}
-		apierr.WriteJSON(w, out)
+		s.writeConversationJSON(r.Context(), w, r.PathValue("id"), out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

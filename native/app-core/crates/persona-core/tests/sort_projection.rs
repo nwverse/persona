@@ -53,6 +53,7 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
             "filters.json",
             "folding.json",
             "grouping.json",
+            "held.json",
             "hub_state.json",
             "ordering.json",
             "session_state.json",
@@ -75,6 +76,9 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
         "folded_machine_hides_rows",
         "folded_space_keeps_counts",
         "folded_state_and_expanded_idle",
+        "held_quiet_row_keeps_unread_state_section",
+        "held_quiet_space_stays_active",
+        "held_row_stays_out_of_quiet_idle_fold",
         "hub_blocked",
         "hub_done_seen_after",
         "hub_done_seen_at_tolerance",
@@ -178,6 +182,56 @@ fn agents_list_projection_replays_every_fixture() {
 }
 
 #[test]
+fn multi_hub_preferences_scoped_pin_mute_and_order_match_ios() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "shared", "session_id": "second", "app_hub_group": "hub-a", "title": "needle", "state": "idle"},
+            {"machine_id": "shared", "session_id": "first", "app_hub_group": "hub-a", "title": "needle", "state": "unread"},
+            {"machine_id": "shared", "session_id": "first", "app_hub_group": "hub-b", "title": "needle", "state": "idle"},
+        ],
+        "machines": [
+            {"id": "shared", "name": "Fixture", "group": "hub-a"},
+            {"id": "shared", "name": "Fixture", "group": "hub-b"},
+        ],
+        "pins": {}, "mutes": {},
+        "hub_preferences": {
+            "hub-a": {"pins": {"sessions": ["shared/first", "shared/second"]}, "mutes": {"sessions": ["shared/first"]}},
+            "hub-b": {"pins": {"sessions": ["shared/second"]}, "mutes": {"sessions": ["shared/first"], "allowed": ["shared/first"]}},
+        },
+        "settings": {"grouping": "state", "quick": "all"},
+    }))
+    .expect("multi-hub input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"][0]["rows"],
+        serde_json::json!(["hub-a|shared/first", "hub-a|shared/second"]),
+        "the hub's own pin order is retained even though its first row is also muted"
+    );
+    assert_eq!(actual["groups"][0]["id"], "pinned");
+    assert_eq!(actual["groups"][1]["id"], "state/idle");
+    assert_eq!(actual["groups"][1]["rows"], serde_json::json!(["hub-b|shared/first"]));
+    assert_eq!(actual["unread_shown"], serde_json::json!(["hub-a|shared/first"]));
+
+    let mut legacy = serde_json::json!({
+        "sessions": [
+            {"machine_id": "shared", "session_id": "first", "title": "needle", "state": "idle"},
+            {"machine_id": "shared", "session_id": "second", "title": "needle", "state": "idle"},
+            {"machine_id": "shared", "session_id": "third", "title": "needle", "state": "idle"},
+        ],
+        "machines": [{"id": "shared", "name": "Fixture"}],
+        "pins": {"sessions": ["shared/first", "shared/second"]}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all"},
+    });
+    let input: Input = serde_json::from_value(legacy.take()).expect("legacy input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"][0]["rows"],
+        serde_json::json!(["shared/first", "shared/second"]),
+        "legacy preferences retain their old semantics"
+    );
+}
+
+#[test]
 fn awaiting_reply_is_not_folded_like_plain_idle() {
     let document: Value =
         serde_json::from_str(&fs::read_to_string(fixture_dir().join("folding.json")).expect("folding")).expect("JSON");
@@ -203,6 +257,29 @@ fn awaiting_reply_is_not_folded_like_plain_idle() {
         actual["groups"][1]["visible_rows"],
         serde_json::json!(["machine-a/quiet"])
     );
+}
+
+#[test]
+fn held_in_list_matches_the_complete_ios_session_key_path() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "m", "session_id": "held", "app_hub_group": "hub-a", "state": "idle"},
+            {"machine_id": "m", "session_id": "held", "app_hub_group": "hub-b", "state": "idle"},
+        ],
+        "machines": [
+            {"id": "m", "name": "Example", "group": "hub-a"},
+            {"id": "m", "name": "Example", "group": "hub-b"},
+        ],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all", "held": "hub-a|m/held"},
+    }))
+    .expect("multi-hub held input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    // iOS `AgentListOrder.held` compares `SessionKey.path`, not a machine/session pair without its hub.
+    assert_eq!(actual["groups"][0]["id"], "state/unread");
+    assert_eq!(actual["groups"][0]["rows"], serde_json::json!(["hub-a|m/held"]));
+    assert_eq!(actual["groups"][1]["id"], "state/idle");
+    assert_eq!(actual["groups"][1]["rows"], serde_json::json!(["hub-b|m/held"]));
 }
 
 #[test]
@@ -319,6 +396,229 @@ fn background_waiting_quick_filter_shows_only_rank_4() {
         "only the background-waiting section appears"
     );
     assert_eq!(actual["groups"][0]["rows"], serde_json::json!(["m/bg"]));
+}
+
+#[test]
+fn compact_tab_rows_preserve_pane_order_and_fold_ids() {
+    // Independently derived from iOS's TabPanes: slot order, then pane_index / base-36 pane id.
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "box", "session_id": "lead", "state": "working", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:pW", "pane_index": 0},
+            {"machine_id": "box", "session_id": "branch", "state": "idle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:p2E", "pane_index": 1},
+            {"machine_id": "box", "session_id": "other", "state": "working", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s2", "slot_index": 2, "pane_id": "w1:p3A", "pane_index": 0},
+        ],
+        "machines": [{"id": "box", "name": "Fixture"}], "pins": {}, "mutes": {},
+        "settings": {"grouping": "space", "quick": "all", "presentation_rows": true, "folded": ["tab/box/app/1"]},
+    })).expect("tab input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["rows"],
+        serde_json::json!([
+            {"id": "tab|box/herdr:w1/s1", "fold_id": "tab/box/app/1", "rows": ["box/lead", "box/branch"], "visible_rows": [], "folded": true},
+            {"id": "box/other", "fold_id": "box/other", "rows": ["box/other"], "visible_rows": ["box/other"], "folded": false},
+        ])
+    );
+    assert_eq!(
+        actual["groups"][0]["rows"],
+        serde_json::json!(["box/lead", "box/branch", "box/other"])
+    );
+}
+
+#[test]
+fn aggregate_waiting_never_underflows_spoken_counts() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [{"machine_id": "m", "session_id": "w", "state": "working", "background_waiting": true}],
+        "machines": [{"id": "m", "name": "Fixture"}], "pins": {}, "mutes": {},
+        "settings": {"grouping": "space", "quick": "all", "aggregate": {"m/-": {"state": {"working": 1, "idle": 0, "unknown": 0}}}},
+    })).expect("aggregate input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"][0]["spoken"],
+        serde_json::json!("1 个工作中，1 个后台等待中")
+    );
+}
+
+#[test]
+fn compact_search_and_quick_filter_show_all_retained_tab_rows() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "box", "session_id": "lead", "state": "working", "title": "needle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:pW", "pane_index": 0},
+            {"machine_id": "box", "session_id": "branch", "state": "working", "title": "needle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:p2E", "pane_index": 1},
+        ],
+        "machines": [{"id": "box", "name": "Fixture"}], "pins": {}, "mutes": {},
+        "settings": {"grouping": "space", "quick": "working", "query": "needle", "presentation_rows": true},
+    })).expect("search tab input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"][0]["visible_rows"],
+        serde_json::json!(["box/lead", "box/branch"])
+    );
+    assert_eq!(
+        actual["rows"][0]["visible_rows"],
+        serde_json::json!(["box/lead", "box/branch"])
+    );
+}
+
+#[test]
+fn compact_idle_tabs_expand_for_search_and_quick_filter_only() {
+    let sessions = serde_json::json!([
+        {"machine_id": "box", "session_id": "lead", "state": "idle", "title": "needle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:pW", "pane_index": 0},
+        {"machine_id": "box", "session_id": "branch", "state": "idle", "title": "needle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:p2E", "pane_index": 1},
+    ]);
+    let input = |query: &str, quick: &str| {
+        serde_json::from_value::<Input>(serde_json::json!({
+            "sessions": sessions,
+            "machines": [{"id": "box", "name": "Fixture"}], "pins": {}, "mutes": {},
+            "settings": {"grouping": "space", "quick": quick, "query": query, "presentation_rows": true},
+        }))
+        .expect("idle tab input")
+    };
+    let folded = serde_json::to_value(persona_core::sort::project(&input("", "all"))).expect("idle folded");
+    assert!(
+        folded["rows"].as_array().expect("rows").is_empty(),
+        "idle tabs stay behind the idle fold without a query"
+    );
+    let searched = serde_json::to_value(persona_core::sort::project(&input("needle", "all"))).expect("search expands");
+    assert_eq!(
+        searched["rows"].as_array().map(|rows| rows.len()),
+        Some(2),
+        "quiet spaces show flat panes, not tab headers"
+    );
+    assert_eq!(searched["rows"][0]["visible_rows"], serde_json::json!(["box/lead"]));
+    assert_eq!(searched["rows"][1]["visible_rows"], serde_json::json!(["box/branch"]));
+    for (query, quick) in [("needle", "working"), ("", "working")] {
+        let filtered = serde_json::to_value(persona_core::sort::project(&input(query, quick))).expect("quick filter");
+        assert!(
+            filtered["rows"].as_array().expect("rows").is_empty(),
+            "idle members are excluded by the working quick filter"
+        );
+    }
+}
+
+#[test]
+fn compact_idle_space_search_and_quick_filter_expand_independently() {
+    let input = |query: &str, quick: &str| {
+        serde_json::from_value::<Input>(serde_json::json!({
+            "sessions": [
+                {"machine_id": "m", "session_id": "idle", "state": "idle", "title": "needle", "space_id": "w1", "space_name": "app"},
+                {"machine_id": "m", "session_id": "unread", "state": "idle", "title": "needle", "space_id": "w1", "space_name": "app"},
+            ],
+            "machines": [{"id": "m", "name": "Fixture"}], "pins": {}, "mutes": {},
+            "settings": {"grouping": "space", "quick": quick, "query": query, "presentation_rows": true, "kept": if quick == "all" { serde_json::json!([]) } else { serde_json::json!(["m/idle"]) }},
+        })).expect("quiet input")
+    };
+    assert!(
+        serde_json::to_value(persona_core::sort::project(&input("", "all"))).expect("folded")["rows"]
+            .as_array()
+            .expect("rows")
+            .is_empty()
+    );
+    for (query, quick, count, expected) in [("needle", "all", 2, "m/idle"), ("needle", "working", 1, "m/idle")] {
+        let projected = serde_json::to_value(persona_core::sort::project(&input(query, quick))).expect("expanded");
+        assert_eq!(
+            projected["rows"].as_array().map(|rows| rows.len()),
+            Some(count),
+            "query={query} quick={quick}"
+        );
+        assert_eq!(projected["rows"][0]["visible_rows"], serde_json::json!([expected]));
+    }
+}
+
+#[test]
+fn compact_active_space_expands_idle_pane_for_query_and_quick_filter() {
+    let input = |query: &str, quick: &str| {
+        serde_json::from_value::<Input>(serde_json::json!({
+            "sessions": [
+                {"machine_id": "box", "session_id": "lead", "state": "working", "title": "needle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:pW", "pane_index": 0},
+                {"machine_id": "box", "session_id": "branch", "state": "idle", "title": "needle", "space_id": "w1", "space_kind": "herdr", "space_name": "app", "slot_id": "s1", "slot_index": 1, "pane_id": "w1:p2E", "pane_index": 1},
+            ],
+            "machines": [{"id": "box", "name": "Fixture"}], "pins": {}, "mutes": {},
+            "settings": {"grouping": "space", "quick": quick, "query": query, "presentation_rows": true, "kept": if quick == "all" { serde_json::json!([]) } else { serde_json::json!(["box/branch"]) }},
+        })).expect("active tab input")
+    };
+    let folded = serde_json::to_value(persona_core::sort::project(&input("", "all"))).expect("mixed tab");
+    assert_eq!(
+        folded["rows"][0]["visible_rows"],
+        serde_json::json!(["box/lead", "box/branch"]),
+        "a busy tab keeps all its panes visible"
+    );
+    for (query, quick) in [("needle", "all"), ("", "working")] {
+        let expanded = serde_json::to_value(persona_core::sort::project(&input(query, quick))).expect("expanded pane");
+        assert_eq!(
+            expanded["rows"][0]["visible_rows"],
+            serde_json::json!(["box/lead", "box/branch"]),
+            "query={query} quick={quick}"
+        );
+    }
+}
+
+#[test]
+fn compact_active_space_expands_an_independent_idle_row_for_query_and_quick_filter() {
+    let input = |query: &str, quick: &str| {
+        serde_json::from_value::<Input>(serde_json::json!({
+            "sessions": [
+                {"machine_id": "box", "session_id": "busy", "state": "working", "title": "needle", "space_id": "w1", "space_name": "app"},
+                {"machine_id": "box", "session_id": "idle", "state": "idle", "title": "needle", "space_id": "w1", "space_name": "app"},
+            ],
+            "machines": [{"id": "box", "name": "Fixture"}], "pins": {}, "mutes": {},
+            "settings": {"grouping": "space", "quick": quick, "query": query, "presentation_rows": true, "kept": if quick == "all" { serde_json::json!([]) } else { serde_json::json!(["box/idle"]) }},
+        })).expect("independent idle row")
+    };
+    let folded = serde_json::to_value(persona_core::sort::project(&input("", "all"))).expect("idle fold");
+    assert!(
+        !folded["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["id"] == "box/idle"),
+        "the independent idle row stays folded"
+    );
+    for (query, quick) in [("needle", "all"), ("", "working")] {
+        let expanded =
+            serde_json::to_value(persona_core::sort::project(&input(query, quick))).expect("expanded idle row");
+        assert!(
+            expanded["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .any(|row| row["id"] == "box/idle"),
+            "query={query} quick={quick}"
+        );
+        assert!(
+            expanded["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .any(|row| row["id"] == "box/idle" && row["visible_rows"] == serde_json::json!(["box/idle"]))
+        );
+    }
+}
+
+#[test]
+fn nested_rows_and_folded_children_match_ios_counts() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "m", "session_id": "parent", "state": "working", "background_waiting": true, "children": {"working": 1, "needs_you": 0}},
+            {"machine_id": "m", "session_id": "orphan", "state": "working", "nested_subtask": true},
+            {"machine_id": "m", "session_id": "waiting", "state": "working", "background_waiting": true},
+            {"machine_id": "m", "session_id": "ordinary", "state": "working"},
+        ],
+        "machines": [{"id": "m", "name": "Fixture"}], "pins": {}, "mutes": {},
+        "settings": {"grouping": "space", "quick": "all", "aggregate": {"m/-": {"state": {"needs_you": 0, "working": 7, "unread": 0, "idle": 1, "unknown": 0}}}},
+    })).expect("folded parent input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["counts"],
+        serde_json::json!({"needsYou": 0, "working": 2, "unread": 0, "backgroundWaiting": 1})
+    );
+    assert_eq!(
+        actual["groups"][0]["state_counts"],
+        serde_json::json!({"needs_you": 0, "working": 7, "unread": 0, "idle": 1, "unknown": 0})
+    );
+    assert_eq!(
+        actual["groups"][0]["spoken"],
+        serde_json::json!("7 个工作中，1 个后台等待中")
+    );
 }
 
 #[test]

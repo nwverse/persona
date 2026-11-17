@@ -510,6 +510,17 @@ func providerShaped(l proto.ManagedLauncher) bool {
 // the model variables. The Haiku tier is HaikuModel, else SmallModel (what it was), else the model. A tier, the small
 // model or the subagent model named explicitly gets [1m] by its own window (tierModel).
 func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation bool) map[string]string {
+	// The provider's own environment replaces the endpoint below: fallback policy belongs to that effective gateway,
+	// not the stored one. An empty override means the official default, not a custom gateway with no models declared.
+	effectiveBaseURL := l.LaunchBaseURL()
+	for _, kv := range launcherEnvVars(l.Env) {
+		if kv[0] == "ANTHROPIC_BASE_URL" {
+			effectiveBaseURL = kv[1]
+		}
+	}
+	if effectiveBaseURL == "" {
+		effectiveBaseURL = "https://" + proto.AnthropicAPIHost
+	}
 	// Claude Code adds /v1/messages: a provider stored with a trailing /v1, from a hub before it dropped it, would
 	// otherwise call /v1/v1/messages though Test connection passed.
 	env := map[string]string{"ANTHROPIC_BASE_URL": l.LaunchBaseURL()}
@@ -521,7 +532,7 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 		// (#7319). Off when the launcher's model list shows the gateway lacks one: the turn then ends on its refusal,
 		// which the assistant's recovery reads (assistant_recovery.go). A launcher that declares no list, or one with
 		// them all, keeps Claude Code's fallback; the launcher's own environment, applied below, wins either way.
-		if !proto.AnthropicAPI(l.BaseURL) && lacksRefusalFallback(l) {
+		if !proto.AnthropicAPI(effectiveBaseURL) && lacksRefusalFallback(l) {
 			env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] = "1"
 		}
 	} else if l.TimeoutMS > 0 {
@@ -567,7 +578,8 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 		env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = strconv.Itoa(w)
 	}
 	// The compact window the provider declares, else its model's window; none when neither is known, and Claude Code
-	// compacts by the model it knows. The same for an assistant conversation, main or not, as for an agent (#3066).
+	// compacts by the model it knows. The same for an assistant conversation as for an agent (#3066); an assistant start
+	// writes its own, which holds the main conversation to assistant.main_compact_window (#7314, perStartEnv).
 	if c := cmp.Or(l.CompactWindow, w); c > 0 {
 		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(c)
 	}
@@ -654,8 +666,8 @@ func envList(env map[string]string) []string {
 }
 
 // perStartEnv: what an assistant start decides (its compact window, the launcher's declared one as
-// assistantCompactionPolicy reads it; its thinking level, switched while it runs) and so never goes into settings env,
-// which would win over the start's own environment.
+// assistantCompactionPolicy reads it, capped for the main conversation; its thinking level, switched while it runs) and
+// so never goes into settings env, which would win over the start's own environment.
 var perStartEnv = []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL"}
 
 // pinnedEnv is env without perStartEnv: the part pinned over the user's ~/.claude/settings.json (the gateway, its key,

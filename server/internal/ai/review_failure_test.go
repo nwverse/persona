@@ -1,10 +1,12 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDirectTypedCodesBypassGateStatuses(t *testing.T) {
@@ -20,7 +22,7 @@ func TestDirectTypedCodesBypassGateStatuses(t *testing.T) {
 		for _, tc := range codes {
 			t.Run(fmt.Sprintf("%d/%s", status, tc.code), func(t *testing.T) {
 				body := fmt.Sprintf(`{"error":{"code":%q,"message":"request rejected"}}`, tc.code)
-				err, requests := directAPIError(t, "", status, body)
+				err, requests := directAPIError(t, "", status, body, "X-Should-Retry", "false")
 				if requests != 1 || IsPaused(err) {
 					t.Fatalf("requests = %d, error = %v; want the typed raw error, not a pause", requests, err)
 				}
@@ -73,20 +75,23 @@ func TestDirectMessagesTypedCodesSuppressTransience(t *testing.T) {
 	})
 }
 
-func TestDirectNoRetryWithoutValidCooldownReturnsRaw(t *testing.T) {
+func TestDirectNoRetryWithoutPositiveCooldownPausesBusy(t *testing.T) {
+	fakeClock(t)
 	for _, tc := range []struct {
 		name       string
 		status     int
 		retryAfter string
+		pause      time.Duration
 	}{
-		{"429 without cooldown", 429, ""},
-		{"503 without cooldown", 503, ""},
-		{"529 without cooldown", 529, ""},
-		{"malformed cooldown", 429, "soon"},
-		{"signed positive cooldown", 429, "+1"},
-		{"negative cooldown", 429, "-1"},
-		{"signed zero cooldown", 429, "-0"},
-		{"503 cooldown is not a quota reset", 503, "10"},
+		{"429 without cooldown", 429, "", busyFirst},
+		{"503 without cooldown", 503, "", busyFirst},
+		{"529 without cooldown", 529, "", busyFirst},
+		{"malformed cooldown", 429, "soon", busyFirst},
+		{"signed positive cooldown", 429, "+1", busyFirst},
+		{"negative cooldown", 429, "-1", busyFirst},
+		{"zero cooldown", 429, "0", busyFirst},
+		{"signed zero cooldown", 429, "-0", busyFirst},
+		{"503 cooldown stays busy", 503, "10", 10 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := `{"error":{"message":"request rejected"}}`
@@ -95,16 +100,35 @@ func TestDirectNoRetryWithoutValidCooldownReturnsRaw(t *testing.T) {
 				header = append(header, "Retry-After", tc.retryAfter)
 			}
 			err, requests := directAPIError(t, "chat", tc.status, body, header...)
-			if requests != 1 || IsPaused(err) || Transient(err) {
-				t.Fatalf("requests = %d, error = %v, transient = %v; want one raw non-transient error", requests, err, Transient(err))
-			}
-			if want := fmt.Sprintf("ai: HTTP %d: %s", tc.status, body); err == nil || err.Error() != want {
-				t.Fatalf("error = %v, want %q", err, want)
-			}
-			if reason, _, _ := classify(err); reason != "" {
-				t.Fatalf("gate reason = %q, want no pause", reason)
+			paused := requireDirectPause(t, err, ReasonBusy)
+			if requests != 1 || !paused.Until.Equal(now().Add(tc.pause)) {
+				t.Fatalf("requests = %d, pause = %+v; want one request and busy backoff %s", requests, paused, tc.pause)
 			}
 		})
+	}
+}
+
+func TestDirectNoRetryBusyRetainsCapAndBackoff(t *testing.T) {
+	clk := fakeClock(t)
+	u := newUpstream(t, answer(http.StatusServiceUnavailable, `{"error":{"message":"request rejected"}}`, "X-Should-Retry", "false"))
+	client := New(Config{API: "chat", BaseURL: u.srv.URL, APIKey: "example-key", Model: "example-model"})
+	_, err := client.Complete(context.Background(), "system", "synthetic input", 32)
+	paused := requireDirectPause(t, err, ReasonBusy)
+	if !paused.Until.Equal(now().Add(busyFirst)) {
+		t.Fatalf("first pause = %+v, want %s", paused, busyFirst)
+	}
+	clk.add(busyFirst)
+	_, err = client.Complete(context.Background(), "system", "synthetic input", 32)
+	paused = requireDirectPause(t, err, ReasonBusy)
+	if !paused.Until.Equal(now().Add(2 * busyFirst)) {
+		t.Fatalf("second pause = %+v, want %s", paused, 2*busyFirst)
+	}
+	g := gateFor(client.cfg.BaseURL, "example-key")
+	g.mu.Lock()
+	limitCap, strikes := g.cap, g.strikes
+	g.mu.Unlock()
+	if limitCap == 0 || strikes != 2 || u.sent.Load() != 2 {
+		t.Fatalf("cap = %d, strikes = %d, requests = %d; want a retained cap and doubled backoff", limitCap, strikes, u.sent.Load())
 	}
 }
 

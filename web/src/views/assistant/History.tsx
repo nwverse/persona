@@ -1,3 +1,6 @@
+import { shownManager, useShownManager } from "../../lib/manager-choice";
+import { availableConversation, conversationDeleted, conversationDeletionRevision, conversationDeletionScope } from "../../lib/conversation-deleted";
+import { useCanDeleteConversation } from "../../lib/conversation-delete";
 // "All chats" (docs/assistant/assistant.md "Managing its own conversations", the iOS app's sidebar + ArchivedConversationsView): every conversation
 // Persona has, the main one first, the rest newest first by day; search on the title and the last message; a row's menu
 // renames it, copies its id, archives it (the main one can't be). The archived ones are folded at the end. The background
@@ -5,18 +8,17 @@
 // copies its id.
 import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, enc, errorText } from "../../lib/api";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { onHubEvent, refreshAssistant, useStore } from "../../lib/store";
 import { isResumed } from "../../lib/reconnect";
-import { useShownManager } from "../../lib/manager-choice";
 import type { AssistantInfo, Session } from "../../lib/types";
+import { ConversationDeleteConfirmation, leaderItem } from "../ConversationMenu";
 import { GroupCount } from "../SidebarSection";
-import { leaderItem } from "../ConversationMenu";
 import { Button, Collapse, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { InfoTip } from "../../ui/InfoTip";
 import { Icon } from "../../ui/icons";
@@ -38,10 +40,16 @@ const ROW_LINE = "mt-0.5 block truncate text-[12px] text-ink-3";
 const pill = (bg: string, ink: string) => `inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full ${bg} px-2 text-[11px] font-medium ${ink}`;
 
 export function History({ origin, onToggleSidebar }: { origin?: string; onToggleSidebar: () => void }) {
+  const deletionRevision = useStore(conversationDeletionRevision);
+  const manager = useShownManager();
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const epoch = useStore(conversationDeletionScope);
+  const account = JSON.stringify([owner, epoch]);
+  const priorAccount = useRef(account);
+  const reads = useRef(0);
   const filter = parseOriginFilter(origin);
   const assistant = useStore((s) => s.assistant);
   const mid = assistant?.machine_id;
-  const manager = useShownManager();
   const live = useStore((s) => (mid ? s.sessions[mid] ?? NONE : NONE));
   const [fetched, setFetched] = useState<Conversation[] | null>(null);
   const [error, setError] = useState("");
@@ -69,16 +77,24 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
 
   /** Reads the list; true when it went through. */
   const load = useCallback(async () => {
+    const read = ++reads.current;
     try {
       const a = await api<AssistantInfo & { conversations: Conversation[] }>("/assistant?archived=1");
+      if (read !== reads.current || manager !== shownManager() || owner !== credentialOwner() || epoch !== conversationDeletionScope()) return;
       setFetched(a.conversations ?? []);
       setError("");
       return true;
     } catch (e) {
+      if (read !== reads.current || manager !== shownManager() || owner !== credentialOwner() || epoch !== conversationDeletionScope()) return;
       setError(errorText(e));
       return false;
     }
-  }, []);
+  }, [manager, owner, epoch]);
+  useLayoutEffect(() => {
+    reads.current++;
+    if (priorAccount.current !== account) { priorAccount.current = account; setQuery(""); }
+    setFetched(null); setError(""); setTitles({}); setMarked({}); setRenaming(null);
+  }, [manager, account]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -104,12 +120,12 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
 
   const all = useMemo(
     () =>
-      mergeConversations(fetched ?? [], assistant?.conversations ?? [], live, manager).map((s) => {
+      mergeConversations(fetched ?? [], assistant?.conversations ?? [], live, manager).filter(availableConversation).map((s) => {
         const title = titles[s.session_id];
         const archived = marked[s.session_id];
         return title || archived !== undefined ? { ...s, ...(title ? { title } : {}), ...(archived !== undefined ? { archived } : {}) } : s;
       }),
-    [fetched, assistant?.conversations, live, manager, titles, marked],
+    [fetched, assistant?.conversations, live, manager, titles, marked, deletionRevision],
   );
   const background = assistant?.background_supervisor;
   // what was said in them too (#6283): the manager's search, merged into the local matches (titles, last messages), as
@@ -122,7 +138,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
     const shown = all.filter((s) => matchesOrigin(s, filter, background));
     const merged = mergeSearch(filterConversations(shown, query), said.answer, all, (r): Conversation => ({
       machine_id: r.machine_id, session_id: r.session_id, title: r.title, cwd: "", status: "idle", assistant: true, archived: r.archived, updated_at: r.updated_at, origin: r.origin,
-    })).filter(({ chat }) => matchesOrigin(chat, filter, background));
+    })).filter(({ chat }) => availableConversation(chat) && matchesOrigin(chat, filter, background));
     const byId = new Map<string, AssistantSearchHit>();
     for (const r of said.answer?.results ?? []) if (r.hits[0] && !r.title_match) byId.set(r.session_id, r.hits[0]);
     return { hits: merged.map((m) => m.chat), saidBy: byId };
@@ -329,6 +345,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
   const menu = useMenu();
   // found by what was said in it: opens at that message (#6283)
   const route: Route = conversationPage(s.session_id, s.machine_id, s.manager, said?.item_id);
+  const owner = credentialOwner(), epoch = conversationDeletionScope(), manager = shownManager();
   // the background supervisor is built in (#5082): its own name and mark, and nothing to rename, archive or make 常驻
   const builtIn = useStore((x) => isBackgroundSupervisor(x.assistant, s.session_id));
   const title = builtIn ? backgroundSupervisorTitle(s) : conversationTitle(s, main);
@@ -342,6 +359,8 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
   // the chats outside the sidebar live here: 设为常驻 puts one in its 常驻 group (#4331)
   const leader = useStore((x) => !!x.assistant?.leaders?.includes(s.session_id));
   const own = !main && !builtIn;
+  const canDelete = useCanDeleteConversation(s, main, builtIn);
+  const [deleting, setDeleting] = useState(false);
   const items: MenuItem[] = [
     ...(own && !s.archived ? [leaderItem(s, leader)] : []),
     ...(own ? [{ key: "rename", label: t("assistant-history.rename_ellipsis"), icon: "pencil" as const, onSelect: () => onRename(s) }] : []),
@@ -351,12 +370,16 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
           ? { key: "unarchive", label: t("assistant-history.unarchive"), icon: "archive" as const, onSelect: () => onArchive(s, false) }
           : { key: "archive", label: t("assistant-history.archive"), icon: "archive" as const, onSelect: () => onArchive(s, true) }]
       : []),
+    ...(canDelete ? [{ key: "delete", label: t("conversation-menu.delete"), icon: "trash" as const, danger: true, divider: true, onSelect: () => setDeleting(true) }] : []),
   ];
   return (
     <div className={cx("group relative flex items-center gap-1 pr-2 transition-colors hover:bg-hover", menu.anchor && "bg-hover")}>
       <a
         href={href(route)}
-        onClick={(e) => onLinkClick(e, route)}
+        onClick={(e) => {
+          if (conversationDeleted(s.machine_id, s.session_id) || owner !== credentialOwner() || epoch !== conversationDeletionScope() || manager !== shownManager()) e.preventDefault();
+          else onLinkClick(e, route);
+        }}
         title={[title, last].filter(Boolean).join("\n")}
         className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 focus-visible:outline-none"
       >
@@ -399,6 +422,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
         active={!!menu.anchor}
         className={menu.anchor ? "" : "sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"}
       />
+      {deleting && <ConversationDeleteConfirmation s={s} onClose={() => setDeleting(false)} />}
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} items={items} align="right" width={180} />}
     </div>
   );

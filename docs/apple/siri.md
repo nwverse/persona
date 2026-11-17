@@ -14,6 +14,7 @@ it reads `Keychain.serverConfig` afresh each time (the hub address + device toke
 | `AddTodoIntent` | New To-Do | `POST /api/v1/todos` (`{"title", "notes"?}`, see `docs/assistant/todos.md`), in the App's currently selected hub group (`hub.group`, the same as the To-dos page; falls back to the first group if it is missing). Reads "To-do saved: '…'" and returns the title for use in subsequent Shortcuts actions. If an old hub lacks the to-do endpoint (404), asks the user to update the hub first. | Background |
 | `OpenPersonalAgentIntent` | Open Personal Agent | Tapping a personal Agent session in Spotlight opens that conversation directly (Agents › Personal Agents › session; back goes to the personal Agents list; an open settings sheet is closed first). `AppModel.openPersonalAgent` is handed to `ChatsView`, which, as with `openChat`, pushes it once the list has appeared and the navigation stack is still. | Foreground |
 | `OpenPersonaAssistantIntent` / `OpenPersonaAgentsIntent` | Open Persona Assistant / Agents | Intents behind the controls for Control Center, the Lock Screen, and the Action Button. | Foreground |
+| `OpenPersonaDictationIntent` | Dictate to Persona | Opens a new assistant conversation and leaves its visible starter a one-shot request to start the composer's existing dictation. Permission or availability failure keeps the new conversation, focuses the field and shows the mic's usual message; nothing is sent automatically. | Foreground |
 | `StartMeetingRecordingIntent` | Record (Record a Meeting until #5243; the type keeps its name, so shortcuts made with it keep working) | Starts a meeting recording on the phone, named after the calendar event happening now, with its Live Activity (Stop, Bookmark); does nothing while something already records. An `AudioRecordingIntent`: no hub needed, the transcript syncs later (`docs/apple/recording.md`, "Meeting recordings"). | Background (foreground once, to ask for the microphone) |
 
 `PersonalAgentEntity` is an `IndexedEntity`: whenever the Agents page finishes loading, it calls `CSSearchableIndex.default().indexAppEntities(...)`
@@ -25,15 +26,16 @@ and `PersonaShortcuts.updateAppShortcutParameters()`, so Spotlight can find sess
 - Give an Agent a Task: "用 Persona 让 Agent 去做" (Have Persona give an Agent a task), "让 Persona 的 <会话名> 去做" (Have Persona's <session name> do it), "Persona 交给 Agent" (Persona, hand it to an Agent), "Have Persona agent do something", "Send a task to <session name> with Persona"
 - Personal Agent Unread: "Persona 个人 Agent 未读" (Persona personal Agent unread), "Persona Agent 有什么新消息" (What's new from Persona Agents), "Check Persona agents"
 - New To-Do: "用 Persona 新建待办" (Create a to-do with Persona), "Persona 记个待办" (Persona, note a to-do), "Persona 加个待办" (Persona, add a to-do), "Add a to-do in Persona", "New Persona to-do" → Siri then asks "What's the to-do?"; notes can only be entered in the Shortcuts App.
-- Record: "用 Persona 录音" (Record with Persona), "用 Persona 录会议" (Record a meeting with Persona), "用 Persona 录下这个会" (Record this meeting with Persona), "在 Persona 开始录音" (Start recording in Persona), "Persona 录会议" (Persona, record the meeting). Every one records a meeting (`docs/apple/recording.md`, "Meeting recordings"). The tenth App Shortcut: Apple allows ten, so the list is full.
+- Start Meeting (Record until #8731): "用 Persona 开会" (Start a meeting with Persona), "Persona 开始会议" (Persona, start a meeting), and the earlier "用 Persona 录音" (Record with Persona), "用 Persona 录会议" (Record a meeting with Persona), "用 Persona 录下这个会" (Record this meeting with Persona), "在 Persona 开始录音" (Start recording in Persona), "Persona 录会议" (Persona, record the meeting). Every one records a meeting (`docs/apple/recording.md`, "Meeting recordings"). The tenth App Shortcut: Apple allows ten, so the list is full.
 - The existing Ask Claude / status actions each gain an English phrase.
 
 `String` parameters cannot appear in phrases (see `docs/apple/intents.md`), so Siri asks for the question / task contents after the invocation phrase.
 
 ## Action Button and Control Center
 
-- Action Button: **Settings › Action Button › Shortcut**; select "Ask Persona", "Give an Agent a Task", "New To-Do" or "Record" directly (App Shortcuts appear automatically), or **Controls** › Record.
+- Action Button: **Settings › Action Button › Shortcut**; select "Ask Persona", "Give an Agent a Task", "New To-Do" or "Start Meeting" directly (App Shortcuts appear automatically), or **Controls** › Record.
 - Control Center / Lock Screen: the `PersonaWidgets` extension adds `ControlWidget`s: `AskPersonaControl`, `PersonaAgentsControl` open the App's assistant page / Agents page;
+  `DictatePersonaControl` (kind `persona.control.dictate`) opens a new assistant conversation with dictation running once its composer is visible;
   `MeetingRecordingControl` (kind `persona.control.meeting-recording`) starts a meeting recording without opening the App.
   Their intents live in `LiveActivity/PersonaControlIntents.swift` and `LiveActivity/RecordingIntents.swift` (compiled into both App and extension; `perform` runs only in the App).
 
@@ -52,7 +54,7 @@ and `PersonaShortcuts.updateAppShortcutParameters()`, so Spotlight can find sess
 3. Say "Have Persona agent do something", choose a session, and describe the task: it should reply "Sent to '…'"; that session in the Lark gateway should receive the message. The same task must not be duplicated (clientId).
 4. Say "Check Persona agents".
 5. Say "Add a to-do in Persona", then give a title: it should reply "To-do saved: '…'", and the App's To-dos page should contain the new entry.
-6. These actions should appear under **Shortcuts App › Persona** and be selectable for the Action Button; **Control Center › Add a Control › Persona** should contain two controls.
+6. These actions should appear under **Shortcuts App › Persona** and be selectable for the Action Button; **Control Center › Add a Control › Persona** should contain three controls: Ask Persona, Persona Agents and Dictate to Persona. Dictate opens a new conversation with its dictation bar up; after stopping, the recognized words stay as an unsent draft.
 7. Searching for a personal Agent's session name in Spotlight should find it; tapping it opens that conversation directly, and back in the top-left returns to the personal Agents list. Try once each with the settings sheet open, with the App in the background, and with it not running.
 
 Unit tests: `PersonaTests/SiriIntentsTests.swift` (answer extraction, polling completion, spoken text, session selection, unread text), `PersonaTests/IntentsTests.swift` (new to-do text, old hubs, the hub group read).

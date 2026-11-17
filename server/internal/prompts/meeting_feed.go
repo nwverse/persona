@@ -7,7 +7,7 @@ package prompts
 type MeetingFeed struct {
 	Lang  string // the user's language: en, ja, else zh-Hans
 	Title string
-	Role  string // listener or participant
+	Role  string // notes, listener or participant
 	// From and To are the wall-clock times (HH:MM, the user's zone) of the first and the last line: From "" when the
 	// batch has no lines (only answers, or only the end), To "" when it is From.
 	From, To string

@@ -2,9 +2,11 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +45,13 @@ func TestDirectHTTPFailureKindsAcrossProtocols(t *testing.T) {
 	}{
 		{"nested OpenAI model code", 404, `{"error":{"code":"model_not_found","message":"request rejected"}}`, FailureModelUnavailable, false},
 		{"nested Anthropic context code", 400, `{"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"request rejected"}}`, FailureContextTooLong, false},
+		{"native Anthropic missing model", 404, `{"type":"error","error":{"type":"not_found_error","message":"model: example-model"}}`, FailureModelUnavailable, false},
+		{"native numeric code retains type and message", 404, `{"type":"error","error":{"type":"not_found_error","code":40401,"message":"model: example-model"}}`, FailureModelUnavailable, false},
+		{"native endpoint 404 stays endpoint-only", 404, `{"type":"error","error":{"type":"not_found_error","message":"unknown endpoint"}}`, FailureOther, false},
+		{"upstream service unavailable is not a missing model", 404, `{"error":{"type":"api_error","message":"upstream model service unavailable"}}`, FailureOther, false},
+		{"selected model unavailable to this key", 404, `{"error":{"message":"The selected model is unavailable to this API key"}}`, FailureModelUnavailable, false},
+		{"model not available to this key", 404, `{"error":{"message":"model is not available to this API key"}}`, FailureModelUnavailable, false},
+		{"model service unavailable is not key inaccessibility", 404, `{"error":{"type":"api_error","message":"model service is unavailable"}}`, FailureOther, false},
 		{"deeper nested context code", 400, `{"error":{"error":{"code":"context_length_exceeded","message":"request rejected"}}}`, FailureContextTooLong, false},
 		{"top-level model code", 404, `{"type":"error","code":"model_not_found","message":"request rejected"}`, FailureModelUnavailable, false},
 		{"unsupported endpoint beats model wording", 404, `{"error":{"code":"unsupported_endpoint","message":"model example-model does not exist on this endpoint"}}`, FailureOther, false},
@@ -136,12 +145,20 @@ func TestDirectNoRetryRateLimitUsesRetryAfterAsQuota(t *testing.T) {
 			}
 		})
 	}
-	t.Run("zero cooldown is still quota", func(t *testing.T) {
-		err, requests := directAPIError(t, "chat", 429, `{"error":{"code":"future_code","message":"request rejected"}}`,
+	t.Run("zero cooldown restores busy backoff", func(t *testing.T) {
+		err, requests := directAPIError(t, "chat", 429, `{"error":{"code":"rpm_limit","message":"requests per minute"}}`,
 			"X-Should-Retry", "false", "Retry-After", "0")
-		paused := requireDirectPause(t, err, ReasonQuota)
-		if requests != 1 || !paused.Until.Equal(now()) {
-			t.Fatalf("requests = %d, pause = %+v; want one request and a pause until now", requests, paused)
+		paused := requireDirectPause(t, err, ReasonBusy)
+		if requests != 1 || !paused.Until.Equal(now().Add(busyFirst)) {
+			t.Fatalf("requests = %d, pause = %+v; want one request and ordinary busy backoff", requests, paused)
+		}
+	})
+	t.Run("malformed cooldown leaves rpm limit busy", func(t *testing.T) {
+		err, requests := directAPIError(t, "chat", 429, `{"error":{"code":"rpm_limit","message":"requests per minute"}}`,
+			"X-Should-Retry", "false", "Retry-After", "soon")
+		paused := requireDirectPause(t, err, ReasonBusy)
+		if requests != 1 || !paused.Until.Equal(now().Add(busyFirst)) {
+			t.Fatalf("requests = %d, pause = %+v; want one request and ordinary busy backoff", requests, paused)
 		}
 	})
 	t.Run("large cooldown caps without overflowing", func(t *testing.T) {
@@ -230,39 +247,111 @@ func TestDirectLimitCodesBeatMisleadingWording(t *testing.T) {
 	})
 }
 
-func TestDirectChatNoRetrySkipsCompatibilityRetries(t *testing.T) {
+func TestDirectChatNoRetryAllowsModifiedCompatibilityRequests(t *testing.T) {
 	cases := []struct {
-		name   string
-		status int
-		body   string
+		name, field string
+		status      int
+		body        string
 	}{
-		{"max_tokens", 400, `{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}`},
-		{"stream_options", 400, `{"error":{"message":"Unrecognized request argument supplied: stream_options"}}`},
-		{"include_usage", 422, `{"detail":[{"loc":["body","include_usage"],"msg":"Extra inputs are not permitted"}]}`},
+		{"max_tokens", "max_tokens", 400, `{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}`},
+		{"stream_options", "stream_options", 400, `{"error":{"code":"future_code","message":"Unrecognized request argument supplied: stream_options"}}`},
+		{"include_usage", "stream_options", 422, `{"detail":[{"loc":["body","include_usage"],"msg":"Extra inputs are not permitted"}]}`},
+		{"reasoning_effort", "reasoning_effort", 400, `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err, requests := directAPIError(t, "chat", tc.status, tc.body, "X-Should-Retry", " FALSE ")
-			if requests != 1 {
-				t.Fatalf("requests = %d, want the explicit no-retry response to stop at 1", requests)
+			var requests []map[string]any
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				requests = append(requests, body)
+				if len(requests) == 1 {
+					w.Header().Set("X-Should-Retry", " FALSE ")
+					w.WriteHeader(tc.status)
+					fmt.Fprint(w, tc.body)
+					return
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer s.Close()
+			cfg := Config{API: "chat", BaseURL: s.URL, APIKey: "example-key", Model: "example-model"}
+			if tc.field == "reasoning_effort" {
+				cfg.ReasoningEffort = "high"
 			}
-			if want := fmt.Sprintf("ai: HTTP %d: %s", tc.status, tc.body); err == nil || err.Error() != want || Transient(err) {
-				t.Fatalf("error = %v, want %q, non-transient", err, want)
+			reply, err := New(cfg).Chat(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "synthetic input"}}, MaxTokens: 32})
+			if err != nil || reply.Text != "ok" || len(requests) != 2 {
+				t.Fatalf("reply = %+v, error = %v, requests = %v; want the modified second request to succeed", reply, err, requests)
+			}
+			first, second := requests[0], requests[1]
+			switch tc.field {
+			case "max_tokens":
+				if first["max_tokens"] != float64(32) || second["max_completion_tokens"] != float64(32) {
+					t.Fatalf("token field was not corrected: first = %v, second = %v", first, second)
+				}
+				if _, present := second["max_tokens"]; present {
+					t.Fatalf("modified request retained max_tokens: %v", second)
+				}
+			case "stream_options":
+				options, _ := first["stream_options"].(map[string]any)
+				if options["include_usage"] != true {
+					t.Fatalf("first request did not ask for usage: %v", first)
+				}
+				if _, present := second["stream_options"]; present {
+					t.Fatalf("modified request retained stream_options: %v", second)
+				}
+			case "reasoning_effort":
+				if first["reasoning_effort"] != "high" {
+					t.Fatalf("first request omitted reasoning_effort: %v", first)
+				}
+				if _, present := second["reasoning_effort"]; present {
+					t.Fatalf("modified request retained reasoning_effort: %v", second)
+				}
 			}
 		})
 	}
 }
 
-func TestDirectChatNoRetrySkipsReasoningEffortRetry(t *testing.T) {
-	body := `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`
-	u := newUpstream(t, answer(http.StatusBadRequest, body, "X-Should-Retry", "false"))
-	client := New(Config{API: "chat", BaseURL: u.srv.URL, APIKey: "example-key", Model: "example-model", ReasoningEffort: "high"})
-	_, err := client.Chat(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "synthetic input"}}, MaxTokens: 32})
-	if got := u.sent.Load(); got != 1 {
-		t.Fatalf("requests = %d, want the explicit no-retry response to stop at 1", got)
+func TestDirectChatNoRetryCompatibilityChangeIsBounded(t *testing.T) {
+	body := `{"error":{"message":"Unrecognized request argument supplied: stream_options"}}`
+	err, requests := directAPIError(t, "chat", http.StatusBadRequest, body, "X-Should-Retry", "false")
+	if requests != 2 {
+		t.Fatalf("requests = %d, want one rejection and one modified request", requests)
 	}
 	if want := "ai: HTTP 400: " + body; err == nil || err.Error() != want || Transient(err) {
 		t.Fatalf("error = %v, want %q, non-transient", err, want)
+	}
+}
+
+func TestDirectChatRecognizedCodesSkipCompatibilityRequests(t *testing.T) {
+	t.Run("budget code beats stream_options wording", func(t *testing.T) {
+		fakeClock(t)
+		body := `{"error":{"code":"budget_exhausted","message":"Unrecognized request argument supplied: stream_options"}}`
+		err, requests := directAPIError(t, "chat", http.StatusBadRequest, body)
+		requireDirectPause(t, err, ReasonQuota)
+		if requests != 1 {
+			t.Fatalf("requests = %d, want the recognized quota code to stop at 1", requests)
+		}
+	})
+	for _, tc := range []struct {
+		code string
+		want FailureKind
+	}{
+		{"model_not_found", FailureModelUnavailable},
+		{"context_length_exceeded", FailureContextTooLong},
+		{"unsupported_endpoint", FailureOther},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			body := fmt.Sprintf(`{"error":{"code":%q,"message":"Unrecognized request argument supplied: stream_options"}}`, tc.code)
+			err, requests := directAPIError(t, "chat", http.StatusBadRequest, body)
+			if requests != 1 || IsPaused(err) || FailureKindOf(err) != tc.want {
+				t.Fatalf("requests = %d, error = %v, kind = %v; want one raw request with kind %v", requests, err, FailureKindOf(err), tc.want)
+			}
+			if want := "ai: HTTP 400: " + body; err == nil || err.Error() != want {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+		})
 	}
 }
 
@@ -276,18 +365,29 @@ func TestDirectStreamFailureKinds(t *testing.T) {
 		transient bool
 	}{
 		{"messages nested model code", "", `data: {"type":"error","error":{"type":"not_found_error","code":"model_not_found","message":"request rejected"}}` + "\n\n", FailureModelUnavailable, "ai: error: not_found_error: request rejected", false},
+		{"messages native missing model", "", `data: {"type":"error","error":{"type":"not_found_error","message":"model: example-model"}}` + "\n\n", FailureModelUnavailable, "ai: error: not_found_error: model: example-model", false},
+		{"messages nested numeric code", "", `data: {"type":"error","error":{"type":"invalid_request_error","code":40004,"message":"prompt is too long"}}` + "\n\n", FailureContextTooLong, "ai: error: invalid_request_error: prompt is too long", false},
 		{"messages top-level context code", "", `data: {"type":"error","code":"context_length_exceeded","message":"request rejected"}` + "\n\n", FailureContextTooLong, "ai: error: context_length_exceeded: request rejected", false},
+		{"messages top-level numeric code", "", `data: {"type":"error","code":50003,"message":"upstream failed exactly","error":{"type":"api_error"}}` + "\n\n", FailureOther, "ai: error: api_error: upstream failed exactly", true},
 		{"messages whole JSON model code", "", `{"type":"error","error":{"type":"not_found_error","code":"model_not_found","message":"request rejected"}}`, FailureModelUnavailable, "ai: error: not_found_error: request rejected", false},
+		{"messages whole JSON top-level numeric code", "", `{"type":"error","code":40402,"message":"model: example-model","error":{"type":"not_found_error"}}`, FailureModelUnavailable, "ai: error: not_found_error: model: example-model", false},
 		{"messages string error model wording", "", `{"error":"unknown model example-model"}`, FailureModelUnavailable, "ai: error: error: unknown model example-model", false},
+		{"messages upstream service unavailable stays transient", "", `data: {"type":"error","error":{"type":"api_error","message":"upstream model service unavailable"}}` + "\n\n", FailureOther, "ai: error: api_error: upstream model service unavailable", true},
+		{"messages model service unavailable stays transient", "", `data: {"type":"error","error":{"type":"api_error","message":"model service is unavailable"}}` + "\n\n", FailureOther, "ai: error: api_error: model service is unavailable", true},
 		{"messages unknown code context wording", "", `data: {"type":"error","error":{"type":"invalid_request_error","code":"future_code","message":"prompt is too long"}}` + "\n\n", FailureContextTooLong, "ai: error: invalid_request_error: prompt is too long", false},
 		{"messages unknown code server status unchanged", "", `data: {"type":"error","error":{"type":"api_error","code":"future_code","message":"prompt is too long"}}` + "\n\n", FailureOther, "ai: error: api_error: prompt is too long", true},
 		{"messages unsupported endpoint", "", `data: {"type":"error","error":{"type":"not_found_error","code":"unsupported_endpoint","message":"model example-model does not exist"}}` + "\n\n", FailureOther, "ai: error: not_found_error: model example-model does not exist", false},
 		{"responses nested model code", "responses", `data: {"type":"response.failed","response":{"error":{"code":"model_not_found","message":"request rejected"}}}` + "\n\n", FailureModelUnavailable, "ai: response.failed: request rejected", false},
+		{"responses top-level numeric code", "responses", `data: {"type":"response.failed","code":40005,"message":"prompt is too long"}` + "\n\n", FailureContextTooLong, "ai: response.failed: prompt is too long", false},
+		{"responses nested numeric code", "responses", `data: {"type":"response.failed","response":{"error":{"code":40405,"message":"unknown model example-model"}}}` + "\n\n", FailureModelUnavailable, "ai: response.failed: unknown model example-model", false},
+		{"responses nested malformed code retains message", "responses", `data: {"type":"response.failed","response":{"error":{"code":{"bad":true},"message":"prompt is too long"}}}` + "\n\n", FailureContextTooLong, "ai: response.failed: prompt is too long", false},
 		{"responses top-level context code", "responses", `data: {"type":"error","code":"context_length_exceeded","message":"request rejected"}` + "\n\n", FailureContextTooLong, "ai: error: request rejected", false},
 		{"responses incomplete context code", "responses", `data: {"type":"response.incomplete","response":{"error":{"code":"context_length_exceeded","message":"request rejected"}}}` + "\n\n", FailureContextTooLong, "ai: response.incomplete: request rejected", false},
 		{"responses unknown code context wording", "responses", `data: {"type":"response.failed","response":{"error":{"code":"future_code","message":"prompt is too long"}}}` + "\n\n", FailureContextTooLong, "ai: response.failed: prompt is too long", false},
 		{"responses unsupported endpoint", "responses", `data: {"type":"response.failed","response":{"error":{"code":"unsupported_endpoint","message":"model example-model does not exist"}}}` + "\n\n", FailureOther, "ai: response.failed: model example-model does not exist", false},
 		{"chat nested model code", "chat", `data: {"error":{"code":"model_not_found","message":"request rejected"}}` + "\n\n", FailureModelUnavailable, "ai: stream error: request rejected", false},
+		{"chat nested numeric code", "chat", `data: {"error":{"code":40406,"message":"unknown model example-model"}}` + "\n\n", FailureModelUnavailable, "ai: stream error: unknown model example-model", false},
+		{"chat nested malformed code retains message", "chat", `data: {"error":{"code":{"bad":true},"message":"unknown model example-model"}}` + "\n\n", FailureModelUnavailable, "ai: stream error: unknown model example-model", false},
 		{"chat nested context code", "chat", `data: {"error":{"code":"context_length_exceeded","message":"request rejected"}}` + "\n\n", FailureContextTooLong, "ai: stream error: request rejected", false},
 		{"chat top-level context code", "chat", `data: {"type":"error","code":"context_length_exceeded","message":"request rejected"}` + "\n\n", FailureContextTooLong, "ai: stream error: request rejected", false},
 		{"chat unknown code model wording", "chat", `data: {"error":{"code":"future_code","message":"unknown model example-model"}}` + "\n\n", FailureModelUnavailable, "ai: stream error: unknown model example-model", false},
@@ -305,6 +405,37 @@ func TestDirectStreamFailureKinds(t *testing.T) {
 			}
 			if got := Transient(err); got != tc.transient {
 				t.Fatalf("Transient(%v) = %v, want %v", err, got, tc.transient)
+			}
+		})
+	}
+}
+
+func TestDirectNumericCodeFields(t *testing.T) {
+	t.Run("HTTP", func(t *testing.T) {
+		body := `{"type":"error","error":{"type":"not_found_error","code":40401,"message":"model: example-model"}}`
+		err, requests := directAPIError(t, "chat", 404, body)
+		var httpFailure *httpError
+		if requests != 1 || !errors.As(err, &httpFailure) {
+			t.Fatalf("requests = %d, error = %v; want one HTTP envelope failure", requests, err)
+		}
+		if httpFailure.code != "40401" || httpFailure.message != "model: example-model" || httpFailure.errorType != "not_found_error" || !IsModelUnavailable(err) {
+			t.Fatalf("HTTP envelope = %+v, kind = %v; want numeric code, exact message and native type", httpFailure, FailureKindOf(err))
+		}
+	})
+	for _, tc := range []struct {
+		name, body, code, kind, message string
+	}{
+		{"Messages whole body", `{"type":"error","code":40402,"message":"model: example-model","error":{"type":"not_found_error"}}`, "40402", "not_found_error", "model: example-model"},
+		{"Messages stream", `data: {"type":"error","code":50003,"message":"upstream failed exactly","error":{"type":"api_error"}}` + "\n\n", "50003", "api_error", "upstream failed exactly"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err, requests := directAPIError(t, "", 200, tc.body)
+			var failure *streamFailure
+			if requests != 1 || !errors.As(err, &failure) {
+				t.Fatalf("requests = %d, error = %v; want one Messages stream failure", requests, err)
+			}
+			if failure.code != tc.code || failure.kind != tc.kind || failure.msg != tc.message {
+				t.Fatalf("stream envelope = %+v, want code %q, type %q, message %q", failure, tc.code, tc.kind, tc.message)
 			}
 		})
 	}

@@ -52,5 +52,8 @@
   "carry_dropped": "{name} can’t run on {computer}, so its default is used.",
   "preset_picked": "Preset {name} · {what}",
   "typed_now": "Typed for this start",
-  "temporary_session": "Temporary session"
+  "temporary_session": "Temporary session",
+  "runs": "Runs",
+  "runs_hint": "Start this task {count} times, each in a worktree of its own, and compare the results.",
+  "start_runs": "Start {count}"
 }

@@ -220,6 +220,9 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.SourceIdentityConflict -> R.string.designsystem_core_source_identity_conflict
     CoreText.Key.SourceClaudeBackground -> R.string.designsystem_core_source_claude_background
     CoreText.Key.SourceClaudeDesktop -> R.string.designsystem_core_source_claude_desktop
+    CoreText.Key.AgentsCodexApp -> R.string.designsystem_core_agents_codex_app
+    CoreText.Key.AgentsDesktopApp -> R.string.designsystem_core_agents_desktop_app
+    CoreText.Key.AgentsRecentlyUsed -> R.string.designsystem_core_agents_recently_used
     CoreText.Key.SourceClaudeTerminal -> R.string.designsystem_core_source_claude_terminal
     CoreText.Key.SourceNoSend -> R.string.designsystem_core_source_no_send
     CoreText.Key.ReadOnlyBecause -> R.string.designsystem_core_read_only_because
@@ -230,6 +233,8 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineTern -> R.string.designsystem_core_engine_tern
     CoreText.Key.EnginePaseo -> R.string.designsystem_core_engine_paseo
     CoreText.Key.EngineCindy -> R.string.designsystem_core_engine_cindy
+    CoreText.Key.EngineNone -> R.string.designsystem_core_engine_none
+    CoreText.Key.EngineNoneDetail -> R.string.designsystem_core_engine_none_detail
     CoreText.Key.EngineOffline -> R.string.designsystem_core_engine_offline
     CoreText.Key.EngineUnknown -> R.string.designsystem_core_engine_unknown
     CoreText.Key.EngineFound -> R.string.designsystem_core_engine_found
@@ -237,6 +242,8 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineMissing -> R.string.designsystem_core_engine_missing
     CoreText.Key.EngineFooter -> R.string.designsystem_core_engine_footer
     CoreText.Key.EngineFooterOffline -> R.string.designsystem_core_engine_footer_offline
+    CoreText.Key.EngineFooterNone -> R.string.designsystem_core_engine_footer_none
+    CoreText.Key.EngineFooterNoneOffline -> R.string.designsystem_core_engine_footer_none_offline
     CoreText.Key.EngineSwitched -> R.string.designsystem_core_engine_switched
     CoreText.Key.EngineSavedOffline -> R.string.designsystem_core_engine_saved_offline
     CoreText.Key.ToolRun -> R.string.designsystem_core_tool_run

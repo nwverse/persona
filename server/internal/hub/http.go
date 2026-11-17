@@ -461,6 +461,13 @@ func (h *Hub) withMachine(fn func(http.ResponseWriter, *http.Request, *Machine))
 			writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 			return
 		}
+		if m.conversationDeleted(r.PathValue("sid")) {
+			writeErrCode(w, http.StatusGone, "conversation_deleted", i18n.Err("assistant-conversation_delete.deleted"))
+			return
+		}
+		if sid := r.PathValue("sid"); sid != "" {
+			w = &conversationResponseWriter{ResponseWriter: w, machine: m, id: sid, header: w.Header().Clone()}
+		}
 		fn(w, r, m)
 	}
 }
@@ -643,6 +650,7 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 	}
 	sid := r.PathValue("sid")
 	p["session_id"] = sid
+	r = h.captureHumanSubmission(r, "")
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	var out json.RawMessage
@@ -700,29 +708,28 @@ const sessionsFlushAt = 32 << 10
 // bytes writeJSON gives for the stamped lists put together, encoded a session at a time and written out every
 // sessionsFlushAt bytes, so neither a copy of the lists nor the whole answer is held. A session that fails to encode
 // is left out, as a push leaves it out (encodeRows). The lists are only read.
+//
+// Each row goes out bounded (sessions_list.go legacyListCut): long texts cut and the task arrays left out — a fleet
+// of hundreds of agents made the whole-list answer hundreds of KB a pull, and a row's whole detail stays in the chat
+// routes. The scratch copy keeps the kept list unchanged.
 func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	var buf bytes.Buffer
 	buf.Grow(sessionsFlushAt + 8<<10)
 	buf.WriteString(`{"sessions":[`)
 	enc := json.NewEncoder(&buf) // escapes HTML, as writeJSON does
-	var scratch *proto.Session
+	var scratch proto.Session
 	n := 0
 	for _, l := range lists {
 		for i := range l.list {
-			s := &l.list[i]
-			if s.Manager != l.manager {
-				if scratch == nil {
-					scratch = new(proto.Session)
-				}
-				*scratch = *s
-				scratch.Manager, s = l.manager, scratch
-			}
+			scratch = l.list[i] // a plain struct copy: the slices point into the kept list, only nilled here
+			scratch.Manager = l.manager
+			legacyListCut(&scratch)
 			mark := buf.Len()
 			if n > 0 {
 				buf.WriteByte(',')
 			}
-			if enc.Encode(s) != nil {
+			if enc.Encode(&scratch) != nil {
 				buf.Truncate(mark)
 				continue
 			}
@@ -1099,6 +1106,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.deletedConversationEventLocked(typ, b) {
+		return
+	}
 	if h.events == nil {
 		h.events = newEventLog()
 	}
@@ -1113,9 +1123,21 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 		if elicitation && !c.has("elicitation") {
 			continue
 		}
+		if typ == legacyLarkEvent && c.has(featureLarkViaMessaging) {
+			continue
+		}
 		c.queue(localizedOnce(forms, c.lang(), b, localize))
 	}
 }
+
+// legacyLarkEvent is the Lark extension's old change notice ({"type":"lark","feed_ids":…}); while the old /api/v1/lark
+// is still read it comes beside the same change's "messaging" event (docs/extensions/extension-messaging.md).
+const legacyLarkEvent = "lark"
+
+// featureLarkViaMessaging: in client_hello, the app follows the "messaging" events for its Feishu screens and drops
+// the legacy "lark" one, so it is not sent to it (#9591). An app says it only while it uses a messaging source, and
+// says it again in a new client_hello when that changes; replayed events on resume, before its hello, still include it.
+const featureLarkViaMessaging = "lark_via_messaging"
 
 func (h *Hub) toSubscribers(machineID, sessionID string, v any) {
 	h.toSubscribersWith(machineID, sessionID, "", v)
@@ -1125,6 +1147,9 @@ func (h *Hub) toSubscribers(machineID, sessionID string, v any) {
 // URL's ?features= or in client_hello. v is encoded only once some client follows the session: most streamed deltas
 // are for sessions no app has open.
 func (h *Hub) toSubscribersWith(machineID, sessionID, feature string, v any) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.toSubscribersLocked(machineID, sessionID, feature, v)
@@ -1178,6 +1203,9 @@ type (
 // itemsToSubscribers fans new items out, without image data to clients that load images on demand. moreAfter marks
 // a producer's capped replay batch, whose remaining items the client must fetch.
 func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan, moreAfter bool) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	if items == nil {
 		items = []proto.Item{}
 	}
@@ -1350,7 +1378,10 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			if c.delta {
 				h.snapshotSessions(c, m)
 			} else {
-				c.sendJSON(map[string]any{"type": "sessions", "machine_id": m.cfg.ID, "sessions": h.shown(m.cfg.ID, h.decorated(m))})
+				// The kept list, not decorated's copy of every row the manager listed: the archived rows told apart are
+				// never shown (#6836), and stamped copies only when a row lacks the manager.
+				shown := h.shown(m.cfg.ID, stamped(m.keptSessions(), h.machineOwner(m.cfg.ID)))
+				c.sendJSON(map[string]any{"type": "sessions", "machine_id": m.cfg.ID, "sessions": shown})
 			}
 		}
 	}
@@ -1466,6 +1497,10 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	case "subscribe":
 		m := h.localMachine(msg.MachineID)
 		if m == nil {
+			return
+		}
+		if m.conversationDeleted(msg.SessionID) {
+			c.sendJSON(deletedConversationEvent(m.cfg.ID, msg.SessionID))
 			return
 		}
 		// Kept under the computer's own id, which is what its pushes carry (a page may have asked by an absorbed one).
@@ -1610,7 +1645,10 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			more = false
 		}
 		if b, err := marshalItems(out); err == nil {
-			c.queue(b)
+			if !m.queueConversationBacklog(sid, func() { c.queue(b) }) {
+				c.sendJSON(deletedConversationEvent(m.cfg.ID, sid))
+				return
+			}
 		}
 		if !more {
 			h.sendLiveText(c, m.cfg.ID, sid)

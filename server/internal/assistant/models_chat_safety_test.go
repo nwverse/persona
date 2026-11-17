@@ -320,6 +320,42 @@ func TestChatProbeDoesNotRetryAfterRetryFailure(t *testing.T) {
 	}
 }
 
+func TestChatProbeRecognizedErrorCodeSuppressesCompatibilityRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, wantCode, wantHead string
+	}{
+		{
+			name:     "quota code beats stream options wording",
+			body:     `{"error":{"code":"budget_exhausted","message":"Unrecognized request argument supplied: stream_options"}}`,
+			wantCode: "",
+			wantHead: "The gateway returned 400",
+		},
+		{
+			name:     "model code beats token wording",
+			body:     `{"error":{"code":"model_not_found","message":"max_tokens is not supported; use max_completion_tokens"}}`,
+			wantCode: "model_not_found",
+			wantHead: "The gateway is reachable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer gw.Close()
+			s, _ := launcherTestService(t)
+			out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "m", API: "chat"})
+			msg, _ := out["error"].(string)
+			code, _ := out["code"].(string)
+			if calls != 1 || out["ok"] != false || code != tc.wantCode || !strings.Contains(msg, tc.wantHead) {
+				t.Fatalf("calls=%d out=%v, want one request with code %q and head %q", calls, out, tc.wantCode, tc.wantHead)
+			}
+		})
+	}
+}
+
 func TestChatProbeTokenRetry(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -330,6 +366,7 @@ func TestChatProbeTokenRetry(t *testing.T) {
 		{"supported", 200, "", false},
 		{"unsupported", 400, `{"error":{"message":"max_tokens is not supported; use max_completion_tokens"}}`, true},
 		{"unsupported alias", 400, `{"error":{"message":"unsupported max_tokens; use max_completion_tokens"}}`, true},
+		{"unknown code still allows compatibility", 400, `{"error":{"code":"future_code","message":"max_tokens is not supported; use max_completion_tokens"}}`, true},
 		{"generic", 400, `{"error":{"message":"bad request"}}`, false},
 		{"missing replacement", 400, `{"error":{"message":"max_tokens is not supported"}}`, false},
 		{"missing rejection", 400, `{"error":{"message":"max_tokens and max_completion_tokens"}}`, false},

@@ -18,7 +18,7 @@ an explicit host selection overrides it. Other offline sessions use the default 
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
 The web is wired: the machine page's Engine section is a checklist with "Make default", New Agent has "Open in", and a session live in
 two hosts shows "Also open in …" above the composer. iOS and Android still pick one engine, and the single engine picked keeps working;
-iOS also offers "No Terminal Engine", the empty set, last in Choose Engine when the hub reports `engine_hosts` (#3302).
+iOS and Android also offer "No Terminal Engine", the empty set, last in Choose Engine when the hub reports `engine_hosts` (#3302).
 
 - **Only enabled hosts are registered.** An engine that is not checked gets no client, no polling and no event subscription; it is only probed once in
   `node.info` (for "Detected"). An engine that is not installed or not running does not slow the others down.
@@ -213,7 +213,7 @@ inbox when it has one. tmux is added next to whichever engine the machine select
 when `botmux` is on the computer's PATH, node adds a botmux host alongside the selected engine host (`server/internal/node/hostbotmux.go`).
 Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
 
-- **Listing and state**: each refresh runs `botmux observe --include-raw` (all sessions from all daemons, reused within 5 seconds, immediately reread after sending; 0.3–0.9 seconds for about 500 local sessions; occasional observe failures retain the previous list).
+- **Listing and state**: each refresh runs `botmux observe --include-raw` (all sessions from all daemons, reused within 5 seconds, immediately reread after sending; 0.3–0.9 seconds for about 500 local sessions; occasional observe failures retain the previous list). botmux exits 1 when one daemon's probe failed (`unauthorized`, `unreachable`, `daemon_offline`) and still prints every daemon's answer: the sessions of the daemons that answered are listed, a failed daemon's stay as it last listed them, and a message to one of those is refused with its probe error, nothing posted. Only when no daemon answered is the observe a failure (#8949).
   Lists Claude Code, Codex, and the compatible Codex fork (`cli.id: claude-code / codex / traex`), with identical state rules: running sessions use botmux state (dialog `tuiPromptActive` or botmux Needs you → Needs you; `working` / `starting` / `analyzing` → Working;
   others → Done). Suspended (`not_running`, not closed, active within 7 days) appear Not running. For Claude Code, botmux session ID is the Claude ID used to start it, so transcript handling is unchanged.
   For Codex / the compatible fork, observe omits CLI session ID (stored in botmux database), but every prompt starts with `<session_id><botmux-session-id></session_id>`.

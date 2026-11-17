@@ -47,7 +47,7 @@ nonisolated struct VoiceUnavailableNote: Equatable, Sendable {
                                         message: String(localized: "It’s view-only and can’t take messages."), settings: nil)
         case .meetingRoom:
             return VoiceUnavailableNote(title: String(localized: "Voice isn’t available in this chat"),
-                                        message: String(localized: "To talk to Persona in this meeting, hold Talk on the meeting’s page while it records."),
+                                        message: String(localized: "To talk to Persona in this meeting, tap Talk on the meeting’s page while it records."),
                                         settings: nil)
         case .unknown:
             return VoiceUnavailableNote(title: String(localized: "Not sure yet whether the hub supports voice"),
