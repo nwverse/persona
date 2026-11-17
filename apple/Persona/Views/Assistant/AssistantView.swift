@@ -282,7 +282,7 @@ struct AssistantView: View {
                 // A phone's page at regular width too (iPhone Duo open, either layout; #3680, #3641): the iPhone's new
                 // conversation, with what needs the user over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, cleared: showsClearedMain, launcher: $starterLauncher, mode: $starterMode,
-                          effort: $starterEffort, openInbox: { navPath.wrappedValue.append($0) }, resend: resend, delete: deleteFailed) { text, images in
+                          effort: $starterEffort, openInbox: openFromOutside, resend: resend, delete: deleteFailed) { text, images in
                     Task { await start(text, images) }
                 }
                 .onAppear {
@@ -551,6 +551,11 @@ struct AssistantView: View {
         #if DEBUG
         ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut) path=\(navPath.wrappedValue.count) kept=\(kept?.count ?? 0)")
         #endif
+        // The Inbox at its root: chosen again while in front, its page stays up and is told (#9053). A kept path puts
+        // a new page beneath its item, which lands on that item's choice.
+        if page == .inbox {
+            if kept == nil { model.inboxEntries += 1 } else { InboxBarLanding.shared.broughtBack() }
+        }
         underDrawer {
             backToRoot()
             if let kept {
@@ -575,6 +580,27 @@ struct AssistantView: View {
         if let shell, shell.drawer.isOut { shell.drawer.close() }
     }
 
+    /// An Inbox item opened from outside the Inbox (a Needs-you line over the composer): pushed over the Inbox, the list
+    /// landed on the item's choice, so closing the item shows the list where the item lives (#9053, docs/assistant/inbox.md
+    /// "Section bar"). What the Inbox kept open gives way to it. A page without places pushes the item alone, as before.
+    private func openFromOutside(_ item: InboxItem) {
+        guard placesByValue else { return navPath.wrappedValue.append(item) }
+        // the item in front before the list beneath first appears, whichever of the two appears first
+        InboxBarLanding.shared.appeared(item)
+        #if os(iOS)
+        if embedded, let unified {
+            traceRoot(.inbox, unified.select(.page(ShellRoute.inbox), path: navPath))
+            navPath.wrappedValue = NavigationPath([item])
+            return
+        }
+        #endif
+        _ = places.enter(.inbox, from: navPath.wrappedValue)
+        var path = NavigationPath()
+        path.append(ShellRoute.inbox)
+        path.append(item)
+        navPath.wrappedValue = path
+    }
+
     #if os(iOS)
     /// The Sidebar layout (#8359): each page the sidebar opens is a root of the page beside it, the conversation one of
     /// them. Picking one replaces the root at once, the one left keeping what was opened on it; picking the one in front
@@ -588,7 +614,19 @@ struct AssistantView: View {
             traceRoot(page, nil)
             enterHealth()
         default:
-            traceRoot(page, SidebarPageRoot.of(page).map { unified.select($0, path: navPath) })
+            let step = SidebarPageRoot.of(page).map { unified.select($0, path: navPath) }
+            if page == .inbox, let step { inboxPicked(step) }
+            traceRoot(page, step)
+        }
+    }
+
+    /// The Inbox picked in the Sidebar layout (#9053): picked again while it is the root, its page stays up and is told,
+    /// as every entry opens on Needs You; brought back with what it kept open, its new page lands on that item's choice.
+    private func inboxPicked(_ step: SidebarPageRoots.Step) {
+        switch step.move {
+        case .none, .popToRoot: model.inboxEntries += 1
+        case .switchRoot: if !step.path.isEmpty { InboxBarLanding.shared.broughtBack() }
+        case .drillDown: break
         }
     }
 
@@ -1043,6 +1081,10 @@ struct AssistantWelcome: View {
     /// The cards' rows at most (the shell: two, the page ends at their bottom, with no third row peeking out under the
     /// fade over Needs You, #5648); every suggestion when nil.
     var cardRows: Int? = nil
+    /// The token calendar's days (#9506) and its page.
+    @State private var usage = TokenUsageModel()
+    @State private var showUsage = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     /// A thing to ask: sent as `prompt`, or (`local`) opening help on this device; `needs`: the phone data it reads.
     struct Suggestion {
@@ -1109,6 +1151,14 @@ struct AssistantWelcome: View {
         .coordinateSpace(.named(WelcomeFold.space))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("assistant-welcome")
+        // Read when the page shows and when the app comes back to the front: no timer (the home stays still).
+        .tabActiveTask(id: sizeClass == .regular) {
+            await usage.loadDays(sizeClass == .regular ? TokenUsageModel.yearDays : TokenUsageModel.phoneDays)
+        }
+        .navigationDestination(isPresented: $showUsage) { TokenUsagePage() }
+        #if DEBUG
+        .onAppear { if UserDefaults.standard.bool(forKey: "openTokenUsage") { showUsage = true } } // screenshots
+        #endif
     }
 
     @ViewBuilder private var things: some View {
@@ -1175,17 +1225,10 @@ struct AssistantWelcome: View {
                  : String(localized: "Start a new side chat. I can see your computers, iPhone, email, Lark, and organized projects, and I can keep an eye on things and remind you when it's time."))
                 .font(Theme.Font.secondary).lineHeight(.secondary)
                 .foregroundStyle(.secondary)
-            // Wraps: in one HStack, a few more machines (or larger text) widened the whole page past the screen.
-            LarkFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(model.machines.filter { $0.online && model.assistantShows($0.manager) }) { m in
-                    Chip(text: m.name, symbol: m.symbol)
-                }
-                #if os(macOS)
-                // What this chip shows is this device's own link to the hub: on the Mac, this Mac.
-                Chip(text: ConnectorText.device, symbol: model.live.looksConnected ? Theme.Icon.laptop : Theme.Icon.laptopOffline)
-                #else
-                Chip(text: "iPhone", symbol: model.live.looksConnected ? Theme.Icon.phone : "iphone.slash")
-                #endif
+            // Tokens a day (#9506), where the computers' chips were: labels that did nothing (the connection is in the
+            // title). Only once the hub has history with usage in it: an older hub, or one with no computers, shows none.
+            if usage.hasUsage, let days = usage.days {
+                TokenCalendarCard(days: days) { showUsage = true }
             }
         }
     }

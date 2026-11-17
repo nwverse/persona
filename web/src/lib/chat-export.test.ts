@@ -24,6 +24,45 @@ describe("spec/fixtures/chat-export/cases.json", () => {
   }
 });
 
+describe("server and local truncation", () => {
+  const meta = fixture.meta;
+  const body = (item: Item) => transcriptMarkdown([item], meta, { work: true, words, time: utc });
+
+  it.each(["user", "assistant"] as const)("does not guess omitted character counts from a %s message's UTF-8 bytes", (role) => {
+    const text = "汉".repeat(8192) + "\n…（已截断，共 27000 字节）";
+    const out = body({ id: "m", seq: 1, role, kind: "text", text, full_size: 27000 });
+    expect(out).toContain(text);
+    expect(out).toContain(words.cutUnknown);
+    expect(out).not.toContain("18790 more characters");
+  });
+
+  it("uses an unnumbered warning for a server-cut result even when locally clipped too", () => {
+    const out = body({ id: "r", seq: 1, role: "user", kind: "tool_result", text: "汉".repeat(4100), full_size: 27000 });
+    expect(out).toContain(words.cutUnknown);
+    expect(out).not.toContain("more characters not included");
+  });
+
+  it("counts local clipping of a complete result in Unicode code points", () => {
+    const out = body({ id: "r", seq: 1, role: "user", kind: "tool_result", text: "😀".repeat(4002) });
+    expect(out).toContain(words.cut(2));
+    expect(out).not.toContain(words.cutUnknown);
+  });
+
+  it("reports both incomplete history and a server-cut retained message", async () => {
+    const page = async (): Promise<ItemsPage> => ({ items: [{ id: "a", seq: 1, role: "assistant", kind: "text", text: "partial", full_size: 100 }], has_more: true });
+    const got = await readConversation({ work: false, page, full: async () => { throw new Error("unavailable"); } });
+    const out = transcriptMarkdown(got.items, meta, { work: false, words, partial: got.partial });
+    expect(got.partial).toBe(true);
+    expect(out).toContain(words.partialUnknown);
+    expect(out).toContain(words.cutUnknown);
+  });
+
+  it("retains a warning for a server-cut thinking item", () => {
+    const out = body({ id: "t", seq: 1, role: "assistant", kind: "thinking", text: "partial thought", full_size: 100 });
+    expect(out).toContain(words.cutUnknown);
+  });
+});
+
 describe("the pieces", () => {
   it("fences text longer than any run of backticks inside it", () => {
     expect(fenced("plain")).toBe("```\nplain\n```");
@@ -66,7 +105,7 @@ function hub(n: number, size = 3, cut: number[] = []) {
     const slice = older.slice(Math.max(0, older.length - size));
     return { items: slice, has_more: older.length > size, history };
   };
-  const full = async (id: string) => ({ ...items.find((i) => i.id === id)!, text: `whole ${id}` });
+  const full = async (id: string) => ({ ...items.find((i) => i.id === id)!, text: `whole ${id}`, full_size: undefined });
   return { items, queries, page, full, rewrite: (h: string) => void (history = h) };
 }
 
@@ -85,6 +124,25 @@ describe("reading the whole conversation", () => {
       "turns=10&lazy_images=1&fold_work=1&before_seq=3",
     ]);
     expect(seen).toEqual([3, 6, 8]);
+  });
+
+  it("requests a full item even when the appended page notice is longer than its missing tail", async () => {
+    const text = "x".repeat(24576) + "\n…（已截断，共 24577 字节）";
+    const page = async (): Promise<ItemsPage> => ({ items: [{ id: "a", seq: 1, role: "assistant", kind: "text", text, full_size: 24577 }], has_more: false });
+    let calls = 0;
+    const full = async (): Promise<Item> => { calls++; return { id: "a", seq: 1, role: "assistant", kind: "text", text: "x".repeat(24577) }; };
+    const got = await readConversation({ work: false, page, full });
+    expect(calls).toBe(1);
+    expect(got.items[0].text).toBe("x".repeat(24577));
+    expect(got.items[0].full_size).toBeUndefined();
+  });
+
+  it("keeps the cut marker if a full response is still marked cut", async () => {
+    const page = async (): Promise<ItemsPage> => ({ items: [{ id: "a", seq: 1, role: "assistant", kind: "text", text: "partial", full_size: 100 }], has_more: false });
+    const full = async (): Promise<Item> => ({ id: "a", seq: 1, role: "assistant", kind: "text", text: "still partial", full_size: 100 });
+    const got = await readConversation({ work: false, page, full });
+    expect(got.items[0]).toMatchObject({ text: "still partial", full_size: 100 });
+    expect(transcriptMarkdown(got.items, fixture.meta, { work: false, words })).toContain(words.cutUnknown);
   });
 
   it("reads the pages unfolded with work steps", async () => {
