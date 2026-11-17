@@ -57,8 +57,8 @@ func TestLauncherHealthUsageLimitRechecksBeforeReset(t *testing.T) {
 					t.Fatalf("restored starts changed machine: %v", starts)
 				}
 			} else {
-				if !r.unusable() || r.CheckedAt != before.CheckedAt || r.Kind != errKindUsageLimit || !r.ResetsAt.Equal(reset) || r.Fails != before.Fails {
-					t.Fatalf("failed probe changed quota record: before %+v, after %+v", before, r)
+				if !r.unusable() || !r.CheckedAt.After(before.CheckedAt) || r.Kind != errKindUsageLimit || !r.ResetsAt.Equal(reset) || r.Fails != before.Fails+1 {
+					t.Fatalf("failed probe did not retain fresh quota evidence: before %+v, after %+v", before, r)
 				}
 				if starts := taskStartMachines(f); len(starts) != 0 {
 					t.Fatalf("exhausted quota started agents: %v", starts)
@@ -127,6 +127,7 @@ func TestFixedTaskUsageLimitRecoversOnRetryBeforeReset(t *testing.T) {
 	f.mu.Lock()
 	delete(f.checks, "l4/work")
 	f.mu.Unlock()
+	editHealth(s, "l4", "work", func(r *LauncherHealth) { r.CheckedAt = time.Now().Add(-healthRecheckThrottle - time.Second) })
 	s.health.mu.Lock()
 	s.health.recheckAt[healthKey("l4", "work")] = time.Now().Add(-healthRecheckThrottle - time.Second)
 	s.health.mu.Unlock()

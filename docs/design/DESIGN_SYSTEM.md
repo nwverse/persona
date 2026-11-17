@@ -545,6 +545,20 @@ on-demand model panel, not the everyday Assistant home (#6887).
   thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each
   as wide as its picture (¾ to 1.6 of its height), with a small mark for a screenshot or a web page and nothing written
   around them; a tap opens the viewer on the turn's images. Android draws it on Glass (`ViewedImagesRow`, #4339 C9).
+- Pictures in replies (#9474; web #9475, Android #9476; iOS `ReplyPictureRun`, rules in PersonaKit `ReplyImages` and
+  `ReplyImageLayout`, tokens `Theme.Size.replyPicture` / `replyPictures` / `replyPictureFailed`): a web picture on a
+  line of its own, however it sits in its paragraph, is a block picture; block pictures with only line breaks or blank
+  lines between them are one run. One picture is `replyPicture` (240 pt) tall and as wide as its shape from 3:4 up to
+  the column (wider or narrower ones cut around their centre), never larger than itself; two are squares side by side;
+  three or more are squares three to a row (four as 2 × 2), at most two rows, the sixth dimmed with "+N" for those not
+  drawn; a run is at most `replyPictures` (480 pt) wide. Same left edge as the text, `Radius.control`, the hairline
+  `cardStroke`, `Fill.well` while it loads. The box is its final size before the picture arrives: only a lone
+  picture's width changes, so the text below never moves. One that did not load is a `replyPictureFailed` tile with
+  the retry mark (in a run, that square), a tap retries; a long press offers Open Original. A picture inside a line of
+  text is the line's height. A tap opens the viewer on every picture of the reply. They load through the hub's remote
+  image route (`remote_images`, docs/protocol/protocol.md "Remote images (#9473)") at the size drawn; what other
+  people wrote (the Inbox's Lark, GitHub and connector threads, `asksBeforePictures()`) keeps each run its size with
+  Load Image over it until tapped, since a picture there may be a tracking pixel.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -1689,6 +1703,15 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one. When the interaction advertises `can_cancel`, a visible **Skip** text action with at least a 44 pt target leads that action row, on the review too; it is not the card's fold mark. Skip sends only `{"cancel":true}`, is disabled while an answer or another Skip is in flight, and leaves the card and its picks in place with the error and Retry on failure. Success removes the card and gives the receipt **Question closed without an answer**. Persona's own main-conversation `ask_user` has no terminal handoff; an Agent's question keeps it. Cards without `can_cancel` have no Skip and keep their existing layout.
+- **A card this client can't answer** (web #7497, Android `approvalBlockedReason`; iOS in #6868): the session's
+  capabilities withhold `approve` (a Codex thread Persona hasn't joined, a subagent its parent drives, an unknown
+  session), so the card's answers are disabled. It never greys silently: one line under the card in the attention tone
+  says why. Where the session offers a live link: "Link it live to answer it here, or answer it on the computer", with
+  the ⋯ menu's **Live link** (same label, icon and action) beside it; once linked the card answers and the line goes.
+  Otherwise: "This session can't be answered from here. Answer it on the computer." An answer on its way is a different
+  state and keeps its own "Sending" line in the card's answer row. A manager work card (`persona_triage`) has no line:
+  its local defer and dismiss still work there. Web: `answerBlock` (`web/src/lib/format.ts`); the line and Live link
+  load in their own chunk, off the first screen (`web/src/views/chat/CardBlockedLine.tsx`).
 - **A question the assistant answered** (iOS `DelegatedCard`, web `Delegated.tsx`, Android on Glass): no longer a pending request, so it is counted nowhere and has no Needs you row. The newest one for the Agent is a card over its chat's composer, after the Agent's own cards, until its × puts it away: "Answered by the assistant", each question with the answer as it is now, "Why: …", and Change Answer while the chat takes messages. Change Answer's sheet starts from the answers so far and sends only what changed, as a message to the Agent. Session Info lists every one with the same body and Change Answer.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 

@@ -397,6 +397,7 @@ struct ThreadRichTextView: View {
             Markdown(Self.memo(text.body) { MarkdownContent(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply($0)))) })
                 .markdownSoftBreakMode(.lineBreak)
                 .markdownTheme(.persona)
+                .asksBeforePictures() // other people wrote it (#9474)
                 .textSelection(.enabled)
             Text(stamp).font(Theme.Font.caption).monospacedDigit().foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .trailing)
