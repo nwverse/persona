@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -94,9 +95,10 @@ func TestAssistantIgnoresARuntimeFromAnOlderHub(t *testing.T) {
 	}
 }
 
-// A conversation an older node ran on another runtime has "runtime" in its state as the hub keeps it. It continues on
-// the CLI: claude resumes the same conversation id in the profile its state recorded, whether the hub still names
-// that runtime or names none; the state the node writes back has no runtime.
+// A conversation an older node ran on the Agent SDK: the hub's state for it has the launcher and the profile that node
+// chose (the hub kept no runtime; a "runtime" key, as an older node held it, is ignored), and its transcript the SDK's
+// entrypoint. It continues on the CLI: claude resumes the same conversation id in the profile its state recorded,
+// whether the hub still names that runtime or names none; the state the node writes back has no runtime.
 func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.T) {
 	for _, hub := range []string{"older hub", "current hub"} {
 		t.Run(hub, func(t *testing.T) {
@@ -105,8 +107,8 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 			id := "a5500000-0000-4000-8000-000000000901"
 			cwd := filepath.Join(n.dir, "assistant")
 			profile := filepath.Join(n.dir, "profiles", "claude")
-			writeProfileTranscript(t, profile, cwd, id)
-			// state.load's answer as the hub gives it, with what an older node wrote for the conversation.
+			writeRunTranscript(t, profile, cwd, id, "sdk-ts")
+			// state.load's answer for the conversation, with the key an older node held.
 			load := []byte(`{"sessions":{"` + id + `":{"launcher":"claude","cwd":` + jsonString(t, cwd) + `,` +
 				`"model_fingerprint":"fp-main","runtime":"agentsdk","config_dir":` + jsonString(t, profile) + `,` +
 				`"is_main":true,"started_at":"2026-11-01T00:00:00Z"}}}`)
@@ -137,8 +139,9 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 				t.Fatal("no process")
 			}
 			if i := slices.Index(p.cmd.Args, "--resume"); i < 0 || i+1 >= len(p.cmd.Args) || p.cmd.Args[i+1] != id ||
-				!slices.Contains(p.cmd.Args, "-ic") || slices.Contains(p.cmd.Args, "--session-id") {
-				t.Fatalf("not claude -p resuming %s: %q", id, p.cmd.Args)
+				!slices.Contains(p.cmd.Args, "-ic") || slices.Contains(p.cmd.Args, "--session-id") ||
+				!strings.Contains(strings.Join(p.cmd.Args, " "), "command claude") {
+				t.Fatalf("not claude -p itself resuming %s: %q", id, p.cmd.Args)
 			}
 			if got := envValue(p.cmd.Environ(), "CLAUDE_CONFIG_DIR"); !sameScopePath(got, profile) {
 				t.Fatalf("process profile %q, want %q", got, profile)
@@ -155,6 +158,111 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 				t.Fatalf("the state written back records a runtime: %s", b)
 			}
 		})
+	}
+}
+
+// writeRunTranscript writes assistant conversation id's transcript in profile: a user line and an answer that a
+// Claude Code started through entrypoint wrote.
+func writeRunTranscript(t *testing.T, profile, cwd, id, entrypoint string) {
+	t.Helper()
+	ep := jsonString(t, entrypoint)
+	writeFile(t, filepath.Join(profile, "projects", "-assistant", id+".jsonl"),
+		`{"type":"user","cwd":`+jsonString(t, cwd)+`,"entrypoint":`+ep+`,"message":{"role":"user","content":"earlier"}}`+"\n"+
+			`{"type":"assistant","entrypoint":`+ep+`,"message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}`+"\n")
+}
+
+// A conversation the Agent SDK started with the plain claude launcher keeps running claude as the SDK did, the
+// executable itself (`command claude`, past an alias or shell function named claude) in the profile its state
+// recorded, resuming it there: also where `claude` sets a profile of its own, and after the CLI's lines followed the
+// SDK's. A conversation the CLI started goes through the launcher as before, and is refused where the launcher's own
+// profile is another (#4310).
+func TestAssistantResumesAnAgentSDKConversationPastAClaudeWrapper(t *testing.T) {
+	for _, c := range []struct{ wrapper, started string }{
+		{"none", "sdk-ts"}, {"alias", "sdk-ts"}, {"function", "sdk-ts"}, {"none", "sdk-cli"}, {"alias", "sdk-cli"},
+	} {
+		t.Run(c.wrapper+"/"+c.started, func(t *testing.T) {
+			f, _ := resumeTest(t)
+			n := f.n
+			own := filepath.Join(n.home, ".claude-work")
+			switch c.wrapper {
+			case "alias":
+				writeFile(t, filepath.Join(n.home, ".zshrc"), `alias claude='CLAUDE_CONFIG_DIR=`+shellQuote(own)+` claude'`+"\n")
+				if got := n.assistantLauncherProfile(context.Background(), "claude"); !sameScopePath(got, own) {
+					t.Fatalf("the claude alias's own profile %q, want %q", got, own)
+				}
+			case "function": // the probe's own claude stands in for it: no profile of its own is seen
+				writeFile(t, filepath.Join(n.home, ".zshrc"), `function claude { CLAUDE_CONFIG_DIR=`+shellQuote(own)+` command claude "$@"; }`+"\n")
+			}
+			id := "a5500000-0000-4000-8000-000000000902"
+			cwd := filepath.Join(n.dir, "assistant")
+			profile := filepath.Join(n.dir, "profiles", "claude")
+			transcript := filepath.Join(profile, "projects", "-assistant", id+".jsonl")
+			writeRunTranscript(t, profile, cwd, id, c.started)
+			putSessionState(t, n, id, map[string]any{"launcher": "claude", "cwd": cwd, "config_dir": profile})
+			params := map[string]any{"session_id": id, "launcher": "claude", "cwd": cwd, "text": "hello", "model_fingerprint": "fp-main"}
+			_, err := nodeCall(t, n, "assistant.send", params)
+			if c.wrapper == "alias" && c.started == "sdk-cli" {
+				if err == nil || !strings.Contains(err.Error(), "conflicts with the launcher's own profile") {
+					t.Fatalf("a conversation the CLI started: %v, want the profile conflict", err)
+				}
+				return
+			}
+			for round := 1; round <= 2; round++ {
+				if err != nil {
+					t.Fatalf("round %d: resume failed: %v (claude saw %q)", round, err, f.file("cli-profile"))
+				}
+				p := f.proc(id)
+				if p == nil {
+					t.Fatalf("round %d: no process", round)
+				}
+				if i := slices.Index(p.cmd.Args, "--resume"); i < 0 || i+1 >= len(p.cmd.Args) || p.cmd.Args[i+1] != id {
+					t.Fatalf("round %d: not resuming %s: %q", round, id, p.cmd.Args)
+				}
+				if itself := strings.Contains(strings.Join(p.cmd.Args, " "), "command claude"); itself != (c.started == "sdk-ts") {
+					t.Fatalf("round %d: claude itself %v: %q", round, itself, p.cmd.Args)
+				}
+				cliWait(t, "claude's profile", func() bool { return f.file("cli-profile") != "" })
+				if got := strings.TrimSuffix(f.file("cli-profile"), "\n"); !sameScopePath(strings.TrimPrefix(got, "set:"), profile) {
+					t.Fatalf("round %d: claude ran in profile %q, want %q", round, got, profile)
+				}
+				if st, _ := n.state.get(id); !sameScopePath(st.ConfigDir, profile) {
+					t.Fatalf("round %d: recorded profile %q", round, st.ConfigDir)
+				}
+				// The CLI's lines after the SDK's: the conversation is still the one the SDK started.
+				n.stopAssistant(id)
+				_ = os.Remove(filepath.Join(f.dir, "cli-profile"))
+				appendFile(t, transcript, `{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"later"}}`+"\n")
+				_, err = nodeCall(t, n, "assistant.send", params)
+			}
+		})
+	}
+}
+
+// The first entrypoint on a transcript is the start's, wherever the reads that take it in cut it.
+func TestStartedOnAgentSDK(t *testing.T) {
+	dir := t.TempDir()
+	read := 64 << 10
+	sdk, cli := `"entrypoint":"sdk-ts"`, `"entrypoint":"sdk-cli"`
+	for name, c := range map[string]struct {
+		text string
+		want bool
+	}{
+		"the CLI's":               {`{` + cli + `}` + "\n" + `{` + sdk + `}` + "\n", false},
+		"the SDK's":               {`{` + sdk + `}` + "\n" + `{` + cli + `}` + "\n", true},
+		"after lines without one": {`{"type":"summary"}` + "\n" + `{` + sdk + `}` + "\n", true},
+		"past the first read":     {`{"type":"user","text":"` + strings.Repeat("x", 2*read) + `",` + sdk + `}` + "\n", true},
+		"its key cut by a read":   {strings.Repeat("x", read-10) + sdk + "\n", true},
+		"its value cut by a read": {strings.Repeat("x", read-len(`"entrypoint":"`)-2) + sdk + "\n", true},
+		"none":                    {`{"type":"summary"}` + "\n", false},
+	} {
+		p := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".jsonl")
+		writeFile(t, p, c.text)
+		if got := startedOnAgentSDK(p); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+	if startedOnAgentSDK("") || startedOnAgentSDK(filepath.Join(dir, "missing.jsonl")) {
+		t.Error("no transcript was started on the SDK")
 	}
 }
 

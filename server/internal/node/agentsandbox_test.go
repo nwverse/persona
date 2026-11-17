@@ -102,7 +102,7 @@ func TestAssistantCLIInAgentSandbox(t *testing.T) {
 	settings := filepath.Join(n.dir, "launcher-settings", "claude-claude-settings.json")
 	writeFile(t, settings, "{}")
 	args := []string{"-p", "--settings", settings}
-	cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), args, env)
+	cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), false, args, env)
 	if !slices.Equal(cmd.Args, plain(args)) || !slices.Equal(cmd.Env, env) {
 		t.Fatalf("off: %q %q", cmd.Args, cmd.Env)
 	}
@@ -114,7 +114,7 @@ func TestAssistantCLIInAgentSandbox(t *testing.T) {
 	settings = filepath.Join(n.dir, "launcher-settings", "claude-claude-settings.json")
 	writeFile(t, settings, "{}")
 	args = []string{"-p", "--settings", settings}
-	cmd = n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), args, env)
+	cmd = n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), false, args, env)
 	if !inSandbox(cmd.Args) || !slices.Equal(cmd.Args[3:], plain(args)) {
 		t.Fatalf("on: %q", cmd.Args)
 	}
@@ -131,17 +131,17 @@ func TestAssistantCLIInAgentSandbox(t *testing.T) {
 	// A managed launcher's shell runs `personad launch` outside the sandbox: it fetches the launcher's settings, then
 	// wraps the agent it execs itself (TestLaunchExec).
 	n.setManaged([]proto.ManagedLauncher{{Name: "work"}})
-	if cmd := n.assistantCLICommand("/bin/zsh", "work", filepath.Join(n.dir, "assistant"), args, env); inSandbox(cmd.Args) || cmd.Args[0] != "/bin/zsh" {
+	if cmd := n.assistantCLICommand("/bin/zsh", "work", filepath.Join(n.dir, "assistant"), false, args, env); inSandbox(cmd.Args) || cmd.Args[0] != "/bin/zsh" {
 		t.Errorf("managed launcher: the shell was wrapped: %q", cmd.Args)
 	}
 
 	t.Setenv("PERSONA_AGENT_SANDBOX", "off")
-	if cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), args, env); inSandbox(cmd.Args) {
+	if cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), false, args, env); inSandbox(cmd.Args) {
 		t.Errorf("PERSONA_AGENT_SANDBOX=off over the file: %q", cmd.Args)
 	}
 	t.Setenv("PERSONA_AGENT_SANDBOX", "on")
 	n = agentNode(t, false)
-	if cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), nil, env); !inSandbox(cmd.Args) {
+	if cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), false, nil, env); !inSandbox(cmd.Args) {
 		t.Errorf("PERSONA_AGENT_SANDBOX=on without the file: %q", cmd.Args)
 	}
 }
@@ -196,7 +196,7 @@ func TestAgentSandboxFallsBack(t *testing.T) {
 				args = append(args, c.prep(t, n, cwd)...)
 			}
 			env := []string{"PATH=/usr/bin"}
-			cmd := n.assistantCLICommand("/bin/zsh", "claude", cwd, args, env)
+			cmd := n.assistantCLICommand("/bin/zsh", "claude", cwd, false, args, env)
 			if inSandbox(cmd.Args) || cmd.Args[0] != "/bin/zsh" || !slices.Equal(cmd.Env, env) {
 				t.Fatalf("wrapped: %q %q", cmd.Args, cmd.Env)
 			}
@@ -213,7 +213,7 @@ func TestAgentSandboxFallsBack(t *testing.T) {
 		agentSandboxFakes(t, macSandbox)
 		n := agentNode(t, true)
 		writeFile(t, filepath.Join(n.home, ".claude", "settings.json"), `{"sandbox": {"enabled": false, "autoAllowBashIfSandboxed": true}}`)
-		if cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), nil, nil); !inSandbox(cmd.Args) {
+		if cmd := n.assistantCLICommand("/bin/zsh", "claude", filepath.Join(n.dir, "assistant"), false, nil, nil); !inSandbox(cmd.Args) {
 			t.Errorf("sandbox.enabled false: not wrapped %q", cmd.Args)
 		}
 	})
