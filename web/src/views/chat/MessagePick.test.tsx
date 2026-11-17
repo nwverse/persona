@@ -154,7 +154,7 @@ describe("the pick bar", () => {
     off();
     // Forward to opens with them in the chat's order, and they are dropped once they went
     const batch = opened.mock.calls[0][0];
-    expect(batch.drafts.map((d) => d.source.item)).toEqual(["u#1", "r#2"]);
+    expect(batch.drafts!.map((d) => d.source.item)).toEqual(["u#1", "r#2"]);
     expect(batch.select).toBeUndefined();
     batch.sent?.();
     expect(onEnd).toHaveBeenCalledOnce();
@@ -187,18 +187,18 @@ describe("the pick bar", () => {
     const questions = host.querySelector<HTMLButtonElement>("[data-pick-questions]");
     expect(questions?.getAttribute("aria-checked")).toBe("true");
     act(() => button("pick-forward").click());
-    expect(opened.mock.calls[0][0].drafts.map((d) => d.source.item)).toEqual(["u#1", "r#2"]);
+    expect(opened.mock.calls[0][0].drafts!.map((d) => d.source.item)).toEqual(["u#1", "r#2"]);
     act(() => questions!.click());
     expect(host.querySelector("[data-pick-questions]")?.getAttribute("aria-checked")).toBe("false");
     act(() => button("pick-forward").click());
-    expect(opened.mock.calls[1][0].drafts.map((d) => d.source.item)).toEqual(["r#2"]);
+    expect(opened.mock.calls[1][0].drafts!.map((d) => d.source.item)).toEqual(["r#2"]);
     off();
     localStorage.removeItem(INCLUDE_KEY);
   });
 
   it("is started from the message menu's last row, Select messages (#9469)", () => {
-    const select = vi.fn();
-    const chat: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Agent", title: "Network tests", forward: () => {}, select, images: () => [] };
+    const forward = vi.fn();
+    const chat: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Agent", title: "Network tests", forward, images: () => [] };
     act(() =>
       root.render(
         <ChatActionsContext.Provider value={chat}>
@@ -213,7 +213,8 @@ describe("the pick bar", () => {
     const last = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].at(-1)!;
     expect(last.textContent).toBe("Select messages");
     act(() => last.click());
-    expect(select).toHaveBeenCalledWith(expect.objectContaining({ itemId: "r#2", isUser: false }));
+    // Forward with `now`: Forward to's chunk starts picking with it, the picker not shown
+    expect(forward).toHaveBeenCalledWith(expect.objectContaining({ itemId: "r#2", isUser: false }), true);
   });
 
   it("hands the chat back with Cancel or Escape", () => {

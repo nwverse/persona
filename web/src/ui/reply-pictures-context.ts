@@ -9,7 +9,3 @@ export interface ReplyPictures {
 }
 
 export const ReplyPicturesContext = createContext<ReplyPictures>({ text: "", ask: false });
-
-/** Set by Export image (#9469, views/chat/ExportImage.tsx): a run draws all its pictures, through the hub only, for a
- *  picture that cannot be tapped (no "+N", no viewer, no waiting for a tap). */
-export const ReplyPicturesExport = createContext(false);

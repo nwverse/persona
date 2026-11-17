@@ -7,7 +7,7 @@
 // without the route (as #8162 had them, loaded straight from their host with no Referer once asked).
 // Its own chunk: loaded with a reply's first picture. Sizes are inline styles, not new utility classes (those would
 // land in every page's stylesheet).
-import { useContext, useMemo, useState, type CSSProperties } from "react";
+import { createContext, useContext, useMemo, useState, type CSSProperties } from "react";
 import type { Element } from "hast";
 import { t } from "../i18n";
 import { getToken } from "../lib/api";
@@ -33,9 +33,13 @@ import type { ViewerImage } from "../views/chat/ImageViewer";
 import { ImageViewer } from "../views/chat/LazyImageViewer";
 import { Icon } from "./icons";
 import { NARROW, useMedia } from "./media-query";
-import { ReplyPicturesContext, ReplyPicturesExport } from "./reply-pictures-context";
+import { ReplyPicturesContext } from "./reply-pictures-context";
 
 export { rehypeReplyImages } from "./reply-images-plugin";
+
+/** Set by Export image (#9469, views/chat/ExportImage.tsx): a run draws all its pictures, through the hub only, for a
+ *  picture that cannot be tapped (no "+N", no viewer, no waiting for a tap). Here, not with the first screen's context. */
+export const ReplyPicturesExport = createContext(false);
 
 const RADIUS = 10; // the turn's viewed images' tiles (TurnImages.tsx)
 const tileClass = "group relative shrink-0 overflow-hidden bg-field shadow-hairline outline-none focus-visible:ring-2 focus-visible:ring-accent";

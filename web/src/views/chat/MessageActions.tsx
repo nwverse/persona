@@ -263,9 +263,8 @@ export function MessageActions({
   if (!actions.length) return <div className={className}>{children}</div>;
 
   // the menu ends in Select messages (#9469, iOS's row under the bar): picking starts with this one picked
-  const select: MenuItem[] = chat?.select && chat.forward && pick && !picking
-    ? [{ key: "select-messages", label: t("chat-messageactions.select_messages"), icon: "check", divider: true, onSelect: () => chat.select?.(pick) }]
-    : [];
+  const send = chat?.forward;
+  const select: MenuItem[] = send && pick && !picking ? [{ key: "pick", label: t("chat-messageactions.pick"), icon: "check", divider: true, onSelect: () => send(pick, true) }] : [];
   const items: MenuItem[] = [...[...actions, ...extras].map((a, i) => ({ ...a, divider: i === actions.length && i > 0 })), ...select];
 
   return (

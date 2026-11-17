@@ -10,7 +10,8 @@ import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } 
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { errorText, imageURL } from "../../lib/api";
-import { forwardDraftOf, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import type { ForwardChat, ForwardPick } from "../../lib/forward";
+import { forwardDraftOf } from "../../lib/forward-draft";
 import { managerOf, useRoster } from "../../lib/managers";
 import type { MessagePick } from "../../lib/message-pick";
 import { exportMessages, exportSubtitle, pageHeight, pagePlan, type ExportMessage, type Slice } from "../../lib/pick-export";
@@ -20,7 +21,7 @@ import { Button, Dialog, Spinner, Switch, toast } from "../../ui/atoms";
 import { SessionMark } from "../../ui/AgentMark";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { ReplyPicturesExport } from "../../ui/reply-pictures-context";
+import { ReplyPicturesExport } from "../../ui/ReplyImages";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import type { ExportRequest } from "./Picking";
 
@@ -162,7 +163,7 @@ export default function ExportImage({ request, pick, onClose }: { request: Expor
   const blocks = messages ? exportBlocks(messages, chat, heading, exportSubtitle(messages, agent)) : [];
   const foot = (n: number, of: number) => <ExportFoot name={brand} page={of > 1 ? `${n}/${of}` : undefined} />;
   const sheet = (
-    <div aria-hidden className="pointer-events-none fixed top-0 -left-[10000px]" data-export-sheet>
+    <div aria-hidden className="pointer-events-none fixed top-0" style={{ left: -10000 }} data-export-sheet>
       {!plan && messages && (
         <div ref={measure} style={{ width: WIDTH, padding: `0 ${PAD}px`, display: "flex", flexDirection: "column", gap: GAP, "--text-scale": 1 } as React.CSSProperties}>
           {blocks}
@@ -204,7 +205,7 @@ export default function ExportImage({ request, pick, onClose }: { request: Expor
       }
     >
       <div className="flex flex-col gap-3" data-export-dialog>
-        <div className="flex max-h-[52vh] min-h-40 flex-col items-center gap-2 overflow-y-auto rounded-control bg-field p-3" data-export-preview>
+        <div className="flex max-h-[52vh] flex-col items-center gap-2 overflow-y-auto rounded-control bg-field p-3" style={{ minHeight: 160 }} data-export-preview>
           {working && <Spinner />}
           {failed && (
             <div className="flex flex-col items-center gap-2 py-6 text-center">
@@ -275,7 +276,7 @@ function exportBlocks(messages: ExportMessage[], chat: ForwardChat, heading: boo
 function ExportMessageView({ message: m, chat }: { message: ExportMessage; chat: ForwardChat }) {
   if (m.role === "user") {
     return (
-      <div data-export-block className="ml-auto flex max-w-[80%] flex-col items-end gap-1.5">
+      <div data-export-block className="ml-auto flex flex-col items-end gap-1.5" style={{ maxWidth: "80%" }}>
         {m.images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1">
             {m.images.map((im) => (

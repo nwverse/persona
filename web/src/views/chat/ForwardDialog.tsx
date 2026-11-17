@@ -9,13 +9,14 @@
 // it and starts picking there with that message picked (lib/message-pick.ts, views/chat/Picking.tsx: they come with this
 // dialog, so the chat draws them at once); opened for the picked ones, it shows them as
 // one card, and each goes as a block of its own, in the chat's order, each cut at its share (forward-block.ts forwardLimit).
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { t } from "../../i18n";
 import { errorText, fullItem, imageURL } from "../../lib/api";
 import { imagePayload, MAX_IMAGE } from "../../lib/attachments";
 import { MAX_IMAGES } from "../../lib/composer-commands";
 import { sendDraft, type DraftImage } from "../../lib/drafts";
 import type { ForwardBatch, ForwardDraft } from "../../lib/forward";
+import { forwardDraftOf } from "../../lib/forward-draft";
 import { forwardRuns } from "../../lib/forward-group";
 import { forwardLimit, forwardRef, forwardRoute } from "../../lib/forward-block";
 import { forwardSessions, PERSONA_TARGET, rememberForward, sessionTarget } from "../../lib/forward-memory";
@@ -126,11 +127,25 @@ function deliver(target: Target, refs: ContextRef[], images: DraftImage[], lost:
   else navigate({ name: "session", mid: s.machine_id, sid: s.session_id, view: "chat" });
 }
 
-export function ForwardDialog({ batch, open, onClose }: { batch: ForwardBatch; open: boolean; onClose: () => void }) {
+export function ForwardDialog(props: { batch: ForwardBatch; open: boolean; onClose: () => void }) {
+  return props.batch.now ? <StartNow batch={props.batch} onClose={props.onClose} /> : <ForwardPicker {...props} />;
+}
+
+/** The message menu's Select messages (#9469): picking starts with that message, the picker never shown. */
+function StartNow({ batch, onClose }: { batch: ForwardBatch; onClose: () => void }) {
+  useEffect(() => {
+    const s = batch.select;
+    if (s) s.start(startPick(s.first));
+    onClose();
+  }, [batch, onClose]);
+  return null;
+}
+
+function ForwardPicker({ batch, open, onClose }: { batch: ForwardBatch; open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const drafts = batch.drafts;
+  const drafts = useMemo(() => batch.drafts ?? batch.from?.picks.map((p) => forwardDraftOf(batch.from!.chat, p)) ?? [], [batch]);
   const draft = drafts[0];
   // what the page holds as it opens (iOS reads the list once): rows don't move under the pointer while it is open
   const held = useMemo(() => ({ sessions: heldSessions(), machines: getState().machines, assistant: getState().assistant, recents: forwardSessions() }), [batch]);
@@ -209,7 +224,7 @@ export function ForwardDialog({ batch, open, onClose }: { batch: ForwardBatch; o
                   onClick={() => {
                     onClose();
                     // what the chat draws while it picks comes with this dialog: handed over before it starts
-                    select.start(startPick(select.first, select.items));
+                    select.start(startPick(select.first));
                   }}
                   data-forward-select
                 >

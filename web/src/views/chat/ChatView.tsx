@@ -109,7 +109,7 @@ import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions"
 import { QueueStrip } from "./QueueStrip";
 import type { LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
-import { forwardDraftOf, jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
@@ -622,13 +622,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       draftKey,
       title,
       canCompose,
-      forward: (p: ForwardPick) => openForward({ drafts: [forwardDraftOf(forwardFrom(), p)], select: { first: p, start: setPicker, items: () => items.current } }),
-      // the message menu's Select messages (#9469): picking starts with it, what draws it loaded on the press
-      select: (p: ForwardPick) =>
-        void import("./Picking").then(
-          (m) => setPicker(m.startPick(p, () => items.current)),
-          (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"), // the chunk would not load
-        ),
+      // `now`: the message menu's Select messages (#9469), Forward to's chunk starts picking with it, showing nothing
+      forward: (p: ForwardPick, now?: boolean) => openForward({ from: { chat: forwardFrom(), picks: [p] }, select: { first: p, start: setPicker }, now }),
       pick: picker,
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),

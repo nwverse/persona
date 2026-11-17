@@ -8,11 +8,11 @@
 // the first screen. Export image's dialog is a chunk of its own again (ExportImage.tsx), loaded on its first press.
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
-import { forwardDraftOf, forwardSummary, openForward, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { forwardSummary, openForward, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { forwardDraftOf } from "../../lib/forward-draft";
 import { FORWARD_MOST, messagePick, questionsOf, type MessagePick } from "../../lib/message-pick";
 import { copiedText, exportMessages, pickQuestions } from "../../lib/pick-export";
 import { errorText } from "../../lib/api";
-import type { Item } from "../../lib/types";
 import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { CheckMark } from "../../ui/CheckMark";
 import { Icon, type IconName } from "../../ui/icons";
@@ -21,13 +21,12 @@ import { pickParts } from "./picking-parts";
 
 const ExportImage = lazy(() => import("./ExportImage"));
 
-/** The message menu's Select messages (#9469): what the chat draws while it picks goes to `pickParts`, and a pick starts
- *  with `first`, its questions read from the chat. */
-export function startPick(first: ForwardPick, items: () => readonly Item[]): MessagePick {
+/** Forward to's Select messages… and the message menu's Select messages (#9469): what the chat draws while it picks goes
+ *  to `pickParts`, and a pick starts with `first` (the bar reads its replies' questions from the chat). */
+export function startPick(first: ForwardPick): MessagePick {
   pickParts.Row = PickRow;
   pickParts.Bar = PickBar;
   const pick = messagePick();
-  pick.setQuestions(() => pickQuestions([...items()]));
   pick.start(first);
   return pick;
 }
@@ -61,7 +60,13 @@ export function PickRow({ pick, message, side }: PickRowProps) {
         className="peer absolute -inset-1.5 z-10 cursor-pointer rounded-[16px]"
         data-pick={on ? "on" : brought ? "brought" : "off"}
       >
-        <CheckMark on={on || brought} soft={brought} className={cx("absolute", side ? "top-5 right-full mr-1.5" : "top-2.5 left-1.5")} />
+        {brought ? (
+          <span aria-hidden className={cx("absolute flex size-4 items-center justify-center rounded-chip bg-accent-tint text-accent", side ? "top-5 right-full mr-1.5" : "top-2.5 left-1.5")}>
+            <Icon name="check" size={10} stroke={3} />
+          </span>
+        ) : (
+          <CheckMark on={on} className={cx("absolute", side ? "top-5 right-full mr-1.5" : "top-2.5 left-1.5")} />
+        )}
       </button>
       <span aria-hidden className={cx("pointer-events-none absolute -inset-1.5 -z-10 rounded-[16px] transition-colors duration-150", on ? "bg-accent-tint" : "[@media(hover:hover)]:peer-hover:bg-hover")} />
     </>
@@ -120,6 +125,8 @@ export function PickBar({ pick, chat, onEnd }: PickBarProps) {
   const [exporting, setExporting] = useState<ExportRequest | null>(null);
   const [copying, setCopying] = useState(false);
   const told = useRef(refusals);
+  // Include questions: each picked reply's questions, read from the chat's transcript as it is at each pick
+  useEffect(() => pick.setQuestions(() => pickQuestions([...chat().items])), [pick, chat]);
   useEffect(() => {
     if (refusals === told.current) return;
     told.current = refusals;
