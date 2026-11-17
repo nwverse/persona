@@ -164,17 +164,25 @@ func (c *keptClaim) tab(ctx context.Context) (*host.Created, error) {
 		c.drop()
 		return c.k.created, nil
 	}
-	if org, ok := c.k.launch.(host.Organizer); ok {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		err := org.Close(cctx, c.k.created.Pane, cmp.Or(c.k.ws, c.k.created.SpaceID), c.k.created.SlotID)
-		cancel()
-		if err != nil {
-			c.release()
-			return nil, fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
-		}
+	if err := c.closeStalledTab(ctx); err != nil {
+		c.release()
+		return nil, fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
 	}
 	c.drop()
 	return nil, nil
+}
+
+// closeStalledTab closes the kept tab of a stalled Orca start, whose one launch is used, for the user's retry to open a
+// new one. No agent runs there (tab checked keptTabFreeLocked just before), so this closes no Agent's terminal
+// (docs/integrations/engines.md "Agents run in a terminal"; terminal_guard_test.go).
+func (c *keptClaim) closeStalledTab(ctx context.Context) error {
+	org, ok := c.k.launch.(host.Organizer)
+	if !ok {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return org.Close(cctx, c.k.created.Pane, cmp.Or(c.k.ws, c.k.created.SpaceID), c.k.created.SlotID)
 }
 
 // drop ends the claim with the tab no longer kept: the start runs in it, or closed it.

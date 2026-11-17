@@ -36,9 +36,10 @@ import (
 // starting, late refusals shown and logged, idempotent creation asked again after a reconnect, imports without a hard
 // limit; 470,156 B over main's 465,712 B, with main's 5 B of headroom). Raised by 489 B for the Paseo bridge's
 // permission modes on launchers and rows, its providers' names, and a Codex agent's way back to its own mode (#8261:
-// 470,645 B over main's 470,156 B, with main's 5 B of headroom).
+// 470,645 B over main's 470,156 B, with main's 5 B of headroom). Raised by 23,629 B for the Antigravity companion
+// runtime package and its self-update hook (#9698: 487,872 B over main's 464,243 B, with main's 6,407 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 470_650
+	const budget = 494_279
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
