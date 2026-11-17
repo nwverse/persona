@@ -2309,6 +2309,31 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
 
+### The floating meeting window (#8731 V5)
+
+While a meeting records and its room is put away (the room's collapse, or swiped down), a small card floats over every
+page of the app (`MeetingFloatingWindow`, on `RootView`). The room's full-screen cover lies over it, and it goes with the
+recording.
+
+- **Look:** dark in both appearances, as the room is. The first line has the recording's dot (gray while paused), the
+  meeting's name and the time in the danger color. The second line has who speaks now: their face (a green ring while they
+  speak; Persona's avatar with the purple ring), the word for it and a small waveform that moves while someone speaks.
+- **Who it can tell** (E7, `MeetingFloatSpeaker`):
+  - **Persona is answering** while the phone says its answer or the meeting call's voice speaks;
+  - **Someone is speaking** while the microphone hears a voice (a gate that opens at one level and closes after a hold
+    below another, so a breath doesn't flicker);
+  - **You're speaking** instead when the microphone is a headset's, which hears little but its wearer;
+  - **Quiet** otherwise, **Paused** while paused.
+  - No numbered speakers: the phone can't tell people apart.
+- **Interaction:**
+  - a tap brings the room back (`MeetingRecorder.openRecordings`);
+  - dragged, it settles on the nearer side at that height, inside a band clear of the top bar and the bottom's composer
+    and tabs (`MeetingFloatPlace`);
+  - pulled past a side, it docks there as a bar with the dot and the recording mark, and the bar's tap brings the card
+    back. VoiceOver has Move to the Side.
+  - No buttons in it: Pause and End are the room's and the Dynamic Island's.
+- **Tokens:** `Theme.Size.meetingFloat*` and `Theme.Recording.float*`.
+
 ### After the meeting (#8731 V3)
 
 A meeting that ended is one screen: `MeetingPage`'s after mode. It opens after End in the meeting room, and from the
