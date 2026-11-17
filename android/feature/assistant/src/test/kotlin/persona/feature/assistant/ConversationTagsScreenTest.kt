@@ -56,6 +56,7 @@ class ConversationTagsScreenTest {
     )
 
     private fun show(hub: HistoryHub): HistoryHub {
+        val requested = hub.assistant.value.mainSession
         rule.setContent {
             CompositionLocalProvider(LocalAppFeedback provides object : AppFeedback {
                 override fun failure(failure: Throwable, operation: Boolean): Boolean {
@@ -72,7 +73,7 @@ class ConversationTagsScreenTest {
                 }
             }) {
                 AssistantScreen(navigator, hub, hub, startConversation = { error("Unexpected creation") },
-                    requestedSession = hub.assistant.value.mainSession, management = hub, composerService = null,
+                    requestedSession = requested, management = hub, composerService = null,
                     chatContent = { Text("chat:${it.sessionId}") })
             }
         }
