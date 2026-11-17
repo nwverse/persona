@@ -2,10 +2,11 @@
 import BeautifulUI
 import SwiftUI
 
-/// The composer's mic tapped (not held): the composer's capsule turns into ChatGPT's dictation bar, [✕] the wave [■] [↑].
-/// ✕ drops what was heard; ■ puts it into the draft and sends nothing; ↑ puts it into the draft and sends. ■ and ↑ wait
-/// for the recognizer's last words ("Transcribing", a spinner on the button pressed). The draft typed before stays and
-/// what was heard goes after it (`DictationHold.joined`). Held, the mic keeps Telegram's hold (`ComposerHoldMic`).
+/// The composer's mic tapped (not held): the composer's capsule turns into ChatGPT's dictation bar, [✕] the wave and
+/// ■ ↑. ✕ drops what was heard; ■ puts it into the draft and sends nothing; ↑ puts it into the draft and sends. ■ is
+/// where the mic was, so a second tap there stops without sending (#9619). ■ and ↑ wait for the recognizer's last words
+/// ("Transcribing", a spinner on the button pressed). The draft typed before stays and what was heard goes after it
+/// (`DictationHold.joined`). Held, the mic dictates while held (`ComposerHoldMic`).
 @Observable
 final class DictationBarModel {
     /// The bar is showing.
@@ -118,10 +119,16 @@ final class DictationBarModel {
 }
 
 /// The bar's row, laid over the composer's one-line shape (`ShellComposerBar` hides its own row under it): ✕ where
-/// 「+」 is, ↑ where the mic is, so the buttons seem to turn into each other.
+/// 「+」 is and ■ where the mic was tapped, so the buttons seem to turn into each other and a second tap in the same
+/// place stops (#9619). ↑ takes the round button after the mic (voice, stop, send), or goes before ■ when the mic ended
+/// its row (`stopLast`).
 struct DictationBar: View {
     let model: DictationBarModel
     let meter: DictationMeter
+    /// The mic ends its row: ■ goes last, ↑ before it. It follows the composer while the bar is off
+    /// (`ShellComposerBar.followMicPlace`), so the tap moves nothing; a change moves the two (one view each, reordered,
+    /// never built again) without animation.
+    var stopLast = false
     var cancel: () -> Void
     var stop: () -> Void
     var send: () -> Void
@@ -150,21 +157,32 @@ struct DictationBar: View {
                 .scaleEffect(x: on || reduceMotion ? 1 : 0.01, y: 1,
                              anchor: on || model.closing != .cancel ? .trailing : .leading)
                 .opacity(on ? 1 : Theme.DictationBar.hiddenInk)
-                // VoiceOver reads the wave as where dictation stands, between ✕ and ■.
+                // VoiceOver reads the wave as where dictation stands, between ✕ and the two that end it.
                 .accessibilityElement()
                 .accessibilityLabel(named(ending == nil ? String(localized: "Listening…") : String(localized: "Transcribing…")))
                 .accessibilityAddTraits(.updatesFrequently)
                 .accessibilityHidden(!on)
-            ComposerRoundButton(symbol: Theme.Icon.stopDictating, label: named(String(localized: "Stop Dictation")), id: named("dictation-bar-stop"),
-                                pressScales: !reduceMotion, muted: true, busy: model.slow && ending == .stop, action: stop)
-                .disabled(ending != nil)
-                .modifier(BarPart(on: on, reduceMotion: reduceMotion))
-            ComposerRoundButton(symbol: Theme.Icon.send, label: named(String(localized: "Send")), id: named("dictation-bar-send"),
-                                pressScales: !reduceMotion, busy: model.slow && ending == .send, action: send)
-                .disabled(ending != nil)
-                .modifier(BarPart(on: on, reduceMotion: reduceMotion))
+            ForEach(stopLast ? Self.sendThenStop : Self.stopThenSend, id: \.self) { part in
+                endButton(part, ending: ending, named: named)
+                    .disabled(ending != nil)
+                    .modifier(BarPart(on: on, reduceMotion: reduceMotion))
+                    .animation(nil, value: stopLast)
+            }
         }
         .allowsHitTesting(on)
+    }
+
+    private static let stopThenSend = ["stop", "send"]
+    private static let sendThenStop = ["send", "stop"]
+
+    /// ■ or ↑.
+    private func endButton(_ part: String, ending: DictationBarModel.Ending?, named: (String) -> String) -> ComposerRoundButton {
+        if part == "stop" {
+            return ComposerRoundButton(symbol: Theme.Icon.stopDictating, label: named(String(localized: "Stop Dictation")), id: named("dictation-bar-stop"),
+                                       pressScales: !reduceMotion, muted: true, busy: model.slow && ending == .stop, action: stop)
+        }
+        return ComposerRoundButton(symbol: Theme.Icon.send, label: named(String(localized: "Send")), id: named("dictation-bar-send"),
+                                   pressScales: !reduceMotion, busy: model.slow && ending == .send, action: send)
     }
 }
 

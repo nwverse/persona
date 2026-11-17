@@ -91,7 +91,9 @@ struct ChatView: View {
     @State private var filesReveal: String?
     /// Kept when the Files pane swaps back to Chat, so an unfinished remote operation can be seen again.
     @State private var folderTransfers = FolderTransfers()
-    @State private var git: GitStatus?
+    private var git: GitStatus? {
+        session.flatMap { AgentMenuRouting.shared.gitStatus($0) }
+    }
     @State private var menu = MessageMenu()
     /// What Forward To picked (#3807): done once its sheet has gone, as a navigation made while it goes is dropped.
     @State private var forwardPicked: ForwardOutcome?
@@ -344,6 +346,7 @@ struct ChatView: View {
             // floats a bar over the chat (Persona's conversation, `MessageLiftHost`, #3188).
             .liftBlur(menu)
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
+            .devScreen(style == .assistant ? "assistant-chat" : "chat")
             .onAppear { liftHost?.menu = menu }
             .onDisappear { if liftHost?.menu === menu { liftHost?.menu = nil } }
             .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
@@ -421,6 +424,11 @@ struct ChatView: View {
             if style == .dev { if sideBars { sideHeader } else { devChrome } }
             #endif
         }
+        #if os(iOS)
+        // The page's top under side bars in a split is the chat's own, not its navigation bar's (`pinsSideTop`).
+        .safeAreaPadding(.top, pinsSideTop ? Theme.Space.xl : 0)
+        .ignoresSafeArea(.container, edges: pinsSideTop ? .top : [])
+        #endif
     }
 
     /// The closeout the header's card shows (#3612, `CloseoutCard`): a stopped agent's own account of its work, on its
@@ -752,6 +760,9 @@ struct ChatView: View {
         // 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
         let activityTop = AnyView(chatPresentation)
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
+        #if os(iOS)
+        .task(id: "\(key.path)|\(session != nil)") { takeAgentMenuDestination() }
+        #endif
         // A Workflow call the hub folded into a turn's work (#3436): that fold is fetched, so the run's card comes out.
         .task(id: workflowFolds.map(\.id)) { await unfoldWorkflowCalls(workflowFolds) }
         .task(id: FeedScope(key: key, manager: feedManager)) {
@@ -818,6 +829,12 @@ struct ChatView: View {
         }
         .stackSegment()
         .renameSessionAlert($renaming)
+        #if os(iOS)
+        .sheet(item: Binding(get: { AgentMenuRouting.shared.linkingSession },
+                              set: { AgentMenuRouting.shared.linkingSession = $0 })) {
+            TodoLinkAgentSheet(session: $0)
+        }
+        #endif
         .confirmClose($closing) { closedAgent($0, order: []) }
         .confirmDeleteSession($deleting)
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
@@ -2172,7 +2189,7 @@ struct ChatView: View {
                     .accessibilityHidden(!terminalShown)
             }
             if pane == .git {
-                GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview,
+                GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: sharedGit, review: openReview,
                         commentKey: session?.canSend == false ? nil : key).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             } else if pane == .files {
@@ -2190,7 +2207,7 @@ struct ChatView: View {
                     .padding(.top, style == .dev ? chrome.height - min(chrome.collapse, chrome.maxCollapse) : 0)
             } else { chatPane.stackSegment() }
         // Files and Git come in from the right (a swipe to the left), the chat back from the left.
-        case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview,
+        case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: sharedGit, review: openReview,
                         commentKey: session?.canSend == false ? nil : key).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         case .files: FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key,
@@ -2220,21 +2237,23 @@ struct ChatView: View {
 
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
     private var panes: [SessionPane] {
-        var p: [SessionPane] = [.chat]
-        if session?.canTerminal == true { p.append(.terminal) }
-        if git?.isRepo == true { p.append(.git) }
-        if !(session?.cwd ?? "").isEmpty { p.append(.files) }
-        return p
+        guard let session else { return [.chat] }
+        return AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session))
     }
 
     private var paneBadges: [SessionPane: String] {
-        guard let n = git?.files.count, let text = CountBadge.text(n) else { return [:] }
-        return [.git: text]
+        AgentMenuFacts.paneBadges(session.flatMap { AgentMenuRouting.shared.gitStatus($0) })
+    }
+
+    private var sharedGit: Binding<GitStatus?> {
+        Binding(get: { git }, set: { new in
+            if let session { AgentMenuRouting.shared.store.set(new, for: .init(session: session.key, cwd: session.cwd)) }
+        })
     }
 
     private func loadGit() async {
-        guard style == .dev, let cwd = session?.cwd, !cwd.isEmpty, let api = model.api(key.group) else { return }
-        if let s = try? await api.gitStatus(machine: key.machineID, cwd: cwd) { git = s }
+        guard style == .dev, let session, !session.cwd.isEmpty, let api = model.api(session.group) else { return }
+        await AgentMenuRouting.shared.store.load(.init(session: session.key, cwd: session.cwd), api: api)
     }
 
     /// The chat is an upside-down list (newest first, flipped back on screen), the way chat apps do it: the newest
@@ -2264,8 +2283,7 @@ struct ChatView: View {
                         guard let mark = navigationJump else { return }
                         await jumpToInput(mark)
                     }
-                    // Left of the open Duo's floating tabs' switch, which stands up past the footer there (#4231).
-                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under).tabSwitchRoom() }
+                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under) }
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
@@ -2289,8 +2307,6 @@ struct ChatView: View {
             // the region alone did not do it. Not the classic composer's island, which takes what it is offered until it
             // has measured itself.
             ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { pickOrFooter } }
-                // Room beside the open Duo's floating tabs' switch while it shows (#4231): the composer and what is over it.
-                .tabSwitchRoom()
                 .layoutPriority(usesShellComposer ? 1 : 0)
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
@@ -3587,13 +3603,52 @@ struct ChatView: View {
     /// ⋯ and its menu, in the open header and in the folded slim bar (#7962): one menu, so an item added to
     /// `moreMenuItems` shows in both. `label` is how each draws the button (the open one in glass, the slim bar's bare).
     private func moreMenu<Look: View>(@ViewBuilder label: () -> Look) -> some View {
+        #if os(iOS)
         Menu(content: { moreMenuItems }, label: label)
             .labelOnlyMenu()
             .accessibilityLabel("More")
             .accessibilityIdentifier("chat.more")
+        #else
+        Menu(content: { moreMenuItems }, label: label)
+            .labelOnlyMenu()
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("chat.more")
+        #endif
     }
 
     @ViewBuilder private var moreMenuItems: some View {
+        #if os(iOS)
+        if style == .dev, let host { hostedMenuItems(host) }
+        if style == .dev, let session {
+            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: pane,
+                                                            hosted: host != nil, showsSpace: openSpace != nil,
+                                                            sides: sides),
+                                    handlers: agentMenuHandlers)).stackSegment()
+        } else if session?.canAttach == true {
+            Button { Task { await model.attach(key) } } label: { Label("Attach Live", systemImage: Theme.Icon.link).lineLimit(1) }
+        }
+        if style == .assistant {
+            if status.isActive, session?.canInterrupt == true {
+                Button { Task { await model.interrupt(key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
+            }
+            ScreenMenu(machine: nil, recent: computerActivity?.machine, from: key)
+            if let s = session {
+                Button { UIPasteboard.general.string = s.cwd } label: { Label("Copy Directory", systemImage: Theme.Icon.folder) }
+                if s.status.isLive && s.canClose {
+                    Button(role: .destructive) { closing = s } label: { Label("Stop and Close Agent…", systemImage: Theme.Icon.end).lineLimit(1) }
+                }
+                if s.canDelete {
+                    Button(role: .destructive) { deleting = s } label: { Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1) }
+                }
+            }
+        }
+        #else
+        legacyMoreMenuItems
+        #endif
+    }
+
+    #if !os(iOS)
+    @ViewBuilder private var legacyMoreMenuItems: some View {
             if style == .dev, let host { hostedMenuItems(host) }
             if let s = session, let todo = s.todo,
                 TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
@@ -3685,6 +3740,59 @@ struct ChatView: View {
                 }
             }
     }
+
+    #endif
+
+    #if os(iOS)
+    private var agentMenuHandlers: AgentMenuHandlers {
+        let handlers = AgentMenuHandlers()
+        handlers.navigate = { _, destination in
+            switch destination {
+            case .terminal(let resume):
+                if resume { resumeInTerminal() } else { openTerminal() }
+            case .pane(let target):
+                withAnimation(Theme.Motion.standard) { pane = target }
+            case .review:
+                openReview?(nil)
+            case .preview:
+                previewing = true
+            case .subagents:
+                showSubagents = true
+            case .sideSessions:
+                sideUI.showList = true
+            case .space:
+                if let space = session?.spaceKey { openSpace?(space) }
+            }
+        }
+        handlers.rename = { renaming = $0 }
+        handlers.close = { closing = $0 }
+        handlers.delete = { deleting = $0 }
+        handlers.linkTodo = { AgentMenuRouting.shared.linkingSession = $0 }
+        handlers.openTodo = { _ in showTodoDetail = true }
+        handlers.takeover = { session in
+            Task {
+                if let adopted = await takeoverCoordinator.takeOver(session, model: model) {
+                    model.adopt(adopted)
+                    switchTo(adopted.key)
+                }
+            }
+        }
+        handlers.continueInNewSession = { session in
+            Task {
+                if let adopted = await takeoverCoordinator.continueInNewSession(session, model: model) {
+                    model.adopt(adopted)
+                    switchTo(adopted.key)
+                }
+            }
+        }
+        return handlers
+    }
+
+    private func takeAgentMenuDestination() {
+        guard let session, let destination = AgentMenuRouting.shared.take(key) else { return }
+        agentMenuHandlers.navigate(session, destination)
+    }
+    #endif
 
     /// A custom title: tapping it toggles the developer info card (instead of the system scroll-to-top).
     /// While the hub is out of reach the subtitle turns into a spinner and Connecting… (Telegram keeps the name and
@@ -3994,11 +4102,29 @@ struct ChatView: View {
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
 
+    /// Under side bars in a split (the open Duo on its side) the page starts `Theme.Space.xl` from the top whatever its
+    /// navigation bar holds. The bar holds nothing across the top (its actions are in the side column, its title is
+    /// removed) but, with the column folded, the system's Show Sidebar, and that row pushed the header and the chat 58 pt
+    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the system's
+    /// button lies on the title's line at the top left, as on a place. Not while typing: the bar then shows the system's
+    /// title over the content, and the header is only fog. Not in a hosting sheet, which has a bar of its own.
+    private var pinsSideTop: Bool {
+        #if os(iOS)
+        sideBars && split?.sideBars == true && host == nil && !composerTyping
+        #else
+        false
+        #endif
+    }
+
+    /// The list folded under side bars: the system's Show Sidebar at the top left brings it back (#3680), so the side
+    /// column has no second one.
+    private var systemShowsList: Bool { backShowsList && split?.sideBars == true }
+
     /// The header's actions as system toolbar items, for the side column: back on top (a custom one, so it leaves files /
     /// Git for the chat first), then the panes, the terminal and ⋯. Each has a title as well as a symbol: the column
     /// shows the symbol, the overflow menu both.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
-        if !hidesBack {
+        if !hidesBack && !systemShowsList {
             ToolbarItem(placement: .cancellationAction) {
                 // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
@@ -4356,6 +4482,9 @@ struct ChatView: View {
             ShellTrace.shared.note("chat appeared \(style == .assistant ? "assistant" : "agents") #\(appearCount)")
             #endif
             bindMenu()
+            #if os(iOS)
+            takeAgentMenuDestination()
+            #endif
             if !entered { // only on entry: coming back from a full-screen cover must not move what you were reading
                 entered = true
                 if takeMessageJump() {
@@ -4935,7 +5064,7 @@ struct ChatView: View {
         bindMenu()
         menu.selected = nil
         if pane == .git || pane == .files { pane = .chat } // the next agent may live in another directory
-        git = nil
+        AgentMenuRouting.shared.store.clear(.init(session: key, cwd: session?.cwd ?? ""))
         position = ScrollPosition(edge: .top)
         model.subscribe(next, by: owner)
         model.show(next, by: owner)
@@ -7073,7 +7202,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }.overTabSwitch()
+                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)
@@ -8026,6 +8155,51 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     var touched: () -> Void
     @ViewBuilder var full: () -> Full
     @ViewBuilder var compact: () -> Compact
+    /// Settings › Appearance & Display › Persona Banner in Screenshots (#9508).
+    @StoredValue(ScreenshotBannerPrefs.enabledKey) private var screenshotBanner = ScreenshotBannerPrefs.enabledByDefault
+
+    /// The open header and its slim bar: its own view, so the fold is read where it is drawn (inside the bar's own
+    /// hosting controller with the screenshot banner on, #9508), not by this one at every step of a fold.
+    private var header: some View {
+        ChromeHeaderStack(chrome: chrome, full: full, compact: compact)
+    }
+
+    var body: some View {
+        #if os(iOS)
+        if ScreenshotBanner.wraps(screenshotBanner) {
+            // A screenshot shows the banner here instead (#9508): the header over the page's color and its material,
+            // so the banner under it never shows through; the banner over the page's color alone (no second blur).
+            header
+                .contentShape(.rect)
+                .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
+                .screenshotBanner {
+                    ZStack { Theme.pageBackground; Rectangle().fill(.bar) }
+                } bannerBackdrop: {
+                    Theme.pageBackground
+                } banner: {
+                    ScreenshotBannerContent()
+                }
+        } else {
+            plain
+        }
+        #else
+        plain
+        #endif
+    }
+
+    /// The header as it always was.
+    private var plain: some View {
+        header
+            .background(.bar, ignoresSafeAreaEdges: .top)
+            .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
+    }
+}
+
+/// The open header and its slim bar, folded as far as the chat has scrolled (`ChromeHeader`).
+private struct ChromeHeaderStack<Full: View, Compact: View>: View {
+    var chrome: ChatChrome
+    @ViewBuilder var full: () -> Full
+    @ViewBuilder var compact: () -> Compact
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -8050,8 +8224,6 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
         }
         .frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
         .clipped()
-        .background(.bar, ignoresSafeAreaEdges: .top)
-        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
     }
 }
 
