@@ -2,6 +2,7 @@ package persona.core.designsystem
 
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -152,15 +153,25 @@ fun JSidebarColumn(
     overlay: Boolean = false,
     onDismiss: () -> Unit = {},
     insetSidebar: Boolean = true,
+    drags: Boolean = false,
+    detailAtRoot: Boolean = true,
+    onDragSettle: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    val progress by animateFloatAsState(if (shown) 1f else 0f,
-        sidebarColumnSpec(PersonaTheme.style, PersonaTheme.reduceMotion), label = "sidebar-column")
+    // The finger drag is SplitColumnControl (`SidebarColumnDrag.kt`). Idle, and a column that does not drag, keeps
+    // this layout and `sidebarColumnSpec` (the button, the scrim and Back).
+    val drag = if (drags && sidebar != null) rememberColumnDragController(width, overlay, shown, detailAtRoot, onDragSettle) else null
+    val laidOut = drag?.layoutShown ?: shown
+    val progress by animateFloatAsState(if (laidOut) 1f else 0f,
+        if (drag?.snaps == true) snap() else sidebarColumnSpec(PersonaTheme.style, PersonaTheme.reduceMotion),
+        label = "sidebar-column")
     val palette = PersonaTheme.palette
     val visible = sidebar != null && progress > 0f
-    val modal = sidebar != null && overlay && shown
+    val presented = drag?.layoutShown ?: shown
+    val modal = sidebar != null && overlay && presented
     val close = stringResource(R.string.designsystem_close)
-    Box(modifier.fillMaxSize()) {
+    @Composable
+    fun panes() {
         if (visible) Box(Modifier.width(width).fillMaxHeight()
             .zIndex(if (overlay) 1f else 0f)
             .then(if (overlay) Modifier.pointerInput(Unit) {
@@ -180,6 +191,15 @@ fun JSidebarColumn(
             if (overlay && visible) Box(Modifier.fillMaxSize().padding(start = width * progress)
                 .background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
                 .clickable(enabled = shown, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
+        }
+    }
+    if (drag == null) {
+        Box(modifier.fillMaxSize()) { panes() }
+    } else {
+        // The pictures record `panes` only. The overlay is a sibling, drawn above them (`SplitColumnControl.swift:196`).
+        Box(modifier.fillMaxSize().then(drag.gestureModifier(width, shown, detailAtRoot, overlay))) {
+            Box(Modifier.fillMaxSize().then(drag.recordModifier())) { panes() }
+            ColumnDragOverlay(drag)
         }
     }
 }
