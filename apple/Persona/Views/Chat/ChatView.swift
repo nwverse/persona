@@ -211,6 +211,8 @@ struct ChatView: View {
     @State private var chrome = ChatChrome()
     /// The page's height, read by the pending cards only (#926).
     @State private var footerRoom = FooterRoom()
+    /// Where each pending card's message is in the chat, for its View in Chat (#9392).
+    @State private var cardSources = CardSources()
     @Environment(\.openSpace) private var openSpace
     @State private var link: LinkTarget?
     /// ⋯ › Preview's list of the session's dev servers, and the one picked there, opened once the list is gone (#150).
@@ -2532,14 +2534,36 @@ struct ChatView: View {
         if ref.isForward { return openForwarded(ref) }
         if openContextLink(ref) { return true }
         guard ref.kind == "quote", !ref.msg.isEmpty else { return false }
+        return jumpToMessage(ref.msg, hold: hold)
+    }
+
+    /// Finds the pending cards' messages in the loaded chat (`CardSource`) and how View in Chat goes to one (#9392).
+    private func findCardSources() {
+        let items = store.items
+        var found: [String: String] = [:]
+        for card in pendingCards { found[card.id] = CardSource.item(for: card.interaction, in: items) }
+        if cardSources.items != found { cardSources.items = found }
+        // After the card has folded (`InteractionPanel`): the list's new height first, then the jump, which lands where
+        // the list measured it.
+        cardSources.open = { id in
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                _ = jumpToMessage(id)
+            }
+        }
+    }
+
+    /// Brings message `msg` (an item's id) of the loaded chat to the middle of the list and lights it up for `hold`, opening
+    /// the work line it is folded in; the list stops following the newest. False when it is not in the loaded chat.
+    private func jumpToMessage(_ msg: String, hold: Duration = Theme.Quote.flashHold) -> Bool {
         var target: String?
         for line in currentLines() {
             switch line.content {
             case .row, .recaps, .answerPart:
-                if line.holds(ref.msg) { target = line.id }
+                if line.holds(msg) { target = line.id }
             case .work(let wid, let items, let live, _, _):
                 // The agent's words before its last ones are in the work line: open it, go to that step.
-                if let item = items.first(where: { if case .text(let i) = $0 { i.id == ref.msg } else { false } }) {
+                if let item = items.first(where: { if case .text(let i) = $0 { i.id == msg } else { false } }) {
                     if !isOpen(wid, live: live) {
                         var t = Transaction()
                         t.disablesAnimations = true
@@ -2548,7 +2572,7 @@ struct ChatView: View {
                     target = wid + "/" + item.id
                 }
             case .workStep(let group, let item, _):
-                if case .text(let i) = item, i.id == ref.msg { target = group + "/" + item.id }
+                if case .text(let i) = item, i.id == msg { target = group + "/" + item.id }
             default: break
             }
             if target != nil { break }
@@ -2753,7 +2777,7 @@ struct ChatView: View {
     @ViewBuilder private var taskFooter: some View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
-        TaskQuestions(conversation: conversation)
+        TaskQuestions(conversation: conversation, room: footerRoom)
         DraftReader(key: key) { typed in
             if let range = TaskMentionList.mention(in: typed) {
                 TaskMentionList(conversation: conversation) { todo in
@@ -2850,6 +2874,10 @@ struct ChatView: View {
                 }
                 if !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
+                        .environment(\.cardSources, cardSources)
+                        .task(id: CardSourceInputs(cards: pendingCards.map(\.id), count: store.items.count, last: store.items.last?.id)) {
+                            findCardSources()
+                        }
                 }
                 // The latest question the assistant answered here (#544), until put away; Session Info lists them all.
                 if let answered = model.delegated(for: key).last {
