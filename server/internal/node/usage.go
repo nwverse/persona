@@ -117,6 +117,7 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
+	queries := n.usageQueries()
 	t := time.NewTicker(usageEvery)
 	defer t.Stop()
 	for {
@@ -127,6 +128,11 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 				return
 			}
 			m.scan(f, cutoff)
+		}
+		for _, q := range queries {
+			for _, r := range q.poll(ctx, n, cutoff) {
+				m.add(&usageFile{}, r, cutoff)
+			}
 		}
 		m.prune(cutoff)
 		if n.peer != nil {
@@ -211,9 +217,13 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 	if model == "" {
 		model = "unknown"
 	}
+	session := uf.session
+	if r.Session != "" { // a database's row says its session
+		session = r.Session
+	}
 	launcher := ""
-	if m.launcherOf != nil && uf.session != "" {
-		launcher = m.launcherOf(uf.session)
+	if m.launcherOf != nil && session != "" {
+		launcher = m.launcherOf(session)
 	}
 	uf.skip, uf.at = false, usageKey{minute, model, launcher, r.Agent}
 	m.addTo(uf.at, r.Tokens, true)

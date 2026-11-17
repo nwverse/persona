@@ -1,6 +1,7 @@
 package node
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -24,10 +25,23 @@ type usageAdapter interface {
 	parser() tokenuse.Parser
 }
 
-// usageAdapters are the agents whose usage this node meters, in the order their files are read (a request in two
-// agents' files is counted in the first one's).
+// usageAdapters are the agents whose usage this node meters from files, in the order their files are read (a request
+// in two agents' files is counted in the first one's). opencode keeps its in a database: usageQueries.
 func (n *Node) usageAdapters() []usageAdapter {
-	return []usageAdapter{claudeUsage{}, codexUsage{tokenuse.Codex, (*Node).codexHome}, codexUsage{tokenuse.Traex, (*Node).traexHome}}
+	return []usageAdapter{claudeUsage{}, codexUsage{tokenuse.Codex, (*Node).codexHome}, codexUsage{tokenuse.Traex, (*Node).traexHome},
+		piUsageFiles{tokenuse.Pi, piAgentDir}, piUsageFiles{tokenuse.Omp, ompAgentDir}}
+}
+
+// usageAgents are the agents this node meters, by file and by query.
+func (n *Node) usageAgents() []string {
+	var out []string
+	for _, ad := range n.usageAdapters() {
+		out = append(out, ad.agent())
+	}
+	for _, q := range n.usageQueries() {
+		out = append(out, q.agent())
+	}
+	return out
 }
 
 // claudeUsage: Claude Code's transcripts in every config directory, their subagents' and their workflow runs' agents'
@@ -76,4 +90,40 @@ func (codexUsage) session(path string) string {
 		return name[len(name)-36:]
 	}
 	return name
+}
+
+// piUsageFiles: the sessions of pi or of omp (the same format) under the agent's directory,
+// <dir>/sessions/<cwd>/<time>_<id>.jsonl. A node bound to a session scope reads none.
+type piUsageFiles struct {
+	name string
+	dir  func(home string) string
+}
+
+func (p piUsageFiles) agent() string           { return p.name }
+func (p piUsageFiles) parser() tokenuse.Parser { return tokenuse.PiParser(p.name) }
+
+func (p piUsageFiles) paths(n *Node) []string {
+	if n.sessionScope != nil {
+		return nil
+	}
+	paths, _ := filepath.Glob(filepath.Join(p.dir(n.home), "sessions", "*", "*.jsonl"))
+	return paths
+}
+
+// session is a session file's id: its name after the last "_".
+func (piUsageFiles) session(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if i := strings.LastIndexByte(name, '_'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// piAgentDir is pi's agent directory: PI_CODING_AGENT_DIR when it is set, else <home>/.pi/agent (omp's is
+// ompAgentDir; with the variable set both are it, and a request in it counts once).
+func piAgentDir(home string) string {
+	if d := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); d != "" {
+		return d
+	}
+	return filepath.Join(home, ".pi", "agent")
 }

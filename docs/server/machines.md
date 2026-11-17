@@ -222,7 +222,11 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
 
 - **Metering** (`node/usage.go`): every 10 seconds the node reads what its agents' records gained. An adapter per agent (`node/usage_adapters.go`, #9923) says which files hold its usage,
   which session a file belongs to and which parser reads it: Claude Code's main and subagent transcripts in every config directory, and the agents of its workflow runs
-  (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex and of the compatible traex CLI. The parsers (`server/internal/tokenuse`)
+  (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex and of the compatible traex CLI; the sessions of pi and omp
+  (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent` and `~/.omp/agent`: `sessions/<cwd>/<time>_<id>.jsonl`, #9992). opencode keeps its steps in a SQLite database (`$PERSONA_OPENCODE_DB`,
+  else `$XDG_DATA_HOME/opencode/opencode.db`, default `~/.local/share/opencode/opencode.db`): its adapter queries it with the system `sqlite3` (`node/usage_opencode.go`), the rows added
+  since the last read and the unfinished ones again, nothing while the database has not changed; without `sqlite3` (a Linux machine often has none) opencode is not metered.
+  Cursor's CLI and Antigravity keep no token counts the node can read and check: they are not metered. A runtime with no record of its own is not metered either. The parsers (`server/internal/tokenuse`)
   are the same ones the usage on a chat's replies and the subagent summaries read (`docs/protocol/protocol.md`, "Token usage on items"), so a request counts the same everywhere
   and sums the replies per minute, model, **agent** (its adapter's, `proto.Session.Agent`'s names, #9984) and **launcher**: the launcher Persona started the session with (`sessionState.Launcher`, looked up by the transcript's session or thread id;
   a subagent's or workflow agent's transcript is its session's). A session typed in a terminal has no launcher (`""`, shown as "Other"). The node keeps 26 hours and reports changed minutes as `usage`
@@ -233,7 +237,10 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
 - **What a reply counts**: Claude Code's `usage` (input not from the cache, cache creation as cache write, cache read, output), once a request at the most its lines say (Claude Code up to 2.1.306
   wrote the output so far on each content block); Claude Code's own replies for a failed request (`<synthetic>`, `isApiErrorMessage`) and usage of all zeros are skipped. Codex's `last_token_usage`:
   its input includes what was read from the cache and what was written to it (`cached_input_tokens`, `cache_write_input_tokens`), counted as cache read and cache write and taken out of input,
-  as Codex itself does for its fresh input (OpenAI's models write none: 0); reasoning tokens are in its output. Reasoning is output for every agent.
+  as Codex itself does for its fresh input (OpenAI's models write none: 0); reasoning tokens are in its output. pi's and omp's usage is already in the four kinds (an assistant
+  message's `usage` with its `model`; pi's `usage` entries, omp's `model_usage` entries and pi's compaction and branch summaries count too, a summary under the session's latest model;
+  omp's `orchestration` tokens are added to their kinds); a fork copies their entries as they are, so the entry's id and time name a request. An opencode step counts once it finished
+  (`data.time.completed`; a compaction once completed or failed), its `reasoning` added to its output, which leaves it out. Reasoning is output for every agent.
   Cache hit rate = cache read / (input + cache write + cache read).
 - **Storage** (`devices/usage.go`, `db/usage.go`): the manager keeps the last 26 hours in memory (the island, the cards) and writes every notification to `machine_usage` in order, from one goroutine.
   Each node reports on a 10-second tick of its own, so while another machine has written in the last 25 seconds, the notifications that come within 5 seconds of one go in one transaction with it (`db.PutUsages`, in order; if Postgres rejects one, each goes under a savepoint of its own); a single busy machine's are written at once.
