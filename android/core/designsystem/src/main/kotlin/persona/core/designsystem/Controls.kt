@@ -436,8 +436,9 @@ data class JSegment(val label: String, val count: Int? = null, val status: Statu
 
 /**
  * A small set of mutually exclusive filters. On Glass one pill slides to the chosen segment
- * (`GlassSlidingPill`, `Theme.Motion.state`); Brief keeps underlined text tabs and Board a ruled
- * strip of cells. [compact] reduces spacing only; text keeps the ambient font scale.
+ * (`GlassSlidingPill`, `Theme.Motion.state`) and the label colour fades with it. An index outside
+ * the list draws no pill. Brief keeps underlined text tabs and Board a ruled strip of cells.
+ * [compact] reduces spacing only; text keeps the ambient font scale.
  */
 @Composable
 fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
@@ -447,7 +448,7 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
     when (PersonaTheme.style) {
         // One pill, not a background on each segment. iOS: the system's sliding thumb (`Picker` `.segmented`).
         AppStyle.Glass -> GlassSlidingPill(
-            selected = selected.coerceIn(0, options.lastIndex.coerceAtLeast(0)),
+            selected = selected,
             count = options.size,
             color = palette.action,
             modifier = modifier.clipDrawing(CircleShape).background(palette.surface)
@@ -461,7 +462,13 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
                     .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }
                     .padding(horizontal = if (compact) Tokens.Space.s else 16.dp.dense, vertical = 9.dp.dense),
                 contentAlignment = Alignment.Center,
-            ) { Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+            ) {
+                // One weight, as this row always had. Only the colour fades (`GlassSegmentLabel`).
+                GlassSegmentLabel(
+                    text(segment), selected = on, selectedColor = palette.onAction, idleColor = palette.ink2,
+                    style = type.labelSmall, softWrap = false,
+                )
+            }
         }
         AppStyle.Brief -> Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (compact) Tokens.Space.s else 22.dp.dense)) {
             options.forEachIndexed { index, segment ->
