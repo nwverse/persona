@@ -102,11 +102,10 @@ function Shares({ rows }: { rows: { key: string; name: React.ReactNode; total: n
  *  agents apart has no agent ("", which agentName would read as Claude Code) and no mark. */
 function agentRowName(a: UsageAgentShare): React.ReactNode {
   if (!a.agent) return <span className="truncate text-ink-3">{t("tokencalendar.not_split")}</span>;
-  const label = a.agent === "omp" ? "Oh My Pi" : undefined;
   return (
     <>
-      <AgentMark agent={a.agent} label={label} size={14} decorative />
-      <span className="truncate">{agentName(a.agent, label)}</span>
+      <AgentMark agent={a.agent} size={14} decorative />
+      <span className="truncate">{agentName(a.agent)}</span>
     </>
   );
 }
