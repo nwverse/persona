@@ -1516,6 +1516,16 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     (main → worker at hop 1, its answer at 1, … the third request and its answer at 3); counting every message refused the worker's second answer
     (hop 4). Two chats that keep writing to each other still stop after 2 × 3 messages however slowly they write, which the rate limit alone would not do.
     Per chat, at most 3 sends to the same target and 10 total within 10 minutes (memory only, reset on hub restart). User messages reset hops to 0.
+  - **The main chat dispatches** (#10099, `relayAllowedOn`): the limits above guard against loops (per pair), spread (hops) and fan-out (per
+    sender); none of them should leave the owner's dispatch center stuck. So a request from the main chat is never refused for its hop: past
+    3 it goes at hop 3, where the receiver may answer it but sends nothing further. Requests *to* the main chat cost hops as before, so a
+    leader can't keep the main chat going (leader ↔ main still stops after 2 × 3 messages). The main chat's sends to its leader chats count
+    per pair (3 per leader in 10 minutes) but not against its 10-per-sender cap, which stays for every other target.
+  - **A scheduled run starts a new chain** (`scheduledWake`): a follow-up or routine that goes into an existing chat clears its hop, as a
+    run in a fresh chat always did. At most once per chat per 10 minutes, so a chat cut off by the hops can't schedule itself a minute
+    ahead over and over to keep a loop alive; the rates hold either way.
+  - **`conversation_new` has its own budget**: 3 per chat in 10 minutes, 10 for the main chat, and a start that fails gives its place back
+    (`relayRefund`). It has no per-target count: every target is a new chat; the budget is the fan-out guard.
   - Sending to archived chats restores them.
 - **App**: swipe left to Archive in sidebar (not main chat; also long-press). Sidebar changes `ScrollView` + `LazyVStack` to `List`, removing insets, separators, backgrounds
   with unchanged appearance, enabling system swipes. With drawer open, a left drag starting on a **swipeable chat row** goes to the row (`SwipeRowMark`; `DrawerPan` makes row gestures wait for it to fail);
