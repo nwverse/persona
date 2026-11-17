@@ -41,12 +41,20 @@ internal fun cutText(text: String): String {
     return if (at >= 0) text.substring(0, at) else text
 }
 
-/** "12 KB", "3.4 MB": decimal units, like iOS `ByteCountFormatter`. */
-internal fun formatBytes(bytes: Long, resources: Resources): String = when {
-    bytes >= 1_000_000_000 -> String.format(Locale.ROOT, "%.1f GB", bytes / 1e9)
-    bytes >= 1_000_000 -> String.format(Locale.ROOT, "%.1f MB", bytes / 1e6)
-    bytes >= 1_000 -> "${bytes / 1000} KB"
-    else -> resources.getQuantityString(R.plurals.chat_bytes, bytes.toInt(), bytes.toInt())
+/**
+ * "12 KB", "3.4 MB": decimal units, like iOS `ByteCountFormatter`. Rounded before the unit is picked, as the machine pages'
+ * `MetricFormat.bytes`: kilobytes to the nearest, and a size that rounds up to the next unit is shown in it (999,999 bytes
+ * is 1.0 MB, not 1000 KB; 999.95 MB is 1.0 GB, not 1000.0 MB) (#9890).
+ */
+internal fun formatBytes(bytes: Long, resources: Resources): String {
+    val kb = (bytes + 500) / 1_000
+    val mbTenths = (bytes + 50_000) / 100_000
+    return when {
+        bytes < 1_000 -> resources.getQuantityString(R.plurals.chat_bytes, bytes.toInt(), bytes.toInt())
+        kb < 1_000 -> "$kb KB"
+        mbTenths < 10_000 -> String.format(Locale.ROOT, "%.1f MB", mbTenths / 10.0)
+        else -> String.format(Locale.ROOT, "%.1f GB", (bytes + 50_000_000) / 100_000_000 / 10.0)
+    }
 }
 
 /**
