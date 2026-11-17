@@ -637,6 +637,8 @@ struct MeetingPage: View {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 RecordingTimelineRows(entry: entry, exchanges: [], paused: false, items: $transcriptItems)
             }
+            // A container of its own, so its rows keep their identifiers (`recording-timeline-sentence`).
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("meeting-after-transcript")
         case .photos:
             MeetingAfterPhotos(recording: id)
