@@ -78,6 +78,8 @@ Performance measurements are in section 5.
 Material 3's ColorScheme, Typography and Shapes are also generated from the current style, so Material components not yet replaced change colors and fonts along with it, but pages should switch to the components below.
 The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryButton` / `Card` / `EmptyState` still work and now map to the current style internally; new code uses the new components directly.
 
+Page stacks share `rememberPageTransitions()` (`PageTransitions.kt`): every `NavDisplay` and the Proactive screen use the existing opaque trailing-edge push (300ms), quarter-width move-back and pop (260ms, departing page on top), mirrored in RTL. Predictive pop seeks the same eased pop transform. These timings and geometry are retained Android behavior, pending a measured UIKit navigation reference; no new UIKit parallax or dimming values are inferred. `PersonaTheme.reduceMotion` (including system animations off) makes all three transitions instant. An Agents list pick in an upright regular window **replaces the detail immediately**: only the overlaid list slides away, copying `SplitNavigation.swift`'s sidebar value links and `hideOverlay()` (lines 125–208). `JSidebarColumn` uses `Theme.Motion.layout`'s 300ms, zero-bounce spring on Glass (`Tokens.Motion.Layout`); Brief and Board retain their 240/160ms tweens. The phone drawer keeps its separate drawer spring.
+
 ### 2.2 Components
 
 A component with a composable slot ends with a function-typed parameter, so a caller can pass the slot as a trailing lambda. Add a parameter before the slots, never after (#4146, checked by `scripts/app/android_slot_order.py`; see [android.md](android.md) "Design-system slot order").
