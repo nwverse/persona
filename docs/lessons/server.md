@@ -1647,10 +1647,26 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
   and reserve Darwin private paths without case; a Linux rule test or cross-build
   does not establish native macOS filesystem behavior. Preparation rechecks when
   resources are actually used.
+- **Test a missing state root as well as missing workspace targets** (#7100):
+  `realPath` returns the physical existing ancestors plus missing tail with
+  `ErrNotExist`. Keep that returned path for containment. A state-root link or
+  linked parent with an absent destination must still deny that destination at
+  the base, task and repository levels; a sibling sharing only its prefix stays
+  outside. Test through Node RPC with actual temporary links and no creation.
 - **Literal checks don't stop links**: `stat` / `file` only checked whether the resolved string contained `/Library/Mobile Documents`; a `~/x` symlink into iCloud still reached `os.Stat`, hanging the batch on a locked Mac.
 - **`filepath.EvalSymlinks` isn't enough**: it `Lstat`s component by component; after following a link into iCloud it stats the next component there, so checks after return are too late.
   Walk components ourselves (`realPath` in `node/pathguard.go`), checking `offLimits` before each `Lstat`; lowercase comparisons because macOS is case-insensitive by default.
 - **One hung stat mustn't stall the batch**: network drives and sleeping disks hang too. `statPaths` runs 8 concurrently, waits at most 3 seconds overall, and treats nonresponses as `missing`.
+
+## Verify saved settings on the wire (#7100)
+
+- Distinct JSON tags on an embedded saved-settings field and an effective field
+  do not collide. Verify the actual HTTP response before changing the view:
+  `workspace_rules` stays partial while `effective_workspace_rules` is complete.
+  Exercise untouched settings, partial writes, omitted fields, explicit values
+  equal to defaults and null resets through GET/PUT, then read the database and
+  GET from a fresh service. Internal struct assertions alone miss serialization
+  regressions and cannot establish the editor's inheritance contract.
 
 ## Upload names the file system cannot take
 

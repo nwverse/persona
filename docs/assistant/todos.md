@@ -1104,6 +1104,10 @@ default. Omitted patch fields preserve saved values; `null` removes an override;
 empty strings are invalid on the wire. The Web editor converts a cleared field
 to a null patch and uses the same fallback in preview and after reload. Assistant
 writes still require the explicit manager.
+Assistant GET and PUT responses keep `workspace_rules` as the saved partial
+object (`{}` when unset or wholly reset); `effective_workspace_rules` separately
+contains all resolved fields. Saving a value equal to a default still records
+an explicit override. Reading defaults never materializes them in saved rules.
 Task overrides have their own CAS revision, independent of legacy Todo edits.
 
 Folder templates support `{task-id}`, `{task-slug}`, `{yyyy}` and `{mmdd}`.
@@ -1130,7 +1134,9 @@ on case-sensitive volumes, while Linux comparisons remain case-sensitive.
 The Node resolves existing symlink ancestors of the base, task root and every
 repository's absolute path through its existing guarded walker, then rejects
 credential paths and physical private state. Only a missing tail is accepted;
-other resolution errors fail closed. It also validates local branch format.
+other resolution errors fail closed. This includes the private-state root itself:
+the guarded walk returns its physical existing ancestors plus missing tail even
+with `ErrNotExist`, and containment uses that returned path. It also validates local branch format.
 No directory is created, no repository is
 queried or fetched, and no Engine is opened. `.persona` and `.git` task path
 segments and private state directories are unavailable; `{persona-home}` has no

@@ -3,6 +3,7 @@ package assistant
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,67 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
+
+func TestWorkspaceNamingSettingsWireRoundTrip(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	f := newFakeHub()
+	s := newServiceOn(t, f, database)
+	check := func(t *testing.T, s *Service, method, body string, saved, effective map[string]string) {
+		t.Helper()
+		r := httptest.NewRequest(method, "/api/v1/assistant", strings.NewReader(body))
+		r.Header.Set(assistantwire.ManagerHeader, s.managerIdentity())
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s: %d %s", method, w.Code, w.Body)
+		}
+		var wire map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
+			t.Fatal(err)
+		}
+		for field, want := range map[string]map[string]string{"workspace_rules": saved, "effective_workspace_rules": effective} {
+			var got map[string]string
+			if err := json.Unmarshal(wire[field], &got); err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s %s = %s; want %+v (error %v)", method, field, wire[field], want, err)
+			}
+		}
+		t.Logf("%s: workspace_rules=%s effective_workspace_rules=%s", method, wire["workspace_rules"], wire["effective_workspace_rules"])
+	}
+	defaults := map[string]string{"base_directory": "{home}/workspace", "task_directory_template": "task-{task-id}", "branch_template": "persona/{task-id}"}
+	check(t, s, "GET", "", map[string]string{}, defaults)
+	for _, tc := range []struct {
+		name, patch      string
+		saved, effective map[string]string
+	}{
+		{"partial", `{"workspace_rules":{"branch_template":"custom/{task-id}"}}`, map[string]string{"branch_template": "custom/{task-id}"}, map[string]string{"base_directory": "{home}/workspace", "task_directory_template": "task-{task-id}", "branch_template": "custom/{task-id}"}},
+		{"omitted preserves", `{"notes":"Example note"}`, map[string]string{"branch_template": "custom/{task-id}"}, map[string]string{"base_directory": "{home}/workspace", "task_directory_template": "task-{task-id}", "branch_template": "custom/{task-id}"}},
+		{"explicit default stays saved", `{"workspace_rules":{"base_directory":"{home}/workspace"}}`, map[string]string{"base_directory": "{home}/workspace", "branch_template": "custom/{task-id}"}, map[string]string{"base_directory": "{home}/workspace", "task_directory_template": "task-{task-id}", "branch_template": "custom/{task-id}"}},
+		{"field null inherits", `{"workspace_rules":{"branch_template":null}}`, map[string]string{"base_directory": "{home}/workspace"}, defaults},
+		{"whole null inherits", `{"workspace_rules":null}`, map[string]string{}, defaults},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check(t, s, "PUT", tc.patch, tc.saved, tc.effective)
+			// Read the serialized database value, then GET through a fresh service/cache.
+			var persisted map[string]json.RawMessage
+			if found, err := database.Setting(t.Context(), settingsKey, &persisted); err != nil || !found {
+				t.Fatal("saved settings missing", found, err)
+			}
+			var rules map[string]string
+			if err := json.Unmarshal(persisted["workspace_rules"], &rules); err != nil || !reflect.DeepEqual(rules, tc.saved) {
+				t.Fatalf("persisted rules %s; want %+v (error %v)", persisted["workspace_rules"], tc.saved, err)
+			}
+			s = newServiceOn(t, f, database)
+			check(t, s, "GET", "", tc.saved, tc.effective)
+		})
+		if t.Failed() {
+			return
+		}
+	}
+}
 
 func namingHTTPFixture(t *testing.T) (*Service, *repositorystore.Store, *atomic.Int32) {
 	t.Helper()

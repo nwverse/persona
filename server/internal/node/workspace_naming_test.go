@@ -2,6 +2,8 @@ package node
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -107,6 +109,73 @@ func TestWorkspaceNamingResolvesPrivateStateItself(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, namingGuardTree(t, home, state)) {
 		t.Fatal("preview changed resources")
+	}
+}
+
+func TestWorkspaceNamingMissingPrivateStateBehindSymlink(t *testing.T) {
+	for _, link := range []string{"ancestor", "state-root"} {
+		for _, level := range []string{"base", "task", "repository"} {
+			for _, target := range []string{"state", "descendant", "sibling-prefix"} {
+				t.Run(link+"/"+level+"/"+target, func(t *testing.T) {
+					home, physical := t.TempDir(), t.TempDir()
+					physicalState := filepath.Join(physical, "missing", "private-state")
+					alias := filepath.Join(home, "state-alias")
+					state, to := alias, physicalState
+					if link == "ancestor" {
+						state, to = filepath.Join(alias, "missing", "private-state"), physical
+					}
+					if err := os.Symlink(to, alias); err != nil {
+						t.Skip("symlinks:", err)
+					}
+					t.Setenv("PERSONA_HOME", state)
+					n := &Node{home: home, dir: state}
+					resolved, err := n.realPath(state)
+					if !errors.Is(err, fs.ErrNotExist) || resolved != physicalState {
+						t.Fatalf("missing state = %q, %v; want physical tail %q", resolved, err, physicalState)
+					}
+					to = physicalState
+					if target == "descendant" {
+						to = filepath.Join(to, "project")
+					} else if target == "sibling-prefix" {
+						to += "-projects"
+					}
+					at := filepath.Join(home, "workspace")
+					if level != "base" {
+						at = filepath.Join(at, "task-todo_example")
+					}
+					if level == "repository" {
+						at = filepath.Join(at, "web")
+					}
+					if err := os.MkdirAll(filepath.Dir(at), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(to, at); err != nil {
+						t.Fatal(err)
+					}
+					source := namingGuardSource()
+					if lexical := workspacenaming.Resolve(source, workspacenaming.NodeContext{Home: home, PersonaHome: state}); lexical.Plan == nil {
+						t.Fatal("fixture did not reach the physical guard", lexical)
+					}
+					before := namingGuardTree(t, home, physical)
+					got := namingGuardPreview(t, n, source)
+					if target == "sibling-prefix" {
+						if got.Plan == nil || got.Status != "complete" || workspacenaming.CheckPlan(*got.Plan) != nil {
+							t.Fatal("safe sibling metadata rejected or changed", got)
+						}
+					} else {
+						if got.Plan != nil || got.Status != "invalid" || len(got.Diagnostics) != 1 || got.Diagnostics[0].Code != "base_scope_denied" {
+							t.Fatal("missing physical private state accepted", got)
+						}
+						if level == "repository" && got.Diagnostics[0].RepoID != "web" {
+							t.Fatal("missing repository attribution", got)
+						}
+					}
+					if !reflect.DeepEqual(before, namingGuardTree(t, home, physical)) {
+						t.Fatal("preview changed resources")
+					}
+				})
+			}
+		}
 	}
 }
 
