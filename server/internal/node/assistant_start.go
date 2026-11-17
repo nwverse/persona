@@ -226,11 +226,16 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) []stri
 }
 
 // assistantCLICommand is the command that runs the conversation's claude on the CLI: an interactive shell so ~/.zshrc
-// defines the launcher function, "$@" passing our flags through. In the agent sandbox when it is on (agentsandbox.go).
-// A managed launcher's shell is not wrapped: it runs `personad launch`, which fetches the launcher's settings outside
-// the sandbox and wraps only the agent it execs (launchExec).
-func (n *Node) assistantCLICommand(shell, launcher, cwd string, args, env []string) *exec.Cmd {
-	argv := append([]string{shell, "-ic", n.launcherCommandIn(launcher, envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath) + ` "$@"`, "persona"}, args...)
+// defines the launcher function, "$@" passing our flags through; itself: Claude Code's executable past a `claude` alias
+// or function instead (claudeItself). In the agent sandbox when it is on (agentsandbox.go). A managed launcher's shell
+// is not wrapped: it runs `personad launch`, which fetches the launcher's settings outside the sandbox and wraps only
+// the agent it execs (launchExec).
+func (n *Node) assistantCLICommand(shell, launcher, cwd string, itself bool, args, env []string) *exec.Cmd {
+	command := n.launcherCommandIn(launcher, envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath)
+	if itself {
+		command = commandInProfile("command claude", envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath)
+	}
+	argv := append([]string{shell, "-ic", command + ` "$@"`, "persona"}, args...)
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),
@@ -346,7 +351,11 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if err != nil {
 		return nil, fmt.Errorf("prepare assistant MCP config: %w", err)
 	}
-	cmd := n.assistantCLICommand(shell, launcher, cwd, args, env)
+	itself := resume && n.claudeItself(id, launcher)
+	if itself {
+		n.logger.Printf("assistant %s: started on the Agent SDK: resumes with claude itself in its recorded profile, not the claude launcher", short(id))
+	}
+	cmd := n.assistantCLICommand(shell, launcher, cwd, itself, args, env)
 	cmd.SysProcAttr = osproc.GroupAttr() // so stop() can kill the whole group
 	msysCmdLine(cmd)
 	stdin, err := cmd.StdinPipe()

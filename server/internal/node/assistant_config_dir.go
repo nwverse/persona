@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -38,9 +39,10 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, aske
 		}
 		return n.sessionScope.claude, nil
 	}
+	itself := resume && n.claudeItself(id, launcher) // the Agent SDK started it: no launcher's profile applies
 	// The launcher's own profile when it sets one (a wrapper), normalized; "" when any profile goes.
 	ownProfile := func() (string, error) {
-		if _, managed := n.managedLauncher(launcher); managed {
+		if _, managed := n.managedLauncher(launcher); managed || itself {
 			return "", nil
 		}
 		if own := n.assistantLauncherProfile(ctx, launcher); own != "" {
@@ -147,6 +149,68 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, aske
 		return "", errors.New("config_dir conflicts with the launcher's own profile; restore that profile or use a compatible launcher")
 	}
 	return selected, nil
+}
+
+// An assistant conversation an older node started on the Agent SDK with the plain claude launcher ran Claude Code's
+// executable itself, never a `claude` alias or shell function, in the profile the node chose for it (Persona's own,
+// <data>/profiles/claude, unless one was asked for). Through such an alias or function that sets a profile of its own,
+// claude would open that profile instead and not find the conversation, or the profile check would refuse it on every
+// message. So the conversation keeps running claude as the SDK did: the executable past the alias (`command claude`,
+// assistantCLICommand) in the profile it recorded, resuming it there, with no launcher's own profile applied. A
+// conversation the CLI started keeps the launcher's rules (#4310).
+//
+// The hub never kept which runtime ran a conversation; its transcript says so. Claude Code writes the entrypoint it was
+// started through on its lines: "sdk-ts" under the Agent SDK, "sdk-cli" for claude -p. The first one is the start's,
+// and stays the SDK's once the CLI goes on with the conversation.
+
+// claudeItself says whether conversation id, resumed on launcher, runs Claude Code's executable itself (above).
+func (n *Node) claudeItself(id, launcher string) bool {
+	if id == "" || launcher != "claude" || n.sessionScope != nil {
+		return false
+	}
+	if _, managed := n.managedLauncher(launcher); managed {
+		return false
+	}
+	return startedOnAgentSDK(n.transcriptPath(id))
+}
+
+// firstEntrypointReach bounds how far into a transcript startedOnAgentSDK looks for its first entrypoint: a first
+// message with images or a long snapshot runs to a few hundred KB.
+const firstEntrypointReach = 8 << 20
+
+// startedOnAgentSDK says whether the first entrypoint on the transcript at path is the Agent SDK's.
+func startedOnAgentSDK(path string) bool {
+	if path == "" {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	key := []byte(`"entrypoint":"`)
+	var head []byte
+	buf := make([]byte, 64<<10)
+	at := -1 // where the first entrypoint's value starts, once read
+	for len(head) < firstEntrypointReach {
+		got, err := f.Read(buf)
+		from := max(0, len(head)-len(key)+1) // a key cut by the last read is whole now
+		head = append(head, buf[:got]...)
+		if at < 0 {
+			if i := bytes.Index(head[from:], key); i >= 0 {
+				at = from + i + len(key)
+			}
+		}
+		if at >= 0 {
+			if j := bytes.IndexByte(head[at:], '"'); j >= 0 {
+				return string(head[at:at+j]) == "sdk-ts"
+			}
+		}
+		if err != nil {
+			return false
+		}
+	}
+	return false
 }
 
 // holdsNewestCopy reports whether copy exists and is no older than newest: the same file reached through a symlink, or
@@ -266,6 +330,11 @@ func (n *Node) launcherCommandIn(name, dir string, q func(string) string) string
 	if _, managed := n.managedLauncher(name); managed {
 		cmd = q(n.bin) + " launch " + name
 	}
+	return commandInProfile(cmd, dir, q)
+}
+
+// commandInProfile is shell command cmd run in Claude profile dir ("" for "default").
+func commandInProfile(cmd, dir string, q func(string) string) string {
 	if dir == "" {
 		// "default": unset after the shell's rc files, not an empty value (claudeProcessEnv)
 		return "unset CLAUDE_CONFIG_DIR; " + cmd
