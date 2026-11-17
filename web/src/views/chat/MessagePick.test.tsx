@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
 import { onOpenForward, type ForwardBatch, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import type { Item } from "../../lib/types";
-import { FORWARD_MOST, messagePick, type MessagePick } from "../../lib/message-pick";
+import { FORWARD_MOST, INCLUDE_KEY, messagePick, type MessagePick } from "../../lib/message-pick";
 import { ChatActionsContext, type ChatActions } from "./chat-actions";
 import { MessageActions } from "./MessageActions";
 import { PickBar, PickRow } from "./Picking";
@@ -145,7 +145,9 @@ describe("the pick bar", () => {
     pick.start(p("r#2"));
     renderChat(pick, { onEnd });
     expect(host.querySelector("[data-pick-count]")?.textContent).toBe("1 selected");
-    expect(button("pick-forward").textContent).toContain("Forward 1");
+    expect(button("pick-forward").textContent).toContain("Forward"); // the count is in the middle (#9469)
+    expect(button("pick-copy").textContent).toContain("Copy");
+    expect(button("pick-export").textContent).toContain("Export image");
     act(() => boxes()[0].click());
     expect(host.querySelector("[data-pick-count]")?.textContent).toBe("2 selected");
     act(() => button("pick-forward").click());
@@ -162,14 +164,56 @@ describe("the pick bar", () => {
   });
 
   it.each([
-    ["zh-Hans", "已选 2 条", "转发 2 条"],
-    ["ja", "2件を選択", "2件を転送"],
+    ["zh-Hans", "已选 2 条", "转发"],
+    ["ja", "2件を選択", "転送"],
   ])("speaks %s", async (lang, count, forward) => {
     await initI18n(lang);
     renderChat(pick, {});
     act(() => boxes()[1].click());
     expect(host.querySelector("[data-pick-count]")?.textContent).toBe(count);
     expect(button("pick-forward").textContent).toContain(forward);
+  });
+
+  it("offers Include questions while a picked reply's question is not picked, and forwards it with the reply (#9469)", () => {
+    const opened = vi.fn<(b: ForwardBatch) => void>();
+    const off = onOpenForward(opened);
+    const asked: ForwardPick = { itemId: "u#1", text: "How many times does it retry?", isUser: true };
+    pick = messagePick();
+    pick.setQuestions(() => new Map([["r#2", [asked]]]));
+    pick.start(p("r#2"));
+    const fromWith: ForwardChat = { ...from, items: [{ id: "u#1", seq: 1, role: "user", kind: "text", text: asked.text }, { id: "r#2", seq: 2, role: "assistant", kind: "text", text: "Three times." }] as Item[] };
+    const chat: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Agent", title: "Network tests", forward: () => {}, pick, images: () => [] };
+    act(() => root.render(<ChatActionsContext.Provider value={chat}><PickBar pick={pick} chat={() => fromWith} onEnd={() => {}} /></ChatActionsContext.Provider>));
+    const questions = host.querySelector<HTMLButtonElement>("[data-pick-questions]");
+    expect(questions?.getAttribute("aria-checked")).toBe("true");
+    act(() => button("pick-forward").click());
+    expect(opened.mock.calls[0][0].drafts.map((d) => d.source.item)).toEqual(["u#1", "r#2"]);
+    act(() => questions!.click());
+    expect(host.querySelector("[data-pick-questions]")?.getAttribute("aria-checked")).toBe("false");
+    act(() => button("pick-forward").click());
+    expect(opened.mock.calls[1][0].drafts.map((d) => d.source.item)).toEqual(["r#2"]);
+    off();
+    localStorage.removeItem(INCLUDE_KEY);
+  });
+
+  it("is started from the message menu's last row, Select messages (#9469)", () => {
+    const select = vi.fn();
+    const chat: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Agent", title: "Network tests", forward: () => {}, select, images: () => [] };
+    act(() =>
+      root.render(
+        <ChatActionsContext.Provider value={chat}>
+          <MessageActions text="Three times." itemId="r#2">
+            <p data-words>Three times.</p>
+          </MessageActions>
+        </ChatActionsContext.Provider>,
+      ),
+    );
+    const words = host.querySelector<HTMLElement>("[data-words]")!;
+    act(() => void words.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })));
+    const last = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].at(-1)!;
+    expect(last.textContent).toBe("Select messages");
+    act(() => last.click());
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ itemId: "r#2", isUser: false }));
   });
 
   it("hands the chat back with Cancel or Escape", () => {

@@ -3,10 +3,11 @@
 import { cx } from "./atoms";
 import { Icon } from "./icons";
 
-/** The tick of a role="checkbox" row; round for a role="radio" one. */
-export function CheckMark({ on, round, className }: { on: boolean; round?: boolean; className?: string }) {
+/** The tick of a role="checkbox" row; round for a role="radio" one. `soft`: ticked in the lighter accent, for what goes
+ *  along with a pick without being picked (a picked reply's question, #9469). */
+export function CheckMark({ on, round, soft, className }: { on: boolean; round?: boolean; soft?: boolean; className?: string }) {
   return (
-    <span aria-hidden className={cx("flex size-4 shrink-0 items-center justify-center transition-colors duration-150", round ? "rounded-full" : "rounded-chip", on ? "bg-accent text-white" : "shadow-[inset_0_0_0_1.5px_var(--line-strong)]", className)}>
+    <span aria-hidden className={cx("flex size-4 shrink-0 items-center justify-center transition-colors duration-150", round ? "rounded-full" : "rounded-chip", on ? (soft ? "bg-accent-tint text-accent" : "bg-accent text-white") : "shadow-[inset_0_0_0_1.5px_var(--line-strong)]", className)}>
       {on && <Icon name="check" size={10} stroke={3} />}
     </span>
   );

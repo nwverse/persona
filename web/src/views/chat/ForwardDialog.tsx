@@ -17,7 +17,6 @@ import { MAX_IMAGES } from "../../lib/composer-commands";
 import { sendDraft, type DraftImage } from "../../lib/drafts";
 import type { ForwardBatch, ForwardDraft } from "../../lib/forward";
 import { forwardRuns } from "../../lib/forward-group";
-import { messagePick } from "../../lib/message-pick";
 import { forwardLimit, forwardRef, forwardRoute } from "../../lib/forward-block";
 import { forwardSessions, PERSONA_TARGET, rememberForward, sessionTarget } from "../../lib/forward-memory";
 import { forwardSections, keyOf, targetDetail, targetTitle, type TargetSection } from "../../lib/forward-targets";
@@ -41,8 +40,7 @@ import { StatusMark } from "../../ui/StatusMark";
 import { conversationTitle } from "../assistant/conversations";
 import { ForwardBar } from "./ForwardBar";
 import { ForwardGroupBar } from "./ForwardGroup";
-import { PickBar, PickRow } from "./Picking";
-import { pickParts } from "./picking-parts";
+import { startPick } from "./Picking";
 import { readPhoto } from "./QueueStrip";
 
 type Target = { kind: "persona" } | { kind: "new" } | { kind: "session"; s: Session };
@@ -211,11 +209,7 @@ export function ForwardDialog({ batch, open, onClose }: { batch: ForwardBatch; o
                   onClick={() => {
                     onClose();
                     // what the chat draws while it picks comes with this dialog: handed over before it starts
-                    pickParts.Row = PickRow;
-                    pickParts.Bar = PickBar;
-                    const pick = messagePick();
-                    pick.start(select.first);
-                    select.start(pick);
+                    select.start(startPick(select.first, select.items));
                   }}
                   data-forward-select
                 >

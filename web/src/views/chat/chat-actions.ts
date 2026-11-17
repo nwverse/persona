@@ -21,6 +21,8 @@ export interface ChatActions {
   /** Picking messages to forward at once (#3838), set with `forward`: while it is on, each message with a Forward is a
    *  checkbox instead of its actions. */
   pick?: MessagePick;
+  /** The message menu's Select messages (#9469), set with `forward`: picking starts with this message picked. */
+  select?: (pick: ForwardPick) => void;
   /** "Start a new session" from a reply (its item id): set only when the session can be forked. */
   fork?: (itemId: string) => void;
   /** A Persona conversation, for everyday words (docs/protocol/i18n.md "Glossary"): "Start a new chat", not "session". */

@@ -167,7 +167,8 @@ export function forwardDraftOf(c: ForwardChat, p: ForwardPick): ForwardDraft {
  *  `start`; `sent`: called once they went to a target. */
 export interface ForwardBatch {
   drafts: ForwardDraft[];
-  select?: { first: ForwardPick; start: (pick: MessagePick) => void };
+  /** Select messages…: picking starts with `first`; `items`, the chat's transcript, says what questions its replies bring. */
+  select?: { first: ForwardPick; start: (pick: MessagePick) => void; items: () => readonly Item[] };
   sent?: () => void;
 }
 

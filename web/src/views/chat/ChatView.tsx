@@ -622,7 +622,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       draftKey,
       title,
       canCompose,
-      forward: (p: ForwardPick) => openForward({ drafts: [forwardDraftOf(forwardFrom(), p)], select: { first: p, start: setPicker } }),
+      forward: (p: ForwardPick) => openForward({ drafts: [forwardDraftOf(forwardFrom(), p)], select: { first: p, start: setPicker, items: () => items.current } }),
+      // the message menu's Select messages (#9469): picking starts with it, what draws it loaded on the press
+      select: (p: ForwardPick) =>
+        void import("./Picking").then(
+          (m) => setPicker(m.startPick(p, () => items.current)),
+          (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"), // the chunk would not load
+        ),
       pick: picker,
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
