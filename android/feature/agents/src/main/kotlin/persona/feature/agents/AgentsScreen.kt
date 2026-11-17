@@ -325,6 +325,22 @@ internal fun AgentsScreen(
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
             }, idleRepos = repoTree, hideIdle = hideIdle)
     }
+    // Tap-driven row motion only (#9600). Hub pushes change [tree] with the flag clear, so they stay put.
+    val listTapMotion = remember { ListTapMotion() }
+    // The motion follows this screen's model. A second model (the shot loop, or a new key) must not
+    // leave the flag on the previous one: that list then folds with nothing armed.
+    DisposableEffect(model, listTapMotion) {
+        model.attachListTap(listTapMotion)
+        onDispose { model.detachListTap(listTapMotion) }
+    }
+    // A page built before the tap carries an older generation and is ignored (the list is throttled).
+    LaunchedEffect(page) { listTapMotion.land(page.tapEpoch) }
+    BindListTapMotion(listTapMotion)
+    // The computer chip only (ChatsView.swift:1646). The menu's machine picker sets the filter with no animation (AgentsMenus.swift:141).
+    fun clearMachine() {
+        model.machine("", animate = true)
+        onMachineSelected("")
+    }
     val paginationFooter = page.pagination.paged && !firstPageIncomplete
     val controls = page.settings
     // Use the effective sort and the user's fold choices, which are kept separately from the live list projection.
@@ -385,6 +401,7 @@ internal fun AgentsScreen(
             summary = summary, subtitle = subtitle, greet = true, largeTitle = LocalHomeChrome.current == null,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
             onTitleClick = if (connection != ConnectionState.Online) connectionDetails else ({ menu = true }), refreshing = refreshing, onRefresh = model::refresh,
+            listScroll = listTapScroll(listTapMotion),
             actions = {
                 if (LocalHomeChrome.current == null) JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
                 JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
@@ -393,6 +410,8 @@ internal fun AgentsScreen(
                 else JIconButton(PersonaIcons.moreMenu, stringResource(R.string.agents_action_list_settings), { menu = true })
             },
         ) {
+            val tapScope = ListTapLazyScope(this, listTapMotion, listState, page.tapEpoch)
+            with(tapScope) {
             item("search") {
                 val settings by model.listSettings.collectAsStateWithLifecycle()
                 androidx.compose.animation.AnimatedVisibility(!homeChrome || searchVisible || settings.query.isNotBlank()) {
@@ -430,8 +449,8 @@ internal fun AgentsScreen(
                 val hint = stringResource(R.string.agents_only_machine_hint)
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
                     JChip(stringResource(R.string.agents_only_machine, name), Modifier.testTag("agents-machine-filter")
-                        .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
-                        selected = true, onClick = { model.machine(""); onMachineSelected("") },
+                        .semantics { onClick(label = hint) { clearMachine(); true } },
+                        selected = true, onClick = { clearMachine() },
                         role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
                 }
             }
@@ -704,7 +723,11 @@ internal fun AgentsScreen(
                     is TreeChildrenEntry -> item(entry.key, contentType = "children") {
                         val slot = repoSlots[entry.key]
                         AgentSpaceHeader(stringResource(R.string.agents_child_tasks, entry.count), !entry.expanded,
-                            onToggle = { expandedTasks = if (entry.expanded) expandedTasks - entry.parent.id else expandedTasks + entry.parent.id },
+                            onToggle = {
+                                // Codex subtasks (ChatsView.swift:3289).
+                                listTapMotion.arm(ListTapMotionKind.State)
+                                expandedTasks = if (entry.expanded) expandedTasks - entry.parent.id else expandedTasks + entry.parent.id
+                            },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier,
                             depth = slot?.level ?: entry.depth, kind = stringResource(R.string.agents_child_tasks_kind))
                     }
@@ -741,6 +764,8 @@ internal fun AgentsScreen(
                     if (page.pagination.loading) JSpinner()
                     else if (page.pagination.hasMore) JTextButton(stringResource(R.string.agents_page_more), model::loadMore)
                 }
+            }
+            tapScope.commit()
             }
         }
         AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()

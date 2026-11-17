@@ -9,6 +9,8 @@ import persona.core.domain.sort.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import persona.core.designsystem.Haptic
+import persona.core.designsystem.ListTapMotion
+import persona.core.designsystem.ListTapMotionKind
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -49,6 +51,8 @@ internal data class AgentsPageState(
     val spacesById: Map<String, AgentSpace> = emptyMap(),
     /** Whether the hub has the direction tree (#4352): only then does the menu offer "By direction". */
     val directionsAvailable: Boolean = false,
+    /** The tap this page was built from. A throttled page from before the tap carries an older one (#9600). */
+    val tapEpoch: Int = 0,
 )
 
 /**
@@ -101,6 +105,14 @@ internal class AgentsViewModel(
     } }
     private val operations = bindings?.operations?.let { AgentOperationsState(it, preferences.hubCache) }
     val operationState = operations?.state ?: MutableStateFlow(AgentOperationsSnapshot())
+    /**
+     * Every Agents list on screen (#9600). A foldable's overlay and the page underneath can both be composed
+     * during a navigation transition (`Root.kt` `sceneStrategies`, `AgentsOverlay`), and they share this model,
+     * so each list registers its own motion instead of one field the later screen would replace.
+     */
+    private val listTaps = mutableListOf<ListTapMotion>()
+    /** Bumped on a tap. The throttled page flow stops waiting, and the page built from the tap carries this. */
+    private val tapWake = MutableStateFlow(0)
     private val sending = mutableSetOf<String>()
     private val messageIds = mutableMapOf<String, String>()
     private var changing = false
@@ -255,8 +267,9 @@ internal class AgentsViewModel(
         val source = if (group == null) everySession else everySession.filter { group.admits(it.machineId) }
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)
+        val grouping = resolvedGrouping(settings.pendingGrouping ?: localPrefs.grouping, todosSupported)
         val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
-            grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
+            grouping = grouping, foldedTabs = settings.pendingFoldedTabs ?: localPrefs.foldedTabs)
         val rows = sessions.map { it.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(it.machineId, "sessions_hierarchy")) }
         // The shell records this before its read receipt, so a conflated Idle snapshot cannot erase an Unread entry.
         val heldSession = held?.takeIf { it == visible }?.path
@@ -292,13 +305,15 @@ internal class AgentsViewModel(
             loaded = pagination.loaded).let { state ->
             // Computer projects use the same held marker as the main projection; ordinary space members stay as before.
             val spaces = agentSpaces(rows.map { it.copy(heldInList = it.id == heldSession) })
-            state.copy(spaces = spaces, spacesById = spacesByGroup(result, prefs.grouping, spaces), directionsAvailable = directions != null)
+            state.copy(spaces = spaces, spacesById = spacesByGroup(result, prefs.grouping, spaces), directionsAvailable = directions != null,
+                tapEpoch = maxOf(effective.tapEpoch, ops.tapEpoch))
         }
     // The app (listContext set) builds only from the latest inputs and redraws at most every PAGE_MILLIS: with an
     // accessibility service on, Compose diffs the whole semantics tree on each recomposition, and one per pushed
-    // session event kept the long list janky. Tests (no listContext) stay synchronous.
+    // session event kept the long list janky. Tests (no listContext) stay synchronous. A tap wakes the hold so the
+    // page that contains the tap is not stuck behind one built before it.
     }.let { built -> if (listContext == kotlin.coroutines.EmptyCoroutineContext) built.flowOn(listContext)
-        else built.conflate().flowOn(listContext).throttleLatest(PAGE_MILLIS) }
+        else built.conflate().flowOn(listContext).throttleLatest(PAGE_MILLIS, tapWake) }
     val page = combine(projectedPage, repository.listStatus, flow {
         // Apply filters only while the page is observed; hidden/destroyed screens retain no filter worker.
         // A hub hello can cancel the first request and start a replacement. Keep displaying the repository's
@@ -526,26 +541,89 @@ internal class AgentsViewModel(
             .groupingBy { GroupKeys.namespaceOf(it.session.machineId) }.eachCount()
     }
 
-    fun machine(id: String) { previous = null; settings.update { it.copy(machineFilter = id, kept = emptySet()) } }
+    fun machine(id: String, animate: Boolean = false) {
+        previous = null
+        // The chip clears with the list (ChatsView.swift:1646). The menu's picker does not (AgentsMenus.swift:141).
+        if (animate) writeTap(ListTapMotionKind.State) { it.copy(machineFilter = id, kept = emptySet()) }
+        else settings.update { it.copy(machineFilter = id, kept = emptySet()) }
+    }
     /** Shows one hub group (or every group); a computer chip of another group is let go. */
     fun group(value: GroupFilter?) {
         previous = null
         groupFilter.value = value
         settings.update { if (value.admits(it.machineFilter) || it.machineFilter.isEmpty()) it else it.copy(machineFilter = "", kept = emptySet()) }
     }
-    fun grouping(group: AgentGrouping) = localChange {
+    fun grouping(group: AgentGrouping) {
+        // Theme.Motion.layout, AgentsMenus.swift:405. The value on screen may still be the previous
+        // page: a tap's pending grouping is the one already chosen (the page waits on the throttle).
+        val shown = settings.value.pendingGrouping ?: page.value.preferences.grouping
+        if (shown == group) {
+            localChange {
+                previous = null
+                settings.update { it.copy(kept = emptySet()) }
+                preferences.grouping(group)
+            }
+            return
+        }
+        // The new grouping and the epoch are one emission. Saving comes after, so a slow write cannot
+        // publish the grouping alone (that page would be held, the rows would land, and the real epoch
+        // would capture no shift). A failed save is put back only if this tap is still the pending one
+        // (PinsStore.swift:131, :139, :163). A later tap, or a grouping saved by someone else, stays.
+        val epoch = stamp(ListTapMotionKind.Layout)
         previous = null
-        settings.update { it.copy(kept = emptySet()) }
-        preferences.grouping(group)
+        settings.update { it.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group) }
+        localChange {
+            try {
+                preferences.grouping(group)
+                settings.update { current -> if (current.pendingGrouping == group) current.copy(pendingGrouping = null) else current }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (settings.value.pendingGrouping == group) {
+                    val back = stamp(ListTapMotionKind.Layout)
+                    settings.update { current ->
+                        if (current.pendingGrouping != group) current
+                        else current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null)
+                    }
+                }
+                throw e
+            }
+        }
     }
     fun compact() = localChange { preferences.compact(!page.value.preferences.compact) }
     /** Glass's ⋯ › Display: a row style or Compact List (iOS `AgentListDisplay`). */
     fun display(value: AgentListDisplay) = localChange { preferences.setDisplay(value) }
-    fun foldTab(tab: AgentTab) = localChange { preferences.foldTab(tab.foldKey, tab.foldKey !in page.value.preferences.foldedTabs) }
-    fun pin(row: AgentSession) = change(row.session.machineId) { it.preference(pin = true, space = false, key = row.id) }
-    fun mute(row: AgentSession) = change(row.session.machineId) { it.preference(pin = false, space = false, key = row.id, spaceKey = row.spacePreferenceKey) }
-    fun spacePin(session: Session) = change(session.machineId) { it.preference(true, true, "${session.machineId}/${session.spaceName}") }
-    fun spaceMute(session: Session) = change(session.machineId) { it.preference(false, true, "${session.machineId}/${session.spaceName}") }
+    fun foldTab(tab: AgentTab) {
+        // A tab folds through toggleFold (ChatsView.swift:2080), animated at :1168.
+        // The folded set and the epoch are written together, before the phone saves them. A page
+        // built from the save alone would carry the fold and the old epoch. The base is the pending
+        // set when the throttled page has not caught up, so a second fold in that gap keeps the first.
+        val base = settings.value.pendingFoldedTabs ?: page.value.preferences.foldedTabs
+        val next = if (tab.foldKey in base) base - tab.foldKey else base + tab.foldKey
+        val epoch = stamp(ListTapMotionKind.State)
+        previous = null
+        settings.update { it.copy(tapEpoch = epoch, pendingFoldedTabs = next) }
+        localChange {
+            try {
+                preferences.foldTab(tab.foldKey, tab.foldKey in next)
+                settings.update { current -> if (current.pendingFoldedTabs == next) current.copy(pendingFoldedTabs = null) else current }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                // Only this tap's set is dropped. The saved prefs show again, and the revert is its own tap.
+                if (settings.value.pendingFoldedTabs == next) {
+                    val back = stamp(ListTapMotionKind.State)
+                    settings.update { current ->
+                        if (current.pendingFoldedTabs != next) current
+                        else current.copy(tapEpoch = back, pendingFoldedTabs = null)
+                    }
+                }
+                throw e
+            }
+        }
+    }
+    fun pin(row: AgentSession) = change(row.session.machineId) { it.preference(pin = true, space = false, key = row.id, onWrite = ::stampState) }
+    fun mute(row: AgentSession) = change(row.session.machineId) { it.preference(pin = false, space = false, key = row.id, spaceKey = row.spacePreferenceKey, onWrite = ::stampState) }
+    fun spacePin(session: Session) = change(session.machineId) { it.preference(true, true, "${session.machineId}/${session.spaceName}", onWrite = ::stampState) }
+    fun spaceMute(session: Session) = change(session.machineId) { it.preference(false, true, "${session.machineId}/${session.spaceName}", onWrite = ::stampState) }
     fun rename(session: Session, title: String?, tab: String?) {
         val edit = SessionRename.changes(session, title, tab)
         if (!edit.changed) return
@@ -639,6 +717,9 @@ internal class AgentsViewModel(
                 _failure.value = e
             } finally { changing = false }
             try {
+                // A key this refresh adds is not in the pin's moving set, so it jumps. A row the pin
+                // already moved keeps the spring. The 300 ms throttle can fold this refresh into
+                // the pin's own emission; those two cannot be told apart.
                 repository.refresh()
                 operations.reconcile(repository.sessions.value).forEach { bindings?.onSessionClosed?.invoke(it) }
                 operations.refresh()
@@ -680,7 +761,8 @@ internal class AgentsViewModel(
     }
 
     fun fold(group: AgentListGroup) {
-        settings.update { current ->
+        // Section fold and a quiet space (ChatsView.swift:1168, :2595, :3114, :3214, :3237).
+        writeTap(ListTapMotionKind.State) { current ->
             if (group.parent == "quiet") current.copy(
                 expandedQuiet = if (group.folded) current.expandedQuiet + group.id else current.expandedQuiet - group.id,
                 folded = if (group.folded) current.folded - group.id else current.folded + group.id,
@@ -699,12 +781,14 @@ internal class AgentsViewModel(
         saveFolds()
     }
     fun fold(machine: AgentMachineGroup) {
-        settings.update { it.copy(folded = if (machine.folded) it.folded - machine.id else it.folded + machine.id) }
+        // ChatsView.swift:1168, the computer's section
+        writeTap(ListTapMotionKind.State) { it.copy(folded = if (machine.folded) it.folded - machine.id else it.folded + machine.id) }
         saveFolds()
     }
     fun foldAll(fold: Boolean) {
+        // Collapse All / Expand All (AgentsMenus.swift:125, :128), Theme.Motion.standard.
         previous = null
-        settings.update { it.copy(
+        writeTap(ListTapMotionKind.State) { it.copy(
             // The sections, on top of what is folded: a computer heading stays as it is, as iOS's Collapse All (#4338 A11).
             folded = if (fold) it.folded + page.value.list.groups.map { group -> group.id }
                 else if (page.value.settings.grouping == AgentGrouping.State) setOf(StateSeenOpened) else emptySet(),
@@ -715,15 +799,40 @@ internal class AgentsViewModel(
     }
     /** A section's rows past [AgentRowCap]: all of them ([open]), or the first ones again. */
     fun showAll(group: AgentListGroup, open: Boolean) {
+        // ChatsView.swift:3010, Show all
         val key = AgentRowCap.key(group.id)
-        settings.update { it.copy(expandedAll = if (open) it.expandedAll + key else it.expandedAll - key) }
+        writeTap(ListTapMotionKind.State) { it.copy(expandedAll = if (open) it.expandedAll + key else it.expandedAll - key) }
     }
     fun showIdle(group: AgentListGroup) {
-        settings.update { it.copy(expandedIdle = it.expandedIdle + group.idleKey) }
+        // ChatsView.swift:3048, "N more idle"
+        writeTap(ListTapMotionKind.State) { it.copy(expandedIdle = it.expandedIdle + group.idleKey) }
     }
     /** Folds [group]'s idle agents behind their line again (By Repository's "Hide N Idle", iOS `collapseRow`, #4338 A8). */
     fun hideIdle(group: AgentListGroup) {
-        settings.update { it.copy(expandedIdle = it.expandedIdle - group.idleKey) }
+        // ChatsView.swift:3074
+        writeTap(ListTapMotionKind.State) { it.copy(expandedIdle = it.expandedIdle - group.idleKey) }
+    }
+    /** Each composed list (page and overlay) gets the tap. The page is throttled, so the flag waits for that emission. */
+    fun attachListTap(motion: ListTapMotion) {
+        if (listTaps.none { it === motion }) listTaps += motion
+    }
+    fun detachListTap(motion: ListTapMotion) { listTaps.removeAll { it === motion } }
+
+    /** Theme.Motion.standard. Returns the generation stamped on the page this tap writes. */
+    private fun stampState(): Int = stamp(ListTapMotionKind.State)
+    private fun stamp(kind: ListTapMotionKind): Int {
+        val epoch = tapWake.value + 1
+        tapWake.value = epoch
+        armTaps(kind, epoch)
+        return epoch
+    }
+    /** The settings write and the generation are one emission, so a page from before the tap cannot match it. */
+    private fun writeTap(kind: ListTapMotionKind, block: (AgentListSettings) -> AgentListSettings) {
+        val epoch = stamp(kind)
+        settings.update { block(it).copy(tapEpoch = epoch) }
+    }
+    private fun armTaps(kind: ListTapMotionKind, epoch: Int) {
+        listTaps.toList().forEach { it.arm(kind, awaitPage = true, epoch = epoch) }
     }
     private val AgentListGroup.idleKey: String
         get() = if (id.startsWith("machine/")) "machine-${id.removePrefix("machine/")}" else id
@@ -891,12 +1000,25 @@ internal fun answerFailureHaptic(error: Exception): Haptic? = when (error) {
 /** How often the app's Agents page redraws at most while sessions stream in. */
 private const val PAGE_MILLIS = 300L
 
-/** The first value at once, then at most one per [millis]: the latest of those that came meanwhile. */
-internal fun <T> Flow<T>.throttleLatest(millis: Long): Flow<T> = channelFlow {
+/**
+ * The first value at once, then at most one per [millis]: the latest of those that came meanwhile.
+ * [wake] ending the wait (a tap) sends one extra page without waiting. If a page is already queued,
+ * that queued page is the extra: it was built before the tap, and the page after it is the tap.
+ * A conflated channel keeps only the latest, so a queued value might already be the tap; the extra
+ * is then the next hub page. A hub page after the tap waits another [millis].
+ */
+internal fun <T> Flow<T>.throttleLatest(millis: Long, wake: kotlinx.coroutines.flow.StateFlow<Int> = kotlinx.coroutines.flow.MutableStateFlow(0)): Flow<T> = channelFlow {
     val latest = kotlinx.coroutines.channels.Channel<T>(kotlinx.coroutines.channels.Channel.CONFLATED)
     launch { collect { latest.send(it) }; latest.close() }
+    var burst = 0
     for (value in latest) {
         send(value)
-        kotlinx.coroutines.delay(millis)
+        if (burst > 0) { burst--; continue }
+        val stamp = wake.value
+        if (kotlinx.coroutines.withTimeoutOrNull(millis) { wake.first { it != stamp } } != null) {
+            val queued = latest.tryReceive().getOrNull()
+            if (queued != null) send(queued)
+            burst = 1
+        }
     }
 }
