@@ -2714,6 +2714,15 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   page from there and deletes with a swipe, asked first. Reason: the same list sat in two places (the page and
   Knowledge's last chip, start controls included), and after the rename two Meetings lists would split meetings by how
   they arrived (principles 2 and 4).
+- **One row for one meeting** (#8872): a meeting both imported from a connected app and recorded in Persona is the
+  recording's row (its minutes, transcript and map are Persona's), once the hub has matched them (after the minutes
+  step; until then both rows show). Its avatar carries the app it came from in the corner, drawn as the Inbox marks a
+  connector's item (the app's own mark on white, a gray link without one: `KBImportedBadge`, the web's `RowTile`), and
+  VoiceOver reads the notes' name as the row's value. The recording's page, on Knowledge's page and on the meeting's own
+  after the meeting, has one row more under the facts: **Lark Meeting Notes** (another app's, **Original Meeting Notes**),
+  which opens them in this app (`KBImportedNotesButton`, `kb-imported-notes`). Two recordings of one meeting both stay,
+  the imported row goes; a recording naming a meeting the list doesn't have stays as it is (principle 4: one meeting,
+  one row).
 - **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
   section, the current one checked), so it can change after the start (principle 3): the meeting page's menu, and in the live view a page menu beside **Hide** (the ellipsis, named
   "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into
