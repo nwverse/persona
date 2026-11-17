@@ -5,7 +5,7 @@ import XCTest
 /// the hub offers attending: MOCK_NO_MEETING_ATTENDANCE=1 has none); a reminder's Start opens the room of the meeting named
 /// after the event, and a plain tap the Meetings page. A notification can't be reached without the system's prompt, so
 /// `-showMeetingReminder start|open` answers a made-up meeting's reminder through its own content. zh-Hans.
-/// PERSONA_SHOTS=<dir> saves reminder-<appearance>-<name>.png.
+/// PERSONA_SHOTS=<dir> saves reminder-<appearance>-<name>[-<PERSONA_SHOTS_TAG>].png.
 final class MeetingReminderUITests: XCTestCase {
     /// The switch, on, with the way to calendar access (the simulator's calendar was never asked for).
     @MainActor func testTheSwitchInSettings() throws {
@@ -13,8 +13,18 @@ final class MeetingReminderUITests: XCTestCase {
         let toggle = app.switches["settings-meeting-reminders"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), "no reminder switch:\n\(app.debugDescription)")
         XCTAssertEqual(toggle.value as? String, "1", "the reminder is on by default")
-        let persona = element(app, "settings-meeting-invite").exists || element(app, "settings-meeting-attendance").exists
-        try shot(app, persona ? "settings" : "settings-no-persona")
+        try shot(app, "settings")
+    }
+
+    /// Settings' Meetings row, on every iPhone (with no Persona role to show where the hub offers none).
+    @MainActor func testTheRowOnEveryHub() throws {
+        let app = try launch(["-tab", "settings"])
+        let settings = app.descendants(matching: .any)["settings-list"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 15), app.debugDescription)
+        let neighbor = app.buttons["settings-knowledge-selection"]
+        for _ in 0..<8 where !neighbor.isHittable { settings.swipeUp() }
+        XCTAssertTrue(app.buttons["settings-meetings"].exists, "no Meetings row:\n\(app.debugDescription)")
+        try shot(app, "list")
     }
 
     /// Start: the meeting named after the event records, in its room.
@@ -52,6 +62,7 @@ final class MeetingReminderUITests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         guard let dir = env["PERSONA_SHOTS"] else { return }
         let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
-        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/reminder-\(appearance)-\(name).png"))
+        let tag = env["PERSONA_SHOTS_TAG"].map { "-" + $0 } ?? ""
+        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/reminder-\(appearance)-\(name)\(tag).png"))
     }
 }
