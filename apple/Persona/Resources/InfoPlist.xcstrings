@@ -375,19 +375,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona turns your voice into text when you hold the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can."
+            "value": "Persona turns your voice into text when you use the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "マイクボタンを押している間、Personaがあなたの声をテキストに変換します。たとえばClaudeへの返信を音声で入力します。緊急コールに出たときも、あなたの決定を聞き取るのに使います。できるときはiPhone上で変換します。"
+            "value": "マイクボタンを使用すると、Personaがあなたの声をテキストに変換します。たとえばClaudeへの返信を音声で入力します。緊急コールに出たときも、あなたの決定を聞き取るのに使います。できるときはiPhone上で変換します。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "按住麦克风按钮时，Persona 把你的语音转成文字，比如口述一条给 Claude 的回复；接起加急来电时，也用它听你的决定。能在 iPhone 上转的都在 iPhone 上转。"
+            "value": "使用麦克风按钮时，Persona 把你的语音转成文字，比如口述一条给 Claude 的回复；接起加急来电时，也用它听你的决定。能在 iPhone 上转的都在 iPhone 上转。"
           }
         }
       }

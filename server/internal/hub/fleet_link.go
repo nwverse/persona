@@ -626,7 +626,7 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		h.forwardOwned(w, r, h.byInteraction)
+		h.forwardOwned(w, h.captureOwnerAnswer(r), h.byInteraction)
 	})))
 	// Body client_id uses the same durable operation receipts as resolve.
 	api.HandleFunc("POST /api/v1/interactions/{id}/choose", h.withReplyReceipt("choose", h.serveChoose))
