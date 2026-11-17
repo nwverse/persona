@@ -164,3 +164,57 @@ func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 		}
 	}
 }
+
+func TestBotSourceReportLongReplyRetriesAfterBotRestart(t *testing.T) {
+	w := newBotWorld(t)
+	w.pair(t)
+	if code, _ := w.do(t, "PUT", "/api/v1/bots/feishu", `{"source_report_full_reply":true}`); code != http.StatusOK {
+		t.Fatalf("enable full replies: HTTP %d", code)
+	}
+	const source = "om_restart_report"
+	w.h.takeAISource(askChat, source)
+
+	var replies atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		reply := func(v any) { _ = json.NewEncoder(rw).Encode(v) }
+		switch req.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			reply(map[string]any{"code": 0, "tenant_access_token": "fake_token", "expire": 7200})
+		case "/open-apis/im/v1/files":
+			// The bot restarts with another client while the answer uploads.
+			w.h.bots.mu.Lock()
+			w.h.bots.api = feishubot.New("cli_test", "test_secret", "http://"+req.Host)
+			w.h.bots.mu.Unlock()
+			reply(map[string]any{"code": 0, "data": map[string]string{"file_key": "file_1"}})
+		case "/open-apis/im/v1/messages/" + source + "/reply":
+			replies.Add(1)
+			reply(map[string]any{"code": 0, "data": map[string]string{"message_id": "om_answer"}})
+		default:
+			t.Errorf("unexpected Feishu request: %s %s", req.Method, req.URL.Path)
+			http.NotFound(rw, req)
+		}
+	}))
+	defer api.Close()
+
+	w.h.bots.mu.Lock()
+	w.h.bots.api = feishubot.New("cli_test", "test_secret", api.URL)
+	w.h.bots.mu.Unlock()
+	raw, err := json.Marshal(map[string]any{
+		"chat_id": askChat, "reply_to": source, "uuid": "sr:restart", "full_answer": true,
+		"text": strings.Repeat("Answer paragraph.\n", 2200),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := assistantwire.AppCall{AppID: assistantwire.AppFeishu, Method: assistantwire.FeishuText, Params: raw}
+	_, handled, err := w.h.AppCall(t.Context(), req)
+	if !handled || err == nil || err == errBotSourceReply || !feishubot.Transient(err) {
+		t.Fatalf("a restart during the upload must fail for now, handled %v, error %v", handled, err)
+	}
+	if got := replies.Load(); got != 0 {
+		t.Fatalf("replied with the old client's file: %d replies", got)
+	}
+	if out, handled, err := w.h.AppCall(t.Context(), req); !handled || err != nil || string(out) != `{"message_id":"om_answer"}` {
+		t.Fatalf("retry with the current client: %s, handled %v, error %v", out, handled, err)
+	}
+}

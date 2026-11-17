@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -19,6 +20,10 @@ const (
 	// A source report can be retried for seven days after the todo closes.
 	botAnswerFileKeep = 7 * 24 * time.Hour
 )
+
+// errBotRestarted: the bot client changed while a long answer was prepared. It has no Feishu
+// code, so the assistant treats it as failing for now (feishubot.Transient) and tries again.
+var errBotRestarted = errors.New("feishu: the bot restarted while the answer was prepared")
 
 type botAnswerFile struct {
 	Content   string    `json:"content"`

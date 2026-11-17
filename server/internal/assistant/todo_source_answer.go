@@ -75,22 +75,6 @@ func (s *Service) sourceMainReply(ctx context.Context, t Todo) (text string, wai
 	if handoff == "" || t.Origin == "" || machine == "" || t.ReopenedAt != nil {
 		return "", 0
 	}
-	// A second turn can start by the time the completion is recorded. Only the handoff's own
-	// exchange is eligible, even when a newer answer is present.
-	var page struct{ Items []proto.Item }
-	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{"session_id": t.Origin, "turns": 5}, &page); err != nil {
-		return "", sourceReportWait
-	}
-	id := channel.ClientMsgID(channel.Feishu, handoff)
-	at := slices.IndexFunc(page.Items, func(it proto.Item) bool {
-		return it.Role == "user" && it.Kind == proto.KindText && it.ClientMsgID == id
-	})
-	if at < 0 {
-		// The node can publish the prompt after the todo closes. The channel run can
-		// also be registered after that close or already have been folded into another run.
-		return "", sourceReportWait
-	}
-
 	heldThrough := -1
 	if run, _ := s.channelRunByID("fb_" + handoff); run != nil {
 		s.chans.mu.Lock()
@@ -99,14 +83,92 @@ func (s *Service) sourceMainReply(ctx context.Context, t Todo) (text string, wai
 		}
 		s.chans.mu.Unlock()
 	}
-	reply, wait := sourceMainReplyItems(page.Items[at+1:], heldThrough)
+	// A read that cannot tell (a failed call, the prompt not found, the full text unreadable) keeps
+	// the longest wait known for this todo. Its background work may still be running, and the short
+	// wait counted from the close would already have passed and sent the fallback in its place.
+	unknown := func() time.Duration {
+		if heldThrough >= 0 {
+			s.noteSourceWait(t.ID, channel.HeldMost)
+		}
+		return s.sourceWaitFloor(t.ID, sourceReportWait)
+	}
+	// A second turn can start by the time the completion is recorded. Only the handoff's own
+	// exchange is eligible, even when a newer answer is present.
+	items, at, err := s.sourceMainPage(ctx, machine, t.Origin, channel.ClientMsgID(channel.Feishu, handoff))
+	if err != nil {
+		return "", unknown()
+	}
+	if at < 0 {
+		// The node can publish the prompt after the todo closes. The channel run can
+		// also be registered after that close or already have been folded into another run.
+		return "", unknown()
+	}
+
+	reply, wait := sourceMainReplyItems(items[at+1:], heldThrough)
 	if len(reply) == 0 {
+		if wait >= channel.HeldMost {
+			s.noteSourceWait(t.ID, wait)
+		}
 		return "", wait
 	}
 	if text := readSourceReply(ctx, busTranscript{s: s, machine: machine, session: t.Origin}, reply); text != "" {
 		return text, 0
 	}
-	return "", sourceReportWait
+	return "", unknown()
+}
+
+// sourceMainTurns are the windows, in prompts, read for the handoff's prompt: the near one
+// first, then a wider one. While background work runs, other requests to the shared
+// conversation can push the prompt out of the near one.
+var sourceMainTurns = []int{5, 30}
+
+// sourceMainPage reads the main conversation back to the handoff's prompt; at is the prompt's
+// index in items, -1 when no window holds it.
+func (s *Service) sourceMainPage(ctx context.Context, machine, session, msgID string) (items []proto.Item, at int, err error) {
+	for _, turns := range sourceMainTurns {
+		var page struct{ Items []proto.Item }
+		if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{"session_id": session, "turns": turns}, &page); err != nil {
+			return nil, -1, err
+		}
+		at := slices.IndexFunc(page.Items, func(it proto.Item) bool {
+			return it.Role == "user" && it.Kind == proto.KindText && it.ClientMsgID == msgID
+		})
+		if at >= 0 {
+			return page.Items, at, nil
+		}
+	}
+	return nil, -1, nil
+}
+
+// noteSourceWait remembers that the answer of todo id was found waiting for background work
+// (up to wait after the close). sourceWaitFloor gives a read that cannot tell at least that long.
+// Memory only: after a restart a held channel run still says so.
+func (s *Service) noteSourceWait(id string, wait time.Duration) {
+	b := &s.todos
+	b.reportMu.Lock()
+	defer b.reportMu.Unlock()
+	if wait <= b.reportWaits[id] {
+		return
+	}
+	if b.reportWaits == nil {
+		b.reportWaits = map[string]time.Duration{}
+	}
+	b.reportWaits[id] = wait
+}
+
+func (s *Service) sourceWaitFloor(id string, wait time.Duration) time.Duration {
+	b := &s.todos
+	b.reportMu.Lock()
+	defer b.reportMu.Unlock()
+	return max(wait, b.reportWaits[id])
+}
+
+// forgetSourceWait drops what noteSourceWait kept once the report stops waiting.
+func (s *Service) forgetSourceWait(id string) {
+	b := &s.todos
+	b.reportMu.Lock()
+	delete(b.reportWaits, id)
+	b.reportMu.Unlock()
 }
 
 // sourceMainReplyItems follows wakes only when their tool call belongs to the handoff or

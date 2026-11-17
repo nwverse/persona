@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -214,6 +215,78 @@ func TestSourceReportImmediateAnswerWaitsForLateHandoff(t *testing.T) {
 			t.Fatalf("expected the handoff's final answer, got %v", got)
 		}
 	})
+}
+
+// While background work runs past sourceReportWait, a read that fails or no longer finds the
+// prompt in the near window must keep waiting instead of sending the fallback.
+func TestSourceReportBackgroundWaitSurvivesUnclearReads(t *testing.T) {
+	e := newAskEnv(t, nil)
+	minutes := 0
+	e.fullReply, e.reportDelay = true, &minutes
+	e.f.pageTurns = true
+	e.ask(ownerAsk("om_long_background", "/ai Check the release"))
+	todo := onlyTodo(e.s)
+	items := []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, ClientMsgID: channel.ClientMsgID(channel.Feishu, todo.Source.Handoff)},
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_check"},
+		{Seq: 3, Role: "tool", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
+		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "The check is still running."},
+		{ID: "interim_end", Seq: 5, Kind: turnDurationKind},
+	}
+	e.f.setItems(items...)
+	e.closeDone(todo.ID)
+	e.clock.advance(0)
+
+	// The background work outlives the short wait.
+	e.s.todos.mu.Lock()
+	old := time.Now().Add(-sourceReportWait - time.Minute)
+	e.s.todos.todos[todo.ID].DoneAt = &old
+	e.s.todos.mu.Unlock()
+
+	e.f.mu.Lock()
+	e.f.itemsFail = 1 // the node does not answer this read
+	e.f.mu.Unlock()
+	e.clock.advance(5 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 0 {
+		t.Fatalf("a failed read sent the fallback: %v", got)
+	}
+
+	// Other requests push the handoff's prompt out of the last five turns before the work ends.
+	seq := 5
+	for i := range 5 {
+		seq += 3
+		items = append(items,
+			proto.Item{Seq: seq - 2, Role: "user", Kind: proto.KindText, Text: fmt.Sprintf("Other request %d", i)},
+			proto.Item{Seq: seq - 1, Role: "assistant", Kind: proto.KindText, Text: "Other answer"},
+			proto.Item{Seq: seq, Kind: turnDurationKind},
+		)
+	}
+	e.f.setItems(items...)
+	e.clock.advance(30 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 0 {
+		t.Fatalf("a prompt outside the near window sent the fallback: %v", got)
+	}
+
+	const answer = "The release check passed."
+	items = append(items,
+		proto.Item{Seq: seq + 1, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "check1", Status: "completed"}},
+		proto.Item{Seq: seq + 2, Role: "assistant", Kind: proto.KindText, Text: answer},
+		proto.Item{ID: "final_end", Seq: seq + 3, Kind: turnDurationKind},
+	)
+	e.f.setItems(items...)
+	e.clock.advance(30 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 1 || got[0]["text"] != answer || got[0]["full_answer"] != true {
+		t.Fatalf("expected the background work's final answer, got %v", got)
+	}
+}
+
+func TestSourceAnswerPollBacksOff(t *testing.T) {
+	if got := sourceAnswerPoll(time.Minute); got != 5*time.Second {
+		t.Fatalf("early poll %s", got)
+	}
+	if got := sourceAnswerPoll(sourceReportWait); got != 30*time.Second {
+		t.Fatalf("late poll %s", got)
+	}
 }
 
 func TestSourceReportDoesNotShareAnUnrelatedTurn(t *testing.T) {
