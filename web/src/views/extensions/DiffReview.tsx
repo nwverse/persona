@@ -63,33 +63,45 @@ export function ReviewProvider({ view, page, fetch, children, local, nativeCache
     }
   });
   const cache = useRef(new Map<string, LineCache>());
+  // each mark_viewed sent gets a number; a path's latest one on this page is the only one whose failure takes it back
+  const marking = useRef({ n: 0, latest: new Map<string, number>() });
   useEffect(() => {
     setOver(new Map());
     cache.current = new Map();
+    marking.current.latest = new Map();
   }, [page]);
   const index = useMemo(() => indexOf(view), [view]);
   const fetchRef = useRef(fetch);
   fetchRef.current = fetch;
   const api = useMemo<ReviewApi>(() => {
     const localId = (d: UIItem) => changeId(d.path ?? "", d.revision, d.hunks);
+    const viewed = (path: string) => {
+      const d = index.diffs.get(path);
+      const o = local && d ? nativeOver[localId(d)] : over.get(path);
+      if (o !== undefined) return o;
+      if (local && d) return !!d.viewed;
+      if (d && !d.mark_viewed) return here.has(localId(d));
+      return d ? !!d.viewed : !!index.entries.get(path);
+    };
     return {
       fetch: (a, v) => fetchRef.current(a, v),
-      viewed: (path) => {
-        const d = index.diffs.get(path);
-        const o = local && d ? nativeOver[localId(d)] : over.get(path);
-        if (o !== undefined) return o;
-        if (local && d) return !!d.viewed;
-        if (d && !d.mark_viewed) return here.has(localId(d));
-        return d ? !!d.viewed : !!index.entries.get(path);
-      },
+      viewed,
       setViewed: (path, v) => {
         const d = index.diffs.get(path);
         if (local && d) setNativeOver((m) => ({ ...m, [localId(d)]: v }));
         else setOver((m) => new Map(m).set(path, v));
         // Native mark_viewed dispatch belongs to the displayed diff's handler, never this provider's latest index.
         if (local) return;
-        if (d?.mark_viewed) void fetchRef.current(d.mark_viewed, { path, viewed: String(v) });
-        else if (d) {
+        // rejected by the extension: the mark it had goes back, as on the native path (DiffView's setViewed), unless
+        // it was changed again since or the page is another one (its marks start afresh)
+        if (d?.mark_viewed) {
+          const was = viewed(path); // this render's mark, from before the change
+          const mine = ++marking.current.n;
+          marking.current.latest.set(path, mine);
+          void fetchRef.current(d.mark_viewed, { path, viewed: String(v) }).then((r) => {
+            if (!r && marking.current.latest.get(path) === mine) setOver((m) => new Map(m).set(path, was));
+          });
+        } else if (d) {
           setViewedHere(localId(d), v);
           setHere(viewedHere());
         }

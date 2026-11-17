@@ -232,16 +232,17 @@ def drop_missing_helpers(assets, state_dir):
     helpers = manifest.get("helpers")
     if not isinstance(helpers, dict):
         return assets
-    kept, dropped = {}, []
-    for program, platforms in helpers.items():
-        for plat, item in (platforms or {}).items():
-            name = item.get("name") if isinstance(item, dict) else None
-            if name in by_name:
-                kept.setdefault(program, {})[plat] = item
-            else:
-                dropped.append(str(name))
-    if not dropped:
-        return assets
+    if helpers:
+        kept, dropped = {}, []
+        for program, platforms in helpers.items():
+            for plat, item in (platforms or {}).items():
+                name = item.get("name") if isinstance(item, dict) else None
+                if name in by_name:
+                    kept.setdefault(program, {})[plat] = item
+                else:
+                    dropped.append(str(name))
+        if not dropped:
+            return assets
     print("warning: latest.json lists helper builds this receipt does not carry; uploading it without them: "
           + ", ".join(sorted(dropped)), file=sys.stderr, flush=True)
     if kept:
