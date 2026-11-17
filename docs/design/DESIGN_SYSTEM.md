@@ -1822,6 +1822,9 @@ Starting tasks group, directly after the workspace preference. It appears only
 for a confirmed matching assistant with `prefer-new`; missing or unknown values
 keep it hidden. Hiding never clears saved rules. Todo details retain their own
 independent advanced entry. Both reuse `Button` and the standard settings input.
+Each mount confines import/render failures to a local `PageBoundary` around its
+`Suspense`, keeping sibling editors mounted and saveable. Recovery retains the
+existing one-time page reload and explicit Reload behavior.
 The editor pairs each label with a wide input and small, always-visible template
 guidance; labels stack above inputs on phones. It serves people configuring
 coding tasks; ordinary tasks need no new fields. Unset fields stay empty and

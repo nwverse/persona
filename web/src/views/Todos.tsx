@@ -117,6 +117,7 @@ import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } 
 import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
 import { retryKey, retryTask, useFeed } from "../lib/feed";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
+import { PageBoundary } from "./PageBoundary";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
 const VIEW_KEY = "persona.todos.view";
@@ -2235,9 +2236,11 @@ function TodoDetail({
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
         legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
-      <Suspense fallback={<Loading />}>
-        <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
-      </Suspense>
+      <PageBoundary page="workspace-naming">
+        <Suspense fallback={<Loading />}>
+          <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+        </Suspense>
+      </PageBoundary>
 
       <ThreadSection todo={todo} />
 

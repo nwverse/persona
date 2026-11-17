@@ -1272,6 +1272,14 @@ own and reloads when idle (docs/web/web.md "New versions"). When verifying a web
 before it, not only a fresh load.
 ## Workspace identity outlives its Agents
 
+An optional lazy panel needs a local error boundary at every mount (#7100).
+Settings' boundary did not protect the Todo detail: a naming import failure
+reached the route boundary and unmounted its dirty title and notes. Exercise the
+real Todo lifecycle with the import pending, reject it after both fields are
+dirty, and check that the same editors can still save. Test actual chunk failure
+and Reload in a browser too; saved-field recovery after a full reload is distinct
+from retaining unsaved drafts while the local error is displayed.
+
 Naming-preview retries must reconcile selected repository IDs after reloading task associations (#7100). Keeping a
 draft does not mean keeping IDs for removed repositories: an invisible stale ID made every retry fail even after
 reloading. Intersect the selection with the fetched associations, preserve unchecked choices, and leave newly added
