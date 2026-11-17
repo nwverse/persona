@@ -206,10 +206,12 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
 @Composable
 internal fun ThoughtContent(text: String, id: String, collapsed: Boolean, last: Boolean = true) {
     var open by rememberSaveable(id) { mutableStateOf(!collapsed) }
+    val edge = rememberOpenEdge(id)
+    val revealing = edge.revealing(open)
     Column {
         val thought = stringResource(R.string.chat_work_thought)
         TimelineStep(PhIcons.Lightbulb, thought, verb = thought, last = last, onClick = { open = !open })
-        if (open) {
+        if (open) Column(Modifier.unfolding(revealing)) {
             Column(Modifier.workDetail(Tokens.Space.m)) {
                 ChatMarkdown(text, id, PersonaTheme.type.callout, PersonaTheme.palette.ink2)
             }
