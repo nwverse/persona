@@ -200,30 +200,6 @@ struct RecordingCornerButton: View {
     }
 }
 
-/// Hide and Done as words at the sheet's top trailing corner: the meeting's after page until it moves to
-/// `RecordingCornerButton` (#9653).
-struct RecordingSheetCloseButton: View {
-    var title: String
-    var identifier: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            // A finger tall and at least that wide, and as wide as its word: a fixed square (`tapTargetFrame`) cut
-            // "Hide" and "Done" to "…" at the largest text sizes. It grows with the text no further than the sheet's
-            // clock does, so the header row beside it keeps room for the time.
-            Text(title).font(Theme.Font.bodyStrong).foregroundStyle(Theme.accent).lineLimit(1)
-                .fixedSize()
-                .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
-                .frame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
-                .contentShape(.rect)
-                .dynamicTypeSize(...Theme.Recording.timerLargestSize)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(identifier)
-    }
-}
-
 // MARK: The clock
 
 /// The recording's time. The system draws and ticks it (`Text(timerInterval:)`), so the page does not draw again four times
