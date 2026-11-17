@@ -56,8 +56,11 @@ describe("the showcase in every language", () => {
     }
   });
 
-  it("falls back to the full showcase for an unknown scenario", () => {
+  it("falls back to the full showcase for an unknown scenario, and takes overview as its URL alias", () => {
     expect(buildShowcase("no-such-scenario", "en", FAST).scenario).toBe("default");
+    const overview = buildShowcase("overview", "en", FAST);
+    expect(overview.scenario).toBe("default");
+    expect(overview.modules.map((module) => module.key)).toEqual(buildShowcase("default", "en", FAST).modules.map((module) => module.key));
   });
 
   it("covers every control kind and select presentation across the full showcase", () => {

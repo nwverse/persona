@@ -13,6 +13,9 @@ import { checkUpdate, CONFIGURATION_VERSION, ConfigurationError } from "../src/l
 
 export const SCENARIO_IDS = ["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "empty", "unsupported"];
 
+/** URL aliases: the preview can link the full set as ?scenario=overview, the name people would expect. */
+const SCENARIO_ALIASES = { overview: "default" };
+
 const clone = (v) => JSON.parse(JSON.stringify(v));
 /** The fixture's own three languages; the page passes the app's current one. */
 const T = (lang, en, zh, ja) => (lang === "en" ? en : lang === "ja" ? ja : zh);
@@ -478,7 +481,8 @@ const moduleOf = (lang, key, doc, { note, readFailures = 0, behavior = null, sou
  * documents and fresh in-memory sources, so pages and tests never share state.
  */
 export function buildShowcase(scenario = "default", lang = "zh-Hans", options = {}) {
-  const chosen = SCENARIO_IDS.includes(scenario) ? scenario : "default";
+  const requested = SCENARIO_ALIASES[scenario] ?? scenario;
+  const chosen = SCENARIO_IDS.includes(requested) ? requested : "default";
   const latency = options.latency ?? (chosen === "slow" ? { read: 1600, save: 1600 } : { read: 140, save: 320 });
   const mod = (key, doc, extra = {}) => moduleOf(lang, key, doc, { ...extra, latency });
   const note = (key) => MODULE_NOTE(lang, key);

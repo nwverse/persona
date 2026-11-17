@@ -6,9 +6,9 @@
 <!-- web/e2e/configuration-showcase.html: a fixture-only showcase of module-injected configuration documents (#9877,
      docs/web/web.md "Configuration forms"), opened on the Vite dev server and never part of a build. The real
      ConfigurationForm draws several mock modules over in-memory sources (configuration-showcase-data.mjs); nothing is
-     read from or written to real settings or storage. ?scenario=<id> selects a scenario (see the nav); an unknown id
-     falls back to the full showcase. The page checks its own documents with the real parser and shows a red line if one
-     is invalid. web/e2e/configuration-showcase.mjs drives and captures it. -->
+     read from or written to real settings or storage. ?scenario=<id> selects a scenario (see the nav); ?scenario=overview
+     or no query is the full set, and an unknown id falls back to it. The page checks its own documents with the real
+     parser and shows a red line if one is invalid. web/e2e/configuration-showcase.mjs drives and captures it. -->
 <body class="bg-page">
 <div id="app" class="mx-auto max-w-[980px] px-5 py-6 sm:px-8"></div>
 <script type="module">

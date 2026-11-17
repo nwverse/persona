@@ -1995,10 +1995,10 @@ in its own chunk. Every control is named by its field's title and described by i
 several independent mock modules — the shared example plus local, server-style and editor documents — cover every kind
 and select presentation, integer/fractional/zero/min/max numbers, empty, full and one-of-one multiselects, read-only
 fields with reasons, and info/warning notices. Selectable scenarios (`?scenario=slow|load-fail|reject|conflict|
-unconfirmed|empty|unsupported`, or the full set by default) show a slow source, a failed first load with Try again, a
-rejected field, a revision conflict, an unconfirmed network write with Reload recovery, an empty document, and an
-unknown kind plus a newer schema version. Each mock source keeps its values in that page's memory and reads or writes no
-real setting; the page checks its own documents with the real parser and is never built.
+unconfirmed|empty|unsupported`; the full set with no query or `?scenario=overview`) show a slow source, a failed first
+load with Try again, a rejected field, a revision conflict, an unconfirmed network write with Reload recovery, an empty
+document, and an unknown kind plus a newer schema version. Each mock source keeps its values in that page's memory and
+reads or writes no real setting; the page checks its own documents with the real parser and is never built.
 
 ## Labs
 
