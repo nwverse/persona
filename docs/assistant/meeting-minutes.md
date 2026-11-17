@@ -902,6 +902,22 @@ A meeting Persona is not in still gets its live view. Since #8731 a meeting star
 - Errors, checked in this order: `403 forbidden`, `503`, `413 too_large` (32 MiB), `410 recording_deleted`, `404 recording_not_found`, `400` (`id` missing or not a UUID, neither `text` nor `images`, `text` over 8000 characters, more than 4 images), `409 meeting_running`, `409 no_material` (neither transcript text nor minutes; a trimmed recording has only its minutes), then the start or send errors as `POST /api/v1/assistant/conversations` and `POST …/messages` give them.
 - `409 meeting_running` while the recording has no `ended_at` (one that never sends it counts as ended 12 hours after its last upload, and a trimmed one as ended), or, in a room meeting, while its room is still `starting`, `ready` or `unavailable`, which lasts at most 6 minutes after the first upload with `ended_at` ("The meeting's end"). A recording with no room, or whose room is `none`, `ended` or `deleted`, never waits for a room.
 
+#### Handing a meeting to an Agent (#8852)
+
+`POST /api/v1/recordings/{id}/handoff` sends the meeting to one of the owner's Agents after it, as the owner's own message to that Agent: the meeting's name, calendar title, start and minutes in a context block (`prompts/meeting/handoff.md`; its transcript too when asked, its start and its end within 40,000 characters), then the owner's line, or, without one, a plain ask for what in it concerns the Agent's work. An Agent has no `kb_*` tools, so everything it gets is in the message.
+
+```jsonc
+{"machine_id": "<machine id>", "session_id": "<session id>", "title": "Site redesign", "text": "Update the home page.", "transcript": false}
+```
+
+`200`: `{"handoff": {"id", "at", "machine_id", "session_id", "title"?, "transcript"?, "state": "sent" | "failed", "problem"?}}`.
+
+- **Who:** full device credentials only (an extension token gets `403`).
+- **The Agent:** held to attending's rules ("Sessions that never attend"). One of this manager's computers, not a work computer, reachable, listed there, taking messages, not `bypassPermissions`, not closed. A Persona conversation is not an Agent (the follow-up is its way). A busy Agent takes it as it takes any of the owner's messages. A refusal is kept as `failed` with `problem`: `not_agent`, `not_allowed`, `unavailable`, or `send_failed` when the computer didn't take it.
+- **When:** `409 meeting_running` while the meeting goes on (as the follow-up); `409 no_material` with neither minutes nor (asked for) a transcript.
+- **Kept:** each try in `meeting.json`'s `handoffs`, oldest first, the last 20, and as `detail.meta.handoffs`, for the meeting's page to show the last one ("Handed to …", or why not, with Retry: the same call again). No part of the live protocol: the apps read them with the detail and from the call's answer.
+- **`title`** is the name the app showed for the Agent (at most 120 characters), kept only for that row.
+
 #### One thread
 
 - The apps show a meeting's conversations as one thread: the room's items, oldest first, then a divider (**After the meeting**), then the follow-up's items, with the seed block of its first message collapsed as the meeting's material. Batches show collapsed ("N lines from the meeting"), heard questions as "What was just said (mm:ss)", photos as thumbnails (phase 3), and a photo that `GET …/photos` no longer lists as "Photo removed", with no thumbnail. The room's header shows nothing on the web (#9411). The iPhone shows "Persona joined the meeting" for it, unless the meeting began with the note-taker. It also shows Persona invited in or taken out during the meeting where it happened; only the iPhone knows those changes.

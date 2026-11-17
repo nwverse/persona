@@ -31091,6 +31091,30 @@
       },
       "extractionState" : "manual"
     },
+    "By Agent · Last 7 Days" : {
+      "comment" : "Token usage page: each coding agent's tokens over the last week",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By Agent · Last 7 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent別 · 過去7日間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Agent · 最近 7 天"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "By App" : {
       "localizations" : {
         "en" : {
@@ -83738,6 +83762,28 @@
       },
       "extractionState" : "manual"
     },
+    "Lark Meeting Notes [Imported Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lark Meeting Notes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lark の議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "飞书会议纪要"
+          }
+        }
+      }
+    },
     "Lark Messages" : {
       "localizations" : {
         "en" : {
@@ -105529,6 +105575,30 @@
         }
       }
     },
+    "Not Split (Before the Update)" : {
+      "comment" : "Token usage page, By Agent: usage the hub kept before it counted each agent apart",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Split (Before the Update)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "区別なし（更新前）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未区分（更新前）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Not Started" : {
       "localizations" : {
         "en" : {
@@ -116727,6 +116797,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Original Meeting Notes [Imported Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original Meeting Notes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原会议纪要"
+          }
+        }
+      }
     },
     "Original [Image Editor 9a4f22]" : {
       "extractionState" : "manual",

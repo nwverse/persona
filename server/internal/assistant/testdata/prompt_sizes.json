@@ -37,13 +37,13 @@
   "mcp_tools.assistant#cancel_followup": 209,
   "mcp_tools.assistant#concern_report": 951,
   "mcp_tools.assistant#conversation_archive": 519,
-  "mcp_tools.assistant#conversation_new": 1015,
+  "mcp_tools.assistant#conversation_new": 778,
   "mcp_tools.assistant#conversation_read": 440,
   "mcp_tools.assistant#conversation_rename": 893,
-  "mcp_tools.assistant#conversation_send": 1132,
-  "mcp_tools.assistant#conversation_tags_set": 452,
+  "mcp_tools.assistant#conversation_send": 823,
+  "mcp_tools.assistant#conversation_tags_set": 613,
   "mcp_tools.assistant#conversation_unarchive": 312,
-  "mcp_tools.assistant#conversations_list": 874,
+  "mcp_tools.assistant#conversations_list": 710,
   "mcp_tools.assistant#delete_routine": 260,
   "mcp_tools.assistant#direction_name": 907,
   "mcp_tools.assistant#inbox_draft": 1017,
@@ -130,5 +130,5 @@
   "supervise.review_rework": 555,
   "supervise.rework": 396,
   "supervise.task_goal": 111,
-  "supervision_instructions": 15688
+  "supervision_instructions": 15686
 }
