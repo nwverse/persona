@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { RpcError } from '../../runtime-sdk/index.js'
@@ -2401,30 +2402,171 @@ test("worktrees made by Paseo: from the workspace's folder, a new branch cut fro
   await assert.rejects(call(node, 'workspace.create', { cwd: w.app, branch: 'x', create_branch: true }), /requires a git repository/)
 })
 
-// A repository Paseo knows by another spelling of its folder (a symbolic link, /home over /data00) keeps its project:
-// handed git's physical top level alone, Paseo would match the spelling and make a second project for it.
-test('a worktree made from a folder goes into the project of its repository, whatever path spelled it; none known: as before', async (t) => {
-  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+// Real folders and Git checkouts: project identity must survive aliases without merging independent clones.
+function projectFixture(t) {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-project-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const w = repoWorkspaces(dir)
+  const repo = join(dir, 'app')
+  mkdirSync(repo)
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  git(repo, 'init', '-b', 'main')
+  git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial')
   const alias = join(dir, 'alias')
-  symlinkSync(dir, alias)
-  const { fake, node } = await setup(t, { workspaces: [w.main, w.wt] })
-  await until('the workspaces', () => node.last('runtime.workspaces'))
-  let projects = [
-    { projectId: 'prj_other', projectKind: 'git', projectRootPath: join(dir, 'other') },
-    { projectId: 'prj_home', projectKind: 'git', projectRootPath: join(alias, 'app') },
-    { projectId: 'prj_phys', projectKind: 'git', projectRootPath: w.app },
-  ]
+  symlinkSync(repo, alias)
+  const project = (id, root) => ({ projectId: id, projectKind: 'git', projectRootPath: root })
+  return { dir, repo, alias, git, project }
+}
+
+const makeTree = (node, cwd, extra = {}) => call(node, 'workspace.create', { cwd, branch: 'feature', create_branch: true, base: 'main', ...extra })
+
+test('path-only worktrees and direct Agent starts reuse the unique physical project, including a non-git directory', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_original', f.alias)]
   fake.handlers['project.list.request'] = () => ({ payload: { projects } })
-  await call(node, 'workspace.create', { cwd: w.app, branch: 'feat/z', create_branch: true, base: 'main' })
-  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_home', 'the first Paseo lists of the same folder')
-  projects = [{ projectId: 'prj_dir', projectKind: 'directory', projectRootPath: w.app }]
-  await call(node, 'workspace.create', { cwd: w.app, branch: 'feat/z2', create_branch: true, base: 'main' })
-  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, undefined, 'no git project there: Paseo finds or makes one')
-  delete fake.handlers['project.list.request']
-  await call(node, 'workspace.create', { cwd: w.app, branch: 'feat/z3', create_branch: true, base: 'main' })
-  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, undefined, 'its projects unknown: as before')
+  await makeTree(node, f.repo)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
+  await call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' })
+  let req = fake.requestsOf('workspace.create.request').at(-1)
+  assert.deepEqual(req.source, { kind: 'directory', path: f.repo, projectId: 'prj_original' })
+  assert.match(req.idempotencyKey, /^persona:workspace:paseo-/)
+  assert.ok(fake.workspaces.has(fake.requestsOf('agent.create.request').at(-1).workspaceId))
+  const folder = join(f.dir, 'notes')
+  const folderAlias = join(f.dir, 'notes-alias')
+  mkdirSync(folder)
+  symlinkSync(folder, folderAlias)
+  projects = [{ ...f.project('prj_notes', folderAlias), projectKind: 'non_git' }]
+  await call(node, 'session.start', { cwd: folder, launcher: 'my-codex' })
+  req = fake.requestsOf('workspace.create.request').at(-1)
+  assert.deepEqual(req.source, { kind: 'directory', path: folder, projectId: 'prj_notes' })
+})
+
+test('ambiguous projects refuse both path-only creation routes; an explicit workspace keeps its own project', async (t) => {
+  const f = projectFixture(t)
+  const w = workspaceDescriptor({ workspaceDirectory: f.alias, projectId: 'prj_original' })
+  const { fake, node } = await setup(t, { workspaces: [w] })
+  await until('the workspace', () => node.last('runtime.workspaces'))
+  let projects = [f.project('prj_duplicate', f.repo), f.project('prj_original', f.alias)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await assert.rejects(makeTree(node, f.repo), (e) => e.code === 'project_ambiguous')
+    await assert.rejects(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), (e) => e.code === 'project_ambiguous')
+  }
+  assert.equal(fake.requestsOf('workspace.create.request').length, 0)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+  fake.handlers['project.list.request'] = () => ({ type: 'rpc_error', payload: { error: 'Unavailable', code: 'unavailable' } })
+  await makeTree(node, f.repo, { workspace_id: w.id })
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
+  await call(node, 'session.start', { cwd: f.alias, workspace_id: w.id, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, w.id)
+})
+
+for (const [name, reply] of [
+  ['RPC failure', { type: 'rpc_error', payload: { error: 'List unavailable', code: 'unavailable' } }],
+  ['missing list', { payload: {} }],
+  ['error with an empty list', { payload: { projects: [], error: 'Storage failed' } }],
+  ['invalid project', { payload: { projects: [{ projectRootPath: '/tmp' }] } }],
+]) {
+  test(`project discovery ${name} creates no workspace or Agent`, async (t) => {
+    const f = projectFixture(t)
+    const { fake, node } = await setup(t)
+    fake.handlers['project.list.request'] = () => reply
+    await assert.rejects(makeTree(node, f.repo), (e) => e.code === 'project_unavailable')
+    await assert.rejects(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), (e) => e.code === 'project_unavailable')
+    assert.equal(fake.requestsOf('workspace.create.request').length, 0)
+    assert.equal(fake.requestsOf('agent.create.request').length, 0)
+  })
+}
+
+test('linked worktrees and subdirectories reuse the main project; a clone with the same remote stays separate', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'linked')
+  f.git(f.repo, 'worktree', 'add', '-b', 'linked', tree)
+  const subdir = join(tree, 'sub')
+  mkdirSync(subdir)
+  const clone = join(f.dir, 'clone')
+  f.git(f.dir, 'clone', f.repo, clone)
+  const remote = 'https://example.com/repo.git'
+  f.git(f.repo, 'remote', 'add', 'origin', remote)
+  f.git(clone, 'remote', 'set-url', 'origin', remote)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_original', f.alias)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  await makeTree(node, subdir)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
+  await call(node, 'session.start', { cwd: subdir, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
+  await makeTree(node, clone)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, undefined)
+  projects.push(f.project('prj_clone', clone))
+  await makeTree(node, clone)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_clone')
+  await call(node, 'session.start', { cwd: clone, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_clone')
+})
+
+test('creation reads changed symlinks again instead of reusing the display path cache', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_original', f.alias)] } })
+  await makeTree(node, f.repo)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
+  rmSync(f.alias)
+  const other = join(f.dir, 'other')
+  mkdirSync(other)
+  symlinkSync(other, f.alias)
+  await makeTree(node, f.repo)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, undefined)
+})
+
+test('a direct start does not create an Agent when its explicitly owned directory workspace fails', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_original', f.alias)] } })
+  fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: null, error: 'Project was archived' } })
+  await assert.rejects(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), /Project was archived/)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+})
+
+test('a directory workspace whose reply was lost uses the same creation key before starting one Agent', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_original', f.alias)] } })
+  const made = workspaceDescriptor({ workspaceDirectory: f.repo, projectId: 'prj_original', workspaceKind: 'directory' })
+  let first
+  fake.handlers['workspace.create.request'] = (msg, c) => {
+    if (!first) {
+      first = msg
+      fake.upsertWorkspace(made)
+      c.socket.destroy()
+      return null
+    }
+    assert.equal(msg.idempotencyKey, first.idempotencyKey)
+    assert.deepEqual(msg.source, first.source)
+    return { payload: { workspace: made } }
+  }
+  await call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('workspace.create.request').length, 2)
+  assert.equal(fake.requestsOf('agent.create.request').length, 1)
+  assert.equal(fake.requestsOf('agent.create.request')[0].workspaceId, made.id)
+})
+
+test('a slow directory workspace keeps the pending start visible and its later failure is reported', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node, rows } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_original', f.alias)] } })
+  let finish
+  fake.handlers['workspace.create.request'] = (msg, c) => {
+    finish = () => c.write(JSON.stringify({ type: 'session', message: { type: 'workspace.create.response',
+      payload: { requestId: msg.requestId, workspace: null, error: 'Project was archived' } } }))
+    return null
+  }
+  const result = await call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' })
+  assert.equal(result.session.starting, true)
+  finish()
+  await until('the failed workspace start remains visible', () => rows().find(r => r.session_id === result.session.session_id)?.start_error?.includes('Project was archived'))
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
 })
 
 // ---- renaming and archiving Paseo's workspaces (#6297) ----
