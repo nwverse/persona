@@ -164,7 +164,8 @@ class DrawerDragShotsTest {
             }
             Snapshot.sendApplyNotifications()
             repeat(2) { rule.mainClock.advanceTimeByFrame() }
-            rule.mainClock.advanceTimeBy(100)
+            // The drawer spring is 0.32 s even with Reduce Motion (Theme.swift:799-801). Let a previous pose rest.
+            rule.mainClock.advanceTimeBy(400)
             val theme = if (pose.dark) "dark" else "light"
             val closed = capture()
             write("glass-$theme-${pose.label}-closed", closed)
@@ -185,7 +186,7 @@ class DrawerDragShotsTest {
                 moveBy(Offset(drawer * 0.25f, 0f), delayMillis = 32)
                 up()
             }
-            rule.mainClock.advanceTimeBy(80)
+            rule.mainClock.advanceTimeBy(400)
             val openBitmap = capture()
             write("glass-$theme-${pose.label}-open", openBitmap)
             val open = pageShift(closed, openBitmap)

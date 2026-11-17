@@ -1,11 +1,9 @@
-@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
-
 package persona.core.designsystem
 
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.AbstractClickableNode
-import androidx.compose.foundation.gestures.DragGestureNode
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -29,18 +27,21 @@ import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.SuspendingPointerInputModifierNode
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.node.DelegatingNode
-import androidx.compose.ui.node.LayoutNode
 import androidx.compose.ui.node.ModifierNodeElement
-import androidx.compose.ui.node.PointerInputModifierNode
-import androidx.compose.ui.node.requireLayoutCoordinates
-import androidx.compose.ui.node.requireLayoutNode
+import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.platform.InspectorInfo
-import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -61,8 +62,9 @@ import kotlinx.coroutines.launch
  * SwiftUI's initial velocity is the share of the remaining distance per second. Compose's is in value units per
  * second, so a 0..1 progress spring takes `share * (target - progress)`.
  *
- * iOS `Theme.Motion.drawer` (`apple/Shared/Design/Theme.swift:799-801`) does not read Reduce Motion. Android still
- * settles at once when [PersonaTheme.reduceMotion] is set; whether the spring should run then is an open question.
+ * iOS `Theme.Motion.drawer` (`apple/Shared/Design/Theme.swift:799-801`) does not read Reduce Motion, so this settle
+ * does not either. The same spring runs, with the finger's velocity. A system animator scale of 0 is the platform's
+ * own switch and makes that spring instant; there is no separate reduced-motion branch here.
  */
 internal object DrawerDrag {
     /** `SwipeRelease` flick, in dp per second (the iPhone's 300 pt/s). */
@@ -119,7 +121,8 @@ internal object DrawerDrag {
      * [onSwipeRow], [sidewaysRoom] and [childOwns] are resolved by the caller. iOS hit-tests the scroller and the
      * swipe row (`AssistantSidebar.swift:500`, `:551-563`). A sideways scroller is checked only while closed (line
      * 526), and only when it has room toward its start (line 558). [childOwns] is a move some other recognizer has
-     * already taken (a slider, a selection, a chart, a link card). Scroll views wait instead
+     * already taken (a slider, a selection, a chart, a swipe row). An Android view keeps a rightward drag
+     * only while it can scroll toward its start, so it is not one of those. Scroll views wait instead
      * (`shouldBeRequiredToFailBy`, lines 540-544), so a list consuming a horizontal move is not one of those.
      */
     fun decision(
@@ -194,6 +197,12 @@ private class DrawerRuntime(opened: Boolean) {
     var clearText: () -> Unit = {}
     var fingerDown = false
 
+    /** Top-left of this drawer in the semantics root, so a pointer lines up with [SemanticsNode.boundsInRoot]. */
+    var originInRoot by mutableStateOf(Offset.Zero)
+
+    /** The compose view. Its semantics owner and its child Android views are the public hit test. */
+    var host: View? = null
+
     /** An external open or close arrived while the finger was down. That target wins over the release. */
     var superseded = false
     lateinit var scope: CoroutineScope
@@ -236,8 +245,8 @@ internal class PhoneDrawerDrag(
  *
  * The spring runs only from [settle], so a finger that takes over mid-flight (`dragBegan`,
  * `AssistantSidebar.swift:92-97`) is not restarted at velocity 0 when the parent flag catches up.
- * Glass passes the share as the spring's initial velocity. Brief, Board and reduced motion pass 0
- * (their tweens ignore it; reduced motion stays the existing instant tween).
+ * Glass passes the share as the spring's initial velocity, including when Reduce Motion is on
+ * (`Theme.Motion.drawer`, `Theme.swift:799-801`, does not read it). Brief and Board pass 0; their tweens ignore it.
  */
 @Composable
 internal fun rememberPhoneDrawerDrag(
@@ -251,9 +260,13 @@ internal fun rememberPhoneDrawerDrag(
     runtime.opened = opened
     runtime.onOpen = onOpen
     runtime.onDismiss = onDismiss
-    runtime.carryVelocity = PersonaTheme.style == AppStyle.Glass && !PersonaTheme.reduceMotion
-    runtime.spec = drawerSpec(PersonaTheme.style, PersonaTheme.reduceMotion)
+    // iOS `drawer(velocity:)` does not read Reduce Motion (`Theme.swift:799-801`). Pass the style's spec with the
+    // reduced-motion flag off so Glass keeps the spring and the share. `drawerSpec`'s own flag still serves the
+    // resting-pixel oracle, which is not this finger settle.
+    runtime.carryVelocity = PersonaTheme.style == AppStyle.Glass
+    runtime.spec = drawerSpec(PersonaTheme.style, reduceMotion = false)
     runtime.haptics = rememberHaptics()
+    runtime.host = LocalView.current
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     runtime.clearText = {
@@ -295,7 +308,9 @@ internal fun rememberPhoneDrawerDrag(
         runtime.live = false
     }
 
-    val modifier = Modifier.then(DrawerDragElement(runtime, dragEnabled))
+    val modifier = Modifier
+        .onGloballyPositioned { runtime.originInRoot = it.positionInRoot() }
+        .then(DrawerDragElement(runtime, dragEnabled))
     return PhoneDrawerDrag(
         progressOf = { runtime.shown },
         liveOf = { runtime.live },
@@ -306,18 +321,20 @@ internal fun rememberPhoneDrawerDrag(
 }
 
 /**
- * What is under the finger, from the hit node upward, the way `sidewaysScroller` walks
+ * What is under the finger, from the frontmost placed semantics node upward, the way `sidewaysScroller` walks
  * (`AssistantSidebar.swift:551-563`).
  *
  * [Waiting] is a scroller that should let the drawer go first: a vertical list, or a horizontal one with no room
- * toward the start (line 558). [Sideways] is a horizontal scroller that still has that room, and only while the
- * drawer is closed and the finger pulls toward the start (line 526). [Child] is some other drag (a slider, a
- * selection, a chart, a link card, a swipe row). A tap target is none of these.
+ * toward the start (line 558). Scroll views wait (`shouldBeRequiredToFailBy`, lines 540-544). [Sideways] is a
+ * horizontal scroller that still has that room, and only while the drawer is closed and the finger pulls toward
+ * the start (line 526). [Child] is a slider or a text selection. A tap target is none of these. An Android view
+ * is [Sideways] only when it can scroll toward the start (`View.canScrollHorizontally(-1)`, the room at line 558).
+ *
+ * [button] is a clickable in front (the open scrim). Its consumption is not a drag, and a view under it is not the hit.
  */
 private enum class UnderFinger { None, Waiting, Sideways, Child }
 
-/** [interop] is an Android view (a link card's WebView). It handles the touch outside Compose's consumption flag. */
-private data class FingerTarget(val under: UnderFinger, val interop: Boolean)
+private data class FingerTarget(val under: UnderFinger, val button: Boolean)
 
 private class DrawerDragNode(private val runtime: DrawerRuntime, enabled: Boolean) : DelegatingNode() {
     private var enabled = enabled
@@ -334,74 +351,113 @@ private class DrawerDragNode(private val runtime: DrawerRuntime, enabled: Boolea
     }
 
     fun underFinger(at: Offset, open: Boolean, dx: Float): FingerTarget {
-        if (!isAttached) return FingerTarget(UnderFinger.None, interop = false)
-        // Deeper nodes win: a slider inside a list is the slider. A scroller with no room does not stop the walk,
-        // so an outer one that still has room keeps the drag (`AssistantSidebar.swift:556-562`).
-        var found = UnderFinger.None
-        var interop = false
-        fun walk(node: LayoutNode) {
-            if (found == UnderFinger.Child || found == UnderFinger.Sideways) return
-            if (!covers(node, at)) return
-            node.forEachChild { walk(it) }
-            if (found == UnderFinger.Child || found == UnderFinger.Sideways) return
-            when (val kind = classify(node, open, dx)) {
-                UnderFinger.Child -> {
-                    found = UnderFinger.Child
-                    interop = DrawerDragHit.hasAndroidView(node)
-                }
-                UnderFinger.Sideways -> found = UnderFinger.Sideways
-                UnderFinger.Waiting -> if (found == UnderFinger.None) found = UnderFinger.Waiting
-                UnderFinger.None -> {}
-            }
+        if (!isAttached) return FingerTarget(UnderFinger.None, button = false)
+        val rootAt = runtime.originInRoot + at
+        val semantics = (runtime.host as? RootForTest)?.semanticsOwner?.unmergedRootSemanticsNode
+        val front = if (semantics != null) frontmost(semantics, rootAt) else null
+        var kind = classifyChain(front, open, dx)
+        val host = runtime.host
+        val view = if (host != null) androidViewAt(host, rootAt) else null
+        val covered = host != null && view != null && composeCovers(front, rootAt)
+        // Room toward the start, and only while closed (`AssistantSidebar.swift:526` and `:558`).
+        if (view != null && host != null && !covered && kind != UnderFinger.Child && !open && dx > 0f &&
+            roomTowardStart(view, host)
+        ) {
+            kind = UnderFinger.Sideways
         }
-        requireLayoutNode().forEachChild { walk(it) }
-        return FingerTarget(found, interop)
+        return FingerTarget(kind, button = front != null && isButton(front))
     }
+}
 
-    /**
-     * Scroll axes are the offset (`ScrollState.value`), read here so the decision does not wait for the scroller's
-     * drag coroutine. Room toward the start is that offset past 1px (`AssistantSidebar.swift:558`).
-     */
-    private fun classify(node: LayoutNode, open: Boolean, dx: Float): UnderFinger {
-        // A link card is an Android view. Kotlin cannot see getInteropView; DrawerDragHit calls it.
-        if (DrawerDragHit.hasAndroidView(node)) return UnderFinger.Child
-        val config = node.semanticsConfiguration
-        if (config != null) {
-            val horizontal = SemanticsProperties.HorizontalScrollAxisRange
-            if (config.contains(horizontal)) {
-                val axis = config[horizontal]
-                val value = axis.value()
-                val atStart = if (axis.reverseScrolling) value >= axis.maxValue() - 1f else value <= 1f
-                return if (!open && dx > 0f && !atStart) UnderFinger.Sideways else UnderFinger.Waiting
-            }
-            if (config.contains(SemanticsProperties.VerticalScrollAxisRange)) return UnderFinger.Waiting
-            if (config.contains(SemanticsProperties.ProgressBarRangeInfo)) return UnderFinger.Child
-            if (config.contains(SemanticsProperties.TextSelectionRange)) return UnderFinger.Child
+/**
+ * Frontmost placed node whose bounds contain [at]. Children come from the semantics tree in z-order (last is on
+ * top). A reuse-pool or prefetched node that is not placed is skipped, so its stale coordinates cannot win.
+ */
+private fun frontmost(node: SemanticsNode, at: Offset): SemanticsNode? {
+    val info = node.layoutInfo
+    if (!info.isAttached || !info.isPlaced || info.isDeactivated) return null
+    if (!node.boundsInRoot.contains(at)) return null
+    val kids = node.children
+    for (index in kids.lastIndex downTo 0) {
+        val found = frontmost(kids[index], at)
+        if (found != null) return found
+    }
+    return node
+}
+
+/**
+ * Walk from the hit up, as `sidewaysScroller` walks superviews (`AssistantSidebar.swift:551-563`). A slider or a
+ * text selection stops the walk. A horizontal scroller with room toward the start stops it too (line 558). One
+ * with no room, and a vertical list, wait (`shouldBeRequiredToFailBy`, lines 540-544) and the walk continues, so
+ * an outer scroller that still has room can win (lines 556-562).
+ */
+private fun classifyChain(front: SemanticsNode?, open: Boolean, dx: Float): UnderFinger {
+    var node = front
+    var waiting = false
+    while (node != null) {
+        val config = node.config
+        if (config.contains(SemanticsProperties.ProgressBarRangeInfo) ||
+            config.contains(SemanticsProperties.TextSelectionRange)
+        ) {
+            return UnderFinger.Child
         }
-        return if (claimsDrag(node)) UnderFinger.Child else UnderFinger.None
-    }
-
-    /** A drag that is not the scroller's own. A click consumes nothing past a tap, so it is not one. */
-    private fun claimsDrag(node: LayoutNode): Boolean {
-        var current: Modifier.Node? = DrawerDragHit.head(node)
-        while (current != null) {
-            if (current is PointerInputModifierNode && current !is DragGestureNode && current !is AbstractClickableNode) {
-                return true
-            }
-            if (current is DragGestureNode) return true
-            current = DrawerDragHit.next(current)
+        val horizontal = SemanticsProperties.HorizontalScrollAxisRange
+        if (config.contains(horizontal)) {
+            val axis = config[horizontal]
+            val value = axis.value()
+            val atStart = if (axis.reverseScrolling) value >= axis.maxValue() - 1f else value <= 1f
+            if (!open && dx > 0f && !atStart) return UnderFinger.Sideways
+            waiting = true
+        } else if (config.contains(SemanticsProperties.VerticalScrollAxisRange)) {
+            waiting = true
         }
-        return false
+        node = node.parent
     }
+    return if (waiting) UnderFinger.Waiting else UnderFinger.None
+}
 
-    private fun covers(node: LayoutNode, at: Offset): Boolean {
-        val child = node.coordinates
-        if (!child.isAttached) return false
-        val host = requireLayoutCoordinates()
-        val origin = host.localPositionOf(child, Offset.Zero)
-        val size = child.size
-        return at.x >= origin.x && at.y >= origin.y && at.x < origin.x + size.width && at.y < origin.y + size.height
+/** The open scrim is a button. It is in front of the page, so a view under it is not what the finger is on. */
+private fun isButton(node: SemanticsNode): Boolean {
+    val config = node.config
+    if (config.contains(SemanticsActions.OnClick)) return true
+    return config.contains(SemanticsProperties.Role) && config[SemanticsProperties.Role] == Role.Button
+}
+
+private fun composeCovers(front: SemanticsNode?, at: Offset): Boolean =
+    front != null && isButton(front) && front.boundsInRoot.contains(at)
+
+/** Deepest Android child of [host] whose window bounds contain the semantics-root point. The host itself is not one. */
+private fun androidViewAt(host: View, rootAt: Offset): View? {
+    val window = IntArray(2)
+    host.getLocationInWindow(window)
+    val hit = deepestView(host, window[0] + rootAt.x, window[1] + rootAt.y)
+    return if (hit == null || hit === host) null else hit
+}
+
+private fun deepestView(view: View, windowX: Float, windowY: Float): View? {
+    if (view.visibility != View.VISIBLE || !view.isAttachedToWindow) return null
+    val loc = IntArray(2)
+    view.getLocationInWindow(loc)
+    val localX = windowX - loc[0]
+    val localY = windowY - loc[1]
+    if (localX < 0f || localY < 0f || localX >= view.width || localY >= view.height) return null
+    if (view is ViewGroup) {
+        for (index in view.childCount - 1 downTo 0) {
+            val found = deepestView(view.getChildAt(index), windowX, windowY)
+            if (found != null) return found
+        }
     }
+    return view
+}
+
+/** `canScrollHorizontally(-1)` is room back toward the start (`AssistantSidebar.swift:558`, content offset past the inset). */
+private fun roomTowardStart(view: View, host: View): Boolean {
+    var current: View? = view
+    while (current != null && current !== host) {
+        if (current.canScrollHorizontally(-1)) return true
+        current = current.parent as? View
+    }
+    return false
 }
 
 private data class DrawerDragElement(val runtime: DrawerRuntime, val enabled: Boolean) : ModifierNodeElement<DrawerDragNode>() {
@@ -462,8 +518,8 @@ private suspend fun PointerInputScope.trackDrawer(runtime: DrawerRuntime, hit: D
                     val horizontal = abs(dx) > abs(dy)
                     // `sidewaysScroller` (`AssistantSidebar.swift:551-563`). A vertical list consumes a horizontal
                     // move without owning it; iOS makes that list wait (`shouldBeRequiredToFailBy`, lines 540-544),
-                    // so claim the move before its Main pass. A slider, selection, chart or link card is not a
-                    // scroll view: if it consumed the move, it keeps it.
+                    // so claim the move before its Main pass. Consumption counts only for the node that is not that
+                    // list and not a button: a slider, a selection, a chart, a swipe row. A tap does not consume the move.
                     val target = hit.underFinger(change.position, open, dx)
                     val under = target.under
                     val sidewaysRoom = under == UnderFinger.Sideways
@@ -475,9 +531,10 @@ private suspend fun PointerInputScope.trackDrawer(runtime: DrawerRuntime, hit: D
                         break
                     }
                     val childConsumed = seen?.isConsumed == true && !claimScroller
-                    // A link card's view owns the touch in the Android view system, which does not set
-                    // [PointerInputChange.isConsumed]. A slider or selection does, and only then keeps the drag.
-                    val childKeeps = horizontal && under == UnderFinger.Child && (childConsumed || target.interop)
+                    val childKeeps = horizontal && (
+                        under == UnderFinger.Child ||
+                            (childConsumed && !target.button && under != UnderFinger.Sideways && under != UnderFinger.Waiting)
+                        )
                     val onSwipeRow = childKeeps && open && dx < 0f
                     val childOwns = childKeeps && !onSwipeRow
                     val choice = DrawerDrag.decision(

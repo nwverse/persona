@@ -1,6 +1,7 @@
 package persona.core.designsystem
 
 import android.view.View
+import android.webkit.WebView
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -13,14 +14,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.layout.Layout
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.snapshots.Snapshot
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -118,6 +124,118 @@ class DrawerDragGestureTest {
         assertEquals(0, scroll.value)
     }
 
+    @Test fun fastDiagonalOnAListTakesTheDrawer() {
+        // Every message has pointerInput (MessageSelection.kt:174 and :240). A fast diagonal whose first sample
+        // is past both slops (dx=30, dy=20) used to be blamed on that child because the list also consumed it.
+        // The list waits (`shouldBeRequiredToFailBy`, AssistantSidebar.swift:540-544), so the drawer takes it.
+        show(reduce = true) {
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(40) { index ->
+                    Box(Modifier.fillMaxWidth().height(72.dp).pointerInput(index) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                            }
+                        }
+                    })
+                }
+            }
+        }
+        rule.onNodeWithTag("shell").performTouchInput {
+            down(Offset(80f, 200f))
+            moveBy(Offset(30f, 20f))
+        }
+        frame()
+        assertTrue("diagonal edge ${edge()}", edge() > 12)
+    }
+
+    @Test fun stillAndroidViewOpensTheDrawer() {
+        // A link card's WebView that cannot scroll sideways is not a sideways scroller (AssistantSidebar.swift:551-558).
+        show(reduce = true) {
+            AndroidView(factory = { StillView(it) }, modifier = Modifier.fillMaxWidth().height(220.dp))
+        }
+        drag(from = Offset(80f, 80f), by = Offset(160f, 0f), hold = true)
+        frame()
+        assertTrue("still view edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun androidViewWithRoomKeepsTheDrag() {
+        lateinit var view: RoomView
+        show(reduce = true) {
+            AndroidView(
+                factory = { RoomView(it).also { created -> view = created } },
+                modifier = Modifier.fillMaxWidth().height(220.dp),
+            )
+        }
+        drag(from = Offset(80f, 80f), by = Offset(140f, 0f))
+        assertEquals("room edge ${edge()}", 0f, edge().toFloat(), 4f)
+        rule.runOnIdle { view.room = false }
+        drag(from = Offset(80f, 120f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("no room edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun pooledHorizontalScrollerDoesNotKeepTheBlankSpot() {
+        // A LazyColumn drops a scrolled-off row from its child list, so that row cannot keep a stale hit.
+        // A reuse-pool node that stays attached is not placed. `covers()` still used its last coordinates.
+        // Place a sideways scroller at the top, give it room, then stop placing it. The blank spot is where it was.
+        val scroll = ScrollState(0)
+        var placeWide by mutableStateOf(true)
+        var ready by mutableStateOf(false)
+        show(reduce = true) {
+            LaunchedEffect(Unit) {
+                scroll.scrollTo(180)
+                placeWide = false
+                ready = true
+            }
+            Layout(
+                content = {
+                    Box(Modifier.fillMaxWidth().height(160.dp).horizontalScroll(scroll)) {
+                        Box(Modifier.width(1200.dp).height(160.dp).background(Color.Yellow))
+                    }
+                },
+                measurePolicy = { measurables, constraints ->
+                    val wide = measurables.first().measure(constraints.copy(minWidth = 0, minHeight = 0))
+                    layout(constraints.maxWidth, constraints.maxHeight) {
+                        if (placeWide) wide.place(0, 0)
+                    }
+                },
+            )
+        }
+        var spins = 0
+        while (!ready && spins < 40) {
+            rule.mainClock.advanceTimeByFrame()
+            spins++
+        }
+        rule.mainClock.advanceTimeByFrame()
+        assertTrue("not ready scroll=${scroll.value}", ready)
+        assertTrue("scroller has no room ${scroll.value}", scroll.value > 100)
+        drag(from = Offset(120f, 40f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("blank edge ${edge()} scroll=${scroll.value}", edge() > 40)
+    }
+
+    @Test fun openScrimOverAWebViewCloses() {
+        var opened by mutableStateOf(true)
+        show(reduce = true, opened = { opened }, onDismiss = { opened = false }) {
+            AndroidView(
+                factory = {
+                    WebView(it).apply { setBackgroundColor(android.graphics.Color.BLUE) }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        val openEdge = edge()
+        assertTrue("open edge $openEdge", openEdge > 200)
+        drag(from = Offset(openEdge + 30f, 300f), by = Offset(-160f, 0f))
+        rule.mainClock.advanceTimeBy(400)
+        assertEquals("scrim edge ${edge()}", 0f, edge().toFloat(), 8f)
+        assertTrue(!opened)
+    }
+
     @Test fun sliderLikeChildKeepsARightwardDrag() {
         var pulls = 0
         show(reduce = true) { ConsumingRow(onPull = { pulls++ }) }
@@ -168,7 +286,7 @@ class DrawerDragGestureTest {
             repeat(steps) { moveBy(Offset(flick / steps, 0f), delayMillis = 8) }
             cancel()
         }
-        rule.mainClock.advanceTimeBy(80)
+        rule.mainClock.advanceTimeBy(400)
         assertEquals("cancel edge ${edge()}", 0f, edge().toFloat(), 4f)
         assertTrue(!opened)
     }
@@ -187,10 +305,10 @@ class DrawerDragGestureTest {
         opened = false
         Snapshot.sendApplyNotifications()
         rule.mainClock.advanceTimeByFrame()
-        rule.mainClock.advanceTimeBy(80)
+        rule.mainClock.advanceTimeBy(400)
         assertEquals("back edge ${edge()}", 0f, edge().toFloat(), 6f)
         rule.onNodeWithTag("shell").performTouchInput { up() }
-        rule.mainClock.advanceTimeBy(80)
+        rule.mainClock.advanceTimeBy(400)
         assertEquals("release edge ${edge()}", 0f, edge().toFloat(), 6f)
         assertTrue(!opened)
     }
@@ -270,7 +388,7 @@ class DrawerDragGestureTest {
         rule.mainClock.advanceTimeBy(50)
         val openEdge = edge()
         drag(from = Offset(openEdge + 30f, 300f), by = Offset(-160f, 0f))
-        rule.mainClock.advanceTimeBy(50)
+        rule.mainClock.advanceTimeBy(400)
         assertEquals(0f, edge().toFloat(), 4f)
         assertTrue(!opened)
     }
@@ -293,7 +411,7 @@ class DrawerDragGestureTest {
         drag(from = Offset(10f, 240f), by = Offset(160f, 0f))
         assertEquals(0f, edge().toFloat(), 3f)
         drag(from = Offset(80f, 280f), by = Offset(180f, 0f))
-        rule.mainClock.advanceTimeBy(50)
+        rule.mainClock.advanceTimeBy(400)
         assertTrue("past the inset, edge ${edge()}", edge() > 200)
     }
 
@@ -309,14 +427,11 @@ class DrawerDragGestureTest {
         assertTrue("brief slow $slow fast $fast", abs(fast.second - slow.second) < 14)
     }
 
-    @Test fun reducedMotionSettlesOnTheNextFrame() {
-        var opened by mutableStateOf(false)
-        show(reduce = true, opened = { opened }, onOpen = { opened = true }) { Box(Modifier.fillMaxSize()) }
-        // Under half, faster than 300 dp/s. The flick opens and the reduced tween is instant.
-        drag(from = Offset(60f, 220f), by = Offset(40f, 0f), delayMillis = 5)
-        rule.mainClock.advanceTimeBy(32)
-        assertTrue("flick edge ${edge()}", edge() > 200)
-        assertTrue(opened)
+    @Test fun reducedMotionCarriesTheFingerVelocity() {
+        // `Theme.Motion.drawer` (`Theme.swift:799-801`) does not read Reduce Motion. A fast flick is further
+        // along than a slow one. An instant tween would leave both already open, in the same place.
+        val (slow, fast) = pairedTravel(AppStyle.Glass, reduce = true)
+        assertTrue("reduce slow $slow fast $fast", fast.second > slow.second + 6)
     }
 
     @Test fun fingerTakesOverMidSpring() {
@@ -349,21 +464,21 @@ class DrawerDragGestureTest {
         assertEquals(listOf(HapticFeedbackType.ContextClick), recorded.types)
         recorded.types.clear()
         opened = false
-        rule.mainClock.advanceTimeBy(32)
+        rule.mainClock.advanceTimeBy(400)
         assertTrue(recorded.types.isEmpty())
         // Slow, and short of half: projection closes, and a drag that does not open plays nothing (line 110).
         drag(from = Offset(60f, 260f), by = Offset(70f, 0f), delayMillis = 400)
-        rule.mainClock.advanceTimeBy(32)
+        rule.mainClock.advanceTimeBy(400)
         assertEquals(0f, edge().toFloat(), 4f)
         assertTrue(recorded.types.isEmpty())
     }
 
     /** Slow settle, then a flick, each from about 0.7 of the width, sampled 40 ms later. One composition. */
-    private fun pairedTravel(style: AppStyle): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+    private fun pairedTravel(style: AppStyle, reduce: Boolean = false): Pair<Pair<Int, Int>, Pair<Int, Int>> {
         var opened by mutableStateOf(false)
         show(
             style = style,
-            reduce = false,
+            reduce = reduce,
             opened = { opened },
             onOpen = { opened = true },
             onDismiss = { opened = false },
@@ -481,6 +596,15 @@ private fun ConsumingRow(onPull: () -> Unit) {
             }
         }
     })
+}
+
+/** An Android view with no sideways room. `canScrollHorizontally` stays false. */
+private class StillView(context: android.content.Context) : View(context)
+
+/** Room toward the start while [room] is set (`View.canScrollHorizontally(-1)`, AssistantSidebar.swift:558). */
+private class RoomView(context: android.content.Context) : View(context) {
+    var room: Boolean = true
+    override fun canScrollHorizontally(direction: Int): Boolean = room && direction < 0
 }
 
 private class RecordingHaptics : HapticFeedback {
