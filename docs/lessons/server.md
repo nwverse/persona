@@ -2678,6 +2678,10 @@ criteria, owner-authorized scope changes and stale scope-revision check. Regener
 from the merged source, then measure the complete schema; an old snapshot can silently lose a new
 argument even when its shorter description still fits the budget.
 
+Compare the complete measurement with the fixed main total too. A merged inventory can include the
+extra tool and pass its own updater while exceeding main's allowance. Keep every new schema field
+and shorten equivalent repeated parameter guidance rather than hiding entries or raising the limit.
+
 An automatically merged route inventory can still miss newly registered upstream routes. Regenerate
 it from actual registrations and inspect the classifications; administration routes stay restricted
 to full credentials unless the authorization policy explicitly grants an extension scope.

@@ -573,7 +573,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Effort = ""
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
-		if err := s.checkAgentStart(ctx, am.ID); err != nil {
+		gated, _ := run["launcher"].(string)
+		if err := s.checkAgentStart(ctx, am.ID, s.startLauncher(ctx, gated)); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
@@ -703,7 +704,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Last look on the machine it will really start on (a health detour may have changed am): re-check and hold
 		// its admission slot across the session.start call.
-		release, err := s.admitAgentStart(sctx, am.ID)
+		final, _ := params["launcher"].(string)
+		release, err := s.admitAgentStart(sctx, am.ID, s.startLauncher(ctx, final))
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}

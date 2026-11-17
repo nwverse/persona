@@ -8,11 +8,8 @@ struct ExtensionSurfaceView: View {
     var view: ExtensionView
     var family: String = "large"
 
-    private var hasHomeProgressRing: Bool {
-        ExtensionSurfaceContent.items(view, family: family).contains {
-            guard case .progress(let progress) = $0 else { return false }
-            return ExtensionSurfaceContent.progressPresentation(family: family, style: progress.style) == .ring
-        }
+    private var fitsCanvas: Bool {
+        ExtensionSurfaceContent.fitsCanvas(view, family: family)
     }
 
     var body: some View {
@@ -48,10 +45,10 @@ struct ExtensionSurfaceView: View {
         case .metric(let metric):
             if family == "accessory_inline" {
                 Text(verbatim: metric.label + " " + metric.value)
-            } else if hasHomeProgressRing {
+            } else if fitsCanvas {
                 stat(label: metric.label, value: metric.value, detail: metric.detail)
-                    .minimumScaleFactor(ExtensionSurfaceTokens.ringContentMinimumScale)
-                    .dynamicTypeSize(...ExtensionSurfaceTokens.ringContentLargestTypeSize)
+                    .minimumScaleFactor(ExtensionSurfaceTokens.canvasContentMinimumScale)
+                    .dynamicTypeSize(...ExtensionSurfaceTokens.canvasContentLargestTypeSize)
             } else {
                 stat(label: metric.label, value: metric.value, detail: metric.detail)
             }
@@ -75,8 +72,12 @@ struct ExtensionSurfaceView: View {
             case .ring:
                 ExtensionSurfaceProgressRing(progress: progress)
             case .bar:
-                ProgressView(value: progress.ratio.isFinite ? min(1, max(0, progress.ratio)) : 0) {
-                    Text(verbatim: progress.label).font(ExtensionSurfaceTokens.label).lineLimit(1)
+                if fitsCanvas {
+                    bar(progress)
+                        .minimumScaleFactor(ExtensionSurfaceTokens.canvasContentMinimumScale)
+                        .dynamicTypeSize(...ExtensionSurfaceTokens.canvasContentLargestTypeSize)
+                } else {
+                    bar(progress)
                 }
             }
         case .row(let row):
@@ -95,14 +96,20 @@ struct ExtensionSurfaceView: View {
                 }
             }
         case .chart(let chart):
-            if hasHomeProgressRing {
+            if fitsCanvas {
                 ExtensionSurfaceChart(chart: chart)
-                    .minimumScaleFactor(ExtensionSurfaceTokens.ringContentMinimumScale)
-                    .dynamicTypeSize(...ExtensionSurfaceTokens.ringContentLargestTypeSize)
+                    .minimumScaleFactor(ExtensionSurfaceTokens.canvasContentMinimumScale)
+                    .dynamicTypeSize(...ExtensionSurfaceTokens.canvasContentLargestTypeSize)
             } else {
                 ExtensionSurfaceChart(chart: chart)
             }
         default: EmptyView()
+        }
+    }
+
+    private func bar(_ progress: ExtensionProgressComponent) -> some View {
+        ProgressView(value: progress.ratio.isFinite ? min(1, max(0, progress.ratio)) : 0) {
+            Text(verbatim: progress.label).font(ExtensionSurfaceTokens.label).lineLimit(1)
         }
     }
 
@@ -127,6 +134,7 @@ nonisolated enum ExtensionSurfaceContent {
     }
 
     /// Inspect the fitted section structure before the general renderer flattens its first two sections.
+    /// The progress may be a ring or a bar: stacked with a metric and a chart, either is taller than the medium canvas (#9644).
     static func usesMediumColumns(_ view: ExtensionView, family: String) -> Bool {
         guard family == "medium", view.sections.count == 1 else { return false }
         let items = view.sections[0].items
@@ -137,9 +145,18 @@ nonisolated enum ExtensionSurfaceContent {
             pair = items[...]
         }
         guard pair.count == 2,
-              case .progress(let progress) = pair.first, progress.style == "ring",
+              case .progress = pair.first,
               case .chart(let chart) = pair.last else { return false }
         return chart.series.count == 1 && chart.kind != "candlestick"
+    }
+
+    /// Layouts that fit metric, bar and chart text to the widget's fixed canvas: a small widget, a medium widget's columns
+    /// and any Home Screen layout with a ring.
+    static func fitsCanvas(_ view: ExtensionView, family: String) -> Bool {
+        family == "small" || usesMediumColumns(view, family: family) || items(view, family: family).contains {
+            guard case .progress(let progress) = $0 else { return false }
+            return progressPresentation(family: family, style: progress.style) == .ring
+        }
     }
 
     static func progressRatio(_ ratio: Double) -> Double {
@@ -199,7 +216,7 @@ private struct ExtensionSurfaceProgressRing: View {
                 .font(ExtensionSurfaceTokens.label)
                 .lineLimit(2)
                 .minimumScaleFactor(ExtensionSurfaceTokens.ringLabelMinimumScale)
-                .dynamicTypeSize(...ExtensionSurfaceTokens.ringContentLargestTypeSize)
+                .dynamicTypeSize(...ExtensionSurfaceTokens.canvasContentLargestTypeSize)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: ExtensionSurfaceTokens.ringSize)
         }
