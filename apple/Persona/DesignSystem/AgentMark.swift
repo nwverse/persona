@@ -40,16 +40,20 @@ nonisolated struct AgentKind: Equatable, Sendable {
     }
 
     /// The agent a token usage share names (`UsageAgentShare.agent`, `Session.agent`'s names, #9984): its mark and its
-    /// product's name, as its sessions show them; nil for "", the usage the hub stored before it kept agents apart.
+    /// product's name, the names every client uses (spec/fixtures/agent-names, checked by TokenCalendarTests); nil for
+    /// "", the usage the hub stored before it kept agents apart.
     init?(usageAgent agent: String) {
         surface = nil
         switch agent.lowercased() {
         case "": return nil
         case "claude": brand = Theme.Brand.claude; name = "Claude Code"
         case "codex": brand = Theme.Brand.openAI; name = "Codex"
+        case "trae": brand = Theme.Brand.trae; name = "TRAE"
         case "traex": brand = nil; name = "TRAEX"
         case "omp": brand = nil; name = "Oh My Pi"
-        default: brand = Self.brand(named: agent); name = agent // pi, opencode, a runtime's own
+        case "gemini": brand = nil; name = "Gemini CLI"
+        case "cursor": brand = nil; name = "Cursor"
+        default: brand = Self.brand(named: agent); name = agent // pi, opencode (their own lower case), a runtime's own
         }
     }
 
