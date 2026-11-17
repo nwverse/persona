@@ -141,7 +141,7 @@ type outboundAuditStore interface {
 
 // Persist the complete attempt before contacting the transport. An unavailable
 // audit store stops an automatic send, rather than silently losing its evidence.
-func (s *Service) auditedMessage(ctx context.Context, source, target, text, sendID string, a outboundApproval, send func() error) error {
+func (s *Service) auditedMessage(ctx context.Context, source, target, text, sendID string, a outboundApproval, send func() (bool, error)) error {
 	st, ok := s.store().(outboundAuditStore)
 	if !ok {
 		return errors.New("outward messages need a persistent audit ledger")
@@ -167,10 +167,12 @@ func (s *Service) auditedMessage(ctx context.Context, source, target, text, send
 		_ = st.SettleSend(ctx, attempt, "") // no transport call happened
 		return fmt.Errorf("message not sent: cannot persist audit: %w", err)
 	}
-	err = send()
+	already, err := send()
 	outcome := "sent"
 	if err != nil {
 		outcome = "failed_or_unknown"
+	} else if already {
+		outcome = "already_delivered"
 	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -183,6 +185,9 @@ func (s *Service) auditedMessage(ctx context.Context, source, target, text, send
 	}
 	if settleErr := st.SettleSend(saveCtx, attempt, state); settleErr != nil {
 		return fmt.Errorf("delivery may have occurred; inspect audit %d before retrying: %w", id, settleErr)
+	}
+	if err == nil && already {
+		return i18n.Err("assistant-outbound.already_delivered")
 	}
 	return err
 }
@@ -213,13 +218,10 @@ func (s *Service) autoSendSuggestion(ctx context.Context, id string, version int
 	var target, machine, session string
 	if it != nil && it.open() && it.Source == "larkcli" && it.Connector != nil && it.Connector.CanReply {
 		g := currentSuggestion(it)
-		if g != nil && g.Version == version && g.Kind == SuggestReply && !g.Handback && len(g.Changes) == 0 {
+		if g != nil && g.Version == version && g.Kind == SuggestReply && g.Conversation == nil && !g.Handback && len(g.Changes) == 0 {
 			target = messageTarget(it.Connector.Thread)
 			if it.Agent != nil {
 				machine, session = it.Agent.MachineID, it.Agent.SessionID
-			}
-			if g.Conversation != nil {
-				machine, session = g.Conversation.MachineID, g.Conversation.SessionID
 			}
 		}
 	}
@@ -292,6 +294,9 @@ func (s *Service) toolMessageSend(ctx context.Context, machine, session string, 
 		if !res.UserAllowed() {
 			return "", errors.New("the owner did not approve: nothing was sent")
 		}
+		// The owner approved the sender on this card, not a later default.
+		s.standingMu.Lock()
+		defer s.standingMu.Unlock()
 	}
 	ctx = context.WithValue(ctx, outboundApprovalKey{}, a)
 	err = s.connectorReply(ctx, in.Channel, connectorMessage(in.Target, in.Text),

@@ -103,6 +103,9 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 		params["sender_identity"] = identity
 	}
 	approval, automatic := ctx.Value(outboundApprovalKey{}).(outboundApproval)
+	if automatic && params["sender_identity"] != approval.Identity {
+		return i18n.Err("assistant-outbound.scope_changed")
+	}
 	if automatic && approval.Kind == "standing_authorization" {
 		// Collection may have updated the item after its suggestion was checked.
 		// Authorize the actual recipient at the transport boundary, not the snapshot.
@@ -110,7 +113,7 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 		if err != nil {
 			return err
 		}
-		if grant == nil || grant.ID != approval.ID || params["sender_identity"] != approval.Identity {
+		if grant == nil || grant.ID != approval.ID {
 			return i18n.Err("assistant-outbound.scope_changed")
 		}
 	}
@@ -122,7 +125,10 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 			return errors.New("message not sent: upgrade the extension manager before using outward-message settings")
 		}
 	}
-	send := func() error { return s.appCall(ctx, AppInbox, inboxReplyMethod, params, &sent) }
+	send := func() (bool, error) {
+		err := s.appCall(ctx, AppInbox, inboxReplyMethod, params, &sent)
+		return sent.Already, err
+	}
 	var err error
 	if automatic {
 		approval.Thread = r.Thread
@@ -135,7 +141,7 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 		}
 		err = s.auditedMessage(ctx, source, messageTarget(r.Thread), r.Text, sendID, approval, send)
 	} else {
-		err = send()
+		_, err = send()
 	}
 	s.inboxSent(sent, sendID)
 	return err

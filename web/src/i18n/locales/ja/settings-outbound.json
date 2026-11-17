@@ -21,6 +21,7 @@
   "declined": "承認されませんでした。変更はありません。",
   "failed": "設定を確認できませんでした。更新してから再試行してください。",
   "failed_or_unknown": "失敗または配信結果が不明",
+  "already_delivered": "未送信：送信IDは配信済み",
   "audit_basis": "許可 / 承認の根拠",
   "authorized_send": "継続的な許可で自動送信",
   "delivery_pending": "配信結果は未確認",

@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -94,12 +95,16 @@ func (st *outboundMemoryStore) SetSentAsUserOutcome(_ context.Context, id int64,
 
 type outboundConnector struct {
 	extensionLark
-	identities []string
-	fail       error
+	identities  []string
+	fail        error
+	beforeReply func()
 }
 
 func (*outboundConnector) ID() string { return "larkcli" }
 func (c *outboundConnector) Reply(ctx context.Context, reply connector.InboxReply) error {
+	if c.beforeReply != nil {
+		c.beforeReply()
+	}
 	c.identities = append(c.identities, connector.SendIdentity(ctx))
 	if c.fail != nil {
 		return c.fail
@@ -260,6 +265,36 @@ func TestOutboundInboxDefaultsAndScopeMismatchesStayManual(t *testing.T) {
 	}
 }
 
+func TestOutboundHandedOffSuggestionStaysManual(t *testing.T) {
+	h, st, c, it := outboundTestHub(t)
+	putMessageGrant(t, st, "inbox_reply")
+	setSettings(t, h.Service, func(v *Settings) { v.Main = "m1" })
+	h.f.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusWorking},
+		proto.Session{SessionID: "m1", Assistant: true})
+	handOff(t, h, it)
+	text := "A handed-off reply still needs the owner."
+	if _, err := mainSuggest(h, "m1", string(standingJSON(t, map[string]string{
+		"item": it.ID, "kind": "reply", "text": text,
+	}))); err != nil {
+		t.Fatal(err)
+	}
+	h.inbox.mu.Lock()
+	g := currentSuggestion(it)
+	waiting := g != nil && g.Conversation != nil && g.Conversation.SessionID == "m1"
+	version := it.SuggestSeq
+	h.inbox.mu.Unlock()
+	if !waiting || len(c.got) != 0 || len(st.audit) != 0 {
+		t.Fatalf("handed-off reply bypassed confirmation: waiting=%v sends=%+v audit=%+v", waiting, c.got, st.audit)
+	}
+	body := fmt.Sprintf(`{"version":%d,"action":"confirm"}`, version)
+	if code, out := suggestionCall(t, h, it.ID, body); code != 200 {
+		t.Fatalf("manual confirmation: %d %v", code, out)
+	}
+	if len(c.got) != 1 || c.got[0].Text != text || c.identities[0] != "bot" {
+		t.Fatalf("manual handed-off reply no longer sends: %+v %v", c.got, c.identities)
+	}
+}
+
 func TestOutboundAutomaticSendFailsClosedWithoutAudit(t *testing.T) {
 	h, st, c, _ := outboundTestHub(t)
 	putMessageGrant(t, st, "inbox_reply")
@@ -336,6 +371,35 @@ func TestOutboundPendingAuditNeverTriggersAnotherSend(t *testing.T) {
 	}
 	if len(c.got) != 1 || len(st.audit) != 1 || !strings.Contains(string(st.audit[0].LetThrough), `"outcome":"pending"`) {
 		t.Fatalf("pending audit retried or lost: %+v %+v", c.got, st.audit)
+	}
+}
+
+func TestOutboundTransportDuplicateIsNotANewDelivery(t *testing.T) {
+	h, st, c, _ := outboundTestHub(t)
+	putMessageGrant(t, st, "assistant_message")
+	payload := map[string]string{
+		"channel": "larkcli", "target": "oc_example_group", "text": "The original message.", "idempotency_key": "surviving-send",
+	}
+	if _, err := h.toolMessageSend(context.Background(), "server", "s1", standingJSON(t, payload)); err != nil {
+		t.Fatal(err)
+	}
+	// Reconstruct the assistant without its audit claim; the manager still has
+	// the delivered send ID, which must not certify a different attempted text.
+	st = &outboundMemoryStore{inboxMemStore: st.inboxMemStore}
+	h.store = func() Store { return st }
+	payload["text"] = "This different text was never sent."
+	_, err := h.toolMessageSend(context.Background(), "server", "s1", standingJSON(t, payload))
+	var message *i18n.Message
+	if !errors.As(err, &message) || message.Key != "assistant-outbound.already_delivered" {
+		t.Fatalf("duplicate reported as a fresh successful send: %v", err)
+	}
+	if len(c.got) != 1 || c.got[0].Text != "The original message." || len(st.audit) != 1 ||
+		st.audit[0].Text != payload["text"] || !strings.Contains(string(st.audit[0].LetThrough), `"outcome":"already_delivered"`) {
+		t.Fatalf("duplicate lost its actual outcome: sends=%+v audit=%+v", c.got, st.audit)
+	}
+	if _, err := h.toolMessageSend(context.Background(), "server", "s1", standingJSON(t, payload)); err == nil ||
+		len(c.got) != 1 || len(st.audit) != 1 {
+		t.Fatalf("duplicate attempt was not settled durably: sends=%+v audit=%+v err=%v", c.got, st.audit, err)
 	}
 }
 
@@ -445,6 +509,12 @@ func TestOutboundOwnerApprovalCardShowsScopeAndDoesNotSelfApprove(t *testing.T) 
 
 func TestOutboundManualMessageNeedsItsOwnPermission(t *testing.T) {
 	h, st, c, _ := outboundTestHub(t)
+	c.beforeReply = func() {
+		if h.standingMu.TryLock() {
+			h.standingMu.Unlock()
+			t.Error("manual send allowed an identity change during transport")
+		}
+	}
 	_ = st.PutSetting(context.Background(), outboundIdentityKey, "user")
 	done := make(chan error, 1)
 	go func() {
@@ -471,8 +541,61 @@ func TestOutboundManualMessageNeedsItsOwnPermission(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("manual send did not finish")
 	}
-	if len(c.got) != 1 || c.identities[0] != "user" {
+	if len(c.got) != 1 || c.identities[0] != "user" || c.got[0].Thread != "larkcli:chat:oc_example_group" ||
+		c.got[0].Text != "Owner-approved example." {
 		t.Fatalf("selected sender ignored: %+v %v", c.got, c.identities)
+	}
+}
+
+func TestOutboundPendingCardRejectsChangedIdentity(t *testing.T) {
+	for _, before := range []string{"bot", "user"} {
+		t.Run(before, func(t *testing.T) {
+			h, st, c, _ := outboundTestHub(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := st.PutSetting(ctx, outboundIdentityKey, before); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := h.toolMessageSend(ctx, "server", "s1", json.RawMessage(
+					`{"channel":"larkcli","target":"oc_example_group","text":"Only this approved sender.","idempotency_key":"pending-sender"}`))
+				done <- err
+			}()
+			card, ok := awaitCard(h.Service)
+			if !ok || !strings.Contains(card.Summary, "Only this approved sender.") ||
+				!strings.Contains(card.Summary, "oc_example_group") {
+				t.Fatalf("missing bound approval card: %+v", card)
+			}
+			after := "user"
+			if before == after {
+				after = "bot"
+			}
+			change, err := h.setOutboundIdentity(ctx, standingJSON(t, after))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := change.apply(ctx); err != nil {
+				t.Fatal(err)
+			}
+			yes := true
+			if _, err := h.Action(ctx, Action{Op: "answer", InteractionID: card.ID,
+				Answer: standingJSON(t, proto.Resolution{Allow: &yes})}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				var message *i18n.Message
+				if !errors.As(err, &message) || message.Key != "assistant-outbound.scope_changed" {
+					t.Fatalf("stale sender approval was not refused: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("stale approval did not settle")
+			}
+			if len(c.identities) != 0 || len(st.audit) != 0 {
+				t.Fatalf("stale approval reached transport: senders=%v audit=%+v", c.identities, st.audit)
+			}
+		})
 	}
 }
 

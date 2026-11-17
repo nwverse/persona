@@ -34,13 +34,18 @@ The assistant uses `message_send {channel, target, text, idempotency_key}` rathe
 than asking `ask_user` and then invoking a CLI. Unmatched sends get a normal
 permission card; matched sends use their approved identity. Inbox automation
 only consumes a persisted, current, plain-text reply suggestion: never handbacks,
-document changes, tasks, or conclusions. Changing the default sender cannot
-broaden a grant bound to another identity.
+handed-off conversations' suggestions, document changes, tasks, or conclusions.
+Changing the default sender cannot broaden a grant bound to another identity.
+A pending send card is also bound to its displayed sender, recipient, and text.
+Changing the default before that card's send begins refuses the old approval.
 
 Before a controlled send, the manager persists its complete attempted text,
 recipient, identity, scenario, and approval/grant ID in the existing Sent ledger.
-An audit failure prevents sending. Outcomes are `pending`, `sent`, or
-`failed_or_unknown`; pending is not proof of delivery. A durable send claim
+An audit failure prevents sending. Outcomes are `pending`, `sent`,
+`failed_or_unknown`, or `already_delivered`; pending is not proof of delivery.
+An extension manager's already-delivered send ID means this attempt sent nothing,
+not that its attempted text was delivered. The ledger and error distinguish that
+case from a fresh send. A durable send claim
 survives manager reconstruction. A failed/uncertain automatic attempt is not
 silently retried, even if an Inbox reply to the same incoming message is reworded. Inspect the
 ledger and original destination before a deliberate manual retry.

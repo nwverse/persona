@@ -51,6 +51,11 @@
   too, so stale goldens cannot hide growth. Fitting the total budget does not register a new per-tool baseline key;
   keep that remaining gate explicit when baseline edits are not authorized.
 
+- Bind manual send approvals as tightly as standing grants (#9762). After the card
+  resolves, serialize the sender recheck and transport with identity changes.
+  Handed-off Inbox suggestions stay manual even when their scope matches a grant.
+  A transport's already-delivered ID proves only a prior send, not delivery of a
+  new attempted text; audit that outcome separately and never report a fresh send.
 
 - Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
   drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.

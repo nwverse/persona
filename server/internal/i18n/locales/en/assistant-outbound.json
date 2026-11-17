@@ -7,5 +7,6 @@
   "bot": "Bot",
   "user": "Me",
   "send_confirm": "Send this message?\nChannel: {channel}\nChat: {target}\nSender: {identity}\n\n{text}",
-  "scope_changed": "The authorization, recipient, or sender changed. Nothing was sent. Refresh the settings and confirm the intended scope."
+  "scope_changed": "The authorization, recipient, or sender changed. Nothing was sent. Refresh the settings and confirm the intended scope.",
+  "already_delivered": "This send ID was delivered earlier. This attempt sent nothing, and does not verify the attempted text. Inspect the previous message at its destination before retrying."
 }

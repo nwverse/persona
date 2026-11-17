@@ -21,6 +21,7 @@
   "declined": "未批准，设置未更改。",
   "failed": "未能核实设置，请刷新后再试。",
   "failed_or_unknown": "发送失败或结果未知",
+  "already_delivered": "未发送：发送标识已投递过",
   "audit_basis": "授权 / 审批依据",
   "authorized_send": "长期授权自动发送",
   "delivery_pending": "尚未核实投递结果",

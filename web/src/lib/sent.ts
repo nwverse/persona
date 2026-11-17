@@ -33,7 +33,7 @@ export interface SentLetThrough {
   setting?: string;
   authorization_id?: string;
   scenario?: string;
-  outcome?: "pending" | "sent" | "failed_or_unknown";
+  outcome?: "pending" | "sent" | "failed_or_unknown" | "already_delivered";
 }
 
 /** The conversation that asked: both ids when the request named one, `extension` for a send an extension recorded. */
@@ -311,7 +311,7 @@ export function ruleText(r: SentRule | undefined): string {
  */
 export function allowedBy(lt: SentLetThrough | undefined): { label: string; tone: AllowedTone; detail: string } {
   const kind = lt?.kind ?? "";
-  if (lt?.outcome === "pending" || lt?.outcome === "failed_or_unknown") {
+  if (lt?.outcome === "pending" || lt?.outcome === "failed_or_unknown" || lt?.outcome === "already_delivered") {
     return { label: t(`settings-outbound.${lt.outcome === "pending" ? "delivery_pending" : lt.outcome}`), tone: "orange",
       detail: `${t("settings-outbound.audit_basis")}: ${lt.authorization_id ?? ""}` };
   }

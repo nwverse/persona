@@ -21,6 +21,7 @@
   "declined": "Not approved. Nothing changed.",
   "failed": "Could not verify the setting. Refresh before trying again.",
   "failed_or_unknown": "Failed or delivery unknown",
+  "already_delivered": "Not sent: send ID delivered earlier",
   "audit_basis": "Authorization / approval",
   "authorized_send": "Authorized automatic send",
   "delivery_pending": "Delivery not yet verified",
