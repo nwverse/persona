@@ -115,6 +115,8 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		{"names A: a merged list", "GET", "/api/v1/inbox", "", namesA},
 		{"names A: a paged list", "GET", "/api/v1/inbox/done", "", namesA},
 		{"names A by query: a manager route", "GET", "/api/v1/assistant?manager=assistant", "", nil},
+		{"names A: a naming preview", "POST", "/api/v1/assistant/workspace-naming/preview", `{"machine_id":"mb","layout":"root"}`, namesA},
+		{"names A by query: a naming preview", "POST", "/api/v1/assistant/workspace-naming/preview?manager=assistant", `{"machine_id":"mb","layout":"root"}`, nil},
 		{"names A: an inbox reply", "POST", "/api/v1/inbox/item-1/reply", `{"text":"x"}`, namesA},
 		{"names A: the knowledge base", "GET", "/api/v1/kb/people", "", namesA},
 		{"names A: another extension's HTTP", "GET", "/api/v1/extensions/lark/things", "", namesA},
@@ -153,6 +155,8 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/v1/assistant?manager=m-0b0b0b", ""},
 		{"GET", "/api/v1/assistant", ""},
+		{"POST", "/api/v1/assistant/workspace-naming/preview", `{"machine_id":"mb","layout":"root"}`},
+		{"POST", "/api/v1/assistant/workspace-naming/preview?manager=m-0b0b0b", `{"machine_id":"mb","layout":"root"}`},
 		{"GET", "/api/v1/inbox/done", ""},
 		{"POST", "/api/v1/notify", `{"title":"t","body":"b","machine_id":"mb","session_id":"b1"}`},
 	} {
@@ -175,10 +179,25 @@ func TestTodoRepositoryRoutesStayOnTheirManager(t *testing.T) {
 		{"GET", "/repositories", ""},
 		{"PUT", "/repositories", `{}`},
 		{"PUT", "/repositories/repo-b/links", `{}`},
+		{"GET", "/workspace-rules", ""},
+		{"PUT", "/workspace-rules", `{"expected_revision":0,"workspace_rules":null}`},
+		{"POST", "/workspace-naming/preview", `{"machine_id":"mb","layout":"root","selected_repo_ids":["repo-b"]}`},
+		{"POST", "/workspace-naming/plans", `{"machine_id":"mb","layout":"root","selected_repo_ids":["repo-b"],"operation_id":"example-operation"}`},
+		{"GET", "/workspace-naming/plans/example-operation", ""},
 	} {
 		beforeA, beforeB := len(reached(a)), len(reached(b))
-		if code, out := extDo(t, url, route.method, "/api/v1/todos/todo-a"+route.suffix, route.body, nil); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
-			t.Errorf("%s %s: another manager's Todo: %d %s", route.method, route.suffix, code, clip(out, 200))
+		ownPath := "/api/v1/todos/todo-b" + route.suffix
+		for _, request := range []struct {
+			path   string
+			header map[string]string
+		}{
+			{"/api/v1/todos/todo-a" + route.suffix, nil},
+			{ownPath, map[string]string{ManagerHeader: assistantwire.AssistantID}},
+			{ownPath + "?manager=assistant", nil},
+		} {
+			if code, out := extDo(t, url, route.method, request.path, route.body, request.header); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
+				t.Errorf("%s %s: another manager: %d %s", route.method, request.path, code, clip(out, 200))
+			}
 		}
 		if got := len(reached(a)); got != beforeA {
 			t.Errorf("%s %s: A was reached: %v", route.method, route.suffix, reached(a)[beforeA:])
@@ -187,7 +206,6 @@ func TestTodoRepositoryRoutesStayOnTheirManager(t *testing.T) {
 			t.Errorf("%s %s: a foreign Todo reached B: %v", route.method, route.suffix, reached(b)[beforeB:])
 		}
 
-		ownPath := "/api/v1/todos/todo-b" + route.suffix
 		if code, out := extDo(t, url, route.method, ownPath, route.body, nil); code != http.StatusOK {
 			t.Errorf("%s %s: own Todo: %d %s", route.method, route.suffix, code, clip(out, 200))
 		}
@@ -273,7 +291,15 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/todos/{id}/repositories":                 "manager", // associations stay with the todo's manager
 		"PUT /api/v1/todos/{id}/repositories":                 "manager",
 		"PUT /api/v1/todos/{id}/repositories/{repo_id}/links": "manager",
-		"POST /api/v1/todos":                                  "manager", "PATCH /api/v1/todos/{id}": "manager",
+		// The Todo's owner selects the manager; sample previews use the token's own manager.
+		// The manager checks machine_id before resolving a preview or saving a plan.
+		"GET /api/v1/todos/{id}/workspace-rules":                       "manager",
+		"PUT /api/v1/todos/{id}/workspace-rules":                       "manager",
+		"POST /api/v1/todos/{id}/workspace-naming/preview":             "manager",
+		"POST /api/v1/todos/{id}/workspace-naming/plans":               "manager",
+		"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}": "manager",
+		"POST /api/v1/assistant/workspace-naming/preview":              "manager",
+		"POST /api/v1/todos":                                           "manager", "PATCH /api/v1/todos/{id}": "manager",
 		"POST /api/v1/todos/{id}/decisions":                 "manager",
 		"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":         "path",
 		"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":      "path",

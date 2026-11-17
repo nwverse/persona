@@ -1,5 +1,10 @@
 # Lessons: testing and validation
 
+- New relayed routes need both extension-scope inventories checked (#7100): `TestRouteScopes` records the exact
+  scope, and `TestEveryExtensionRouteIsBounded` records how ownership is enforced. Updating `extwire.RouteScopes`
+  alone leaves those checks failing. Exercise allowed and refused tokens, another manager's Todo and explicit manager
+  selectors, and body-named machines before recording the classification; keep every existing scope unchanged.
+
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
   owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests

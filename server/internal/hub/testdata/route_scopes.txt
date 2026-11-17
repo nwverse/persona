@@ -324,6 +324,8 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
+todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
+todos.read           GET /api/v1/todos/{id}/workspace-rules
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
@@ -418,6 +420,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/tasks/{id}/run
 -                    POST /api/v1/assistant/urgent-call/test
 -                    POST /api/v1/assistant/warm
+todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/auth/pair-codes
 -                    POST /api/v1/auth/password/exchange
 -                    POST /api/v1/auth/password/finish
@@ -597,6 +600,8 @@ todos.write          POST /api/v1/todos
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/retry
+todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
+todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST /api/v1/translate
 -                    POST /api/v1/translate/mail
 -                    POST /api/v1/workspace-board
@@ -689,6 +694,7 @@ todos.write          PUT /api/v1/todos/{id}/repositories/{repo_id}/links
 -                    PUT /api/v1/todos/{id}/seen
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
+todos.write          PUT /api/v1/todos/{id}/workspace-rules
 -                    PUT /api/v1/workspace-board/settings
 -                    PUT {base}/market-settings
 -                    PUT {base}/markets/{mid}
