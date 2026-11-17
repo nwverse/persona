@@ -54,6 +54,12 @@ nonisolated struct VoiceUnavailableNote: Equatable, Sendable {
                                         message: String(localized: "Try again once connected to the hub."), settings: nil)
         }
     }
+
+    /// Persona's urgent call rings or is on (#9290): no voice chat, Continue or call to Persona until it is over.
+    static var urgentCall: VoiceUnavailableNote {
+        VoiceUnavailableNote(title: String(localized: "Finish the urgent call first"),
+                             message: String(localized: "Persona's urgent call is on. Call again once it's over."), settings: nil)
+    }
 }
 
 /// What stays where the bar was after a call ended by itself, until the page goes (「语音已结束 · 继续」).
@@ -86,6 +92,8 @@ nonisolated struct VoiceEndNote: Equatable, Sendable {
             return note(String(localized: "A call or another app took the audio"))
         case .microphoneTaken:
             return note(String(localized: "A recording or dictation took the microphone"))
+        case .urgentCall:
+            return note(String(localized: "Ended for Persona's urgent call"))
         case .microphoneBusy:
             return note(String(localized: "Finish the recording or dictation first"), .retry)
         case .permissionDenied:

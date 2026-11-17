@@ -60,7 +60,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -1405,9 +1405,9 @@ if os.environ.get("MOCK_MANUAL_HERDR"):
         sess("studio", "a2917000-0000-4000-8000-000000000002", "整理下载文件夹", "/Users/me/Downloads", "done", "idle",
              "downloads", 7, "tidy", 1, 25, "按类型分好了。", started_by_persona=False),
     ]
-# MOCK_WORK=1: stopped agents the hub triaged (docs/assistant/agent-work.md): one done with its conclusion, one waiting for a
-# deploy the hub will wake it after, one cut off by a 503 the hub retries, one waiting for the user's decision on a card;
-# Settings › Session triage reads and writes TRIAGE.
+# MOCK_WORK=1: stopped agents the hub triaged (docs/assistant/agent-work.md): one done with its conclusion that nobody has
+# looked at yet (Just finished, #9751), one waiting for a deploy the hub will wake it after, one cut off by a 503 the hub
+# retries, one waiting for the user's decision on a card; Settings › Session triage reads and writes TRIAGE.
 TRIAGE = {"enabled": bool(os.environ.get("MOCK_WORK")), "auto_continue": bool(os.environ.get("MOCK_WORK")),
           "wake": bool(os.environ.get("MOCK_WORK")), "decide": bool(os.environ.get("MOCK_WORK"))}
 if os.environ.get("MOCK_WORK"):
@@ -1416,7 +1416,8 @@ if os.environ.get("MOCK_WORK"):
     SESSIONS += [
         sess("server", "a9000000-0000-4000-8000-000000000001", "登录页崩溃", "/home/me/code/app", "done", "idle", "app", 7, "fix", 1, 4,
              "修好了，PR 已合并，测试全过。还有一个小的样式问题，要我顺便改吗？",
-             work={"phase": "done", "line": "已合并 PR #12，测试全过", "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/12"}]}),
+             work={"phase": "done", "line": "已合并 PR #12，测试全过", "just_finished": True,
+                   "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/12"}]}),
         sess("server", "a9000000-0000-4000-8000-000000000002", "线上回归", "/home/me/code/app", "done", "idle", "app", 7, "e2e", 2, 6,
              "已经触发部署，部署完我再跑线上测试。",
              work={"phase": "blocked", "on": "external", "line": "等部署跑完再跑线上测试", "wait": "部署跑完", "then": "跑线上测试",
@@ -1999,6 +2000,8 @@ if os.environ.get("MOCK_TAB_PANES"):
             elif _s["session_id"] == PANES_REVIEW:
                 _s.update(last_text="有两处会吞掉错误，先跑一遍现有的测试确认。", pending_interactions=1)
 ORIG_STATE = {s["session_id"]: (s["state"], s["status"]) for s in SESSIONS}
+# Just finished rows (#9751) as they started, so /mock/reset brings back a mark a seen took off
+ORIG_JUST_FINISHED = {s["session_id"] for s in SESSIONS if (s.get("work") or {}).get("just_finished")}
 SEEN = []  # session ids marked seen (GET /mock/seen)
 SESSION_CLOSE = {"fail": False, "attempts": [], "closed": [], "interactions": []}
 # GET /mock/send-fail?on=1: sends to sessions fail (502) until ?on=0, as MOCK_SEND_FAIL=1 makes them for the whole run.
@@ -2016,6 +2019,11 @@ def mark_seen(sid):
     for s in SESSIONS + ASSISTANT:
         if s["session_id"] == sid and s["state"] == "unread":
             s.update(state="idle", status="idle", seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            changed = s["machine_id"]
+        elif s["session_id"] == sid and (s.get("work") or {}).get("just_finished"):
+            # Just finished (#9751): the hub drops the mark once the turn is seen
+            s.update(work={k: v for k, v in s["work"].items() if k != "just_finished"},
+                     seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             changed = s["machine_id"]
     # The hub pushes the machine's list when a session's state changes: that is how the app knows a seen sent over the
     # socket landed (SeenOutbox, #1588). Without it the app sends every one again over HTTP 5 s later (#2061).
@@ -18694,6 +18702,11 @@ def paged_sessions(query):
     # exclude_pane_source=<origin>
     waiting = query.get("waiting", [""])[0]
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
+    # sessions_just_finished (#9751): just_finished=0|1, the seen rows whose done turn nobody looked at, or the others
+    just = query.get("just_finished", [""])[0]
+
+    def just_finished(s):
+        return state_of(s) == "idle" and bool((s.get("work") or {}).get("just_finished"))
 
     def matching(rows):
         rows = [s for s in rows if (not agents_only or agent_row(s))
@@ -18706,6 +18719,7 @@ def paged_sessions(query):
                 and (not spaces or [s["machine_id"], s.get("space_id") or s.get("workspace_id", "")] in spaces)
                 and (not todo or (s.get("todo") or {}).get("id", "") == ("" if todo == "none" else todo))
                 and (not waiting or bool(s.get("background_waiting")) == (waiting in ("1", "true")))
+                and (not just or just_finished(s) == (just in ("1", "true")))
                 and (not origin or pane_origin(s) == origin) and (not not_origin or pane_origin(s) != not_origin)
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
         rows.sort(key=LIST_TUPLE)
@@ -18721,6 +18735,9 @@ def paged_sessions(query):
         waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
         if waits:
             counts["background_waiting"] = waits
+        finished = sum(1 for s in rows if just_finished(s))
+        if finished:
+            counts["just_finished"] = finished
         for s in rows:
             if roots and not s.get("assistant") and state_of(s) != "offline":
                 active = counts["active_agents_by_machine"]
@@ -25560,9 +25577,11 @@ if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice
 
 # ---------- area: model defaults (#2455) ----------
 # MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none)
-# and "New chats' Claude profile" (#4633: private / legacy, saved in its binding; "private" is stored as none),
-# GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s agent.new when absent), and the main
-# conversation asked for the Agent SDK but runs on the CLI (runtime_fallback).
+# as an older hub offers it: a current hub runs the main chat on the Claude Code CLI only and lists no runtimes, and the
+# clients keep the picker for older hubs (#9799). Also "New chats' Claude profile" (#4633: private / legacy, saved in its
+# binding; "private" is stored as none), GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s
+# agent.new when absent), and the main conversation says, as an older hub's does, that it asked for the Agent SDK but
+# runs on the CLI (runtime_fallback).
 MODEL_DEFAULTS = os.environ.get("MOCK_MODEL_DEFAULTS") == "1"
 MODEL_DEFAULTS_FALLBACK = "这台电脑没有 Node.js 22+"
 _model_configuration_without_runtime = model_configuration
@@ -26243,6 +26262,8 @@ class H(BaseHTTPRequestHandler):
             for x in SESSIONS:
                 if x["session_id"] in ORIG_STATE:
                     x["state"], x["status"] = ORIG_STATE[x["session_id"]]
+                if x["session_id"] in ORIG_JUST_FINISHED and x.get("work"):
+                    x["work"] = {**x["work"], "just_finished": True}
                 activity = ORIG_ACTIVITY.get((x["machine_id"], x["session_id"]))
                 if activity:
                     x.update(activity)
@@ -27482,7 +27503,7 @@ class H(BaseHTTPRequestHandler):
                 purpose = own["purpose"]
                 if os.environ.get("MOCK_MODEL_CONFLICT") or body.get("revision") != purpose["revision"]:
                     return self.send_json({"error": "配置已在别处修改"}, 409)
-                if "runtime" in body:
+                if "runtime" in body:  # an older hub's answer; a current hub accepts and ignores runtime (#9799)
                     return self.send_json({"error": MEETING_MODEL_TEXT[lang]["no_runtime"]}, 400)
                 binding = dict(purpose["override"])
                 if "provider" in body and body["provider"] != binding.get("provider"):

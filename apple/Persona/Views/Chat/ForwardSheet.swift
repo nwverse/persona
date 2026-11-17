@@ -90,19 +90,14 @@ struct ForwardSheet: View {
             }
             .pageSearchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                             prompt: String(localized: "Search chats, computers or projects"))
-            // The list only: Cancel stays usable while the message is read.
+            // The list only: ✕ stays usable while the message is read.
             .disabled(busy != nil)
             .navigationTitle("Forward To")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        work?.cancel()
-                        dismiss()
-                    } label: {
-                        Text("Cancel").lineLimit(1).sheetBarLabel()
-                    }
-                    .accessibilityIdentifier("forward.cancel")
+                SheetClose(id: "forward.cancel") {
+                    work?.cancel()
+                    dismiss()
                 }
             }
         }

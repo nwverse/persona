@@ -783,19 +783,7 @@ private struct ComposerPageEditor: View {
 
     private var controls: some View {
         HStack(spacing: Theme.Space.xs) {
-            Spacer(minLength: Theme.Space.s)
-            if focused {
-                Button(action: dismissPageKeyboard) {
-                    ThemedIcon(Theme.Icon.dismissKeyboard)
-                        .font(Theme.Font.secondary)
-                        .foregroundStyle(ink)
-                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Hide Keyboard")
-                .accessibilityIdentifier("composer-page-dismiss-keyboard")
-            }
+            // The way back to the box first, at the leading corner, as every presented page's way out (#9653).
             Button {
                 commitTyped()
                 collapse()
@@ -809,6 +797,19 @@ private struct ComposerPageEditor: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Collapse the message box")
             .accessibilityIdentifier("composer-page-collapse")
+            Spacer(minLength: Theme.Space.s)
+            if focused {
+                Button(action: dismissPageKeyboard) {
+                    ThemedIcon(Theme.Icon.dismissKeyboard)
+                        .font(Theme.Font.secondary)
+                        .foregroundStyle(ink)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide Keyboard")
+                .accessibilityIdentifier("composer-page-dismiss-keyboard")
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, Theme.Space.l)

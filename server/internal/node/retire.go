@@ -355,8 +355,8 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	} else {
 		time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	}
-	shells := paneShells(ctx, created)
-	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
+	shells := n.startPaneShells(ctx, launch, created)
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentStartCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
 		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
 			return unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
