@@ -99,6 +99,10 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	}
 	for i := range p.Tasks {
 		t := &p.Tasks[i]
+		if err := s.checkPlannedInbox(ctx, p.Conversation, *t); err != nil {
+			t.Error = err.Error()
+			continue
+		}
 		var todo Todo
 		if t.ReuseTodo != "" {
 			// The todo is already there with its own title, notes and task card in the conversation's feed (a Lark topic
@@ -117,14 +121,39 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
-			todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project)
+			if t.InboxItem != "" {
+				s.tasks.mu.Lock()
+				s.tasks.reusing[t.ReservedTodoID] = true
+				s.tasks.mu.Unlock()
+			}
+			todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem)
 			if err != nil {
+				if t.InboxItem != "" {
+					s.releaseTakenTodo(t.ReservedTodoID)
+				}
 				t.Error = err.Error()
 				continue
 			}
 			if retitle {
 				s.nameTodoLater(ctx, todo.ID, title, t.Prompt)
 			}
+		}
+		if keep, err := s.linkPlannedInbox(ctx, p.Conversation, *t, todo); err != nil {
+			t.Error = err.Error()
+			if keep {
+				t.TodoID = todo.ID
+			}
+			if t.ReuseTodo != "" {
+				s.releaseTakenTodo(t.ReuseTodo)
+			} else {
+				if !keep {
+					if err := s.deleteTodo(ctx, todo.ID); err != nil {
+						s.logf("task %s: undo Inbox admission: %v", todo.ID, err)
+					}
+				}
+				s.releaseTakenTodo(todo.ID)
+			}
+			continue
 		}
 		todo = s.startPieces(ctx, *t, todo) // its place in a request (todo_pieces.go)
 		t.TodoID = todo.ID
@@ -164,9 +193,13 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	}
 	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	for i := range p.Tasks {
-		if task := p.Tasks[i]; task.TodoID != "" {
+		if task := p.Tasks[i]; task.TodoID != "" && task.Error == "" {
 			s.startPlanTaskAsync(p.ID, p.Conversation, i, task, false, func() {
-				s.releaseTakenTodo(task.ReuseTodo) // linked or failed: the todo is no longer in the gap
+				held := task.ReuseTodo
+				if held == "" && task.InboxItem != "" {
+					held = task.TodoID
+				}
+				s.releaseTakenTodo(held) // linked or failed: the todo is no longer in the gap
 			})
 		}
 	}

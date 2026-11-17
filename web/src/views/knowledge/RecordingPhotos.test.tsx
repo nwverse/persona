@@ -312,7 +312,7 @@ describe("a recorded meeting's photos", () => {
   it("shows a photo the room was sent from the list, and Photo removed once the list lacks it, never the room's copy", async () => {
     await open([photo(1, { note: "The Q3 budget table." })]);
     await reply(pending(itemsPath)[0], { items: roomItems() });
-    // No attendance row is invented; one entry per photo, and neither the withdrawal nor the note's tool call reads as the end.
+    // No attendance row is invented: one entry per photo, and neither the withdrawal nor the note's tool call reads as the end.
     expect(kinds()).toEqual(["photo", "photo"]);
     const [kept, gone] = [...conversation().querySelectorAll<HTMLElement>('li[data-thread="photo"]')];
     expect(kept.textContent).toContain("Photo 1");
