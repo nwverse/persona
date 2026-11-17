@@ -1,5 +1,6 @@
 {
   "err_no_update": "No newer version",
+  "err_beta_channel": "Beta updates need the official GitHub release source and a valid beta manifest; the current source stays unchanged",
   "err_not_release": "This hub can’t update itself",
   "err_busy": "The assistant and agents stayed busy, so it didn’t update. Try again later",
   "err_auto_off": "Automatic updates are off",

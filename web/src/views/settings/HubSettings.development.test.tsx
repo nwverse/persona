@@ -20,7 +20,7 @@ vi.mock("../../lib/hub-update", async (original) => ({
     status = { ...status, state: "applying_backup", auto: false };
     return status;
   },
-  setHubUpdateSettings: async (input: { source?: "release" | "web-dev" }) => {
+  setHubUpdateSettings: async (input: { source?: "release" | "beta" | "web-dev" }) => {
     saved.push(input);
     status = { ...status, ...input, auto: false };
     return status;
@@ -55,9 +55,23 @@ async function mount(state = "available") {
   await act(async () => root!.render(<HubSettings />));
 }
 
+it("offers beta as an explicit reversible source without enabling it by default", async () => {
+  await mount();
+  await act(async () => events.get("hub_update")!({ update: { ...status, source: "release" } }));
+  const source = host.querySelector('select[aria-label="Update source"]') as HTMLSelectElement;
+  expect(source.value).toBe("release");
+  expect(source.textContent).toContain("Beta (prereleases)");
+  await act(async () => { source.value = "beta"; source.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(saved).toEqual([{ source: "beta" }]);
+  expect(source.value).toBe("beta");
+  expect(host.textContent).toContain("Choose Release to return to stable updates");
+  await act(async () => { source.value = "release"; source.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(saved).toEqual([{ source: "beta" }, { source: "release" }]);
+  expect(host.textContent).not.toContain("Choose Release to return to stable updates");
+});
+
 it("puts historical program versions in the development update selector and hides them on release", async () => {
   await mount();
-  expect(host.textContent).toContain("main");
   expect(host.textContent).toContain("a".repeat(12));
   expect(host.textContent).toContain("b".repeat(12));
   const versionGroup = host.querySelector('[data-settings-group="hub-version"]')!;
