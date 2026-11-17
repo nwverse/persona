@@ -13,6 +13,8 @@ import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import persona.core.contracts.api.SshHostKey
 import persona.core.contracts.api.SshRoute
 import persona.core.contracts.api.TunnelException
@@ -36,6 +38,7 @@ class SshTunnel(
     private val route: SshRoute,
     private val identity: SshIdentity,
     private val timings: SshTimings = SshTimings(),
+    private val onProblem: (TunnelProblem) -> Unit = {},
 ) : AutoCloseable {
     @Volatile private var session: Session? = null
     @Volatile private var closed = false
@@ -80,7 +83,7 @@ class SshTunnel(
         }
     }
 
-    override fun close() {
+    override fun close(): Unit = synchronized(this) {
         closed = true
         session?.disconnect()
     }
@@ -96,12 +99,25 @@ class SshTunnel(
         session.setConfig("PreferredAuthentications", "publickey")
         session.setConfig("server_host_key", SshWire.hostKeyAlgorithms(route.hostKeyAlgorithm))
         session.setDaemonThread(true)
-        this.session = session
-        if (closed) throw CancellationException("SSH tunnel closed")
+        // A cancelled start can reach here after close(): publishing the session first would let it dial afterwards.
+        // Register and check together so close either sees this session or this start sees that it was closed.
+        synchronized(this) {
+            if (closed) {
+                session.disconnect()
+                throw CancellationException("SSH tunnel closed")
+            }
+            this.session = session
+        }
         try {
-            // Cancelled before the TCP connection is up, disconnect() does nothing: the login that finishes later ends here.
-            blocking(session::disconnect, onLate = { session.disconnect() }) { session.connect(timings.connectMillis) }
+            // A cancelled caller cannot deliver the exception: its failure handler still closes this unconnected
+            // session (JSch.disconnect() returns early then), so a changed host key never leaves a live attempt.
+            currentCoroutineContext().ensureActive()
+            blocking(session::disconnect, onLate = { session.disconnect() }, onFailure = {
+                session.disconnect()
+                (pinned.problem ?: classify(it)).takeIf { problem -> problem.needsUser }?.let(onProblem)
+            }) { session.connect(timings.connectMillis) }
         } catch (cancelled: CancellationException) {
+            session.disconnect()
             throw cancelled
         } catch (error: Exception) {
             session.disconnect()
