@@ -32,8 +32,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * `.unfolding` takes its full height on the first frame and only fades (#9574, #3005). Conceal keeps its space.
- * Expand grows in place, and with reduced motion every one of them is instant.
+ * `.unfolding` takes its full height on the first frame and only fades (#9574, #3005).
+ * With reduced motion it is opaque on that first frame.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -139,83 +139,6 @@ class UnfoldingTest {
         assertEquals(ink, pixel("detail"))
         assertEquals(0, AndroidColor.red(ink))
         assertTrue(AndroidColor.alpha(ink) > 250)
-    }
-
-    @Test fun concealingKeepsItsSpace() {
-        rule.mainClock.autoAdvance = false
-        var leaving by mutableStateOf(false)
-        rule.setContent {
-            PersonaTheme(style = AppStyle.Glass, reduceMotion = false) {
-                Column(Modifier.width(80.dp).background(Color.White)) {
-                    Box(Modifier.testTag("box").concealing(leaving).fillMaxWidth().height(40.dp).background(Color.Black))
-                }
-            }
-        }
-        rule.mainClock.advanceTimeByFrame()
-        val full = height("box")
-        val solid = pixel("box")
-        rule.runOnIdle { leaving = true }
-        Snapshot.sendApplyNotifications()
-        rule.mainClock.advanceTimeBy(80)
-        assertEquals(full, height("box"))
-        assertNotEquals(solid, pixel("box"))
-        rule.mainClock.advanceTimeBy(2_000)
-        assertEquals(full, height("box"))
-    }
-
-    @Test fun concealingWithReducedMotionIsInstant() {
-        rule.mainClock.autoAdvance = false
-        var leaving by mutableStateOf(false)
-        rule.setContent {
-            PersonaTheme(style = AppStyle.Brief, reduceMotion = true) {
-                Column(Modifier.width(80.dp).background(Color.White)) {
-                    Box(Modifier.testTag("box").concealing(leaving).fillMaxWidth().height(40.dp).background(Color.Black))
-                }
-            }
-        }
-        rule.mainClock.advanceTimeByFrame()
-        val full = height("box")
-        val solid = pixel("box")
-        rule.runOnIdle { leaving = true }
-        Snapshot.sendApplyNotifications()
-        rule.mainClock.advanceTimeByFrame()
-        val gone = pixel("box")
-        assertEquals(full, height("box"))
-        assertNotEquals("reduced conceal still solid", solid, gone)
-        rule.mainClock.advanceTimeBy(2_000)
-        assertEquals(gone, pixel("box"))
-        assertEquals(full, height("box"))
-    }
-
-    @Test fun expandingGrowsOnGlass() = grows(AppStyle.Glass, reduce = false)
-
-    @Test fun expandingOnBriefIsNotInstant() = grows(AppStyle.Brief, reduce = false)
-
-    @Test fun expandingIsInstantWhenReduced() = grows(AppStyle.Board, reduce = true)
-
-    private fun grows(style: AppStyle, reduce: Boolean) {
-        rule.mainClock.autoAdvance = false
-        var tall by mutableStateOf(false)
-        rule.setContent {
-            PersonaTheme(style = style, reduceMotion = reduce) {
-                Column(Modifier.testTag("box").expanding().width(80.dp).background(Color.Black)) {
-                    Box(Modifier.fillMaxWidth().height(24.dp))
-                    if (tall) Box(Modifier.fillMaxWidth().height(76.dp))
-                }
-            }
-        }
-        rule.mainClock.advanceTimeByFrame()
-        val short = height("box")
-        rule.runOnIdle { tall = true }
-        Snapshot.sendApplyNotifications()
-        rule.mainClock.advanceTimeByFrame()
-        val first = height("box")
-        rule.mainClock.advanceTimeBy(120)
-        val mid = height("box")
-        rule.mainClock.advanceTimeBy(2_000)
-        val full = height("box")
-        assertTrue("$style $short $first $mid $full", full > short)
-        if (reduce) assertEquals(full, first) else assertTrue("$style mid $mid of $short..$full", mid in (short + 1) until full)
     }
 
     private fun height(tag: String): Int = rule.onNodeWithTag(tag).fetchSemanticsNode().size.height

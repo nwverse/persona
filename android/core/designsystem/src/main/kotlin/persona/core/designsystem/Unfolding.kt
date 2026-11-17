@@ -1,10 +1,6 @@
 package persona.core.designsystem
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -13,7 +9,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.IntSize
 
 /**
  * What opens in a chat, as iOS `.unfolding` (`ChatPin.swift:707`).
@@ -27,14 +22,6 @@ import androidx.compose.ui.unit.IntSize
  * composition where `open` flips from closed to open, matching `Unfolding.revealing` (`ChatPin.swift:684-692`): a row
  * that was already open, or that a lazy list composed again, does not fade again. Reduced motion draws it at once
  * (`ChatPin.swift:721-722`). iPhone and regular width (iPad, iPhone Duo) use the same modifier; no size class skips it.
- *
- * [Modifier.concealing] copies `Theme.Motion.conceal` (`Theme.swift:755`, [Tokens.Motion.Conceal]). iOS uses it for a
- * menu (`MessageMenu.swift:97`, `:117`) and an inbox event (`InboxEventViews.swift:843`), not for a chat close, and no
- * chat calls it. [expandSpec] / [Modifier.expanding] copies `Theme.Motion.expand` (`Theme.swift:739`,
- * `Animation.smooth(duration: 0.4)`, no bounce, [Tokens.Motion.Expand]). Glass maps that spring the same way it maps
- * `Theme.Motion.layout` (also `Animation.smooth`); Brief and Board keep a tween. iOS calls it for the Lark pinned
- * shelf (`LarkPinnedShelf.swift:22`, `LarkConversationsView.swift:185`). Android has no such shelf, so nothing calls
- * [expanding]. A zero duration is a tween, never a spring. Reduced motion makes all three instant.
  */
 @Stable
 class OpenEdge {
@@ -75,46 +62,4 @@ fun Modifier.unfolding(revealing: Boolean): Modifier {
     }
     if (!fade || reduce || alpha.value >= 1f) return this
     return graphicsLayer { this.alpha = alpha.value }
-}
-
-/**
- * Fade this node away with [Tokens.Motion.Conceal] while it still occupies its space.
- * [leaving] false draws it solid. Not for something a chat closes: that leaves at once.
- */
-@Composable
-fun Modifier.concealing(leaving: Boolean): Modifier {
-    val reduce = PersonaTheme.reduceMotion
-    // Reduced motion draws the end state in this composition. A zero-length tween still waits a frame.
-    val alpha = animateFloatAsState(
-        targetValue = if (leaving && !reduce) 0f else 1f,
-        animationSpec = tween(Tokens.Motion.Conceal.duration, easing = ComposerMotion.curve(Tokens.Motion.Conceal.curve)),
-        label = "conceal",
-    )
-    if (reduce) return if (leaving) graphicsLayer { this.alpha = 0f } else this
-    if (!leaving && alpha.value >= 1f) return this
-    return graphicsLayer { this.alpha = alpha.value }
-}
-
-/** How a block grows in place. Glass uses the iOS spring; Brief and Board keep a tween. Instant when reduced. */
-@Composable
-fun expandSpec(): FiniteAnimationSpec<IntSize> = expandAnimation(PersonaTheme.reduceMotion, PersonaTheme.style == AppStyle.Glass)
-
-/**
- * [expandSpec] as a content-size animation. Chat rows do not use it; the pinned-shelf motion is the token.
- * Reduced motion skips the animation, so the new size is the one measured this frame.
- */
-@Composable
-fun Modifier.expanding(): Modifier {
-    val reduce = PersonaTheme.reduceMotion
-    val spec = expandSpec()
-    if (reduce) return this
-    return animateContentSize(spec)
-}
-
-private fun <T> expandAnimation(reduce: Boolean, glass: Boolean): FiniteAnimationSpec<T> {
-    val duration = Tokens.Motion.Expand.duration
-    if (reduce || duration <= 0 || !glass) {
-        return tween(if (reduce || duration <= 0) Tokens.Motion.reduced else duration, easing = FastOutSlowInEasing)
-    }
-    return IosSpring(duration, Tokens.Motion.Expand.bounce).spec()
 }
