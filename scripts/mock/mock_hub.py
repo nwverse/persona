@@ -9563,6 +9563,49 @@ if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
         "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
         "questions": questions})
     INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
+# MOCK_ASK_LONG=source|source2 (#9392): the main conversation is longer than a screen and ends with the message a skippable
+# ask_user card is about, then the ask_user call itself (as the transcript has it), so the card can lead back to that
+# message. `source` asks one question with three described options; `source2` asks two.
+if os.environ.get("MOCK_ASK_LONG") in ("source", "source2"):
+    _q1 = {"question": "构建卡在打包这一步，接下来怎么查？", "header": "构建排查", "multi_select": False, "options": [
+        {"label": "拿到任务编号再查 (Recommended)", "description": "把构建任务的编号发给我，我拉全量日志确认卡在哪一步"},
+        {"label": "先按已跑完处理", "description": "不拿编号，先确认日志里有没有依赖覆盖生效的记录"},
+        {"label": "先放一放", "description": "暂停这一项，这一轮不再提醒"}]}
+    _q2 = {"question": "查完把结论发到哪里？", "header": "发送", "multi_select": False, "options": [
+        {"label": "这个对话"}, {"label": "构建群"}]}
+    _asked = [_q1] + ([_q2] if os.environ["MOCK_ASK_LONG"] == "source2" else [])
+    ITEMS[ASK1] = ITEMS[ASK1] + [x for n in range(6) for x in (
+        it("user", "text", 3 - n * 0.3, text=f"第 {n + 1} 个构建任务现在什么情况？"),
+        it("assistant", "text", 2.95 - n * 0.3, text=f"第 {n + 1} 个构建任务已经跑完：编译、单元测试、签名都通过，产物已经上传，"
+           "安装包比上一版小了 3%。日志里没有新的警告，耗时和上周持平。"))] + [
+        it("user", "text", 1.1, text="今天那个一直没出包的构建，帮我看看卡在哪。"),
+        it("assistant", "text", 1.05, text="看了构建记录：编译和测试都过了，卡在打包这一步已经 40 分钟，日志停在依赖覆盖那一行。"
+           "可能是任务其实已经跑完、只是状态没回传，也可能是打包机在等锁。要确认是哪一种，得看这个任务的全量日志。"),
+        it("assistant", "tool_use", 1.0, tool_use_id="toolu_ask_source", tool_name="mcp__persona__ask_user",
+           tool_input={"questions": _asked})]
+    ASK_LONG_INTERACTIONS.append({
+        "id": "ix_ask_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "can_cancel": True, "questions": _asked})
+    INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
+# MOCK_CARD_SOURCE=1 (#9392): the network tests' Agent chat is longer than a screen and its question card's call
+# (AskUserQuestion, toolu_q1) is in the transcript after the message it is about. Its card is the oldest one waiting, so
+# with MOCK_TASKS it is the question Persona's conversation shows for its tasks.
+if os.environ.get("MOCK_CARD_SOURCE") == "1":
+    for _ix in INTERACTIONS:
+        if _ix["id"] == "ix_tests":
+            _ix["created_at"] = ago(minutes=90)
+    ITEMS[TESTS] = [x for n in range(6) for x in (
+        it("user", "text", 30 - n, text=f"第 {n + 1} 个接口的错误码对一下文档"),
+        it("assistant", "text", 29.5 - n, text=f"第 {n + 1} 个接口对过了：文档里的错误码都在代码里，超时返回 408，"
+           "重试三次后返回 503，和文档一致。顺手把一个拼错的字段名改了。"))] + ITEMS[TESTS] + [
+        it("assistant", "tool_use", 1.5, tool_use_id="toolu_q1", tool_name="AskUserQuestion",
+           tool_input={"questions": next(ix["questions"] for ix in INTERACTIONS if ix["id"] == "ix_tests")})]
+    # The earlier exchanges were made last: in time order, numbered again from the first seq.
+    ITEMS[TESTS].sort(key=lambda x: x["ts"])
+    _base = min(x["seq"] for x in ITEMS[TESTS])
+    for _i, _x in enumerate(ITEMS[TESTS]):
+        _x["seq"] = _base + _i
 # MOCK_QUESTION_CANCEL=1: the network tests' Agent question and the main ask_user card for
 # MOCK_ASK_LONG=1|actions|swipe|review advertise question-only cancellation; /mock/reset restores both unanswered exactly
 # once and clears their resolved and interaction history entries.
