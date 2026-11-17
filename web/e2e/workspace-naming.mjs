@@ -12,6 +12,7 @@ await mkdir(shots, { recursive: true });
 const deadline = setTimeout(() => { console.error("FAIL workspace naming browser deadline"); process.exit(124); }, 240_000);
 const browser = await chromium.launch({ executablePath, env: { ...process.env, TMPDIR: process.env.WORKSPACE_NAMING_BROWSER_TMP || process.env.TMPDIR }, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const errors = [];
+const results = [];
 let activePage;
 try {
   for (const scheme of ["light", "dark"]) {
@@ -210,7 +211,8 @@ try {
       const fresh = await freshPreview;
       assert.equal(fresh.status(), 200);
       assert.equal(fresh.request().postDataJSON().machine_id, "server");
-      assert.equal((await fresh.json()).plan.root_path, `/home/example/workspace/fresh/${todo.id}`, "the displayed fallback matches the actual manager/Node preview");
+      const freshResult = await fresh.json();
+      assert.equal(freshResult.plan.root_path, `/home/example/workspace/fresh/${todo.id}`, "the displayed fallback matches the actual manager/Node preview");
       if (width === 390) {
         await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "1"));
         await editor.scrollIntoViewIfNeeded();
@@ -234,16 +236,20 @@ try {
       assert.equal(await computer.inputValue(), "", "recovery preserves an explicit empty computer choice");
       assert.equal(await field.inputValue(), "../invalid", "recovery preserves the failed draft");
       assert(await editor.getByRole("button", { name: "Preview naming", exact: true }).isDisabled(), "Reload does not silently choose a preview target");
+      results.push({ scheme, width, previewInput: fresh.request().postDataJSON(), root: freshResult.plan.root_path,
+        placeholder: await taskFolder.getAttribute("placeholder"), recoveredComputer: await computer.inputValue(), recoveredDraft: await field.inputValue() });
       await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `retained-selection-${scheme}-${width}.jpg`) });
       const restored = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
         expected_revision: removed.revision, expected_catalog_revision: catalog.catalog_revision, repositories: inputRows,
       } });
       assert(restored.ok(), "restore this fixture's repositories for the next viewport");
+      assert.equal(await page.locator("vite-error-overlay").count(), 0);
       await context.close();
       console.log(`PASS workspace naming ${scheme} ${width}px: real settings/override reload, blank defaults, clear-save fallback, task fallback, root/container preview, invalid draft, overflow`);
     }
   }
   assert.deepEqual(errors, [], "no browser page errors");
+  await writeFile(join(shots, "browser-results.json"), JSON.stringify({ results, pageErrors: errors }, null, 2) + "\n");
   console.log("PASS isolated workspace naming browser journey");
   await fetch(origin + "/api/v1/_qa/stop");
   await new Promise((resolve) => setTimeout(resolve, 500));

@@ -1,9 +1,10 @@
 import { useId, useRef, useState } from "react";
+import "./WorkspaceNaming.css";
 import { t } from "../i18n";
 import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
 import { loadTaskRepositories, repositoryRequestOptions, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
-import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
+import { useRepositoryRequestContext } from "../lib/repository-context";
 import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
 import { settingsInputClass } from "../views/settings/SettingsParts";
@@ -163,7 +164,7 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
   };
   return <div data-workspace-naming data-settings-group="workspace-naming" className="min-w-0">
     <Button tone="quiet" icon={open ? "chevronDown" : "chevronRight"} expanded={open}
-      className="min-h-11 w-full justify-start rounded-none px-4 text-left font-normal text-ink"
+      className="workspace-naming-toggle min-h-11 w-full justify-start px-4 text-left font-normal text-ink"
       onClick={() => { setOpen(!open); if (!open && !loaded) void load(); }}>{t("workspace-naming.title")}</Button>
     {open && <div className="min-w-0 space-y-3 border-t border-line px-4 py-3">
       <p className="text-label text-ink-2">{t("workspace-naming.scope")}</p>
@@ -171,7 +172,7 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
       {loaded && !supported && <p className="text-label text-ink-2">{t("workspace-naming.unsupported")}</p>}
       {loaded && supported && <>
         <WorkspaceRulesEditor value={draft} inherited={inherited} defaultSource={todoId ? "assistant" : "system"} disabled={busy} diagnostics={result?.diagnostics} onChange={(value) => { invalidate(); setDraft(value); }} />
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <div className="workspace-naming-actions flex flex-wrap items-center gap-2">
           {!sameRules(draft, saved) && <span className="text-meta text-ink-3">{t("workspace-naming.unsaved")}</span>}
           <Button tone="primary" busy={busy} disabled={sameRules(draft, saved)} onClick={() => void save()}>{t("common.save")}</Button>
         </div>
@@ -183,7 +184,7 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
                 <input type="checkbox" checked={selected.includes(repo.repo_id)} onChange={(e) => { invalidate(); setSelected(e.target.checked ? [...selected, repo.repo_id] : selected.filter((id) => id !== repo.repo_id)); }} />{repo.source_snapshot.identity.path}
               </label>)}
             </div>}
-            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="workspace-naming-options flex min-w-0 flex-col gap-2 sm:flex-row">
               <label className="block min-w-0 text-label text-ink-2 sm:flex-1">{t("workspace-naming.computer")}
                 <select aria-label={t("workspace-naming.computer")} className={`${settingsInputClass} mt-1 min-w-0 pointer-coarse:min-h-11`} value={machine} onChange={(e) => { invalidate(); setMachine(e.target.value); }}>
                   <option value="">{t("workspace-naming.choose_computer")}</option>{machines.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}

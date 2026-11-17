@@ -9,7 +9,7 @@ import {
   type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RepositoryLinkInput, type RequestedRef,
   type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositorySet,
 } from "../lib/task-repositories";
-import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
+import { useRepositoryRequestContext } from "../lib/repository-context";
 import type { RepositoryIdentity } from "../lib/repository-identity";
 import { Group, Pill, Row, RowFailed, settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Collapse, Dialog, IconButton, Loading, Menu, toast, useMenu } from "./atoms";
