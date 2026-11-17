@@ -98,7 +98,7 @@ enum ChatExportRenderer {
         for m in messages {
             let gap = blocks.isEmpty ? 0 : Layout.message
             if m.isUser {
-                blocks.append(Block(view: AnyView(ExportBubble(message: m, photos: assets.photos[m.id] ?? [], column: column, scale: scale)), gap: gap))
+                blocks.append(Block(view: AnyView(ExportBubble(message: m, photos: assets.photos[m.id] ?? [], column: column)), gap: gap))
                 continue
             }
             let parts = ExportParts.of(m.text)
@@ -232,15 +232,14 @@ enum ChatExportRenderer {
 /// What the picture draws that loads later in the chat, loaded first: formulas and diagrams (`MarkdownRenderer`), the
 /// pictures in replies, your messages' photos.
 struct ExportAssets {
-    var images: [URL: UIImage] = [:]
+    /// By address.
+    var images: [String: UIImage] = [:]
     var photos: [String: [UIImage]] = [:]
     var column: CGFloat = 0
-    /// The picture's scale: a picture is never drawn larger than its pixels at it.
-    var scale: CGFloat = 3
 
     static func load(_ messages: [ExportMessage], dark: Bool, column: CGFloat, scale: CGFloat,
                      loadImage: (String) async -> UIImage?) async -> ExportAssets {
-        var out = ExportAssets(column: column, scale: scale)
+        var out = ExportAssets(column: column)
         for m in messages {
             if m.isUser {
                 var photos: [UIImage] = []
@@ -252,9 +251,12 @@ struct ExportAssets {
             }
             for part in ExportParts.of(m.text) {
                 switch part {
-                case .images(let urls):
-                    for url in urls where out.images[url] == nil {
-                        if let img = await LarkMedia.shared.image(url.absoluteString, maxPixel: 1600) { out.images[url] = img }
+                case .images(let pictures):
+                    // As the chat loads them (through the hub when it fetches pictures, #9473), at the picture's size.
+                    let size = ReplyImageLayout.size(points: max(column, Theme.Size.replyPicture), scale: scale)
+                    for p in pictures where out.images[p.url] == nil {
+                        let img = await LarkMedia.shared.image(ReplyPictureSource.path(p.url, size: size), maxPixel: CGFloat(size))
+                        if let img { out.images[p.url] = img }
                     }
                 case .mathText(let md):
                     for tex in ExportMath.formulas(md) {
@@ -403,12 +405,11 @@ struct ExportBubble: View {
     var message: ExportMessage
     var photos: [UIImage]
     var column: CGFloat
-    var scale: CGFloat
 
     var body: some View {
         let widest = column * 0.8
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
-            if !photos.isEmpty { ExportGrid(images: photos.map(Optional.some), width: widest, scale: scale, trailing: true) }
+            if !photos.isEmpty { ExportGrid(images: photos.map(Optional.some), width: widest, trailing: true) }
             if !message.text.isEmpty {
                 Text(verbatim: message.text)
                     .font(Theme.Font.secondary)
@@ -439,8 +440,8 @@ struct ExportPartView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .mathText(let md):
             ExportMathText(markdown: md)
-        case .images(let urls):
-            ExportGrid(images: urls.map { assets.images[$0] }, width: column, scale: assets.scale, trailing: false)
+        case .images(let pictures):
+            ExportGrid(images: pictures.map { assets.images[$0.url] }, width: column, trailing: false)
         case .card(let card):
             ShareCardPartView(part: card)
         }
@@ -487,28 +488,29 @@ struct ExportMathText: View {
     }
 }
 
-/// Pictures in a reply or your photos: one alone at its own size (`ExportImageLayout`); several as square tiles, two side
-/// by side, three to a row past that, all of them (a picture cannot open "+3"). A picture that did not load is a tile
-/// with the broken-picture mark.
+/// Pictures in a reply or your photos, laid out as the chat lays out a reply's (`ReplyImageLayout`, #9474): one alone
+/// `Theme.Size.replyPicture` high and as wide as its shape allows, never larger than itself; several as squares, two
+/// side by side, three to a row past that (four 2 × 2), and all of them: a picture cannot open "+3". One that did not
+/// load is a tile with the broken-picture mark.
 struct ExportGrid: View {
     var images: [UIImage?]
     var width: CGFloat
-    var scale: CGFloat
     var trailing: Bool
 
     var body: some View {
         let align: HorizontalAlignment = trailing ? .trailing : .leading
         if images.count == 1, let one = images[0] {
-            let fit = ExportImageLayout.fit(pixels: CGSize(width: one.size.width * one.scale, height: one.size.height * one.scale),
-                                            scale: scale, width: width)
-            tile(one, size: fit.size)
+            let pixels = CGSize(width: one.size.width * one.scale, height: one.size.height * one.scale)
+            let size = ReplyImageLayout.single(pixels: pixels, column: width, height: Theme.Size.replyPicture)
+            tile(one, size: size)
                 .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
         } else {
-            let columns = images.count == 2 || images.count == 4 ? 2 : 3
-            let side = ((width - CGFloat(columns - 1) * Theme.Space.xs) / CGFloat(columns)).rounded(.down)
-            VStack(alignment: align, spacing: Theme.Space.xs) {
+            let grid = ReplyImageLayout.grid(count: images.count, column: width, widest: Theme.Size.replyPictures,
+                                             gap: Theme.Space.replyPictureGap)
+            let columns = grid.columns, side = grid.tile
+            VStack(alignment: align, spacing: Theme.Space.replyPictureGap) {
                 ForEach(Array(stride(from: 0, to: images.count, by: columns)), id: \.self) { start in
-                    HStack(spacing: Theme.Space.xs) {
+                    HStack(spacing: Theme.Space.replyPictureGap) {
                         ForEach(start..<min(start + columns, images.count), id: \.self) { i in
                             tile(images[i], size: CGSize(width: side, height: side))
                         }

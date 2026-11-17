@@ -299,8 +299,8 @@ Chat page:
     (`MarkdownUI.Theme.export`), cards as the share card draws them (`ShareCardParts`), ```math and ```mermaid drawn
     first and taken from `MarkdownRenderer`'s cache, a paragraph with inline formulas drawn as text with them in it
     (`ExportMathText`: MarkdownUI loads inline images in a task an offscreen picture never runs), pictures loaded first
-    and sized as the inline-images rule has it (`ExportImageLayout`: never larger than their pixels, 240 pt high at
-    most, cut to 3:4 or 16:9 past those; several three to a row, all of them), and at the foot of each page Persona's
+    and laid out as the chat lays out a reply's (`ReplyImageLayout`, #9474: one 240 pt high, two side by side, three to
+    a row past that), all of them (no "+N": a picture cannot open it), and at the foot of each page Persona's
     mark (`PersonaBrandLockup`) and "2/3" when there are several. Each block is drawn on its own and kept as a PNG; the
     pages are stacked from them (`ExportPages`) at most 16,000 px and 64 MB to decode each, broken between blocks, a
     block taller than a page cut at a row of one color (`ExportSlicer`); a code block over 60 lines is drawn in pieces.

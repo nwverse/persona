@@ -99,10 +99,14 @@ struct ChatExportTests {
 
     // MARK: Parts
 
-    @Test func picturesOnLinesOfTheirOwnAreOneRun() {
-        let parts = ExportParts.blocks("Before.\n\n![a](https://example.com/a.png)\n![b](https://example.com/b.png)\n\n![c](https://example.com/c.png)\n\nAfter.")
+    @Test func picturesOnLinesOfTheirOwnAreOneRunAsTheChatReadsThem() {
+        let parts = ExportParts.of("Before.\n\n![a](https://example.com/a.png)\n![b](https://example.com/b.png)\n\n![c](https://example.com/c.png)\n\nAfter.")
         #expect(parts.count == 3)
-        #expect(parts[1] == .images(["https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png"].compactMap(URL.init)))
+        guard parts.count == 3, case .images(let run) = parts[1] else { return }
+        #expect(run.map(\.url) == ["https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png"])
+        // A picture right under a line of words is a run of its own too (`ReplyImages`).
+        let under = ExportParts.of("The chart:\n![chart](https://example.com/chart.png)")
+        #expect(under.contains { if case .images(let r) = $0 { r.map(\.url) == ["https://example.com/chart.png"] } else { false } })
     }
 
     @Test func aParagraphWithFormulasIsDrawnAsTextOtherFormulasAsCode() {
@@ -139,23 +143,6 @@ struct ChatExportTests {
         let found = ExportMath.fences("```math\na^2+b^2=c^2\n```\n\n```mermaid\ngraph TD\nA-->B\n```\n\n```swift\nlet x = 1\n```")
         #expect(found.map(\.0) == [.displayMath, .mermaid])
         #expect(found.map(\.1) == ["a^2+b^2=c^2", "graph TD\nA-->B"])
-    }
-
-    // MARK: Pictures in the words
-
-    @Test func aPictureIsNeverEnlargedAndKeepsWithinTheColumnAndCap() {
-        // Small: its own size at 3×.
-        let small = ExportImageLayout.fit(pixels: CGSize(width: 300, height: 225), scale: 3, width: 360)
-        #expect(small.size == CGSize(width: 100, height: 75) && !small.crops)
-        // Wide: the column's width.
-        let wide = ExportImageLayout.fit(pixels: CGSize(width: 3000, height: 2000), scale: 3, width: 360)
-        #expect(wide.size == CGSize(width: 360, height: 240) && !wide.crops)
-        // Tall: the cap's height, cut to 3:4.
-        let tall = ExportImageLayout.fit(pixels: CGSize(width: 1000, height: 4000), scale: 3, width: 360)
-        #expect(tall.size == CGSize(width: 180, height: 240) && tall.crops)
-        // A panorama: 16:9, cut.
-        let pano = ExportImageLayout.fit(pixels: CGSize(width: 6000, height: 1000), scale: 3, width: 360)
-        #expect(pano.size == CGSize(width: 360, height: 203) && pano.crops)
     }
 
     // MARK: Pages

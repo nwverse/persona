@@ -76,8 +76,8 @@ nonisolated enum ExportPart: Equatable, Sendable {
     case markdown(String)
     /// A paragraph with `persona-math:` inline images in it (`MathMarkdown`), drawn as text with the formulas in it.
     case mathText(String)
-    /// Pictures on lines of their own, one after another: their addresses.
-    case images([URL])
+    /// A run of pictures on lines of their own (`ReplyImages`, the chat's rule): all of them.
+    case images([ReplyImage])
     case card(ShareCardPart)
 }
 
@@ -92,7 +92,7 @@ enum ExportParts {
     static func of(_ text: String) -> [ExportPart] {
         ShareCardParts.of(text, limit: ExportMessage.limit).flatMap { part -> [ExportPart] in
             guard case .markdown(let words) = part else { return [.card(part)] }
-            return blocks(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(words))))
+            return blocks(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyImages.apply(ReplyBreaks.apply(words)))))
         }
     }
 
@@ -107,13 +107,9 @@ enum ExportParts {
         }
         for block in split(md) {
             let lines = block.components(separatedBy: "\n")
-            if let urls = imageRun(lines) {
+            if let run = pictures(lines) {
                 flush()
-                if case .images(let before)? = out.last {
-                    out[out.count - 1] = .images(before + urls)
-                } else {
-                    out.append(.images(urls))
-                }
+                out.append(.images(run))
             } else if block.contains("](\(MathMarkdown.scheme):") {
                 if isParagraph(lines) {
                     flush()
@@ -167,18 +163,14 @@ enum ExportParts {
         return blocks
     }
 
-    /// Lines that are each one picture (`![alt](address)`), nothing else: the addresses; nil otherwise.
-    static func imageRun(_ lines: [String]) -> [URL]? {
-        var urls: [URL] = []
-        for line in lines {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            guard t.hasPrefix("!["), t.hasSuffix(")"), let open = t.range(of: "]("),
-                  let url = URL(string: String(t[open.upperBound..<t.index(before: t.endIndex)]).trimmingCharacters(in: .whitespaces)),
-                  url.scheme?.lowercased() != MathMarkdown.scheme
-            else { return nil }
-            urls.append(url)
-        }
-        return urls.isEmpty ? nil : urls
+    /// A run of pictures as `ReplyImages.apply` fences it: the run's pictures; nil for any other block.
+    static func pictures(_ lines: [String]) -> [ReplyImage]? {
+        guard lines.count >= 2, let fence = MarkdownFence.opening(lines[0].trimmingCharacters(in: .whitespaces)),
+              lines[0].contains(ReplyImages.language),
+              fence.isClosed(by: lines[lines.count - 1].trimmingCharacters(in: .whitespaces)),
+              let block = ReplyImages.block(lines.dropFirst().dropLast().joined(separator: "\n")), !block.images.isEmpty
+        else { return nil }
+        return Array(block.images)
     }
 
     /// A plain paragraph: not a list, a quote, a heading, a table or code.
@@ -218,30 +210,6 @@ enum ExportParts {
         return stride(from: 0, to: body.count, by: codeLines).map { start in
             .markdown(([opening] + body[start..<min(start + codeLines, body.count)] + [marker]).joined(separator: "\n"))
         }
-    }
-}
-
-/// How big a picture in the words is drawn (the inline-images rule, until its shared helper lands): never larger than
-/// its own pixels at the screen's scale, no wider than the column, no taller than `cap`; one more upright than 3:4 or
-/// wider than 16:9 is shown at that limit, filled and cut to its middle.
-nonisolated enum ExportImageLayout {
-    static let cap: CGFloat = 240
-    static let tallest: CGFloat = 3.0 / 4.0
-    static let widest: CGFloat = 16.0 / 9.0
-
-    /// The frame for a picture of `pixels` at `scale`, in a column `width` wide; whether it is cut to fit it.
-    static func fit(pixels: CGSize, scale: CGFloat, width: CGFloat) -> (size: CGSize, crops: Bool) {
-        guard pixels.width > 0, pixels.height > 0, width > 0 else { return (.zero, false) }
-        let natural = CGSize(width: pixels.width / max(scale, 1), height: pixels.height / max(scale, 1))
-        let aspect = pixels.width / pixels.height
-        let shown = min(max(aspect, tallest), widest)
-        var w = min(natural.width, width)
-        var h = w / shown
-        if h > cap {
-            h = cap
-            w = h * shown
-        }
-        return (CGSize(width: w.rounded(), height: h.rounded()), abs(shown - aspect) > 0.001)
     }
 }
 
