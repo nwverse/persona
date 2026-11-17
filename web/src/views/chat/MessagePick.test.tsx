@@ -105,14 +105,17 @@ describe("picking messages in a chat", () => {
     expect(boxes()[1].getAttribute("aria-label")).toBe("Three times.");
   });
 
-  it("opens no menu while picking", () => {
+  it("opens no menu while picking", async () => {
     renderChat(undefined);
-    const rightClick = () => act(() => host.querySelector("p")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 })));
-    rightClick();
+    const rightClick = () => act(async () => {
+      host.querySelector("p")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 }));
+      await vi.dynamicImportSettled();
+    });
+    await rightClick();
     expect(document.querySelector('[role="menu"]')).not.toBeNull(); // as it does when not picking
     renderChat(pick);
     expect(document.querySelector('[role="menu"]')).toBeNull(); // the open one closes as picking starts
-    rightClick();
+    await rightClick();
     expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 
