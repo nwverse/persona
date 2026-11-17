@@ -44,6 +44,9 @@ import (
 // on an approval. loadSchedule moves the old lists over once, ids and times kept.
 
 type Task struct {
+	TodoID       string                `json:"todo_id,omitempty"`
+	TodoProgress *scheduleTodoProgress `json:"todo_progress,omitempty"` // hub-owned, preserved across client edits
+	todoBefore   *scheduleTodoSnapshot
 	// FreshEachRun starts a separate conversation for each recurring run. The last
 	// conversation is retained for run history and the existing busy check.
 	FreshEachRun bool           `json:"fresh_each_run,omitempty"`
@@ -229,19 +232,20 @@ type Followup struct {
 
 // ScheduleRun is one entry of the history: a task that ran, failed to start, or was skipped.
 type ScheduleRun struct {
-	ID               string    `json:"id"`
-	Kind             string    `json:"kind"`   // routine / followup (Task.kind)
-	RefID            string    `json:"ref_id"` // the task's id
-	Title            string    `json:"title"`
-	Due              time.Time `json:"due"` // when it was meant to run (the tap for "Run now")
-	At               time.Time `json:"at"`  // when it ran
-	Status           string    `json:"status"`
-	Error            string    `json:"error,omitempty"`
-	RunIfError       string    `json:"run_if_error,omitempty"`
-	ConditionSkipped bool      `json:"condition_skipped,omitempty"`
-	Manual           bool      `json:"manual,omitempty"` // "Run now"
-	MachineID        string    `json:"machine_id,omitempty"`
-	SessionID        string    `json:"session_id,omitempty"`
+	TodoProgress     *ScheduleTodoAssessment `json:"todo_progress,omitempty"`
+	ID               string                  `json:"id"`
+	Kind             string                  `json:"kind"`   // routine / followup (Task.kind)
+	RefID            string                  `json:"ref_id"` // the task's id
+	Title            string                  `json:"title"`
+	Due              time.Time               `json:"due"` // when it was meant to run (the tap for "Run now")
+	At               time.Time               `json:"at"`  // when it ran
+	Status           string                  `json:"status"`
+	Error            string                  `json:"error,omitempty"`
+	RunIfError       string                  `json:"run_if_error,omitempty"`
+	ConditionSkipped bool                    `json:"condition_skipped,omitempty"`
+	Manual           bool                    `json:"manual,omitempty"` // "Run now"
+	MachineID        string                  `json:"machine_id,omitempty"`
+	SessionID        string                  `json:"session_id,omitempty"`
 	// Retried: this run is the automatic retry after a failure (so a retry that fails again does not retry forever).
 	Retried bool `json:"retried,omitempty"`
 	// NotReady: skipped because a required computer or model was not ready, including temporary offline states.
@@ -656,6 +660,7 @@ func sameText(a, b string) bool {
 
 func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
 	var a struct {
+		TodoID          *string         `json:"todo_id"`
 		FreshEachRun    *bool           `json:"fresh_each_run"`
 		At              string          `json:"at"`
 		Every           string          `json:"every"`
@@ -672,6 +677,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		Effort   *string `json:"effort"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	if err := s.validateScheduleTodo(ctx, sessionID, a.TodoID); err != nil {
 		return "", err
 	}
 	var push *string
@@ -734,7 +742,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort); ok || err != nil {
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID); ok || err != nil {
 		if err == nil && id != "" {
 			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
 		}
@@ -762,6 +770,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	}
 	if a.FreshEachRun != nil && t.Repeat != repeatOnce {
 		t.FreshEachRun = *a.FreshEachRun
+	}
+	if err := bindScheduleTodo(&t, a.TodoID); err != nil {
+		return "", err
 	}
 	if !a.NewConversation && !t.FreshEachRun {
 		t.SessionID = sessionID
@@ -811,7 +822,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792), unless this conversation deleted it itself (#9090). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string) (string, string, bool, error) {
 	if sessionID == "" {
 		return "", "", false, nil
 	}
@@ -910,6 +921,10 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	}
 	if freshEachRun != nil && t.Repeat != repeatOnce {
 		t.FreshEachRun = *freshEachRun
+	}
+	if err := bindScheduleTodo(t, todoID); err != nil {
+		sc.mu.Unlock()
+		return "", t.ID, true, err
 	}
 	isolateScheduledConversation(t, mayBeMain)
 	// until applies only once the task is repeating. A one-off ignores it, including a bad value; checkUntil
@@ -1087,6 +1102,7 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 // toolScheduleRoutine adds a daily task from a conversation ("give me a morning briefing at 9 every day"), or changes one by id.
 func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
+		TodoID       *string         `json:"todo_id"`
 		FreshEachRun *bool           `json:"fresh_each_run"`
 		ID           string          `json:"id"`
 		Title        string          `json:"title"`
@@ -1106,6 +1122,9 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		Effort   *string `json:"effort"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	if err := s.validateScheduleTodo(ctx, self, a.TodoID); err != nil {
 		return "", err
 	}
 	runIf, err := parseRoutineCheck(a.RunIf)
@@ -1212,6 +1231,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	}
 	if a.FreshEachRun != nil {
 		t.FreshEachRun = *a.FreshEachRun
+	}
+	if err := bindScheduleTodo(&t, a.TodoID); err != nil {
+		sc.mu.Unlock()
+		return "", err
 	}
 	applyUntil(&t, end, hasUntil, clearUntil)
 	dropStaleUntil(&t, hasUntil, now)
@@ -1646,6 +1669,9 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 // (r.of before the task's LastRun): runs record when they end, and a slow one — an assistant that takes a minute to
 // give up — must not overwrite the status of the run or skip that came after it (#556).
 func (s *Service) recordRun(r ScheduleRun) string {
+	if r.TodoProgress != nil && (r.Status == runSkipped || r.Status == runFailed && r.SessionID == "") {
+		r.TodoProgress = &ScheduleTodoAssessment{TodoID: r.TodoProgress.TodoID, State: "not_run", Reason: r.Error}
+	}
 	r.ID = "run_" + randomHex(4)
 	sc, err := s.lockedSchedule(context.Background())
 	if err != nil {
@@ -1743,6 +1769,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	loc, kb := s.location(ctx), s.kbReady(ctx)
 	run := ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: due.UTC(), At: time.Now().UTC(), Manual: manual, Status: runOK,
 		Retried: retried, of: now.UTC()}
+	if t.TodoID != "" && t.Repeat != repeatOnce {
+		run.TodoProgress = &ScheduleTodoAssessment{TodoID: t.TodoID, State: "pending"}
+	}
 	if !s.sched.begin(t.ID) { // the same task is being sent right now ("Run now" as it came due)
 		return proto.Session{}, s.skipRun(run, errTaskBusy)
 	}
@@ -1773,6 +1802,10 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			s.logf("task %s: the main conversation is not ready; skipped", t.ID)
 			return proto.Session{}, s.skipRun(run, err)
 		}
+	}
+	if t.TodoID != "" && t.Repeat != repeatOnce {
+		before, _ := s.scheduledTodoSnapshot(ctx, t, run)
+		t.todoBefore = &before
 	}
 	draftHandedOff := false
 	startRun := func(m *Device) {
@@ -2098,12 +2131,15 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		if t.stateRunKey != "" && hasSession {
 			s.finishTaskStateRun(ctx, t, run, m.ID, failedSession) // may wait for the run's background work
 		}
+		s.finishScheduledTodo(ctx, t, run)
 		return
 	}
 	full := text
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
 	streak := s.updateRun(run, runFailed, text)
+	run.Error = text
+	s.finishScheduledTodo(ctx, t, run)
 	name := t.labelIn(s.lang(ctx))
 	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
 		name, _ = healthNotice(s.lang(ctx))
@@ -2492,7 +2528,7 @@ func (s *Service) forgetConversation(ctx context.Context, id string) (Task, bool
 // task's own conversation, which has had all that (and the knowledge-base hint) already; it is told the earlier
 // runs are above instead. The task's prompt is always there: it may have been edited, or compacted away.
 func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, continued bool) string {
-	r := prompts.TaskRun{Label: t.label(), Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
+	r := prompts.TaskRun{Label: t.label(), TodoID: t.TodoID, Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
 		Prompt: t.Prompt, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
 	if r.Interval {
 		r.Every = everyText(t.EveryMinutes)

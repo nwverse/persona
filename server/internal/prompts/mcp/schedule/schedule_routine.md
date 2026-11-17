@@ -1,9 +1,15 @@
 Set up a recurring routine: at a time every day (or selected weekdays), Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: "asked"`, only what you send with notify_user). For times a time of day and weekdays can't say, pass `cron` instead of `time` / `weekdays`: a standard 5-field `minute hour day-of-month month day-of-week` in the user's time zone (`*/30 9-18 * * 1-5`, `0 10 1 * *`, `0 9 * * 1,3,5`), or @hourly / @daily / @weekly / @monthly / @yearly. Day of week 0 and 7 are Sunday; restricted day fields match either. Runs are at least 5 minutes apart; seconds, @every and TZ= are refused. A bad expression is refused and the reply lists the next runs, so check them. Pass `id` (from list_followups) to change an existing routine: only fields given change; `enabled: false` pauses it. A routine can take `until` (RFC 3339 or 30m / 2h / 1d, not a bare clock time): after it Persona turns it off and records a skipped run. Omit `until` to keep an existing end time; null clears it. Times use the user's zone. The routine runs on Main chat's launcher, model and effort unless overridden with `launcher`, `model` / `effort`; an empty `launcher` returns to Main chat. Omit these to keep what the routine has. `inbox` (off / worthy / every) is the user's Inbox setting: pass it only when requested. With `fresh_each_run: true`, a recurring task starts a new chat on every run and carries its state note.
 
+For a routine meant to advance an existing supervised to-do, pass its explicit `todo_id`; this conversation must supervise it. After each run Persona checks observable Agent output, acceptance-criterion state changes and changed explicit progress reports. One no-progress run tells the supervisor; two put an actionable Change approach / Keep waiting decision in Needs you, with the run's reason, even with `push: "asked"`. Get the owner's consent before creating or changing recurring work. Omit `todo_id` on an edit to keep its association; `""` clears it.
+
 ```json
 {
   "type": "object",
   "properties": {
+    "todo_id": {
+      "type": "string",
+      "description": "explicit supervised to-do this routine advances; empty clears the association"
+    },
     "fresh_each_run": { "type": "boolean" },
     "id": {
       "type": "string",

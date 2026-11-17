@@ -458,6 +458,7 @@ func RenderAssistantContext(c AssistantContext) string { return render("assistan
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
 	Label          string
+	TodoID         string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
 	Late           string // "" when on time; else how late ("25 minutes")
