@@ -23,10 +23,13 @@ final class MeetingFloatUITests: XCTestCase {
         XCTAssertTrue(waitFor(5) { window.frame.midX < app.frame.midX }, "not on the left: \(window.frame)")
         try shot(app, "left")
 
-        // Pulled past the side: a bar; the bar brings it back.
+        // Pulled past the side: a bar; the bar brings it back. Once the snap has settled, a slow, held drag to the
+        // screen's very edge (the card's middle there puts half of it past the side; a finger can't go further): a quick
+        // one read as a tap on the card, which opened the room.
+        sleep(1)
         let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        // To the screen's very edge: the card's middle there puts half of it past the side (a finger can't go further).
-        left.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.45)))
+        left.press(forDuration: 0.4, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.45)),
+                   withVelocity: .slow, thenHoldForDuration: 0.3)
         let dock = element(app, "meeting-float-dock")
         XCTAssertTrue(dock.waitForExistence(timeout: 5), "no bar:\n\(app.debugDescription)")
         try shot(app, "dock")
