@@ -1,7 +1,0 @@
-# Save and reload evidence
-
-All eight selected production captures were inspected individually. Desktop fields and preview controls retain their alignment in light/dark. At 390px, the controls stack and the preview wraps; application scale 2 remains readable in the expanded crop. The current Assistant fallback and actual preview root agree after task save. Recovery retains an explicit empty computer choice and the failed local draft, with Preview disabled.
-
-This is author evidence, not human or independent acceptance. The existing single-line placeholder/select truncation and fixed-size coarse-pointer inputs remain. Early cropped development captures were excluded. The large crop is a fixture technique, not a physical phone or OS-zoom test.
-
-The final normal app/public-share build passes without budget changes (en 479357 B; ja 482461 B; zh-Hans 480162 B; 65 B remaining). Focused Web regressions pass 56/56; six targeted Go packages, normal Go build, scoped lint, documentation guards and privacy pass. The full Web suite still records two failures (14422 pass, 2 fail, 1 optional skip): the recording-photo assertion also fails on fixed main, while the Inbox step test passes in focused comparisons on both trees and its full-suite cause remains unresolved. Overall CI is not claimed green. The repeated external server/SDK report still lacks a complete execution log; the earlier fixed SDK evidence retains its original identity.
