@@ -1982,22 +1982,24 @@ drafts until **Save** (Enter on one line; Escape puts a typed one back; **Cancel
 count can move from one choice to another without an invalid write in between. Drafts stay through a failed write, a
 conflict, a re-read or a change elsewhere, including what is typed or checked while its save is on the way (that newer
 edit stays unsaved). One write at a time, each against the revision shown. A conflict, or a write whose outcome is unknown
-(`configuration_unavailable`), says so and offers **Reload**, which keeps every draft; nothing else is written until it
-has read again, and a version it can't write blocks writing altogether. Field errors appear on their fields in the
-client's words for codes it knows, else the module's message. A source replaced while it is still answering is ignored,
-and so is a read that started before a newer Document arrived. The form loads with its page, in its own chunk. Every
-control is named by its field's title and described by its description. `web/e2e/configuration-form.html` shows the form
-over the shared `schema/configuration/all-types.json` for screenshots (`web/e2e/configuration-form.mjs`); it is never
-built.
+(`configuration_unavailable`, a request that threw or timed out, or a successful answer that isn't a Document), says so
+and offers **Reload**, which keeps every draft; nothing else is written until it has read again, and a version it can't
+write blocks writing altogether. A refusal the writer names (a validation or storage failure) is retriable at once.
+Field errors appear on their fields in the client's words for codes it knows; an unknown code shows the module's own
+message. A source replaced while it is still answering is ignored, and so is a read that started before a newer Document
+arrived; a read that times out is reported, not mistaken for the form's own cancellation. The form loads with its page,
+in its own chunk. Every control is named by its field's title and described by its description.
+`web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json` for screenshots
+(`web/e2e/configuration-form.mjs`); it is never built.
 
 ## Labs
 
 Settings › Labs (#9877; `web/src/views/settings/Labs.tsx`) is the one place for trial features and for choosing between a
 stable and a new implementation of the same thing. It is a sidebar group of its own, after the hub's, without a title:
-each module says in its own document whose setting it holds. The page explains Labs, says that nothing here changes
-another browser, device, the hub or another person, or grants any permission, then draws each module's source with the
-configuration form. Modules inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only
-real features: never a demo entry.
+each module says in its own document whose setting it holds. The page explains Labs and says that each item states its
+own scope (the terminal one is this browser only), then draws each module's source with the configuration form. Modules
+inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
+entry.
 
 **Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
@@ -2009,8 +2011,9 @@ leaves the page.
   choice keeps working and an older build reads the same value back. Standard writes nothing. A value this build doesn't
   recognize reads as Standard, is left in place and is named in a notice until a choice replaces it; storage the page
   can't read shows Standard with a notice. A write the browser throws on or doesn't read back fails with the module's
-  message and changes nothing. The revision follows what is stored, so a choice made in another tab is a conflict for a
-  stale page, and the page follows other tabs through `subscribe`.
+  message, which says only that the save couldn't be confirmed (the stored value may or may not have changed). The
+  revision follows what is stored, so a choice made in another tab is a conflict for a stale page, and the page follows
+  other tabs through `subscribe`.
 - A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals, and what was
   typed in them, as they are; the next terminal opened (or the page after a reload) uses it.
 - Terminal settings has no WebGL switch of its own: its Renderer row says what draws this terminal (Standard, WebGL, or

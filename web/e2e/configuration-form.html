@@ -37,6 +37,10 @@
       if (fail) {
         const code = fail;
         fail = null;
+        // a request that never gets an answer, as a transport or a proxy can fail it
+        if (code === "network") throw new TypeError("Failed to fetch");
+        if (code === "timeout") throw new DOMException("timed out", "AbortError");
+        if (code === "malformed") return null;
         throw new ConfigurationError(code);
       }
       if (u.revision !== doc.revision) throw new ConfigurationError("configuration_conflict");

@@ -7,8 +7,10 @@
 // - Edits that take more than one step are drafts until Save: typed text and numbers, and a multiselect's checks (so a
 //   one-of-one choice can move from A to B without an invalid write in between). A draft survives a failed write, a
 //   conflict, a re-read and a change made elsewhere; one edited while its save is on the way is kept too.
-// - A conflict, or a write whose outcome is unknown (configuration_unavailable), replaces nothing: the form says so and
-//   writes again only after an explicit reload, keeping every draft. An unknown version blocks writing altogether.
+// - A conflict, or a write whose outcome is unknown (configuration_unavailable, a request that threw or timed out, or a
+//   successful answer that isn't a Document), replaces nothing: the form says so and writes again only after an explicit
+//   reload, keeping every draft. A refusal the source names (a validation or storage failure) is retriable at once. An
+//   unknown version blocks writing altogether.
 // - A controller belongs to one source: a different source is a new controller, and a disposed one ignores every late
 //   answer. A read that started before a newer Document arrived is ignored too.
 import {
@@ -162,9 +164,15 @@ export class ConfigurationController {
       if (!same) this.apply(parsed.doc, parsed.writable);
       this.set({ phase: "ready", readError: null, ...(explicit ? { blocked: null, formError: null } : {}) });
     } catch (e) {
-      if (this.disposed || aborted(e) || seq !== this.readSeq) return;
+      if (this.disposed || this.abortedByUs(e) || seq !== this.readSeq) return;
       this.set(this.state.doc ? { readError: problem(e) } : { phase: "failed", readError: problem(e) });
     }
+  }
+
+  /** Whether `e` is the AbortError this controller caused by disposing. A transport's own timeout is not ours: its
+   *  answer never arrived, and that is an unknown outcome rather than a silence. */
+  private abortedByUs(e: unknown) {
+    return this.abort.signal.aborted && aborted(e);
   }
 
   private apply(doc: ConfigurationDocument, writable: boolean) {
@@ -279,18 +287,20 @@ export class ConfigurationController {
       const selection = now.selection && !sameList(now.selection, sent.selection) ? now.selection : undefined;
       this.set({ busy: null, blocked: null, fields: this.field(id, { draft, selection, saved: draft === undefined && selection === undefined ? true : undefined }) });
     } catch (e) {
-      if (this.disposed || aborted(e)) return;
-      const p = problem(e);
+      if (this.disposed || this.abortedByUs(e)) return;
       // the latest draft stays, edited during the write or not; the pending choice goes
       const now = this.state.fields[id] ?? {};
-      let fields = this.field(id, { draft: now.draft, selection: now.selection });
-      if (RELOAD_CODES.includes(p.code)) {
-        this.set({ busy: null, blocked: p, fields });
-      } else if (p.code === "configuration_version") {
-        this.set({ busy: null, writable: false, formError: p, fields });
+      const fields = this.field(id, { draft: now.draft, selection: now.selection });
+      // Only a code the source names is a refusal this form can retry. A request that threw or timed out, or a
+      // successful answer that isn't a Document, may have committed: only an explicit reload can tell.
+      if (!(e instanceof ConfigurationError) || e.code === "invalid_document" || e.code === "failed") {
+        this.set({ busy: null, blocked: { code: "unconfirmed" }, fields });
+      } else if (RELOAD_CODES.includes(e.code)) {
+        this.set({ busy: null, blocked: problem(e), fields });
+      } else if (e.code === "configuration_version") {
+        this.set({ busy: null, writable: false, formError: problem(e), fields });
       } else {
-        fields = e instanceof ConfigurationError ? this.fieldErrors(e, id, fields) : this.field(id, { ...fields[id], error: p }, fields);
-        this.set({ busy: null, fields });
+        this.set({ busy: null, fields: this.fieldErrors(e, id, fields) });
       }
     } finally {
       if (this.again && !this.disposed) {

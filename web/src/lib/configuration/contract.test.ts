@@ -202,5 +202,8 @@ describe("the error body", () => {
     expect(ConfigurationError.fromBody(undefined, 400).code).toBe("configuration_bad_request");
     expect(ConfigurationError.fromBody("<html>").code).toBe("failed");
     expect(ConfigurationError.fromBody(undefined, 418).code).toBe("failed");
+    // any other server error is an unknown outcome, not a proven refusal
+    expect(ConfigurationError.fromBody(undefined, 500).code).toBe("configuration_unavailable");
+    expect(ConfigurationError.fromBody(undefined, 502).code).toBe("configuration_unavailable");
   });
 });

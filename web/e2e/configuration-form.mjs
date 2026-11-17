@@ -95,6 +95,18 @@ try {
       await page.screenshot({ path: join(shots, `form-${tag}-unavailable.png`) });
       ok(`${tag}: an uncertain write keeps the typed text and asks for Reload`);
 
+      await page.goto(`${base}/e2e/configuration-form.html?fail=network`);
+      await page.waitForSelector("[data-configuration-field]");
+      await page.locator('[data-configuration-field="label"] input').fill("Mine");
+      await page.locator('[data-configuration-field="label"] input').press("Enter");
+      await page.waitForSelector('[role="alert"]', { timeout: 5000 });
+      if ((await page.locator('[data-configuration-field="label"] input').inputValue()) !== "Mine") fail(`${tag}: the draft was lost after a transport failure`);
+      if (!(await page.locator('[data-configuration-field="label"] button', { hasText: "Save" }).isDisabled())) fail(`${tag}: Save is enabled while the outcome is unknown`);
+      await page.screenshot({ path: join(shots, `form-${tag}-unconfirmed.png`) });
+      await page.getByRole("button", { name: "Reload" }).click();
+      await page.waitForTimeout(300);
+      ok(`${tag}: a transport failure keeps the draft and asks for Reload`);
+
       await page.goto(`${base}/e2e/configuration-form.html?fail=configuration_conflict`);
       await page.waitForSelector("[data-configuration-field]");
       await page.locator('[data-configuration-field="label"] input').fill("Mine");

@@ -125,9 +125,10 @@ export const ROOT_CODES = {
 /** The writer's field codes, in the words of README "Injected transport and authority". */
 export const FIELD_CODES = ["type", "option", "duplicate", "min_length", "max_length", "min_selected", "max_selected", "integer", "minimum", "maximum", "range", "unknown", "read_only", "unsupported"] as const;
 
-/** Codes this client says in its own words: the writer's, and its own two (an answer that isn't a Document; a failure
- *  with no code). Any other code shows the writer's message, or a generic line. */
-export const ERROR_CODES: readonly string[] = [...Object.keys(ROOT_CODES), ...FIELD_CODES, "invalid_document", "failed"];
+/** Codes this client says in its own words: the writer's, and its own three (an answer that isn't a Document; a failure
+ *  with no code; a write whose outcome couldn't be confirmed). Any other code shows the writer's message, or a generic
+ *  line. */
+export const ERROR_CODES: readonly string[] = [...Object.keys(ROOT_CODES), ...FIELD_CODES, "invalid_document", "failed", "unconfirmed"];
 
 /** Codes after which the form reads again before it writes again: the resource changed, or a write's outcome is unknown. */
 export const RELOAD_CODES: readonly string[] = ["configuration_conflict", "configuration_unavailable"];
@@ -143,11 +144,13 @@ export class ConfigurationError extends Error {
     this.name = "ConfigurationError";
   }
 
-  /** From an `{ error, code, field_errors }` body; without a code, the root code its HTTP status stands for. */
+  /** From an `{ error, code, field_errors }` body; without a code, the root code its HTTP status stands for (any other
+   *  server error is configuration_unavailable: the request's outcome is unknown). */
   static fromBody(body: unknown, status?: number): ConfigurationError {
     const b = isObject(body) ? body : {};
     const byStatus = Object.entries(ROOT_CODES).find(([code, s]) => s === status && code !== "configuration_version")?.[0];
-    const code = typeof b.code === "string" && b.code ? b.code : (byStatus ?? "failed");
+    const fallback = byStatus ?? (status !== undefined && status >= 500 ? "configuration_unavailable" : "failed");
+    const code = typeof b.code === "string" && b.code ? b.code : fallback;
     const message = typeof b.error === "string" ? b.error : "";
     const list = Array.isArray(b.field_errors) ? b.field_errors : [];
     const fields = list.flatMap((f): ConfigurationFieldError[] =>

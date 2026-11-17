@@ -217,13 +217,13 @@ describe("typed text", () => {
     expect(ctl.snapshot().doc?.values.label).toBe("Sam 👋");
   });
 
-  it("keeps the draft through a failed save", async () => {
+  it("keeps the draft through a failed save the source names", async () => {
     const { ctl, m } = await ready();
     ctl.setDraft("notes", "New words");
     ctl.saveDraft("notes");
-    m.updates[0].reject(new Error("network"));
+    m.updates[0].reject(new ConfigurationError("storage_failed", "The disk is full"));
     await flush();
-    expect(ctl.snapshot().fields.notes).toEqual({ draft: "New words", error: { code: "failed" } });
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "New words", error: { code: "storage_failed", message: "The disk is full" } });
   });
 
   it("keeps text edited while its save is on the way, after the save succeeds (message 14)", async () => {
@@ -395,6 +395,87 @@ describe("resetting", () => {
   });
 });
 
+describe("a write with no usable answer", () => {
+  it("a transport exception blocks writes until Reload and keeps the latest draft", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    m.updates[0].reject(new TypeError("Failed to fetch"));
+    await flush();
+    expect(ctl.snapshot().busy).toBeNull();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Mine" });
+    expect(ctl.canWrite("label")).toBe(false);
+    ctl.saveDraft("label");
+    expect(m.updates).toHaveLength(1); // no second PATCH
+    ctl.reload();
+    m.reads[1].resolve(commit(example, { schema_version: 1, id: example.id, revision: example.revision, changes: { label: "Mine" } }));
+    await flush();
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Mine" });
+    ctl.saveDraft("label");
+    expect(m.updates).toHaveLength(2);
+    expect(m.updates[1].body.changes).toEqual({ label: "Mine" });
+  });
+
+  it("a transport timeout clears busy (it isn't this controller's own abort) and blocks", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    m.updates[0].reject(new DOMException("timed out", "AbortError"));
+    await flush();
+    expect(ctl.snapshot().busy).toBeNull();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Mine" });
+    expect(m.reads).toHaveLength(1); // nothing re-read on its own
+  });
+
+  it("a successful answer that isn't a Document may have committed: it blocks too", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    m.updates[0].resolve(null);
+    await flush();
+    expect(ctl.snapshot().busy).toBeNull();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Mine" });
+    expect(m.updates).toHaveLength(1);
+  });
+
+  it("a code the source names is a refusal it can retry at once", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    m.updates[0].reject(new ConfigurationError("storage_failed", "Couldn't keep it"));
+    await flush();
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Mine", error: { code: "storage_failed", message: "Couldn't keep it" } });
+    ctl.saveDraft("label");
+    expect(m.updates).toHaveLength(2);
+  });
+
+  it("its own dispose still ignores the abort it caused", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    const seen = vi.fn();
+    ctl.subscribe(seen);
+    ctl.dispose();
+    m.updates[0].reject(new DOMException("aborted", "AbortError"));
+    await flush();
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("a read that times out is reported instead of ignored", async () => {
+    const { ctl, m } = await ready();
+    m.change();
+    m.reads[1].reject(new DOMException("timed out", "AbortError"));
+    await flush();
+    expect(ctl.snapshot()).toMatchObject({ phase: "ready", readError: { code: "failed" } });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
+  });
+});
+
 describe("a change made elsewhere during a write", () => {
   it("reads again once the write is done", async () => {
     const { ctl, m } = await ready();
@@ -442,14 +523,80 @@ describe("the HTTP source", () => {
     await expect(unavailable.update({ schema_version: 1, id: "example-preferences", revision: "revision-1" })).rejects.toMatchObject({ code: "configuration_unavailable" });
   });
 
-  it("a form over it treats an answer for another resource as invalid", async () => {
+  it("a 502 with no body is an unavailable outcome: a second PATCH waits for Reload", async () => {
+    let gateway = true;
+    const calls: ConfigurationRequest[] = [];
+    const source = httpConfigurationSource({
+      endpoint: "/api/v1/example/settings",
+      transport: async (_endpoint, request) => {
+        calls.push(request);
+        if (request.method === "GET") return { status: 200, body: example };
+        return gateway ? { status: 502, body: undefined } : { status: 200, body: commit(example, JSON.parse(request.body!)) };
+      },
+    });
+    const ctl = new ConfigurationController(source);
+    ctl.start();
+    await flush();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "configuration_unavailable" });
+    ctl.saveDraft("label");
+    await flush();
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+    gateway = false;
+    ctl.reload();
+    await flush();
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Mine" });
+    ctl.saveDraft("label");
+    await flush();
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(2);
+  });
+
+  it("a 200 with an unreadable body is unconfirmed: no second PATCH until Reload", async () => {
+    let malformed = true;
+    const calls: ConfigurationRequest[] = [];
+    const source = httpConfigurationSource({
+      endpoint: "/api/v1/example/settings",
+      transport: async (_endpoint, request) => {
+        calls.push(request);
+        if (request.method === "GET") return { status: 200, body: example };
+        return { status: 200, body: malformed ? null : commit(example, JSON.parse(request.body!)) };
+      },
+    });
+    const ctl = new ConfigurationController(source);
+    ctl.start();
+    await flush();
+    ctl.setDraft("label", "Mine");
+    ctl.saveDraft("label");
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    ctl.saveDraft("label");
+    await flush();
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+    malformed = false;
+    ctl.reload();
+    await flush();
+    expect(ctl.snapshot().blocked).toBeNull();
+    ctl.saveDraft("label");
+    await flush();
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(2);
+  });
+
+  it("a transport that throws passes its exception through", async () => {
+    const source = httpConfigurationSource({ endpoint: "/x", transport: async () => { throw new TypeError("Failed to fetch"); } });
+    await expect(source.read()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("a form over it treats an answer for another resource as unknown, not as that resource's document", async () => {
     const { source } = http((r) => ({ status: 200, body: r.method === "GET" ? example : { ...example, id: "other" } }));
     const ctl = new ConfigurationController(source);
     ctl.start();
     await flush();
     ctl.choose("layout", "dense");
     await flush();
-    expect(ctl.snapshot().fields.layout.error).toEqual({ code: "invalid_document" });
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
     expect(ctl.snapshot().doc?.id).toBe("example-preferences");
   });
 });

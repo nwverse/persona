@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Settings › Labs (#9877) through the generic configuration form: the terminal renderer module's choice kept in this
 // browser (Standard as no key), the old WebGL switch shown as WebGL, a value from another version named and left until a
-// choice replaces it, a browser that doesn't keep the choice saying so with nothing changed, and another tab's change.
+// choice replaces it, a browser that won't keep the choice saying the save is unconfirmed, and another tab's change.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +44,7 @@ const click = async (el: HTMLElement) => {
 };
 
 describe("Settings › Labs", () => {
-  it("explains Labs and its browser-only scope, and shows the terminal renderer under Agents", async () => {
+  it("explains Labs and that each item states its own scope, and shows the terminal renderer under Agents", async () => {
     await render();
     expect(host.textContent).toContain(t("settings-labs.intro"));
     expect(host.textContent).toContain(t("settings-labs.scope_note"));

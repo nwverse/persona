@@ -2290,11 +2290,11 @@ Why one form: the user asked for settings that modules inject with one portable 
 module adds data, not a page, and the same states (pending, saved, failed, conflict, read only) look the same everywhere.
 
 **Labs** (`docs/web/web.md`, "Labs") is a sidebar group of its own without a title, with the existing `sparkles` glyph (a
-dedicated one would not fit the first screen's budget); its page is an introduction card with the scope line under it,
-then one configuration form per module. Where a feature also has its own options menu (Terminal settings), it shows the
-current value read-only with a button that opens the same Labs page in a `Dialog` over the page (never navigating away,
-so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a second switch, so there is one place
-to change it.
+dedicated one would not fit the first screen's budget); its page is an introduction card with a note under it that each
+item states its own scope, then one configuration form per module. Where a feature also has its own options menu
+(Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
+the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
+second switch, so there is one place to change it.
 
 ## A chosen page that is not there now (#9071)
 

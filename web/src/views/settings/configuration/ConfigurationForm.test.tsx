@@ -300,6 +300,27 @@ describe("typed text", () => {
     expect(row("notes").querySelector('[role="alert"]')?.textContent).toBe("The disk is full");
   });
 
+  it("an answer that never arrives keeps the draft, says the save is unconfirmed, and blocks Save until Reload", async () => {
+    const m = memory();
+    m.state.fail = new TypeError("Failed to fetch");
+    await show(m.source);
+    const input = row("label").querySelector("input")!;
+    type(input, "Mine");
+    key(input, "Enter");
+    await settle();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(t("settings-configuration.error_unconfirmed"));
+    expect(input.value).toBe("Mine");
+    act(() => buttonIn(row("label"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates).toHaveLength(1); // Save is disabled while the outcome is unknown
+    act(() => buttonIn(host, t("settings-configuration.reload")).click());
+    await settle();
+    expect(host.textContent).not.toContain(t("settings-configuration.error_unconfirmed"));
+    act(() => buttonIn(row("label"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates).toHaveLength(2);
+  });
+
   it("a conflict keeps the text and offers Reload, which keeps it too", async () => {
     const m = memory();
     await show(m.source);
