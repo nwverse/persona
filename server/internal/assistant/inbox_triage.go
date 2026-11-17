@@ -350,7 +350,11 @@ func (b *inboxBook) ruleTier(it *InboxItem) string {
 
 // triageInput is the item as the models read it (prompts/inbox/item.md).
 func (b *inboxBook) triageInput(it *InboxItem) string {
-	return prompts.RenderInboxItem(b.promptItem(it))
+	p := b.promptItem(it)
+	if it.Connector != nil && it.Source == "larkcli" && it.Kind == KindDM {
+		p.Latest = it.Preview
+	}
+	return prompts.RenderInboxItem(p)
 }
 
 func (b *inboxBook) promptItem(it *InboxItem) prompts.InboxItem {
@@ -358,9 +362,6 @@ func (b *inboxBook) promptItem(it *InboxItem) prompts.InboxItem {
 	if it.Connector != nil {
 		p.Source = it.Source
 		p.Described = b.kindWords(it.Source, it.Kind)
-		if it.Source == "larkcli" && it.Kind == KindDM {
-			p.Latest = it.Preview
-		}
 	}
 	return p
 }

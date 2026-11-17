@@ -229,6 +229,8 @@ a summary up to 40 characters, and a short reason:
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
   For a `larkcli` human DM, the triage input also names the newest message's preview separately from the conversation.
+  This boundary belongs only to triage and its no-write preview; drafts, task judging and handling conversations keep
+  their existing item inputs without a repeated preview.
   An older answer or acknowledgement does not resolve a later request. An `[Image: ...]` marker is an unread image,
   not its contents: a new work-related DM screenshot still needs the owner to look or respond unless explicit text
   makes it informational or confirms that the current issue is resolved. This does not add OCR or a fixed connector

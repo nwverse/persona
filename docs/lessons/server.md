@@ -2660,3 +2660,7 @@ Triage reads `[Image: ...]` as text, not the image's contents. Preserve the newe
 conversation so an earlier answer or acknowledgement cannot silently close a later screenshot reporting a new
 failure. Stub-model tests prove that input contract and saving the result, not the real model's semantic accuracy;
 keep an original attachment and a live triage readback as separate acceptance evidence.
+
+Keep the newest-preview field in the triage input paths, including the no-write triage preview. The generic
+item builder also feeds drafts, task judging and handling conversations: adding triage labels there changes all
+those inputs. Compare those callers' rendered input bytes, not just triage's golden output.
