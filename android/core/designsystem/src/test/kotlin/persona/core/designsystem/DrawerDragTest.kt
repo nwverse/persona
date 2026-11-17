@@ -65,6 +65,11 @@ class DrawerDragTest {
         assertEquals(DrawerDrag.Decision.Take, decide(dx = -20f, isOpen = true, sidewaysRoom = true))
         assertEquals(DrawerDrag.Decision.Take, decide(dx = 20f, isOpen = true, sidewaysRoom = true))
         assertEquals(DrawerDrag.Decision.Direction, decide(dx = -10f, dy = 30f, isOpen = true, onSwipeRow = true))
+        // A child that already owns the move keeps it, closed or open. A steeper move is still just direction.
+        assertEquals(DrawerDrag.Decision.Child, decide(dx = 20f, childOwns = true))
+        assertEquals(DrawerDrag.Decision.Child, decide(dx = 20f, isOpen = true, childOwns = true))
+        assertEquals(DrawerDrag.Decision.Direction, decide(dx = 10f, dy = 40f, childOwns = true))
+        assertEquals(DrawerDrag.Decision.SwipeRow, decide(dx = -20f, isOpen = true, onSwipeRow = true, childOwns = true))
     }
 
     @Test fun systemInsetIsOnlyTheNonZeroEdges() {
@@ -91,5 +96,6 @@ class DrawerDragTest {
         onSwipeRow: Boolean = false,
         sidewaysRoom: Boolean = false,
         inSystemBack: Boolean = false,
-    ) = DrawerDrag.decision(dx, dy, isOpen, atRoot, onSwipeRow, sidewaysRoom, inSystemBack)
+        childOwns: Boolean = false,
+    ) = DrawerDrag.decision(dx, dy, isOpen, atRoot, onSwipeRow, sidewaysRoom, inSystemBack, childOwns)
 }

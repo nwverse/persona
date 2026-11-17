@@ -3,14 +3,19 @@ package persona.core.designsystem
 import android.view.View
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -75,7 +80,8 @@ class DrawerDragGestureTest {
         val drawer = drawerPx()
         drag(from = Offset(80f, 240f), by = Offset(drawer / 2f, 6f), hold = true)
         frame()
-        assertEquals(drawer / 2f, edge().toFloat(), 4f)
+        val tracked = edge()
+        assertEquals("edge=$tracked drawer=$drawer", drawer / 2f, tracked.toFloat(), 4f)
         val held = edge()
         rule.mainClock.advanceTimeBy(200)
         assertEquals(held.toFloat(), edge().toFloat(), 2f)
@@ -105,10 +111,126 @@ class DrawerDragGestureTest {
             }
         }
         assertEquals(0, scroll.value)
-        drag(from = Offset(120f, 40f), by = Offset(90f, 0f))
-        // iOS takes a rightward drag when the scroller is already at its start (no room, AssistantSidebar.swift:558).
-        // Compose's horizontalScroll consumes that overscroll, so this drawer yields the whole gesture.
-        assertEquals("at-start edge=${edge()} scroll=${scroll.value}", 0f, edge().toFloat(), 4f)
+        drag(from = Offset(120f, 40f), by = Offset(90f, 0f), hold = true)
+        frame()
+        // No room toward the start (`AssistantSidebar.swift:558`): the drawer takes the drag. The scroller stays put.
+        assertTrue("at-start edge=${edge()} scroll=${scroll.value}", edge() > 40)
+        assertEquals(0, scroll.value)
+    }
+
+    @Test fun sliderLikeChildKeepsARightwardDrag() {
+        var pulls = 0
+        show(reduce = true) { ConsumingRow(onPull = { pulls++ }) }
+        drag(from = Offset(80f, 240f), by = Offset(160f, 0f))
+        assertEquals(0f, edge().toFloat(), 4f)
+        assertTrue("child saw $pulls moves", pulls > 0)
+    }
+
+    @Test fun sliderLikeChildKeepsTheOpenDrawer() {
+        var opened by mutableStateOf(true)
+        var pulls = 0
+        // The open page's scrim covers the page, so the child has to live in the drawer. A leftward take would close.
+        show(
+            reduce = true,
+            opened = { opened },
+            onDismiss = { opened = false },
+            drawer = { ConsumingRow(onPull = { pulls++ }) },
+        ) { Box(Modifier.fillMaxSize()) }
+        rule.mainClock.advanceTimeBy(50)
+        val openEdge = edge()
+        assertTrue("open edge $openEdge", openEdge > 200)
+        drag(from = Offset(80f, 240f), by = Offset(-90f, 0f))
+        assertEquals(openEdge.toFloat(), edge().toFloat(), 8f)
+        assertTrue(opened)
+        assertTrue("child saw $pulls moves", pulls > 0)
+    }
+
+    @Test fun jSliderKeepsARightwardDrag() {
+        var value by mutableStateOf(0.4f)
+        show(reduce = true) {
+            Box(Modifier.fillMaxWidth().padding(top = 48.dp)) {
+                JSlider(value, onValueChange = { value = it })
+            }
+        }
+        val before = value
+        drag(from = Offset(180f, 72f), by = Offset(90f, 0f))
+        assertEquals(0f, edge().toFloat(), 4f)
+        assertTrue("slider $before -> $value", value > before + 0.02f)
+    }
+
+    @Test fun cancelClosesWithNoVelocity() {
+        var opened by mutableStateOf(false)
+        show(reduce = true, opened = { opened }, onOpen = { opened = true }) { Box(Modifier.fillMaxSize()) }
+        val flick = drawerPx() * 0.7f
+        rule.onNodeWithTag("shell").performTouchInput {
+            down(Offset(40f, 220f))
+            val steps = 6
+            repeat(steps) { moveBy(Offset(flick / steps, 0f), delayMillis = 8) }
+            cancel()
+        }
+        rule.mainClock.advanceTimeBy(80)
+        assertEquals("cancel edge ${edge()}", 0f, edge().toFloat(), 4f)
+        assertTrue(!opened)
+    }
+
+    @Test fun backDuringADragStaysClosed() {
+        var opened by mutableStateOf(true)
+        show(reduce = true, opened = { opened }, onOpen = { opened = true }, onDismiss = { opened = false }) {
+            Box(Modifier.fillMaxSize())
+        }
+        rule.mainClock.advanceTimeBy(50)
+        assertTrue("open ${edge()}", edge() > 200)
+        // A short drag would settle open on release. Back must win before that release.
+        drag(from = Offset(edge() + 24f, 280f), by = Offset(36f, 0f), hold = true)
+        frame()
+        assertTrue("held ${edge()}", edge() > 200)
+        opened = false
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeBy(80)
+        assertEquals("back edge ${edge()}", 0f, edge().toFloat(), 6f)
+        rule.onNodeWithTag("shell").performTouchInput { up() }
+        rule.mainClock.advanceTimeBy(80)
+        assertEquals("release edge ${edge()}", 0f, edge().toFloat(), 6f)
+        assertTrue(!opened)
+    }
+
+    @Test fun disablingTheDragDoesNotDismiss() {
+        var opened by mutableStateOf(true)
+        var enabled by mutableStateOf(true)
+        var dismissals = 0
+        show(
+            reduce = true,
+            dragEnabledOf = { enabled },
+            opened = { opened },
+            onDismiss = { dismissals++; opened = false },
+        ) { Box(Modifier.fillMaxSize()) }
+        rule.mainClock.advanceTimeBy(50)
+        val openEdge = edge()
+        drag(from = Offset(openEdge + 20f, 260f), by = Offset(-48f, 0f), hold = true)
+        frame()
+        enabled = false
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeBy(80)
+        assertEquals(0, dismissals)
+        assertTrue(opened)
+        assertTrue("still open ${edge()}", edge() > openEdge - 40)
+    }
+
+    @Test fun aDragDoesNotRecomposeEveryFrame() {
+        var compositions = 0
+        show(reduce = true) {
+            compositions++
+            Box(Modifier.fillMaxSize())
+        }
+        rule.mainClock.advanceTimeBy(32)
+        val before = compositions
+        drag(from = Offset(40f, 220f), by = Offset(drawerPx() / 2f, 0f), hold = true, delayMillis = 96)
+        frame()
+        frame()
+        val during = compositions - before
+        assertTrue("recomposed $during times while the finger moved", during <= 3)
     }
 
     @Test fun swipeToReplyKeepsALeftwardDrag() {
@@ -273,6 +395,7 @@ class DrawerDragGestureTest {
         style: AppStyle = AppStyle.Glass,
         reduce: Boolean = true,
         dragEnabled: Boolean = true,
+        dragEnabledOf: (() -> Boolean)? = null,
         opened: () -> Boolean = { false },
         onOpen: () -> Unit = {},
         onDismiss: () -> Unit = {},
@@ -290,7 +413,7 @@ class DrawerDragGestureTest {
                         opened(),
                         onDismiss = onDismiss,
                         modifier = Modifier.testTag("shell").width(shellWidth).height(shellHeight),
-                        dragEnabled = dragEnabled,
+                        dragEnabled = dragEnabledOf?.invoke() ?: dragEnabled,
                         onOpen = onOpen,
                         drawer = drawer,
                     ) {
@@ -339,6 +462,25 @@ class DrawerDragGestureTest {
         }
         return -1
     }
+}
+
+/** A slider or a text selection: it consumes horizontal moves and does not scroll. */
+@Composable
+private fun ConsumingRow(onPull: () -> Unit) {
+    Box(Modifier.fillMaxSize().pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                if (change.position.x != change.previousPosition.x) {
+                    onPull()
+                    change.consume()
+                }
+            }
+        }
+    })
 }
 
 private class RecordingHaptics : HapticFeedback {

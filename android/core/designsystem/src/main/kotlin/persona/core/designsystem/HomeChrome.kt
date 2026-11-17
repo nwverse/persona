@@ -15,6 +15,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
@@ -111,13 +116,17 @@ fun JShellDrawer(
     content: @Composable () -> Unit,
 ) {
     val drag = rememberPhoneDrawerDrag(opened, onOpen, onDismiss, dragEnabled)
-    val progress = drag.progress
+    // While a finger tracks, progress is read in the draw lambdas below. Reading it here would recompose this
+    // drawer on every move. At rest [PhoneDrawerDrag.live] is false and progress is exactly 0 or 1, which is the
+    // drawing from before finger tracking.
+    val live = drag.live
+    val progress = if (live) 0f else drag.progress
     val palette = PersonaTheme.palette
     val density = LocalDensity.current
     val shape = RoundedCornerShape(HomeTokens.drawerPageRadius)
     val close = stringResource(R.string.designsystem_close)
     // Hairline fades with progress (`DrawerPageMotion`, AssistantSidebar.swift:421). At rest it is the same line as before.
-    val hairline = DrawerDrag.hairlineAlpha(progress, palette.line.alpha)
+    val hairline = if (live) null else DrawerDrag.hairlineAlpha(progress, palette.line.alpha)
     val edge = if (hairline == null) Modifier else Modifier.border(
         Tokens.Space.Standard.xxs / 2,
         if (progress >= 1f) palette.line else palette.line.copy(alpha = hairline),
@@ -126,29 +135,73 @@ fun JShellDrawer(
     // Gesture modifier stays inside the background so it does not sit in the layer that casts the page shadow.
     BoxWithConstraints(modifier.fillMaxSize().background(sidebarBackground()).then(drag.modifier)) {
         val drawerWidth = (maxWidth * HomeTokens.drawerFraction).coerceAtMost(HomeTokens.drawerMaximum)
-        drag.widthPx = with(density) { drawerWidth.toPx() }
+        val widthPx = with(density) { drawerWidth.toPx() }
+        val shadowPx = with(density) { HomeTokens.drawerShadow.toPx() }
+        val liftFull = with(density) { Tokens.Space.s.toPx() }
+        val shadow = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
+        drag.widthPx = widthPx
+        val showSidebar = opened || live || progress > 0f
         // The sidebar rises as the page slides off it (`AssistantSidebar.swift:69`, `Theme.Motion.drawerLift`).
-        val lift = DrawerDrag.liftPx(progress, with(density) { Tokens.Space.s.toPx() })
-        val sidebarLift = if (lift == 0f) Modifier else Modifier.graphicsLayer { translationY = lift }
+        // At rest open the offset is zero, so no layer is added and the pixels match the drawer from before tracking.
+        val sidebarLift = when {
+            live -> Modifier.graphicsLayer { translationY = DrawerDrag.liftPx(drag.progress, liftFull) }
+            DrawerDrag.liftPx(progress, liftFull) == 0f -> Modifier
+            else -> Modifier.graphicsLayer { translationY = DrawerDrag.liftPx(progress, liftFull) }
+        }
+        val pageMotion = if (live) {
+            Modifier.graphicsLayer {
+                val p = drag.progress
+                translationX = widthPx * p
+                this.shape = shape
+                clip = p > 0f
+                shadowElevation = shadowPx * p
+                ambientShadowColor = shadow
+                spotShadowColor = shadow
+            }.drawWithContent {
+                drawContent()
+                val p = drag.progress
+                val hair = DrawerDrag.hairlineAlpha(p, palette.line.alpha) ?: return@drawWithContent
+                val color = if (p >= 1f) palette.line else palette.line.copy(alpha = hair)
+                val stroke = (Tokens.Space.Standard.xxs / 2).toPx()
+                val inset = stroke / 2f
+                val radius = (HomeTokens.drawerPageRadius.toPx() - inset).coerceAtLeast(0f)
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(inset, inset),
+                    size = Size(size.width - stroke, size.height - stroke),
+                    cornerRadius = CornerRadius(radius, radius),
+                    style = Stroke(stroke),
+                )
+            }
+        } else {
+            Modifier.graphicsLayer {
+                translationX = widthPx * progress
+                this.shape = shape
+                clip = progress > 0f
+                shadowElevation = shadowPx * progress
+                ambientShadowColor = shadow
+                spotShadowColor = shadow
+            }.then(edge)
+        }
         HardwareShortcutHost(Modifier.fillMaxSize()) {
-            if (opened || progress > 0f) {
+            if (showSidebar) {
                 Box(Modifier.width(drawerWidth).fillMaxHeight().then(sidebarLift).statusBarsPadding().navigationBarsPadding()) {
                     androidx.compose.runtime.CompositionLocalProvider(LocalHomeDrawer provides (PersonaTheme.style == AppStyle.Glass)) { drawer() }
                 }
             }
-            Box(Modifier.fillMaxSize().graphicsLayer {
-                translationX = with(density) { drawerWidth.toPx() } * progress
-                this.shape = shape
-                clip = progress > 0f
-                shadowElevation = with(density) { HomeTokens.drawerShadow.toPx() } * progress
-                ambientShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
-                spotShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
-            }.then(edge)) {
+            Box(Modifier.fillMaxSize().then(pageMotion)) {
                 // A closed drawer must not override a descendant overlay's focus restriction.
                 Box(Modifier.fillMaxSize().then(if (opened)
                     Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)) { content() }
-                if (opened || progress > 0f) Box(Modifier.fillMaxSize().background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
-                    .clickable(enabled = opened, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
+                if (showSidebar) {
+                    val scrim = if (live) {
+                        Modifier.graphicsLayer { alpha = drag.progress }.background(palette.scrim)
+                    } else {
+                        Modifier.background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
+                    }
+                    Box(Modifier.fillMaxSize().then(scrim)
+                        .clickable(enabled = opened, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
+                }
             }
         }
     }

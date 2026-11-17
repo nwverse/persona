@@ -5,15 +5,21 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,7 +30,6 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -48,6 +53,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -61,6 +67,9 @@ class DrawerDragShotsTest {
     @get:Rule val rule = createComposeRule()
 
     private val outDir = File("build/drawer-drag-shots").also { it.mkdirs() }
+    private val phoneWidth = 411.dp
+    private val phoneHeight = 891.dp
+    private val foldedHeight = 900.dp
 
     @Test fun restingClosedAndOpenMatchThePreviousDrawer() {
         var style by mutableStateOf(AppStyle.Glass)
@@ -124,103 +133,125 @@ class DrawerDragShotsTest {
     @Test fun glassPosesPhoneAndFolded() {
         rule.mainClock.autoAdvance = false
         var dark by mutableStateOf(false)
-        var width by mutableStateOf(360.dp)
+        var width by mutableStateOf(phoneWidth)
+        var height by mutableStateOf(phoneHeight)
         var opened by mutableStateOf(false)
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
                 JShellDrawer(
                     opened,
                     onDismiss = { opened = false },
-                    modifier = Modifier.testTag("shell").width(width).height(640.dp),
+                    modifier = Modifier.testTag("shell").width(width).height(height),
                     dragEnabled = true,
                     onOpen = { opened = true },
-                    drawer = { Swatch(Color.Red) },
-                ) { Swatch(Color.Blue) }
+                    drawer = { ShotSidebar() },
+                ) { ShotChat() }
             }
         }
         val cases = listOf(
-            Triple(false, 360.dp, "phone-360"),
-            Triple(false, 411.dp, "folded-411"),
-            Triple(true, 360.dp, "phone-360"),
-            Triple(true, 411.dp, "folded-411"),
+            Pose(false, phoneWidth, phoneHeight, "phone-411"),
+            Pose(false, phoneWidth, foldedHeight, "folded-411x900"),
+            Pose(true, phoneWidth, phoneHeight, "phone-411"),
+            Pose(true, phoneWidth, foldedHeight, "folded-411x900"),
         )
-        for ((isDark, w, label) in cases) {
+        for (pose in cases) {
             // autoAdvance is off, so a state write sits until a frame is requested (PageTransitionsTest).
             rule.runOnIdle {
-                dark = isDark
-                width = w
+                dark = pose.dark
+                width = pose.width
+                height = pose.height
                 opened = false
             }
             Snapshot.sendApplyNotifications()
             repeat(2) { rule.mainClock.advanceTimeByFrame() }
             rule.mainClock.advanceTimeBy(100)
-            val theme = if (isDark) "dark" else "light"
-            save("glass-$theme-$label-closed")
-            assertEquals("$label closed", 0f, edge().toFloat(), 3f)
-            val drawer = drawerPx(w)
+            val theme = if (pose.dark) "dark" else "light"
+            val closed = capture()
+            write("glass-$theme-${pose.label}-closed", closed)
+            val drawer = drawerPx(pose.width)
+            // The marker sits on the left of the chat, below the page corner, so a rightward drag slides it.
             rule.onNodeWithTag("shell").performTouchInput {
-                down(Offset(40f, 240f))
+                down(Offset(48f, 420f))
                 moveBy(Offset(drawer / 2f, 0f))
                 moveBy(Offset(1f, 0f), delayMillis = 16)
             }
             rule.mainClock.advanceTimeBy(16)
-            val mid = edge()
-            save("glass-$theme-$label-mid")
-            assertEquals("$label mid", drawer / 2f, mid.toFloat(), 8f)
+            val midBitmap = capture()
+            write("glass-$theme-${pose.label}-mid", midBitmap)
+            val mid = pageShift(closed, midBitmap)
+            assertEquals("${pose.label} mid", drawer / 2f, mid.toFloat(), 16f)
             // Exactly half with no velocity closes (`SwipeRelease.goes` is strict). Stay in this gesture and go past half.
             rule.onNodeWithTag("shell").performTouchInput {
                 moveBy(Offset(drawer * 0.25f, 0f), delayMillis = 32)
                 up()
             }
             rule.mainClock.advanceTimeBy(80)
-            save("glass-$theme-$label-open")
-            assertTrue("$label open edge ${edge()}", edge() > drawer - 4)
+            val openBitmap = capture()
+            write("glass-$theme-${pose.label}-open", openBitmap)
+            val open = pageShift(closed, openBitmap)
+            assertTrue("${pose.label} open shift $open drawer $drawer", open > drawer - 16)
         }
     }
 
     @Test fun glassSettleIsMidSpringOnTheClock() {
         rule.mainClock.autoAdvance = false
         var dark by mutableStateOf(false)
+        var width by mutableStateOf(phoneWidth)
+        var height by mutableStateOf(phoneHeight)
         var opened by mutableStateOf(false)
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = false, style = AppStyle.Glass) {
                 JShellDrawer(
                     opened,
                     onDismiss = { opened = false },
-                    modifier = Modifier.testTag("shell").width(360.dp).height(640.dp),
+                    modifier = Modifier.testTag("shell").width(width).height(height),
                     dragEnabled = true,
                     onOpen = { opened = true },
-                    drawer = { Swatch(Color.Red) },
-                ) { Swatch(Color.Blue) }
+                    drawer = { ShotSidebar() },
+                ) { ShotChat() }
             }
         }
-        for (isDark in listOf(false, true)) {
-            val theme = if (isDark) "dark" else "light"
+        val cases = listOf(
+            Pose(false, phoneWidth, phoneHeight, "phone-411"),
+            Pose(false, phoneWidth, foldedHeight, "folded-411x900"),
+            Pose(true, phoneWidth, phoneHeight, "phone-411"),
+            Pose(true, phoneWidth, foldedHeight, "folded-411x900"),
+        )
+        for (pose in cases) {
+            val theme = if (pose.dark) "dark" else "light"
             rule.runOnIdle {
-                dark = isDark
+                dark = pose.dark
+                width = pose.width
+                height = pose.height
                 opened = false
             }
             Snapshot.sendApplyNotifications()
             repeat(2) { rule.mainClock.advanceTimeByFrame() }
-            // The close is the 0.32 s drawer spring (Theme.swift:795-797). 400 ms lets it rest before the next theme.
+            // The close is the 0.32 s drawer spring (Theme.swift:795-797). 400 ms lets it rest before the next size.
             rule.mainClock.advanceTimeBy(400)
-            assertEquals("$theme not closed", 0f, edge().toFloat(), 4f)
-            val drawer = drawerPx(360.dp)
+            val closed = capture()
+            val drawer = drawerPx(pose.width)
+            val resting = pageShift(closed, closed)
+            assertEquals("${pose.label} not closed", 0f, resting.toFloat(), 4f)
             // Past half, slow enough that the critically damped spring does not leave the bitmap.
             // A ~10000 dp/s flick's share sends Compose past 1; iOS does not clamp either, but the shot must stay on screen.
             val flick = drawer * 0.55f
             rule.onNodeWithTag("shell").performTouchInput {
-                down(Offset(50f, 240f))
+                down(Offset(48f, 420f))
                 val steps = 8
                 repeat(steps) { moveBy(Offset(flick / steps, 0f), delayMillis = 18) }
                 up()
             }
             rule.mainClock.advanceTimeBy(48)
-            save("glass-$theme-phone-360-settling")
-            val mid = edge()
+            val midBitmap = capture()
+            write("glass-$theme-${pose.label}-settling", midBitmap)
+            val mid = pageShift(closed, midBitmap)
             rule.mainClock.advanceTimeBy(700)
-            val end = edge()
-            assertTrue("$theme settling mid=$mid end=$end", mid > 40 && mid < end - 8 && end > drawer - 4)
+            val end = pageShift(closed, capture())
+            assertTrue(
+                "${pose.label} settling mid=$mid end=$end drawer=$drawer",
+                mid > drawer * 0.55f && mid < end - 8 && end > drawer - 16,
+            )
         }
     }
 
@@ -269,6 +300,54 @@ class DrawerDragShotsTest {
         Box(Modifier.fillMaxSize().background(color))
     }
 
+    /** A sidebar list of chats, the same rows the Assistant sidebar draws. */
+    @Composable
+    private fun ShotSidebar() {
+        Column(
+            Modifier.fillMaxSize().padding(Tokens.Space.m),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+        ) {
+            JSidebarNewChat("New chat", onClick = {})
+            JSidebarHistoryRow("Trip notes", Status.Idle, selected = true, onClick = {}, onMenu = {}, menuLabel = "More")
+            JSidebarHistoryRow("Grocery list", Status.Unread, selected = false, onClick = {}, onMenu = {}, menuLabel = "More")
+            JSidebarHistoryRow(
+                "Weekend plan",
+                Status.NeedsYou,
+                selected = false,
+                onClick = {},
+                onMenu = {},
+                menuLabel = "More",
+                hint = "Pack the bags",
+            )
+        }
+    }
+
+    /**
+     * A short chat. The first bubble is the marker [pageShift] follows: it sits on the left, below the drawer's
+     * 55 dp page corner, so it stays on screen when the page has slid by the drawer width.
+     */
+    @Composable
+    private fun ShotChat() {
+        val palette = PersonaTheme.palette
+        val type = PersonaTheme.type
+        Column(
+            Modifier.fillMaxSize().background(palette.background).padding(Tokens.Space.l),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.m),
+        ) {
+            Spacer(Modifier.height(Tokens.Space.xl * 3))
+            Text("Saturday", style = type.caption, color = palette.ink2)
+            Text(
+                "What is left for the trip?",
+                style = type.body,
+                color = palette.userBubbleText ?: palette.ink,
+                modifier = Modifier.background(palette.userBubble, RoundedCornerShape(Tokens.Radius.bubble))
+                    .padding(Tokens.Space.s),
+            )
+            Text("Pack the bags and send the list before noon.", style = type.body, color = palette.ink)
+            Text("The train is at four.", style = type.callout, color = palette.ink2, modifier = Modifier.align(Alignment.End))
+        }
+    }
+
     private fun pixels(tag: String): Bitmap = rule.onNodeWithTag(tag).captureToImage().asAndroidBitmap()
         .copy(Bitmap.Config.ARGB_8888, false)
 
@@ -289,8 +368,10 @@ class DrawerDragShotsTest {
         return if (count == 0) "0" else "$first count=$count"
     }
 
-    private fun save(name: String) {
-        val bitmap = rule.onNodeWithTag("shell").captureToImage().asAndroidBitmap()
+    private fun capture(): Bitmap = rule.onNodeWithTag("shell").captureToImage().asAndroidBitmap()
+        .copy(Bitmap.Config.ARGB_8888, false)
+
+    private fun write(name: String, bitmap: Bitmap) {
         File(outDir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
@@ -300,13 +381,45 @@ class DrawerDragShotsTest {
         return min(px * HomeTokens.drawerFraction, cap)
     }
 
-    private fun edge(): Int {
-        val map = rule.onNodeWithTag("shell").captureToImage().toPixelMap()
-        val y = map.height / 2
-        for (x in 0 until map.width) {
-            val color = map[x, y]
-            if (color.blue > color.red + 0.15f && color.alpha > 0.5f) return x
+    /**
+     * How far the chat page has moved, in px. The closed frame is the template: the interior of the left-hand
+     * bubble (it starts near y=127). A patch below the bubble is page-colored on both sides of the slide, so it
+     * matches the unmoved page. The scrim tints the bubble, and the same patch is still the closest match.
+     */
+    private fun pageShift(closed: Bitmap, now: Bitmap): Int {
+        val templateX = 20
+        val templateW = 24
+        val y0 = 136
+        val y1 = min(154, closed.height)
+        var bestX = templateX
+        var best = Long.MAX_VALUE
+        val maxX = min(closed.width, now.width) - templateW
+        var x = 0
+        while (x <= maxX) {
+            var sad = 0L
+            var y = y0
+            while (y < y1) {
+                var dx = 0
+                while (dx < templateW) {
+                    val a = closed.getPixel(templateX + dx, y)
+                    val b = now.getPixel(x + dx, y)
+                    sad += abs((a shr 16 and 0xFF) - (b shr 16 and 0xFF))
+                    sad += abs((a shr 8 and 0xFF) - (b shr 8 and 0xFF))
+                    // `and` is infix and loses to subtraction, so the blue term needs its own parentheses.
+                    sad += abs((a and 0xFF) - (b and 0xFF))
+                    dx += 2
+                }
+                y += 2
+            }
+            if (sad < best) {
+                best = sad
+                bestX = x
+            }
+            // Step one pixel. A two-pixel step misses the bubble's glyphs and locks onto a worse match.
+            x += 1
         }
-        return -1
+        return bestX - templateX
     }
 }
+
+private data class Pose(val dark: Boolean, val width: Dp, val height: Dp, val label: String)
