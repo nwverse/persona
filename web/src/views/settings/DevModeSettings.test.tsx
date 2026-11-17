@@ -90,6 +90,14 @@ describe("Developing Persona", () => {
     expect(toggle().getAttribute("aria-checked")).toBe("false");
   });
 
+  it("fills in its words' values", () => {
+    for (const [key, values] of [["settings-devmode.note", { since: "Nov 17, 10:32" }], ["settings-devmode.since_size", { since: "Nov 17, 10:32", size: "2 KB" }], ["settings-devmode.confirm_title", { size: "2 KB" }], ["settings-devmode.details", { size: "2 KB", system: "Chrome 142" }]] as const) {
+      const text = t(key, values);
+      for (const v of Object.values(values)) expect(text).toContain(v);
+      expect(text).not.toMatch(/[{}]/);
+    }
+  });
+
   it("turns off at once when nothing is recorded", async () => {
     localStorage.setItem(DEV_MODE_KEY, "2027-01-15T08:00:00.000Z");
     act(() => root.render(<DevModeRows />));
