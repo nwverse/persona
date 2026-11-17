@@ -572,8 +572,17 @@ final class CallScreenTests: XCTestCase {
     @MainActor private func confirmAndCancel(_ app: XCUIApplication, shot name: String) throws {
         let ask = app.alerts.matching(NSPredicate(format: "label CONTAINS %@", "结束与 Persona 的通话")).firstMatch
         XCTAssertTrue(ask.waitForExistence(timeout: 10), "no question before ending the call\n\(app.debugDescription)")
-        XCTAssertTrue(ask.buttons["结束通话并开始"].firstMatch.exists, "no End Call and Start")
+        let endAndStart = ask.buttons["结束通话并开始"].firstMatch
+        XCTAssertTrue(endAndStart.exists, "no End Call and Start")
         Thread.sleep(forTimeInterval: 1)
+        // Its words are above its buttons: the bar's room once pushed the alert's title down and its message under them.
+        let title = ask.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "结束与 Persona 的通话")).firstMatch
+        let message = ask.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "通话会结束")).firstMatch
+        XCTAssertTrue(message.exists, "no message under the question\n\(app.debugDescription)")
+        XCTAssertLessThanOrEqual(title.frame.maxY, message.frame.minY + 1, "the message is not under the title")
+        XCTAssertLessThanOrEqual(message.frame.maxY, endAndStart.frame.minY + 1,
+                                 "the question's words reach under its buttons: \(message.frame) over \(endAndStart.frame)")
+        XCTAssertGreaterThanOrEqual(title.frame.minY, ask.frame.minY, "the title starts above the alert")
         shot(name, app)
         ask.buttons["取消"].firstMatch.tap()
         XCTAssertTrue(ask.waitForNonExistence(timeout: 5), "Cancel did not close the question")

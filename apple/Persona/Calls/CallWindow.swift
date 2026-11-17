@@ -205,7 +205,8 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
 
     /// Every page under the bar starts below it: the app's root, and every controller presented over it or over another
     /// window under the call's (a sheet, a full-screen cover, the + panel's sheet) whose content would start under the
-    /// bar, gets that much more safe area at its top (`additionalSafeAreaInsets`). A form sheet lower down needs none.
+    /// bar, gets that much more safe area at its top (`additionalSafeAreaInsets`). A form sheet lower down needs none, nor
+    /// does an alert (`takesRoom`).
     /// Without the bar everything given is taken back.
     private func applyRoom() {
         let bar = window?.mode == .bar ? state.barFrame : .null
@@ -241,7 +242,7 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
     /// window's own safe area, the status bar's, it lies under) against the bar's bottom and a small gap. Read from the
     /// window, not the controller's safe area, which the room given changes a layout pass later.
     static func room(for controller: UIViewController, under bar: CGRect) -> CGFloat {
-        guard !bar.isNull, let view = controller.viewIfLoaded, let window = view.window else { return 0 }
+        guard !bar.isNull, takesRoom(controller), let view = controller.viewIfLoaded, let window = view.window else { return 0 }
         let frame: CGRect
         if let presentation = controller.presentationController, controller.presentingViewController != nil,
            let container = presentation.containerView {
@@ -251,6 +252,14 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
         }
         let own = max(0, window.safeAreaInsets.top - frame.minY)
         return room(contentTop: frame.minY + own, barBottom: bar.maxY)
+    }
+
+    /// Whether `controller` is a page that can start under the bar. An alert or an action sheet (SwiftUI's `alert` and
+    /// `confirmationDialog`) is not: its presentation's frame is the whole screen, but it floats in the middle or at the
+    /// bottom, clear of the bar, and room at its top only pushed its words down under its own buttons (the voice chat's
+    /// question showed its title low and no message).
+    static func takesRoom(_ controller: UIViewController) -> Bool {
+        !(controller is UIAlertController)
     }
 
     /// The room a page whose content starts at `contentTop` needs under a bar ending at `barBottom` (pure, for the tests).

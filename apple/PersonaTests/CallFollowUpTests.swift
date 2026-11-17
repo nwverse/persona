@@ -218,6 +218,17 @@ struct CallFollowUpTests {
         #expect(CallWindow.room(contentTop: 300, barBottom: status + bar) == 0, "a sheet at half height")
     }
 
+    /// An alert or an action sheet gets no room under the bar: its presentation covers the whole screen, but its box
+    /// floats clear of the bar, and room at its top pushed the voice chat's question down under its own buttons.
+    @Test func anAlertGetsNoRoomUnderTheBar() {
+        #expect(CallWindow.takesRoom(UIViewController()))
+        #expect(CallWindow.takesRoom(UIHostingController(rootView: Text(verbatim: "sheet"))))
+        #expect(!CallWindow.takesRoom(UIAlertController(title: "t", message: "m", preferredStyle: .alert)))
+        #expect(!CallWindow.takesRoom(UIAlertController(title: "t", message: "m", preferredStyle: .actionSheet)))
+        let bar = CGRect(x: 100, y: 62, width: 200, height: 48)
+        #expect(CallWindow.room(for: UIAlertController(title: "t", message: "m", preferredStyle: .alert), under: bar) == 0)
+    }
+
     /// The call screen's middle sizes the assistant as it sized the orb: its share of the page, then what the words
     /// leave, down to the voice bar's orb's size.
     @Test func theAssistantGivesWayToTheWords() throws {
