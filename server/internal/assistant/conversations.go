@@ -202,6 +202,9 @@ type relayMsg struct {
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
 	// not know it drops it on its next save: the message then ranks and waits as any other supervision message.
 	Urgent bool `json:"urgent,omitempty"`
+	// Interject: this supervision message contains a validated decision_reply for a pending round; the node may bring
+	// it into a running assistant turn and move foreground work to the background. It is never persisted in the relay queue.
+	Interject bool `json:"interject,omitempty"`
 	// QueuedAt and Depth are when it was first queued and how long the queue was with it then (the queue wait,
 	// availability.go): kept by a message that takes its place (queuedAs).
 	QueuedAt time.Time `json:"queued_at,omitzero"`
@@ -467,6 +470,9 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	}
 	params := map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
 		"once_id": relayMsgID(to, msg)} // every try of it under one id: the node sends it once (relay_once.go)
+	if msg.Interject {
+		params["interject_background"] = true
+	}
 	if pick, ok := s.modelPickOf(ctx, machine, to); ok {
 		s.relayOnPick(ctx, machine, to, params, pick) // the conversation's own pick, as a message typed to it runs on (model_pick.go)
 	} else if s.isBackground(ctx, to) {

@@ -90,6 +90,11 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 func (s *Service) decisionTold(ctx context.Context, id, label, machine, session, said string) (bool, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
+	return s.decisionToldLocked(ctx, id, label, machine, session, said)
+}
+
+// decisionToldLocked also serves exact owner replies observed under the task's action lock.
+func (s *Service) decisionToldLocked(ctx context.Context, id, label, machine, session, said string) (bool, error) {
 	a, err := s.askRound(id, "")
 	if err != nil || a == nil {
 		return false, err
@@ -110,7 +115,7 @@ func (s *Service) decisionTold(ctx context.Context, id, label, machine, session,
 			Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")), Choice: decisionText(label),
 			Reason: decisionText(said), Source: db.DecisionManual, SourceMachine: machine, SourceSession: session,
 			CreatedAt: at}); err != nil {
-			s.logf("task %s: decision: %v", id, err)
+			return false, err
 		} else if ok {
 			s.ownerDecided(id, dec, a.WhyOwner)
 			s.decisionsChanged(ctx, id, at)
