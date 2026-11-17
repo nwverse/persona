@@ -132,15 +132,29 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 	if u.h.build.Channel == update.Docker {
 		return nil, u.checkImage(ctx)
 	}
-	src := u.h.updateSource()
+	src, sourceErr := u.releaseSource()
 	source := src.url
+	if sourceErr != nil {
+		u.setCheckState("failed", sourceErr.Error())
+		return nil, sourceErr
+	}
 	if source == "" {
 		return nil, errNotRelease
 	}
 	u.setCheckState("checking", "")
 	cctx, cancel := context.WithTimeout(ctx, updateRequestLimit)
 	defer cancel()
-	r, err := update.Check(cctx, u.client, source)
+	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel())
+	if err == nil && u.selectedBeta() {
+		// A pointer only names the newest prerelease; download its immutable
+		// tag, never the pointer's own placeholder binaries.
+		pinned := update.BetaReleaseBase(source, r.Manifest)
+		if pinned == "" {
+			err = errInvalidBetaVersion
+		} else {
+			r.Source = pinned
+		}
+	}
 	var blocked error
 	if err == nil {
 		blocked = u.unreplaced(r.Manifest)
@@ -192,13 +206,24 @@ func (u *updater) noteBehind(src updateSource, m *update.Manifest) {
 // carries (docs/operations/hub-update.md "The Android app"): nothing without an update source, or for a release without
 // one. It logs an APK it took, and a failure once, until what it finds changes (not every hour).
 func (u *updater) syncAndroid(ctx context.Context) {
-	source := u.h.updateURL()
+	source, sourceErr := u.androidSource()
+	if sourceErr != nil {
+		u.mu.Lock()
+		note := "update: beta source: " + sourceErr.Error()
+		again := note == u.androidNote
+		u.androidNote = note
+		u.mu.Unlock()
+		if !again {
+			u.h.logf("%s", note)
+		}
+		return
+	}
 	if source == "" || u.h.cfg == nil {
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, androidSyncLimit)
 	defer cancel()
-	result, r, err := update.SyncAndroid(cctx, u.client, source, filepath.Join(u.h.cfg.dir, "apps", "android"))
+	result, r, err := update.SyncAndroid(cctx, u.client, source, filepath.Join(u.h.cfg.dir, "apps", "android", u.androidCacheDir()))
 	note := ""
 	switch {
 	case err != nil && r != nil:
@@ -246,8 +271,12 @@ func (u *updater) freshRelease(ctx context.Context) {
 	if err := u.load(ctx); err != nil || u.selectedDevelopment() {
 		return
 	}
-	src := u.h.updateSource()
+	src, sourceErr := u.releaseSource()
 	source := src.url
+	if sourceErr != nil {
+		u.h.logf("update: beta source: %v", sourceErr)
+		return
+	}
 	if source == "" {
 		return
 	}
@@ -269,7 +298,13 @@ func (u *updater) freshRelease(ctx context.Context) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, releaseRefreshLimit)
 	defer cancel()
-	r, err := update.Check(cctx, u.client, source)
+	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel())
+	if err == nil && u.selectedBeta() {
+		r.Source = update.BetaReleaseBase(source, r.Manifest)
+		if r.Source == "" {
+			err = errInvalidBetaVersion
+		}
+	}
 	if err != nil {
 		u.h.logf("update: reading the release for an install script: %v (keeping the one read before)", err)
 		return

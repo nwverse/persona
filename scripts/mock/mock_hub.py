@@ -21388,7 +21388,7 @@ def net_control(path, q):
 # half of them in a new order): the working agents' last line alternates between one line and two (the row's height),
 # and one of them finishes and starts again every three rounds (its space changes rank). ScrollUnderPushTests.
 # MOCK_CHURN=1 also puts a screenshot (a tool result image) in the middle of the first conversation's work.
-# MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
+# MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned|beta: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
 # the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
@@ -21405,7 +21405,10 @@ def hub_update_state():
         HUB_UPDATE.update({"version": "v0.3.0-12-gabc1234-202611021500", "build": 202611021500, "channel": "release",
                            "can_update": True, "latest": latest, "state": "available", "busy": [], "auto": False,
                            "auto_notice": False, "last_check": ago(minutes=20), "confirmed": True})
-        if HUB_UPDATE_MODE == "waiting":
+        if HUB_UPDATE_MODE == "beta":
+            HUB_UPDATE.update(source="beta", version="0.6.2", latest={"version": "0.7.0-beta.1", "build": 202611171300,
+                                                                     "newer": True, "bad": False})
+        elif HUB_UPDATE_MODE == "waiting":
             HUB_UPDATE.update(state="waiting_idle", auto=True, busy=[
                 {"machine_id": "macbook", "machine": "MacBook", "session_id": "a1f3c2d4-0000-4000-8000-000000000001", "title": "给天气 App 加主屏幕小组件"},
                 {"machine_id": "server", "machine": "构建服务器", "session_id": "b2", "title": "整理发布脚本"}])
@@ -27092,6 +27095,9 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/hub/update") and HUB_UPDATE_MODE:
             s, body = hub_update_state(), json.loads(self.last_body or b"{}")
             if p == "/api/v1/hub/update/settings" and self.command == "PUT":
+                if "source" in body:
+                    s["source"] = body["source"]
+                    s["latest"] = None
                 if "auto" in body: s.update(auto=bool(body["auto"]), auto_notice=False)
                 if body.get("auto_notice_seen"): s["auto_notice"] = False
             elif p == "/api/v1/hub/update" and self.command == "POST":
