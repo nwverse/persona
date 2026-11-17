@@ -182,7 +182,7 @@ struct CallSourceTests {
         let voice = try #require(Self.body(try Self.lines("Persona/Voice/VoiceConversation.swift"), "func begin() async"))
         #expect(voice.contains("surface == .call ? deps.microphone.claim(microphoneOwner)"), "a system call gives the microphone away")
 
-        let tap = try #require(Self.body(try Self.lines("Persona/DesignSystem/DictationBar.swift"), "func start(_ dictation: Dictation"))
+        let tap = try #require(Self.body(try Self.lines("Persona/DesignSystem/DictationBar.swift"), "func start(_ dictation: any DictationStarting"))
         let hold = try #require(Self.body(try Self.lines("Persona/DesignSystem/ComposerHoldMic.swift"), "func begin(_ dictation: Dictation"))
         for body in [tap, hold] {
             let gate = try #require(body.range(of: "if let refusal = dictation.callRefusal {"))
