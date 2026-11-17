@@ -8,11 +8,17 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,8 +40,12 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -363,23 +373,197 @@ class DrawerDragGestureTest {
 
     @Test fun swipeRowKeepsTheOpenDrawer() {
         var opened by mutableStateOf(true)
+        var archived = false
         show(
             reduce = true,
             opened = { opened },
             onDismiss = { opened = false },
             drawer = {
-                JSwipeActions(end = SwipeAction("Done", PhIcons.Check, Status.Unread, {})) {
-                    Box(Modifier.fillMaxWidth().height(80.dp).background(sidebar))
+                // The real sidebar is a vertical list (`AssistantScreen.kt` puts `JSwipeActions` in it).
+                // The list waits (`shouldBeRequiredToFailBy`, AssistantSidebar.swift:540-544). The row's mark
+                // still keeps a leftward drag (line 500).
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(8) {
+                        JSwipeActions(end = SwipeAction("Done", PhIcons.Check, Status.Unread, { archived = true })) {
+                            Box(Modifier.fillMaxWidth().height(72.dp).background(sidebar))
+                        }
+                    }
                 }
             },
         ) { Box(Modifier.fillMaxSize()) }
         rule.mainClock.advanceTimeBy(50)
         val openEdge = edge()
         assertTrue("open edge $openEdge", openEdge > 200)
-        // The row is in the uncovered sidebar. iOS refuses here (`DrawerPan`, AssistantSidebar.swift:500).
-        drag(from = Offset(40f, 36f), by = Offset(-70f, 0f))
+        drag(from = Offset(240f, 36f), by = Offset(-200f, 0f))
+        // The row's own settle runs after the finger lifts. The drawer must not have taken the drag.
+        rule.mainClock.advanceTimeBy(500)
         assertEquals(openEdge.toFloat(), edge().toFloat(), 4f)
         assertTrue(opened)
+        assertTrue("the row archived", archived)
+    }
+
+    @Test fun swipeRowWhileClosedStillOpensTheDrawer() {
+        // The closed branch does not check the mark (AssistantSidebar.swift:524-526). A rightward drag opens.
+        show(reduce = true) {
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(4) {
+                    JSwipeActions(end = SwipeAction("Done", PhIcons.Check, Status.Unread, {})) {
+                        Box(Modifier.fillMaxWidth().height(72.dp).background(sidebar))
+                    }
+                }
+            }
+        }
+        drag(from = Offset(40f, 36f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("closed row edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun composerFieldOpensTheDrawer() {
+        // A collapsed cursor is not a selection. iOS's closed drawer branch does not check typing
+        // (AssistantSidebar.swift:524-526); the typing refusal is the pager (line 513).
+        show(reduce = true) {
+            BasicTextField(
+                value = "Saturday",
+                onValueChange = {},
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+            )
+        }
+        drag(from = Offset(48f, 24f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("composer edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun selectedTextKeepsTheDrag() {
+        show(reduce = true) {
+            BasicTextField(
+                value = TextFieldValue("Saturday plans", TextRange(0, 8)),
+                onValueChange = {},
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+            )
+        }
+        drag(from = Offset(48f, 24f), by = Offset(140f, 0f))
+        assertEquals("selection edge ${edge()}", 0f, edge().toFloat(), 4f)
+    }
+
+    @Test fun progressIndicatorDoesNotBlockTheDrawer() {
+        // A spinner and a labelled progress range carry ProgressBarRangeInfo. A slider is the control
+        // that sets its own value (SemanticsActions.SetProgress). The range on its own must not block.
+        show(reduce = true) {
+            Box(Modifier.fillMaxSize().semantics { progressBarRangeInfo = ProgressBarRangeInfo(0.4f, 0f..1f) })
+        }
+        drag(from = Offset(80f, 240f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("progress edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun spinnerDoesNotBlockTheDrawer() {
+        show(reduce = true) {
+            CircularProgressIndicator(Modifier.size(160.dp))
+        }
+        drag(from = Offset(40f, 40f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("spinner edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun longPressThenDragDoesNotOpenTheDrawer() {
+        show(reduce = true) { Box(Modifier.fillMaxSize()) }
+        rule.onNodeWithTag("shell").performTouchInput {
+            down(Offset(80f, 240f))
+            advanceEventTime(viewConfiguration.longPressTimeoutMillis)
+            moveBy(Offset(160f, 0f))
+            up()
+        }
+        frame()
+        assertEquals("long-press edge ${edge()}", 0f, edge().toFloat(), 4f)
+        drag(from = Offset(80f, 300f), by = Offset(140f, 0f), hold = true)
+        frame()
+        assertTrue("a quick drag still opens, edge ${edge()}", edge() > 40)
+    }
+
+    @Test fun rtlHorizontalScrollerAtTheLeftKeepsTheDrag() {
+        // A rightward drag in RTL increases ScrollState (measured 270 to 540). Value 0 still has room,
+        // so the scroller keeps it. `horizontalScroll` does not fold layout direction into reverseScrolling.
+        val scroll = ScrollState(0)
+        var opened by mutableStateOf(false)
+        show(
+            reduce = true,
+            layoutDirection = LayoutDirection.Rtl,
+            opened = { opened },
+            onOpen = { opened = true },
+        ) {
+            Box(Modifier.horizontalScroll(scroll)) {
+                Box(Modifier.width(900.dp).height(120.dp).background(Color.Yellow))
+            }
+        }
+        assertEquals(0, scroll.value)
+        drag(from = Offset(120f, 40f), by = Offset(90f, 0f))
+        rule.mainClock.advanceTimeBy(80)
+        assertTrue(!opened)
+        assertTrue("the scroller moved ${scroll.value}", scroll.value != 0)
+    }
+
+    @Test fun rtlHorizontalScrollerAtItsStartOpensTheDrawer() {
+        // The high end is the start in RTL: a rightward drag there has no room, so the drawer takes it.
+        val scroll = ScrollState(0)
+        var opened by mutableStateOf(false)
+        var ready by mutableStateOf(false)
+        show(
+            reduce = true,
+            layoutDirection = LayoutDirection.Rtl,
+            opened = { opened },
+            onOpen = { opened = true },
+        ) {
+            LaunchedEffect(scroll.maxValue) {
+                if (scroll.maxValue > 0) {
+                    scroll.scrollTo(scroll.maxValue)
+                    ready = true
+                }
+            }
+            Box(Modifier.horizontalScroll(scroll)) {
+                Box(Modifier.width(900.dp).height(120.dp).background(Color.Yellow))
+            }
+        }
+        var spins = 0
+        while (!ready && spins < 40) {
+            rule.mainClock.advanceTimeByFrame()
+            spins++
+        }
+        assertTrue("not at the rtl start ${scroll.value}/${scroll.maxValue}", ready)
+        val atEnd = scroll.value
+        drag(from = Offset(120f, 40f), by = Offset(180f, 0f))
+        rule.mainClock.advanceTimeBy(80)
+        assertTrue("rtl start did not open, scroll ${scroll.value}", opened)
+        assertEquals(atEnd, scroll.value)
+    }
+
+    @Test fun buttonCloseUnderReduceMotionSnaps() {
+        var opened by mutableStateOf(true)
+        show(reduce = true, opened = { opened }, onDismiss = { opened = false }) { Box(Modifier.fillMaxSize()) }
+        rule.mainClock.advanceTimeBy(50)
+        assertTrue("open ${edge()}", edge() > 200)
+        opened = false
+        Snapshot.sendApplyNotifications()
+        // A few frames, not the 0.32 s spring. A snap is at 0; the spring would still be most of the way open.
+        repeat(6) { rule.mainClock.advanceTimeByFrame() }
+        assertEquals("button edge ${edge()}", 0f, edge().toFloat(), 2f)
+    }
+
+    @Test fun unfoldingSnapsTheOpenDrawer() {
+        var opened by mutableStateOf(true)
+        var enabled by mutableStateOf(true)
+        show(
+            style = AppStyle.Glass,
+            reduce = false,
+            dragEnabledOf = { enabled },
+            opened = { opened },
+            onDismiss = { opened = false },
+        ) { Box(Modifier.fillMaxSize()) }
+        assertTrue("open ${edge()}", edge() > 200)
+        enabled = false
+        opened = false
+        Snapshot.sendApplyNotifications()
+        repeat(6) { rule.mainClock.advanceTimeByFrame() }
+        assertEquals("unfold edge ${edge()}", 0f, edge().toFloat(), 2f)
     }
 
     @Test fun leftwardDragOnTheOpenPageCloses() {
@@ -515,6 +699,7 @@ class DrawerDragGestureTest {
         onOpen: () -> Unit = {},
         onDismiss: () -> Unit = {},
         haptics: HapticFeedback? = null,
+        layoutDirection: LayoutDirection = LayoutDirection.Ltr,
         onView: (View) -> Unit = {},
         drawer: @Composable () -> Unit = { Box(Modifier.fillMaxSize().background(sidebar)) },
         content: @Composable () -> Unit,
@@ -523,6 +708,7 @@ class DrawerDragGestureTest {
         rule.setContent {
             onView(LocalView.current)
             val shell: @Composable () -> Unit = {
+                CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
                 PersonaTheme(darkTheme = false, reduceMotion = reduce, style = style) {
                     JShellDrawer(
                         opened(),
@@ -534,6 +720,7 @@ class DrawerDragGestureTest {
                     ) {
                         Box(Modifier.fillMaxSize().background(page)) { content() }
                     }
+                }
                 }
             }
             if (haptics == null) shell()

@@ -4,7 +4,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -42,6 +41,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.LayoutDirection
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -62,24 +62,19 @@ import kotlinx.coroutines.launch
  * SwiftUI's initial velocity is the share of the remaining distance per second. Compose's is in value units per
  * second, so a 0..1 progress spring takes `share * (target - progress)`.
  *
- * iOS `Theme.Motion.drawer` (`apple/Shared/Design/Theme.swift:799-801`) does not read Reduce Motion, so this settle
- * does not either. The same spring runs, with the finger's velocity. A system animator scale of 0 is the platform's
- * own switch and makes that spring instant; there is no separate reduced-motion branch here.
+ * The finger's settle uses iOS `Theme.Motion.drawer` (`apple/Shared/Design/Theme.swift:799-801`), which does not
+ * read Reduce Motion, so that spring runs with the finger's velocity. A button, Back, or another write of the open
+ * flag keeps [PersonaTheme.reduceMotion]. Unfolding to the regular-width column snaps. A system animator scale of 0
+ * is the platform's own switch and makes the finger's spring instant.
  */
 internal object DrawerDrag {
-    /** `SwipeRelease` flick, in dp per second (the iPhone's 300 pt/s). */
-    const val flickDpPerSecond = 300f
-
-    /** How much of the finger's velocity the half-way rule looks ahead, in seconds (`ShellPager.swift:195`). */
-    const val projectionSeconds = 0.2f
-
     /** Below this, the remaining distance is too short to turn into a share (`AssistantSidebar.swift:120`). */
     const val minimumWay = 1f
 
     fun settlesOpen(progress: Float, velocityDpPerSecond: Float, widthDp: Float): Boolean {
-        if (abs(velocityDpPerSecond) > flickDpPerSecond) return velocityDpPerSecond > 0f
+        if (abs(velocityDpPerSecond) > HomeTokens.drawerFlickDpPerSecond) return velocityDpPerSecond > 0f
         val width = max(widthDp, minimumWay)
-        return progress + velocityDpPerSecond * projectionSeconds / width > 0.5f
+        return progress + velocityDpPerSecond * HomeTokens.drawerProjectionSeconds / width > 0.5f
     }
 
     /**
@@ -168,7 +163,7 @@ internal object DrawerDrag {
     }
 }
 
-private class DrawerSettle(val open: Boolean, val velocity: Float, val token: Int)
+private class DrawerSettle(val open: Boolean, val velocity: Float, val token: Int, val finger: Boolean = false)
 
 /**
  * Finger state for [rememberPhoneDrawerDrag]. The pointer scope cannot call [Animatable.stop] (it is a restricted
@@ -190,7 +185,14 @@ private class DrawerRuntime(opened: Boolean) {
     var trailingPx = 0f
     var opened = opened
     var carryVelocity = false
-    var spec: FiniteAnimationSpec<Float> = tween(0)
+    var style: AppStyle = AppStyle.Glass
+    var reduceMotion = false
+
+    /** False while the window is regular: an external close then is the unfold, and it snaps. */
+    var dragEnabled = false
+
+    /** Horizontal scroll value 0 is the left edge. In RTL the start of that scroller is the high end. */
+    var rtl = false
     var onOpen: () -> Unit = {}
     var onDismiss: () -> Unit = {}
     var haptics: (Haptic) -> Unit = {}
@@ -207,20 +209,9 @@ private class DrawerRuntime(opened: Boolean) {
     var superseded = false
     lateinit var scope: CoroutineScope
 
-    /**
-     * While the finger is down, the page is wherever the finger put it. Once the settle animation has
-     * finished, snap to exactly 0 or 1. Compose's spring stops about 0.01 short of the target, and that
-     * hair keeps the scrim composed and lifts the sidebar (`AssistantSidebar.swift:69`).
-     */
+    /** While the finger is down, the page is wherever the finger put it. A finished animation is exactly 0 or 1. */
     val shown: Float
-        get() {
-            val raw = if (dragging) dragProgress else anim.value
-            if (dragging || anim.isRunning) return raw
-            // Wider than 0.001: the spring's displacement threshold is 0.01, so a finished close sits near 0.01.
-            if (settle.open && raw >= 1f - 0.02f) return 1f
-            if (!settle.open && raw <= 0.02f) return 0f
-            return raw
-        }
+        get() = if (dragging) dragProgress else anim.value
 }
 
 internal class PhoneDrawerDrag(
@@ -246,8 +237,9 @@ internal class PhoneDrawerDrag(
  *
  * The spring runs only from [settle], so a finger that takes over mid-flight (`dragBegan`,
  * `AssistantSidebar.swift:92-97`) is not restarted at velocity 0 when the parent flag catches up.
- * Glass passes the share as the spring's initial velocity, including when Reduce Motion is on
+ * The finger's settle passes the share as the spring's initial velocity, including when Reduce Motion is on
  * (`Theme.Motion.drawer`, `Theme.swift:799-801`, does not read it). Brief and Board pass 0; their tweens ignore it.
+ * A button, Back, or another write of the open flag keeps [PersonaTheme.reduceMotion]. Unfolding snaps.
  */
 @Composable
 internal fun rememberPhoneDrawerDrag(
@@ -264,8 +256,10 @@ internal fun rememberPhoneDrawerDrag(
     // iOS `drawer(velocity:)` does not read Reduce Motion (`Theme.swift:799-801`). Pass the style's spec with the
     // reduced-motion flag off so Glass keeps the spring and the share. `drawerSpec`'s own flag still serves the
     // resting-pixel oracle, which is not this finger settle.
-    runtime.carryVelocity = PersonaTheme.style == AppStyle.Glass
-    runtime.spec = drawerSpec(PersonaTheme.style, reduceMotion = false)
+    runtime.style = PersonaTheme.style
+    runtime.reduceMotion = PersonaTheme.reduceMotion
+    runtime.dragEnabled = dragEnabled
+    runtime.carryVelocity = runtime.style == AppStyle.Glass
     runtime.haptics = rememberHaptics()
     runtime.host = LocalView.current
     val focus = LocalFocusManager.current
@@ -277,6 +271,7 @@ internal fun rememberPhoneDrawerDrag(
     }
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
+    runtime.rtl = direction == LayoutDirection.Rtl
     val gestures = WindowInsets.systemGestures
     runtime.leadingPx = gestures.getLeft(density, direction).toFloat()
     runtime.trailingPx = gestures.getRight(density, direction).toFloat()
@@ -300,10 +295,17 @@ internal fun rememberPhoneDrawerDrag(
     }
     LaunchedEffect(runtime.settle.token) {
         val settle = runtime.settle
-        val velocity = if (runtime.carryVelocity) settle.velocity else 0f
+        // The finger's spring ignores Reduce Motion. A button or Back keeps the theme flag. Unfolding, which
+        // turns the gesture off while closing, snaps: the sidebar column is already there.
+        val velocity = if (settle.finger && runtime.carryVelocity) settle.velocity else 0f
+        val spec = when {
+            settle.finger -> drawerSpec<Float>(runtime.style, reduceMotion = false)
+            !settle.open && !runtime.dragEnabled -> tween<Float>(Tokens.Motion.reduced)
+            else -> drawerSpec<Float>(runtime.style, runtime.reduceMotion)
+        }
         val target = if (settle.open) 1f else 0f
         if (runtime.anim.value != target || velocity != 0f) {
-            runtime.anim.animateTo(target, runtime.spec, initialVelocity = velocity)
+            runtime.anim.animateTo(target, spec, initialVelocity = velocity)
         }
         // `anim.stop()` cancels this effect, so a finger taking over does not clear [DrawerRuntime.live] here.
         runtime.live = false
@@ -328,12 +330,16 @@ internal fun rememberPhoneDrawerDrag(
  * [Waiting] is a scroller that should let the drawer go first: a vertical list, or a horizontal one with no room
  * toward the start (line 558). Scroll views wait (`shouldBeRequiredToFailBy`, lines 540-544). [Sideways] is a
  * horizontal scroller that still has that room, and only while the drawer is closed and the finger pulls toward
- * the start (line 526). [Child] is a slider or a text selection. A tap target is none of these. An Android view
- * is [Sideways] only when it can scroll toward the start (`View.canScrollHorizontally(-1)`, the room at line 558).
+ * the start (line 526). [Child] is a slider ([SemanticsActions.SetProgress]) or a text selection whose handles are
+ * showing. A collapsed cursor is not one, and neither is a progress indicator. [SwipeRow] is [SwipeRowMark]: the
+ * open drawer yields a leftward drag on it (line 500) instead of the list that contains it. A tap target is none of
+ * these. An Android view is [Sideways] only when it can scroll toward the start (`View.canScrollHorizontally(-1)`,
+ * the room at line 558).
  *
  * [button] is a clickable in front (the open scrim). Its consumption is not a drag, and a view under it is not the hit.
+ * Semantics does not carry opacity, so only that button counts as covering the view.
  */
-private enum class UnderFinger { None, Waiting, Sideways, Child }
+private enum class UnderFinger { None, Waiting, Sideways, Child, SwipeRow }
 
 private data class FingerTarget(val under: UnderFinger, val button: Boolean)
 
@@ -356,13 +362,13 @@ private class DrawerDragNode(private val runtime: DrawerRuntime, enabled: Boolea
         val rootAt = runtime.originInRoot + at
         val semantics = (runtime.host as? RootForTest)?.semanticsOwner?.unmergedRootSemanticsNode
         val front = if (semantics != null) frontmost(semantics, rootAt) else null
-        var kind = classifyChain(front, open, dx)
+        var kind = classifyChain(front, open, dx, runtime.rtl)
         val host = runtime.host
         val view = if (host != null) androidViewAt(host, rootAt) else null
         val covered = host != null && view != null && composeCovers(front, rootAt)
         // Room toward the start, and only while closed (`AssistantSidebar.swift:526` and `:558`).
-        if (view != null && host != null && !covered && kind != UnderFinger.Child && !open && dx > 0f &&
-            roomTowardStart(view, host)
+        if (view != null && host != null && !covered && kind != UnderFinger.Child && kind != UnderFinger.SwipeRow &&
+            !open && dx > 0f && roomTowardStart(view, host)
         ) {
             kind = UnderFinger.Sideways
         }
@@ -388,25 +394,31 @@ private fun frontmost(node: SemanticsNode, at: Offset): SemanticsNode? {
 
 /**
  * Walk from the hit up, as `sidewaysScroller` walks superviews (`AssistantSidebar.swift:551-563`). A slider or a
- * text selection stops the walk. A horizontal scroller with room toward the start stops it too (line 558). One
- * with no room, and a vertical list, wait (`shouldBeRequiredToFailBy`, lines 540-544) and the walk continues, so
- * an outer scroller that still has room can win (lines 556-562).
+ * text selection with its handles showing stops the walk. A swipe row stops it too, before the list that contains
+ * the row (`SwipeRowMark`, line 500; the list waits, lines 540-544). A horizontal scroller with room toward the
+ * start stops it as well (line 558). One with no room, and a vertical list, wait and the walk continues, so an
+ * outer scroller that still has room can win (lines 556-562).
+ *
+ * [horizontalScroll] stores the caller's `reverseScrolling` on the axis and does not fold in layout direction.
+ * Value 0 is the left edge. A rightward drag in RTL increases that value, so the start, where the drag has no
+ * room, is the high end. The flag and RTL each flip which end that is.
  */
-private fun classifyChain(front: SemanticsNode?, open: Boolean, dx: Float): UnderFinger {
+private fun classifyChain(front: SemanticsNode?, open: Boolean, dx: Float, rtl: Boolean): UnderFinger {
     var node = front
     var waiting = false
     while (node != null) {
         val config = node.config
-        if (config.contains(SemanticsProperties.ProgressBarRangeInfo) ||
-            config.contains(SemanticsProperties.TextSelectionRange)
-        ) {
-            return UnderFinger.Child
+        if (config.contains(SemanticsActions.SetProgress)) return UnderFinger.Child
+        if (config.contains(SemanticsProperties.TextSelectionRange)) {
+            val range = config[SemanticsProperties.TextSelectionRange]
+            if (!range.collapsed) return UnderFinger.Child
         }
+        if (config.contains(SwipeRowMark)) return UnderFinger.SwipeRow
         val horizontal = SemanticsProperties.HorizontalScrollAxisRange
         if (config.contains(horizontal)) {
             val axis = config[horizontal]
             val value = axis.value()
-            val atStart = if (axis.reverseScrolling) value >= axis.maxValue() - 1f else value <= 1f
+            val atStart = atScrollStart(axis.reverseScrolling, value, axis.maxValue(), rtl)
             if (!open && dx > 0f && !atStart) return UnderFinger.Sideways
             waiting = true
         } else if (config.contains(SemanticsProperties.VerticalScrollAxisRange)) {
@@ -417,7 +429,16 @@ private fun classifyChain(front: SemanticsNode?, open: Boolean, dx: Float): Unde
     return if (waiting) UnderFinger.Waiting else UnderFinger.None
 }
 
-/** The open scrim is a button. It is in front of the page, so a view under it is not what the finger is on. */
+/** The end a rightward drag cannot scroll past. RTL and `reverseScrolling` each move that end. */
+private fun atScrollStart(reverseScrolling: Boolean, value: Float, max: Float, rtl: Boolean): Boolean {
+    val highEnd = reverseScrolling xor rtl
+    return if (highEnd) value >= max - 1f else value <= 1f
+}
+
+/**
+ * The open scrim is a button. It is in front of the page, so a view under it is not what the finger is on.
+ * Semantics does not carry opacity, so a plain box above an Android view does not count as covering it.
+ */
 private fun isButton(node: SemanticsNode): Boolean {
     val config = node.config
     if (config.contains(SemanticsActions.OnClick)) return true
@@ -515,16 +536,20 @@ private suspend fun PointerInputScope.trackDrawer(runtime: DrawerRuntime, hit: D
                 tracker.addPointerInputChange(change)
                 if (!took) {
                     if (hypot(dx, dy) < slop) continue
+                    // A long-press has already started a selection. Crossing the slop after that must not open the drawer.
+                    if (change.uptimeMillis - down.uptimeMillis >= viewConfiguration.longPressTimeoutMillis) break
                     val open = runtime.shown > 0f
                     val horizontal = abs(dx) > abs(dy)
                     // `sidewaysScroller` (`AssistantSidebar.swift:551-563`). A vertical list consumes a horizontal
                     // move without owning it; iOS makes that list wait (`shouldBeRequiredToFailBy`, lines 540-544),
-                    // so claim the move before its Main pass. Consumption counts only for the node that is not that
-                    // list and not a button: a slider, a selection, a chart, a swipe row. A tap does not consume the move.
+                    // so claim the move before its Main pass. A marked swipe row does not wait (line 500): the row
+                    // gets the leftward drag. Consumption counts only for a node that is not that list and not a
+                    // button: a slider, a selection, a chart. A tap does not consume the move.
                     val target = hit.underFinger(change.position, open, dx)
                     val under = target.under
                     val sidewaysRoom = under == UnderFinger.Sideways
-                    val claimScroller = under == UnderFinger.Waiting && horizontal && (open || dx > 0f)
+                    val markedRow = under == UnderFinger.SwipeRow
+                    val claimScroller = !markedRow && under == UnderFinger.Waiting && horizontal && (open || dx > 0f)
                     if (claimScroller) change.consume()
                     val seen = awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == pointer }
                     if (runtime.superseded) {
@@ -534,9 +559,10 @@ private suspend fun PointerInputScope.trackDrawer(runtime: DrawerRuntime, hit: D
                     val childConsumed = seen?.isConsumed == true && !claimScroller
                     val childKeeps = horizontal && (
                         under == UnderFinger.Child ||
-                            (childConsumed && !target.button && under != UnderFinger.Sideways && under != UnderFinger.Waiting)
+                            (!markedRow && childConsumed && !target.button &&
+                                under != UnderFinger.Sideways && under != UnderFinger.Waiting)
                         )
-                    val onSwipeRow = childKeeps && open && dx < 0f
+                    val onSwipeRow = horizontal && open && dx < 0f && (markedRow || childKeeps)
                     val childOwns = childKeeps && !onSwipeRow
                     val choice = DrawerDrag.decision(
                         dx, dy, isOpen = open, atRoot = true,
@@ -610,7 +636,7 @@ private fun releaseDrawer(runtime: DrawerRuntime, tracker: VelocityTracker, drag
         runtime.anim.snapTo(progress)
         if (runtime.superseded) return@launch
         runtime.dragging = false
-        runtime.settle = DrawerSettle(opens, velocity, runtime.settle.token + 1)
+        runtime.settle = DrawerSettle(opens, velocity, runtime.settle.token + 1, finger = true)
         if (runtime.superseded) return@launch
         if (opens && !runtime.opened) runtime.onOpen()
         else if (!opens && runtime.opened) runtime.onDismiss()
@@ -632,7 +658,8 @@ private fun parkDrawer(runtime: DrawerRuntime, open: Boolean, notify: Boolean) {
         runtime.anim.snapTo(progress)
         if (runtime.superseded) return@launch
         runtime.dragging = false
-        runtime.settle = DrawerSettle(open, 0f, runtime.settle.token + 1)
+        // A finger cancel still uses the finger's spring. Unfolding clears [DrawerRuntime.dragEnabled] first and snaps.
+        runtime.settle = DrawerSettle(open, 0f, runtime.settle.token + 1, finger = runtime.dragEnabled)
         if (notify && wasOpen && !open) runtime.onDismiss()
     }
 }

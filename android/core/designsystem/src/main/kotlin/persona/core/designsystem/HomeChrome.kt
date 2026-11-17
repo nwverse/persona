@@ -91,9 +91,6 @@ fun resolveDetailLeading(split: SplitDetailContext?, onBack: (() -> Unit)?): Det
     return DetailLeading.Back(onBack)
 }
 
-@Composable
-private fun drawerSpec(): FiniteAnimationSpec<Float> = drawerSpec(PersonaTheme.style, PersonaTheme.reduceMotion)
-
 internal fun <T> drawerSpec(style: AppStyle, reduceMotion: Boolean): FiniteAnimationSpec<T> = when {
     reduceMotion -> tween(Tokens.Motion.reduced)
     style == AppStyle.Glass -> IosSpring(Tokens.Motion.Drawer.duration, Tokens.Motion.Drawer.bounce).spec()
