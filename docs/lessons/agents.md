@@ -1052,6 +1052,18 @@ screen, saw a queue in the transcript and no hint.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
 
+## Claude Code put a label in front of the send-now keys (2026-11-17, #9628, 2.1.326)
+
+"Send now" was refused as `send_now_unrecognized` on a screen showing `  ⎿  Queued · ctrl+enter to send now`. 2.1.326 labels
+the hint under a queued message; the keys and the `to send now` after them did not change. The reader took keys only from a
+line of their own or after the gap following a queued message, so the label in front hid them.
+
+- When reading a hint by its shape, anchor on the keys and the words after them, and let the keys start after any of the
+  line's separators (a gap, ` · `), not only at a fixed position. Words that aren't strokes between the separator and the
+  keys still lend nothing.
+- To date a new shape, grep each version's binary for the component's template (`Queued \xB7 ${`) instead of guessing:
+  `npm pack @anthropic-ai/claude-code-<platform>@<version>` fetches one without installing it.
+
 ## Rewind positions are not message identities (#9410)
 
 AGY reused a user step's numeric ID after rewind, so the node attached an earlier send's persisted client message ID

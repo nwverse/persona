@@ -269,6 +269,9 @@ The history starts the day the manager began keeping it; the days before are onl
   connection and never finished. Now each week is stored as it is read, so a cut scan goes on from the next week, and the node keeps nothing. A fork's
   copy of a reply has its timestamp, so it is in the same week and still counted once. A file is read from about the week's start (`startOffset`; files
   under 256 KB from their start) and stops once 50 lines in a row are past the week, so the weeks together read about one pass of the transcripts.
+  The weeks start at the earliest transcript's first line, not 53 weeks back, and a week reads only the files that changed after it began and whose
+  first line is before its end (#9616: a computer with recent transcripts only spent its first hour on empty weeks, looking for each week's start in every
+  large file). Each file's first line is read once a run (64 KB); those reads and the searches for a week's start count against the rate as well.
 - **Gently**: the reads are limited to 4 MB a second for all transcripts together, at most 256 KB at a time, and the scan ends with the connection.
 - **Stored once** (`db.PutUsageBackfill`, table `usage_backfill`): the node sends each week's hours oldest first, whole hours a request (about 2,000 buckets), the week's last request saying it is read through its last hour. The manager stores an hour
   (as hour rows, `step = 3600`) only when the machine had no row in it before the request, so the live meter's count of an hour always stays; in the same transaction it records

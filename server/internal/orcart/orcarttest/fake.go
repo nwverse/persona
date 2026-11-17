@@ -241,7 +241,12 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 			},
 		}
 	case "terminal.list":
-		out := map[string]any{"terminals": slices.Clone(f.terms), "topologyRevisions": maps.Clone(f.revisions),
+		// Copies of each terminal: the answer is encoded after the lock is let go, while another request may rename one.
+		terms := make([]map[string]any, len(f.terms))
+		for i, t := range f.terms {
+			terms[i] = maps.Clone(t)
+		}
+		out := map[string]any{"terminals": terms, "topologyRevisions": maps.Clone(f.revisions),
 			"hostScope": map[string]any{"hostIds": []string{"local"}}, "totalCount": len(f.terms), "truncated": false}
 		if p["includeVisualLayouts"] != false { // absent includes them, as for older clients
 			out["visualLayouts"] = slices.Clone(f.layouts)
