@@ -32,18 +32,27 @@ func (n *Node) keptStartTab(pane string) (keptStart, bool) {
 // plus its deletion in one critical section, so two session.start requests cannot claim the same kept tab.
 func (n *Node) keptStartTabLocked(pane string) (keptStart, bool) {
 	k, ok := n.keptStarts[pane]
-	if !ok || k.taken || !time.Now().Before(k.until) {
+	if !ok || k.taken || !n.keptTabFreeLocked(pane, k) {
 		return keptStart{}, false
 	}
+	return k, true
+}
+
+// keptTabFreeLocked: the kept tab k on pane has not expired, and no session is bound to it nor any agent runs there.
+// n.mu is held.
+func (n *Node) keptTabFreeLocked(pane string, k keptStart) bool {
+	if !time.Now().Before(k.until) {
+		return false
+	}
 	if _, bound := n.panes[pane]; bound {
-		return keptStart{}, false
+		return false
 	}
 	for _, a := range n.agents {
 		if a.PaneID == pane {
-			return keptStart{}, false
+			return false
 		}
 	}
-	return k, true
+	return true
 }
 
 // errStartTabGone refuses typing into, or starting in, a pane that is not a failed start's kept tab (any more): it
@@ -85,9 +94,10 @@ func (n *Node) startKeys(ctx context.Context, pane, text string, keys []string) 
 //   - keep: startTabFailed keeps the tab (keepStartTab) with an expiry (expireKeptStart closes it then).
 //   - claim: n.start, sync and async alike, holds it (claimKeptTab) before its own checks. Nothing is closed: a held
 //     tab is only marked taken, so its expiry, start.keys and another start leave it alone (another start is refused).
-//   - use: newTab, the one place a start gets a tab, settles the claim (keptClaim.tab): it starts in the tab, or, for
-//     an Orca tab whose one launch is used (orcaHost.Run), closes it and opens a new one. Every check of the start
-//     ran before newTab, so a refused start never got here.
+//   - use: newTab, the one place a start gets a tab, settles the claim (keptClaim.tab). It checks the tab again first:
+//     one a session was bound to or an agent came up in meanwhile is let go untouched (a new tab instead). Else it
+//     starts in the tab, or, for an Orca tab whose one launch is used (orcaHost.Run), closes it and opens a new one.
+//     Every check of the start ran before newTab, so a refused start never got here.
 //   - roll back: a claim newTab did not settle (the start was refused or failed before a tab), or a close that
 //     failed, puts the tab back as kept with its expiry (keptClaim.release); a failed close also fails the start, so no
 //     new tab opens beside the stalled agent that may still run there.
@@ -138,6 +148,16 @@ func (n *Node) claimKeptTab(pane string) (*keptClaim, error) {
 // tab whose one launch is used). A tab that did not close is released (still kept) and its error returned.
 func (c *keptClaim) tab(ctx context.Context) (*host.Created, error) {
 	if c == nil || c.settled {
+		return nil, nil
+	}
+	// Checked again now, not only when claimed: the stalled agent may have come up there during the start's checks
+	// (its SessionStart hook binds the pane). Such a tab is left as it is, kept until its expiry, which leaves a bound
+	// tab open, and the start opens a new tab as for a pane that is not kept.
+	c.n.mu.Lock()
+	free := c.n.keptTabFreeLocked(c.pane, c.k)
+	c.n.mu.Unlock()
+	if !free {
+		c.release()
 		return nil, nil
 	}
 	if o, isOrca := c.k.launch.(*orcaHost); !isOrca || o.launchable(c.k.created.Pane) {

@@ -807,3 +807,34 @@ func TestOrcaConcurrentRetriesOfTheStalledTab(t *testing.T) {
 		}
 	})
 }
+
+// The stalled agent comes up in its kept tab while the retry is still being checked (its SessionStart hook binds the
+// pane, here during the workspace lookup): the retry leaves that tab open and opens a new one rather than close the
+// agent it now holds.
+func TestOrcaRetryLeavesATabWhoseAgentCameUp(t *testing.T) {
+	n, _, o, c, root := keptOrcaStart(t, true)
+	var bound atomic.Bool
+	o.Handle("worktree.ps", func(map[string]any) any {
+		n.bindPane(c.Pane.String(), sidA)
+		bound.Store(true)
+		return map[string]any{"worktrees": []any{orcarttest.Worktree("wt-proj", root, "refs/heads/main")}, "totalCount": 1, "truncated": false}
+	})
+	_, _ = request(t, n, "session.start", map[string]any{"session_id": startID, "cwd": root, "in_pane": c.Pane.String()})
+	if !bound.Load() {
+		t.Fatal("the pane was not bound during the start's checks")
+	}
+	for _, w := range o.Writes() {
+		if w.Close && w.Handle == keptOrcaHandle {
+			t.Fatal("the retry closed the tab whose agent came up")
+		}
+	}
+	if got := startLineIn(o); got == "" || got == keptOrcaHandle {
+		t.Errorf("the start line went to %q, want a new tab", got)
+	}
+	n.mu.Lock()
+	k, ok := n.keptStarts[c.Pane.String()]
+	n.mu.Unlock()
+	if !ok || k.taken {
+		t.Errorf("the tab is not left kept (its expiry leaves a bound tab open): %v %+v", ok, k)
+	}
+}
