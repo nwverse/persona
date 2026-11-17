@@ -10,166 +10,6 @@ import (
 	"time"
 )
 
-// writeGate holds one selected write after nextLocked or nextUDPLocked has dequeued it. The test then chooses whether
-// that write reaches the phone, fails, or completes late. Reads stay on the original connection.
-type writeGate struct {
-	io.ReadWriteCloser
-	typ       byte
-	skip      int
-	result    chan error
-	entered   chan struct{}
-	finished  chan struct{}
-	proceeded chan struct{}
-
-	mu        sync.Mutex
-	intercept int
-	fired     bool
-}
-
-func installWriteGate(t *testing.T, s *Session, tr *transport, typ byte, skip int) *writeGate {
-	t.Helper()
-	g := &writeGate{typ: typ, skip: skip, result: make(chan error, 1), entered: make(chan struct{}), finished: make(chan struct{}), proceeded: make(chan struct{})}
-	s.mu.Lock()
-	g.ReadWriteCloser = tr.conn
-	tr.conn = g
-	s.mu.Unlock()
-	t.Cleanup(func() {
-		select {
-		case g.result <- net.ErrClosed:
-		default:
-		}
-	})
-	return g
-}
-
-func activeTransport(s *Session, id byte) *transport {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.chans[id].active
-}
-
-func (g *writeGate) Write(b []byte) (int, error) {
-	g.mu.Lock()
-	if g.fired {
-		select {
-		case <-g.proceeded:
-		default:
-			close(g.proceeded) // a later write proves the writer loop processed the gated write's result
-		}
-	}
-	selected := len(b) >= 5 && (g.typ == 0 || b[4] == g.typ)
-	intercept := selected && !g.fired && g.intercept >= g.skip
-	if selected {
-		if intercept {
-			g.fired = true
-		}
-		g.intercept++
-	}
-	g.mu.Unlock()
-	if !intercept {
-		return g.ReadWriteCloser.Write(b)
-	}
-	close(g.entered)
-	defer close(g.finished)
-	if err := <-g.result; err != nil {
-		return 0, err
-	}
-	return g.ReadWriteCloser.Write(b)
-}
-
-func (g *writeGate) await(t *testing.T) {
-	t.Helper()
-	select {
-	case <-g.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the selected write was not dequeued")
-	}
-}
-
-func (g *writeGate) complete(err error) { g.result <- err }
-
-func (g *writeGate) waitComplete(t *testing.T) {
-	t.Helper()
-	select {
-	case <-g.finished:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the selected write did not complete")
-	}
-}
-
-// completeLateWrite waits until the session has handled the write result. A successful writer is probed with a harmless
-// acknowledgement on the same connection; a failed writer is observed through the transport's dead fence.
-func (g *writeGate) completeLateWrite(t *testing.T, s *Session, tr *transport, err error) {
-	t.Helper()
-	g.complete(err)
-	g.waitComplete(t)
-	if err != nil {
-		waitFor(t, "the late write failure to close its transport", func() bool {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			return tr.dead
-		})
-		return
-	}
-	s.mu.Lock()
-	if tr.dead {
-		s.mu.Unlock()
-		t.Fatal("the old transport died after a successful write")
-	}
-	tr.ctl = append(tr.ctl, frame(TypeAck, chanOffset(RFB, 0)))
-	s.cond.Broadcast()
-	s.mu.Unlock()
-	select {
-	case <-g.proceeded:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the writer loop did not process the late successful write")
-	}
-}
-
-func resetTestLimits() Limits {
-	l := testLimits
-	l.StallAfter = time.Hour
-	l.Grace = time.Hour
-	l.VideoBacklog = time.Hour
-	return l
-}
-
-func keyframeRequests(helper net.Conn) <-chan []byte {
-	out := make(chan []byte, 16)
-	go func() {
-		for {
-			b := make([]byte, len(keyframeRequest))
-			if _, err := io.ReadFull(helper, b); err != nil {
-				return
-			}
-			out <- b
-		}
-	}()
-	return out
-}
-
-func nextKeyframeRequest(t *testing.T, requests <-chan []byte) {
-	t.Helper()
-	select {
-	case b := <-requests:
-		if !bytes.Equal(b, keyframeRequest) {
-			t.Fatalf("the helper received %v, want a keyframe request", b)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the helper was not asked for a keyframe")
-	}
-}
-
-func noKeyframeRequest(t *testing.T, requests <-chan []byte) {
-	t.Helper()
-	select {
-	case <-requests:
-		t.Fatal("the helper was asked for an unnecessary keyframe")
-	case <-time.After(50 * time.Millisecond):
-		// dropBacklogLocked injects asynchronously; allow an erroneous request to reach the reader before passing.
-	}
-}
-
 // prepareLostReset sends a backlog whose data is lost before the phone, then drops it. The phone is still at zero
 // when the reset at the returned jump is dequeued.
 func prepareLostReset(t *testing.T, s *Session, p *phone, helper net.Conn, id byte) (uint64, <-chan []byte) {
@@ -780,74 +620,143 @@ func TestVideoResetDeliveryEOFLostUDPResetFallsBack(t *testing.T) {
 	l.p.checkHealthy()
 }
 
-// A close dequeued on a failed route was not necessarily delivered. Once its final jump is confirmed, fallback still
-// owes the close itself so the phone can observe EOF.
-func TestVideoResetDeliveryEOFCloseFailureResent(t *testing.T) {
-	s, p, _, helper, id, _ := openVideo(t, true, resetTestLimits())
+// A reset blocked in a writer is outstanding even when no post-jump byte has been handed out. At EOF the retained
+// messages stay intact; StallAfter moves the route, and the next route repeats the same reset before messages and close.
+func TestVideoResetDeliveryEOFBlockedResetRetainsBufferAndFallsBack(t *testing.T) {
+	limits := resetTestLimits()
+	limits.StallAfter = 100 * time.Millisecond
+	s, p, _, helper, id, _ := openVideo(t, true, limits)
+	clock := useClock(s)
 	old := activeTransport(s, id)
 	fallback := activeTransport(s, RFB)
+	blocked := installWriteGate(t, s, old, TypeReset, 0)
 	jump, requests := prepareLostReset(t, s, p, helper, id)
 	nextKeyframeRequest(t, requests)
-	reset := p.nextOf(TypeReset)
-	_, at, _, _ := readChanOffset(reset.body)
-	if at != jump {
-		t.Fatalf("reset at %d, want %d", at, jump)
-	}
-	waitFor(t, "the final jump to confirm", func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.chans[id].jumpConfirmed
-	})
-	closeWrite := installWriteGate(t, s, old, TypeClose, 0)
-	if err := helper.Close(); err != nil {
-		t.Fatal(err)
-	}
-	closeWrite.await(t)
-	closeWrite.complete(io.ErrClosedPipe)
-	waitChannelActive(t, s, id, fallback)
+	blocked.await(t)
+	p.dropData(id, false)
 
-	closed := p.nextOf(TypeClose)
-	_, end, _, _ := readChanOffset(closed.body)
-	if end != jump || closed.via != p.carriers[0] {
-		t.Fatalf("close at %d on the wrong route, want %d on fallback", end, jump)
-	}
-	waitFor(t, "the phone to observe the fallback close", func() bool { return p.endedAtClose(id) })
-}
-
-// Once EOF is known, no later picture needs retained decoder messages. Dropping an unconfirmed final buffer also lets
-// the quiet-EOF stall watchdog recover a reset blocked before any of that buffer was handed out.
-func TestVideoResetDeliveryEOFDropsUnconfirmedBuffer(t *testing.T) {
-	limits := resetTestLimits()
-	s, p, cv, helper, id, _ := openVideo(t, true, limits)
-	clock := useClock(s)
-	fallback := activeTransport(s, RFB)
-	p.dropResets(id, true)
-	jump, requests := prepareLostReset(t, s, p, helper, id)
-	nextKeyframeRequest(t, requests)
-
+	key := videoFrameMsg(2, true, 80)
 	format := videoMessage(videoFormat, pattern(40))
+	retained := append(append([]byte(nil), key...), format...)
 	go func() {
-		_, _ = helper.Write(format)
+		_, _ = helper.Write(retained)
 		_ = helper.Close()
 	}()
-	waitFor(t, "EOF to drop the unconfirmed decoder buffer", func() bool {
+	waitFor(t, "EOF behind the blocked reset", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.chans[id].eof
+	})
+	s.mu.Lock()
+	ch := s.chans[id]
+	base, sent, jumpAt, data := ch.base, ch.sent, ch.jumpOff, ch.jumpData
+	buffered := append([]byte(nil), ch.buf...)
+	s.mu.Unlock()
+	if base != jump || sent != jump || jumpAt != jump || data || !bytes.Equal(buffered, retained) {
+		t.Fatalf("blocked reset changed the final stream: base=%d sent=%d jump=%d data=%v buffered=%d", base, sent, jumpAt, data, len(buffered))
+	}
+
+	clock.Advance(limits.StallAfter)
+	waitChannelActive(t, s, id, fallback)
+	blocked.complete(io.ErrClosedPipe)
+	reset := p.nextOf(TypeReset)
+	_, at, _, _ := readChanOffset(reset.body)
+	if at != jump || reset.via != p.carriers[0] {
+		t.Fatalf("fallback reset at %d on the wrong route, want %d on the parent", at, jump)
+	}
+	p.waitReceived(id, retained)
+	closed := p.nextOf(TypeClose)
+	_, end, _, _ := readChanOffset(closed.body)
+	if end != jump+uint64(len(retained)) {
+		t.Fatalf("close at %d, want %d", end, jump+uint64(len(retained)))
+	}
+	if !p.endedAtClose(id) {
+		t.Fatal("the phone did not finish after the fallback reset, retained messages and close")
+	}
+	noKeyframeRequest(t, requests)
+	p.checkHealthy()
+}
+
+// A reset starts its own stall interval when it is handed out. An old acknowledgement must not make a newly handed-out
+// reset stuck early, and a quiet route with no data tail still becomes stuck exactly at StallAfter.
+func TestVideoResetDeliveryResetStallClockStartsAtHandout(t *testing.T) {
+	limits := resetTestLimits()
+	limits.StallAfter = 100 * time.Millisecond
+	s, p, _, helper, id, _ := openVideo(t, true, limits)
+	clock := useClock(s)
+	p.dropData(id, true)
+	backlog := videoFrameMsg(1, true, 100)
+	go helper.Write(backlog)
+	waitFor(t, "the last unacknowledged data before the jump", func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		ch := s.chans[id]
-		return ch.eof && ch.jumpValid && !ch.jumpConfirmed && ch.jumpOff == jump+uint64(len(format)) &&
-			ch.sent == ch.base && len(ch.buf) == 0 && !ch.sentClose
+		return ch.base == 0 && ch.sent == uint64(len(backlog)) && len(ch.buf) == len(backlog)
 	})
-
-	blocked := installWriteGate(t, s, fallback, TypeReset, 0)
-	cv.conn.Close()
+	old := activeTransport(s, id)
+	blocked := installWriteGate(t, s, old, TypeReset, 0)
+	requests := keyframeRequests(helper)
+	s.mu.Lock()
+	clock.Advance(10 * limits.StallAfter) // the last acknowledgement is long ago; the reset has not been handed out
+	s.dropBacklogLocked(s.chans[id])
+	s.cond.Broadcast()
+	s.mu.Unlock()
+	nextKeyframeRequest(t, requests)
 	blocked.await(t)
-	clock.Advance(2 * limits.StallAfter)
-	waitFor(t, "the blocked final reset's route to stall", func() bool {
+
+	clock.Advance(limits.StallAfter - time.Millisecond)
+	timer := time.NewTimer(50 * time.Millisecond) // let several watchdog ticks observe the frozen clock
+	<-timer.C
+	s.mu.Lock()
+	dead := old.dead
+	s.mu.Unlock()
+	if dead {
+		t.Fatal("the reset's route stalled before StallAfter after its handout")
+	}
+	clock.Advance(time.Millisecond)
+	waitFor(t, "the reset's route to stall at StallAfter", func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return fallback.dead
+		return old.dead
 	})
 	blocked.complete(io.ErrClosedPipe)
+}
+
+// A live stream has no EOF special case. A reset lost on an otherwise quiet route still stalls, moves, and is repeated
+// before the next keyframe.
+func TestVideoResetDeliveryLiveLostResetOnQuietRouteFallsBack(t *testing.T) {
+	limits := resetTestLimits()
+	limits.StallAfter = 100 * time.Millisecond
+	s, p, _, helper, id, _ := openVideo(t, true, limits)
+	clock := useClock(s)
+	old := activeTransport(s, id)
+	fallback := activeTransport(s, RFB)
+	lost := installWriteGate(t, s, old, TypeReset, 0)
+	p.dropResets(id, true)
+	jump, requests := prepareLostReset(t, s, p, helper, id)
+	nextKeyframeRequest(t, requests)
+	lost.await(t)
+	lost.complete(nil)
+	lost.waitComplete(t)
+
+	next := installWriteGate(t, s, fallback, TypeReset, 0)
+	clock.Advance(limits.StallAfter)
+	waitChannelActive(t, s, id, fallback)
+	next.await(t)
+	p.dropResets(id, false)
+	p.dropData(id, false)
+	next.complete(nil)
+	next.waitComplete(t)
+	reset := p.nextOf(TypeReset)
+	_, at, _, _ := readChanOffset(reset.body)
+	if at != jump || reset.via != p.carriers[0] {
+		t.Fatalf("fallback reset at %d on the wrong route, want %d on the parent", at, jump)
+	}
+	key := videoFrameMsg(2, true, 100)
+	writeVideo(helper, key)
+	p.waitReceived(id, key)
+	noKeyframeRequest(t, requests)
+	p.checkHealthy()
 }
 
 // An earlier close at E must not finish the phone after the first retained message re-based at E. At EOF there is no

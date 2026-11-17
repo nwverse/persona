@@ -859,12 +859,14 @@ iPhone's side comes next.
   before data; if post-jump data was already handed to a writer, the node drops to a fresh message boundary and keyframe
   first, so the reset cannot land inside a message the phone may have started. While the stream is live, that safety drop
   retains non-frame decoder messages (`format`, `encoding`, …), because the helper need not repeat them for the new
-  keyframe. Once the helper has reached EOF there is no later keyframe: an unconfirmed final drop discards the remaining
-  video buffer instead. A close does not finish a channel while its final jump is unconfirmed. The close is held, or
-  repeated if it already went out, until that confirmation, because the phone's reset handler does not re-check an earlier
-  close. A route change also owes the close again: dequeueing it on the old route did not deliver it. Since the final
-  reset has no data tail to probe, the stall limit also applies to it: the route is closed and the move owes the reset
-  again.
+  keyframe. A safety drop after EOF discards the remaining video buffer: no later keyframe can follow, and retained
+  messages must not move the stream's end beyond a close the phone already holds. EOF by itself leaves buffered messages
+  intact while a reset awaits confirmation. A close does not finish a channel while its final jump is unconfirmed. A new
+  jump after a close went out owes another close after confirmation, because the phone's reset handler does not re-check
+  an earlier close; moving or losing a route alone does not owe the close again. A reset handed to a writer is outstanding
+  until the phone confirms it, whatever the buffer holds and whether or not EOF has arrived. If no bytes were already in
+  flight, its stall interval starts at handout. A route that keeps it unconfirmed for the stall limit is closed, and the
+  next route owes the reset again.
 - **Direct routes** (`screenlink.Direct`): while at least one session is live, the node listens on one TCP port bound
   to each of its candidate addresses (never the wildcard), and closes the listener with the last session. Candidates
   come from its own interfaces, with no Tailscale API or command: private IPv4 and unique-local IPv6 on Ethernet or

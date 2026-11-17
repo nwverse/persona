@@ -529,6 +529,7 @@ func (s *Session) dropFramesLocked(ch *channel, reason string) {
 	ch.sent = end
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
+	ch.resetOut = false  // this is a new jump; its reset has not been handed out yet
 	ch.sentClose = false // repeat any earlier EOF close only after this jump is confirmed
 	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	now := s.now()
@@ -644,6 +645,10 @@ func (s *Session) nextUDPLocked(t *transport) (udpJob, bool) {
 	}
 	if ch.reset {
 		ch.reset = false
+		ch.resetOut, ch.resetOff = true, ch.base
+		if ch.sent == ch.base {
+			ch.progress = s.now() // an outstanding reset starts the stall clock just like the first byte
+		}
 		return udpJob{ctl: chanOffsetBody(udpReset, ch.id, ch.base)}, true
 	}
 	for len(t.resend) > 0 {
@@ -674,7 +679,7 @@ func (s *Session) nextUDPLocked(t *transport) (udpJob, bool) {
 			s.dropBacklogLocked(ch)
 			return s.nextUDPLocked(t)
 		}
-		if ch.sent == ch.base {
+		if ch.sent == ch.base && !ch.resetOut {
 			ch.progress = s.now() // the first byte the phone hasn't acknowledged goes out: the stall clock starts
 		}
 		off := ch.sent

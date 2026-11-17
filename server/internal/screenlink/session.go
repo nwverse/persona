@@ -102,6 +102,8 @@ type channel struct {
 	eof       bool   // local ended: a close follows the last byte
 	sentClose bool
 	reset     bool // a reset at base goes out before more data
+	resetOut  bool // a reset handed to the active writer is still waiting for the phone's confirmation
+	resetOff  uint64
 	jumpOff   uint64
 	jumpValid bool // a backlog drop made jumpOff; RFB never has one
 	// While jumpValid && !jumpConfirmed, only a phone-stated offset at or past jumpOff confirms the jump. A transport
@@ -467,11 +469,6 @@ func (s *Session) readLocal(ch *channel) {
 		}
 		if err != nil {
 			ch.eof = true
-			if ch.jumpValid && !ch.jumpConfirmed && len(ch.buf) > 0 {
-				// No later picture needs decoder-only messages after EOF. In particular, do not re-base retained messages
-				// beyond a close the phone may already hold; drop the unconfirmed final buffer and finish at its end.
-				s.dropBacklogLocked(ch)
-			}
 			s.cond.Broadcast()
 			s.mu.Unlock()
 			return
@@ -559,11 +556,15 @@ func (s *Session) nextLocked(t *transport) []byte {
 		}
 		if ch.reset {
 			ch.reset = false
+			ch.resetOut, ch.resetOff = true, ch.base
+			if ch.sent == ch.base {
+				ch.progress = s.now() // an outstanding reset starts the stall clock just like the first byte
+			}
 			return frame(TypeReset, chanOffset(id, ch.base))
 		}
 		end := ch.base + uint64(len(ch.buf))
 		if ch.sent < end {
-			if ch.sent == ch.base {
+			if ch.sent == ch.base && !ch.resetOut {
 				ch.progress = s.now() // the first byte the phone hasn't acknowledged goes out: the stall clock starts
 			}
 			from := ch.sent - ch.base
@@ -586,6 +587,9 @@ func (s *Session) nextLocked(t *transport) []byte {
 // confirmJumpLocked records the phone's own offset, never a successful write or an offset the node chose for a move.
 // A pending reset at the confirmed jump is no longer owed.
 func (s *Session) confirmJumpLocked(ch *channel, off uint64) {
+	if ch.resetOut && off >= ch.resetOff {
+		ch.resetOut = false
+	}
 	if ch.jumpValid && !ch.jumpConfirmed && off >= ch.jumpOff {
 		ch.jumpConfirmed = true
 		ch.reset = false
@@ -657,10 +661,8 @@ func (s *Session) moveLocked(ch *channel, t *transport, off uint64) bool {
 	if !moved {
 		return true // the same route: what it has in flight still arrives
 	}
-	if ch.eof {
-		ch.sentClose = false // a close in flight on the old route is not delivery evidence; repeat it here
-	}
 	ch.sent, ch.progress = ch.base, s.now()
+	ch.resetOut = false // the new route owes an unconfirmed reset itself; the old writer no longer holds one
 	if ch.jumpValid && !ch.jumpConfirmed {
 		if ch.jumpData {
 			// The phone may have received data past the old jump, even in the middle of a message. A reset at the old
@@ -696,6 +698,7 @@ func (s *Session) dropBacklogLocked(ch *channel) {
 	ch.sent = ch.base
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
+	ch.resetOut = false  // this is a new jump; its reset has not been handed out yet
 	ch.sentClose = false // if EOF already sent a close, repeat it after this jump is confirmed
 	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	s.logf("screenlink: video moved with a %d-byte backlog: dropped for a keyframe", dropped)
@@ -913,9 +916,6 @@ func (s *Session) lose(t *transport) {
 		if ch.active != t || ch.finished {
 			continue
 		}
-		if ch.eof {
-			ch.sentClose = false // even with no fallback yet, do not finish on a close dequeued by this dead route
-		}
 		if p := t.parent; p != nil && !p.dead && !p.pending {
 			s.moveLocked(ch, p, ch.base) // off a UDP flow: onto its own TLS route first
 		} else if alt := s.fallbackLocked(ch); alt != nil {
@@ -1000,11 +1000,8 @@ func (s *Session) watch() {
 			if ch.active == nil && !ch.lostAt.IsZero() && now.Sub(ch.lostAt) >= s.limits.Grace {
 				expired = append(expired, ch)
 			}
-			// A final reset has no data tail to probe. If it stays unconfirmed, its route is stuck too: moving the
-			// channel re-arms the reset instead of leaving an empty EOF backlog waiting forever.
-			unconfirmedFinalJump := ch.eof && len(ch.buf) == 0 && ch.jumpValid && !ch.jumpConfirmed
-			// The phone has had bytes this long without acknowledging them: the route carrying them is stuck.
-			if ch.active != nil && (ch.sent > ch.base || unconfirmedFinalJump) && now.Sub(ch.progress) >= s.limits.StallAfter {
+			// Bytes or a reset handed to this route remain outstanding until the phone acknowledges them.
+			if ch.active != nil && (ch.sent > ch.base || ch.resetOut) && now.Sub(ch.progress) >= s.limits.StallAfter {
 				stuck = append(stuck, ch.active)
 			}
 			// The local end finished and the phone has everything, including the reset for any final jump.
