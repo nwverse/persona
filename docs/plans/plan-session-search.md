@@ -130,6 +130,19 @@ that may match is read through `transcript.File`, whose branch tree leaves out l
 or an edit and whose `History` notices a rewritten file, and the words are matched on the visible items it yields. So
 an abandoned message never gives a hit, and every `item_id` and `seq` returned opens in `session.items`.
 
+**Whole items.** `transcript.File` keeps a page-sized copy of a long item (`pageTextLen`, 24 KiB; `File.Full` reads
+the line again for the whole). A candidate item that came cut is read whole with `File.Full` before it is matched,
+redacted or clipped, so a word past the cut is found and a credential that crosses it is redacted whole; if `Full`
+fails (the line changed since the page was read), the item gives no hit.
+
+**A continued Codex thread is one session.** A thread continued into a new rollout keeps its older segments as
+separate files (`rolloutSegments`, `server/internal/node/codex.go`; the list follows the newest). The scan takes a
+thread's segments together, newest first, and the thread counts toward `limit` only once every segment has been
+searched; one the budget cut short is returned with what was found and `partial: true` on its row. `session.items`
+opens a thread at its newest file, so a hit in an older segment cannot land on its item today: it is returned with
+its snippet and `"segment": "older"`, without `item_id` or `seq`, and opens the session at its start (a decision
+below).
+
 **Answer** (at most `limit` sessions, 3 hits each, 64 KiB in all):
 
 ```json
@@ -184,12 +197,22 @@ mnemo's numbers; PR 2 measures them on a synthetic corpus.
 **Recommended: (c) everywhere, (a) where mnemo is installed.** Both sit behind `session.search` and give the same
 answer, so the App and the manager never know which one ran (`backend` is for the coverage line only).
 
-- **Scan (always there)**: transcript files newest first by modification time; each line is checked against the
-  folded words on its raw bytes (ASCII case-folded) and a file with a line that can match is read through
-  `transcript.File` and matched on its visible items (section 1). A word with characters that JSON may escape (quotes, `<`, `>`,
-  `&`, `\`) or that NFKC changes is not used to skip lines, so the shortcut never drops a real match. The scan stops
-  when `limit` sessions have hits (`more: true`) or at `budget_ms` (2.5 s by default), which answers `partial: true`
-  with `searched_back_to`, the modification time of the last file it finished. One scan at a time per node; a new search
+- **Scan (always there)**: sessions newest first by their newest file's modification time (a continued Codex
+  thread with all its segments, section 1). Each line goes through a prefilter that may only rule a line out, and a
+  file with a line it did not rule out is read through `transcript.File` and matched on its visible items, whole
+  (section 1).
+- **The prefilter** rules a line out only when its visible text cannot hold the words. `chatsearch.IndexText` shows a
+  reply's Markdown without its markup, so `foo**bar**` matches `foobar` although the raw bytes never hold `foobar`:
+  comparing raw bytes would drop real matches. Instead the line and each word are reduced the same way: JSON escapes
+  decoded (`\n`, `\"`, `\\`, `\uXXXX`), folded as matching folds (`chatsearch.Fold`, NFKC and lower case), cut down to
+  letters, digits and combining marks, and recomposed (NFC). A line is ruled out when some word's reduced form is
+  missing from the line's. Removing markup drops only characters that this reduction drops too, except where
+  markup takes letters with it; a line holding such markup (a link or image target, `](`; a reference label, `][`;
+  an HTML tag or entity, `<` or `&` followed by a letter or `/` or `#`) is never ruled out, and a word that reduces to
+  nothing rules nothing out. PR 2 checks the contract with a property test (below), and if the prefilter skips too
+  little to keep inside the budget, the answer is a scan that reaches less far back, never a looser prefilter.
+- **When the scan stops**: once `limit` sessions have hits (`more: true`), or at `budget_ms` (2.5 s by default), which
+  answers `partial: true` with `searched_back_to`, the modification time of the last session it finished. One scan at a time per node; a new search
   from the same caller cancels the old one. No state is kept between searches beyond a small in-memory cache of each
   file's session id and head metadata, keyed by path, size and modification time.
 - **mnemo (when present)**: the node looks for `mnemo` the way it looks for other CLIs, checks `mnemo --version`
@@ -234,7 +257,7 @@ is listed as a decision below, not part of this plan.
 
 ```json
 {"results": [{"machine_id": "…", "session_id": "…", "title": "…", "project": "…", "harness": "codex",
-              "updated_at": "…", "archived": false, "score": 0.032, "hits": […], "more_hits": 1}],
+              "updated_at": "…", "archived": false, "score": 0.016, "hits": […], "more_hits": 1}],
  "computers": [{"machine_id": "…", "name": "computer-a", "status": "searched", "backend": "mnemo", "took_ms": 180},
                {"machine_id": "…", "name": "computer-b", "status": "partial", "backend": "scan",
                 "searched_back_to": "2026-09-01T10:00:00Z"},
@@ -250,9 +273,13 @@ counts ride along on the computer's row.
   session takes its title, project and launcher label from there. A session outside the list window gets its title
   from its first user words, redacted and clipped by the node. Agent session archives are the manager's, so archived
   sessions are marked.
-- **Several managers**: the hub's relay asks each manager in parallel and concatenates `results` and `computers`, each
-  row stamped with its manager as merged lists are. `mergeList` asks one after the other, which is fine for to-dos but
-  would add seconds here, so the relay needs a parallel variant (a decision below). Most installs have one manager.
+- **Several managers**: the hub's relay asks each manager in parallel, each row stamped with its manager as merged
+  lists are, and merges the answers rather than concatenating them: all managers' `results` sorted together by
+  `score` (`order=relevance`, section 5) or by the newest hit (`order=newest`), ties broken by the newer hit, then
+  machine and session id, and `limit` applied once to the merged list. `computers` is every manager's rows (a computer
+  belongs to one manager). `partial` is true if any answer's is; `more` is true if any answer's is or the merge cut
+  results. `mergeList` asks one after the other, which is fine for to-dos but would add seconds here, so the relay
+  needs a parallel variant (a decision below). Most installs have one manager.
 - **Capability**: the manager names `session_content_search` in its hello and the hub lists the feature
   `sessions_content_search` while the default manager names it, as `assistant_search` does. Clients without it keep
   today's search.
@@ -274,9 +301,11 @@ A new route rather than a new mode of `search=`:
 - **On a node**: the scan returns sessions by their newest hit; mnemo returns its own relevance order (BM25). Within
   a session, hits are newest first.
 - **In the manager**: the computers' orders are fused with Reciprocal Rank Fusion (k = 60, the usual constant; mnemo
-  merges its own devices with RRF too), since a scan's order and BM25 scores cannot be compared directly; ties go to
-  the newer hit. `order=newest` sorts by the newest hit instead. Each result carries its fused `score`, so a list
-  merged across managers can still be ordered.
+  merges its own devices with RRF too), since a scan's order and BM25 scores cannot be compared directly. A session
+  lives on one computer, so its fused score is `1 / (60 + rank)`, with `rank` its 1-based place in its own computer's
+  answer: it depends on nothing but that answer, so a manager and the hub's relay compute the same `score` and any
+  number of managers' results sort together (section 3). Ties go to the newer hit. `order=newest` sorts by the newest
+  hit instead.
 - **Limits**: query at most 200 characters; `limit` 20 sessions by default, 50 at most; 3 hits per session with
   `more_hits`; each node asked for `limit` sessions; snippets about 40 characters before the match and 80 after.
 - **Paging**: no cursor. A cursor would make every computer keep state for a query. "More" asks again with a larger
@@ -288,7 +317,8 @@ A new route rather than a new mode of `search=`:
 - **What never leaves the computer**: transcript files, whole items, tool output beyond a snippet, transcript paths,
   mnemo's index, archive and snippets. The answer carries ids, times, the session's working directory (already in the
   session list) and redacted snippets.
-- **How a snippet is made**, on the node: the whole item text first, tool input through `proto.RedactArgs`, then
+- **How a snippet is made**, on the node: the whole item text first (read with `File.Full` when the page copy was cut,
+  section 1; an item that cannot be read whole gives no hit), tool input through `proto.RedactArgs`, then
   `transcript.SanitizeShareText` over the whole text, and only then `chatsearch.Snippet` cuts the window. Redacting
   before cutting means a credential cut in half at the edge of a snippet is never shown. A hit whose matched words fall
   inside a redacted span is dropped: the search should not answer "this token is in session X".
@@ -347,18 +377,27 @@ A new route rather than a new mode of `search=`:
    temporary home with Claude, Codex and Codex App history fixtures: Chinese, width and case; words in different
    items do not match; blocked directories; assistant, health-space and meeting-room chats and an assistant-started
    Codex thread give no hits or snippets while an ordinary session beside them does; rewind and edit fixtures where an
-   abandoned message gives no hit and every returned `item_id` opens through `session.items`; a never-opened Codex App
+   abandoned message gives no hit and every returned `item_id` opens through `session.items`; the prefilter's property
+   test: over generated Markdown (emphasis, code spans, links, images, reference links, tables, fences, HTML tags and
+   entities, JSON escapes, fullwidth and decomposed letters) and every fixture, no line whose visible item matches is
+   ruled out, including `foo**bar**` for `foobar` and `[foo](u)bar` for `foobar`; a long item whose match lies past the
+   24 KiB page cut is found, a secret that crosses the cut is redacted whole, and an item whose line changed before
+   `Full` gives no hit; a Codex thread continued across segments, its hits in the older segment found (marked
+   `older`, no `item_id`), the thread counted once and only after all its segments, and a budget that stops inside it
+   giving `partial` on its row; a never-opened Codex App
    chat and an App history behind its database both found, and a budget too small for them counted in
    `uncovered.codex_app`; each secret shape from `share_sanitize.go` redacted in snippets; a match inside a secret
    dropped; the budget giving `partial` and `searched_back_to`; cancellation; the size caps; a
    benchmark on a synthetic corpus, numbers in the PR. Never the developer's real home.
 3. **The mnemo backend.** A fake `mnemo` script on `PATH` in tests: too old or missing leads to a scan; remote-host
    hits, unknown paths, blocked folders, assistant and health chats, lines on an abandoned branch and `archived` hits
-   are dropped; a changed line is dropped; mnemo's snippet is
+   are dropped; a changed line is dropped; a hit in a cut item is matched and redacted whole; mnemo's snippet is
    never forwarded; a timeout falls back to a scan.
 4. **Manager fan-out, route and relay**, the feature, the route scope, the architecture guard's table list, and
    `scripts/mock/mock_hub.py` answering the route. Tests with fake computers: slow (timeout), offline (no call),
-   outdated, failing; one deadline per computer; cancellation; fusion order; caps; no query in the logs.
+   outdated, failing; one deadline per computer; cancellation; fusion order; caps; no query in the logs; two
+   managers through the relay: relevance and newest orders interleaved across them, one `limit` over the merge,
+   `partial` and `more` from either.
 5. **Web**: the ⌘K row, results view, coverage line, landing and Continue; an end-to-end check against the mock hub.
 6. **Assistant tool** and `agent_read`'s `around_seq`: the tool definition, deferred loading, the work-computer rule,
    the text it returns, coverage lines.
@@ -372,8 +411,8 @@ Each comes with a recommendation; small reversible choices are settled during im
 
 1. **Backends**: a bounded scan everywhere plus mnemo where installed (recommended); or mnemo only, with computers
    without it reported as "not searched: install mnemo"; a built-in index is not recommended (the node guard, #757).
-2. **Several managers**: a parallel relay in the hub that concatenates the managers' answers (recommended); or the
-   apps ask each manager and merge, as with `pagedLists`.
+2. **Several managers**: a parallel relay in the hub that merges the managers' answers by score and applies the limit
+   once (recommended); or the apps ask each manager and merge the same way, as with `pagedLists`.
 3. **Tool output**: searched only when asked per search (recommended), or by default as mnemo does.
 4. **Scan defaults**: 2.5 s per computer, 6 s per request, no default time window (the budget is the window and the
    answer says how far back it got). Or a default `since:90d`.
@@ -386,3 +425,6 @@ Each comes with a recommendation; small reversible choices are settled during im
    off until the user turns it on.
 10. **Later**: lifting the knowledge base's file prefilter into a shared package if scans prove slow. It is a cache
     that can only rule files out, but it is an index of a kind.
+11. **Hits in a continued Codex thread's older segments**: shown with their snippet, opening the session at its start
+    (recommended for now); or `session.items` taught to page back into a thread's older segments, so they land on the
+    item, as a separate change.
