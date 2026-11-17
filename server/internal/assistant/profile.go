@@ -62,7 +62,7 @@ type Settings struct {
 	Main          string `json:"main,omitempty"`
 	MainMachineID string `json:"main_machine_id,omitempty"` // confirmed routing device of Main
 	// Former are the main conversations replaced since (newest first, POST /api/v1/assistant/main/new): their machine
-	// keeps listing them, archived, however long they are quiet.
+	// keeps listing them however long they are quiet. New main chat archives them; model handoffs keep them visible.
 	Former []FormerMain `json:"former_main,omitempty"`
 	// MainTasksQuiet: tasks the main conversation opens are told only there, not pushed, on the Live Activity or in
 	// task badges (#1731). nil is on (the default); the view always says what is in effect.
@@ -461,7 +461,7 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink) []SessionRef {
 		}
 	}
 	add(v.mainRouteMachine(), v.Main)
-	for _, f := range v.Former { // archived, still to be found
+	for _, f := range v.Former { // still to be found after an archive or model handoff
 		add(f.MachineID, f.SessionID)
 	}
 	for _, t := range tasks {

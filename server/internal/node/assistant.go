@@ -391,6 +391,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		launcher, options = own, nil // the model picked for the other launcher is not this one's
 	}
 	execution := executionOption(options)
+	prepareOnly := execution.PrepareOnly
+	execution.PrepareOnly = false // never retain this one-shot operation in the process's recovery metadata
 	execution.Origin = origin
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
@@ -423,7 +425,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff)
+		return n.assistantSendRuntimePrepared(ctx, onRuntime, id, cwd, rl, text, images, mode, prepareOnly, execution.Model, eff)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
@@ -685,6 +687,20 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 
 	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
+	if prepareOnly {
+		if p.agent == "claude" {
+			if err := p.control(ctx, map[string]any{"subtype": "initialize"}); err != nil {
+				n.stopAssistantProcess(id)
+				return "", err
+			}
+			if err := n.syncAssistantModes(ctx, p); err != nil {
+				n.stopAssistantProcess(id)
+				return "", err
+			}
+		}
+		awaitList(n.notifySessionsSoon())
+		return id, nil
+	}
 	n.noteAssistantRecoveryProcess(ctx, p)
 	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
 		// An active process may retain its old environment while a switch waits. Never send selections to that

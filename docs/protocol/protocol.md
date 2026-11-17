@@ -209,7 +209,23 @@ not returned because it can belong to background naming. No `model_started`, exe
 is synthesized. The tool invokes no model, writes no settings, resolves no card, renames nothing and publishes no
 session list. Ordinary coding Agents, extensions and work machines cannot call it.
 
+### Main-chat model handoff (#10032)
+
+`assistant_main_model_handoff` enables `POST /api/v1/assistant/main/model` for full credentials. Request:
+`{expect, launcher, model?, effort?}`; response: `{session, replaced?, carried}`. Same-engine picks keep the current
+session. A cross-engine pick prepares a new session before atomically committing Main, its stored model pick and the
+bounded transcript handoff. Stale Main (`main_changed`), running work, pending questions or input (`busy`), invalid picks
+and startup failures leave the source in place. Clients must wait for the authoritative response before navigating,
+preserve recoverable drafts on failure, and must not automatically repeat an uncertain startup request.
+
+The manager calls the additive node RPC `assistant.start_prepared` with new-chat `assistant.send` setup fields and no
+text, images, existing session ID or guest. It returns `{session_id}` after process/thread initialization without sending
+a turn. Older nodes refuse the unknown method. See [model-config.md](../assistant/model-config.md#main-chat-model-handoffs-10032)
+for state persistence, context consumption and extension boundaries.
+
 ### Health check and feature flags
+
+- `assistant_main_model_handoff`: the full-credential prepared main-chat model route described above (#10032).
 
 `GET /api/v1/health` needs no authentication. Public sources get only:
 

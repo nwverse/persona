@@ -31,6 +31,7 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	AssistantPrepared       bool            `json:"assistant_prepared,omitempty"` // runtime instructions still await the first real message
 	CreationID              string          `json:"creation_id,omitempty"`
 	Incarnation             string          `json:"incarnation,omitempty"`
 	Pane                    string          `json:"pane,omitempty"`

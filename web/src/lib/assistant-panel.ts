@@ -43,6 +43,8 @@ export interface AssistantPanelOptions {
   /** The chat already runs on `engine`: a provider of another engine can't take it over (the hub refuses it, 409
    *  `launcher_other_kind`), so it is listed off with why. Not set on the new-conversation page. */
   running?: boolean;
+  /** The main chat can prepare a replacement when a pick crosses engines (#10032). */
+  handoff?: boolean;
   /** A new conversation may choose an advertised native speed for its first turn. */
   starting?: boolean;
   /** The chat has Codex's Fast speed: the model it runs offers it ("as it runs": on when `fastOn`). */
@@ -72,7 +74,7 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
       p.models = models;
     }
     // the provider it runs on stays as it is, whatever its kind: it is what the panel says the chat runs
-    if (running && kind !== runs && l.name !== setup.provider) p.unavailable = t("chat-modelpanel.other_engine", { from: agentName(runs), to: agentName(kind) });
+    if (running && !o.handoff && kind !== runs && l.name !== setup.provider) p.unavailable = t("chat-modelpanel.other_engine", { from: agentName(runs), to: agentName(kind) });
     else if (typed && typedModelOffered(kind, e.list)) p.typable = true;
     return p;
   });
@@ -85,6 +87,8 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
   }
   // what can't run it, a Paseo provider among them: that provider is its engine, never "paseo" (#8142)
   for (const u of info?.unavailable ?? []) {
+    // Agent-only launchers belong in the worker picker; they cannot become an assistant chat (#10032).
+    if (u.code === "not_main_chat") continue;
     if (providers.some((p) => p.id === u.name)) continue;
     providers.push({ id: u.name, name: providerTitle(u), engine: agentId(providerAgent(u.agent || "claude", u.name)), models: null, unavailable: u.reason });
   }

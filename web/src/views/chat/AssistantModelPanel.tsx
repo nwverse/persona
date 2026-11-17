@@ -5,7 +5,7 @@
 // message, on every device), drawn at once and put back with the hub's words if it says no; following the default again
 // is a DELETE. An older hub: the pick lasts for this page and goes with each message, as before. The new-conversation
 // page: the pick goes with the conversation's start.
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, errorText, sessionPath } from "../../lib/api";
 import { assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
@@ -16,9 +16,10 @@ import { useChosenManager } from "../../lib/manager-choice";
 import type { PanelConfig } from "../../lib/model-panel";
 import { TYPED_MODELS_FEATURE } from "../../lib/model-id";
 import { providerTitle } from "../../lib/provider-names";
+import { navigate } from "../../lib/router";
 import { speedStep } from "../../lib/session-panel";
 import { assistantLaunchers, forgetModel, modelList, readModels, useModelLists } from "../../lib/session-models";
-import { getSession, hubHas, upsertSession, useStore } from "../../lib/store";
+import { getSession, hubHas, patchAssistant, upsertSession, useStore } from "../../lib/store";
 import type { ModelPick, Session } from "../../lib/types";
 import { toast } from "../../ui/atoms";
 import { ModelPanel } from "../../ui/model-panel/ModelPanel";
@@ -71,8 +72,8 @@ async function setEffort(s: Session, effort: string): Promise<boolean> {
 }
 
 /** The strip on top: where the setup comes from and, for a pick, the way back. */
-export function PickStrip({ chat, setup, named, onBack }: { chat: AssistantChat; setup: AssistantSetup; named: string; onBack?: () => void }) {
-  const text = !chat.session
+export function PickStrip({ chat, setup, named, onBack, pending = false }: { chat: AssistantChat; setup: AssistantSetup; named: string; onBack?: () => void; pending?: boolean }) {
+  const text = pending ? t("chat-modelpill.handoff_pending") : !chat.session
     ? t("chat-modelpill.header_new", { setup: named })
     : setup.source === "pick"
       ? t(chat.kept ? "chat-modelpill.header_picked" : "chat-modelpill.header_picked_page", { setup: named })
@@ -82,7 +83,7 @@ export function PickStrip({ chat, setup, named, onBack }: { chat: AssistantChat;
   // the main chat and the new one go back to the default; another chat's pick is undone (it then keeps what it runs)
   const back = chat.session && !(chat.followsDefault ?? chat.isMain) ? t("chat-modelpill.undo_pick") : t("chat-modelpill.follow_default");
   return (
-    <div data-pick-strip={setup.source} className="flex min-w-0 items-baseline gap-2 border-b border-line px-3.5 py-2 text-[12px] leading-[1.45] text-ink-2">
+    <div data-pick-strip={setup.source} role={pending ? "status" : undefined} className="flex min-w-0 items-baseline gap-2 border-b border-line px-3.5 py-2 text-[12px] leading-[1.45] text-ink-2">
       <span className="min-w-0 flex-1 break-words">{text}</span>
       {setup.source === "pick" && onBack && (
         <button type="button" onClick={onBack} className="shrink-0 font-medium whitespace-nowrap text-accent-ink hover:underline">
@@ -94,9 +95,12 @@ export function PickStrip({ chat, setup, named, onBack }: { chat: AssistantChat;
 }
 
 export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: AssistantChat; mid: string; anchor: HTMLElement; onClose: () => void }) {
+  const [switching, setSwitching] = useState(false);
+  const switchingRef = useRef(false);
   const version = useModelLists();
   const typed = useStore((s) => hubHas(s.features, TYPED_MODELS_FEATURE));
   const chosen = useChosenManager();
+  const handoff = useStore((s) => hubHas(s.features, "assistant_main_model_handoff")) && !chosen && chat.isMain;
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE)) && !chosen;
   const { info } = assistantLaunchers(mid);
   const setup = assistantSetup(chat, info);
@@ -106,9 +110,9 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
   const fast = Boolean(chat.session?.service_tiers?.some((x) => x.id === "priority"));
   const fastOn = Boolean(setup.fast);
   const { providers, state } = useMemo(
-    () => assistantPanel(setup, info, (name) => modelList(mid, name, "assistant"), { typed, engine, running, starting: !chat.session && startServiceTier, fast, fastOn }),
+    () => assistantPanel(setup, info, (name) => modelList(mid, name, "assistant"), { typed, engine, running, handoff, starting: !chat.session && startServiceTier, fast, fastOn }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
-    [setup.provider, setup.model, setup.effort, setup.fast, info, mid, typed, engine, running, fast, fastOn, startServiceTier, version],
+    [setup.provider, setup.model, setup.effort, setup.fast, info, mid, typed, engine, running, handoff, fast, fastOn, startServiceTier, version],
   );
   const latest = () => (chat.session ? (getSession(chat.session.machine_id, chat.session.session_id) ?? chat.session) : undefined);
   const key = assistantPickKey(chat);
@@ -121,6 +125,28 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
   };
   const apply = async (pick: ModelPick): Promise<boolean> => {
     const s = latest();
+    const target = providers.find((p) => p.id === pick.launcher);
+    const current = providers.find((p) => p.id === setup.provider);
+    if (s && handoff && target?.engine !== current?.engine) {
+      if (switchingRef.current) return false;
+      switchingRef.current = true;
+      setSwitching(true);
+      try {
+        const result = await api<{ session: Session; replaced?: string; carried: boolean }>("/assistant/main/model", {
+          method: "POST", json: { expect: s.session_id, ...pick },
+        });
+        upsertSession(result.session);
+        patchAssistant({ main: result.session.session_id, main_machine_id: result.session.machine_id });
+        navigate({ name: "persona" });
+        return true;
+      } catch (e) {
+        toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+        return false;
+      } finally {
+        switchingRef.current = false;
+        setSwitching(false);
+      }
+    }
     if (s && chat.kept) return keepPick(s, pick);
     keepHere(pick);
     // an older hub keeps the effort on the session (what the effort chip did)
@@ -204,7 +230,8 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
       onApplyCurrent={onApplyCurrent}
       onReload={onReload}
       onForget={onForget}
-      header={<PickStrip chat={chat} setup={setup} named={named} onBack={back} />}
+      held={switching}
+      header={<PickStrip chat={chat} setup={setup} named={named} pending={switching} onBack={switching ? undefined : back} />}
     />
   );
 }

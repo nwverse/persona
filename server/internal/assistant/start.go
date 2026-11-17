@@ -344,12 +344,16 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		cfg := s.settings(ctx)
 		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
 	}
-	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	method := DeviceAssistantSend
+	if p.PrepareOnly {
+		method = assistantwire.DeviceAssistantStartPrepared
+	}
+	err = s.call(ctx, machine, method, params, &res)
 	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
 		// A node too old to be told a profile starts it where it always has; a launcher running another agent than
 		// Claude Code, which alone has profiles, starts without one.
 		delete(params, "config_dir")
-		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+		err = s.call(ctx, machine, method, params, &res)
 	}
 	s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
 	if err != nil {
@@ -361,6 +365,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
+	if p.PrepareOnly {
+		sess.Status, sess.State = proto.StatusIdle, proto.StateIdle
+	}
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
 }

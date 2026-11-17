@@ -332,7 +332,7 @@ func (s *Service) writeConversationJSON(ctx context.Context, w http.ResponseWrit
 }
 
 func conversationWrite(method string) bool {
-	return method == "assistant.send" || method == "session.send" || method == "session.start" || method == "session.resume" || method == "session.fork" || method == "session.rewind"
+	return method == "assistant.send" || method == "assistant.start_prepared" || method == "session.send" || method == "session.start" || method == "session.resume" || method == "session.fork" || method == "session.rewind"
 }
 
 // Check every referenced identity: a resume may name both a new session id and

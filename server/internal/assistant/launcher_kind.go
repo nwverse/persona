@@ -80,7 +80,7 @@ func (s *Service) launcherAgent(ctx context.Context, machine, name string) strin
 	}
 	for _, l := range picker {
 		if l.Name == name {
-			return l.AgentType
+			return firstNonEmpty(l.AgentType, l.Agent, "claude")
 		}
 	}
 	return ""

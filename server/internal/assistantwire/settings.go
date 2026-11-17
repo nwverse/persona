@@ -60,6 +60,9 @@ const (
 	DeviceAssistantGuestDelete = "assistant.guest_delete"
 	// DeviceAssistantWarm: {cwd, launcher, …model} → {}: a process ready for the next new conversation.
 	DeviceAssistantWarm = "assistant.warm"
+	// DeviceAssistantStartPrepared starts and acknowledges a new chat without delivering a model turn.
+	// An older node refuses the unknown method instead of sending an empty prompt (#10032).
+	DeviceAssistantStartPrepared = "assistant.start_prepared"
 	// DeviceAssistantMemory: {op, cwd, name?, content?} → the memory files (op list) or {}.
 	DeviceAssistantMemory = "assistant.memory"
 	// DeviceAssistantCompact: {session_id, only_running?} → {}; only_running refuses not_running instead of starting a
@@ -81,6 +84,7 @@ const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant c
 
 // StartParams is assistant.start's params.
 type StartParams struct {
+	PrepareOnly    bool          `json:"-"` // manager-owned main-model handoff; never an ordinary start or bus parameter
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images,omitempty"`
 	Launcher       string        `json:"launcher,omitempty"`

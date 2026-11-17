@@ -2030,6 +2030,12 @@ Code: `lib/usage-windows.ts` (pure functions, with unit tests), `views/UsageBars
 
 ## Model pill and model panel (#5032)
 
+With `assistant_main_model_handoff`, the main chat can choose a model from another engine in this same panel (#10032).
+Agent-only profiles are omitted from this Assistant panel and remain available when choosing workers.
+Its existing pick strip shows progress immediately; it keeps the current chat and draft on failure and navigates to the
+confirmed replacement on success. Same-engine and side-chat picks keep their existing behavior. The server prepares
+without a model turn and transfers context and tasks as described in [model-config.md](../assistant/model-config.md#main-chat-model-handoffs-10032).
+
 Who it serves: people working with coding Agents in the **Agents** chats, and everyone in a Persona chat (#5033), where it
 reads as plain choices of a model. The user asked (2026-11-12) for this part of the chat page to match Cindy's model
 selector; where Persona's earlier rules differ, Cindy's wins, built from Persona's tokens and components

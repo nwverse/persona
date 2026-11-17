@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
+import { storedPageDraft, storePageDraft } from "../../lib/drafts";
 import { NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
 import { panelSections } from "../../lib/model-panel";
 import { getSession, getState, upsertSession } from "../../lib/store";
@@ -49,7 +50,7 @@ let machine = 0;
 let host: HTMLDivElement;
 let root: Root;
 let calls: { method: string; url: string; body?: unknown }[];
-let pickAnswer: () => Response;
+let pickAnswer: () => Response | Promise<Response>;
 let defaultSetup: { provider: string; model: string; effort: string };
 let superviseSetup: { provider: string; model: string; effort: string };
 
@@ -79,6 +80,7 @@ beforeEach(() => {
       unavailable: [{ name: "gpt-direct", kind: "api", code: "api_protocol", reason: "Responses API" }],
     });
     if (url.includes("/assistant/conversations/c1/model")) return pickAnswer();
+    if (url.includes("/assistant/main/model")) return pickAnswer();
     return json({ ok: true });
   }));
   host = document.createElement("div");
@@ -109,6 +111,53 @@ async function open() {
 }
 const strip = () => document.querySelector<HTMLElement>("[data-pick-strip]");
 const sent = (method: string) => calls.filter((c) => c.method === method && c.url.includes("/assistant/conversations/c1/model")).map((c) => c.body ?? null);
+
+describe("prepared main-chat model handoffs", () => {
+  it("offers another engine only for a main chat on a supporting hub and waits for the confirmed replacement", async () => {
+    getState().features.push("assistant_main_model_handoff");
+    await show(chat());
+    await open();
+    expect(panel.props!.providers.find((p) => p.id === "codex")!.unavailable).toBeUndefined();
+    let finish!: (r: Response) => void;
+    pickAnswer = () => new Promise((resolve) => { finish = resolve; });
+    let picking!: Promise<boolean>;
+    act(() => { picking = panel.props!.onPick({ provider: "codex", model: "gpt-fast", effort: "low" }); });
+    await flush();
+    expect(document.querySelector('[role="status"]')?.textContent).toBe(t("chat-modelpill.handoff_pending"));
+    expect(panel.props!.held).toBe(true);
+    expect(getState().assistant?.main).toBe("c1");
+    expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+    expect(calls.find((c) => c.url.includes("/assistant/main/model"))?.body).toEqual({ expect: "c1", launcher: "codex", model: "gpt-fast", effort: "low" });
+    await act(async () => { finish(json({ session: chat({ session_id: "next", agent: "codex", launcher: "codex", model_pick: { launcher: "codex", model: "gpt-fast", effort: "low" } }), replaced: "c1", carried: true })); expect(await picking).toBe(true); });
+    expect(getState().assistant?.main).toBe("next");
+    expect(getSession(mid(), "c1")).toBeDefined();
+    expect(getSession(mid(), "next")?.model_pick?.model).toBe("gpt-fast");
+  });
+
+  it("keeps the source, pick and draft after failed startup without retrying", async () => {
+    getState().features.push("assistant_main_model_handoff");
+    storePageDraft(`${mid()}/c1`, "Unsent message");
+    await show(chat()); await open();
+    pickAnswer = () => json({ error: "Target unavailable", code: "offline" }, 503);
+    await act(async () => { expect(await panel.props!.onPick({ provider: "codex", model: "gpt-fast" })).toBe(false); });
+    expect(getState().assistant?.main).toBe("c1");
+    expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+    expect(storedPageDraft(`${mid()}/c1`)).toBe("Unsent message");
+    expect(calls.filter((c) => c.url.includes("/assistant/main/model"))).toHaveLength(1);
+    expect(panel.props!.held).toBe(false);
+    expect(toast).toHaveBeenCalled();
+  });
+
+  it("keeps side chats on their engine and same-engine picks on the ordinary PUT", async () => {
+    getState().features.push("assistant_main_model_handoff");
+    await show(chat({ session_id: "side" })); await open();
+    expect(panel.props!.providers.find((p) => p.id === "codex")!.unavailable).toBeTruthy();
+    await show(chat()); await open();
+    await act(async () => { expect(await panel.props!.onPick({ provider: "relay", model: "haiku" })).toBe(true); });
+    expect(sent("PUT")).toHaveLength(1);
+    expect(calls.some((c) => c.url.includes("/assistant/main/model"))).toBe(false);
+  });
+});
 
 describe("a Persona chat's pill on a hub that keeps picks", () => {
   it("shows what the main chat runs, opens the panel with its providers and says it follows the default", async () => {

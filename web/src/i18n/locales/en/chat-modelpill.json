@@ -16,5 +16,6 @@
   "follow_default": "Follow default",
   "undo_pick": "Undo pick",
   "provider_gone": "This provider isn't on this computer anymore",
-  "pick_dropped": "{launcher} can't run Persona chats, so this chat is back on the default"
+  "pick_dropped": "{launcher} can't run Persona chats, so this chat is back on the default",
+  "handoff_pending": "Switching models and carrying over this chat…"
 }

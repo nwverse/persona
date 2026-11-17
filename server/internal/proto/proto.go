@@ -11,6 +11,9 @@ const (
 	MinAppBuild = 0
 )
 
+// FeatureMainModelHandoff enables prepared main-chat model changes (#10032).
+const FeatureMainModelHandoff = "assistant_main_model_handoff"
+
 // Features are what this hub supports beyond the first protocol, listed in the WebSocket hello and /health for
 // clients that need to know before they try (docs/protocol/protocol.md).
 var Features = []string{
@@ -34,6 +37,7 @@ var Features = []string{
 	"model_configuration",      // unified per-purpose models and provider selection
 	"typed_models",             // a model ID the launcher's list lacks: starts, POST …/modes, the Persona chat's pick; custom rows, DELETE …/models/custom (#1644)
 	"assistant_model_pick",     // PUT / DELETE /api/v1/assistant/conversations/{id}/model, model_pick on assistant conversations, unavailable on …/launchers?purpose=assistant (#5033)
+	FeatureMainModelHandoff,    // POST /api/v1/assistant/main/model: prepare a cross-runtime main chat before committing its pick and context (#10032)
 	"launcher_switch",          // POST …/modes {launcher, model?, effort?} switches a running Claude Code Agent to another launcher with its next message; Session.pending_switch (#5035)
 	"engine_switch",            // POST …/modes with a launcher of the other engine: the next message moves the conversation between Claude Code and Codex with a handoff; pending_switch.agent, engine_history (#5054)
 	"client_msg_id",            // session.send dedupes retries

@@ -16,5 +16,6 @@
   "follow_default": "恢复跟随默认",
   "undo_pick": "撤销单独选择",
   "provider_gone": "这台电脑上已经没有这个服务商了",
-  "pick_dropped": "「{launcher}」跑不了 Persona 对话，已换回默认"
+  "pick_dropped": "「{launcher}」跑不了 Persona 对话，已换回默认",
+  "handoff_pending": "正在切换模型并交接对话…"
 }

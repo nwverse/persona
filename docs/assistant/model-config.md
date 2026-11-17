@@ -390,6 +390,42 @@ The model panel of a Persona chat switches that conversation to another launcher
 - **What can't, and why**: `?purpose=assistant` also answers `unavailable`, so the panel shows these disabled with the reason rather than hiding them: the computer's launchers that can't run assistant chats (`not_main_chat`: a Paseo provider, a managed Codex launcher, a runtime without the assistant capability), then the Model providers that can't run here: Responses / Chat Completions direct APIs (`api_protocol`), an agent that can't (`not_main_chat`), out of the computer's device scope (`launcher_out_of_scope`) or skipping it for its own sign-in (`launcher_own_service`). Reasons come in the request's language; hidden launchers stay out entirely. A launcher that an assistant runtime on the same computer declares it runs the assistant for (`assistant_for`, [runtimes.md](../integrations/runtimes.md) "Assistant") also has `instead`, that runtime's launcher, and its reason names it ("For assistant chats, choose Grok"); a pick or a message on it is refused with the same pointer. Only that declaration counts, never a likeness of names or agents, and nothing ever runs on one in the other's place: the user chooses it.
 - **Typed IDs**: the hub remembers a typed model (`models.used`, "Typing a model ID") when a message carried it. A pick's model is not sent with the messages, so a typed model kept only as a pick is not offered again under "Typed before" until a message carries it.
 
+### Main-chat model handoffs (#10032)
+
+On a hub advertising `assistant_main_model_handoff`, the Web main chat's existing model panel also offers providers of
+another engine. Choosing one prepares a replacement, carries bounded local transcript context, then moves Main and its
+open tasks to it. The old conversation remains visible in history; an idle native Claude/Codex process is closed so it
+cannot keep doing unattended work. External runtime sessions stay idle, since their close operation can archive history.
+Same-engine picks keep the existing conversation and
+use the ordinary model-pick route. Worker defaults, leaders and the background supervisor's configuration stay as they were.
+
+Agent-only profiles (`unavailable.code: not_main_chat`) are omitted from the Assistant panel. They remain in the worker
+catalog; providers with a fixable scope, sign-in or API-protocol problem still show their reason.
+
+`POST /api/v1/assistant/main/model` takes `{expect, launcher, model?, effort?}` and returns
+`{session, replaced?, carried}`. `expect` is required and must still be Main. The manager validates the exact pick and
+requires an observed source without running work, compaction, pending questions or queued input. It extracts the existing
+bounded handoff locally, without asking a model to summarize, and starts the target through `assistant.start_prepared`.
+That node method accepts only a new, empty assistant chat: Claude acknowledges initialization and controls, Codex starts
+its native thread, and external runtimes acknowledge `session.start`; none receives a model turn. An older node refuses
+the unknown method. This confirms process/thread startup, not provider quota or the success of a future answer.
+
+After startup the manager rechecks Main, source revision, activity and the previous pick. It commits `assistant`,
+`assistant.model_picks` and `assistant.main_handoff` in one Postgres transaction before updating its caches. Failure keeps
+the old Main, visibility, pick and task ownership; an acknowledged unused target is closed. It never automatically retries
+an uncertain start. Concurrent requests naming the same old Main can commit only one replacement. Open tasks use the
+existing task-handover path, whose former-Main reconciliation retries task-store failures. Closed tasks keep their history.
+
+The first real message consumes the deferred context once. Switching again before that message carries the unconsumed
+context onward. The Web panel immediately shows the pending operation and keeps its current selection and draft on
+failure; it navigates to Main only after a successful response. Older hubs and side conversations keep their existing
+picker behavior. Native clients are unchanged and can adopt the additive route separately.
+
+This is a core operation, rather than a standalone extension. Existing extension UI slots cannot intercept the built-in
+model picker, and extension tokens cannot call this full-credential route. A plugin must not save a hub master token to
+work around that boundary. A future extension contribution can request this same host-owned operation if an explicit,
+scoped hook is designed; no new plugin permission or general-purpose hook is introduced here.
+
 ## Importing providers from shell aliases (#2455, #5024)
 
 `GET /api/v1/launchers/import?machine=` previews; `POST` confirms (see `docs/protocol/protocol.md`, “Model providers and per-purpose configuration” for the API). The manager calls that machine's node `launchers.zshrc` (`assistant/models_import.go`), which reads `~/.zshrc` (`$ZDOTDIR` first), `~/.bashrc` and `~/.bash_aliases` in the login shell's order (zsh: `~/.zshrc`, `~/.bashrc`, `~/.bash_aliases`; bash: `~/.bashrc`, `~/.bash_aliases`, `~/.zshrc`). Each alias says which file it came from; a name defined in two files is read from the first of them in that order (inside one file the last definition counts, as in the shell). The manager then merges them with the pure function `mergeZshrcAliases` (same file):

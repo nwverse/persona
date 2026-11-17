@@ -70,6 +70,10 @@ func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runti
 // permission mode and its memory directory; a new conversation's first message also carries the instructions only a
 // runtime needs (memory, Feishu).
 func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, modelAndEffort ...string) (string, error) {
+	return n.assistantSendRuntimePrepared(ctx, h, id, cwd, launcher, text, images, mode, false, modelAndEffort...)
+}
+
+func (n *Node) assistantSendRuntimePrepared(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, prepareOnly bool, modelAndEffort ...string) (string, error) {
 	var pickedModel, pickedEffort string
 	if len(modelAndEffort) > 0 {
 		pickedModel = modelAndEffort[0]
@@ -129,6 +133,17 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		id = s.SessionID
 		instructions = n.runtimeInstructions(cwd, memDir)
 	}
+	if prepareOnly {
+		st, _ := n.state.get(id)
+		st.AssistantPrepared, st.Launcher, st.Cwd = true, launcher, cwd
+		n.state.put(id, st)
+		n.persistModes(id, mode, pickedEffort)
+		awaitList(n.notifySessionsSoon())
+		return id, nil
+	}
+	if st.AssistantPrepared {
+		instructions = n.runtimeInstructions(cwd, memDir)
+	}
 	n.noteModes(id, mode, pickedEffort)
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
@@ -164,6 +179,11 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", fmt.Errorf("%s: %w", h.label(), err)
 	}
 	commit()
+	if st.AssistantPrepared {
+		st, _ := n.state.get(id)
+		st.AssistantPrepared = false
+		n.state.put(id, st)
+	}
 	awaitList(n.notifySessionsSoon()) // as a Claude conversation's send: not the whole list's time
 	return id, nil
 }

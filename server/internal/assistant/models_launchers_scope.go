@@ -201,7 +201,7 @@ func harnessName(agent string) string {
 }
 
 // startScopeMethods are the node calls that run a launcher (params' launcher): a scope refuses them (service.go call).
-var startScopeMethods = map[string]bool{DeviceSessionStart: true, DeviceAssistantSend: true, DeviceAssistantWarm: true, DeviceSessionSend: true}
+var startScopeMethods = map[string]bool{DeviceSessionStart: true, DeviceAssistantSend: true, assistantwire.DeviceAssistantStartPrepared: true, DeviceAssistantWarm: true, DeviceSessionSend: true}
 
 // ---- the computers' own service ----
 

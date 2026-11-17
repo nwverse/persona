@@ -1,0 +1,8 @@
+{
+  "source_unavailable": "The current main chat is unavailable. Reconnect before switching models.",
+  "busy": "Wait for the main chat to finish and resolve its pending questions and queued messages before switching models.",
+  "invalid_pick": "Choose a provider and a valid reasoning effort.",
+  "unknown_runtime": "The chat engine could not be confirmed. Refresh before switching models.",
+  "atomic_store": "This hub cannot save a main-chat handoff atomically. Update the hub before switching engines.",
+  "target_changed": "The new chat did not start with the selected provider. The current main chat was kept."
+}

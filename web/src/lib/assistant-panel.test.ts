@@ -38,6 +38,16 @@ const info: AssistantLaunchers = {
 };
 const read: Record<string, ModelList> = { claude: { list: claudeList }, relay: { list: relayList }, "team-api": { list: { agent: "claude", models: [] } } };
 const listOf = (name: string) => read[name] ?? {};
+
+it("omits Agent-only profiles from Assistant without hiding fixable providers or changing the worker catalog", () => {
+  const worker = { name: "cloud-worker-profile", agent: "cloud-worker", kind: "launcher", code: "not_main_chat", reason: "Agent tasks only" };
+  const catalog = { ...info, unavailable: [...info.unavailable, worker] };
+  const panel = assistantPanel({ provider: "claude", model: "opus", source: "default" }, catalog, listOf, { handoff: true });
+  expect(panel.providers.some((p) => p.id === worker.name)).toBe(false);
+  expect(panel.providers.find((p) => p.id === "far-gw")?.unavailable).toBeTruthy();
+  expect(panel.providers.find((p) => p.id === "gpt-direct")?.unavailable).toBeTruthy();
+  expect(catalog.unavailable).toContain(worker);
+});
 const session = (x: Partial<Session> = {}): Session =>
   ({ machine_id: "server", session_id: "c1", title: "t", cwd: "/a", status: "idle", state: "idle", assistant: true, agent: "claude", launcher: "relay", model: "claude-sonnet-5-5", effort: "medium", ...x }) as Session;
 const chat = (x: Partial<AssistantChat> = {}): AssistantChat => ({ session: session(), isMain: false, kept: true, config: "claude", ...x });
@@ -109,8 +119,8 @@ describe("the panel's providers", () => {
     expect(providers.find((p) => p.id === "codex")).toMatchObject({ loading: true, models: null });
   });
 
-  it("a Paseo provider that can't run it is off as that provider, never 'paseo' (#8142)", () => {
-    const paseo: AssistantLaunchers = { ...info, unavailable: [{ name: "grok", kind: "launcher", agent: "paseo", code: "not_main_chat", reason: "跑不了主对话" }, { name: "cursor", kind: "launcher", agent: "paseo", code: "not_main_chat", reason: "跑不了主对话" }] };
+  it("a Paseo provider with a fixable scope problem keeps its provider identity (#8142)", () => {
+    const paseo: AssistantLaunchers = { ...info, unavailable: [{ name: "grok", kind: "launcher", agent: "paseo", code: "launcher_out_of_scope", reason: "Unavailable on this computer" }, { name: "cursor", kind: "launcher", agent: "paseo", code: "launcher_out_of_scope", reason: "Unavailable on this computer" }] };
     const { providers } = assistantPanel(assistantSetup(chat({ isMain: true }), paseo), paseo, listOf, {});
     expect(providers.filter((p) => p.unavailable).map((p) => [p.id, p.engine])).toEqual([["grok", "grok"], ["cursor", "cursor"]]);
   });

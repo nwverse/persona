@@ -325,6 +325,7 @@ var Routes = []string{
 	"PUT /api/v1/assistant/conversations/{id}/model", // the model a conversation's next messages run on (model_pick.go, #5033)
 	"DELETE /api/v1/assistant/conversations/{id}/model",
 	"POST /api/v1/assistant/main/new",
+	"POST /api/v1/assistant/main/model", // prepared cross-runtime handoff, full credentials only (#10032)
 	"POST /api/v1/assistant/main/clear",
 	"POST /api/v1/assistant/origins/backfill",
 	// The channels (channels.go there, docs/extensions/channels.md "API").

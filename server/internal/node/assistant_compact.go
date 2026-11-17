@@ -186,8 +186,31 @@ type Handoff struct {
 // assistantHandoff reads what a new main conversation should know of conversation id (docs/assistant/assistant.md
 // "New main chat").
 func (n *Node) assistantHandoff(id string) (Handoff, error) {
-	if id == "" || !validID(id) {
+	return n.assistantHandoffContext(context.Background(), id)
+}
+
+func (n *Node) assistantHandoffContext(ctx context.Context, id string) (Handoff, error) {
+	runtime := n.runtimeAssistant(id)
+	if id == "" || (!validID(id) && !runtime) {
 		return Handoff{}, errors.New("invalid session id")
+	}
+	if runtime && n.runtimeTranscript(id) == "" {
+		h, err := n.runtimeFor(ctx, "session.items", id)
+		if err != nil {
+			return Handoff{}, err
+		}
+		if h == nil {
+			return Handoff{}, errRuntimeAway(id)
+		}
+		var page struct {
+			Items []proto.Item `json:"items"`
+		}
+		cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
+		defer cancel()
+		if err := h.peer.Call(cctx, "session.items", map[string]any{"session_id": id, "limit": 400, "lazy_images": true}, &page); err != nil {
+			return Handoff{}, err
+		}
+		return Handoff{Recent: recentTurns(page.Items, -1)}, nil
 	}
 	path := n.transcriptPath(id)
 	if path == "" {

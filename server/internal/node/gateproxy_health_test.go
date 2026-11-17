@@ -510,6 +510,12 @@ func TestFakeCodexAppServer(t *testing.T) {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	for sc.Scan() {
+		if record := os.Getenv("PERSONA_FAKE_CODEX_REQUESTS"); record != "" {
+			if f, err := os.OpenFile(record, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+				_, _ = f.Write(append(append([]byte(nil), sc.Bytes()...), '\n'))
+				_ = f.Close()
+			}
+		}
 		var m struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
