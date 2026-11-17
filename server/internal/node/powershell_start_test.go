@@ -196,19 +196,9 @@ unset PERSONA_ASSISTANT JARVIS_ASSISTANT PERSONA_ASSISTANT_BIN JARVIS_ASSISTANT_
 	r3MainOrca          = "cd -- /tmp/r3-main-orca && " + r3MainDirect + "\r"
 )
 
-func r3MainDirectCommand(t *testing.T, n *Node) string {
-	t.Helper()
-	got := n.claudeCommandLine(claudeLaunch{Launcher: "claude", Settings: `C:\Users\u\settings.json`},
-		"--session-id "+startID, shellQuote)
-	if got != r3MainDirect {
-		t.Fatalf("main command golden no longer matches its old code path:\n%q\nwant:\n%q", got, r3MainDirect)
-	}
-	return got
-}
-
 func TestWindowsUnchangedDirectStartsUseMainBytes(t *testing.T) {
 	n := &Node{dir: `C:\node dir`}
-	direct := r3MainDirectCommand(t, n)
+	direct := n.claudeCommandLine(claudeLaunch{Launcher: "claude", Settings: `C:\Users\u\settings.json`}, "--session-id "+startID, shellQuote)
 	bash := `C:\Program Files\Git\bin\bash.exe`
 	for _, tc := range []struct {
 		name       string
@@ -263,9 +253,22 @@ func TestWindowsHostNamedBashUsesMainBytes(t *testing.T) {
 	}
 }
 
+func TestWindowsHostNamedPowerShellUsesHandoff(t *testing.T) {
+	for _, launch := range []host.Launcher{&herdrCoreHost{}, &ternHost{}} {
+		shells := windowsPaneShellDecision(false, `C:\Program Files\PowerShell\7\pwsh.exe`, nil, "")
+		if !(&Node{dir: `C:\node dir`}).typesStartFile(launch, shells...) {
+			t.Fatalf("%T did not make a host-named PowerShell start-file eligible", launch)
+		}
+		got, want := startLineChoice("claude", r3MainStartPath, r3MainAnchor, powerShellTestBash, true, shells...), powerShellStartLine(powerShellTestBash, r3MainStartPath, r3MainAnchor)
+		if got != want {
+			t.Fatalf("%T typed = %q, want %q", launch, got, want)
+		}
+	}
+}
+
 func TestWindowsAdoptedPaneUsesMainBytes(t *testing.T) {
 	n := &Node{dir: `C:\node dir`}
-	direct := r3MainDirectCommand(t, n)
+	direct := r3MainDirect
 	created := &host.Created{Pane: host.PaneRef{Kind: host.Herdr, ID: "w1:p1"}}
 	ctx := withAdoptedPane(context.Background(), created, []string{"bash", "pwsh"})
 	shells := n.startPaneShells(ctx, &herdrHost{}, created)

@@ -192,7 +192,7 @@ func (n *Node) typeStartMode(ctx context.Context, launch host.Launcher, created 
 // typesStartFile: runAgentCommand types `. <file>` into a POSIX pane, or a PowerShell line that has Git Bash read
 // the file on Windows, rather than typing the command itself.
 func (n *Node) typesStartFile(launch host.Launcher, shells ...string) bool {
-	return startsFromFile(launch) && n.dir != "" && (takesAssign(shells...) || powerShellPane(shells...))
+	return n.dir != "" && (powerShellPane(shells...) || startsFromFile(launch) && takesAssign(shells...))
 }
 
 // startsFromFile: the launcher's panes get a start file (herdr, herdr-core, Orca) rather than the command typed out.
