@@ -1,7 +1,5 @@
 package persona.core.designsystem
 
-import android.graphics.Bitmap
-import android.graphics.Picture
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.os.Build
@@ -34,7 +32,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
@@ -52,6 +49,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlinx.coroutines.runBlocking
 
 /**
  * The foldable list column following a finger, copying iOS `SplitColumnControl` (`apple/Persona/Views/SplitColumnControl.swift`)
@@ -187,6 +185,15 @@ internal var columnDragOverlayDrawn = false
 
 /** The live controller, so a test can move the line without a second gesture path. */
 internal var columnDragControllerForTest: ColumnDragController? = null
+
+/**
+ * Replaces [stillImage] in tests. Null in production.
+ *
+ * minSdk is 30, so `GraphicsLayer.toImageBitmap()` already uses the API 28 hardware snapshot and keeps a child
+ * `RenderEffect`. Robolectric forces the software snapshot, which drops that effect. The replacement lives in test
+ * source, because the hardware path reflects into an internal Compose method that R8 does not keep.
+ */
+internal var columnDragSnapshotForTest: (suspend (GraphicsLayer) -> ImageBitmap)? = null
 
 internal class ColumnDragController {
     var step by mutableStateOf(DragStep.Idle)
@@ -457,44 +464,14 @@ internal fun ColumnDragController.recordModifier(progress: Float): Modifier {
 /**
  * Rasterize while the recorded children still exist.
  *
- * `toImageBitmap` on Robolectric draws the layer into a software bitmap and drops `RenderEffect`. Haze glass is one,
- * so the page bar is recorded as opaque black while the live frame is not. `Bitmap.createBitmap(Picture)` is the
- * API 28 snapshot (`LayerSnapshotV28`): the picture asks for a hardware pass, which is what puts the effect in the
- * pixels. iOS `snapshotView` is that rendered frame (`SplitColumnControl.swift:191`).
+ * Public `toImageBitmap` (`SplitColumnControl.swift:191` is the same rendered frame). A test may replace it via
+ * [columnDragSnapshotForTest].
  */
 private fun stillImage(layer: GraphicsLayer): ImageBitmap? {
     val size = layer.size
-    val width = size.width
-    val height = size.height
-    if (width < 1 || height < 1) return null
-    // Same shape as `LayerSnapshotV28.GraphicsLayerPicture`: `Bitmap.createBitmap` draws this onto a
-    // hardware canvas, which is what records a child `RenderEffect`. `beginRecording` stays empty so the
-    // picture's own buffer is not what gets replayed.
-    val picture = object : Picture() {
-        override fun getWidth(): Int = width
-        override fun getHeight(): Int = height
-        override fun requiresHardwareAcceleration(): Boolean = true
-        override fun beginRecording(width: Int, height: Int): android.graphics.Canvas = android.graphics.Canvas()
-        override fun endRecording() = Unit
-        override fun draw(canvas: android.graphics.Canvas) {
-            layer.drawOnto(canvas)
-        }
-    }
-    val rendered = Bitmap.createBitmap(picture)
-    val soft = if (rendered.config == Bitmap.Config.ARGB_8888) rendered
-        else rendered.copy(Bitmap.Config.ARGB_8888, false)
-    return soft.asImageBitmap()
-}
-
-/** `GraphicsLayer.draw` is internal. The API 28 snapshot calls the same method (`LayerSnapshotV28`). */
-private val graphicsLayerDraw = GraphicsLayer::class.java.getMethod(
-    "draw\$ui_graphics",
-    androidx.compose.ui.graphics.Canvas::class.java,
-    GraphicsLayer::class.java,
-)
-
-private fun GraphicsLayer.drawOnto(canvas: android.graphics.Canvas) {
-    graphicsLayerDraw.invoke(this, androidx.compose.ui.graphics.Canvas(canvas), null)
+    if (size.width < 1 || size.height < 1) return null
+    val shot = columnDragSnapshotForTest
+    return runBlocking { if (shot != null) shot(layer) else layer.toImageBitmap() }
 }
 
 @Composable

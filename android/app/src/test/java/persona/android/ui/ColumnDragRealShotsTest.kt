@@ -22,9 +22,11 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import android.graphics.Color as AndroidColor
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import kotlin.math.abs
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,6 +54,10 @@ import java.io.File
 @Config(application = Application::class, sdk = [35])
 class ColumnDragRealShotsTest {
     @get:Rule val rule = createComposeRule()
+
+    @Before fun hardwareSnapshots() = installColumnDragHardwareSnapshot(on = true)
+
+    @After fun clearHardwareSnapshots() = installColumnDragHardwareSnapshot(on = false)
 
     @Config(qualifiers = "en-w673dp-h951dp-mdpi")
     @Test fun overFoldable() = frames(over = true, prefix = "over", windowDp = 673f, widthPx = 673, heightPx = 951)

@@ -27,8 +27,10 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,6 +49,14 @@ import kotlin.math.roundToInt
 @Config(sdk = [35])
 class SidebarColumnDragShotsTest {
     @get:Rule val rule = createComposeRule()
+
+    @Before fun hardwareSnapshots() {
+        columnDragSnapshotForTest = ::columnDragHardwareSnapshot
+    }
+
+    @After fun clearHardwareSnapshots() {
+        columnDragSnapshotForTest = null
+    }
 
     @Config(sdk = [35], qualifiers = "en-w673dp-h951dp-mdpi")
     @Test fun overFoldable() = frames(over = true, prefix = "over")
