@@ -2,20 +2,28 @@
 <html lang="zh-Hans">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Configuration showcase</title>
-<!-- web/e2e/configuration-showcase.html: a fixture-only showcase of module-injected configuration documents (#9877,
-     docs/web/web.md "Configuration forms"), opened on the Vite dev server and never part of a build. The real
-     ConfigurationForm draws several mock modules over in-memory sources (configuration-showcase-data.mjs); nothing is
-     read from or written to real settings or storage. ?scenario=<id> selects a scenario (see the nav); ?scenario=overview
-     or no query is the full set, and an unknown id falls back to it. The page checks its own documents with the real
-     parser and shows a red line if one is invalid. web/e2e/configuration-showcase.mjs drives and captures it. -->
+<title>Settings</title>
+<!-- web/e2e/configuration-showcase.html: a fixture-only page that shows module settings exactly as the real
+     ConfigurationForm draws them (#9877, docs/web/web.md "Configuration forms"), opened on the Vite dev server and never
+     part of a build. The default view is three genuine-looking module documents over in-memory sources
+     (configuration-showcase-data.mjs); nothing is read from or written to real settings or storage, and the mock framing
+     is deliberately not shown (the user asked for the real appearance). ?scenario= selects a coverage case
+     (overview/default, slow, load-fail, reject, conflict, unconfirmed, contract, empty, unsupported); the navigation is
+     not drawn. The page checks its own documents with the real parser and shows a red line if one is invalid.
+     web/e2e/configuration-showcase.mjs drives and captures it. -->
+<style>
+  /* src/styles.css keeps e2e out of Tailwind's scan ("@source not \"../e2e\""), so a fixture-only utility would not
+     exist in the built CSS. The content width is fixture-scoped here, matching the settings column (Settings.tsx uses
+     max-w-[760px]); the page's other classes are app utilities the scan already generates. */
+  #app { max-width: 760px; margin-inline: auto; }
+</style>
 <body class="bg-page">
-<div id="app" class="mx-auto max-w-[980px] px-5 py-6 sm:px-8"></div>
+<div id="app" class="px-5 py-6 sm:px-8"></div>
 <script type="module">
   import "/src/styles.css";
   import { initI18n } from "/src/i18n/index.ts";
   import { applyLook } from "/src/ui/look.ts";
-  import { buildShowcase, scenarios, shell } from "/e2e/configuration-showcase-data.mjs";
+  import { buildShowcase, shell } from "/e2e/configuration-showcase-data.mjs";
 
   applyLook();
   // The app's theme (index.html does this for the real app): the saved choice, else the system's scheme.
@@ -40,8 +48,6 @@
   document.title = s.title;
   const query = new URLSearchParams(location.search);
   const { scenario, modules } = buildShowcase(query.get("scenario") ?? "default", lang);
-  const list = scenarios(lang);
-  const current = list.find((item) => item.id === scenario) ?? list[0];
   const app = document.getElementById("app");
   const mk = (tag, className, text) => {
     const element = document.createElement(tag);
@@ -50,36 +56,10 @@
     return element;
   };
 
-  const header = mk("header", "mb-7");
-  header.append(mk("h1", "text-[20px] font-semibold leading-tight text-ink", s.title));
-  header.append(mk("p", "mt-1.5 text-[13px] leading-relaxed text-ink-2", s.lead));
-  const banner = mk("p", "mt-3 rounded-card bg-surface px-4 py-2.5 text-[12.5px] leading-snug text-orange shadow-card", s.mockBanner);
-  banner.setAttribute("data-showcase-mock", "");
-  header.append(banner);
-  header.append(mk("p", "mt-3 text-[12px] leading-relaxed text-ink-3", s.instructions));
+  app.append(mk("h1", "mb-4 px-1 text-[20px] font-semibold leading-tight text-ink", s.title));
 
-  const nav = mk("nav", "mt-4 flex flex-wrap gap-2");
-  nav.setAttribute("aria-label", s.scenarioLabel);
-  for (const item of list) {
-    const selected = item.id === scenario;
-    const link = mk("a", `rounded-control px-3 py-1.5 text-[12.5px] no-underline shadow-btn ${selected ? "bg-ink text-surface" : "bg-surface text-ink-2 hover:bg-hover hover:text-ink"}`, item.label);
-    link.href = `?scenario=${encodeURIComponent(item.id)}`;
-    if (selected) link.setAttribute("aria-current", "page");
-    nav.append(link);
-  }
-  header.append(nav);
-  const note = mk("p", "mt-2 text-[12.5px] leading-snug text-ink-3", `${s.scenarioNote}: ${current.note}`);
-  note.setAttribute("data-showcase-note", "");
-  header.append(note);
-  const other = mk("p", "mt-2 text-[12px] text-ink-3");
-  const otherLink = mk("a", "underline", s.otherPage);
-  otherLink.href = "/e2e/configuration-form.html";
-  other.append(otherLink);
-  header.append(other);
-  app.append(header);
-
-  // The real parser checks every mock document and effective value: a fixture this build can't read is a bug in the page,
-  // not something to discover while clicking.
+  // The real parser checks every document and effective value: a fixture this build can't read is a bug in the page,
+  // not something to discover while clicking. It draws only on that bug.
   const problems = [];
   for (const module of modules) {
     try {
@@ -105,13 +85,8 @@
   const main = mk("main", "");
   main.setAttribute("data-showcase-scenario", scenario);
   for (const module of modules) {
-    const section = mk("section", "mb-9");
+    const section = mk("section", "mb-6");
     section.setAttribute("data-showcase-module", module.key);
-    const top = mk("div", "mb-1.5 flex flex-wrap items-center gap-2 px-1");
-    top.append(mk("span", "rounded-control bg-surface px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ink-2 shadow-hairline", s.mock));
-    top.append(mk("span", "text-[11.5px] text-ink-3", module.sourceLabel));
-    section.append(top);
-    if (module.note) section.append(mk("p", "mb-3 px-1 text-[12px] leading-relaxed text-ink-3", module.note));
     const mount = mk("div", "");
     mount.setAttribute("data-showcase-form", module.key);
     section.append(mount);

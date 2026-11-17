@@ -3,7 +3,7 @@
 // builds documents the real contract parses with valid effective values, and each in-memory writer commits, refuses or
 // fails exactly as its scenario says. This is fixture verification, not production behavior.
 import { describe, expect, it } from "vitest";
-import { buildShowcase, SCENARIO_IDS, scenarios, shell } from "./configuration-showcase-data.mjs";
+import { buildShowcase, SCENARIO_IDS, shell } from "./configuration-showcase-data.mjs";
 import { CONFIGURATION_VERSION, fieldValue, parseDocument } from "../src/lib/configuration/contract.ts";
 
 const LANGS = ["en", "zh-Hans", "ja"];
@@ -12,19 +12,12 @@ const moduleByKey = (showcase, key) => showcase.modules.find((module) => module.
 const updateFor = (doc, more) => ({ schema_version: CONFIGURATION_VERSION, id: doc.id, revision: doc.revision, ...more });
 
 describe("the showcase in every language", () => {
-  it("names every scenario, with a note and a title", () => {
+  it("names every scenario and every page string", () => {
     for (const lang of LANGS) {
-      const list = scenarios(lang);
-      expect(list.map((scenario) => scenario.id)).toEqual(SCENARIO_IDS);
-      for (const scenario of list) {
-        expect(scenario.label.trim()).not.toBe("");
-        expect(scenario.note.trim()).not.toBe("");
-      }
       const strings = shell(lang);
-      for (const key of ["title", "lead", "mockBanner", "instructions", "scenarioLabel", "scenarioNote", "mock", "otherPage", "fixtureProblem"]) {
-        expect(strings[key].trim(), `${lang} ${key}`).not.toBe("");
-      }
+      for (const key of ["title", "fixtureProblem"]) expect(strings[key].trim(), `${lang} ${key}`).not.toBe("");
     }
+    expect(SCENARIO_IDS).toEqual(["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "contract", "empty", "unsupported"]);
   });
 
   it.each(LANGS.flatMap((lang) => SCENARIO_IDS.map((id) => [lang, id])))("%s %s: every document parses with valid effective values", async (lang, id) => {
@@ -36,7 +29,6 @@ describe("the showcase in every language", () => {
     for (const module of showcase.modules) {
       expect(keys.has(module.key), module.key).toBe(false);
       keys.add(module.key);
-      expect(module.note.trim()).not.toBe("");
       const { doc, writable } = parseDocument(module.document);
       expect(ids.has(doc.id), doc.id).toBe(false);
       ids.add(doc.id);
@@ -47,7 +39,7 @@ describe("the showcase in every language", () => {
           if (field.kind !== "unsupported") expect(fieldValue(doc, field), `${module.key}:${field.id}`).toBeDefined();
         }
       }
-      if (id === "load-fail" && module.key === "showcase-shared") {
+      if (id === "load-fail" && module.key === "showcase-terminal") {
         await expect(module.source.read()).rejects.toMatchObject({ code: "configuration_unavailable" });
         expect((await module.source.read()).id).toBe(doc.id);
       } else {
@@ -63,13 +55,14 @@ describe("the showcase in every language", () => {
     expect(overview.modules.map((module) => module.key)).toEqual(buildShowcase("default", "en", FAST).modules.map((module) => module.key));
   });
 
-  it("focuses each failure scenario on its affected module and keeps all five in the full set", () => {
+  it("keeps the product view to three genuine modules and focuses each failure on its module", () => {
     const keys = (id) => buildShowcase(id, "en", FAST).modules.map((module) => module.key);
-    expect(keys("default")).toEqual(["showcase-terminal", "showcase-digest", "showcase-editor", "showcase-shared", "showcase-empty"]);
+    expect(keys("default")).toEqual(["showcase-terminal", "showcase-digest", "showcase-editor"]);
     expect(keys("overview")).toEqual(keys("default"));
     expect(keys("slow")).toEqual(keys("default"));
-    expect(keys("load-fail")).toEqual(["showcase-shared"]);
+    expect(keys("load-fail")).toEqual(["showcase-terminal"]);
     for (const id of ["reject", "conflict", "unconfirmed"]) expect(keys(id), id).toEqual(["showcase-digest"]);
+    expect(keys("contract")).toEqual(["showcase-shared"]);
   });
 
   it("covers every control kind and select presentation across the full showcase", () => {
@@ -87,8 +80,8 @@ describe("the showcase in every language", () => {
     expect([...presentations].sort()).toEqual(["dropdown", "list", "segmented"]);
   });
 
-  it("keeps the shared all-types example unchanged as one module", () => {
-    const shared = moduleByKey(buildShowcase("default", "en", FAST), "showcase-shared");
+  it("keeps the shared all-types example unchanged in its own coverage scenario", () => {
+    const shared = moduleByKey(buildShowcase("contract", "en", FAST), "showcase-shared");
     expect(shared.document.id).toBe("example-preferences");
     expect(shared.document.revision).toBe("revision-1");
     const { doc } = parseDocument(shared.document);
@@ -178,9 +171,9 @@ describe("the in-memory writers", () => {
   });
 
   it("load-fail: the first read fails once and the next succeeds", async () => {
-    const shared = moduleByKey(buildShowcase("load-fail", "en", FAST), "showcase-shared");
-    await expect(shared.source.read()).rejects.toMatchObject({ code: "configuration_unavailable" });
-    expect((await shared.source.read()).id).toBe("example-preferences");
+    const terminal = moduleByKey(buildShowcase("load-fail", "en", FAST), "showcase-terminal");
+    await expect(terminal.source.read()).rejects.toMatchObject({ code: "configuration_unavailable" });
+    expect((await terminal.source.read()).id).toBe("showcase-terminal");
   });
 
   it("gives each page fresh sources, so two pages never share values", async () => {

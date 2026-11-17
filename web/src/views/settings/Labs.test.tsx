@@ -53,11 +53,11 @@ describe("Settings › Labs", () => {
     expect(field().textContent).toContain(t("settings-labs.terminal_renderer_hint"));
   });
 
-  it("shows the module's default, scope, activation and rollback as the form's details", async () => {
+  it("shows the module's default in the footer and its scope, activation and rollback as details", async () => {
     await render();
-    expect([...field().querySelectorAll("dt")].map((d) => d.textContent)).toEqual([t("settings-configuration.default"), t("settings-labs.scope"), t("settings-labs.activation"), t("settings-labs.rollback")]);
+    expect(field().textContent).toContain(`${t("settings-configuration.default")} ${t("settings-labs.terminal_renderer_standard")}`);
+    expect([...field().querySelectorAll("dt")].map((d) => d.textContent)).toEqual([t("settings-labs.scope"), t("settings-labs.activation"), t("settings-labs.rollback")]);
     expect([...field().querySelectorAll("dd")].map((d) => d.textContent)).toEqual([
-      t("settings-labs.terminal_renderer_standard"),
       t("settings-labs.scope_browser"),
       t("settings-labs.terminal_renderer_activation"),
       t("settings-labs.terminal_renderer_rollback"),
@@ -71,7 +71,7 @@ describe("Settings › Labs", () => {
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
   });
 
-  it("keeps WebGL as the old switch's value, says it is saved, and Use default removes it again", async () => {
+  it("keeps WebGL as the old switch's value, says it is saved, and Reset removes it again", async () => {
     await render();
     await click(radios()[1]);
     expect(localStorage.getItem(KEY)).toBe("1");

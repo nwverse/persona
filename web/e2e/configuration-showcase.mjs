@@ -69,30 +69,44 @@ try {
     await open(page);
     if (await sideways(page)) fail(`${tag}: the showcase scrolls sideways`);
     const modules = await page.$$eval("[data-showcase-module]", (els) => els.map((e) => e.getAttribute("data-showcase-module")));
-    if (modules.length !== 5) fail(`${tag}: modules ${modules}`);
+    if (modules.length !== 3) fail(`${tag}: modules ${modules}`);
     const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
-    if (fields < 20) fail(`${tag}: only ${fields} fields drawn`);
+    if (fields !== 13) fail(`${tag}: only ${fields} fields drawn`);
+    // The fixture's width is scoped in the page (e2e is out of Tailwind's scan), and the compact rows stay low: the
+    // review's pre-refinement rows were 176/193 px.
+    const layout = await page.evaluate(() => {
+      const app = document.getElementById("app");
+      const rect = app.getBoundingClientRect();
+      const row = (form, id) => Math.round(document.querySelector(`[data-showcase-form="${form}"] [data-configuration-field="${id}"]`)?.getBoundingClientRect().height ?? 0);
+      return { width: Math.round(rect.width), left: Math.round(rect.left), line: row("showcase-editor", "line_height"), topic: row("showcase-digest", "topic"), text: document.body.innerText };
+    });
+    const expected = width >= 600 ? 760 : width;
+    if (Math.abs(layout.width - expected) > 2) fail(`${tag}: content width ${layout.width} (expected ${expected})`);
+    if (width >= 600 && layout.left < 100) fail(`${tag}: content is not centered (left ${layout.left})`);
+    if (layout.line > 160 || layout.topic > 160) fail(`${tag}: rows are ${layout.line}/${layout.topic} px`);
+    for (const word of ["Mock", "mock", "模拟数据", "配置展示", "Scenario", "scenario", "Fixture", "fixture"]) {
+      if (layout.text.includes(word)) fail(`${tag}: the page still shows "${word}"`);
+    }
     await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
-    ok(`${tag}: ${modules.length} modules, ${fields} fields`);
+    ok(`${tag}: ${modules.length} modules, ${fields} fields, ${layout.width}px wide, rows ${layout.line}/${layout.topic}px`);
 
     if (theme === "light" && !size && language === "en") {
-      // A one-of-one multiselect replaces its choice with Save (the same interaction as the real form).
+      // A maximum of one is a single choice: choosing Chinese replaces Auto at once, with no second check.
       const languageField = field(page, "showcase-editor", "snippet_language");
-      const boxes = languageField.locator('[role="checkbox"]');
-      await boxes.nth(1).click();
-      await boxes.nth(0).click();
+      const radios = languageField.locator('[role="radio"]');
+      await radios.nth(1).click();
+      const picked = await radios.evaluateAll((els) => els.map((e) => e.getAttribute("aria-checked")));
+      if (picked.join(",") !== "false,true,false") fail(`${tag}: the replacement checked ${picked}`);
       await languageField.locator("button", { hasText: "Save" }).click();
       await languageField.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: the replacement was not saved`));
-      const checked = await boxes.evaluateAll((els) => els.map((e) => e.getAttribute("aria-checked")));
-      if (checked.join(",") !== "false,true,false") fail(`${tag}: the replacement checked ${checked}`);
-      ok(`${tag}: a one-of-one multiselect replaces its choice and saves`);
+      ok(`${tag}: a single-choice multiselect replaces its choice at once and saves`);
 
       // An overridden choice goes back to its default in this page's memory.
       const renderer = field(page, "showcase-terminal", "renderer");
-      await renderer.locator("button", { hasText: "Use default" }).click();
-      await renderer.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Use default did not save`));
-      if (await renderer.locator("button", { hasText: "Use default" }).count()) fail(`${tag}: Use default is still offered after resetting`);
-      ok(`${tag}: Use default resets an overridden value`);
+      await renderer.locator("button", { hasText: "Reset" }).click();
+      await renderer.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Reset did not save`));
+      if (await renderer.locator("button", { hasText: "Reset" }).count()) fail(`${tag}: Reset is still offered after resetting`);
+      ok(`${tag}: Reset returns an overridden value to its default`);
 
       // Unicode text saves as typed.
       const note = field(page, "showcase-digest", "note").locator("textarea");
@@ -111,6 +125,7 @@ try {
     ["reject", "light", 1280],
     ["conflict", "light", 1280],
     ["unconfirmed", "light", 1280],
+    ["contract", "light", 1280],
     ["empty", "light", 1280],
     ["unsupported", "light", 1280],
     ["conflict", "dark", 390],
@@ -124,7 +139,7 @@ try {
     await open(page, scenario);
     if (await sideways(page)) fail(`${tag}: the scenario scrolls sideways`);
     const drawn = await page.$$eval("[data-showcase-module]", (els) => els.map((e) => e.getAttribute("data-showcase-module")));
-    const focused = scenario === "load-fail" ? ["showcase-shared"] : ["reject", "conflict", "unconfirmed"].includes(scenario) ? ["showcase-digest"] : null;
+    const focused = scenario === "load-fail" ? ["showcase-terminal"] : ["reject", "conflict", "unconfirmed"].includes(scenario) ? ["showcase-digest"] : null;
     if (focused && drawn.join(",") !== focused.join(",")) fail(`${tag}: focused modules ${drawn}`);
     if (focused) ok(`${tag}: focused on ${focused[0]}`);
 
@@ -136,13 +151,13 @@ try {
       await enabled.locator("text=Saved").waitFor({ timeout: 6000 }).catch(() => fail(`${tag}: the slow save never finished`));
       ok(`${tag}: a slow save shows Saving…, then Saved`);
     } else if (scenario === "load-fail") {
-      const shared = form(page, "showcase-shared");
-      if (await shared.locator("[data-configuration-field]").count()) fail(`${tag}: the failed module already drew fields`);
-      const retry = shared.locator("button", { hasText: "Try again" });
+      const terminal = form(page, "showcase-terminal");
+      if (await terminal.locator("[data-configuration-field]").count()) fail(`${tag}: the failed module already drew fields`);
+      const retry = terminal.locator("button", { hasText: "Try again" });
       await retry.waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: no Try again`));
-      await shared.screenshot({ path: join(shots, `${tag}-failed.png`) });
+      await terminal.screenshot({ path: join(shots, `${tag}-failed.png`) });
       await retry.click();
-      await shared.locator('[data-configuration-field="compact"]').waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Try again did not load the document`));
+      await terminal.locator('[data-configuration-field="renderer"]').waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Try again did not load the document`));
       ok(`${tag}: a failed first read offers Try again and recovers`);
     } else if (scenario === "reject") {
       const topic = field(page, "showcase-digest", "topic");
@@ -190,6 +205,13 @@ try {
       await input.press("Enter");
       await topic.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: saving after Reload did not succeed`));
       ok(`${tag}: an unconfirmed save keeps the draft and waits for Reload`);
+    } else if (scenario === "contract") {
+      const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
+      if (fields !== 9) fail(`${tag}: the contract example drew ${fields} fields`);
+      const kinds = await page.$$eval("[data-configuration-field]", (els) => [...new Set(els.map((e) => e.getAttribute("data-kind")))]);
+      if (kinds.length !== 5) fail(`${tag}: the contract example kinds ${kinds}`);
+      await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+      ok(`${tag}: the shared contract example draws all five kinds`);
     } else if (scenario === "empty") {
       const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
       if (fields !== 0) fail(`${tag}: the empty form drew ${fields} fields`);
@@ -208,7 +230,7 @@ try {
       ok(`${tag}: an unknown kind and a newer version are shown read-only`);
     }
 
-    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed"].includes(scenario)) {
+    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed", "contract"].includes(scenario)) {
       await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
       ok(`${tag}: scenario drawn`);
     }

@@ -9,7 +9,7 @@
   "read_only": "読み取り専用",
   "saving": "保存中…",
   "saved": "保存しました",
-  "reset": "既定値を使う",
+  "reset": "リセット",
   "save": "保存",
   "cancel": "キャンセル",
   "count": "{n} / {max}",

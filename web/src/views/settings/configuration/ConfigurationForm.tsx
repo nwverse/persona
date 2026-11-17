@@ -2,10 +2,16 @@
 // "Configuration forms"): one Document from an injected source, drawn with the settings pieces every page uses. It knows
 // no module: titles, descriptions, details and notices are the source's words, shown as given.
 //
+// Every field ends in one footer row: its default value, the count where a text field has a limit, the save state, and
+// the Reset / Cancel / Save actions that apply. The row is the same for every kind, so a row stays short and the actions
+// never sit between the control and its explanation.
+//
 // A single-step choice (switch, selection) is written at once and shows as pending until the source has committed it;
 // typed text and numbers are drafts until Save (Enter on one line), and a multiselect's checks are a pending selection
-// with Save and Cancel, so a fixed count can move from one value to another without an invalid write in between. Drafts
-// stay through any failure or conflict. One write at a time, and a conflict or an uncertain write needs Reload first.
+// with Save and Cancel. A multiselect whose maximum is one is drawn and operated as a single choice: choosing another
+// option replaces the old one locally (the wire value stays an array), so a replacement never shows two chosen or a
+// too-many error. Drafts stay through any failure or conflict. One write at a time, and a conflict or an uncertain write
+// needs Reload first.
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { formatList, t } from "../../../i18n";
 import { ConfigurationController, draftValue, type FieldState, type FormState, type Problem } from "../../../lib/configuration/controller";
@@ -98,7 +104,7 @@ function Banner({ tone, action, children }: { tone: "caution" | "alert"; action?
   );
 }
 
-/** A value as a line of text (the Default row). */
+/** A value as a line of text (the default value in the footer). */
 function valueText(field: KnownField, v: FieldValue): string {
   switch (field.kind) {
     case "toggle":
@@ -119,6 +125,7 @@ function valueText(field: KnownField, v: FieldValue): string {
 function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormState; field: ConfigurationField }) {
   const titleId = useId();
   const descId = useId();
+  const countId = useId();
   const doc = s.doc!;
   const fs: FieldState = s.fields[field.id] ?? {};
   const notice = doc.notices?.[field.id];
@@ -132,45 +139,80 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
   const shown = fs.pending !== undefined ? fs.pending : checked !== undefined ? checked : value;
   const inline = known && (known.kind === "toggle" || (known.kind === "select" && (known.select.presentation === "segmented" || known.select.presentation === "dropdown")));
   const selectionDirty = !!known && known.kind === "multiselect" && fs.selection !== undefined && !sameValue(fs.selection, value);
+  const typed = !!known && (known.kind === "text" || known.kind === "number");
+  const committed = typed && shown !== undefined ? String(shown) : "";
+  const text = fs.draft ?? committed;
+  const typedDirty = typed && fs.draft !== undefined && fs.draft !== committed;
+  const count = known?.kind === "text" && known.text.max_length !== undefined ? t("settings-configuration.count", { n: scalarLength(text), max: known.text.max_length }) : undefined;
   const resettable = !!known && s.writable && !known.read_only && !known.disabled_reason && !selectionDirty && (value === undefined || !sameValue(value, known.default));
 
   return (
-    <div data-settings-row={`configuration-${doc.id}-${field.id}`} data-configuration-field={field.id} data-kind={field.kind} className="px-4 py-3">
-      <div className="flex flex-col gap-x-3 gap-y-2 sm:flex-row sm:items-start">
+    <div data-settings-row={`configuration-${doc.id}-${field.id}`} data-configuration-field={field.id} data-kind={field.kind} className="px-4 py-2.5">
+      <div className="flex flex-col gap-x-3 gap-y-1.5 sm:flex-row sm:items-start">
         <div className="min-w-0 flex-1">
           <div id={titleId} className="text-[13px] text-ink">{field.title}</div>
           {field.description && <p id={descId} className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{field.description}</p>}
         </div>
         {inline && shown !== undefined && <div className="shrink-0"><InlineControl ctl={ctl} field={known!} shown={shown} can={can} titleId={titleId} descId={field.description ? descId : undefined} /></div>}
       </div>
-      {known && !inline && shown !== undefined && <div className="mt-2.5"><BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} selectionDirty={selectionDirty} titleId={titleId} descId={field.description ? descId : undefined} /></div>}
-      {known && (
-        <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11.5px] leading-snug">
-          <Detail term={t("settings-configuration.default")}>{valueText(known, known.default)}</Detail>
-          {known.details?.map((d, i) => <Detail key={i} term={d.title}>{d.description}</Detail>)}
-        </dl>
+      {known && !inline && shown !== undefined && (
+        <div className="mt-2">
+          <BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={field.description ? descId : undefined} countId={count !== undefined ? countId : undefined} />
+        </div>
       )}
+      {fs.error && <p role="alert" className="mt-1.5 text-[11.5px] leading-snug text-red">{problemText(fs.error)}</p>}
+      {notice && <Note tone={notice.kind === "warning" ? "caution" : undefined}>{notice.message}</Note>}
+      {field.kind === "unsupported" && <Note tone="caution">{field.reason === "kind" ? t("settings-configuration.unsupported_kind") : t("settings-configuration.unsupported_definition")}</Note>}
+      {known && value === undefined && <Note tone="caution">{t("settings-configuration.invalid_value")}</Note>}
+      {known?.disabled_reason ? <Note>{known.disabled_reason}</Note> : known?.read_only ? <Note>{t("settings-configuration.read_only")}</Note> : null}
+      {known && known.details?.length ? (
+        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px] leading-snug">
+          {known.details.map((d, i) => <Detail key={i} term={d.title}>{d.description}</Detail>)}
+        </dl>
+      ) : null}
       {!known && field.details?.length ? (
-        <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11.5px] leading-snug">
+        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px] leading-snug">
           {field.details.map((d, i) => <Detail key={i} term={d.title}>{d.description}</Detail>)}
         </dl>
       ) : null}
-      {field.kind === "unsupported" && <Note tone="caution">{field.reason === "kind" ? t("settings-configuration.unsupported_kind") : t("settings-configuration.unsupported_definition")}</Note>}
-      {known && value === undefined && <Note tone="caution">{t("settings-configuration.invalid_value")}</Note>}
-      {notice && <Note tone={notice.kind === "warning" ? "caution" : undefined}>{notice.message}</Note>}
-      {known?.disabled_reason ? <Note>{known.disabled_reason}</Note> : known?.read_only ? <Note>{t("settings-configuration.read_only")}</Note> : null}
-      <div aria-live="polite" className="empty:hidden">
-        {s.busy === field.id && (
-          <p className="mt-2 flex items-center gap-1.5 text-[11.5px] text-ink-2"><Spinner />{t("settings-configuration.saving")}</p>
-        )}
-        {fs.saved && <p className="mt-2 text-[11.5px] leading-snug text-green">{t("settings-configuration.saved")}</p>}
-      </div>
-      {fs.error && <p role="alert" className="mt-2 text-[11.5px] leading-snug text-red">{problemText(fs.error)}</p>}
-      {resettable && (
-        <div className="mt-2">
+      {known && <FieldFooter ctl={ctl} field={known} can={can} resettable={resettable} dirty={typedDirty || selectionDirty} count={count} countId={countId} busy={s.busy === field.id} saved={!!fs.saved} />}
+    </div>
+  );
+}
+
+/** One footer row for a field: its default and count, the save state, and Reset / Cancel / Save. */
+function FieldFooter({ ctl, field, can, resettable, dirty, count, countId, busy, saved }: {
+  ctl: ConfigurationController;
+  field: KnownField;
+  can: boolean;
+  resettable: boolean;
+  dirty: boolean;
+  count?: string;
+  countId: string;
+  busy: boolean;
+  saved: boolean;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="min-w-0 text-[11.5px] leading-snug text-ink-3">
+        {t("settings-configuration.default")} <span className="text-ink-2">{valueText(field, field.default)}</span>
+      </span>
+      {count !== undefined && <span id={countId} className="text-[11px] text-ink-3 tabular-nums">{count}</span>}
+      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        <span aria-live="polite" className={busy || saved ? "flex items-center gap-1.5 text-[11.5px] leading-snug" : "sr-only"}>
+          {busy && <><Spinner />{t("settings-configuration.saving")}</>}
+          {saved && <span className="text-green">{t("settings-configuration.saved")}</span>}
+        </span>
+        {resettable && (
           <Button size="sm" tone="quiet" icon="undo" disabled={!can} onClick={() => ctl.reset(field.id)}>{t("settings-configuration.reset")}</Button>
-        </div>
-      )}
+        )}
+        {dirty && (
+          <>
+            <Button size="sm" tone="quiet" onClick={() => ctl.discard(field.id)}>{t("settings-configuration.cancel")}</Button>
+            <Button size="sm" tone="primary" disabled={!can} onClick={() => ctl.saveDraft(field.id)}>{t("settings-configuration.save")}</Button>
+          </>
+        )}
+      </span>
     </div>
   );
 }
@@ -185,20 +227,19 @@ function Detail({ term, children }: { term: string; children: React.ReactNode })
 }
 
 function Note({ tone, children }: { tone?: "caution"; children: React.ReactNode }) {
-  return <p className={tone ? "mt-2 text-[11.5px] leading-snug text-orange" : "mt-2 text-[11.5px] leading-snug text-ink-3"}>{children}</p>;
+  return <p className={tone ? "mt-1.5 text-[11.5px] leading-snug text-orange" : "mt-1.5 text-[11.5px] leading-snug text-ink-3"}>{children}</p>;
 }
 
 interface ControlProps {
   ctl: ConfigurationController;
   field: KnownField;
   shown: FieldValue;
-  can: boolean;
   titleId: string;
   descId?: string;
 }
 
 /** Controls at the end of the title row: a switch, a segmented choice, a dropdown. */
-function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps) {
+function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps & { can: boolean }) {
   if (field.kind === "toggle") return <Switch on={shown as boolean} onChange={(on) => ctl.choose(field.id, on)} disabled={!can} label={field.title} describedBy={descId} />;
   if (field.kind !== "select") return null;
   if (field.select.presentation === "dropdown") {
@@ -216,7 +257,7 @@ function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps
 }
 
 /** Controls under the title: a list of choices, a list of checks, a text or number field. */
-function BlockControl({ ctl, field, shown, fs, can, editable, selectionDirty, titleId, descId }: ControlProps & { fs: FieldState; editable: boolean; selectionDirty: boolean }) {
+function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId, countId }: ControlProps & { fs: FieldState; can: boolean; editable: boolean; countId?: string }) {
   if (field.kind === "select") {
     const options = field.select.options;
     return (
@@ -225,56 +266,64 @@ function BlockControl({ ctl, field, shown, fs, can, editable, selectionDirty, ti
       </fieldset>
     );
   }
-  if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={shown as string[]} dirty={selectionDirty} can={can} editable={editable} titleId={titleId} descId={descId} />;
-  if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={descId} />;
+  if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={shown as string[]} editable={editable} titleId={titleId} descId={descId} />;
+  if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} editable={editable} titleId={titleId} descId={descId} countId={countId} />;
   return null;
 }
 
-function Checks({ ctl, field, chosen, dirty, can, editable, titleId, descId }: { ctl: ConfigurationController; field: Extract<KnownField, { kind: "multiselect" }>; chosen: string[]; dirty: boolean; can: boolean; editable: boolean; titleId: string; descId?: string }) {
+function Checks({ ctl, field, chosen, editable, titleId, descId }: { ctl: ConfigurationController; field: Extract<KnownField, { kind: "multiselect" }>; chosen: string[]; editable: boolean; titleId: string; descId?: string }) {
   const options = field.multiselect.options;
-  // Checking is local until Save: a one-of-one choice moves A → B by unchecking A and checking B, and only the result is
-  // written (an invalid one is said before anything is sent).
-  const flip = (v: string) => {
-    const on = chosen.includes(v);
-    // in the options' order, whatever order they were picked in
-    ctl.setSelection(field.id, options.map((o) => o.value).filter((x) => (x === v ? !on : chosen.includes(x))));
+  // A maximum of one is a single choice: clicking another option replaces the old one at once (the value stays an array on
+  // the wire). Any other maximum keeps ordinary checks, where a draft can pass through a temporary count.
+  const single = field.multiselect.max_selected === 1;
+  const canClear = single && (field.multiselect.min_selected ?? 0) === 0;
+  const pick = (v: string) => {
+    if (single) ctl.setSelection(field.id, canClear && chosen.includes(v) ? [] : [v]);
+    else {
+      const on = chosen.includes(v);
+      // in the options' order, whatever order they were picked in
+      ctl.setSelection(field.id, options.map((o) => o.value).filter((x) => (x === v ? !on : chosen.includes(x))));
+    }
   };
+  const onKeyDown = single
+    ? (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (!editable) return;
+        const keys = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+        if (!keys) return;
+        e.preventDefault();
+        const at = options.findIndex((o) => chosen.includes(o.value));
+        const next = (at < 0 ? 0 : at + keys + options.length) % options.length;
+        ctl.setSelection(field.id, [options[next].value]);
+        e.currentTarget.querySelector<HTMLElement>(`[data-choice="${next}"]`)?.focus();
+      }
+    : undefined;
   return (
-    <div>
-      <div role="group" aria-labelledby={titleId} aria-describedby={descId} className="divide-y divide-line overflow-hidden rounded-card bg-inset shadow-hairline">
-        {options.map((o) => {
-          const on = chosen.includes(o.value);
-          return (
-            <button key={o.value} type="button" role="checkbox" aria-checked={on} disabled={!editable} onClick={() => flip(o.value)}
-              className="touch-hit flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
-              <CheckMark on={on} className="mt-0.5" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] font-medium text-ink">{o.title}</span>
-                {o.description && <span className="block text-[11.5px] text-ink-3">{o.description}</span>}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      {dirty && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          <span className="ml-auto flex shrink-0 items-center gap-2">
-            <Button size="sm" tone="quiet" onClick={() => ctl.discard(field.id)}>{t("settings-configuration.cancel")}</Button>
-            <Button size="sm" tone="primary" disabled={!can} onClick={() => ctl.saveDraft(field.id)}>{t("settings-configuration.save")}</Button>
-          </span>
-        </div>
-      )}
+    <div role={single ? "radiogroup" : "group"} aria-labelledby={titleId} aria-describedby={descId} onKeyDown={onKeyDown}
+      className="divide-y divide-line overflow-hidden rounded-card bg-inset shadow-hairline">
+      {options.map((o, i) => {
+        const on = chosen.includes(o.value);
+        return (
+          <button key={o.value} type="button" role={single ? "radio" : "checkbox"} aria-checked={on} disabled={!editable}
+            tabIndex={single ? (on || (!chosen.length && i === 0) ? 0 : -1) : undefined} data-choice={single ? i : undefined}
+            onClick={() => pick(o.value)}
+            className="touch-hit flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
+            <CheckMark on={on} round={single} className="mt-0.5" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12.5px] font-medium text-ink">{o.title}</span>
+              {o.description && <span className="block text-[11.5px] text-ink-3">{o.description}</span>}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-function Typed({ ctl, field, shown, fs, can, editable, titleId, descId }: ControlProps & { fs: FieldState; editable: boolean; field: Extract<KnownField, { kind: "text" | "number" }> }) {
+function Typed({ ctl, field, shown, fs, editable, titleId, descId, countId }: ControlProps & { fs: FieldState; editable: boolean; countId?: string }) {
   const committed = String(shown);
   const text = fs.draft ?? committed;
   const dirty = fs.draft !== undefined && fs.draft !== committed;
   const multiline = field.kind === "text" && field.text?.multiline;
-  const max = field.kind === "text" ? field.text?.max_length : undefined;
-  const countId = useId();
   const onKey = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     if (e.key === "Escape" && dirty) {
@@ -295,7 +344,7 @@ function Typed({ ctl, field, shown, fs, can, editable, titleId, descId }: Contro
   };
   const common = {
     "aria-labelledby": titleId,
-    "aria-describedby": [descId, max !== undefined ? countId : undefined].filter(Boolean).join(" ") || undefined,
+    "aria-describedby": [descId, countId].filter(Boolean).join(" ") || undefined,
     "aria-invalid": fs.error ? true : undefined,
     value: text,
     disabled: !editable,
@@ -304,22 +353,9 @@ function Typed({ ctl, field, shown, fs, can, editable, titleId, descId }: Contro
     spellCheck: false,
     autoComplete: "off",
   };
+  if (multiline) return <textarea {...common} rows={3} className={textareaClass} onChange={(e) => ctl.setDraft(field.id, e.target.value)} />;
   return (
-    <div>
-      {multiline ? (
-        <textarea {...common} rows={3} className={textareaClass} onChange={(e) => ctl.setDraft(field.id, e.target.value)} />
-      ) : (
-        <input {...common} inputMode={field.kind === "number" ? (field.number?.integer ? "numeric" : "decimal") : undefined} className={inputClass} onChange={(e) => ctl.setDraft(field.id, e.target.value)} />
-      )}
-      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-        {max !== undefined && <span id={countId} className="min-w-0 flex-1 text-[11px] text-ink-3 tabular-nums">{t("settings-configuration.count", { n: scalarLength(text), max })}</span>}
-        {dirty && (
-          <span className="ml-auto flex shrink-0 items-center gap-2">
-            <Button size="sm" tone="quiet" onClick={() => ctl.discard(field.id)}>{t("settings-configuration.cancel")}</Button>
-            <Button size="sm" tone="primary" disabled={!can} onClick={() => ctl.saveDraft(field.id)}>{t("settings-configuration.save")}</Button>
-          </span>
-        )}
-      </div>
-    </div>
+    <input {...common} inputMode={field.kind === "number" ? (field.number?.integer ? "numeric" : "decimal") : undefined}
+      className={field.kind === "number" ? `${inputClass} max-w-[9rem]` : inputClass} onChange={(e) => ctl.setDraft(field.id, e.target.value)} />
   );
 }
