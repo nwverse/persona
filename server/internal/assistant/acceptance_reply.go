@@ -212,7 +212,11 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		return acceptResult{}, errAcceptStore
 	}
 	a, ok := b.asks[id]
-	if !ok || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
+	// A durable owner Pass may precede completion if the process stops between the two writes.
+	ownerCheck := todoOK && t.Supervision != nil && t.Supervision.State == reviewUserCheck
+	resumeOwnerPass := ok && ownerCheck &&
+		!a.Conclusion && !a.ByAssistant && !a.BySupervisor && !a.AcceptedAt.IsZero()
+	if !ok || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() && !resumeOwnerPass || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
 		decideAsk(a) && (a.Recommend == "" || todoOK && acceptAskEnded(a, t)) ||
 		byDefault && !(decideAsk(a) && a.Reversible && !a.Deadline.IsZero() && a.DueAt.IsZero() && !time.Now().Before(a.Deadline)) {
 		b.mu.Unlock()
@@ -227,14 +231,16 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			return acceptResult{}, err
 		}
 	}
-	previousDueAt := a.DueAt
-	a.AcceptedAt = time.Now().UTC()
+	previousDueAt, previousAcceptedAt := a.DueAt, a.AcceptedAt
+	if a.AcceptedAt.IsZero() {
+		a.AcceptedAt = time.Now().UTC()
+	}
 	if byDefault {
 		a.ByDefault, a.DueAt = true, a.AcceptedAt
 	}
 	if err := s.saveAcceptErrLocked(ctx); err != nil {
 		// Kept only in memory, it would wait again after a restart: not accepted, and nothing that follows one runs.
-		a.AcceptedAt, a.ByDefault, a.DueAt = time.Time{}, false, previousDueAt
+		a.AcceptedAt, a.ByDefault, a.DueAt = previousAcceptedAt, false, previousDueAt
 		b.mu.Unlock()
 		s.logf("task %s: acceptance: save: %v", id, err)
 		return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
@@ -243,12 +249,12 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 	b.mu.Unlock()
 	s.askChanged(ctx) // it no longer waits
 	if !decideAsk(&cp) && !cp.Conclusion {
-		if todoOK && t.Supervision.state(t) == reviewUserCheck {
+		if ownerCheck {
 			closed, err := s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
 			if err != nil {
 				b.mu.Lock()
 				if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
-					a.AcceptedAt = time.Time{}
+					a.AcceptedAt = previousAcceptedAt
 					s.saveAcceptLocked(ctx)
 				}
 				b.mu.Unlock()

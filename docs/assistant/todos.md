@@ -641,6 +641,8 @@ ordinary stalled-task idle limit. This does not change the closure policy for ta
 The owner's **Pass** (app, card or approval reply) marks the task verified, closes it by review, and permits normal
 completed-task retirement. Change feedback records a new work round before relaying the words to the same Agent;
 the old Pass can no longer complete that round. Failed delivery is shown as failed, not as successful rework.
+The same applies to the owner's next message from the task card or directly in its Agent chat. A recorded Pass
+interrupted by a hub restart is completed by the acceptance recovery sweep, not left waiting for a second Pass.
 An accepted review without `user_check` still completes the task immediately as before.
 
 (#2056, `assistant/todo_ask.go`.) A to-do whose result waits for the owner carries that ask on itself, so the apps can show it in the to-do list and take it with one tap, not only the briefing and the Lark card.

@@ -399,7 +399,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
 // so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
 // separate work.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// #10047: personal verification reuses the review chip and Needs you, with an open-task state and label on the first
+// screen. Against main 40ee4e32fb in one environment: ja 482,579 B to 482,788 B (+209 B), en 479,473 B to 479,696 B,
+// zh-Hans 480,296 B to 480,514 B. Routing the label through reviewState instead of its direct guard added another
+// 25 B in each language, so the guard stays. The budget adds only the measured ja delta, keeping main's 104 B room.
+export const FIRST_SCREEN_BUDGET = 482_892;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

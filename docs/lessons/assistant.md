@@ -722,3 +722,8 @@ A supervisor's accepted review is not the owner's personal verification. Keep an
 until Pass, so both completed-task and ordinary idle retirement leave its Agent available. Feedback starts a new
 work round even though the task was already open: otherwise its old Pass can verify rework. Test open counts and
 the actual retirement passes as well as the card; a still-pending card alone never proves its task is open.
+The acceptance record and completion are separate durable writes: recover a saved owner Pass after a restart,
+including the verified stage if the todo was already closed.
+Serialize the round change, not an ordinary message's Agent-start wait: a second message must still join the
+Agent already starting (`TestStoppedTaskSecondMessageGoesToTheStartingAgent`), rather than wait behind the
+first sender's action lock.

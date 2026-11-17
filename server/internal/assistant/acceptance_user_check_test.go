@@ -109,6 +109,46 @@ func TestUserCheckFeedbackReturnsToTheSameAgent(t *testing.T) {
 	}
 }
 
+func TestUserCheckChatFeedbackInvalidatesPass(t *testing.T) {
+	ctx := context.Background()
+	for _, direct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "task card", true: "Agent chat"}[direct], func(t *testing.T) {
+			s, f, todo := acceptedForUserCheck(t)
+			a := askOf(s, todo.ID)
+			before := len(sentToAgent(f))
+			if direct {
+				s.userSpokeText(ctx, SessionRef{MachineID: "box", SessionID: "s1"}, "Please fix the spacing.")
+			} else if _, err := s.routeToTask(ctx, todo.Origin, todo.ID, "Please fix the spacing."); err != nil {
+				t.Fatal(err)
+			}
+			got := todoNow(s, todo.ID)
+			if got.DoneAt != nil || got.Supervision.state(got) == reviewUserCheck || got.ReopenedAt == nil {
+				t.Fatalf("chat feedback did not resume ongoing work: %+v", got)
+			}
+			if !direct {
+				f.mu.Lock()
+				sent := append([]map[string]any(nil), f.agentSent[before:]...)
+				f.mu.Unlock()
+				if len(sent) != 1 || sent[0]["session_id"] != "s1" {
+					t.Fatalf("chat feedback did not reach the same Agent: %+v", sent)
+				}
+			}
+			if result, err := s.acceptTry(ctx, todo.ID, a.MessageID); err != nil || result.taken {
+				t.Fatalf("old Pass accepted after chat feedback: %+v, %v", result, err)
+			}
+		})
+	}
+}
+
+func TestUserCheckOldUserPromptDoesNotInvalidatePass(t *testing.T) {
+	s, _, todo := acceptedForUserCheck(t)
+	a := askOf(s, todo.ID)
+	s.agentDecisionSpoke(context.Background(), SessionRef{MachineID: "box", SessionID: "s1"}, a.AskedAt.Add(-time.Second), "")
+	if got := todoNow(s, todo.ID); got.Supervision.state(got) != reviewUserCheck {
+		t.Fatalf("an old replayed user prompt cancelled personal verification: %+v", got)
+	}
+}
+
 func TestUserCheckPassHTTPCompletesTheTask(t *testing.T) {
 	s, _, todo := acceptedForUserCheck(t)
 	if todo.DoneAt != nil {
@@ -142,6 +182,49 @@ func TestUserCheckPersistsAcrossRestart(t *testing.T) {
 	}
 	if row, err := database.GetTodo(ctx, todo.ID); err != nil || row.DoneAt == nil || row.DoneBy != db.DoneByReview {
 		t.Fatalf("Pass was not persisted as completed: %+v, %v", row, err)
+	}
+}
+
+func TestUserCheckRecoversAStoredPassBeforeCompletion(t *testing.T) {
+	ctx := context.Background()
+	database := todoTestDB(t)
+	s, f, todo := acceptedForUserCheckOn(t, database)
+	// The process ended after persisting Pass but before completing the task.
+	s.accept.mu.Lock()
+	s.accept.asks[todo.ID].AcceptedAt = time.Now().UTC()
+	err := s.saveAcceptErrLocked(ctx)
+	s.accept.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := newServiceOn(t, f, database)
+	restarted.verifySupervisedAsks(ctx)
+	if row, err := database.GetTodo(ctx, todo.ID); err != nil || row.DoneAt == nil || row.DoneBy != db.DoneByReview {
+		t.Fatalf("restart left a recorded owner Pass incomplete: %+v, %v", row, err)
+	}
+	if got := todoNow(restarted, todo.ID); got.Stage != "verify" || got.Supervision.state(got) != reviewAccepted {
+		t.Fatalf("recovered Pass was not verified: %+v", got)
+	}
+}
+
+func TestUserCheckRecoversPassAfterCompletionBeforeVerification(t *testing.T) {
+	ctx := context.Background()
+	database := todoTestDB(t)
+	s, f, todo := acceptedForUserCheckOn(t, database)
+	s.accept.mu.Lock()
+	s.accept.asks[todo.ID].AcceptedAt = time.Now().UTC()
+	err := s.saveAcceptErrLocked(ctx)
+	s.accept.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.reviewDoneTodo(ctx, todo.ID, "Owner passed", true); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newServiceOn(t, f, database)
+	restarted.verifySupervisedAsks(ctx)
+	if got := todoNow(restarted, todo.ID); got.DoneAt == nil || got.Stage != "verify" || got.Supervision.State != reviewAccepted {
+		t.Fatalf("restart did not finish the verified stage: %+v", got)
 	}
 }
 

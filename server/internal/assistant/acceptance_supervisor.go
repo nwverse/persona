@@ -61,7 +61,7 @@ func (s *Service) verifyBySupervisor(ctx context.Context, id string) (bool, erro
 }
 
 // verifySupervisedAsks passes every "Please verify" or done conclusion still waiting whose task its supervisor accepted
-// (supervisorVerified): the ones asked before #3240, and any a race left behind.
+// (supervisorVerified). It also completes owner Passes persisted just before a process stopped.
 func (s *Service) verifySupervisedAsks(ctx context.Context) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		s.logf("acceptance: supervisor verify: %v", err)
@@ -75,14 +75,26 @@ func (s *Service) verifySupervisedAsks(ctx context.Context) {
 	}
 	var ids []string
 	for id, a := range b.asks {
-		if !decideAsk(a) && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() {
+		if !decideAsk(a) && !a.AskedAt.IsZero() {
 			ids = append(ids, id)
 		}
 	}
 	b.mu.Unlock()
 	slices.Sort(ids)
 	for _, id := range ids {
-		if t, ok := s.todoNow(id); !ok || !supervisorVerified(t) {
+		t, ok := s.todoNow(id)
+		if !ok {
+			continue
+		}
+		if t.Supervision != nil && t.Supervision.State == reviewUserCheck {
+			if a, ok := s.askCopy(id); ok && !a.AcceptedAt.IsZero() && !a.ByAssistant && !a.BySupervisor {
+				if _, err := s.acceptTry(ctx, id, ""); err != nil {
+					s.logf("task %s: recover owner Pass: %v", id, err)
+				}
+			}
+			continue
+		}
+		if !supervisorVerified(t) {
 			continue
 		}
 		if ok, err := s.verifyBySupervisor(ctx, id); err != nil {
