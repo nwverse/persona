@@ -227,13 +227,13 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
-	shells := paneShells(ctx, created)
+	shells := n.startPaneShells(ctx, launch, created)
 	line := n.claudeCommandLine(spec, args+modeFlags(mode, effort)+planThenFlags(mode, planThen), shellQuote)
 	if execution.SecretTicket != "" { // through personad launch --ticket; the spec herdr resumes with keeps none (secretenv.go)
 		line = n.withSecretTicket(line, launcher, execution.SecretTicket, shellQuote)
 	}
 	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), line)
-	cmd = n.agentCommand(cmd, shellQuote, shells...)
+	cmd = n.agentStartCommand(cmd, shellQuote, shells...)
 	if cdFirst(ctx) { // a launcher switch in a shell that is not in the conversation's folder (launcher_switch.go)
 		cmd = cdThen(cwd, cmd, shells...)
 	}
