@@ -2378,7 +2378,8 @@ test("worktrees made by Paseo: from the workspace's folder, a new branch cut fro
 
   const made = await call(node, 'workspace.create', { cwd: w.app, workspace_id: w.main.id, branch: 'feat/y', create_branch: true, base: 'main', name: 'feat-y', key: 'persona-k1' })
   const req = fake.requestsOf('workspace.create.request').at(-1)
-  assert.deepEqual(req.source, { kind: 'worktree', cwd: w.app, action: 'branch-off', refName: 'main', branchName: 'feat/y', worktreeSlug: 'feat-y' })
+  assert.deepEqual(req.source, { kind: 'worktree', cwd: w.app, action: 'branch-off', refName: 'main', branchName: 'feat/y', worktreeSlug: 'feat-y', projectId: 'prj_app' },
+    "the named workspace's own project")
   assert.equal(req.idempotencyKey, 'persona-k1')
   assert.equal(req.agent, undefined, 'no agent: Paseo would rename the branch after its prompt')
   assert.equal(req.firstAgentContext, undefined)
@@ -2398,6 +2399,32 @@ test("worktrees made by Paseo: from the workspace's folder, a new branch cut fro
   await assert.rejects(call(node, 'workspace.create', { cwd: w.app, workspace_id: 'wks_00000000000000ff', branch: 'x', create_branch: true }), (err) => err.code === 'workspace_missing')
   fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: null, setupTerminalId: null, error: 'Create worktree requires a git repository', errorCode: 'not_git' } })
   await assert.rejects(call(node, 'workspace.create', { cwd: w.app, branch: 'x', create_branch: true }), /requires a git repository/)
+})
+
+// A repository Paseo knows by another spelling of its folder (a symbolic link, /home over /data00) keeps its project:
+// handed git's physical top level alone, Paseo would match the spelling and make a second project for it.
+test('a worktree made from a folder goes into the project of its repository, whatever path spelled it; none known: as before', async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const alias = join(dir, 'alias')
+  symlinkSync(dir, alias)
+  const { fake, node } = await setup(t, { workspaces: [w.main, w.wt] })
+  await until('the workspaces', () => node.last('runtime.workspaces'))
+  let projects = [
+    { projectId: 'prj_other', projectKind: 'git', projectRootPath: join(dir, 'other') },
+    { projectId: 'prj_home', projectKind: 'git', projectRootPath: join(alias, 'app') },
+    { projectId: 'prj_phys', projectKind: 'git', projectRootPath: w.app },
+  ]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  await call(node, 'workspace.create', { cwd: w.app, branch: 'feat/z', create_branch: true, base: 'main' })
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_home', 'the first Paseo lists of the same folder')
+  projects = [{ projectId: 'prj_dir', projectKind: 'directory', projectRootPath: w.app }]
+  await call(node, 'workspace.create', { cwd: w.app, branch: 'feat/z2', create_branch: true, base: 'main' })
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, undefined, 'no git project there: Paseo finds or makes one')
+  delete fake.handlers['project.list.request']
+  await call(node, 'workspace.create', { cwd: w.app, branch: 'feat/z3', create_branch: true, base: 'main' })
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, undefined, 'its projects unknown: as before')
 })
 
 // ---- renaming and archiving Paseo's workspaces (#6297) ----

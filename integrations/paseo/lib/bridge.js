@@ -2052,6 +2052,25 @@ export function createPaseoBridge(deps = {}, options = {}) {
     return { checkouts: paseoCheckouts(worktreesBase(), root) }
   }
 
+  /**
+   * The Paseo project of the repository whose top level is dir, by the physical path (canon): the first Paseo lists
+   * (its oldest) when aliases of one folder made several. undefined when it has none or cannot say: Paseo then finds or
+   * makes one as before.
+   */
+  async function projectAt(dir) {
+    let res
+    try {
+      res = await paseo.request('project.list.request', {}, { timeoutMs: 30_000 })
+    } catch (err) {
+      log(`paseo: listing its projects: ${err.message}`)
+      return undefined
+    }
+    const root = canon(dir)
+    const p = (res?.projects ?? []).find((x) => x?.projectKind === 'git' && typeof x.projectRootPath === 'string' && x.projectRootPath &&
+      canon(x.projectRootPath) === root)
+    return typeof p?.projectId === 'string' && p.projectId ? p.projectId : undefined
+  }
+
   /** Paseo's worktrees root: its config's worktrees.root, else <Paseo home>/worktrees (its config.js resolveWorktreesRoot). */
   function worktreesBase() {
     const home = options.home ?? paseo.home
@@ -2093,6 +2112,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
       if (branch) source.branchName = branch
     }
     if (typeof params.name === 'string' && params.name.trim()) source.worktreeSlug = params.name.trim()
+    // The repository's own project: without one Paseo matches the folder by its spelling only, so a repository it knows
+    // as /home/… handed in as the physical /data00/… (git's top level, the node's) got a second project of its own.
+    const projectId = from?.projectId || await projectAt(cwd)
+    if (projectId) source.projectId = projectId
     const req = { source }
     if (typeof params.key === 'string' && params.key) req.idempotencyKey = params.key.slice(0, 512)
     const res = await paseo.request('workspace.create.request', req, { timeoutMs: CREATE_WAIT })
