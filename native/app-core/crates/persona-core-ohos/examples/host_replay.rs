@@ -442,6 +442,11 @@ fn projection_json(bytes: &[u8]) -> Result<String, String> {
                 .map_err(|error| format!("stream_repair: input does not decode: {error}"))?;
             serde_json::to_string(&persona_core::stream_repair::project(&input)).map_err(|e| e.to_string())
         }
+        "plain_open_fence" => {
+            let input: persona_core::stream_repair::PlainFenceInput = serde_json::from_value(input.clone())
+                .map_err(|error| format!("plain_open_fence: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::stream_repair::plain_open_fence(&input)).map_err(|e| e.to_string())
+        }
         "task_index" => {
             let input: persona_core::task_index::Input = serde_json::from_value(input.clone())
                 .map_err(|error| format!("task_index: input does not decode: {error}"))?;

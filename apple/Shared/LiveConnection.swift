@@ -26,8 +26,9 @@ nonisolated enum ServerEvent: Sendable {
     /// What changed in a machine's list since the last (a hub that has `sessions_delta`, asked for on connect): the
     /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「Session deltas」).
     case sessionsDelta(machineID: String, upsert: [Session], remove: [String])
-    /// A lightweight hint, never an authoritative row checkpoint.
-    case sessionsList(revision: String)
+    /// A lightweight hint, never an authoritative row checkpoint. `changes`: which rows changed since which revision,
+    /// when the hub can say (`SessionListChanges`).
+    case sessionsList(revision: String, changes: SessionListChanges? = nil)
     /// hasMore is nil when the event cannot know (a catch-up after since_seq): only pages from the end tell. moreAfter:
     /// the hub capped a catch-up, more came after these.
     case items(SessionKey, [Item], backlog: Bool, hasMore: Bool?, span: ItemSpan, moreAfter: Bool)
@@ -192,14 +193,16 @@ nonisolated enum ServerEvent: Sendable {
         var manager: JSONValue?
         /// meeting_live's.
         var recordingID: String?
-        /// meeting_live's list of parts; raw, since other messages use `changed` for other shapes.
+        /// meeting_live's list of parts, and the ids a `sessions_list` hint names; raw, since the shapes differ.
         var changed: JSONValue?
+        /// A `sessions_list` hint's starting revision; raw, so another message's `since` of another shape cannot break it.
+        var since: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
             case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
-            case effective, changed
+            case effective, changed, since
             case answeredBy = "answered_by", recordingID = "recording_id"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
@@ -245,7 +248,7 @@ nonisolated enum ServerEvent: Sendable {
         case "sessions":
             guard let m = e.machineID else { return nil }
             return .sessions(machineID: m, (e.sessions ?? []).map { var s = $0; s.machineID = m; return s })
-        case "sessions_list": return e.revision.map { .sessionsList(revision: $0) }
+        case "sessions_list": return e.revision.map { .sessionsList(revision: $0, changes: SessionListChanges(since: e.since, changed: e.changed)) }
         case "sessions_delta":
             guard let m = e.machineID else { return nil }
             return .sessionsDelta(machineID: m, upsert: (e.upsert ?? []).map { var s = $0; s.machineID = m; return s }, remove: e.remove ?? [])
@@ -664,7 +667,7 @@ final class LiveConnection {
     /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`), and
     /// where to resume the broadcasts from once a hello gave a stream.
     static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false) -> [URLQueryItem] {
-        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
+        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," + SessionListChanges.feature + "," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
     }
 
     private func heartbeat(_ t: URLSessionWebSocketTask, _ gen: Int) {

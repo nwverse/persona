@@ -632,7 +632,11 @@ Phase 3 lands in several PRs.
     table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
     `repaired` and extra-field expectations; they do not replay the complete inline, math or mixed-reply corpora. The
     NAPI export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift
-    check. `MathMarkdown.rewrite`, visual gaps, timing, rendering, the plain-fence C ABI/ArkTS/SwiftPM projections,
+    check. The plain-fence projection (#9563) also reaches the independent Linux C ABI client and real ArkTS host helper:
+    both replay #9515's five explicit Apple assertions and 31 source-derived controls through complete `{text}` objects
+    and wrong-expectation checks with the caller's full drawn-info-string list. `coreProjectPlainOpenFence` and its declaration are committed and drift
+    checked, but neither that NAPI function nor a SwiftPM projection has been executed.
+    `MathMarkdown.rewrite`, visual gaps, timing, rendering, the plain-fence SwiftPM projection,
     production adapters and the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI
     and ArkTS host evidence; real NAPI / SwiftPM projection is not yet covered.
 
