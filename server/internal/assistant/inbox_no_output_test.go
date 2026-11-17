@@ -216,8 +216,18 @@ func TestInboxNoOutputRedeliveryFeedFailureWaitsForActualTurn(t *testing.T) {
 			s.tasks.turns.mu.Lock()
 			s.tasks.turns.loaded = false
 			s.tasks.turns.mu.Unlock()
-			s.recoverTaskInboxEvents(ctx)
-			if !s.taskInboxUnhandled(ctx, id) || len(unhandledInboxSignals(s)) != 0 {
+			s.superviseWatch(ctx, time.Now())
+			var ledger struct {
+				Events map[string]struct {
+					Retried bool   `json:"retried"`
+					Failure string `json:"failure"`
+				} `json:"inbox_events"`
+			}
+			if _, err := st.Setting(ctx, taskTurnsKey, &ledger); err != nil {
+				t.Fatal(err)
+			}
+			event, pending := ledger.Events[id]
+			if !pending || !event.Retried || event.Failure != "" || len(unhandledInboxSignals(s)) != 0 {
 				t.Fatal("feed failure discarded the event or persisted a false delivery failure")
 			}
 			inboxRetryTurn(s, f, "retry-result", prompt, answer, 20)
@@ -226,7 +236,11 @@ func TestInboxNoOutputRedeliveryFeedFailureWaitsForActualTurn(t *testing.T) {
 			}
 			signals := unhandledInboxSignals(s)
 			if answer != "" {
-				if len(signals) != 0 || s.taskInboxUnhandled(ctx, id) {
+				ledger.Events = nil
+				if _, err := st.Setting(ctx, taskTurnsKey, &ledger); err != nil {
+					t.Fatal(err)
+				}
+				if len(signals) != 0 || len(ledger.Events) != 0 {
 					t.Fatalf("the retry's answer did not acknowledge its event: %+v", signals)
 				}
 			} else if len(signals) != 1 || signals[0].Inbox.URL != g.Inbox.URL ||
