@@ -518,7 +518,7 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
   after its live snapshot, and once it is written the node sends the control request `{"subtype":"background_tasks"}` (Ctrl+B: every
   in-flight foreground Bash command and subagent goes on in the background). The model then reads the message right after the tool that
   was running returns; the backgrounded work reports back as a task notification, as `run_in_background` does. 2.1.139 is the first
-  release whose control protocol has `background_tasks` (Agent SDK 0.2.139).
+  release whose control protocol has `background_tasks`.
 - **Best effort**: an older or unknown version gets no control request; a refused or failed request is logged and the message
   still waits for the next tool boundary, as before. An idle chat is unaffected.
 - **The note goes with every mid-turn message** (#4883): whatever the switch and the version, a message that reaches a busy Claude on
