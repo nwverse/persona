@@ -4,12 +4,8 @@
 // switch of its own).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { t } from "../../../i18n";
-
-const nav = vi.hoisted(() => ({ to: [] as string[] }));
-vi.mock("../../../lib/router", async (orig) => ({ ...(await orig<typeof import("../../../lib/router")>()), navigate: (to: string) => nav.to.push(to) }));
-
 import { AppearanceRow, RendererRow } from "./TerminalOptions";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -64,19 +60,20 @@ describe("Renderer in Terminal settings", () => {
     [{ renderer: "webgl", rendererFellBack: false }, "session-terminal-terminaloptions.renderer_webgl"],
     [{ renderer: "standard", rendererFellBack: true }, "session-terminal-terminaloptions.renderer_fell_back"],
   ] as const)("says what draws this terminal (%o) and has no switch", (v, line) => {
-    act(() => root.render(<RendererRow v={v} onClose={() => {}} />));
+    act(() => root.render(<RendererRow v={v} onOpenLabs={() => {}} />));
     expect(host.textContent).toContain(t("session-terminal-terminaloptions.renderer"));
     expect(host.textContent).toContain(t(line));
     expect(host.querySelector('[role="switch"]')).toBeNull();
   });
 
-  it("closes the menu and opens Settings › Labs", () => {
-    nav.to = [];
-    let closed = 0;
-    act(() => root.render(<RendererRow v={{ renderer: "standard", rendererFellBack: false }} onClose={() => closed++} />));
+  it("opens Labs over the page, without leaving it", () => {
+    const at = location.pathname + location.search;
+    let opened = 0;
+    act(() => root.render(<RendererRow v={{ renderer: "standard", rendererFellBack: false }} onOpenLabs={() => opened++} />));
     const open = [...host.querySelectorAll("button")].find((b) => b.textContent === t("session-terminal-terminaloptions.renderer_open_labs"))!;
+    expect(open.getAttribute("aria-haspopup")).toBe("dialog");
     act(() => open.click());
-    expect(closed).toBe(1);
-    expect(nav.to).toEqual(["/settings?tab=labs"]);
+    expect(opened).toBe(1);
+    expect(location.pathname + location.search).toBe(at);
   });
 });

@@ -1942,7 +1942,7 @@ For `node_unreachable` and `timeout` (#5031) the hub did answer; the computer di
 
 ## Labs
 
-Settings › Labs (#9877; `web/src/lib/labs.ts`, `web/src/views/settings/LabsSettings.tsx`) is the one place for trial
+Settings › Labs (#9877; `web/src/lib/labs.ts`, `web/src/views/settings/Labs.tsx`) is the one place for trial
 features and for choosing between a stable and a new implementation of the same thing. It is in the sidebar's "this
 device" group, after Shortcuts. Each entry is a card: its name and a Trial chip, what it does, the choice (a segmented
 control for an implementation choice, a switch for an on / off trial), and four lines: **Default**, **Applies to**,
@@ -1957,7 +1957,7 @@ not provide one and no entry needs it yet.
 **Definitions.** `LABS` lists every entry with its kind (`choiceLab`: options and a default; `booleanLab`: a default),
 its storage key, scope (`browser`), activation (`new-views`) and the issue that added it. Features read an entry only
 through `readLab` (once, where the feature starts) and the settings page through `useLab`; writes go through `writeLab`.
-No feature adds its own switch for a trial. `LabsSettings.tsx` holds each entry's words in a table typed by the entry ids,
+No feature adds its own switch for a trial. `Labs.tsx` holds each entry's words in a table typed by the entry ids,
 so a new entry does not compile until it has them in all three languages.
 
 **Values.** The default writes nothing. An entry that had a key before Labs keeps that key and its stored values (an
@@ -1976,7 +1976,10 @@ uses the DOM renderer and is not affected. It is a browser setting because GPU s
 Its key is `persona.terminal.webgl` with WebGL stored as `1`, the Terminal settings switch's from before Labs.
 - A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals as they are.
 - Terminal settings no longer has its own WebGL switch: its Renderer row says what draws this terminal (Standard, WebGL,
-  or Standard after WebGL stopped) and has a Labs button that opens this page.
+  or Standard after WebGL stopped) and has a Labs button. It opens the same Labs cards in a dialog over the page (a sheet
+  on a phone; `LabsDialog`), as Edit shortcuts opens its editor, never Settings in place of the page: the chat beside the
+  terminal stays mounted, so an unsent draft keeps its text, its images (held only by the composer, released when it
+  unmounts) and an image being edited.
 - If WebGL cannot start or its GPU context is lost, that terminal disposes the addon, xterm repaints with the DOM renderer
   from its unchanged buffer, input keeps flowing, and Labs is set back to Standard so the next terminal does not fail the
   same way. A toast says so; if Standard could not be saved, it says that instead. A terminal that fell back stays on

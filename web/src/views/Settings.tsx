@@ -38,7 +38,7 @@ import { PersonaPicker } from "./assistant/Persona";
 import { TriageSettings } from "./settings/TriageSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
-import { LabsSettings } from "./settings/LabsSettings";
+import { LabsSettings } from "./settings/Labs";
 import { NotificationSettings } from "./settings/NotificationSettings";
 import { DesktopSettings } from "./settings/DesktopSettings";
 import { DevModeRows } from "./settings/DevModeSettings";
