@@ -11,8 +11,14 @@
      (overview/default, slow, load-fail, reject, conflict, unconfirmed, contract, empty, unsupported); the navigation is
      not drawn. The page checks its own documents with the real parser and shows a red line if one is invalid.
      web/e2e/configuration-showcase.mjs drives and captures it. -->
+<style>
+  /* src/styles.css keeps e2e out of Tailwind's scan ("@source not \"../e2e\""), so a fixture-only utility would not
+     exist in the built CSS. The content width is fixture-scoped here, matching the settings column (Settings.tsx uses
+     max-w-[760px]); the page's other classes are app utilities the scan already generates. */
+  #app { max-width: 760px; margin-inline: auto; }
+</style>
 <body class="bg-page">
-<div id="app" class="mx-auto max-w-[760px] px-5 py-6 sm:px-8"></div>
+<div id="app" class="px-5 py-6 sm:px-8"></div>
 <script type="module">
   import "/src/styles.css";
   import { initI18n } from "/src/i18n/index.ts";

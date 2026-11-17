@@ -72,8 +72,23 @@ try {
     if (modules.length !== 3) fail(`${tag}: modules ${modules}`);
     const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
     if (fields !== 13) fail(`${tag}: only ${fields} fields drawn`);
+    // The fixture's width is scoped in the page (e2e is out of Tailwind's scan), and the compact rows stay low: the
+    // review's pre-refinement rows were 176/193 px.
+    const layout = await page.evaluate(() => {
+      const app = document.getElementById("app");
+      const rect = app.getBoundingClientRect();
+      const row = (form, id) => Math.round(document.querySelector(`[data-showcase-form="${form}"] [data-configuration-field="${id}"]`)?.getBoundingClientRect().height ?? 0);
+      return { width: Math.round(rect.width), left: Math.round(rect.left), line: row("showcase-editor", "line_height"), topic: row("showcase-digest", "topic"), text: document.body.innerText };
+    });
+    const expected = width >= 600 ? 760 : width;
+    if (Math.abs(layout.width - expected) > 2) fail(`${tag}: content width ${layout.width} (expected ${expected})`);
+    if (width >= 600 && layout.left < 100) fail(`${tag}: content is not centered (left ${layout.left})`);
+    if (layout.line > 160 || layout.topic > 160) fail(`${tag}: rows are ${layout.line}/${layout.topic} px`);
+    for (const word of ["Mock", "mock", "模拟数据", "配置展示", "Scenario", "scenario", "Fixture", "fixture"]) {
+      if (layout.text.includes(word)) fail(`${tag}: the page still shows "${word}"`);
+    }
     await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
-    ok(`${tag}: ${modules.length} modules, ${fields} fields`);
+    ok(`${tag}: ${modules.length} modules, ${fields} fields, ${layout.width}px wide, rows ${layout.line}/${layout.topic}px`);
 
     if (theme === "light" && !size && language === "en") {
       // A maximum of one is a single choice: choosing Chinese replaces Auto at once, with no second check.
