@@ -732,7 +732,11 @@ def usage_history_hours(n):
         if m["id"] in weights:
             machines.append({"id": m["id"], "name": m["name"], **{k: int(v * weights[m["id"]] / all_w) for k, v in total.items()}})
     machines.sort(key=lambda x: -(x["in"] + x["cache_write"] + x["cache_read"] + x["out"]))
-    return {"zone": time.strftime("%Z") or "UTC", "hours": hours, "machines": machines, "total": total, "stored": True}
+    # Each agent's share (#9984), largest first; "" is usage kept before the hub counted agents apart.
+    agents = [{"agent": a, **{k: int(v * f) for k, v in total.items()}}
+              for a, f in (("claude", 0.62), ("codex", 0.21), ("opencode", 0.08), ("pi", 0.05), ("", 0.04))]
+    return {"zone": time.strftime("%Z") or "UTC", "hours": hours, "machines": machines, "agents": agents, "total": total,
+            "stored": True}
 
 
 def sess(mid, sid, title, cwd, status, state, space, sidx, slot, slidx, minutes, last, agent="claude", pending=0, **kw):
