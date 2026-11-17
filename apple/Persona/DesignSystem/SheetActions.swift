@@ -87,9 +87,11 @@ struct SheetConfirm: ToolbarContent {
                 Button(role: .confirm, action: action)
             }
         } else {
-            // iOS 18 has no confirm role (#6730): a ✓ in the accent, read as its name or Done.
-            Button(action: action) { ThemedIcon(Theme.Icon.done) }
-                .accessibilityLabel(name.map { Text($0) } ?? Text("Done"))
+            // iOS 18 has no confirm role (#6730): the word, as iOS 18's own sheets say it. A ✓ there read like the
+            // selection ticks of the form under it.
+            Button(action: action) {
+                if let name { Text(name).lineLimit(1) } else { Text("Done").lineLimit(1) }
+            }
         }
     }
 }

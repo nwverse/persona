@@ -1419,6 +1419,10 @@ Use an invalidation revision as the task key and handle the flag after completio
   the app also says `openAppWhenRun { true }` for iOS 18; the two agree, so whichever one a system reads, it opens the app.
   `continueInForeground` has nothing to stand in for it in a file the widget extension also compiles
   (`ForegroundContinuableIntent` is unavailable in extensions): on iOS 18 the meeting intent says what to do instead.
+- **iPadOS 18 puts an automatic search field in the bar beside the title.** A wide field squeezed Inbox's title to "In…",
+  where iPadOS 26 folds search into a button. `pageSearchable` without a placement uses `.navigationBarDrawer` (under
+  the title) before iOS 26 at regular width only; compact widths keep `.automatic`, which on an iOS 18 iPhone is that
+  drawer already (iOS 26 puts the field at the bottom instead).
 - **`AppIntentsSSUTraining` failing with "Unable to parse Info.plist" means an empty bundle id** (`--bundle-id` with nothing
   after it), not a bad plist: the machine's config has no `app.bundle_id`. Build with a placeholder config as
   `scripts/ci/apple.sh` does (`{"app": {"bundle_id": "org.example.persona.ci"}}` through `PERSONA_CONFIG`).
