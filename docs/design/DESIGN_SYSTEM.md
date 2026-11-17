@@ -1254,14 +1254,17 @@ arc from twelve o'clock (`ringStartAngle`) and round ends. Zero shows only the t
 ratios are clamped to 0–1 and nonfinite ratios become zero. The center shows a locale-formatted whole percentage
 in `ringNumber` (15 pt rounded semibold at the default size), capped at `ringNumberLargestTypeSize` and shrinking
 to `ringNumberMinimumScale`. The label sits beside the ring in the bar's `label` font on at most two lines, capped
-at `ringContentLargestTypeSize` and shrinking to `ringLabelMinimumScale` (0.5). Text that still does not fit uses
+at `canvasContentLargestTypeSize` and shrinking to `ringLabelMinimumScale` (0.5). Text that still does not fit uses
 system truncation; detail is omitted. The row is one VoiceOver element with the progress label and percentage.
-In a Home Screen layout containing a ring, metric and chart text is capped at `ringContentLargestTypeSize`
-(`.xxxLarge`) and shrinks to `ringContentMinimumScale` so the fixed widget canvas retains every line at accessibility sizes.
+In a small widget, in a medium widget's two columns and in any Home Screen layout containing a ring, metric, bar label
+and chart text is capped at `canvasContentLargestTypeSize` (`.xxxLarge`) and shrinks to `canvasContentMinimumScale`
+(0.5), so a metric's value shrinks before it is cut short and the fixed widget canvas retains every line at
+accessibility sizes (#9644). Other medium and large layouts keep their text unchanged.
 `progressTint` follows the bar's default accent without tone coloring; the arc participates in system widget accents.
 Items retain their order. A medium widget uses two columns only when its fitted view has exactly one section with
-`[metric?, progress(style: "ring"), chart]` and that chart has exactly one series and is not candlestick: metric and
-ring on the left, chart on the right. All other layouts stack items vertically. An omitted, `bar` or unknown style
+`[metric?, progress, chart]`, the progress a ring or a bar, and that chart has exactly one series and is not
+candlestick: metric and progress on the left, chart on the right. Stacked, a metric, a bar and a chart are taller than
+the medium canvas (#9644). All other layouts stack items vertically. An omitted, `bar` or unknown style
 uses the default bar. Accessory families follow 3.13.
 
 The widget extension doesn't build `Theme`: Persona's widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. Heroes, rings and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. A hero may shrink to fit (`heroMinScale`), and a name in a row shrinks a little (`nameMinScale`) before it is cut short. Every widget in `docs/apple/home-widgets.md`.
