@@ -96,9 +96,10 @@ struct ProviderWizard: View {
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
-                // Cancel on the first step (a Mac asks first once something is typed); Back after it.
+                // ✕ on the first step (a Mac asks first once something is typed); Back after it. Finished, the bar's own ✕
+                // (a wizard that starts on the import ends on its first step).
                 .sheetCancel(unsaved: !wizard.name.isEmpty || !wizard.apiKey.isEmpty || !wizard.presetKey.isEmpty,
-                             when: step == start) { dismiss() }
+                             when: step == start && !finished) { dismiss() }
                 .animation(Theme.Motion.standard, value: step)
                 // Again once the hub's features are in (a sheet opened while connecting starts without them).
                 .task(id: wizard.presetsFlow) {
