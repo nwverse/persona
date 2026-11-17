@@ -188,6 +188,7 @@ type Service struct {
 	accept         acceptBook     // acceptance.go
 	pushQuiet      quietSwitch    // push_quiet.go: the hub's low-distraction switch as last read
 	deploy         deployProbe    // deploy_check.go: is the work in the running hub
+	parkReplies    parkReplyBook  // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
