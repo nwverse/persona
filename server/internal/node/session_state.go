@@ -38,7 +38,6 @@ type sessionState struct {
 	Model                   string          `json:"model,omitempty"`
 	ModelFingerprint        string          `json:"model_fingerprint,omitempty"`
 	ModelEffort             string          `json:"model_effort,omitempty"`
-	Runtime                 string          `json:"runtime,omitempty"` // the assistant runtime it was asked to run on (assistant_sdk.go)
 	ConfigDir               string          `json:"config_dir,omitempty"`
 	Cwd                     string          `json:"cwd"`
 	IsMain                  bool            `json:"is_main,omitempty"`

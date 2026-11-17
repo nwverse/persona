@@ -25577,9 +25577,11 @@ if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice
 
 # ---------- area: model defaults (#2455) ----------
 # MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none)
-# and "New chats' Claude profile" (#4633: private / legacy, saved in its binding; "private" is stored as none),
-# GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s agent.new when absent), and the main
-# conversation asked for the Agent SDK but runs on the CLI (runtime_fallback).
+# as an older hub offers it: a current hub runs the main chat on the Claude Code CLI only and lists no runtimes, and the
+# clients keep the picker for older hubs (#9799). Also "New chats' Claude profile" (#4633: private / legacy, saved in its
+# binding; "private" is stored as none), GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s
+# agent.new when absent), and the main conversation says, as an older hub's does, that it asked for the Agent SDK but
+# runs on the CLI (runtime_fallback).
 MODEL_DEFAULTS = os.environ.get("MOCK_MODEL_DEFAULTS") == "1"
 MODEL_DEFAULTS_FALLBACK = "这台电脑没有 Node.js 22+"
 _model_configuration_without_runtime = model_configuration
@@ -27501,7 +27503,7 @@ class H(BaseHTTPRequestHandler):
                 purpose = own["purpose"]
                 if os.environ.get("MOCK_MODEL_CONFLICT") or body.get("revision") != purpose["revision"]:
                     return self.send_json({"error": "配置已在别处修改"}, 409)
-                if "runtime" in body:
+                if "runtime" in body:  # an older hub's answer; a current hub accepts and ignores runtime (#9799)
                     return self.send_json({"error": MEETING_MODEL_TEXT[lang]["no_runtime"]}, 400)
                 binding = dict(purpose["override"])
                 if "provider" in body and body["provider"] != binding.get("provider"):

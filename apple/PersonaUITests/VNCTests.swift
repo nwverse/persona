@@ -1349,7 +1349,7 @@ final class VNCTests: XCTestCase {
         XCTAssertTrue(screen.waitForExistence(timeout: 10))
         let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
         // The mode is kept per Mac: an earlier run may have left Phone Screen on. Mouse Mode first.
-        if sheet.waitForExistence(timeout: 3) { app.buttons["完成"].firstMatch.tap() }
+        if sheet.waitForExistence(timeout: 3) { app.buttons["sheet-close"].firstMatch.tap() }
         app.buttons["vnc-more"].tap()
         app.buttons["鼠标模式"].firstMatch.tap()
         rest()
@@ -1395,7 +1395,7 @@ final class VNCTests: XCTestCase {
         // The Windows button opens the list again; Mouse Mode stops it.
         app.buttons["phone-screen-windows-button"].tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
-        app.buttons["完成"].firstMatch.tap()
+        app.buttons["sheet-close"].firstMatch.tap()
         XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
         app.buttons["vnc-more"].tap()
         app.buttons["鼠标模式"].firstMatch.tap()
@@ -1414,7 +1414,7 @@ final class VNCTests: XCTestCase {
         let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
         XCTAssertTrue(screen.waitForExistence(timeout: 10))
         let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
-        if sheet.waitForExistence(timeout: 3) { app.buttons["完成"].firstMatch.tap() }
+        if sheet.waitForExistence(timeout: 3) { app.buttons["sheet-close"].firstMatch.tap() }
         app.buttons["vnc-more"].tap()
         app.buttons["鼠标模式"].firstMatch.tap()
         rest()
@@ -1468,7 +1468,7 @@ final class VNCTests: XCTestCase {
         let source = app.descendants(matching: .any)["vnc-pip-source"].firstMatch
         XCTAssertTrue(source.waitForExistence(timeout: 10), "the source:\n\(app.debugDescription)")
         let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
-        if sheet.waitForExistence(timeout: 3) { app.buttons["完成"].firstMatch.tap() }
+        if sheet.waitForExistence(timeout: 3) { app.buttons["sheet-close"].firstMatch.tap() }
         app.buttons["vnc-more"].tap()
         app.buttons["鼠标模式"].firstMatch.tap()
         rest()
@@ -1510,7 +1510,7 @@ final class VNCTests: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let pip = springboard.windows.matching(NSPredicate(format: "identifier BEGINSWITH 'PIP' OR label == 'Picture in Picture' OR label == '画中画'")).firstMatch
         let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
-        if sheet.waitForExistence(timeout: 3) { app.buttons["完成"].firstMatch.tap() }
+        if sheet.waitForExistence(timeout: 3) { app.buttons["sheet-close"].firstMatch.tap() }
         app.buttons["vnc-more"].tap()
         app.buttons["鼠标模式"].firstMatch.tap()
         rest()

@@ -12,9 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A provider's environment for claude (#2455, docs/integrations/launchers.md): one pure function both ways of running the main
-// conversation and every Agent use, the CLI (its --settings env, `personad launch`'s env) and the Agent SDK bridge (the
-// child's env and settings.env). Cindy's env-builder, the Anthropic part.
+// A provider's environment for claude (#2455, docs/integrations/launchers.md): one pure function the main conversation
+// and every Agent use on the CLI (its --settings env, `personad launch`'s env). Cindy's env-builder, the Anthropic part.
 
 // legacyEnvClear: what `personad launch` has always dropped from the shell (another launcher or account) before a
 // managed launcher from before #2455 runs. A trailing "*" is a prefix.

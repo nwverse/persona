@@ -376,7 +376,12 @@ internal object ExtensionPickers {
     /** A whole number one step down or up from [current] (else the default, else the minimum, else 0), within the field's bounds. */
     fun stepped(field: ExtensionField, current: Long?, up: Boolean): Long {
         val from = current ?: (field.fallback as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: field.minimum?.let { kotlin.math.ceil(it).toLong() } ?: 0L
-        var next = if (up) from + 1 else from - 1
+        val step = field.step ?: 1L
+        var next = if (up) {
+            if (from > Long.MAX_VALUE - step) Long.MAX_VALUE else from + step
+        } else {
+            if (from < Long.MIN_VALUE + step) Long.MIN_VALUE else from - step
+        }
         field.minimum?.let { next = maxOf(next, kotlin.math.ceil(it).toLong()) }
         field.maximum?.let { next = minOf(next, kotlin.math.floor(it).toLong()) }
         return next

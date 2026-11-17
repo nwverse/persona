@@ -15,7 +15,9 @@ struct PersonaApp: App {
         WindowGroup {
             RootView()
                 #if os(iOS)
+                .personaCallCover() // the call to Persona's page and the bar back to it (#9290, CallScreen.swift)
                 .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
+                .overlay { MeetingFloatingWindow() } // a meeting recording with its room put away (#8731 V5)
                 #endif
                 #if DEBUG && os(iOS)
                 .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
@@ -26,6 +28,12 @@ struct PersonaApp: App {
                 .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
+                #if os(iOS)
+                // A redial from the Phone app's Recents (#9290), where SwiftUI hands it over rather than the scene's delegate;
+                // the two are one tap (`PersonaCalls.continueActivity` takes it once).
+                .onContinueUserActivity(PersonaCalls.activityTypes[0]) { PersonaCalls.shared.continueActivity($0) }
+                .onContinueUserActivity(PersonaCalls.activityTypes[1]) { PersonaCalls.shared.continueActivity($0) }
+                #endif
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
                     #if os(iOS)
@@ -114,6 +122,7 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
                 #endif
             } else if new == .background {
                 #if os(iOS)
@@ -174,10 +183,36 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         let d = UserDefaults.standard
         #if os(iOS)
-        if d.bool(forKey: "showUrgentCallSample") { // the urgent call page, from the mock hub (UrgentCallCenter.showSample)
+        // `-showUrgentCallSample YES|held`: the urgent call page, from the mock hub (UrgentCallCenter.showSample); `held`
+        // on hold with Resume.
+        let urgentSampleHeld = d.string(forKey: "showUrgentCallSample") == "held"
+        if d.bool(forKey: "showUrgentCallSample") || urgentSampleHeld {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                UrgentCallCenter.shared.showSample()
+                UrgentCallCenter.shared.showSample(held: urgentSampleHeld)
+            }
+        }
+        // `-openOwnerCall YES`: calls Persona (#9290) once the hub is there, as the main conversation's Call does (on the
+        // Simulator through `SimulatedCallSystem`); `-openOwnerCallSeconds <n>` hangs up n seconds after it connected.
+        if d.bool(forKey: "openOwnerCall") {
+            let seconds = d.integer(forKey: "openOwnerCallSeconds")
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                await PersonaCalls.shared.callPersona(origin: .recents)
+                guard seconds > 0 else { return }
+                for _ in 0..<60 where PersonaCalls.shared.ownerCall?.connectedSince == nil && PersonaCalls.shared.ownerInProgress {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                try? await Task.sleep(for: .seconds(seconds))
+                PersonaCalls.shared.hangUp()
+            }
+        }
+        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended`: the call page's
+        // state, with no system and no audio (PersonaCalls.showSample).
+        if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                PersonaCalls.shared.showSample(sample)
             }
         }
         #endif
