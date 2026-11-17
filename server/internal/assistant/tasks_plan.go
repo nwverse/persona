@@ -207,6 +207,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			}
 		}
 	}
+	if scope == nil {
+		for i := range a.Tasks {
+			if err := s.planPieces(&a.Tasks[i]); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+		}
+	}
 	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
 		return "", err
 	}

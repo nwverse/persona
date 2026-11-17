@@ -115,6 +115,11 @@ type PlanTask struct {
 	// this task is a worker of; the hub's, never what a tool call or an edit says.
 	Role   string `json:"role,omitempty"`
 	Parent string `json:"parent,omitempty"`
+	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
+	// (todo_pieces.go), checked when the plan is made and written on the to-do when the task starts; left out, a task on
+	// a to-do (todo_id) keeps that to-do's own. Not what the apps send back with an edit.
+	PartOf string   `json:"part_of,omitempty"`
+	After  []string `json:"after,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`

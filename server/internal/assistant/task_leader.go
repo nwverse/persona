@@ -470,7 +470,9 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	delivered := func(ctx context.Context) { s.leaderRetryDelivered(ctx, lead, entries, kept) }
-	if err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept, delivered); err != nil {
+	// Sort a copy for rendering so the retry still pairs each fingerprint with its original signal.
+	text := prompts.RenderWorkerSupervise(sortEntries(slices.Clone(entries)))
+	if err := s.sendToLeader(ctx, lead, text, kept, delivered); err != nil {
 		var escalated leaderEscalated
 		if errors.As(err, &escalated) {
 			// The current process's escalation/retry owns this message. Do not restore its pending entry and escalate it

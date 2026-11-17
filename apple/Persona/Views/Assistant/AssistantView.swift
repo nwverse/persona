@@ -480,6 +480,7 @@ struct AssistantView: View {
                 default: break
                 }
                 // `-openShellPage inbox|machines|routines|knowledge|profile` (the new shell): that page pushed.
+                let atRoot = (navPath.wrappedValue.count, showRecordings)
                 switch UserDefaults.standard.string(forKey: "openShellPage") {
                 case "inbox": show(.inbox)
                 case "todos": show(.todos)
@@ -490,6 +491,16 @@ struct AssistantView: View {
                 case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
+                }
+                // A conversation picked after the push (a launch with `-openChatsFresh` reads it from the hub, late on a
+                // busy Mac) goes back to the root and takes Recordings with it: pushed again while that can happen. Only
+                // where the push shows in this stack's state (the sidebar layout picks a root instead).
+                if UserDefaults.standard.string(forKey: "openShellPage") == "recordings",
+                   (navPath.wrappedValue.count, showRecordings) != atRoot {
+                    for _ in 0..<10 {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        if (navPath.wrappedValue.count, showRecordings) == atRoot { show(.recordings) }
+                    }
                 }
             }
             .onAppear {

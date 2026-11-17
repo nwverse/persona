@@ -155,6 +155,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 			continue
 		}
+		todo = s.startPieces(ctx, *t, todo) // its place in a request (todo_pieces.go)
 		t.TodoID = todo.ID
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
