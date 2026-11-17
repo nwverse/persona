@@ -217,6 +217,11 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
 		params := mcpToolsParams(req.Input, session, assistant, guest)
+		// A supervision round's process asks for its narrower set (assistant_round.go); a manager that does not know
+		// it gives the whole list.
+		if req.ToolSet != "" {
+			params["tool_set"] = req.ToolSet
+		}
 		if err := n.peer.Call(ctx, "mcp.tools", params, &res); err != nil {
 			resp = map[string]any{"tools": []proto.Tool{}, "error": err.Error()}
 		} else {
