@@ -58,12 +58,14 @@ final class ExtensionNumberKeyboardTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         XCTAssertEqual((saved["agent_continue_hours"] as? NSNumber)?.intValue, value, "The hub must receive the edited config")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "A successful save ends editing")
+        XCTAssertFalse(app.buttons["plugin-keyboard-save"].exists)
         try shot(app, "saved-" + look, env: env)
         if let dir = env["PERSONA_NUMBER_RAW"] {
             let data = try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: URL(fileURLWithPath: dir).appending(path: "saved-\(look).json"))
         }
-        // The existing save reloads the form and can end editing. Refocus the saved field to test Done independently.
+        // Saving ended editing. Refocus the saved field to test Done on its own.
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         for _ in 0..<10 where !field.isHittable { app.swipeUp() }
         field.tap()

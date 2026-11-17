@@ -251,7 +251,11 @@ struct ExtensionDetailView: View {
         .toolbar {
             NumberKeyboardActions(focused: focusedNumber != nil, canSave: page.canSave, saving: page.saving,
                                   configurationBusy: lifecycle.busy,
-                                  save: { Task { await page.save() } }, done: { focusedNumber = nil })
+                                  save: {
+                                      // A successful save ends editing, unless another field took focus while it ran; a refused one keeps the field focused.
+                                      let editing = focusedNumber
+                                      Task { if await page.save(), focusedNumber == editing { focusedNumber = nil } }
+                                  }, done: { focusedNumber = nil })
         }
         #endif
         .confirmationDialog(disableDialogTitle, isPresented: disableDialogPresented, titleVisibility: .visible) {
