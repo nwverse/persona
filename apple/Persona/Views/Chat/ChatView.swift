@@ -5588,6 +5588,21 @@ struct Composer: View, Equatable {
         voiceNote = VoiceEntry.start(key, model: model)
     }
 
+    /// Call Persona in the 「+」 panel (#9290): Persona's main conversation only, on the iPhone and iPad (the system's calls);
+    /// Voice Chat beside it stays the chat's own voice. Why a call could not be placed shows over the app
+    /// (`PersonaCalls.refusal`, `personaCallCover`).
+    private var callPersonaEntry: (() -> Void)? {
+        #if os(iOS)
+        guard isMainAssistantChat, VoicePlatform.current == .phone else { return nil }
+        return {
+            focused = false
+            Task { [group = key.group] in await PersonaCalls.shared.callPersona(group: group, origin: .app) }
+        }
+        #else
+        return nil
+        #endif
+    }
+
     /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
@@ -6319,6 +6334,7 @@ struct Composer: View, Equatable {
     /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
+                                                call: callPersonaEntry,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
