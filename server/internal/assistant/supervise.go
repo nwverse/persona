@@ -116,6 +116,8 @@ type TaskReview struct {
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
 	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
+	// Automatic keeps closeout admission and its unchanged-dependency streak in the existing review JSON.
+	Automatic *automaticPark `json:"automatic,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
@@ -159,6 +161,10 @@ func (v *Supervision) clone() *Supervision {
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
+		if r.Automatic != nil {
+			a := *r.Automatic
+			out.Reviews[i].Automatic = &a
+		}
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt

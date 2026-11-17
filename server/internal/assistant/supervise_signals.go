@@ -95,6 +95,9 @@ const (
 )
 
 func (g superviseSignal) level() string {
+	if g.Kind == sigParkedSummary {
+		return supervisionInfo
+	}
 	if g.Kind == sigReport && g.Report == upReportProgress {
 		return supervisionInfo
 	}
@@ -227,7 +230,7 @@ func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimin
 // signal records g for the supervisor, unless the same stretch of state was told already, and sees that the message
 // goes out when it is due.
 func (s *Service) signal(g superviseSignal) {
-	if g.level() == supervisionInfo {
+	if g.level() == supervisionInfo && g.Kind != sigParkedSummary {
 		return // Progress is already recorded on the task card; it never wakes the assistant.
 	}
 	if g.At.IsZero() {
@@ -249,7 +252,9 @@ func (s *Service) signal(g superviseSignal) {
 		return
 	}
 	if cur, ok := b.pending[g.id()]; ok {
-		g.At = cur.At // still waiting: it keeps its place
+		if g.Kind != sigParkedSummary || g.Key == cur.Key {
+			g.At = cur.At // still waiting: it keeps its place; a new summary day keeps its own date
+		}
 		if g.Ask == "" {
 			g.Ask = cur.Ask
 		}
@@ -445,6 +450,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		}
 		ownerEvidencePending := s.parkDecidedRetry(ctx, t) // a stored owner answer outranks legacy reconciliation
 		t = s.reconcileLegacyOwnerPriority(ctx, t, ownerEvidencePending)
+		if g, ok := s.automaticParkSummary(ctx, t, now.In(s.location(ctx))); ok {
+			s.signal(g)
+		}
 		if g, ok := parkDecidedSignal(t); ok { // a decision ended its parking, and no message carried that yet (parked.go)
 			s.signal(g)
 		}

@@ -15,7 +15,7 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	actionable := map[string]bool{}
 	for _, g := range list {
 		switch g.Kind {
-		case sigIdle, sigStalled, sigOrphaned:
+		case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
 		default:
 			actionable[g.Todo] = true
 		}
@@ -34,6 +34,11 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 			s.turnsTold(ctx, []superviseSignal{g})
 			s.logf("supervise: task %s %s handled without a model", g.Todo, g.Kind)
 		default:
+			if t, ok := s.todoNow(g.Todo); ok {
+				if a := lastAutomatic(t.Supervision); a != nil && a.Count >= maxAutomaticParks {
+					g.Detail += " Automatic-parking limit reached (three unchanged attempts)."
+				}
+			}
 			kept = append(kept, g)
 		}
 	}
@@ -51,7 +56,7 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 // Unknown, actionable and conflicting evidence deliberately falls through to ordinary supervision.
 func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now time.Time) (bool, time.Time) {
 	switch g.Kind {
-	case sigIdle, sigStalled, sigOrphaned:
+	case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
 	default:
 		return false, time.Time{}
 	}
@@ -60,7 +65,8 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 		return false, time.Time{}
 	}
 	v := t.Supervision
-	if v.state(t) != "" || v.Waits != nil || v.AutoReview != nil && v.AutoReview.State == autoRunning {
+	st := v.state(t)
+	if st != "" && st != reviewRework || v.Waits != nil || v.AutoReview != nil && v.AutoReview.State == autoRunning {
 		return false, time.Time{}
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
@@ -79,7 +85,8 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 	}
 	for _, c := range agents {
 		if e, exists := s.workEntry([2]string{c.MachineID, c.SessionID}); exists && sameTurn(c, e.TurnAt) &&
-			(e.Work.On == proto.WaitUser || e.Work.Phase == proto.WorkWorking) {
+			(e.Work.On == proto.WaitUser || e.Work.Phase == proto.WorkWorking ||
+				e.Work.Closeout != nil && closeoutDisproved(*e.Work.Closeout)) {
 			return false, time.Time{}
 		}
 	}
@@ -109,6 +116,15 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 		if wake.IsZero() || next.Before(wake) {
 			wake = next
 		}
+	}
+	if wake.IsZero() && len(agents) == 1 && s.parkCloseout(ctx, t, agents[0], now) {
+		return true, time.Time{}
+	}
+	if st != "" {
+		return false, time.Time{} // only evidenced closeouts extend the existing mechanical path to rework
+	}
+	if g.Kind == sigAllStopped {
+		return false, wake // other all-stopped handling retains its existing group checks
 	}
 	d := t.Delivery
 	if d == nil || d.Unblock != unblockOther || d.Gate == "" || d.At.IsZero() ||

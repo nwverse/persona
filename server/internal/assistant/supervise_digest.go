@@ -211,6 +211,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	if len(entries) == 0 {
+		s.automaticParksTold(ctx, holds)
 		s.agentDecisionRepliesTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		b.mu.Lock()
@@ -227,6 +228,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			return
 		}
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
+		s.automaticParksTold(ctx, kept)
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
@@ -234,7 +236,11 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
 	leader := background || to != here.Main && s.isLeader(ctx, to)
 	render := func(list []prompts.SuperviseEntry) string {
-		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
+		level := supervisionInfo
+		if slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind != sigParkedSummary }) {
+			level = supervisionTriage
+		}
+		return prompts.RenderSupervise(prompts.Supervise{Level: level, Entries: sortEntries(list), Leader: leader, Background: background, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 			BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 			LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:             slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
@@ -419,6 +425,12 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
 	switch g.Kind {
+	case sigParkedSummary:
+		r := v.parking()
+		if r == nil || r.Automatic == nil || g.Key != g.At.Format(time.DateOnly)+"|"+parkKey(r) ||
+			s.digestTo(s.settings(ctx), superviseSignal{Todo: t.ID}) != g.To {
+			return prompts.SuperviseEntry{}, false
+		}
 	case sigDraftPR:
 		if t.PRURL != g.PRURL && !slices.Contains(t.PRs, g.PRURL) {
 			return prompts.SuperviseEntry{}, false
@@ -552,7 +564,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigRecheck || g.Kind == sigOwnerCannot {
 		e.Decision = g.Decision
 	}
-	if g.Kind == sigParkedDue { // what it waited for is the signal, not a reason in brackets
+	if g.Kind == sigParkedDue || g.Kind == sigParkedSummary {
 		e.Detail, e.Parked = "", s.parkedEntry(ctx, v.parking())
 	}
 	if g.Kind == sigParkDecided && st == reviewParked { // parked again before this went: what it waits for now
