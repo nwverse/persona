@@ -36,7 +36,7 @@ func testUsagePath(t *testing.T, path string) usagePath {
 
 func testUsageAdapter(path string) usageAdapter {
 	if strings.HasPrefix(filepath.Base(path), "rollout-") {
-		return codexUsage{tokenuse.Codex, (*Node).codexHome}
+		return codexUsage{tokenuse.Codex, (*Node).meteredCodexHomes}
 	}
 	return claudeUsage{}
 }

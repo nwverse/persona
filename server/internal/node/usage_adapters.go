@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/tokenuse"
 )
@@ -17,8 +18,8 @@ import (
 type usageAdapter interface {
 	// agent is the agent the records are of (proto.Session.Agent's names).
 	agent() string
-	// paths are the files that may hold usage; usageFiles keeps those changed since its cutoff.
-	paths(n *Node) []string
+	// paths are the files that may hold usage written since since; usageFiles keeps those changed since then.
+	paths(n *Node, since time.Time) []string
 	// session is the session (or thread) the file at path belongs to.
 	session(path string) string
 	// parser reads one file's lines.
@@ -28,7 +29,8 @@ type usageAdapter interface {
 // usageAdapters are the agents whose usage this node meters from files, in the order their files are read (a request
 // in two agents' files is counted in the first one's). opencode keeps its in a database: usageQueries.
 func (n *Node) usageAdapters() []usageAdapter {
-	return []usageAdapter{claudeUsage{}, codexUsage{tokenuse.Codex, (*Node).codexHome}, codexUsage{tokenuse.Traex, (*Node).traexHome},
+	return []usageAdapter{claudeUsage{}, codexUsage{tokenuse.Codex, (*Node).meteredCodexHomes},
+		codexUsage{tokenuse.Traex, func(n *Node) []string { return []string{n.traexHome()} }},
 		piUsageFiles{tokenuse.Pi, piAgentDir}, piUsageFiles{tokenuse.Omp, ompAgentDir}}
 }
 
@@ -48,10 +50,10 @@ func (n *Node) usageAgents() []string {
 // (projectTranscripts).
 type claudeUsage struct{}
 
-func (claudeUsage) agent() string              { return tokenuse.Claude }
-func (claudeUsage) paths(n *Node) []string     { return n.projectTranscripts() }
-func (claudeUsage) parser() tokenuse.Parser    { return tokenuse.ClaudeParser() }
-func (claudeUsage) session(path string) string { return claudeUsageSession(path) }
+func (claudeUsage) agent() string                       { return tokenuse.Claude }
+func (claudeUsage) paths(n *Node, _ time.Time) []string { return n.projectTranscripts() }
+func (claudeUsage) parser() tokenuse.Parser             { return tokenuse.ClaudeParser() }
+func (claudeUsage) session(path string) string          { return claudeUsageSession(path) }
 
 // claudeUsageSession is a Claude Code transcript's session: its name (<id>.jsonl), the session folder over a
 // subagent's (<id>/subagents/agent-….jsonl) or a workflow run's agent's (<id>/subagents/workflows/<run>/agent-….jsonl).
@@ -65,31 +67,61 @@ func claudeUsageSession(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
-// codexUsage: the rollouts of Codex or of a CLI that writes Codex's (traex), under its home.
+// codexUsage: the rollouts of Codex (every Codex home: the default and the registered ones) or of a CLI that writes
+// Codex's (traex), every file: each segment of a continued thread (rolloutSegments; the session list follows a
+// thread's newest), and for a backfill reaching further back than the session list's two weeks every rollout on disk.
 type codexUsage struct {
-	name string
-	home func(*Node) string
+	name  string
+	homes func(*Node) []string
 }
 
 func (c codexUsage) agent() string           { return c.name }
 func (c codexUsage) parser() tokenuse.Parser { return tokenuse.CodexParser(c.name) }
 
-func (c codexUsage) paths(n *Node) []string {
-	rs := rollouts(c.home(n))
-	out := make([]string, len(rs))
-	for i, r := range rs {
-		out[i] = r.path
+func (c codexUsage) paths(n *Node, since time.Time) []string {
+	var out []string
+	seen, homes := map[string]bool{}, map[string]bool{}
+	for _, home := range c.homes(n) {
+		key := home
+		if real, err := filepath.EvalSymlinks(home); err == nil {
+			key = real // a registered home that is another's under a link: read once
+		}
+		if homes[key] {
+			continue
+		}
+		homes[key] = true
+		var paths []string
+		if time.Since(since) > codexWindow-time.Hour {
+			paths = allRolloutPaths(home)
+		} else {
+			for _, r := range rolloutSegments(home) {
+				paths = append(paths, r.path)
+			}
+		}
+		for _, p := range paths {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
 	}
 	return out
 }
 
-// session is a rollout's thread id: its name ends with it.
-func (codexUsage) session(path string) string {
-	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if strings.HasPrefix(name, "rollout-") && len(name) >= 36 {
-		return name[len(name)-36:]
+// meteredCodexHomes are the Codex homes whose usage is metered: every one (usageCodexHomes), or a session scope's own.
+func (n *Node) meteredCodexHomes() []string {
+	if n.sessionScope != nil {
+		return []string{n.codexHome()}
 	}
-	return name
+	return n.usageCodexHomes()
+}
+
+// session is a rollout's thread: the id its name ends with, before a continued segment's own (rolloutID).
+func (codexUsage) session(path string) string {
+	if id := rolloutID(path); id != "" {
+		return id
+	}
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
 // piUsageFiles: the sessions of pi or of omp (the same format) under the agent's directory,
@@ -102,7 +134,7 @@ type piUsageFiles struct {
 func (p piUsageFiles) agent() string           { return p.name }
 func (p piUsageFiles) parser() tokenuse.Parser { return tokenuse.PiParser(p.name) }
 
-func (p piUsageFiles) paths(n *Node) []string {
+func (p piUsageFiles) paths(n *Node, _ time.Time) []string {
 	if n.sessionScope != nil {
 		return nil
 	}
