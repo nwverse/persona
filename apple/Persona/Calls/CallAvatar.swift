@@ -1,5 +1,65 @@
 #if os(iOS)
 import SwiftUI
+import UIKit
+
+/// Who a call is with, as its pages show them (#9290 follow-up): the assistant's look and its name, taken together when
+/// the call is made and once more just before the system's Start (a cold launch's look may have come by then:
+/// `PersonaCalls.place`), then fixed for the call, as the system's handle is. Choosing another avatar, or another hub's,
+/// changes neither the face nor the name of a call that is on. A package's pictures are read and decoded off the main
+/// actor (`prepareFrames`, `prepareFace`) and kept here for the call; until they are ready, and for a built-in, the face
+/// is the built-in drawing in the look's design. The pages only arrange what is here (docs/apple/performance.md P1, P4,
+/// P8).
+@MainActor @Observable final class CallAssistant {
+    private(set) var persona: Persona
+    /// The package's dot frames for the states the call screen shows (`states`), once decoded.
+    private(set) var frames: [PersonaState: PersonaFrames] = [:]
+    /// The package's face for the return bar and the urgent call's header, once decoded.
+    private(set) var face: UIImage?
+    /// The pixel width the face was read for: a larger one is read again (the text grew).
+    @ObservationIgnored private var faceWidth: CGFloat = 0
+    @ObservationIgnored private var loadingFrames = false
+
+    /// The states the call screen shows (`CallAvatarLook.state`).
+    static let states: [PersonaState] = [.idle, .working, .offline]
+
+    /// The name the system's call UI, the call screen and the bar say (`CallHandle.name`).
+    var name: String { CallHandle.name(persona.name) }
+
+    init(_ persona: Persona) {
+        self.persona = persona
+    }
+
+    /// The look and name taken once more (just before the system's Start), together; its pictures go with the old look.
+    func retake(_ persona: Persona) {
+        guard persona != self.persona else { return }
+        self.persona = persona
+        frames = [:]
+        face = nil
+        faceWidth = 0
+    }
+
+    /// Reads and decodes the package's frames for the call's states off the main actor, once. Nothing for a built-in.
+    func prepareFrames(_ store: PersonaStore) async {
+        let look = persona
+        guard !look.isBuiltin, frames.isEmpty, !loadingFrames else { return }
+        loadingFrames = true
+        let loaded = await store.decodedFrames(look, Self.states)
+        loadingFrames = false
+        guard persona == look else { return }
+        frames = loaded
+    }
+
+    /// Reads the package's face `points` wide at `scale` off the main actor, prepared for display. Nothing for a built-in,
+    /// nor when the one here is large enough.
+    func prepareFace(_ store: PersonaStore, points: CGFloat, scale: CGFloat) async {
+        let look = persona, width = points * scale
+        guard !look.isBuiltin, width > faceWidth else { return }
+        faceWidth = width
+        let image = await store.decodedFace(look, points: points, scale: scale)
+        guard persona == look else { return }
+        if let image { face = image } else { faceWidth = 0 }
+    }
+}
 
 /// How the assistant looks on the call screen in each of the voice's phases (pure, for the tests): which of its states
 /// it shows (`PersonaState`, as the Persona tab's dot does), whether it holds still, how the ring around it looks, and
@@ -48,14 +108,17 @@ nonisolated struct CallAvatarLook: Equatable, Sendable {
     var ringMoves: Bool { ring == .voice || ring == .lap }
 }
 
-/// The assistant on the call screen: its own look as the app shows it elsewhere (`PersonaDot`: Mochi drawn, or a
-/// package's or an uploaded picture's frames), moving with the call, and a thin ring around it following the voice. Only
+/// The assistant on the call screen: the call's own look (`CallAssistant`, as the app's dot draws it: Mochi drawn, or a
+/// package's or an uploaded picture's frames, decoded off the main actor), moving with the call, and a thin ring around
+/// it following the voice. Only
 /// the ring reads the levels, on its own clock, so a new level redraws the ring and nothing else (docs/apple/performance.md
 /// P4, P5); the clock pauses whenever the ring has nothing to follow, with Reduce Motion and in Low Power Mode, where the
 /// face holds still too. While the assistant speaks and `interrupt` is given it is a button, Interrupt Voice, as the voice
 /// bar's orb; otherwise it is decoration (the name and the line under it say the state in words).
 struct CallAvatar: View {
     let look: CallAvatarLook
+    /// Who the call is with: the look and name it was made with (never the one chosen since).
+    let assistant: CallAssistant
     /// 0…1, the voice's level, read only on the ring's clock.
     var level: () -> Double = { 0 }
     /// The box at the default text size; it grows with the text like every `Theme.Size`.
@@ -73,7 +136,7 @@ struct CallAvatar: View {
         Button { if isButton { interrupt?() } } label: {
             ZStack {
                 CallAvatarRing(look: look, level: level, box: box)
-                PersonaDot(size: face, state: look.state, still: look.still)
+                CallAssistantDot(assistant: assistant, size: face, state: look.state, still: look.still)
                     .opacity(look.ring == .ended ? PersonaFace.offlineOpacity : 1)
                 if let mark = look.mark {
                     CallAvatarMark(mark: mark, side: box * Theme.Size.callAvatarBadge)
@@ -147,6 +210,75 @@ private struct CallAvatarRing: View {
             Circle().stroke(Theme.Hue.gray.opacity(0.3), lineWidth: Theme.Size.ruleWide).frame(width: rest, height: rest)
         }
     }
+}
+
+/// The call's assistant in a state, as `PersonaDot` draws one but from what `CallAssistant` has ready: a package's frames
+/// once decoded (in a UIImageView, as the dot's), else the built-in drawing in the look's design. Nothing is read or
+/// decoded here: the frames are asked for in a task, off the main actor. Holds still with Reduce Motion and in Low Power
+/// Mode, and when the call says so.
+struct CallAssistantDot: View {
+    let assistant: CallAssistant
+    let size: CGFloat
+    let state: PersonaState
+    var still = false
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let look = assistant.persona
+        face(look, still: still || reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+            .task(id: look) { await assistant.prepareFrames(model.personas) }
+    }
+
+    @ViewBuilder private func face(_ look: Persona, still: Bool) -> some View {
+        if !look.isBuiltin, let frames = assistant.frames[state] {
+            VisibleWork { eligible in
+                PersonaFramesView(frames: frames, animating: !still, eligible: eligible)
+            }
+        } else {
+            AssistantAvatar(size: size, design: look.avatarDesign, state: state, still: still)
+        }
+    }
+}
+
+/// The call's assistant's small face (the return bar, the urgent call's header), as `PersonaAvatar` draws one but from
+/// what `CallAssistant` has ready: a package's picture once read off the main actor, else the built-in drawing.
+struct CallAssistantFace: View {
+    let assistant: CallAssistant
+    let size: CGFloat
+    @Environment(AppModel.self) private var model
+    @Environment(\.displayScale) private var scale
+
+    var body: some View {
+        let look = assistant.persona
+        face(look)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+            .task(id: CallFaceRequest(look: look, side: size * scale)) {
+                await assistant.prepareFace(model.personas, points: size, scale: scale)
+            }
+    }
+
+    @ViewBuilder private func face(_ look: Persona) -> some View {
+        if !look.isBuiltin, let image = assistant.face {
+            Image(uiImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(.circle)
+        } else {
+            AssistantAvatar(size: size, design: look.avatarDesign, state: .idle)
+        }
+    }
+}
+
+/// What a face is read for: the look and its side in pixels.
+private nonisolated struct CallFaceRequest: Hashable, Sendable {
+    var look: Persona
+    var side: CGFloat
 }
 
 /// The mark on a still face: a pause on hold (the caution color), a slashed microphone while muted (gray), as the

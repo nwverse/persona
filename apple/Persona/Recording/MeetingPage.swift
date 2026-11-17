@@ -598,7 +598,7 @@ struct MeetingPage: View {
     private func voiceStart(_ key: SessionKey?, entry: RecordingEntry) -> (() -> Void)? {
         guard let key, capture.state == .idle, conversation.followupHold(entry) == nil,
               VoiceSupport.shared.availability(for: model.session(key), group: key.group).isAvailable else { return nil }
-        return { voiceNote = VoiceEntry.start(key, model: model) }
+        return { voiceNote = VoiceEntry.start(key, model: model) { voiceNote = $0 } }
     }
 
     /// The title, when the meeting ran, where the minutes are, and (in the sheet) the way to them. The composer is the

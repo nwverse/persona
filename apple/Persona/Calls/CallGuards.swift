@@ -9,12 +9,7 @@ import WebKit
 extension PersonaCalls {
     /// A system call is live for the app's guards: a call to Persona from "Calling…" to its end, an urgent call ringing
     /// (one the system showed) or answered. DEBUG samples are pictures, not calls: they guard nothing.
-    var guardsLive: Bool {
-        calls.contains { call in
-            guard !call.sample, call.phase.isLive else { return false }
-            return !call.kind.isUrgent || !(call.unshown && call.phase == .ringing)
-        }
-    }
+    var guardsLive: Bool { calls.contains(where: \.counts) }
 
     /// The assistant's name while a call to Persona is live (from "Calling…"), else nil: what a voice chat elsewhere asks
     /// before it ends the call ("End the call with <name>…?"), and CarPlay's says it is on the phone.
@@ -33,10 +28,47 @@ extension PersonaCalls {
         return key.group == group && AppModel.shared.assistantMain == key
     }
 
+    /// Why disconnecting the hubs of `groups` (nil: every hub) waits, or nil when it may go ahead: a live call (one the
+    /// guards count) talks through one of them, and the disconnect would revoke its credential and close its tunnels, so
+    /// its voice would end as unreachable with no word. Refused until the call ends (Settings' Disconnect, Devices' Revoke
+    /// and Unpair: `AppModel.signingOut`). A call whose group is not known yet counts for every group.
+    func disconnectRefusal(groups: Set<String>?) -> String? {
+        for call in calls where call.counts {
+            if let groups, let group = callGroup(call), !groups.contains(group) { continue }
+            return String(localized: "On a call with \(call.name). End the call before disconnecting.")
+        }
+        return nil
+    }
+
+    /// The hub group a live call talks through: a call to Persona's conversation's group (its kind's while it is still
+    /// finding it), an urgent call's ring's. Nil when not known yet.
+    private func callGroup(_ call: PersonaCall) -> String? {
+        switch call.kind {
+        case .owner(let group):
+            if let owner = call.engine as? OwnerCallEngine { return owner.key.group }
+            return group.isEmpty ? nil : group
+        case .urgent:
+            return call.urgentSession?.ring.group
+        }
+    }
+
     /// The app's own guards ask this manager (the shared one only: a test's manager guards nothing of the app's).
     func guardTheApp() {
         LiveCallGate.isLive = { [weak self] in self?.guardsLive ?? false }
-        onLiveChange = { live in CallMediaGuard.shared.callLive(live) }
+        LiveCallGate.disconnectRefusal = { [weak self] groups in self?.disconnectRefusal(groups: groups) }
+        onLiveChange = { live in
+            LiveCallGate.callLiveChanged(live)
+            CallMediaGuard.shared.callLive(live)
+        }
+    }
+}
+
+extension PersonaCall {
+    /// What the app's guards count as live (`PersonaCalls.guardsLive`): a call to Persona from "Calling…" to its end, an
+    /// urgent call ringing (one the system showed) or answered. DEBUG samples are pictures, not calls.
+    var counts: Bool {
+        guard !sample, phase.isLive else { return false }
+        return !kind.isUrgent || !(unshown && phase == .ringing)
     }
 }
 

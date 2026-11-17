@@ -10,9 +10,12 @@ import os
     let id: UUID
     let kind: CallKind
     let direction: CallDirection
+    /// Who the call is with: the assistant's look and name, taken together when the call is made (and once more just
+    /// before the system's Start), then fixed for the call (`CallAssistant`).
+    let assistant: CallAssistant
     /// The assistant's name as the call carries it (`CallHandle.name`): what the system's call UI, the Lock Screen and
-    /// Recents show, and what the call screen and the bar say under its look. Taken when the call is made.
-    let name: String
+    /// Recents show, and what the call screen and the bar say under its look.
+    var name: String { assistant.name }
     private(set) var phase: CallPhase
     private(set) var muted = false
     /// On hold, and why (the system's pause first).
@@ -52,11 +55,11 @@ import os
     var sampleLevel: Double { sampleSpeaking ? 0.6 : 0 }
     #endif
 
-    fileprivate init(id: UUID, kind: CallKind, direction: CallDirection, name: String) {
+    fileprivate init(id: UUID, kind: CallKind, direction: CallDirection, persona: Persona) {
         self.id = id
         self.kind = kind
         self.direction = direction
-        self.name = name
+        assistant = CallAssistant(persona)
         machine = CallMachine(id: id, kind: kind, direction: direction)
         phase = machine.phase
     }
@@ -122,8 +125,10 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     @ObservationIgnored var lastRedial: Date?
     /// A call to Persona on this group ended: the tunnels it kept open in the background go (`AppModel.callEnded`).
     @ObservationIgnored var callLeft: @MainActor (_ group: String) -> Void = { AppModel.shared.callEnded(group: $0) }
-    /// The assistant's name a new call carries (`CallHandle.name` of the persona on screen; the tests' own).
-    @ObservationIgnored let assistantName: @MainActor () -> String
+    /// The assistant a new call is with: the persona on screen (the tests' own). The call carries its look and name.
+    @ObservationIgnored let assistant: @MainActor () -> Persona
+    /// What the system's side needs before it is made, off the main actor: its call UI's icon (`CallIcon.prepare`).
+    @ObservationIgnored let prepareSystem: @MainActor () async -> Void
     /// A system call became live, or the last one ended (`guardsLive`): the app's media guard follows (`guardTheApp`).
     @ObservationIgnored var onLiveChange: (@MainActor (Bool) -> Void)?
     @ObservationIgnored private var wasLive = false
@@ -134,9 +139,11 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
          ownerDeps: @escaping @MainActor (String, any SystemCallAudio, @escaping @MainActor (VoiceCallEvent) -> Void) -> VoiceDeps
              = { VoiceDeps.systemCall(group: $0, audio: $1, events: $2) },
          callCategory: @escaping @MainActor () async -> Void = { await PersonaCalls.setCallCategory() },
-         assistantName: @escaping @MainActor () -> String = { CallHandle.name(AppModel.shared.persona.name) }) {
+         assistant: @escaping @MainActor () -> Persona = { AppModel.shared.persona },
+         prepareSystem: @escaping @MainActor () async -> Void = { await CallIcon.prepare() }) {
         makeSystem = system
-        self.assistantName = assistantName
+        self.assistant = assistant
+        self.prepareSystem = prepareSystem
         self.clock = clock
         self.voiceCalls = voiceCalls
         self.ownerAudio = ownerAudio
@@ -151,8 +158,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         voiceCalls.systemCallName = { [weak self] in self?.liveOwnerCallName }
     }
 
-    /// The system's side, made the first time a call needs it. On the Simulator a stand-in (it has no call service);
-    /// DEBUG `-showSystemCallService YES` takes LiveCommunicationKit there too, to see what it does.
+    /// The system's side, made the first time a call needs it (after `readySystem`). On the Simulator a stand-in (it has
+    /// no call service); DEBUG `-showSystemCallService YES` takes LiveCommunicationKit there too, to see what it does.
     static func makeSystem() -> any CallSystem {
         #if targetEnvironment(simulator)
         #if DEBUG
@@ -178,6 +185,14 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// Whether the system's side was made (the tests: launching makes none).
     var systemMade: Bool { made != nil }
 
+    /// Before the system's side is first made (a call placed, an urgent call rung): what it needs is made off the main
+    /// actor (the call UI's icon, whose drawing and PNG encoding would otherwise run as the manager is made, on the main
+    /// actor). Nothing once it exists.
+    func readySystem() async {
+        guard made == nil else { return }
+        await prepareSystem()
+    }
+
     // MARK: What the page reads
 
     /// The call the call page shows: the call to Persona, live or just ended.
@@ -193,6 +208,10 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     var ownerInProgress: Bool { calls.contains { !$0.kind.isUrgent && $0.phase.isLive } }
 
     func call(_ id: UUID) -> PersonaCall? { calls.first { $0.id == id } }
+    /// The urgent call the hub knows as `callID` (its page's header shows who is calling).
+    func urgentCall(_ callID: String) -> PersonaCall? {
+        calls.last { if case .urgent(let id) = $0.kind { id == callID } else { false } }
+    }
 
     // MARK: What the page does
 
@@ -237,8 +256,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
 
     // MARK: Adding and ending calls
 
-    @discardableResult func add(_ id: UUID = UUID(), kind: CallKind, direction: CallDirection, name: String? = nil) -> PersonaCall {
-        let call = PersonaCall(id: id, kind: kind, direction: direction, name: name.map { CallHandle.name($0) } ?? assistantName())
+    @discardableResult func add(_ id: UUID = UUID(), kind: CallKind, direction: CallDirection, persona: Persona? = nil) -> PersonaCall {
+        let call = PersonaCall(id: id, kind: kind, direction: direction, persona: persona ?? assistant())
         if calls.isEmpty { route.watch() }
         calls.append(call)
         noteLive()
@@ -428,13 +447,16 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
 
     /// Another chat's voice (a page's Voice Chat, CarPlay's Talk to Persona, Continue: `VoiceCalls.endSystemCall`): the
     /// call to Persona ends (one call at a time) and its audio goes before the voice chat opens its own (at most a
-    /// second): the system's deactivation would otherwise interrupt the new session.
+    /// second): the system's deactivation would otherwise interrupt the new session. A call that ended already (hung up
+    /// from AirPods or the system's call UI while the question was up) is not hung up again, but the system may still
+    /// hold its audio until its deactivation comes: that is waited for all the same, as for any call of ours whose audio
+    /// the system has not let go yet.
     func endForVoiceChat() async {
-        guard let call = ownerCall, call.phase.isLive else { return }
-        let wasActive = call.machine.audioActive
-        hangUp(call.id)
-        guard wasActive else { return }
-        for _ in 0..<20 where call.machine.audioActive || call.phase.isLive {
+        let owner = ownerCall.flatMap { $0.sample ? nil : $0 }
+        if let owner, owner.phase.isLive { hangUp(owner.id) }
+        let holding = calls.filter { !$0.sample && $0.machine.audioActive }
+        guard !holding.isEmpty else { return }
+        for _ in 0..<20 where holding.contains(where: { $0.machine.audioActive || ($0 === owner && $0.phase.isLive) }) {
             try? await Task.sleep(for: .milliseconds(50))
         }
     }
@@ -455,6 +477,7 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         let call = add(id, kind: .urgent(callID: callID), direction: .incoming)
         attach(UrgentCallEngine(id: id), to: call)
         watchInterruptions()
+        await readySystem()
         // Its category before the system can activate the session for it. Not while a call to Persona set it already (the
         // same), nor under an in-app voice chat, whose loudspeaker stays while it rings: answering ends the chat, and
         // sets the category then (`readyToAnswer`).
@@ -537,16 +560,21 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         call.audioPrepared = true
     }
 
-    /// Off the main actor: setting the category blocks for a moment.
+    /// Off the main actor (setting the category blocks for a moment), on the audio session's queue: a dictation block
+    /// queued before the call went live runs first, and one queued after sees the call and touches nothing
+    /// (`LiveCallGate.sessionQueue`).
     static func setCallCategory() async {
         let options = PhoneVoiceAudio.callSessionOptions
-        await Task.detached {
-            do {
-                try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: options)
-            } catch {
-                PersonaCalls.log.notice("call: the audio category: \(error.localizedDescription, privacy: .public)")
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            LiveCallGate.sessionQueue.async {
+                do {
+                    try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: options)
+                } catch {
+                    PersonaCalls.log.notice("call: the audio category: \(error.localizedDescription, privacy: .public)")
+                }
+                done.resume()
             }
-        }.value
+        }
     }
 
     /// `call`'s category is set: its own, or that of a call to Persona that is on and set it (the same). A call to Persona

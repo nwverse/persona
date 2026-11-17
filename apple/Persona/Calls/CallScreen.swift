@@ -189,7 +189,7 @@ private struct CallScreenAvatar: View {
         #else
         let sample = 0.0
         #endif
-        CallAvatar(look: CallAvatarLook.make(phase), level: { [levels = voice?.levels, speaking = phase == .speaking] in
+        CallAvatar(look: CallAvatarLook.make(phase), assistant: call.assistant, level: { [levels = voice?.levels, speaking = phase == .speaking] in
             guard let levels else { return sample }
             return Double(speaking ? levels.output : levels.input)
         }, size: size, interrupt: phase == .speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
@@ -363,8 +363,8 @@ struct CallReturnPill: View {
             open()
         } label: {
             HStack(spacing: Theme.Space.s) {
-                // The assistant's face, still: the call screen's look, small.
-                PersonaAvatar(size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
+                // The assistant's face, still: the call screen's look, small (the call's own, never one chosen since).
+                CallAssistantFace(assistant: call.assistant, size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
                 HStack(spacing: Theme.Space.xs) {
                     Text(verbatim: call.name)
                     Text(verbatim: "·") // i18n-ignore: a separator

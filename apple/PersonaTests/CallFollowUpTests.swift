@@ -1,8 +1,10 @@
+import AVFoundation
 import Foundation
 import ImageIO
 import SwiftUI
 import Testing
 import UIKit
+import UniformTypeIdentifiers
 import WebKit
 @testable import Persona
 
@@ -243,6 +245,267 @@ struct CallFollowUpTests {
         #expect(alpha.contains(0) && alpha.contains(255))
     }
 
+    /// Drawn off the main actor, once, before the system's side is made with it: the manager gets finished data and
+    /// draws nothing on the main actor (#9290 follow-up, second review).
+    @Test func theIconIsReadyBeforeTheManagerAndDrawnOffTheMainActor() async throws {
+        await CallIcon.prepare()
+        #expect(CallIcon.drawnOnMainThread == false, "drawn on the main thread")
+        let data = try #require(CallIcon.ready)
+        #expect(data.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]))
+        let rig = CallRig()
+        _ = await rig.dial()
+        #expect(rig.systemSteps == ["prepared", "made"], "the system's side was made before its icon was ready")
+        let ringing = CallRig()
+        try await ringing.calls.ring(UUID(), callID: "call_1", name: "Urgent")
+        #expect(ringing.systemSteps == ["prepared", "made"])
+    }
+
+    // MARK: The second review's findings
+
+    /// Disconnecting a hub a live call talks through is refused with the call's name, touching nothing; another group's
+    /// goes ahead; with the call over, it may (#1).
+    @Test func aDisconnectWaitsForTheCallThroughItsHub() async throws {
+        let rig = CallRig()
+        rig.assistant = "Mochi"
+        let (call, socket) = await rig.connected()
+        let group = rig.voice.key.group
+        let refusal = try #require(rig.calls.disconnectRefusal(groups: [group]))
+        #expect(refusal.contains("Mochi"))
+        #expect(rig.calls.disconnectRefusal(groups: nil) == refusal, "Disconnect All")
+        #expect(rig.calls.disconnectRefusal(groups: ["another"]) == nil, "another group's hub")
+        #expect(call.phase.isLive && !socket.closed)
+        // An urgent call whose group is not known yet counts for every group.
+        try await rig.calls.ring(UUID(), callID: "call_1", name: "Urgent")
+        #expect(rig.calls.disconnectRefusal(groups: ["another"]) != nil)
+
+        let over = CallRig()
+        let (ended, _) = await over.connected()
+        over.calls.hangUp()
+        over.system.act(.end, ended.id)
+        #expect(over.calls.disconnectRefusal(groups: nil) == nil)
+    }
+
+    /// Settings' Disconnect asks before it revokes or forgets anything: refused, it says why and starts nothing.
+    @Test func settingsDisconnectIsRefusedDuringACall() async {
+        let model = AppModel()
+        let gate = LiveCallGate.disconnectRefusal
+        var asked: [Set<String>?] = []
+        LiveCallGate.disconnectRefusal = { groups in
+            asked.append(groups)
+            return "On a call"
+        }
+        defer { LiveCallGate.disconnectRefusal = gate }
+        await model.disconnectAll()
+        #expect(model.toast?.message == "On a call" && model.hubSignOut == nil)
+        await model.disconnectGroup("g")
+        #expect(asked == [nil, ["g"]], "Disconnect All asks for every group, a group's for its own")
+        LiveCallGate.disconnectRefusal = { _ in nil }
+        #expect(model.disconnectRefusal([], scope: .all) == nil)
+    }
+
+    /// The call's look and name go together: taken when the call is made and again just before the system's Start,
+    /// then fixed; choosing another assistant meanwhile changes neither (#10).
+    @Test func theCallKeepsTheAssistantItWasMadeWith() async throws {
+        let rig = CallRig()
+        rig.persona = CallRig.persona(named: "Persona")
+        let call = rig.calls.add(kind: .owner(group: rig.voice.key.group), direction: .outgoing)
+        rig.attachEngine(call)
+        // The look came (a cold launch's download) while the call was still being placed: taken before the Start.
+        rig.persona = CallRig.persona(named: "奶蛙")
+        await rig.calls.place(call, origin: .app)
+        #expect(rig.system.startNames == ["奶蛙"] && call.name == "奶蛙" && call.assistant.persona.name == "奶蛙")
+        // Another assistant chosen during the call: the call's face and name stay the ones the system has.
+        var other = CallRig.persona(named: "Mochi")
+        other.id = "another"
+        rig.persona = other
+        rig.system.act(.start, call.id)
+        #expect(call.assistant.persona.name == "奶蛙" && call.assistant.persona.id == Persona.builtinID)
+        #expect(call.name == "奶蛙")
+    }
+
+    /// A package's frames and face are read and decoded off the main actor into the call's assistant, each file once;
+    /// a look taken again drops the old pictures (#12).
+    @Test func theCallsPicturesAreDecodedOffTheMainActor() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "call-look-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "call-look-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = PersonaStore(root: root, defaults: defaults)
+        let manifest = try JSONDecoder().decode(PersonaManifest.self, from: Data(#"""
+            {"format":1,"id":"frog","name":"奶蛙","avatar":{"sizes":{"64":"face.png"}},"dot":{"states":{"idle":{"file":"idle.png"}}}}
+            """#.utf8))
+        let frog = Persona(id: "frog", name: "奶蛙", subtitle: nil, rev: "r1", manifest: manifest)
+        let folder = store.directory(frog)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Self.png(side: 16).write(to: folder.appending(path: "idle.png"))
+        try Self.png(side: 64).write(to: folder.appending(path: "face.png"))
+
+        let frames = await store.decodedFrames(frog, CallAssistant.states)
+        #expect(Set(frames.keys) == Set(CallAssistant.states), "a state the package lacks shows idle's")
+        #expect(frames[.idle] === frames[.working], "one file decoded once")
+        let face = await store.decodedFace(frog, points: 32, scale: 2)
+        #expect(face?.size.width == 64)
+        #expect(await store.decodedFrames(.builtin, CallAssistant.states).isEmpty)
+
+        let assistant = CallAssistant(frog)
+        await assistant.prepareFrames(store)
+        await assistant.prepareFace(store, points: 32, scale: 2)
+        #expect(assistant.frames[.offline] != nil && assistant.face != nil)
+        assistant.retake(.builtin)
+        #expect(assistant.frames.isEmpty && assistant.face == nil && assistant.name == "Persona")
+        await assistant.prepareFrames(store)
+        #expect(assistant.frames.isEmpty, "a built-in is drawn, not read")
+    }
+
+    /// The question's yes when the call already ended by itself (AirPods, the system's call UI) while it was up: no
+    /// hang-up is asked, but the voice chat still waits for the system to let the ended call's audio go (#5).
+    @Test func anEndedCallsAudioIsStillWaitedForBeforeTheVoiceChat() async {
+        let rig = CallRig()
+        let (call, _) = await rig.connected()
+        rig.system.act(.end, call.id)
+        #expect(call.phase.isEnded)
+        let other = SessionKey(group: rig.voice.key.group, machineID: "m2", sessionID: "s2")
+        let sockets = rig.voice.sockets.count
+        let starting = Task {
+            await rig.voiceCalls.start(other, extensionID: "voice", surface: .phone, deps: rig.voice.deps, endingCall: true)
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(rig.voice.sockets.count == sockets, "the voice chat opened its audio before the ended call's went")
+        #expect(!rig.system.requests.contains(.end), "an ended call is not hung up again")
+        rig.system.deactivate()
+        #expect(await starting.value == nil)
+        #expect(rig.voice.sockets.count == sockets + 1 && rig.voiceCalls.current?.surface == .phone)
+    }
+
+    /// End Call and Start, then an urgent call rings while the call's audio goes: the voice chat does not start, and
+    /// the refusal comes back to whoever asked (the question's yes awaits it: `VoiceEntry.proceed`) (#6, #11).
+    @Test func anUrgentCallDuringTheHandOffIsSaidToTheQuestion() async throws {
+        let rig = CallRig()
+        let (call, _) = await rig.connected()
+        let other = SessionKey(group: rig.voice.key.group, machineID: "m2", sessionID: "s2")
+        let starting = Task {
+            await rig.voiceCalls.start(other, extensionID: "voice", surface: .phone, deps: rig.voice.deps, endingCall: true)
+        }
+        await rig.voice.waitUntil { rig.system.requests.contains(.end) }
+        try await rig.calls.ring(UUID(), callID: "call_1", name: "Urgent")
+        rig.system.act(.end, call.id)
+        rig.system.deactivate()
+        #expect(await starting.value == .urgentCall)
+        #expect(rig.voice.sockets.count == 1, "the voice chat started under the urgent call")
+    }
+
+    /// Dictation waiting for its permission when a call goes live is refused then, before the microphone or the
+    /// session: the call manager's voice does not claim `RecordingMicrophone`, so only the gate can say no (#4, #9).
+    @Test func dictationAsksTheCallAgainAfterItsPermission() async {
+        let dictation = Dictation()
+        dictation.sample = "one two"
+        let live = LiveFlag()
+        dictation.callGate = { live.on ? "On a call" : nil }
+        let permission = HeldPermission()
+        dictation.permission = { await permission.ask() }
+        var failures: [String] = []
+        var heard = 0
+        dictation.start(update: { _ in heard += 1 }, failed: { failures.append($0) })
+        await Self.waitUntil { permission.asked }
+        live.on = true // an urgent call answered meanwhile
+        permission.answer()
+        await Self.waitUntil { !failures.isEmpty }
+        try? await Task.sleep(for: .milliseconds(400)) // a sample's first word would come by now
+        #expect(failures == ["On a call"] && heard == 0 && !dictation.isListening)
+        #expect(Self.microphoneIsFree())
+    }
+
+    /// A recording paused before an urgent call was answered: Persona speaking or not, Continue, and Stop on its Live
+    /// Activity all leave the call's session as it is (no category, no deactivation, no preferred input); the recording
+    /// still stops and is saved, and its microphone goes back (#2, #8). No suspension while it records: other suites'
+    /// tests use the one recorder too.
+    @Test func aPausedRecordingStopsUnderACallLeavingItsSession() async throws {
+        let capture = RecordingCapture.shared
+        guard capture.state == .idle else { return }
+        let rig = try RecorderRig(capture)
+        defer { rig.restore() }
+        rig.useFile()
+        await capture.start(locale: "en-US") // no wait with a file: it records when this returns
+        try #require(capture.state == .recording, "\(capture.error ?? "")")
+        capture.togglePause()
+        #expect(capture.state == .paused)
+        rig.log.calls = []
+        rig.live.on = true // an urgent call answered: the recording stays paused
+        capture.setPlaysAloud(true) // Persona told to speak (the page's switch): its category waits for the resume
+        capture.togglePause() // Continue: refused
+        #expect(capture.state == .paused && capture.error == "End the call first")
+        let id = try #require(capture.stop()) // Stop on its Live Activity
+        #expect(capture.state == .idle && rig.saved == [id])
+        #expect(rig.log.calls.isEmpty, "the call's session was touched: \(rig.log.calls)")
+        #expect(Self.microphoneIsFree())
+    }
+
+    /// A start with a Bluetooth microphone still being looked for when an urgent call is answered: it stops there,
+    /// sets the phone's category on nothing and opens no microphone, and leaves the call's session as it is (#3).
+    @Test func aCallDuringTheBluetoothSearchStopsTheStart() async throws {
+        let capture = RecordingCapture.shared
+        guard capture.state == .idle else { return }
+        let rig = try RecorderRig(capture)
+        defer { rig.restore() }
+        rig.useFile()
+        rig.log.onActivate = { rig.live.on = true }
+        await capture.start(locale: "en-US", input: .bluetooth)
+        #expect(capture.state == .idle && capture.recordingID == nil)
+        #expect(capture.error == "End the call first")
+        #expect(rig.log.calls.filter { $0.hasPrefix("category") }.count == 1, "the phone's category under the call: \(rig.log.calls)")
+        #expect(!rig.log.calls.contains("deactivate") && !rig.log.calls.contains { $0.hasPrefix("input") }, "\(rig.log.calls)")
+        #expect(Self.microphoneIsFree())
+    }
+
+    /// A call answered while the microphone was asked for: the start is refused then, nothing set up (#3).
+    @Test func aCallDuringTheMicrophonePromptStopsTheStart() async throws {
+        let capture = RecordingCapture.shared
+        guard capture.state == .idle else { return }
+        let rig = try RecorderRig(capture)
+        defer { rig.restore() }
+        capture.permission = { [live = rig.live] in
+            live.on = true
+            return true
+        }
+        await capture.start(locale: "en-US")
+        #expect(capture.state == .idle && capture.error == "End the call first")
+        #expect(rig.log.calls.isEmpty && Self.microphoneIsFree())
+    }
+
+    /// The room under the bar is watched only while the bar shows and the app is in front (#13).
+    @Test func theBarsRoomIsWatchedOnlyInFront() {
+        #expect(CallWindow.watchesRoom(bar: true, active: true))
+        #expect(!CallWindow.watchesRoom(bar: true, active: false), "the watch runs in the background")
+        #expect(!CallWindow.watchesRoom(bar: false, active: true))
+    }
+
+    // MARK: Helpers
+
+    private static func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<300 where !condition() { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    private static func microphoneIsFree() -> Bool {
+        let probe = UUID()
+        defer { RecordingMicrophone.shared.release(probe) }
+        return RecordingMicrophone.shared.claim(probe)
+    }
+
+    /// A gray square PNG `side` pixels wide.
+    static func png(side: Int) throws -> Data {
+        let ctx = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let image = try #require(ctx.makeImage())
+        let data = NSMutableData()
+        let out = try #require(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(out, image, nil)
+        #expect(CGImageDestinationFinalize(out))
+        return data as Data
+    }
+
     /// The image's alpha, row by row from the top.
     private static func alpha(_ image: CGImage) throws -> [UInt8] {
         var out = [UInt8](repeating: 0, count: image.width * image.height)
@@ -251,5 +514,98 @@ struct CallFollowUpTests {
                                          bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue))
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         return out
+    }
+}
+
+/// Whether a call is live, as a test's gate says it.
+@MainActor final class LiveFlag {
+    var on = false
+}
+
+/// The system's question for the microphone, held open until the test answers it.
+@MainActor final class HeldPermission {
+    private var waiting: CheckedContinuation<Bool, Never>?
+    private(set) var asked = false
+
+    func ask() async -> Bool {
+        asked = true
+        return await withCheckedContinuation { waiting = $0 }
+    }
+
+    func answer(_ granted: Bool = true) {
+        waiting?.resume(returning: granted)
+        waiting = nil
+    }
+}
+
+/// `RecordingCapture.shared` on a test's gate, session and permission, with a file in place of the microphone when
+/// asked; `restore` puts the app's back.
+@MainActor final class RecorderRig {
+    let capture: RecordingCapture
+    let live = LiveFlag()
+    let log = SessionLog()
+    private(set) var saved: [UUID] = []
+    private let gate: () -> String?
+    private let session: RecordingSession
+    private let onSaved: ((UUID) -> Void)?
+    private let onStopping: ((UUID) -> Void)?
+    private let file: URL
+
+    init(_ capture: RecordingCapture) throws {
+        self.capture = capture
+        gate = capture.callGate
+        session = capture.session
+        onSaved = capture.onSaved
+        onStopping = capture.onStopping
+        file = FileManager.default.temporaryDirectory.appending(path: "call-recording-\(UUID().uuidString).caf")
+        try Self.silence(file)
+        capture.callGate = { [live] in live.on ? "End the call first" : nil }
+        capture.session = log.session
+        capture.onSaved = { [weak self] in self?.saved.append($0) }
+        capture.onStopping = { _ in }
+    }
+
+    /// A file in place of the microphone (DEBUG `-openMeetingAudio`): no permission, no input.
+    func useFile() {
+        UserDefaults.standard.set(file.path, forKey: RecordingFileInput.key)
+    }
+
+    func restore() {
+        UserDefaults.standard.removeObject(forKey: RecordingFileInput.key)
+        if capture.state != .idle { capture.stop() }
+        capture.callGate = gate
+        capture.session = session
+        capture.onSaved = onSaved
+        capture.onStopping = onStopping
+        capture.permission = nil
+        capture.error = nil
+        for id in saved { try? RecordingLibrary.shared.remove(id) }
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// Two seconds of silence, 16 kHz mono.
+    private static func silence(_ url: URL) throws {
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false))
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 32000))
+        buffer.frameLength = 32000
+        try file.write(from: buffer)
+    }
+}
+
+/// The audio session calls a recording made (`RecordingSession`), in order.
+@MainActor final class SessionLog {
+    var calls: [String] = []
+    var onActivate: () -> Void = {}
+
+    var session: RecordingSession {
+        RecordingSession(setCategory: { [weak self] _, _, options in self?.calls.append("category \(options.rawValue)") },
+                         activate: { [weak self] in
+                             self?.calls.append("activate")
+                             self?.onActivate()
+                         },
+                         deactivate: { [weak self] in self?.calls.append("deactivate") },
+                         availableInputs: { [] },
+                         setPreferredInput: { [weak self] port in self?.calls.append(port == nil ? "input none" : "input") })
     }
 }

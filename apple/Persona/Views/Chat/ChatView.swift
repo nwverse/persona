@@ -5486,7 +5486,7 @@ struct Composer: View, Equatable {
 
     private func startVoice() {
         focused = false
-        voiceNote = VoiceEntry.start(key, model: model)
+        voiceNote = VoiceEntry.start(key, model: model) { voiceNote = $0 }
     }
 
     /// Call Persona in the 「+」 panel (#9290): Persona's main conversation only, on the iPhone and iPad (the system's calls);

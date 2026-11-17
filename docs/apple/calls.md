@@ -22,9 +22,9 @@ and nothing in the app ends a live call by itself ("Nothing in the app ends a ca
 | `CallSystem` (`CallSystem.swift`) | The seam to the system. `LCKCallSystem` on devices: the app's only `ConversationManager`, made the first time a call needs it (never at launch, #9264), and its delegate `PersonaCallsLCKDelegate`, whose methods are all `nonisolated` and hop to the main actor in order (`CallMain`; an unmarked delegate method traps when LiveCommunicationKit calls it from its own queue). `SimulatedCallSystem` in the Simulator. A fake in the tests. LiveCommunicationKit's action objects cannot be made by anyone else, so each action reaches `PersonaCalls` as a `CallSystemAction` with its own fulfil and fail. |
 | `CallEngine` (`CallEngine.swift`) | What runs the conversation: `OwnerCallEngine` for a call to Persona (a `VoiceConversation(surface: .call)` on the system's audio session, `PhoneVoiceAudio(session: .system)`), `UrgentCallEngine` for an urgent call (`UrgentCallSession`, turn by turn). |
 | `CallRoute` (`CallRoute.swift`) | Where the sound goes now (receiver, speaker, Bluetooth by name, headphones, car), read from the session on every route change while there is a call, never from what the app asked for. Speaker on is `overrideOutputAudioPort(.speaker)`, handed back when the last call ends. |
-| `CallScreen`, `CallAvatar`, `CallControls`, `UrgentCallView` | The pages. The assistant in the middle of the call screen is `CallAvatar` (its look moving with the call, a ring of the voice's level). Every control goes through `PersonaCalls`, never to the voice directly, so the system's call UI and AirPods say the same. |
-| `CallWindow` (`CallWindow.swift`) | The call screen and the bar back to a minimised call, in a passthrough window at `.normal + 0.75` over the app's windows (the + panel's, the screen viewer's) and under the toasts', the system's alerts and the keyboard. It takes touches only where it shows something: the whole screen for the call screen and a refusal's alert, the bar alone while minimised. The pages under the bar get its room (`additionalSafeAreaInsets` on the app's root, and on every sheet or cover whose content would start under it). |
-| `CallIcon` (`CallIcon.swift`) | The system call UI's template icon: Mochi's silhouette, 40 pt at 3×, made with the manager. |
+| `CallScreen`, `CallAvatar`, `CallControls`, `UrgentCallView` | The pages. The assistant in the middle of the call screen is `CallAvatar` (its look moving with the call, a ring of the voice's level). Who a call is with is the call's own `CallAssistant` (`PersonaCall.assistant`): the look and name taken together when the call is made and once more just before the system's Start, then fixed, so the face beside the name never follows an avatar chosen during the call; a package's frames and face are read and decoded off the main actor into it (`PersonaStore.decodedFrames`, `decodedFace`), and the pages (`CallAssistantDot`, `CallAssistantFace`) only arrange what is there, the built-in drawing meanwhile. Every control goes through `PersonaCalls`, never to the voice directly, so the system's call UI and AirPods say the same. |
+| `CallWindow` (`CallWindow.swift`) | The call screen and the bar back to a minimised call, in a passthrough window at `.normal + 0.75` over the app's windows (the + panel's, the screen viewer's) and under the toasts', the system's alerts and the keyboard. It takes touches only where it shows something: the whole screen for the call screen and a refusal's alert, the bar alone while minimised. The pages under the bar get its room (`additionalSafeAreaInsets` on the app's root, and on every sheet or cover whose content would start under it), looked at again four times a second while the bar shows and the app is active; the watch is cancelled as the app leaves the front (Home, the lock, another app) and the room put right at once as it comes back (`CallWindow.watchesRoom`, docs/apple/performance.md P9). |
+| `CallIcon` (`CallIcon.swift`) | The system call UI's template icon: Mochi's silhouette, 40 pt at 3×, drawn and encoded off the main actor before the manager is made (`PersonaCalls.readySystem`, the first call placed or rung), which only takes the finished PNG. |
 | `CallGuards` (`CallGuards.swift`), `LiveCallGate` (`apple/Shared/Recording/LiveCallGate.swift`) | What keeps in-app actions from ending a live call: the manager answers whether a call is live (`guardsLive`), the assistant's name for the questions, the call's own conversation; web pages' media waits (`CallMediaGuard`). |
 
 The voice side of a call to Persona (the `.call` surface, the system's audio session, `surface` in `start`, hold frames)
@@ -48,15 +48,19 @@ LiveCommunicationKit in the Simulator, to see and log what it does.
 - `includesConversationInRecents: true` (the redial), `supportsVideo: false`, `supportedHandleTypes: [.generic]`, no
   ringtone. `iconTemplateImageData` is the assistant's mark as a template (`CallIcon`): an alpha silhouette of Mochi
   (its body and outline, its eyes cut out), 40 pt at 3× as Apple's guidance for a call app's icon asks, drawn with plain
-  Core Graphics once, when the manager is made (its configuration is fixed for its life). Mochi stands for every look:
+  Core Graphics and encoded once, on a background thread, before the manager is made (`CallIcon.prepare`, awaited by
+  `PersonaCalls.readySystem` before the first Start or ring; the manager's configuration is fixed for its life and is
+  made on the main actor from the finished data, `CallIcon.ready`). Mochi stands for every look:
   a package's or an uploaded picture has no outline of its own to cut.
 - Every conversation is pausable: `capabilities: [.pausing]` in the incoming report and in a `conversationUpdated`
   report for outgoing calls.
 
 The handle is the assistant's name: `Handle(type: .generic, value: <name>, displayName: <name>)`, where the name is
 `Persona.name` of the look on screen ("Persona" for the built-in Mochi, the package's name for another look), trimmed,
-and "Persona" when it is empty (`CallHandle.name`). The call takes it when it is made (`PersonaCall.name`), so the system
-and the call screen say the same for the whole call. The system UI, the Dynamic Island, the Lock Screen and Recents show
+and "Persona" when it is empty (`CallHandle.name`). The call takes the look and its name together when it is made, and
+once more just before the system's Start (after every wait, so a cold launch's hub and look count), then keeps both
+(`PersonaCall.assistant`): the system, the call screen and the bar say the same name beside the same face for the whole
+call, whatever avatar or hub is chosen meanwhile. The system UI, the Dynamic Island, the Lock Screen and Recents show
 the handle's **value** and ignore its display name (FB24933340), and a redial gives back only the value. A redial with
 any value (an old "Persona", a look's name since changed) calls the current hub's main conversation. An urgent call's
 member is the same value with the call's name ("Urgent: <title>" when the Lock Screen may show details) only as its
@@ -189,12 +193,28 @@ an in-app action never silently ends it, takes its microphone or sets up the aud
 (`PersonaCalls.guardsLive`, `LiveCallGate`):
 
 - **Dictation** (the composer's mic tapped or held, #9619; the to-do fields): refused at once with a toast, "On a call —
-  dictation is off until it ends"; neither the dictation bar nor a hold opens (`Dictation.callGate`).
+  dictation is off until it ends"; neither the dictation bar nor a hold opens (`Dictation.callGate`). A dictation that
+  was waiting for its permission when the call went live is refused once it is answered, before the microphone or the
+  session; its session is opened on the audio session's queue the call sets its category on (`LiveCallGate.sessionQueue`),
+  and a block that finds a call live there touches nothing (`LiveCallGate.liveNow`). A dictation the call came during
+  (an urgent call answered) does not deactivate the session as it ends.
 - **A recording** (a meeting from the + list, the home screen's menu, Siri, the Control or the Recordings page; a note;
   all day): refused, "End the call first" (a toast where the start came from elsewhere, the Recordings page's line under
   its button); a recording a call paused stays paused, saying the same (`RecordingCapture.callGate`, checked before the
-  permission, the session or the microphone).
-- **Voice chat**: asks first in another conversation, shows the call screen in the call's own (above).
+  permission, after it, after the Bluetooth microphone's search, at the resume's turn and just before the session is set
+  up or the microphone opens: a start the call came during stops there). A recording that exists under a call (paused
+  before an urgent call was answered) can still be stopped and is saved; its Stop (the Live Activity's, the system's)
+  gives back only its microphone and leaves the call's session as it is, and Persona speaking or not (its category),
+  echo cancellation and the meeting speaker's route wait for the call to end.
+- **Voice chat**: asks first in another conversation, shows the call screen in the call's own (above). A refusal that
+  comes after the yes (an urgent call rang while the call's audio went) is said by the same alert once it has gone
+  (`VoiceEntry.proceed` awaits the start to its end); the yes after the call already ended by itself (AirPods, the
+  system's call UI) hangs up nothing but still waits for the system to let its audio go.
+- **Disconnecting the call's hub** (Settings' Disconnect All, Disconnect This Group or This Hub, Devices' Revoke and
+  Unpair of this device): refused with a toast, "On a call with <name>. End the call before disconnecting.", before any
+  credential is revoked or anything forgotten (`AppModel.disconnectRefusal`, `PersonaCalls.disconnectRefusal`); another
+  group's hub disconnects as before. A call whose group is not known yet (an urgent call without its ring's details)
+  counts for every group.
 - **CarPlay**: the car's Talk to Persona (its screen, its Start, its Continue, Siri's Talk to Persona with the car
   connected) does not start while a call to Persona is on the phone: the car says "You're on a call with <name> on the
   phone" (`CarPlayVoiceSession.onPhoneCall`), and the call plays through the car when the car is its audio. The choice:
@@ -213,16 +233,18 @@ fails on a new one until it is given one):
 | `CallSystem` (`activateAudio` once after the 5 s watchdog; the Simulator's stand-in) | yes, the call's own | no | none needed |
 | `CallRoute.setSpeaker` (`overrideOutputAudioPort`) | yes, on Speaker | no: the call's own route | none needed |
 | `PhoneVoiceAudio` (`.phone`, `.carPlay`: category, activation, preferred input, speaker override) | only through `VoiceCalls` | would: its session replaces the call's | refused, or asked first (`VoiceCalls.systemCallName`); the system mode (a call's) never touches the session (`aSystemCallsAudioNeverTouchesTheSystemsSession`) |
-| `Dictation` (`.record` category, activation, deactivation) | would, when tapped | would: cuts the call's microphone, its deactivation stops the call's audio | refused (`LiveCallGate.dictationRefusal`) |
-| `RecordingCapture.configureSession` (start, resume, the resume when the app comes back) | would | would | refused (`LiveCallGate.recordingRefusal`) |
-| `MeetingSpeaker` (speaker override), `MeetingVoicePlayer`, `MeetingCallAudio` | only during a meeting recording | — | none: no recording starts during a call |
+| `Dictation` (`.record` category, activation, deactivation) | would, when tapped, or when its permission is answered | would: cuts the call's microphone, its deactivation stops the call's audio | refused before and after the permission (`LiveCallGate.dictationRefusal`); opened on `LiveCallGate.sessionQueue`, in order with the call's category; no deactivation while a call is live |
+| `RecordingCapture.configureSession` (start, resume, the resume when the app comes back) | would | would | refused, and asked again after every wait and before the session or the microphone (`LiveCallGate.recordingRefusal`) |
+| `RecordingCapture` stop, cancel, failed start (preferred input, deactivation), `setPlaysAloud` (category), `turnOnEchoCancellation` | yes: a recording paused before an urgent call was answered | would: the deactivation stops the call's audio, the category moves its route | under a live call only the microphone goes back; the category and voice processing wait for the resume |
+| `MeetingSpeaker` (speaker override and its restore), `MeetingVoicePlayer`, `MeetingCallAudio` | only during a meeting recording (a paused one exists under a call) | the override would move the call's route | skipped during a call (`LiveCallGate.callIsLive`) |
 | `VNCPiP.prepare` (`.playback` category, activation) | would, opening a Mac's screen | would | skipped during a call (`LiveCallGate.callIsLive`) |
 | `UrgentCallVoice` (its recognizer's engine, `MeetingVoicePlayer`, the phone's voice) | yes, the urgent call's own | no: on the system's session, no category change | none needed |
 | `AVPlayer` / `AVPlayerViewController` / `VideoPlayer` (audio messages, video files, link cards' video, Lark media) | can | no: they play through the session as it is and change nothing | none: the sound plays in the call's route |
 | WebKit media (in-app browser, HTML cards and files, mail) | can | can: WebKit's own audio interrupts the call's session | suspended (`CallMediaGuard`) |
 | Camera (`UIImagePickerController`, photos only) and the QR scanner (`DataScannerViewController`) | can | no: video only, no audio input | none needed |
 | Haptics (`UIFeedbackGenerator`), voice cues (through the voice's own player) | can | no | none needed |
-| Hub switch, Sign Out | can | no session change; Sign Out disconnects the hub the call talks to, so its voice ends as unreachable after its reconnects | none: Sign Out is the owner leaving the hub |
+| Hub switch | can | no session change | none needed |
+| Disconnect (Settings' Disconnect, Devices' Revoke and Unpair) | would | would: it revokes the credential and closes the tunnels the call talks through, and the voice ends as unreachable | refused while a call talks through that hub (`LiveCallGate.disconnectRefusal`) |
 
 ## Recents and intents
 
@@ -272,7 +294,13 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
   `LocalProxyRouteTests` and the CarPlay suites; `CallFollowUpTests` (the assistant's name on the system call and the
   ring, the guards following the live call, voice chat refused or asked, dictation and recordings refused, web media
   suspended, the call keeping its microphone, the assistant's look per state, the call's window, the bar's room, the
-  template icon); `CallSourceTests` also checks every audio-session site's verdict and that every way in asks first.
+  template icon; and from the second review: a disconnect refused while the call talks through the hub, the call
+  keeping the look and name it was made with, a package's pictures decoded off the main actor, an ended call's audio
+  waited for, an urgent call during the hand-off said to the question, dictation asked again after its permission, a
+  paused recording stopped under a call leaving its session, a start stopped by a call during the Bluetooth search or
+  the microphone prompt, the icon drawn off the main actor before the manager, the bar's room watched only in front);
+  `CallSourceTests` also checks every audio-session site's verdict, that every way in asks first, and those rules
+  (`whatTheSecondReviewFoundStaysFixed`).
 - UI (`apple/PersonaUITests/`, against `MOCK_VOICE=1` `scripts/mock/mock_hub.py`, `docs/operations/testing.md`):
   `CallScreenTests` (each sample, largest text, the app's text size, the bar, + › Call Persona, the urgent call's Mute
   and its page on hold with Resume, and the real path: a call that keeps sending audio on the Agents page, in an Agent's

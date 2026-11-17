@@ -114,7 +114,7 @@ struct CallSourceTests {
             "Persona/Views/Chat/PromptComposer.swift": ("dictation: refused", "callGate"),
             "Shared/Recording/RecordingCapture.swift": ("a recording: refused, a paused one stays paused", "callGate"),
             "Persona/Screen/VNCPiP.swift": ("picture in picture: the session left alone", "LiveCallGate.callIsLive"),
-            "Persona/Recording/MeetingSpeaker.swift": ("a meeting recording's answers: no recording during a call", nil),
+            "Persona/Recording/MeetingSpeaker.swift": ("a meeting recording's answers: a recording a call paused leaves the call's route alone", "LiveCallGate.callIsLive"),
         ]
         let calls = ["setCategory(", "setActive(", "overrideOutputAudioPort(", "setPreferredInput(", "setMode("]
         var found: Set<String> = []
@@ -136,7 +136,7 @@ struct CallSourceTests {
             let body = try #require(Self.body(capture, name), "\(name)")
             let gate = try #require(body.range(of: "callGate()"), "\(name) does not ask the gate")
             #expect(gate.lowerBound < (body.range(of: "configureSession(")?.lowerBound ?? body.endIndex), "\(name)")
-            #expect(gate.lowerBound < (body.range(of: "permission()")?.lowerBound ?? body.endIndex), "\(name)")
+            #expect(gate.lowerBound < (body.range(of: "askPermission()")?.lowerBound ?? body.endIndex), "\(name)")
         }
         let pip = try #require(Self.body(try Self.lines("Persona/Screen/VNCPiP.swift"), "if !LiveCallGate.callIsLive {"))
         #expect(pip.contains("setCategory(") && pip.contains("setActive("), "picture in picture sets the session only with no call")
@@ -147,9 +147,9 @@ struct CallSourceTests {
     /// is on the phone, a meeting recording is refused before its page opens, and the call keeps the microphone.
     @Test func nothingInTheAppEndsALiveCallByItself() throws {
         let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
-        let start = try #require(Self.body(entry, "static func start("))
+        let start = try #require(Self.body(entry, "private static func prepare("))
         let own = try #require(start.range(of: "if calls.isOwnerCallConversation(key) {"))
-        let ask = try #require(start.range(of: "return .endCallFirst(name, key: key)"))
+        let ask = try #require(start.range(of: "return .said(.endCallFirst(name, key: key))"))
         let begin = try #require(start.range(of: "VoiceCalls.shared.start("))
         #expect(own.lowerBound < ask.lowerBound && ask.lowerBound < begin.lowerBound)
         #expect(start.contains("calls.present()"))
@@ -195,7 +195,7 @@ struct CallSourceTests {
         let system = try Self.lines("Persona/Calls/CallSystem.swift").joined(separator: "\n")
         #expect(system.contains("Handle(type: .generic, value: name, displayName: name)"))
         #expect(system.contains("members: [Handle(type: .generic, value: name, displayName: title)]"))
-        #expect(system.contains("iconTemplateImageData: CallIcon.templatePNG()"))
+        #expect(system.contains("iconTemplateImageData: icon") && system.contains("let icon = CallIcon.ready"))
         for path in ["Persona/Calls/CallSystem.swift", "Persona/Calls/CallScreen.swift", "Persona/Calls/OwnerCall.swift", "Persona/Calls/PersonaCalls.swift"] {
             let text = try Self.lines(path).joined(separator: "\n")
             #expect(!text.contains("CallHandle.persona"), "\(path)")
@@ -206,8 +206,8 @@ struct CallSourceTests {
     /// the page's Voice Chat at once, its Continue, CarPlay's start and Continue, and that `PersonaCalls` answers it.
     @Test func voiceChatIsRefusedDuringAnUrgentCall() throws {
         let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
-        let start = try #require(Self.body(entry, "static func start("))
-        #expect(start.contains("let calls = PersonaCalls.shared") && start.contains("if calls.urgentInProgress { return PersonaCalls.urgentNote }"))
+        let start = try #require(Self.body(entry, "private static func prepare("))
+        #expect(start.contains("let calls = PersonaCalls.shared") && start.contains("if calls.urgentInProgress { return .said(PersonaCalls.urgentNote) }"))
         let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
         #expect(strip.contains("refusal = await VoiceCalls.shared.resume(") && strip.contains(".voiceUnavailableAlert($refusal"))
         let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift").joined(separator: "\n")
@@ -222,5 +222,82 @@ struct CallSourceTests {
             let body = try #require(Self.body(voiceCalls, name), "\(name)")
             #expect(body.contains("await handOff("), "\(name)")
         }
+    }
+
+    /// The second review's findings (#9290 follow-up), as rules only the sources show.
+    ///
+    /// A recording that stops, never starts or changes under a live call leaves the session alone; every wait in a
+    /// recording's start and resume asks the gate again; dictation asks after its permission and opens its session on
+    /// the queue the call sets its category on; the voice chat question's yes hears the refusal that comes after its wait.
+    @Test func whatTheSecondReviewFoundStaysFixed() throws {
+        let capture = try Self.lines("Shared/Recording/RecordingCapture.swift")
+        let release = try #require(Self.body(capture, "private func releaseAudioSession()"))
+        let gate = try #require(release.range(of: "if callGate() == nil {"))
+        #expect(gate.lowerBound < (release.range(of: "session.deactivate()")?.lowerBound ?? release.startIndex), "a stop deactivates the call's session")
+        #expect(gate.lowerBound < (release.range(of: "setPreferredInput(nil)")?.lowerBound ?? release.startIndex))
+        let aloud = try #require(Self.body(capture, "func setPlaysAloud("))
+        #expect(aloud.contains("callGate() == nil"), "Persona's speaking changes the call's category")
+        let echo = try #require(Self.body(capture, "func turnOnEchoCancellation()"))
+        #expect(echo.contains("callGate() == nil"))
+        let configure = try #require(Self.body(capture, "private func configureSession(token:"))
+        let search = try #require(configure.range(of: "await bluetoothInput("))
+        let after = try #require(configure.range(of: "try checkCall()", range: search.upperBound..<configure.endIndex), "the Bluetooth search's wait is not followed by the gate")
+        #expect(after.lowerBound < (configure.range(of: "setPreferredInput(port)")?.lowerBound ?? configure.startIndex))
+        let start = try #require(Self.body(capture, "func start(locale:"))
+        let asked = try #require(start.range(of: "await askPermission()"))
+        #expect(start.range(of: "callGate()", range: asked.upperBound..<start.endIndex) != nil, "the permission's wait is not followed by the gate")
+        #expect((start.range(of: "try checkCall()")?.lowerBound ?? start.endIndex) < (start.range(of: "try writer.start()")?.lowerBound ?? start.startIndex))
+        let resume = try #require(Self.body(capture, "private func resume("))
+        #expect((resume.range(of: "try self.checkCall()")?.lowerBound ?? resume.endIndex) < (resume.range(of: "try writer.resume()")?.lowerBound ?? resume.startIndex))
+
+        let composer = try Self.lines("Persona/Views/Chat/PromptComposer.swift")
+        let listen = try #require(Self.body(composer, "private func listen(_ turn:"))
+        let permission = try #require(listen.range(of: "granted = await Self.allowed()"))
+        let recheck = try #require(listen.range(of: "if let refusal = callGate() { return refusal }"))
+        #expect(permission.upperBound < recheck.lowerBound, "dictation does not ask the gate after its permission")
+        #expect(recheck.lowerBound < (listen.range(of: "RecordingMicrophone.shared.claim(")?.lowerBound ?? listen.startIndex))
+        #expect(listen.contains("guard !LiveCallGate.liveNow else { return c.resume(returning: .call) }"))
+        #expect(composer.joined(separator: "\n").contains("private static var audioQueue: DispatchQueue { LiveCallGate.sessionQueue }"))
+        let calls = try Self.lines("Persona/Calls/PersonaCalls.swift")
+        let category = try #require(Self.body(calls, "static func setCallCategory()"))
+        #expect(category.contains("LiveCallGate.sessionQueue.async"), "the call's category is not on the session's queue")
+        let guards = try Self.lines("Persona/Calls/CallGuards.swift").joined(separator: "\n")
+        #expect(guards.contains("LiveCallGate.callLiveChanged(live)"))
+
+        let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
+        let proceed = try #require(Self.body(entry, "static func proceed("))
+        #expect(proceed.contains("return await begin(key, model: model, endingCall: true)"), "the yes does not wait for its refusal")
+        let begin = try #require(Self.body(entry, "private static func prepare("))
+        #expect(begin.contains("return .ready { await VoiceCalls.shared.start("), "a start's refusal is dropped")
+        #expect(!entry.joined(separator: "\n").contains("Task { await VoiceCalls.shared.start("), "a start's refusal is dropped")
+        let starts = try #require(Self.body(entry, "@discardableResult static func start("))
+        #expect(starts.contains("if let why = await begin() { refused(why) }"))
+
+        let signOut = try Self.lines("Persona/App/HubSignOut.swift")
+        let signing = try #require(Self.body(signOut, "private func signingOut("))
+        let refused = try #require(signing.range(of: "if let refusal = disconnectRefusal(hubs, scope: scope) {"))
+        #expect(refused.lowerBound < (signing.range(of: "Self.signOut(hubs)")?.lowerBound ?? signing.startIndex), "credentials go before the call is asked")
+        #expect(refused.lowerBound < (signing.range(of: "forget(self)")?.lowerBound ?? signing.startIndex))
+
+        let system = try Self.lines("Persona/Calls/CallSystem.swift").joined(separator: "\n")
+        #expect(!system.contains("templatePNG("), "the icon is drawn as the manager is made, on the main actor")
+        let owner = try Self.lines("Persona/Calls/OwnerCall.swift")
+        let place = try #require(Self.body(owner, "func place(_ call: PersonaCall"))
+        let ready = try #require(place.range(of: "await readySystem()"))
+        #expect(ready.lowerBound < (place.range(of: "let system = system")?.lowerBound ?? place.startIndex))
+        #expect(place.contains("call.assistant.retake(assistant())"))
+
+        // The call's pages draw only what the call's assistant has ready: nothing read or decoded in their bodies.
+        for path in ["Persona/Calls/CallAvatar.swift", "Persona/Calls/CallScreen.swift"] {
+            let text = try Self.lines(path).joined(separator: "\n")
+            for loader in ["PersonaDot(", "PersonaAvatar(", "personas.frames(", "personas.avatar("] {
+                #expect(!text.contains(loader), "\(path) uses \(loader)")
+            }
+        }
+
+        let window = try Self.lines("Persona/Calls/CallWindow.swift")
+        let follow = try #require(Self.body(window, "private func followRoom()"))
+        #expect(follow.contains("guard Self.watchesRoom(bar: barShown, active: active) else {") && follow.contains("watching?.cancel()"))
+        #expect(window.joined(separator: "\n").contains("UIApplication.willResignActiveNotification"))
     }
 }

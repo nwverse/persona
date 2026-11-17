@@ -110772,6 +110772,29 @@
         }
       }
     },
+    "On a call with %@. End the call before disconnecting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a call with %1$@. End the call before disconnecting."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ と通話中です。通話を終了してから接続を解除してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在与 %1$@ 通话。请先结束通话，再断开连接。"
+          }
+        }
+      }
+    },
     "On a call — dictation is off until it ends" : {
       "extractionState" : "manual",
       "localizations" : {

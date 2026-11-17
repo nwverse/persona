@@ -76,16 +76,25 @@ import Testing
     private(set) var left: [String] = []
     /// How many times a call's audio category was set (`PersonaCalls.prepareAudio`).
     private(set) var categories = 0
-    /// The assistant's name a new call carries (`PersonaCalls.assistantName`).
+    /// The assistant's name a new call carries (`PersonaCalls.assistant`: the persona on screen, here named so).
     var assistant = "Persona"
+    /// The persona on screen, when a test gives a whole one (its look and name): else the built-in named `assistant`.
+    var persona: Persona?
+    /// What happened before the system's side was made, in order: "prepared" (`PersonaCalls.readySystem`), "made".
+    private(set) var systemSteps: [String] = []
     private(set) lazy var calls: PersonaCalls = {
-        let calls = PersonaCalls(system: { [system] in system }, clock: voice.clock, voiceCalls: voiceCalls,
+        let calls = PersonaCalls(system: { [weak self, system] in
+            self?.systemSteps.append("made")
+            return system
+        }, clock: voice.clock, voiceCalls: voiceCalls,
                                  ownerAudio: { [voice] in voice.audio }, ownerDeps: { [voice] _, audio, events in
             var deps = voice.deps
             deps.audio = { audio }
             deps.callEvents = events
             return deps
-        }, callCategory: { [weak self] in self?.categories += 1 }, assistantName: { [weak self] in CallHandle.name(self?.assistant) })
+        }, callCategory: { [weak self] in self?.categories += 1 }, assistant: { [weak self] in
+            self?.persona ?? CallRig.persona(named: self?.assistant ?? "")
+        }, prepareSystem: { [weak self] in self?.systemSteps.append("prepared") })
         calls.callLeft = { [weak self] in self?.left.append($0) }
         return calls
     }()
@@ -120,6 +129,13 @@ import Testing
     }
 
     func settle() async { for _ in 0..<20 { await Task.yield() } }
+
+    /// The built-in look under another name.
+    static func persona(named name: String) -> Persona {
+        var persona = Persona.builtin
+        persona.name = name
+        return persona
+    }
 }
 
 /// The app's one call manager (#9290): the system's actions reach the call by its id, the machine says what to do and

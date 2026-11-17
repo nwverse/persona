@@ -36,7 +36,12 @@ private struct UrgentCallHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.s) {
-                PersonaAvatar(size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
+                // The call's own assistant (its look when it rang), else the one on screen.
+                if let assistant = PersonaCalls.shared.urgentCall(session.id)?.assistant {
+                    CallAssistantFace(assistant: assistant, size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
+                } else {
+                    PersonaAvatar(size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
+                }
                 Text("Urgent Call").font(Theme.Font.heading).foregroundStyle(Theme.danger)
                 Spacer(minLength: Theme.Space.s)
                 if let answered = session.answeredAt {

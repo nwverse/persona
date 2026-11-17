@@ -27,20 +27,48 @@ extension VoiceSupport {
     /// urgent call rings or is on (#9290): its audio is the system's. While a call to Persona is on (#9290 follow-up:
     /// nothing in the app ends it by itself): in its own conversation the call screen comes up instead (it is the same
     /// conversation); elsewhere the user is asked first ("End the call with … and start a voice chat here?",
-    /// `VoiceUnavailableNote.endCallFirst`), and `endingCall` is their yes.
-    @discardableResult static func start(_ key: SessionKey, model: AppModel, endingCall: Bool = false) -> VoiceUnavailableNote? {
-        #if os(iOS)
-        let calls = PersonaCalls.shared
-        if calls.urgentInProgress { return PersonaCalls.urgentNote }
-        if calls.isOwnerCallConversation(key) {
-            calls.present()
+    /// `VoiceUnavailableNote.endCallFirst`), and `endingCall` is their yes. What can be said at once is returned; why
+    /// the start was refused after its wait (an urgent call rang while the call to Persona let its audio go, a call to
+    /// Persona came meanwhile) goes to `refused`, once the start has run (`begin`).
+    @discardableResult static func start(_ key: SessionKey, model: AppModel, endingCall: Bool = false,
+                                         refused: @escaping @MainActor (VoiceUnavailableNote) -> Void) -> VoiceUnavailableNote? {
+        switch prepare(key, model: model, endingCall: endingCall) {
+        case .said(let note): return note
+        case .ready(let begin):
+            Task { if let why = await begin() { refused(why) } }
             return nil
         }
-        if !endingCall, let name = calls.liveOwnerCallName { return .endCallFirst(name, key: key) }
+    }
+
+    /// `start`, awaited: what to say, at once or after the start ran (VoiceCalls' own refusal after its hand-off), or nil
+    /// when the voice chat started, or the call screen came up instead.
+    static func begin(_ key: SessionKey, model: AppModel, endingCall: Bool = false) async -> VoiceUnavailableNote? {
+        switch prepare(key, model: model, endingCall: endingCall) {
+        case .said(let note): return note
+        case .ready(let begin): return await begin()
+        }
+    }
+
+    /// What a start does: says something at once (nil: nothing to say, the call screen came up), or is ready to begin
+    /// the voice chat, which says why not when it is refused after all.
+    private enum Prepared {
+        case said(VoiceUnavailableNote?)
+        case ready(@MainActor () async -> VoiceUnavailableNote?)
+    }
+
+    private static func prepare(_ key: SessionKey, model: AppModel, endingCall: Bool) -> Prepared {
+        #if os(iOS)
+        let calls = PersonaCalls.shared
+        if calls.urgentInProgress { return .said(PersonaCalls.urgentNote) }
+        if calls.isOwnerCallConversation(key) {
+            calls.present()
+            return .said(nil)
+        }
+        if !endingCall, let name = calls.liveOwnerCallName { return .said(.endCallFirst(name, key: key)) }
         #endif
         let availability = VoiceSupport.shared.availability(for: model.session(key), group: key.group)
         guard case .available(let id) = availability else {
-            return VoiceUnavailableNote.make(availability, extensionID: VoiceSupport.shared.voiceExtensionID(group: key.group))
+            return .said(VoiceUnavailableNote.make(availability, extensionID: VoiceSupport.shared.voiceExtensionID(group: key.group)))
         }
         Haptics.tap()
         let recent = VoiceLine.recent(model.chat(key).items)
@@ -49,16 +77,16 @@ extension VoiceSupport {
         if VoiceSample.silentAudio { deps.audio = { VoiceSample.SilentAudio() } }
         #endif
         // A call to Persona that is on (the user said end it) ends first, and the voice chat starts once the system let
-        // its audio go (`VoiceCalls.endSystemCall`).
-        Task { await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps, endingCall: endingCall) }
-        return nil
+        // its audio go (`VoiceCalls.endSystemCall`); an urgent call that rang meanwhile refuses it then.
+        return .ready { await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps, endingCall: endingCall) }
     }
 
     /// The user said yes to `note`'s question (End Call and Start): the call to Persona ends and the voice chat starts or
-    /// is picked up again. What to say if it cannot after all.
+    /// is picked up again. What to say if it cannot after all, awaited to the end: a refusal that comes after the call
+    /// ended (an urgent call rang while its audio went) is said too.
     static func proceed(_ note: VoiceUnavailableNote, model: AppModel) async -> VoiceUnavailableNote? {
         switch note.proceed {
-        case .startVoice(let key): return start(key, model: model, endingCall: true)
+        case .startVoice(let key): return await begin(key, model: model, endingCall: true)
         case .resumeVoice(let key): return await VoiceCalls.shared.resume(key, endingCall: true)
         case nil: return nil
         }

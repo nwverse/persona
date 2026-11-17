@@ -57,9 +57,23 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
     private var given: [ObjectIdentifier: (controller: Weak, top: CGFloat)] = [:]
     private var watching: Task<Void, Never>?
     private var hiding: Task<Void, Never>?
+    /// The bar shows (the room under it is looked at while the app is in front).
+    private var barShown = false
+    /// The app is in front (active): the room watch runs only then.
+    private var active = UIApplication.shared.applicationState == .active
+    private var observers: [NSObjectProtocol] = []
 
     private init() {
         state.changed = { [weak self] in self?.barMoved() }
+        // The room watch stops as the app leaves the front (Home, the lock, another app: the bar stays, the call goes
+        // on, nothing is seen) and starts again with the room put right at once as it comes back.
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.foreground(true) }
+        })
+        observers.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.foreground(false) }
+        })
     }
 
     /// Shows `mode` over `shell` (the window the app's root is in; nil: the last one seen).
@@ -154,9 +168,24 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
     }
 
     /// While the bar shows, what is over the app (a sheet, a cover, the + panel's sheet) can change at any time and UIKit
-    /// says nothing: it is looked at again every `callBarRoomCheck`, in front only.
+    /// says nothing: it is looked at again every `callBarRoomCheck`, while the app is in front only (`watchesRoom`). Out
+    /// of the front the watch is cancelled, not just idle: nothing wakes the main actor for it through a call in the
+    /// background or under the lock.
     private func watchRoom(_ on: Bool) {
-        guard on else {
+        barShown = on
+        followRoom()
+    }
+
+    /// The app came to the front or left it: back in front, the room is put right at once, then watched again.
+    private func foreground(_ on: Bool) {
+        guard active != on else { return }
+        active = on
+        if on, barShown { applyRoom() }
+        followRoom()
+    }
+
+    private func followRoom() {
+        guard Self.watchesRoom(bar: barShown, active: active) else {
             watching?.cancel()
             watching = nil
             return
@@ -166,10 +195,13 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Theme.Motion.callBarRoomCheck)
                 guard !Task.isCancelled, let self else { return }
-                if UIApplication.shared.applicationState == .active { self.applyRoom() }
+                self.applyRoom()
             }
         }
     }
+
+    /// Whether the room under the bar is watched: the bar shows and the app is in front (pure, for the tests).
+    nonisolated static func watchesRoom(bar: Bool, active: Bool) -> Bool { bar && active }
 
     /// Every page under the bar starts below it: the app's root, and every controller presented over it or over another
     /// window under the call's (a sheet, a full-screen cover, the + panel's sheet) whose content would start under the

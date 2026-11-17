@@ -125,16 +125,19 @@ nonisolated enum CallMain {
 
     /// Two groups so an urgent call during a call to Persona offers Hold & Accept (with one the system offers only End &
     /// Accept and Decline, and a Start at capacity fails); calls in Recents for the redial; one handle type, `.generic`.
-    /// The system call UI's icon is the assistant's mark as a template (`CallIcon`, Mochi's silhouette), made with the
-    /// manager: its configuration is fixed for the manager's life.
-    static var configuration: ConversationManager.Configuration {
-        ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: CallIcon.templatePNG(),
+    /// The system call UI's icon is the assistant's mark as a template (`CallIcon`, Mochi's silhouette): its PNG drawn
+    /// and encoded off the main actor before the manager is made (`PersonaCalls.readySystem`), and only handed in here,
+    /// on the main actor; the configuration is fixed for the manager's life.
+    static func configuration(icon: Data?) -> ConversationManager.Configuration {
+        ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: icon,
                                           maximumConversationGroups: 2, maximumConversationsPerConversationGroup: 1,
                                           includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
     }
 
     init() {
-        manager = ConversationManager(configuration: Self.configuration)
+        let icon = CallIcon.ready
+        if icon == nil { Self.log.notice("call: the manager is made before its icon was drawn: the system call UI shows none") }
+        manager = ConversationManager(configuration: Self.configuration(icon: icon))
         manager.delegate = delegate
         delegate.system = self
     }
