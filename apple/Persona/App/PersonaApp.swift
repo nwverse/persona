@@ -36,6 +36,8 @@ struct PersonaApp: App {
                     return .handled
                 })
                 .rootHubLinkSheet($model.linkSheet)
+                // A pairing link from outside the app asks before it pairs (#9929).
+                .pairConfirmation($model.pairToConfirm) { model.pairFromLink($0.config) }
                 #if os(iOS)
                 // A redial from the Phone app's Recents (#9290), where SwiftUI hands it over rather than the scene's delegate;
                 // the two are one tap (`PersonaCalls.continueActivity` takes it once).
@@ -78,24 +80,8 @@ struct PersonaApp: App {
                         }
                         return
                     }
-                    Task {
-                        do {
-                            try await model.pair(cfg)
-                            let host = cfg.url.host() ?? String(localized: "Server")
-                            model.toast = Toast(String(localized: "Connected to \(host)"), style: .success)
-                        }
-                        catch {
-                            // An expired code says so (showPairing); anything else is said too, not through `show`, which
-                            // keeps quiet about a timeout or no network: a hub out of reach then said nothing after 30 s on
-                            // the welcome page (#4273).
-                            if PairError.isExpiredCode(error) {
-                                model.showPairing(error)
-                            } else if !error.isCancellation {
-                                model.toast = Toast(String(localized: "Couldn't connect: \(error.localizedDescription)"), style: .error)
-                                Haptics.error()
-                            }
-                        }
-                    }
+                    // A link only opens pages: pairing waits for the user's Connect (#9929).
+                    model.askToPair(cfg)
                 }
         }
         #if os(visionOS)
