@@ -1715,10 +1715,18 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   drafts). An open plan is also a card among the conversation's lines (iOS `FeedLine`, web `FeedLineView` #8193, Android on Glass `GlassPlanCard`), at the
   end of the exchange it happened in: its tasks, where each would run, "Start these directly", then Start, Edit and Don't start;
   once started the hand-off cards take its place, and a dismissed one reads "Not started · N tasks". A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
-  and its cards are; it never brings a card into the stack, which is the conversation's own. On Android the two places
-  of cards share the room the footer leaves above the composer (iOS draws the question uncapped): each takes at most half
-  the page, and with both on screen each has at least half of that room, a card that needs less leaving the rest to the
-  other, so the composer stays on the page.
+  and its cards are; it never brings a card into the stack, which is the conversation's own. The two places of cards
+  share the room the footer leaves above the composer: on Android each takes at most half the page, and with both on
+  screen each has at least half of that room, a card that needs less leaving the rest to the other, so the composer
+  stays on the page. iOS (#9392) caps the task question as it caps the stack (`FooterRoom.cardsRoom`): alone, as a lone
+  question card (#6277), with the conversation's own cards on screen half of that room each; its card fits itself to its
+  share and scrolls inside, its task's name and title row in view. It was uncapped, and on iPad and the open iPhone Duo
+  it took the whole page, its top under the top bar.
+  A question card folds from its title row (the whole row, and the fold button at its end, `interaction-fold`) to one
+  line: its title, the question and, for a card of several questions, "N left". Folded, it keeps its page and its picks
+  and gives the conversation its room. Where the chat finds the message the card is about (the agent's words before the
+  call that asked it, `CardSource`), the open card's title row has **View in Chat**: the card folds and the chat goes to
+  that message and lights it up, as a quote's jump does. A task's question asks in another chat and has none.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,
