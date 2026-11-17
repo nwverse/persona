@@ -467,6 +467,27 @@ pub unsafe extern "C" fn persona_core_project_viewed_images(input: *const u8, le
     .unwrap_or_else(|_| PersonaCoreBytes::empty())
 }
 
+/// Applies one recent-conversation or recent-setup operation (`persona_core::recents::Input`). The shown operation
+/// receives its persistence predicate as an explicit `existing` string list. Returns the complete fixture-shaped JSON,
+/// or an empty buffer for malformed input or an unknown operation. No storage, clock or production adapter is involved.
+/// Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_recents(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::recents::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        let Ok(projection) = persona_core_domain::recents::input_fixture(&input) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&projection)
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
 /// Projects background-task calls, descriptions and notice status sequences (`persona_core::task_index::Input`).
 /// Returns the complete `Index` JSON. Pure function, same buffer ownership as `persona_core_project_sort`.
 ///
