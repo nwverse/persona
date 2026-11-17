@@ -27,8 +27,11 @@ final class MeetingReminderUITests: XCTestCase {
         try shot(app, "list")
     }
 
-    /// Start: the meeting named after the event records, in its room.
+    /// Start: the meeting named after the event records, in its room (a hub with the meeting conversation).
     @MainActor func testStartOpensTheRoom() throws {
+        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] {
+            try post(hub, "/mock/meeting_conversation", ["on": true, "room": "ok", "end_seconds": 180])
+        }
         let app = try launch(["-tab", "assistant", "-showMeetingReminder", "start"])
         XCTAssertTrue(element(app, "recording-live-hide").waitForExistence(timeout: 25), "no meeting room:\n\(app.debugDescription)")
         XCTAssertTrue(app.staticTexts["产品周会"].firstMatch.exists, "not the event's name:\n\(app.debugDescription)")
@@ -56,6 +59,15 @@ final class MeetingReminderUITests: XCTestCase {
 
     @MainActor private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
+    }
+
+    private func post(_ hub: String, _ path: String, _ body: [String: Any]) throws {
+        var request = URLRequest(url: URL(string: hub + path)!)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let done = expectation(description: path)
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 5)
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {

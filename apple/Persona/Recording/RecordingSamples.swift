@@ -54,11 +54,14 @@ enum RecordingSamples {
     }
 
     /// `-showMeetingReminder start`: a reminder's Start with no microphone. The made-up meeting records under the
-    /// reminder's meeting and its name, and its room opens.
+    /// reminder's meeting and its name, attended as a real start would be (`MeetingAttendees.startAttendance`: a room
+    /// meeting with the meeting conversation), and its room opens.
     static func startFromReminder(_ meeting: RecordingMeeting) {
         RecordingLibrary.shared.restore(liveMeeting)
         var live = RecordingEntry(id: liveMeeting, createdAt: .now, source: .phone, title: meeting.title ?? "", active: true)
         live.meeting = meeting
+        let attendance = MeetingAttendees.startAttendance(AppModel.shared)
+        if attendance.room || attendance.sentRole.attends { live.attendance = attendance }
         try? RecordingLibrary.shared.save(live)
         RecordingCapture.shared.showSample(liveMeeting, elapsed: 1)
         MeetingRecorder.openRecordings()

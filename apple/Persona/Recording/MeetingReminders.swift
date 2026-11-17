@@ -132,11 +132,15 @@ import UserNotifications
 
     #if DEBUG
     /// `-showMeetingReminder start|open`: answers the made-up weekly meeting's reminder as its Start or a plain tap would,
-    /// through the notification's own content (a UI test can't reach a notification without the system's prompt).
+    /// through the notification's own content (a UI test can't reach a notification without the system's prompt), once
+    /// the hub has said what it offers (a meeting starts as a room meeting by it), or after five seconds.
     static func showIfAsked() {
         guard let mode = UserDefaults.standard.string(forKey: "showMeetingReminder"),
               let meeting = meeting(content(RecordingSamples.reminderMeeting()).userInfo) else { return }
-        respond(action: mode == "start" ? startAction : UNNotificationDefaultActionIdentifier, meeting: meeting)
+        Task {
+            for _ in 0..<20 where AppModel.shared.hubFeatures.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }
+            respond(action: mode == "start" ? startAction : UNNotificationDefaultActionIdentifier, meeting: meeting)
+        }
     }
     #endif
 
