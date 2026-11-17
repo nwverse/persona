@@ -172,7 +172,6 @@
   "agent_stopped": "停止",
   "todo_chip": "ToDo：{state}",
   "todo_waiting_merge": "マージ待ち",
-  "tray_just_finished": "完了したばかり",
   "start_cause_connection_lost": "このコンピューターとの接続が切れました",
   "start_cause_offline": "このコンピューターは現在オフラインです",
   "start_cause_timed_out": "起動に時間がかかりすぎました",
