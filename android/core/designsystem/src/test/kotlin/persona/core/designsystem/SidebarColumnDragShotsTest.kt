@@ -60,6 +60,97 @@ class SidebarColumnDragShotsTest {
     @Config(sdk = [35], qualifiers = "en-w951dp-h673dp-mdpi")
     @Test fun restingBesideMatches() = resting(overlay = false)
 
+    @Config(sdk = [35], qualifiers = "en-w673dp-h951dp-mdpi")
+    @Test fun overDoesNotShowTheFullColumnBeforeTheOverlay() = layoutStaysUntilCovered(over = true)
+
+    @Config(sdk = [35], qualifiers = "en-w951dp-h673dp-mdpi")
+    @Test fun besideDoesNotShiftThePageBeforeTheOverlay() = layoutStaysUntilCovered(over = false)
+
+    @Config(sdk = [35], qualifiers = "en-w673dp-h951dp-mdpi")
+    @Test fun closingOverKeepsTheColumnUntilTheOverlay() = columnStaysUntilCovered()
+
+    /** No frame from finger-down until the overlay draws shows the snapped layout (`SplitColumnControl.swift:204-216`). */
+    private fun layoutStaysUntilCovered(over: Boolean) {
+        val pageColor = 0xFF2244AA.toInt()
+        val columnColor = 0xFF22AA44.toInt()
+        val markerColor = 0xFFFFEE00.toInt()
+        var shown by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = false) {
+                Box(Modifier.fillMaxSize().testTag("shot")) {
+                    JSidebarColumn(sidebar = {
+                        Box(Modifier.fillMaxSize().background(Color(columnColor)))
+                    }, width = 320.dp, pageStart = 320.dp, shown = shown, overlay = over, drags = true,
+                        onDragSettle = { shown = it }) {
+                        Box(Modifier.fillMaxSize().background(Color(pageColor))) {
+                            Box(Modifier.width(8.dp).fillMaxHeight().background(Color(markerColor)))
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        val widthPx = with(rule.density) { 320.dp.toPx() }
+        val controller = columnDragControllerForTest ?: error("missing controller")
+        rule.mainClock.autoAdvance = false
+        rule.runOnUiThread {
+            controller.begin(ColumnDragZone.Open, over = over, widthPx = widthPx)
+            Snapshot.sendApplyNotifications()
+        }
+        var covered = false
+        var frame = 0
+        while (frame < 24 && !covered) {
+            rule.mainClock.advanceTimeByFrame()
+            val bmp = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            val marker = bmp.getPixel(2, 80)
+            val edge = bmp.getPixel(300, 400)
+            assertEquals("frame $frame shifted the page before the overlay covered it", markerColor, marker)
+            assertEquals("frame $frame showed the column at full width before the overlay", pageColor, edge)
+            if (columnDragOverlayDrawn) covered = true
+            ShadowLooper.idleMainLooper()
+            frame++
+        }
+        assertTrue("overlay never drew", covered)
+    }
+
+    /** Closing over the page hides the column only after the overlay is up (`:225` after `:204`). */
+    private fun columnStaysUntilCovered() {
+        val pageColor = 0xFF2244AA.toInt()
+        val columnColor = 0xFF22AA44.toInt()
+        var shown by mutableStateOf(true)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = false) {
+                Box(Modifier.fillMaxSize().testTag("shot")) {
+                    JSidebarColumn(sidebar = {
+                        Box(Modifier.fillMaxSize().background(Color(columnColor)))
+                    }, width = 320.dp, pageStart = 320.dp, shown = shown, overlay = true, drags = true,
+                        onDragSettle = { shown = it }) {
+                        Box(Modifier.fillMaxSize().background(Color(pageColor)))
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        val widthPx = with(rule.density) { 320.dp.toPx() }
+        val controller = columnDragControllerForTest ?: error("missing controller")
+        rule.mainClock.autoAdvance = false
+        rule.runOnUiThread {
+            controller.begin(ColumnDragZone.Close, over = true, widthPx = widthPx)
+            Snapshot.sendApplyNotifications()
+        }
+        var covered = false
+        var frame = 0
+        while (frame < 24 && !covered) {
+            rule.mainClock.advanceTimeByFrame()
+            val bmp = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            assertEquals("frame $frame hid the column before the overlay", columnColor, bmp.getPixel(80, 400))
+            if (columnDragOverlayDrawn) covered = true
+            ShadowLooper.idleMainLooper()
+            frame++
+        }
+        assertTrue("overlay never drew", covered)
+    }
+
     private fun frames(over: Boolean, prefix: String) {
         var dark by mutableStateOf(false)
         var shown by mutableStateOf(false)
@@ -108,7 +199,7 @@ class SidebarColumnDragShotsTest {
             assertEquals(DragStep.Idle, controller.step)
             rule.runOnIdle { controller.begin(ColumnDragZone.Open, over = over, widthPx = widthPx) }
             var i = 0
-            while (i < 16 && controller.step != DragStep.Follow) {
+            while (i < 24 && controller.step != DragStep.Follow) {
                 rule.onNodeWithTag("shot").captureToImage()
                 rule.waitForIdle()
                 ShadowLooper.idleMainLooper()
@@ -157,7 +248,7 @@ class SidebarColumnDragShotsTest {
             rule.mainClock.autoAdvance = true
             rule.runOnIdle { controller.begin(ColumnDragZone.Close, over = over, widthPx = widthPx) }
             var shut = 0
-            while (shut < 16 && controller.step != DragStep.Follow) {
+            while (shut < 24 && controller.step != DragStep.Follow) {
                 rule.onNodeWithTag("shot").captureToImage()
                 rule.waitForIdle()
                 ShadowLooper.idleMainLooper()

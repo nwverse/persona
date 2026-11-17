@@ -21,8 +21,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import android.graphics.Color as AndroidColor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import kotlin.math.abs
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -116,13 +118,17 @@ class ColumnDragRealShotsTest {
             assertEquals("Idle", drag.step())
             rule.runOnIdle { drag.begin(open = true, over = over, widthPx = columnPx) }
             var i = 0
-            while (i < 16 && drag.step() != "Follow") {
+            while (i < 24 && drag.step() != "Follow") {
                 rule.onNodeWithTag("shot").captureToImage()
                 rule.waitForIdle()
                 ShadowLooper.idleMainLooper()
                 i++
             }
             assertEquals("$prefix $mode stuck at ${drag.step()}", "Follow", drag.step())
+            // The still of this frame, before the finger moves. The live capture above is the same layout.
+            // A glass bar recorded without its blur is black here (`SplitColumnControl.swift:191`).
+            val still = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            assertBarMatchesLive(start, still, "$prefix $mode")
             rule.runOnIdle { drag.move(columnPx / 2f) }
             rule.waitForIdle()
             rule.onNodeWithText("Weekend plans").assertExists()
@@ -152,7 +158,7 @@ class ColumnDragRealShotsTest {
             rule.mainClock.autoAdvance = true
             rule.runOnIdle { drag.begin(open = false, over = over, widthPx = columnPx) }
             var shut = 0
-            while (shut < 16 && drag.step() != "Follow") {
+            while (shut < 24 && drag.step() != "Follow") {
                 rule.onNodeWithTag("shot").captureToImage()
                 rule.waitForIdle()
                 ShadowLooper.idleMainLooper()
@@ -175,6 +181,36 @@ class ColumnDragRealShotsTest {
             }
             assertEquals("Idle", drag.step())
             assertTrue("$prefix $mode shut did not close", !shown)
+        }
+    }
+
+    /** Top bar of the rasterized still against the live capture of the same frame. */
+    private fun assertBarMatchesLive(live: Bitmap, still: Bitmap, label: String) {
+        val top = 8
+        val bottom = 72.coerceAtMost(minOf(live.height, still.height))
+        val left = 24
+        val right = (minOf(live.width, still.width) - 24).coerceAtLeast(left + 1)
+        var sum = 0.0
+        var n = 0
+        var black = 0
+        for (y in top until bottom) {
+            for (x in left until right) {
+                val a = live.getPixel(x, y)
+                val b = still.getPixel(x, y)
+                sum += abs(AndroidColor.red(a) - AndroidColor.red(b))
+                sum += abs(AndroidColor.green(a) - AndroidColor.green(b))
+                sum += abs(AndroidColor.blue(a) - AndroidColor.blue(b))
+                n++
+                // The title glyphs are near-black in the live frame too. Count only still pixels that the live bar is not.
+                val liveSum = AndroidColor.red(a) + AndroidColor.green(a) + AndroidColor.blue(a)
+                val stillSum = AndroidColor.red(b) + AndroidColor.green(b) + AndroidColor.blue(b)
+                if (stillSum < 24 && liveSum >= 24) black++
+            }
+        }
+        val mean = sum / (n * 3)
+        assertTrue("$label top bar mean channel delta $mean", mean < 20.0)
+        if (!label.endsWith("dark")) {
+            assertTrue("$label near-black pixels the live bar does not have: $black", black < n / 50)
         }
     }
 
