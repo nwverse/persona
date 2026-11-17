@@ -1078,11 +1078,20 @@ func (s *Service) withdrawAskUser(session string) {
 func (s *Service) pendingQuestions() []proto.Interaction {
 	s.loadAskLater(context.Background())
 	s.questions.mu.Lock()
-	defer s.questions.mu.Unlock()
 	out := []proto.Interaction{}
 	for _, q := range s.questions.m {
 		out = append(out, q.ix)
 	}
+	s.questions.mu.Unlock()
+	// Prepared assistant approvals use the interaction queue so clarification
+	// can release the original tool without resolving the card.
+	s.fleet.mu.Lock()
+	for _, p := range s.fleet.interactions {
+		if p.prepared != nil {
+			out = append(out, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
 }
@@ -1103,6 +1112,17 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		return ActionResult{OK: err == nil}, err
 	}
 	if mine, err := s.workAnswer(ctx, a.InteractionID, r); mine {
+		return ActionResult{OK: err == nil}, err
+	}
+	s.fleet.mu.Lock()
+	prepared := s.fleet.interactions[a.InteractionID]
+	isPrepared := prepared != nil && prepared.prepared != nil
+	s.fleet.mu.Unlock()
+	if isPrepared {
+		if !r.Cancel {
+			s.ownerHeard(prepared.ix.SessionID)
+		}
+		err := s.resolveAnswer(ctx, a.InteractionID, r, true, nil, nil)
 		return ActionResult{OK: err == nil}, err
 	}
 	s.questions.mu.Lock()
