@@ -90,7 +90,7 @@ type usagePath struct {
 func (n *Node) usageFiles(cutoff time.Time) []usagePath {
 	var out []usagePath
 	for _, ad := range n.usageAdapters() {
-		for _, p := range ad.paths(n) {
+		for _, p := range ad.paths(n, cutoff) {
 			if st, err := os.Stat(p); err == nil && st.ModTime().After(cutoff) && n.scopedTranscriptAllows(p) {
 				out = append(out, usagePath{p, st, ad})
 			}

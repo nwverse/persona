@@ -33,8 +33,8 @@ var (
 
 // usageBackfillStatus answers a node's usage.backfill.status: done, or the hours to read, from where the history
 // begins (or the hour after the last one stored) to the start of the node's live window. A node that names the agents
-// it reads ({"agents": [...]}) gets each one's too (agents): the agents read before agents were kept apart share the
-// machine's first record, which the answer's own fields are (what an older node reads).
+// it reads ({"agents": [...]}) gets each one's too (agents): Claude Code's is the machine's first record, which the
+// answer's own fields are (what an older node reads); every other agent has its own (db.UsageBackfillRecord).
 func (d *Devices) usageBackfillStatus(ctx context.Context, machine string, params json.RawMessage, now time.Time) (map[string]any, error) {
 	st, ok := d.opts.Store.(usageBackfillStore)
 	if !ok { // nowhere to keep the history
