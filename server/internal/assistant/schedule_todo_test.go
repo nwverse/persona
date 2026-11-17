@@ -134,6 +134,40 @@ func TestScheduledTodoUnknownEvidenceDoesNotCount(t *testing.T) {
 	}
 }
 
+func TestScheduledTodoProgressAfterUnknownReadResetsKnownStreak(t *testing.T) {
+	s, f, todo := scheduledTodoFixture(t)
+	todo.Agents = []TodoAgent{{MachineID: "box", SessionID: "worker"}}
+	putTodo(s, todo)
+	unreadable, answer := false, "An existing artifact"
+	f.answerNode(DeviceSessionItems, func(machine string, _ json.RawMessage) (any, error) {
+		if machine == "box" && unreadable {
+			return nil, errors.New("unreachable")
+		}
+		return map[string]any{"items": []proto.Item{{Kind: proto.KindText, Role: "assistant", Text: answer}}}, nil
+	})
+	task := todoProgressTask(todo.ID)
+	setTasks(s, task)
+	assessTodoRun(t, s, task.ID, nil)
+	f.mu.Lock()
+	unreadable = true
+	f.mu.Unlock()
+	_, unknown := assessTodoRun(t, s, task.ID, nil)
+	if unknown.State != "unknown" || unknown.NoProgress != 1 {
+		t.Fatalf("unreadable run: %+v", unknown)
+	}
+	f.mu.Lock()
+	unreadable, answer = false, "A new artifact produced while the node was unreachable"
+	f.mu.Unlock()
+	_, recovered := assessTodoRun(t, s, task.ID, nil)
+	if recovered.State != "progress" || recovered.NoProgress != 0 {
+		t.Fatalf("recovery lost observable progress against the last readable baseline: %+v", recovered)
+	}
+	_, next := assessTodoRun(t, s, task.ID, nil)
+	if next.State != "no_progress" || next.NoProgress != 1 {
+		t.Fatalf("an unknown read bridged two unrelated no-progress stretches: %+v", next)
+	}
+}
+
 func TestScheduledTodoPersistedStreakOutlivesHistoryAndRestart(t *testing.T) {
 	store := &memStore{}
 	s, _ := newQuietServiceOn(t, store)

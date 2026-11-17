@@ -1026,8 +1026,9 @@ permission to spend, send or widen scope. The decision's 24-hour deadline only r
 the proposed strategy change by default. Existing notification preferences and decision routing still apply.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
 
-Observed progress resets the streak. Unreadable evidence is `unknown`: it neither increments nor clears the
-previous known count; a readable baseline is re-established before inferring no progress from that source.
+Observed progress resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
+previous known count, and it preserves the last readable evidence. An initially unreadable baseline must become
+readable before it can establish a no-progress run; later recovery can still prove progress against known evidence.
 Closed, cancelled, superseded or paused work is inactive, clears the streak and is not reopened or escalated.
 The latest evidence, run identity, count and escalation markers live with the schedule in `assistant.tasks`,
 survive restart and do not depend on the shared 200-run display history. Replaying a completion does not count

@@ -149,6 +149,11 @@ func scheduledTodoAdvanced(before, after scheduleTodoSnapshot) bool {
 
 func retainTodoEvidence(before, after scheduleTodoSnapshot) scheduleTodoSnapshot {
 	out := after
+	// A failed read must not replace a previously readable baseline with an unknown one.
+	out.Unknown = before.Unknown && after.Unknown
+	if after.Unknown && len(after.Criteria) == 0 {
+		out.Criteria = maps.Clone(before.Criteria)
+	}
 	out.Answers = maps.Clone(before.Answers)
 	if out.Answers == nil {
 		out.Answers = map[string]string{}
