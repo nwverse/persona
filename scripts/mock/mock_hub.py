@@ -4675,6 +4675,9 @@ def managers_route(h, method, p):
 # modes, every recording's live log and its asks; POST /mock/recording_minutes forgets them too.
 MEETING_ATTENDANCE = os.environ.get("MOCK_NO_MEETING_ATTENDANCE") != "1"
 MEETING_ROLES = ("off", "listener", "participant")
+# A room meeting's roles (#8851): the three, and the note-taker, which follows the meeting and answers nothing. The hub
+# takes notes on a room's upload, on the hub-transcription timeline and on the audio socket; never as the default.
+ROOM_ROLES = MEETING_ROLES + ("notes",)
 MEETING_MODE = {"feed": os.environ.get("MOCK_MEETING_FEED", "ok"), "answer": os.environ.get("MOCK_MEETING_ANSWER", "ok"),
                 "answer_seconds": float(os.environ.get("MOCK_MEETING_ANSWER_SECONDS", "3")), "kb_read_only": False}
 MEETING_LIVE = {}  # recording id → its role, session, live log, fed count and asks (meeting_live)
@@ -4911,7 +4914,7 @@ def meeting_ask(h, st, body, rec):
             now = meeting_ask_now(st, stored)
             return h.send_json({"ask": now}, 202 if now["state"] == "pending" else 200) or True
     if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
-    if st["role"] == "off": return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
+    if st["role"] in ("off", "notes"): return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
     room = room_of(st["id"])
     if room is not None and room.get("state") in ("ended", "deleted"):
         return h.send_json({"error": "The meeting has ended: ask in its follow-up.", "code": "meeting_ended"}, 409) or True
@@ -5111,13 +5114,13 @@ def meeting_event_flush(rid):
 
 
 def room_role(body):
-    """The role an upload's room asks for and what was wrong with it (kb.roomRole): not a string, or not one of the three,
-    unknown_role; a role on a recording that is not a meeting not_meeting."""
+    """The role an upload's room asks for and what was wrong with it (kb.roomRole): not a string, or not one of the room's
+    roles (notes too, #8851), unknown_role; a role on a recording that is not a meeting not_meeting."""
     att = body["room"].get("attendance")
     if att is not None and not isinstance(att, str): return "", "unknown_role"
     role = (att or "").strip().lower()
     if role in ("", "off"): return "", None
-    if role not in ("listener", "participant"): return "", "unknown_role"
+    if role not in ("notes", "listener", "participant"): return "", "unknown_role"
     if recording_kind(body) != "meeting": return "", "not_meeting"
     return role, None
 
@@ -5197,7 +5200,9 @@ def conv_start(rid, part, origin, items):
 
 def room_header(rec, role):
     started = rec.get("started_at", "")
-    say = "participant: answers may be said aloud" if role == "participant" else "listener: answers are shown on screen only"
+    say = ("participant: answers may be said aloud" if role == "participant"
+           else "notes: you keep the topics and highlights only, and nobody asks you anything until the role changes" if role == "notes"
+           else "listener: answers are shown on screen only")
     return meeting_source_text(rec, f'The meeting is starting. Write nothing now.\n\n<persona-context kind="context" title="{meeting_name(rec)}" url="">\n'
                                     f"Title: {meeting_name(rec)}\nStarted: {started}\nLanguage: {rec.get('language') or 'en'}\nRole: {say}\n</persona-context>")
 
@@ -5404,7 +5409,7 @@ def room_end(rid):
     if state == "ready" and r.get("attendance"):
         rec = RECORDINGS.get(rid) or {}
         conv_append(r["machine_id"], r["session_id"], [conv_item("user", meeting_source_text(rec,
-            f'"{meeting_name(rec)}", the meeting you attend as a {r["attendance"]}, has ended. Write nothing in reply.'),
+            f'"{meeting_name(rec)}", the meeting you attend as {"the note-taker" if r["attendance"] == "notes" else "a " + r["attendance"]}, has ended. Write nothing in reply.'),
             source={"kind": "meeting", "title": meeting_name(rec)})])
     if state in ("ready", "starting", "unavailable"):
         r.update(state="ended", problem="")
@@ -6534,7 +6539,7 @@ def transcription_timeline(t, raw):
     if not isinstance(raw, dict): return
     roles, spans = raw.get("roles", []), raw.get("speaking", [])
     if not isinstance(roles, list) or not isinstance(spans, list) or len(roles) > 100 or len(spans) > 1000: return
-    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in MEETING_ROLES for r in roles): return
+    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in ROOM_ROLES for r in roles): return
     if any(not isinstance(sp, dict) or not transcription_number(sp.get("start")) or not transcription_number(sp.get("end"))
            or sp["start"] > sp["end"] or not isinstance(sp.get("text", ""), (str, type(None))) for sp in spans): return
     spans = [{"start": sp["start"], "end": sp["end"], **({"text": spoken_cut(sp["text"])} if sp.get("text") else {})} for sp in spans]
@@ -7120,7 +7125,7 @@ def transcription_socket(h, rid):
                     state["at"] = at
                     state["sentence"] = max(at, t["held"][-1][1] if t["held"] else 0)
                 elif kind == "role":
-                    if msg.get("attendance") not in MEETING_ROLES: fail("bad_frame"); break
+                    if msg.get("attendance") not in ROOM_ROLES: fail("bad_frame"); break
                     transcription_timeline(t, {"roles": [{"at": at, "attendance": msg["attendance"]}]})
                 elif kind == "speaking":
                     if type(msg.get("on")) is not bool or not isinstance(msg.get("text", ""), (str, type(None))): fail("bad_frame"); break
@@ -21063,6 +21068,73 @@ if os.environ.get("MOCK_RENDER"):
     MOCK_TREE[MOCK_REPO + "/docs/算法.md"] = "# 降雨预报的算法\n\n" + RENDER_MD + (
         "\n\n## 时序\n\n```mermaid\nsequenceDiagram\n  participant W as 小组件\n  participant A as App\n  participant S as 服务器\n"
         "  W->>A: 时间线请求\n  A->>S: GET /v1/forecast\n  S-->>A: 6 小时预报\n  A-->>W: Timeline\n```\n")
+# Pictures in replies (#9474, #9473): the hub's remote image route draws made-up pictures, their shape named by the
+# address (tall-, wide-, pano-, square-, small-; fail- answers fetch_failed), a gradient picked by the number in it,
+# scaled to fit `size` and never enlarged. MOCK_REMOTE_IMAGES=0 is a hub from before it (no feature, 404).
+# MOCK_REPLY_IMAGES=1 adds a turn to the release-notes conversation whose reply names such pictures: a pair under a
+# line of text and a portrait alone right under one (the shape replies take), a landscape one and a run of eight in
+# paragraphs of their own, one inside a line, one that fails.
+REMOTE_IMAGES = os.environ.get("MOCK_REMOTE_IMAGES") != "0"
+_features_without_remote_images = features
+
+
+def features():
+    return _features_without_remote_images() + (["remote_images"] if REMOTE_IMAGES else [])
+
+
+_REMOTE_SHAPES = {"tall": (1080, 1440), "wide": (1600, 1200), "pano": (3000, 1000), "square": (1200, 1200), "small": (96, 96)}
+_REMOTE_COLORS = [((244, 237, 229), (228, 211, 192)), ((168, 199, 230), (125, 139, 152)), ((231, 227, 220), (200, 196, 188)),
+                  ((246, 242, 236), (201, 160, 122)), ((185, 214, 238), (122, 162, 108)), ((239, 233, 222), (127, 154, 134)),
+                  ((255, 216, 164), (200, 116, 107)), ((238, 240, 242), (45, 49, 56)), ((207, 229, 245), (230, 225, 216))]
+
+
+def mock_picture(h, name, size=0):
+    """A made-up picture named like the fixture's (shape-number.ext), at its own size or scaled to fit `size`."""
+    if name.startswith("fail-"):
+        return h.send_json({"error": "Couldn't fetch that picture. Try again later.", "code": "fetch_failed"}, 502)
+    w, hgt = _REMOTE_SHAPES.get(name.split("-", 1)[0], (1200, 900))
+    if size and max(w, hgt) > size:
+        w, hgt = (size, max(1, hgt * size // w)) if w >= hgt else (max(1, w * size // hgt), size)
+    digits = "".join(c for c in name if c.isdigit())
+    top, bottom = _REMOTE_COLORS[int(digits or 0) % len(_REMOTE_COLORS)]
+    data = _fs_png(w, hgt, top, bottom)
+    h.send_response(200)
+    h.send_header("Content-Type", "image/png")
+    h.send_header("Cache-Control", "private, max-age=86400")
+    h.send_header("Content-Length", str(len(data)))
+    h.end_headers()
+    h.wfile.write(data)
+
+
+def mock_remote_image(h, raw_query):
+    """GET /api/v1/remote-image: `url` read as written (a plus stays a plus, as the hub reads it), `size` snapped."""
+    addr = next((unquote(v) for k, _, v in (part.partition("=") for part in raw_query.split("&")) if k == "url"), "")
+    name = addr.rsplit("/", 1)[-1]
+    if not addr.startswith(("http://", "https://")):
+        return h.send_json({"error": "That picture's address can't be loaded.", "code": "bad_url"}, 400)
+    try:
+        size = int(parse_qs(raw_query).get("size", ["1024"])[0])
+    except ValueError:
+        size = 1024
+    size = next((s for s in (256, 512, 768, 1024, 1536, 2048) if size <= s), 2048) if size > 0 else 1024
+    return mock_picture(h, name, size)
+
+
+# The pictures' addresses are the mock's own /mock/pic/<name>: another origin than the app's hub, so a build from
+# before #9473 loads them straight (as large as they are), and one with it through /api/v1/remote-image.
+REPLY_PIC = "http://127.0.0.1:%d/mock/pic/" % PORT
+REPLY_IMAGES_MD = ("找到了能看到楼和屋里的照片。\n\n"
+                   "**楼和小区**（中介发的两张）\n![楼](" + REPLY_PIC + "tall-1.jpg)\n![街道](" + REPLY_PIC + "pano-4.jpg)\n"
+                   "- 楼下就是公交站，走到地铁大约 8 分钟。\n\n"
+                   "**厨房**（同一篇帖子里的照片）\n![厨房](" + REPLY_PIC + "tall-0.jpg)\n- 厨房是独立的，带洗衣机位。\n\n"
+                   "**客厅**\n\n![客厅](" + REPLY_PIC + "wide-3.jpg)\n\n"
+                   "**屋里**（帖子里一共 8 张）\n\n" + " ".join("![](" + REPLY_PIC + "%s-%d.jpg)" % (k, n) for n, k in enumerate(
+                       ["wide", "square", "tall", "wide", "square", "tall", "wide", "square"], 5)) + "\n\n"
+                   "项目的图标 ![图标](" + REPLY_PIC + "small-6.png) 跟着行高走。\n\n"
+                   "这张没取到：\n![坏图](" + REPLY_PIC + "fail-1.jpg)\n\n最后一段文字在图片下面。")
+if os.environ.get("MOCK_REPLY_IMAGES"):
+    ITEMS[RELEASE] = ITEMS.get(RELEASE, []) + [it("user", "text", 1, text="帮我找几张这套房子的照片"),
+                                               it("assistant", "text", 0, text=REPLY_IMAGES_MD)]
 MOCK_TREE["Desktop/"] = None  # listed, but macOS keeps it from personad (mock_denied)
 MOCK_COMMITS[2]["refs"] = "tag: v0.1.0"
 TIME_OFFSET = os.environ.get("MOCK_TIME_OFFSET", "")
@@ -22570,11 +22642,12 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None, edit=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
-    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten."""
+    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten.
+    `edit`: push a successful edit of that path instead of a reply, for the transcript changes panel's live updates."""
     import time
     for send, subscribed in list(LIVE):
         for sid in list(subscribed):
@@ -22606,7 +22679,9 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                     time.sleep(late / 1000)
                 items = ITEMS[sid]
             before = items[-1]["seq"]
-            new = ([it("user", "text", 0, text=user)] if user else []) + [it("assistant", "text", 0, text=text)]
+            new = ([it("user", "text", 0, text=user)] if user else []) + (tool(
+                "Edit", {"file_path": edit, "old_string": "before", "new_string": "after " + edit}, "ok", 0,
+            ) if edit else [it("assistant", "text", 0, text=text)])
             if MOCK_SYNC_REVS:  # written now, as the hub's lines are: the page compares their time with the list's
                 for x in new:
                     x["ts"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -25664,7 +25739,7 @@ class H(BaseHTTPRequestHandler):
             args = (trace["text"] if trace else SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None,
                     q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
-                    int(q.get("upto", ["0"])[0]), plan)
+                    int(q.get("upto", ["0"])[0]), plan, q.get("edit", [""])[0] or None)
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -26002,6 +26077,10 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p.startswith("/mock/pic/"): return mock_picture(self, p.rsplit("/", 1)[-1])
+        if p == "/api/v1/remote-image":
+            if not REMOTE_IMAGES: return self.send_json({"error": "not found"}, 404)
+            return mock_remote_image(self, urlparse(self.path).query)
         if p == "/api/v1/assistant/search":
             if not ASSISTANT_SEARCH: return self.send_json({"error": "not found"}, 404)
             return self.send_json(assistant_search(q.get("q", [""])[0], q.get("limit", ["30"])[0]))

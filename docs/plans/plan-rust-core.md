@@ -579,7 +579,9 @@ Phase 3 lands in several PRs.
   - The two source-order layout cases, rendered lines, incremental rebuilds and production adapters are outside this
     slice. Static turns now have C ABI and macOS SwiftPM replay (#8912, #8952), but no real-NAPI replay; viewed images
     have C ABI replay (#9017) and macOS SwiftPM replay of 28 complete objects plus eight no-line boundaries (#9237 /
-    #9246), but no ArkTS host projection. Both turn comparisons deliberately ignore
+    #9246). ArkTS host replay (#9577) compares the ordinary complete post-overlay object and the source-derived folded
+    object, with malformed, no-image and wrong-expectation controls. `coreProjectViewedImages` is generated and drift
+    checked, but no real NAPI invocation is claimed. Both turn comparisons deliberately ignore
     rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
     `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 
@@ -622,15 +624,23 @@ Phase 3 lands in several PRs.
     recognition prevents inline repair there. Math end (#9395) independently replays all six explicit Apple math
     assertions and 57 source-derived display/inline/math-boundary controls through real Kotlin/JNI, including
     `MathMarkdown.display`'s extended-grapheme predicate, open/closed blocks, code spans, money, CJK prose and
-    trailing indentation. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host
+    trailing indentation. Plain-open-fence projection (#9515) adds all five explicit Apple assertions and 31
+    source-derived scanner, indentation, whitespace, Unicode, drawn-predicate and closed/open-fence controls through a
+    separate real Kotlin/JNI entry point. Its caller supplies the complete drawn-info-string list as input, replacing
+    Apple's `drawn` closure; no renderer is called. Existing repaired/end behavior and the C ABI/ArkTS repair corpus are
+    unchanged. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host
     projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus
     the JNI digit, leading-blank-line and delimiter boundaries as 22 fence + 19 marker/boundary + 39
     table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
     `repaired` and extra-field expectations; they do not replay the complete inline, math or mixed-reply corpora. The
     NAPI export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift
-    check. `plainOpenFence`, visual gaps, timing, rendering, SwiftPM binding, production adapters and the #4044
-    performance goal remain open. These repair slices have cargo, real host-JNI, C ABI and ArkTS host evidence; real
-    NAPI / SwiftPM projection is not yet covered.
+    check. The plain-fence projection (#9563) also reaches the independent Linux C ABI client and real ArkTS host helper:
+    both replay #9515's five explicit Apple assertions and 31 source-derived controls through complete `{text}` objects
+    and wrong-expectation checks with the caller's full drawn-info-string list. `coreProjectPlainOpenFence` and its declaration are committed and drift
+    checked, but neither that NAPI function nor a SwiftPM projection has been executed.
+    `MathMarkdown.rewrite`, visual gaps, timing, rendering, the plain-fence SwiftPM projection,
+    production adapters and the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI
+    and ArkTS host evidence; real NAPI / SwiftPM projection is not yet covered.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and

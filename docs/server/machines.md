@@ -253,6 +253,28 @@ so a day's number is the same sum as today's tokens on the Machines page.
   in a zone whose clock is not a whole hour from UTC.
 - Without Postgres (`stored: false`) both come from the buckets in memory, the last 26 hours.
 
+### Backfill
+
+The history starts the day the manager began keeping it; the days before are only in the transcripts on each computer. Once a computer (#9484, `node/usage_backfill.go`,
+`devices/usage_backfill.go`), its node reads them and sends the hours:
+
+- **When**: three minutes after the node connects (its sessions' state loaded, as the live meter's launchers need), it asks `usage.backfill.status`. The manager answers
+  `done`, or the range: from where the history begins (53 weeks back) or the hour after the last one it stored, to the hour the node's live window (26 hours) starts in.
+  Without Postgres it answers `done`. An older manager does not know it, and the node does nothing.
+- **What**: the live meter's rules (a reply counted once across files, `<synthetic>` skipped, the same four kinds) over every transcript changed since the range began,
+  each read from about the range's start (`startOffset`), summed by the hour, model and launcher. Only those numbers go to the manager: no text, no file names or paths.
+  A year of reply ids is kept as 64-bit hashes. What is on disk is the limit: Claude Code deletes transcripts after 30 days unless `cleanupPeriodDays` says otherwise; Codex keeps its rollouts.
+- **A week at a time** (#9562): the node reads one week, oldest first, sends its hours and only then reads the next. A computer with many gigabytes of
+  transcripts takes longer than the time between two hub restarts (several an hour), and a scan that kept everything to the end started over on every
+  connection and never finished. Now each week is stored as it is read, so a cut scan goes on from the next week, and the node keeps nothing. A fork's
+  copy of a reply has its timestamp, so it is in the same week and still counted once. A file is read from about the week's start (`startOffset`; files
+  under 256 KB from their start) and stops once 50 lines in a row are past the week, so the weeks together read about one pass of the transcripts.
+- **Gently**: the reads are limited to 4 MB a second for all transcripts together, at most 256 KB at a time, and the scan ends with the connection.
+- **Stored once** (`db.PutUsageBackfill`, table `usage_backfill`): the node sends each week's hours oldest first, whole hours a request (about 2,000 buckets), the week's last request saying it is read through its last hour. The manager stores an hour
+  (as hour rows, `step = 3600`) only when the machine had no row in it before the request, so the live meter's count of an hour always stays; in the same transaction it records
+  the last hour sent and, with the last request, when the scan finished. A scan cut off (a restart, a dropped connection) asks again on the next connection and reads from the
+  hour after the last stored; a request sent twice adds nothing. Once finished, the node is not asked again.
+
 ## Gaps
 
 Periods without machine samples are breaks in the chart, not connected lines:

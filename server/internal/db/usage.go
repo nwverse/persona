@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -162,4 +163,78 @@ func (d *DB) UsageSpans(ctx context.Context, bounds []time.Time, byMachine bool)
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// UsageBackfill is how far a machine's backfill got (usage_backfill, docs/server/machines.md "Backfill").
+type UsageBackfill struct {
+	Through time.Time // the start of the last hour sent; zero: none yet
+	Done    time.Time // when the scan finished; zero: not yet
+	Hours   int       // hours stored
+}
+
+// UsageBackfill is machine's backfill so far (zero: never started).
+func (d *DB) UsageBackfill(ctx context.Context, machine string) (UsageBackfill, error) {
+	var b UsageBackfill
+	var through, done *time.Time
+	err := d.pool.QueryRow(ctx, `SELECT through, done_at, hours FROM usage_backfill WHERE machine_id = $1`, machine).
+		Scan(&through, &done, &b.Hours)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return b, nil
+	}
+	if through != nil {
+		b.Through = *through
+	}
+	if done != nil {
+		b.Done = *done
+	}
+	return b, err
+}
+
+// PutUsageBackfill stores one request of machine's backfill: buckets (Minute an hour's start, any order) go in as
+// hour rows, but only for the hours that had no row of the machine (of any step) before it, so the live meter's
+// count stays and a backfill sent again adds nothing; through (the last hour sent) and done move its record on. One
+// transaction; stored is the hours added.
+func (d *DB) PutUsageBackfill(ctx context.Context, machine string, buckets []proto.UsageBucket, through time.Time, done bool) (stored int, err error) {
+	n := len(buckets)
+	hours, models, launchers := make([]int64, n), make([]string, n), make([]string, n)
+	in, cw, cr, out, req := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
+	for i, b := range buckets {
+		hours[i], models[i], launchers[i] = b.Minute, b.Model, b.Launcher
+		in[i], cw[i], cr[i], out[i], req[i] = b.Input, b.CacheWrite, b.CacheRead, b.Output, int64(b.Requests)
+	}
+	err = pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		if n > 0 {
+			// had: the machine's hours with a row, as the statement starts (its own rows are not in it).
+			if err := tx.QueryRow(ctx, `WITH b AS (
+					SELECT date_bin('1 hour', to_timestamp(hour), timestamptz 'epoch') AS ts, model, launcher, input,
+						cache_write, cache_read, output, requests
+					FROM unnest($2::bigint[], $3::text[], $4::text[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[])
+						AS u(hour, model, launcher, input, cache_write, cache_read, output, requests)
+				), had AS (
+					SELECT DISTINCT date_bin('1 hour', ts, timestamptz 'epoch') AS ts FROM machine_usage
+					WHERE machine_id = $1 AND ts >= (SELECT min(ts) FROM b) AND ts < (SELECT max(ts) FROM b) + interval '1 hour'
+				), added AS (
+					INSERT INTO machine_usage (machine_id, ts, step, model, launcher, input, cache_write, cache_read, output, requests)
+					SELECT $1, ts, 3600, model, launcher, sum(input), sum(cache_write), sum(cache_read), sum(output), sum(requests)
+					FROM b WHERE ts NOT IN (SELECT ts FROM had) GROUP BY ts, model, launcher
+					ON CONFLICT (machine_id, ts, step, model, launcher) DO NOTHING
+					RETURNING ts
+				)
+				SELECT count(DISTINCT ts) FROM added`,
+				machine, hours, models, launchers, in, cw, cr, out, req).Scan(&stored); err != nil {
+				return err
+			}
+		}
+		var th *time.Time
+		if !through.IsZero() {
+			th = &through
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO usage_backfill (machine_id, through, done_at, hours)
+			VALUES ($1, $2, CASE WHEN $3::boolean THEN now() END, $4)
+			ON CONFLICT (machine_id) DO UPDATE SET through = GREATEST(usage_backfill.through, excluded.through),
+				done_at = COALESCE(usage_backfill.done_at, excluded.done_at), hours = usage_backfill.hours + excluded.hours,
+				updated_at = now()`, machine, th, done, stored)
+		return err
+	})
+	return stored, err
 }

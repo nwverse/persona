@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -60,6 +61,12 @@ type usageMeter struct {
 	launcherOf func(session string) string
 	sent       bool // the first report (full) is out
 	sentAt     time.Time
+	// The backfill's (usage_backfill.go): step, its buckets' seconds (0: a minute); until, where it stops counting
+	// (the live window's start); seen instead of counted, the replies it counted by a hash (a year of reply ids would
+	// be large).
+	step  int64
+	until time.Time
+	seen  map[uint64]struct{}
 }
 
 func newUsageMeter() *usageMeter {
@@ -187,8 +194,22 @@ func (m *usageMeter) add(uf *usageFile, reply string, ts time.Time, model string
 	if model == "" {
 		model = "unknown"
 	}
-	minute := ts.Unix() / 60 * 60
-	if reply != "" {
+	if !m.until.IsZero() && !ts.Before(m.until) {
+		return
+	}
+	step := m.step
+	if step <= 0 {
+		step = 60
+	}
+	minute := ts.Unix() / step * step
+	if reply != "" && m.seen != nil {
+		h := fnv.New64a()
+		h.Write([]byte(reply))
+		if _, ok := m.seen[h.Sum64()]; ok {
+			return
+		}
+		m.seen[h.Sum64()] = struct{}{}
+	} else if reply != "" {
 		if _, ok := m.counted[reply]; ok {
 			return
 		}
@@ -338,7 +359,11 @@ func (m *usageMeter) report(now time.Time) (map[string]any, bool) {
 // startOffset finds where in a big file the window starts: lines are written in time order, so step back from the
 // end until a line is older than the cutoff. Small files are read whole (lines before the cutoff are skipped anyway).
 func startOffset(path string, size int64, cutoff time.Time) int64 {
-	const small = 4 << 20
+	return startOffsetFrom(path, size, cutoff, 4<<20)
+}
+
+// startOffsetFrom is startOffset with files of up to small bytes read whole (the backfill's weeks take less).
+func startOffsetFrom(path string, size int64, cutoff time.Time, small int64) int64 {
 	if size <= small {
 		return 0
 	}
@@ -348,7 +373,7 @@ func startOffset(path string, size int64, cutoff time.Time) int64 {
 	}
 	defer f.Close()
 	buf := make([]byte, 256<<10)
-	for step := int64(small); ; step *= 2 {
+	for step := small; ; step *= 2 {
 		pos := size - step
 		if pos <= 0 {
 			return 0
