@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-Hans">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration showcase</title>
+<!-- web/e2e/configuration-showcase.html: a fixture-only showcase of module-injected configuration documents (#9877,
+     docs/web/web.md "Configuration forms"), opened on the Vite dev server and never part of a build. The real
+     ConfigurationForm draws several mock modules over in-memory sources (configuration-showcase-data.mjs); nothing is
+     read from or written to real settings or storage. ?scenario=<id> selects a scenario (see the nav); an unknown id
+     falls back to the full showcase. The page checks its own documents with the real parser and shows a red line if one
+     is invalid. web/e2e/configuration-showcase.mjs drives and captures it. -->
+<body class="bg-page">
+<div id="app" class="mx-auto max-w-[980px] px-5 py-6 sm:px-8"></div>
+<script type="module">
+  import "/src/styles.css";
+  import { initI18n } from "/src/i18n/index.ts";
+  import { applyLook } from "/src/ui/look.ts";
+  import { buildShowcase, scenarios, shell } from "/e2e/configuration-showcase-data.mjs";
+
+  applyLook();
+  // The app's theme (index.html does this for the real app): the saved choice, else the system's scheme.
+  const savedTheme = (() => {
+    try {
+      return localStorage.getItem("persona.theme");
+    } catch {
+      return null;
+    }
+  })();
+  document.documentElement.classList.toggle("dark", savedTheme === "dark" || (savedTheme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches));
+  // The app's own language (catalog, buttons and messages), loaded before any module that says t().
+  const lang = await initI18n();
+  const [{ createElement }, { createRoot }, { ConfigurationForm }, { fieldValue, parseDocument }] = await Promise.all([
+    import("react"),
+    import("react-dom/client"),
+    import("/src/views/settings/configuration/ConfigurationForm.tsx"),
+    import("/src/lib/configuration/contract.ts"),
+  ]);
+
+  const s = shell(lang);
+  document.title = s.title;
+  const query = new URLSearchParams(location.search);
+  const { scenario, modules } = buildShowcase(query.get("scenario") ?? "default", lang);
+  const list = scenarios(lang);
+  const current = list.find((item) => item.id === scenario) ?? list[0];
+  const app = document.getElementById("app");
+  const mk = (tag, className, text) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+
+  const header = mk("header", "mb-7");
+  header.append(mk("h1", "text-[20px] font-semibold leading-tight text-ink", s.title));
+  header.append(mk("p", "mt-1.5 text-[13px] leading-relaxed text-ink-2", s.lead));
+  const banner = mk("p", "mt-3 rounded-card bg-surface px-4 py-2.5 text-[12.5px] leading-snug text-orange shadow-card", s.mockBanner);
+  banner.setAttribute("data-showcase-mock", "");
+  header.append(banner);
+  header.append(mk("p", "mt-3 text-[12px] leading-relaxed text-ink-3", s.instructions));
+
+  const nav = mk("nav", "mt-4 flex flex-wrap gap-2");
+  nav.setAttribute("aria-label", s.scenarioLabel);
+  for (const item of list) {
+    const selected = item.id === scenario;
+    const link = mk("a", `rounded-control px-3 py-1.5 text-[12.5px] no-underline shadow-btn ${selected ? "bg-ink text-surface" : "bg-surface text-ink-2 hover:bg-hover hover:text-ink"}`, item.label);
+    link.href = `?scenario=${encodeURIComponent(item.id)}`;
+    if (selected) link.setAttribute("aria-current", "page");
+    nav.append(link);
+  }
+  header.append(nav);
+  const note = mk("p", "mt-2 text-[12.5px] leading-snug text-ink-3", `${s.scenarioNote}: ${current.note}`);
+  note.setAttribute("data-showcase-note", "");
+  header.append(note);
+  const other = mk("p", "mt-2 text-[12px] text-ink-3");
+  const otherLink = mk("a", "underline", s.otherPage);
+  otherLink.href = "/e2e/configuration-form.html";
+  other.append(otherLink);
+  header.append(other);
+  app.append(header);
+
+  // The real parser checks every mock document and effective value: a fixture this build can't read is a bug in the page,
+  // not something to discover while clicking.
+  const problems = [];
+  for (const module of modules) {
+    try {
+      const { doc, writable } = parseDocument(module.document);
+      const expected = module.key !== "showcase-newer-version";
+      if (writable !== expected) problems.push(`${module.key}: writable=${writable}`);
+      for (const group of doc.groups) {
+        for (const field of group.fields) {
+          if (field.kind !== "unsupported" && fieldValue(doc, field) === undefined) problems.push(`${module.key}:${field.id}`);
+        }
+      }
+    } catch (error) {
+      problems.push(`${module.key}: ${error?.code ?? error}`);
+    }
+  }
+  if (problems.length) {
+    const problem = mk("p", "mb-5 rounded-card bg-surface px-4 py-2.5 text-[12.5px] leading-snug text-red shadow-card", `${s.fixtureProblem} (${problems.join(", ")})`);
+    problem.setAttribute("role", "alert");
+    problem.setAttribute("data-showcase-invalid", "");
+    app.append(problem);
+  }
+
+  const main = mk("main", "");
+  main.setAttribute("data-showcase-scenario", scenario);
+  for (const module of modules) {
+    const section = mk("section", "mb-9");
+    section.setAttribute("data-showcase-module", module.key);
+    const top = mk("div", "mb-1.5 flex flex-wrap items-center gap-2 px-1");
+    top.append(mk("span", "rounded-control bg-surface px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ink-2 shadow-hairline", s.mock));
+    top.append(mk("span", "text-[11.5px] text-ink-3", module.sourceLabel));
+    section.append(top);
+    if (module.note) section.append(mk("p", "mb-3 px-1 text-[12px] leading-relaxed text-ink-3", module.note));
+    const mount = mk("div", "");
+    mount.setAttribute("data-showcase-form", module.key);
+    section.append(mount);
+    main.append(section);
+    createRoot(mount).render(createElement(ConfigurationForm, { source: module.source }));
+  }
+  app.append(main);
+</script>

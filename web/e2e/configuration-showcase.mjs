@@ -1,0 +1,217 @@
+// Browser checks and screenshots for the configuration showcase (#9877 follow-up, docs/web/web.md "Configuration forms"):
+// web/e2e/configuration-showcase.html, the real form over the showcase's mock modules, plus every scenario.
+//
+// Needs the Vite dev server (no hub is used: the page reads nothing from one) and Chrome or any Chromium through
+// --executable:
+//
+//   (cd web && npx vite --port 5977 --strictPort &)
+//   node web/e2e/configuration-showcase.mjs http://127.0.0.1:5977 --shots <dir> [--executable <chromium>]
+//
+// Shots go to <dir>, never into the repository. Prints one line per check and a verdict; exits 1 on a failure and after
+// four minutes.
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { chromium } from "playwright-core";
+
+const args = process.argv.slice(2);
+const flag = (name) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const base = (args[0] ?? "").replace(/\/$/, "");
+const shots = flag("--shots");
+const executable = flag("--executable");
+if (!base || !shots) {
+  console.error("usage: node web/e2e/configuration-showcase.mjs <web URL> --shots <dir> [--executable <chromium>]");
+  process.exit(2);
+}
+mkdirSync(shots, { recursive: true });
+setTimeout(() => {
+  console.log("FAIL timed out after 4 minutes");
+  process.exit(1);
+}, 240_000).unref();
+
+let failed = false;
+const ok = (msg) => console.log(`ok  ${msg}`);
+const fail = (msg) => {
+  failed = true;
+  console.log(`FAIL ${msg}`);
+};
+
+const browser = await chromium.launch(executable ? { executablePath: executable } : { channel: "chrome" });
+async function context(theme, width, size, language = "en") {
+  const phone = width < 600;
+  const ctx = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, deviceScaleFactor: 2, colorScheme: theme, reducedMotion: "reduce", hasTouch: phone, isMobile: phone });
+  await ctx.addInitScript(([t, s, l]) => {
+    localStorage.setItem("persona.language", l);
+    localStorage.setItem("persona.theme", t);
+    if (s) localStorage.setItem("persona.text-size", s);
+  }, [theme, size, language]);
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => fail(`page error: ${e.message}`));
+  return { ctx, page };
+}
+const sideways = (page) => page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+const form = (page, key) => page.locator(`[data-showcase-form="${key}"]`);
+const field = (page, key, id) => form(page, key).locator(`[data-configuration-field="${id}"]`);
+const open = async (page, scenario) => {
+  await page.goto(`${base}/e2e/configuration-showcase.html${scenario ? `?scenario=${scenario}` : ""}`);
+  await page.waitForSelector("[data-showcase-form]", { timeout: 20000 });
+  await page.waitForTimeout(700);
+  if (await page.locator("[data-showcase-invalid]").count()) fail(`${scenario ?? "default"}: the fixture self-check failed`);
+};
+
+try {
+  // The full showcase at every size and theme, plus the Chinese view the user asked for.
+  for (const [theme, width, size, language = "en"] of [["light", 1280], ["dark", 1280], ["light", 390], ["dark", 390], ["light", 390, "large"], ["light", 1280, undefined, "zh-Hans"], ["light", 390, undefined, "zh-Hans"]]) {
+    const tag = `showcase-${width}-${theme}${size ? `-${size}` : ""}${language === "zh-Hans" ? "-zh" : ""}`;
+    const { ctx, page } = await context(theme, width, size, language);
+    await open(page);
+    if (await sideways(page)) fail(`${tag}: the showcase scrolls sideways`);
+    const modules = await page.$$eval("[data-showcase-module]", (els) => els.map((e) => e.getAttribute("data-showcase-module")));
+    if (modules.length !== 5) fail(`${tag}: modules ${modules}`);
+    const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
+    if (fields < 20) fail(`${tag}: only ${fields} fields drawn`);
+    await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+    ok(`${tag}: ${modules.length} modules, ${fields} fields`);
+
+    if (theme === "light" && !size && language === "en") {
+      // A one-of-one multiselect replaces its choice with Save (the same interaction as the real form).
+      const languageField = field(page, "showcase-editor", "snippet_language");
+      const boxes = languageField.locator('[role="checkbox"]');
+      await boxes.nth(1).click();
+      await boxes.nth(0).click();
+      await languageField.locator("button", { hasText: "Save" }).click();
+      await languageField.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: the replacement was not saved`));
+      const checked = await boxes.evaluateAll((els) => els.map((e) => e.getAttribute("aria-checked")));
+      if (checked.join(",") !== "false,true,false") fail(`${tag}: the replacement checked ${checked}`);
+      ok(`${tag}: a one-of-one multiselect replaces its choice and saves`);
+
+      // An overridden choice goes back to its default in this page's memory.
+      const renderer = field(page, "showcase-terminal", "renderer");
+      await renderer.locator("button", { hasText: "Use default" }).click();
+      await renderer.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Use default did not save`));
+      if (await renderer.locator("button", { hasText: "Use default" }).count()) fail(`${tag}: Use default is still offered after resetting`);
+      ok(`${tag}: Use default resets an overridden value`);
+
+      // Unicode text saves as typed.
+      const note = field(page, "showcase-digest", "note").locator("textarea");
+      await note.fill("第一行：你好，世界 👋\n第二行");
+      await field(page, "showcase-digest", "note").locator("button", { hasText: "Save" }).click();
+      await field(page, "showcase-digest", "note").locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Unicode text did not save`));
+      if ((await note.inputValue()) !== "第一行：你好，世界 👋\n第二行") fail(`${tag}: Unicode text changed`);
+      ok(`${tag}: Unicode text saves`);
+    }
+    await ctx.close();
+  }
+
+  const scenarios = [
+    ["slow", "light", 1280],
+    ["load-fail", "light", 1280],
+    ["reject", "light", 1280],
+    ["conflict", "light", 1280],
+    ["unconfirmed", "light", 1280],
+    ["empty", "light", 1280],
+    ["unsupported", "light", 1280],
+    ["conflict", "dark", 390],
+    ["unconfirmed", "dark", 390],
+    ["unsupported", "dark", 390],
+    ["empty", "light", 390],
+  ];
+  for (const [scenario, theme, width] of scenarios) {
+    const tag = `showcase-${scenario}-${width}-${theme}`;
+    const { ctx, page } = await context(theme, width);
+    await open(page, scenario);
+    if (await sideways(page)) fail(`${tag}: the scenario scrolls sideways`);
+
+    if (scenario === "slow") {
+      const enabled = field(page, "showcase-digest", "enabled");
+      await enabled.locator('[role="switch"]').click();
+      await enabled.locator("text=Saving").waitFor({ timeout: 1200 }).catch(() => fail(`${tag}: Saving… never showed`));
+      await form(page, "showcase-digest").screenshot({ path: join(shots, `${tag}-saving.png`) });
+      await enabled.locator("text=Saved").waitFor({ timeout: 6000 }).catch(() => fail(`${tag}: the slow save never finished`));
+      ok(`${tag}: a slow save shows Saving…, then Saved`);
+    } else if (scenario === "load-fail") {
+      const shared = form(page, "showcase-shared");
+      if (await shared.locator("[data-configuration-field]").count()) fail(`${tag}: the failed module already drew fields`);
+      const retry = shared.locator("button", { hasText: "Try again" });
+      await retry.waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: no Try again`));
+      await shared.screenshot({ path: join(shots, `${tag}-failed.png`) });
+      await retry.click();
+      await shared.locator('[data-configuration-field="compact"]').waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: Try again did not load the document`));
+      ok(`${tag}: a failed first read offers Try again and recovers`);
+    } else if (scenario === "reject") {
+      const topic = field(page, "showcase-digest", "topic");
+      const input = topic.locator("input");
+      await input.fill("Another topic");
+      await input.press("Enter");
+      await topic.locator('[role="alert"]').waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: no rejection message`));
+      const said = await topic.locator('[role="alert"]').textContent().catch(() => "");
+      if (!said || !said.includes("already used")) fail(`${tag}: rejection said ${said}`);
+      await form(page, "showcase-digest").screenshot({ path: join(shots, `${tag}-rejected.png`) });
+      if ((await input.inputValue()) !== "Another topic") fail(`${tag}: the rejected draft was lost`);
+      await input.press("Enter");
+      await topic.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: the second save did not succeed`));
+      ok(`${tag}: a rejected field keeps its text and the next save succeeds`);
+    } else if (scenario === "conflict") {
+      const topic = field(page, "showcase-digest", "topic");
+      const input = topic.locator("input");
+      await input.fill("Mine");
+      await input.press("Enter");
+      const banner = form(page, "showcase-digest").locator('[role="alert"]');
+      await banner.waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: no conflict banner`));
+      if ((await input.inputValue()) !== "Mine") fail(`${tag}: the conflict lost the draft`);
+      await form(page, "showcase-digest").screenshot({ path: join(shots, `${tag}-conflict.png`) });
+      await form(page, "showcase-digest").locator("button", { hasText: "Reload" }).click();
+      await page.waitForTimeout(500);
+      if (await form(page, "showcase-digest").locator('[role="alert"]').count()) fail(`${tag}: Reload did not clear the conflict`);
+      if ((await input.inputValue()) !== "Mine") fail(`${tag}: Reload lost the draft`);
+      await input.press("Enter");
+      await topic.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: saving after Reload did not succeed`));
+      ok(`${tag}: a conflict keeps the draft, and Reload recovers`);
+    } else if (scenario === "unconfirmed") {
+      const topic = field(page, "showcase-digest", "topic");
+      const input = topic.locator("input");
+      await input.fill("Mine");
+      await input.press("Enter");
+      const banner = form(page, "showcase-digest").locator('[role="alert"]');
+      await banner.waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: no unconfirmed banner`));
+      const said = await banner.textContent().catch(() => "");
+      if (!said || !said.includes("Couldn't confirm")) fail(`${tag}: the banner said ${said}`);
+      if (!(await topic.locator("button", { hasText: "Save" }).isDisabled())) fail(`${tag}: Save is enabled while the outcome is unknown`);
+      await form(page, "showcase-digest").screenshot({ path: join(shots, `${tag}-unconfirmed.png`) });
+      await form(page, "showcase-digest").locator("button", { hasText: "Reload" }).click();
+      await page.waitForTimeout(500);
+      if (await form(page, "showcase-digest").locator('[role="alert"]').count()) fail(`${tag}: Reload did not clear the unconfirmed state`);
+      await input.press("Enter");
+      await topic.locator("text=Saved").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: saving after Reload did not succeed`));
+      ok(`${tag}: an unconfirmed save keeps the draft and waits for Reload`);
+    } else if (scenario === "empty") {
+      const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
+      if (fields !== 0) fail(`${tag}: the empty form drew ${fields} fields`);
+      const title = await form(page, "showcase-empty").locator("h2").textContent().catch(() => "");
+      if (!title || !title.trim()) fail(`${tag}: the empty form has no title`);
+      await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+      ok(`${tag}: an empty document shows its title and no fields`);
+    } else if (scenario === "unsupported") {
+      const kind = form(page, "showcase-newer-kind");
+      await kind.locator("text=needs a newer version").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: the unknown kind was not named`));
+      const version = form(page, "showcase-newer-version");
+      await version.locator("text=can't be changed").waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: the newer version was not marked read-only`));
+      const enabled = version.locator('[data-configuration-field="enabled"] [role="switch"]');
+      if (!(await enabled.isDisabled())) fail(`${tag}: a newer version's control is enabled`);
+      await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+      ok(`${tag}: an unknown kind and a newer version are shown read-only`);
+    }
+
+    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed"].includes(scenario)) {
+      await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+      ok(`${tag}: scenario drawn`);
+    }
+    await ctx.close();
+  }
+} finally {
+  await browser.close();
+}
+console.log(failed ? "FAIL configuration showcase" : "PASS configuration showcase");
+process.exit(failed ? 1 : 0);

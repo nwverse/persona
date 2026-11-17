@@ -1990,7 +1990,15 @@ message. A source replaced while it is still answering is ignored, and so is a r
 arrived; a read that times out is reported, not mistaken for the form's own cancellation. The form loads with its page,
 in its own chunk. Every control is named by its field's title and described by its description.
 `web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json` for screenshots
-(`web/e2e/configuration-form.mjs`); it is never built.
+(`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/configuration-showcase.html`
+(`web/e2e/configuration-showcase.mjs`, `web/e2e/configuration-showcase-data.mjs`) is a fixture-only showcase for people:
+several independent mock modules — the shared example plus local, server-style and editor documents — cover every kind
+and select presentation, integer/fractional/zero/min/max numbers, empty, full and one-of-one multiselects, read-only
+fields with reasons, and info/warning notices. Selectable scenarios (`?scenario=slow|load-fail|reject|conflict|
+unconfirmed|empty|unsupported`, or the full set by default) show a slow source, a failed first load with Try again, a
+rejected field, a revision conflict, an unconfirmed network write with Reload recovery, an empty document, and an
+unknown kind plus a newer schema version. Each mock source keeps its values in that page's memory and reads or writes no
+real setting; the page checks its own documents with the real parser and is never built.
 
 ## Labs
 
