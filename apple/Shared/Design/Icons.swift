@@ -341,9 +341,8 @@ extension Theme {
         static let collapse = "chevron.up"
         /// All of the lines hidden between a diff's hunks shown at once (UI version 5's `context`, #827): arrows out of a line.
         static let unfoldLines = "arrow.up.and.line.horizontal.and.arrow.down"
-        /// Holding the mic: slide this way to drop what was heard, or up to keep dictating hands-free (`DictationHold`).
+        /// Holding the mic: slide this way to drop what was heard (`DictationHold`).
         static let slideToCancel = back
-        static let slideToLock = collapse
         /// Clears an agent's context (/clear), in the 「+」 menu and panel.
         static let clearContext = "eraser"
 
