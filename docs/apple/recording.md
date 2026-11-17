@@ -938,7 +938,8 @@ there; after the file's end silence comes at the same pace until Stop.
 A run with `-openMeetingAudio` also writes the tape of the meeting it records (`MeetingTapeRecorder`, following
 `MeetingTranscription` and `MeetingConversation` through Observation; nothing in the meeting's own code knows of it) to
 the app's Documents/meeting-tapes/`<recording id>`.json, a second after each change and at once at Stop, then with the
-minutes once the hub wrote them (read every 15 seconds for up to 20 minutes). Get it from the simulator with
+minutes once the hub wrote them (read every 15 seconds for up to 20 minutes; a tape that ended without them waits on at
+the next launch of such a run). Get it from the simulator with
 `xcrun simctl get_app_container <udid> <bundle id> data` (Documents/meeting-tapes/ under it); a tape folder keeps the
 tape as tape.json with its audio beside it.
 
@@ -971,6 +972,10 @@ the room's stores at `t` divided by the speed: the captions and lines into `Meet
 has them, the room, the topics and the highlights into `MeetingConversation`. The replayed meeting stays off every hub
 (`MeetingReplay.holds`): `RecordingSync.status` never makes it pending, `MeetingConversation` never reads its `…/live`,
 it asks for no hub transcription (so no audio socket and no gap upload), and after End its minutes are the tape's.
+
+The tape holds what the room's stores held, not the room's own conversation: Persona's messages in the thread aren't
+on it, so the replayed Live box keeps its last lines unfolded where the meeting's folded to its newest line under the
+thread.
 
 To see the hub's current highlights and map logic on the same audio, record it again: start a meeting with
 `-openMeetingAudio` and the tape's audio, then compare the new tape with the old one.

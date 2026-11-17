@@ -1,10 +1,11 @@
 #if DEBUG && os(iOS)
 import Foundation
 
-/// The recording being made (#9417; docs/operations/runtime-cli.md「Commands」): `recording` says what records, and with
-/// `action` `stop` ends it as End's End and Write the Minutes does (`MeetingRecorder.stop`), for a script that records a
-/// meeting: a confirmation dialog's buttons take no accessibility activation, and `alert` dismisses one without running
-/// its SwiftUI action.
+/// Recordings, for a script that records meetings (#9417; docs/operations/runtime-cli.md「Commands」): `recording` says
+/// what records; `action` `stop` ends it as End's End and Write the Minutes does (`MeetingRecorder.stop`), and `delete`
+/// with an `id` deletes that recording, here and then on the hub, as the row's Delete does once confirmed
+/// (`RecordingDeletion.run`). A confirmation dialog's buttons take no accessibility activation, and `alert` dismisses
+/// one without running its SwiftUI action.
 extension RuntimeCLI {
     static let recordingCommands: [String: Command] = [
         "recording": { a in recording(a) },
@@ -20,8 +21,15 @@ extension RuntimeCLI {
             guard let id else { return fail("nothing is recording") }
             MeetingRecorder.shared.stop(recordingID: id)
             return ["stopped": id]
+        case "delete":
+            guard let target = (a["id"] as? String).flatMap(UUID.init(uuidString:)), RecordingLibrary.shared.entry(target) != nil else {
+                return fail("no recording with that id")
+            }
+            guard target.uuidString != id else { return fail("that recording is being made: stop it first") }
+            if let problem = RecordingDeletion.run(target) { return fail(problem) }
+            return ["deleted": target.uuidString]
         case let other?:
-            return fail("unknown action \(other): stop")
+            return fail("unknown action \(other): stop, delete")
         }
     }
 }
