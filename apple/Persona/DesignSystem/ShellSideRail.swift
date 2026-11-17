@@ -54,6 +54,9 @@ struct ShellSideRail<Buttons: View, Switcher: View>: View {
     let edge: HorizontalEdge
     @ViewBuilder var buttons: Buttons
     @ViewBuilder var switcher: Switcher
+    /// The pages under it keep their own buttons in the column clear of the tab bar (#9837): its top goes there.
+    @Environment(\.sideColumn) private var sideColumn
+    @State private var id = UUID()
 
     var body: some View {
         // The column is what the page gives up on that side: its width with the side's safe area, less its width
@@ -62,7 +65,13 @@ struct ShellSideRail<Buttons: View, Switcher: View>: View {
             GeometryReader { whole in
                 let column = max(0, whole.size.width - inside.size.width)
                 VStack(spacing: Theme.Space.m) {
-                    switcher.padding(.bottom, Theme.Space.s)
+                    switcher
+                        // From the column's top (the safe area's), where the system's own items are measured from.
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.column)).minY } action: { top in
+                            sideColumn?.report(id, top: top, windowWidth: whole.size.width)
+                        }
+                        .onDisappear { sideColumn?.report(id, top: nil, windowWidth: whole.size.width) }
+                        .padding(.bottom, Theme.Space.s)
                     buttons
                 }
                 .frame(width: TabSwitchLayout.sideColumn(inset: column))
@@ -71,8 +80,22 @@ struct ShellSideRail<Buttons: View, Switcher: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge == .trailing ? .bottomTrailing : .bottomLeading)
                 .padding(.bottom, Buttons.self == EmptyView.self ? TabSwitchLayout.sideFoot(height: whole.size.height) : Theme.Space.l)
             }
+            .coordinateSpace(.named(Self.column))
             .ignoresSafeArea(.container, edges: edge == .trailing ? .trailing : .leading)
         }
+    }
+
+    private static var column: String { "shell-side-rail.column" }
+}
+
+/// Room in a rail for what the system draws at the column's foot itself (a page's search, #9837): as tall as the rail's
+/// round buttons, so the tab bar over it stands where it does on every other page, and the system's own clear of the
+/// face over it.
+struct ShellRailSlot: View {
+    var body: some View {
+        Color.clear
+            .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+            .accessibilityHidden(true)
     }
 }
 #endif

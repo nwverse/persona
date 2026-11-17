@@ -901,6 +901,27 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   the centring and the lower middle, the room, the choice kept), `DuoTabSwitchTests` (UI, each posture: one bar of symbols and
   names where it belongs, the count at a symbol's corner, each item's page, the keyboard, Merged and Separate at once and after
   a relaunch). Built with Xcode 26 the bar edge is never read, so the open Duo on its side gets the bar along the foot.
+- **One side column** (#9837, 2026-11-17, the owner: the tab bar lay over an Agent chat's Files and ⋯ on the open Duo on its
+  side and on the outer display, and the system's search over Messages' Lark Settings at the outer display's foot). The
+  system puts a page's own bar items down the column from its top: Back alone (a 48 pt glass), 12 pt under it the rest in
+  one glass (48 pt items, 4 pt apart), the first from 174 pt under the safe area's top on the outer display (its camera is
+  over the status bar) and 124 pt on the inner one, and a page's search at its foot (its top 38 pt over the safe area's foot),
+  at every text size (iOS 27.2, `Theme.Shell.systemBar…`; the safe area's top is 0 on both). Our rail stands from the foot.
+  - Each rail with the tab bar reports the bar's top (from the safe area's) to a `SideColumn` in the environment, which a scope gives
+    the pages under that rail (`SideColumnScope`: the open Duo's tabs in `TabSwitchPlaced`, the shell's Agents page in
+    `ShellView`); it is the room for the page's buttons from the system's first item (`TabSwitchLayout.systemBarTop`).
+  - An Agent's chat keeps Back, ⋯ and the leading ones of the chat / terminal / Git / Files buttons that stand
+    `Theme.Space.s` clear of the bar (`TabSwitchLayout.pageButtons`, `ChatView.sideButtons`); the rest are only in ⋯,
+    which has them all. Measured: on its side terminal, Git and ⋯ (Files in ⋯); under the outer display's rail only ⋯
+    beside Back. The tab bar is never moved for them.
+  - Messages in the shell under side bars shows its navigation bar without its title, so Lark Settings goes with the
+    system's items at the column's top as on the open Duo's tab; its rail keeps the face and an empty slot where the
+    system's search stands (`ShellRailSlot`), so the tab bar stays where it is on the other pages.
+  - The tab bar's chosen item is reached by a lens (`TabBarLens`): clear glass over the items in the glass styles
+    (`lensSurface`), swelling and stretching along the bar as it glides with a bounce, fading as it lands; the chosen
+    Assistant item shows the persona's face. With Reduce Motion the items cross-fade.
+  - Tests: `TabSwitchLayoutTests` (what fits, the column's room), `DuoSideColumnTests` (UI, each posture: no two buttons of
+    the column over one another on an Agent's chat, Messages, a to-do and the main chat, also at the largest text size).
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
   Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
   system's tab bar gave way to the Duo's own, #4231, above. What follows is the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
