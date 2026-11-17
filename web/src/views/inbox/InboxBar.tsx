@@ -141,7 +141,8 @@ export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGroup
   };
   const all = entries.find((e) => e.id === "all");
   return (
-    <div className="flex items-center gap-0.5" data-inbox-bar>
+    // 4 px into the list's side padding at the end: the grouping button's mark, not its box, ends where the search field does
+    <div className="-mr-1 flex items-center gap-0.5" data-inbox-bar>
       <div role="radiogroup" aria-label={t("inbox-inboxlist.sections")} className="flex min-w-0 flex-1 items-center gap-0.5">
         {/* room around the pills for their touch targets (44 px around 24) and the keyboard's focus ring, which a sideways
             scroller would clip, given back by the negative margin so the row sits where it would (12 px above and below:
@@ -162,8 +163,7 @@ export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGroup
         </div>
         {all && pill(all)}
       </div>
-      {/* pulled 4 px into the list's side padding: the button's mark, not its box, ends where the search field does */}
-      <div inert={!groupable} className={cx("-mr-1 flex shrink-0 items-center gap-0.5", !groupable && "invisible")} data-bar-grouping>
+      <div inert={!groupable} className={cx("flex shrink-0 items-center gap-0.5", !groupable && "invisible")} data-bar-grouping>
         <span aria-hidden className="h-4 w-px shrink-0 bg-line-strong" />
         <GroupingButton open={Boolean(menu.anchor)} onClick={menu.open} />
       </div>
