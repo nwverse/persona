@@ -16,6 +16,7 @@ const node = await startFakeNode(undefined, { strict: true, tools: [{ name: 'int
 node.callTool = ({ args }) => ({ content: [{ type: 'text', text: `PROBE_OK:${args.value}` }] })
 const options = { home, env: {}, socketPath: node.path, bin: process.env.GROK_BIN || 'grok',
   grokHome: process.env.GROK_HOME || join(homedir(), '.grok'), model: process.env.GROK_MODEL, effort: process.env.GROK_EFFORT,
+  displayName: 'Grok', assistantFor: 'grok',
   log: (msg) => process.stderr.write(`${msg}\n`) }
 let runtime = createGrokRuntime(options)
 let id
@@ -35,6 +36,9 @@ try {
   id = start.session.session_id
   console.log(JSON.stringify({ stage: 'created', model: start.session.model, effort: start.session.effort }))
   assert.equal(node.hello.caps.rename, true)
+  assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.display_name, l.assistant_for]), [['grok-chat', 'Grok', 'grok']])
+  console.log(JSON.stringify({ stage: 'launcher_declared', success: true }))
+  await node.peer.call('session.watch', { session_id: id, since_seq: 0 })
   await node.peer.call('session.rename', { session_id: id, title: 'Initial integration title' })
   const title = 'Renamed integration conversation'
   await node.peer.call('session.rename', { session_id: id, title })
@@ -45,6 +49,9 @@ try {
   assert.ok(first.last.includes(`PROBE_OK:${nonce}`), first.last)
   assert.ok(!first.result.items.some((i) => i.role === 'user' && i.text?.includes('The integration nonce is')), 'Private context leaked into the rendered transcript')
   console.log(JSON.stringify({ stage: 'assistant_mcp_context', success: true }))
+  const deltas = node.all('session.delta').filter((d) => d.session_id === id && d.text)
+  assert.ok(deltas.length > 0, 'no streamed reply text reached the node')
+  console.log(JSON.stringify({ stage: 'streaming', success: true, deltas: deltas.length }))
   const follow = await send('Without using any tools, repeat exactly the PROBE_OK result from your previous answer.')
   assert.ok(follow.last.includes(`PROBE_OK:${nonce}`), follow.last)
   console.log(JSON.stringify({ stage: 'continuation', success: true }))
@@ -70,6 +77,35 @@ try {
   const restored = await until('restored plan mode', async () => (await runtime.driver.listSessions()).find((s) => s.session_id === id), 10_000)
   assert.equal(restored.permission_mode, 'plan')
   console.log(JSON.stringify({ stage: 'restart_keeps_readonly', success: true }))
+  // Default mode: a write goes to the phone first. A refusal leaves nothing; an approval lets it through.
+  for (const allow of [false, true]) {
+    const file = join(cwd, `approval-${allow ? 'allowed' : 'denied'}.txt`)
+    const before = node.asked.length
+    node.resolve = (ix) => (ix.kind === 'permission' ? { allow } : { dismiss: true })
+    const turn = await send(`Integration approval test. Create the file ${file} containing the single word ${allow ? 'ALLOWED' : 'DENIED'} using a file write tool once. If the write is refused, do not retry and reply REFUSED. Otherwise reply WRITTEN.`, { mode: 'default' })
+    const asked = node.asked.slice(before).filter((ix) => ix.kind === 'permission' && ix.session_id === id)
+    assert.ok(asked.length > 0, 'the write did not ask the phone')
+    if (allow) {
+      await access(file)
+      assert.ok(turn.last.includes('WRITTEN'), turn.last)
+    } else {
+      await assert.rejects(access(file))
+      assert.ok(turn.last.includes('REFUSED'), turn.last)
+    }
+    console.log(JSON.stringify({ stage: allow ? 'approval_allowed' : 'approval_denied', success: true, asked: asked.length, tool: asked[0].tool_name }))
+  }
+  // Stop: a running reply ends when interrupted, and the conversation takes the next message.
+  await node.peer.call('session.watch', { session_id: id, since_seq: 0 })
+  const streamed = node.all('session.delta').length
+  await node.peer.call('session.send', { session_id: id, text: 'Without using tools, write the numbers from 1 to 3000 in words, one per line.', mode: 'bypassPermissions' })
+  await until('the long reply streaming', () => node.all('session.delta').slice(streamed).some((d) => d.session_id === id && d.text), 60_000)
+  const stopped = await node.peer.call('session.interrupt', { session_id: id })
+  assert.equal(stopped.settled, true)
+  assert.equal(runtime.sessions.get(id).running, false)
+  console.log(JSON.stringify({ stage: 'interrupt', success: true }))
+  const after = await send('Without using any tools, reply exactly AFTER_STOP_OK.')
+  assert.ok(after.last.includes('AFTER_STOP_OK'), after.last)
+  console.log(JSON.stringify({ stage: 'after_interrupt', success: true }))
   const probeDir = join(home, 'launcher-check')
   await mkdir(probeDir)
   const checked = await node.peer.call('launchers.check', { cwd: probeDir, prompt: 'Reply exactly CHECK_OK. Do not use tools.' })
