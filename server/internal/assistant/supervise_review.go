@@ -599,6 +599,10 @@ func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, 
 // sendToTaskAs is sendToTask; with wait, a closed agent's resume and send is waited for too (up to 5 minutes), so the
 // caller learns whether the text reached it (inboxToAgent, #7346).
 func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bool) (string, error) {
+	return s.sendTaskInput(ctx, t, text, wait, nil)
+}
+
+func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait bool, event *taskInboxEvent) (string, error) {
 	agents := s.taskAgents(ctx, t)
 	if len(agents) == 0 {
 		return "", errors.New("the task has no agent")
@@ -619,6 +623,16 @@ func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bo
 		}
 		if cur.DoneAt != nil || cur.ReopenedAt != nil && (t.ReopenedAt == nil || !cur.ReopenedAt.Equal(*t.ReopenedAt)) {
 			return db.ErrTodoCompleted
+		}
+		if event != nil {
+			event.Machine, event.Session = c.MachineID, c.SessionID
+			duplicate, err := s.recordTaskInboxEvent(ctx, *event)
+			if err != nil {
+				return err
+			}
+			if duplicate {
+				return nil
+			}
 		}
 		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err

@@ -94,9 +94,18 @@ func (s *Service) inboxToAgent(ctx context.Context, g superviseSignal) {
 	in := *g.Inbox
 	g.Inbox = &in
 	if t, ok := s.todoNow(g.Todo); ok && taskOpen(t) {
-		_, err := s.sendToTaskAs(ctx, t, prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
-			Preview: in.Preview, URL: in.URL, Count: in.Count}), true)
+		e := taskInboxEvent{ID: namedClientID("task inbox\n" + t.ID + "\n" + g.Key), Todo: t.ID, Inbox: in}
+		e.Prompt = prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
+			Preview: in.Preview, URL: in.URL, Count: in.Count, Event: e.ID})
+		_, err := s.sendTaskInput(ctx, t, e.Prompt, true, &e)
 		if err != nil {
+			_ = s.updateTaskInboxEvents(ctx, func(events map[string]taskInboxEvent) bool {
+				if cur, ok := events[e.ID]; ok && !cur.Retried {
+					delete(events, e.ID) // the unchanged supervisor fallback owns failed initial delivery
+					return true
+				}
+				return false
+			})
 			s.logf("task %s: inbox %s not sent to its agent: %v", t.ID, in.Item, err)
 		} else {
 			in.ToAgent = "sent"

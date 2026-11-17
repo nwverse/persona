@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A nearby empty turn is not proof that a PR event reached an Agent (#10050). Match the actual input and source association: an owner may have explicitly asked for no reply. Record external delivery provenance before sending, keep transport distinct from acknowledgement, and persist the bounded retry before making it. A still-unhandled source must survive both duplicate completions and a manager reload; ordinary owner input must never spend its retry.
+
 - A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
 
 - Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.

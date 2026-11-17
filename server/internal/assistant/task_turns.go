@@ -205,8 +205,9 @@ func receiptID(todo string, e taskTurn) string {
 // taskTurnsDoc is the ledger as it is kept: the turns by todo, and since when it is kept (a turn that ended before
 // was handled, or not, by a manager that kept none: it is not taken up again).
 type taskTurnsDoc struct {
-	Since time.Time           `json:"since"`
-	Turns map[string]taskTurn `json:"turns"`
+	Since       time.Time                 `json:"since"`
+	Turns       map[string]taskTurn       `json:"turns"`
+	InboxEvents map[string]taskInboxEvent `json:"inbox_events,omitempty"`
 }
 
 // turnLook is the row of a task's last agent as the sweep last looked at it: it looks again when the row moved. A row
@@ -323,12 +324,14 @@ func (s *Service) turnsLocked(ctx context.Context) bool {
 }
 
 // saveTurnsLocked writes the ledger; b.mu is held.
-func (s *Service) saveTurnsLocked(ctx context.Context) {
+func (s *Service) saveTurnsLocked(ctx context.Context) error {
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, taskTurnsKey, s.tasks.turns.doc); err != nil {
 			s.logf("task turns: %v", err)
+			return err
 		}
 	}
+	return nil
 }
 
 // pruneTurns takes the turns of todos closed or gone off the ledger (the sweep, each tick; a write only when there is
@@ -337,13 +340,16 @@ func (s *Service) saveTurnsLocked(ctx context.Context) {
 func (s *Service) pruneTurns(ctx context.Context) {
 	b := &s.tasks.turns
 	b.mu.Lock()
-	if !s.turnsLocked(ctx) || len(b.doc.Turns) == 0 {
+	if !s.turnsLocked(ctx) || len(b.doc.Turns)+len(b.doc.InboxEvents) == 0 {
 		b.mu.Unlock()
 		return
 	}
 	ids := make([]string, 0, len(b.doc.Turns))
 	for id := range b.doc.Turns {
 		ids = append(ids, id)
+	}
+	for _, e := range b.doc.InboxEvents {
+		ids = append(ids, e.Todo)
 	}
 	b.mu.Unlock()
 	var gone []string
@@ -368,6 +374,11 @@ func (s *Service) pruneTurns(ctx context.Context) {
 		delete(b.looked, id)
 		delete(b.tries, id)
 		delete(b.retry, id)
+		for key, e := range b.doc.InboxEvents {
+			if e.Todo == id {
+				delete(b.doc.InboxEvents, key)
+			}
+		}
 	}
 	s.saveTurnsLocked(ctx)
 	b.mu.Unlock()

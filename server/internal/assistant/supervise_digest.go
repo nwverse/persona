@@ -502,6 +502,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if g.Inbox == nil || !s.inboxSignalHolds(t) || !s.inboxSignalsOn(ctx) {
 			return prompts.SuperviseEntry{}, false // waits for the owner's decision, or the switch went off, meanwhile
 		}
+		if g.Inbox.ToAgent == "unhandled" && !s.taskInboxUnhandled(ctx, g.Key) {
+			return prompts.SuperviseEntry{}, false // the source event was answered while its notice waited
+		}
 	}
 	var asks []prompts.SuperviseAsk
 	if g.Kind == sigAsk {

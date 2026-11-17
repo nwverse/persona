@@ -483,6 +483,9 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	end, named := turnEndOf(items)
 	if cut.SessionID != "" {
 		if _, again := s.takeTurn(cctx, t, last, items, end, named, since, turnInterrupted); again {
+			if read && silentTurn(items) {
+				s.taskInboxTurnEnded(cctx, t, last, items, true)
+			}
 			return settleTaken // this very turn was taken up before: no second receipt
 		}
 		// A turn cut off by the model service is no end of the work: an interrupted receipt (with "Continue" on the card),
@@ -493,6 +496,9 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 			Error: clip(strings.TrimSpace(cut.TurnError), 300)}
 		s.appendInterrupted(cctx, t, body, false)
 		if s.closedWhileRead(t.ID) {
+			return settleTaken
+		}
+		if read && silentTurn(items) && s.taskInboxTurnEnded(cctx, t, last, items, true) {
 			return settleTaken
 		}
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
@@ -521,6 +527,7 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	}
 	if read && silentTurn(items) {
 		if _, again := s.takeTurn(cctx, t, last, items, end, named, since, turnInterrupted); again {
+			s.taskInboxTurnEnded(cctx, t, last, items, true)
 			return settleTaken // this very turn was taken up before: no second receipt
 		}
 		// No reply and no tool call, yet no error either (the model service answered 200 with nothing in it): no end
@@ -534,9 +541,15 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		if s.closedWhileRead(t.ID) {
 			return settleTaken
 		}
+		if s.taskInboxTurnEnded(cctx, t, last, items, true) {
+			return settleTaken
+		}
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return settleTaken
+	}
+	if read {
+		s.taskInboxTurnEnded(cctx, t, last, items, false)
 	}
 	// The whole last reply, as Markdown: the session list's last_text is one line cut at 200 characters.
 	text := strings.TrimSpace(last.LastText)
