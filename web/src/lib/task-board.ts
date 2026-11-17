@@ -3,6 +3,7 @@
 // All N and the board count the same things.
 import { awaitsReview, type DockAgent, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
+import { compareWaitAge } from "./task-wait";
 
 export type BoardSectionKey = "waiting" | "review" | "failed" | "working" | "parked" | "unread" | "stopped" | "done";
 
@@ -48,10 +49,11 @@ export const BOARD_ORDER: BoardSectionKey[] = ["waiting", "review", "failed", "w
 
 /** The board's sections that have something, in order; tasks newest first, agents waiting ones under "Needs you", the rest
  *  under "Working" (as the dock orders them). */
-export function boardSections(rows: BoardRow[], agents: DockAgent[]): BoardSection[] {
+export function boardSections(rows: BoardRow[], agents: DockAgent[], now = Date.now()): BoardSection[] {
   const by = new Map<BoardSectionKey, BoardSection>(BOARD_ORDER.map((key) => [key, { key, rows: [], agents: [] }]));
   const newest = [...rows].sort((a, b) => byTime(b.todo.created_at, a.todo.created_at));
   for (const r of newest) by.get(boardSectionOf(r))!.rows.push(r);
   for (const a of agents) by.get(a.state === "needs_you" ? "waiting" : "working")!.agents.push(a);
+  by.get("parked")!.rows.sort((a, b) => compareWaitAge(a.todo, b.todo, now));
   return BOARD_ORDER.map((k) => by.get(k)!).filter((s) => s.rows.length > 0 || s.agents.length > 0);
 }

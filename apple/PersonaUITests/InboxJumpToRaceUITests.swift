@@ -115,6 +115,8 @@ final class InboxJumpToRaceUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair, "-ui.scheme", "light", "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
                                "-inbox.grouping", "time", "-inboxJumpWait", "60"]
+            // Done at the end of every section stacked, its title folding (the section bar's All, #9053)
+            + ["-showInboxSection", "all"]
         for attempt in 0..<2 { // the first launch after pairing may open on the Assistant: once more, paired
             if attempt > 0 { app.terminate() }
             app.launchPinned()
@@ -154,7 +156,7 @@ final class InboxJumpToRaceUITests: XCTestCase {
     }
 
     /// Picks `group` in Jump To's menu: its item reads "<title>, <count>" (a plain prefix would also take the shell's
-    /// Back, "今天要处理的事", for 今天).
+    /// Back, 「今天要处理的事」, for 「今天」).
     @MainActor private func jump(to group: String) {
         pick(NSPredicate(format: "label BEGINSWITH %@ AND identifier != %@", group + ", ", "inbox.groupTitle"), "\(group) in Jump To")
     }
@@ -193,7 +195,7 @@ final class InboxJumpToRaceUITests: XCTestCase {
         shownDoneGroups().first.map { Self.title($0.label) }
     }
 
-    /// Done's groups' titles on screen, top first. Needs You and FYI group by time too (a 今天 of their own): a title
+    /// Done's groups' titles on screen, top first. Needs You and FYI group by time too (a 「今天」 of their own): a title
     /// above Done's, while Done's is in the list, is theirs.
     @MainActor private func shownDoneGroups() -> [(frame: CGRect, label: String)] {
         guard let root = try? app.windows.firstMatch.snapshot() else { return [] }
@@ -208,7 +210,7 @@ final class InboxJumpToRaceUITests: XCTestCase {
         return shown.filter { done == nil || $0.frame.minY >= done!.maxY - 1 }.sorted { $0.frame.minY < $1.frame.minY }
     }
 
-    /// A group title's label is its title and count ("1 个月前、8", "1+ Month Ago, 8").
+    /// A group title's label is its title and count (「1 个月前、8」, "1+ Month Ago, 8").
     private static func title(_ label: String) -> String {
         String(label.split(whereSeparator: { $0 == "、" || $0 == "," }).first ?? Substring(label))
     }
