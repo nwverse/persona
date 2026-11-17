@@ -794,11 +794,11 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 	decode := func(v any) error { return json.Unmarshal(ev.params, v) }
 	switch ev.name {
 	case assistantwire.EventUserSpoke:
-		var p SessionRef
+		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {
 			return err
 		}
-		s.UserSpoke(ctx, p)
+		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:
 		var p SessionRef
 		if err := decode(&p); err != nil {

@@ -78,7 +78,7 @@ Relationship to other docs:
 | `apple/PersonaTests/TokenRatchetTests.swift` with `apple/PersonaTests/TokenBaseline.json` | Per-file counts of hard-coded padding, HStack spacing, corner radius, hex color, animation, level weight, fixed frame and raw SF Symbol. Counts may only go down. Baseline: 339 hits in 64 files, 46% of them hex colors in terminal, Lark and OS-badge palettes. |
 | `apple/PersonaTests/TypeScaleTests.swift` | No system font styles or sizes outside `Theme.Font`. |
 | `apple/PersonaTests/IconVocabularyTests.swift` | A registered symbol must be written as its `Theme.Icon` name. |
-| `apple/PersonaTests/SheetCloseTests.swift` with `apple/PersonaTests/SheetCloseBaseline.json` | Per-file counts, under `apple/Persona` and outside Mac-only branches, of a presented page's close written by the page instead of `SheetClose` (any item at `.cancellationAction`, or a ✕, Cancel, Close or Done at `.topBarLeading` outside `SheetActions.swift`), and of closes at the trailing edge (✕, a close or cancel role, Cancel, Close, or a Done whose action is one plain statement, at `.confirmationAction`, `.topBarTrailing` or `.primaryAction`; Select's Done and Mark as Done do more and do not count). Counts may only go down. Baseline: 55 own closes in 47 files, 45 trailing closes in 41 files (2026-11-17). |
+| `apple/PersonaTests/SheetCloseTests.swift` with `apple/PersonaTests/SheetCloseBaseline.json` | Per-file counts, under `apple/Persona` and outside Mac-only branches, of a presented page's close written by the page instead of `SheetClose` (any item at `.cancellationAction`, or a ✕, Cancel, Close or Done at `.topBarLeading` outside `SheetActions.swift`), and of closes at the trailing edge (✕, a close or cancel role, Cancel, Close, or a Done whose action is one plain statement, at `.confirmationAction`, `.topBarTrailing` or `.primaryAction`; Select's Done and Mark as Done do more and do not count). Counts may only go down. Baseline: 48 own closes in 40 files, 36 trailing closes in 32 files (2026-11-17, after Settings). |
 | `apple/PersonaTests/ContinuousMotionTests.swift` | Every unending animation lists where Reduce Motion stops it. |
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
@@ -1128,6 +1128,13 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   "claude-max", "codex" read "aster", "max", "codex") unless that would make two captions the same or leave only a note.
   The full name stays the cell's accessible name and tooltip, and the list's group header. Why: providers often share a
   letter tile, and a phone has no hover, so marks alone could not be told apart before opening one (2026-11-16).
+- Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider
+  group, each family's name is a 11.5 px `text-submeta` line in `ink-3` (12 px side padding, 6 px above, 2 px below)
+  over its rows; its right end holds the fold, a text button in the same size and colour ("Earlier versions · N" with
+  an 11 px chevron, "Hide earlier" with the chevron turned up), a `--hover-2` fill and `ink` on hover, one line, its
+  accessible name naming the family. The newest row says "Latest" after its name in `text-submeta` `ink-3`, no chip.
+  Rows outside any family (the Default entry, unknown models) have no header. Why: one family's versions read as one
+  choice and the newest is the one most people want, while older ones stay one tap (or a search) away (2026-11-17).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by

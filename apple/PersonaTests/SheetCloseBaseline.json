@@ -148,13 +148,6 @@
   "Persona\/Views\/Link\/PreviewChooser.swift" : {
     "trailingClose" : 1
   },
-  "Persona\/Views\/Machines\/AddComputerView.swift" : {
-    "ownClose" : 1,
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Machines\/BrowserLoginsSection.swift" : {
-    "ownClose" : 1
-  },
   "Persona\/Views\/Mail\/MailViews.swift" : {
     "ownClose" : 2,
     "trailingClose" : 1
@@ -197,39 +190,6 @@
     "trailingClose" : 2
   },
   "Persona\/Views\/Session\/Terminal\/TerminalExtras.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/ConnectDeviceView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/DesktopPresence.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/HubUpdateViews.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Settings\/InAppTunnelView.swift" : {
-    "ownClose" : 1,
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/ManagersView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/ModelConfigurationView.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Settings\/ProviderWizardView.swift" : {
-    "ownClose" : 1,
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/SentView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/SettingsView.swift" : {
-    "ownClose" : 1,
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Settings\/SubscriptionsEntry.swift" : {
     "trailingClose" : 1
   },
   "Persona\/Views\/Todos\/Calendar\/TodoCalendarDrag.swift" : {
