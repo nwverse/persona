@@ -16829,6 +16829,29 @@ if WORK_TIMELINE:
     mock_work_timeline()
 
 
+# MOCK_WEB_SOURCES=1 (#9132): the main chat ends with a finished exchange that looked things up on the web, so its reply
+# has a Sources row: a Claude Code WebSearch whose result names five pages on its "Links:" line, and a WebFetch of one
+# of them. Made-up sites (example domains).
+def mock_web_sources():
+    links = [{"title": "Kyoto 10-day forecast", "url": "https://weather.example.com/kyoto/10-day"},
+             {"title": "Kyoto in late November: what to pack", "url": "https://www.travel.example.org/kyoto-november"},
+             {"title": "Autumn leaves report: Kyoto", "url": "https://leaves.example.net/kyoto"},
+             {"title": "Japan weather warnings", "url": "https://alerts.example.com/japan"},
+             {"title": "Kyoto city events this week", "url": "https://events.example.org/kyoto"}]
+    q = "Kyoto weather next week"
+    rows = [it("user", "text", 0.6, text="What's the weather in Kyoto next week? We're going on Tuesday.")]
+    rows += tool("WebSearch", {"query": q}, 'Web search results for query: "%s"\n\nLinks: %s\n\nMostly sunny, 9–17 °C.' % (q, json.dumps(links)), 0.5)
+    rows += tool("WebFetch", {"url": links[0]["url"], "prompt": "Tuesday to Friday"}, "Tue sunny 17/9, Wed sunny 16/8, Thu cloudy 15/9, Fri light rain 14/10.", 0.4)
+    rows.append(it("assistant", "text", 0.3, text="Mostly sunny from Tuesday, 15–17 °C by day and 8–10 °C at night; light rain is likely on "
+                                                   "Friday, so pack a light jacket and a small umbrella. The autumn leaves should be near their best."))
+    ITEMS[ASK1] = ITEMS[ASK1] + rows
+    ASSISTANT[0].update(state="idle", status="idle", updated_at=ago(), last_text=rows[-1]["text"])
+
+
+if os.environ.get("MOCK_WEB_SOURCES") == "1":
+    mock_web_sources()
+
+
 # MOCK_EDIT_DIFF=1 (#2915): one finished turn whose edits read as real diffs: an Edit that changes a word in two lines
 # of a block (context between and around them), a MultiEdit of two pieces, a Write (all additions) and an Edit of a
 # 56-line switch that changes its first and last lines (the unchanged middle folds; past 40 lines, Show All). The first
@@ -18063,6 +18086,44 @@ def fold_usage(run):
     return list(sums.values()) + out
 
 
+def fold_sources(run):
+    """transcript.foldSources (#9132, spec/fixtures/fold-sources): the pages the run's successful WebFetch calls opened,
+    then the results its WebSearch calls returned (Claude's "Links: [...]" lines, Codex's "title  url" lines), each URL
+    once, at most 10. The fake leaves out the cut-result rules: its results are never cut."""
+    ok = {x.get("tool_use_id"): x for x in run if x["kind"] == "tool_result" and not x.get("is_error")}
+    calls = lambda name: [x for x in run if x["kind"] == "tool_use" and x.get("tool_name") == name and x.get("tool_use_id") in ok]
+    web = lambda u: bool(re.match(r"(?i)^https?://\S+$", u or ""))
+    found = [{"url": (x.get("tool_input") or {}).get("url", "")} for x in calls("WebFetch")]
+    for x in calls("WebSearch"):
+        lines = (ok[x["tool_use_id"]].get("text") or "").split("\n")
+        linked = [l[len("Links: "):] for l in lines if l.startswith("Links: ")]
+        if linked:
+            for l in linked:
+                try:
+                    found += [{"url": e.get("url", ""), "title": e.get("title", "")} for e in json.loads(l)]
+                except ValueError:
+                    pass
+            continue
+        for l in (l.strip() for l in lines):
+            if web(l):
+                found.append({"url": l})
+            elif "  " in l:
+                title, _, url = l.rpartition("  ")
+                found.append({"url": url.strip(), "title": title})
+    out, at = [], {}
+    for e in found:
+        url, title = e["url"].strip(), (e.get("title") or "").strip()
+        if not web(url):
+            continue
+        if url in at:
+            if title:
+                out[at[url]].setdefault("title", title)
+            continue
+        at[url] = len(out)
+        out.append({"url": url, **({"title": title} if title else {})})
+    return out[:10]
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -18100,13 +18161,14 @@ def fold_work(items):
                     preview["full_size"] = max(latest.get("full_size", 0), len(preview["text"].encode()))
                     preview["text"] = preview["text"][:511] + "…"
                 narration["latest_thinking"] = preview
-            usage = fold_usage(run)
+            usage, sources = fold_usage(run), fold_sources(run)
             out.append({"id": "fold:" + run[0]["id"], "seq": run[0]["seq"], "ts": run[0]["ts"], "role": "assistant", "kind": "fold",
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
                                  **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
-                                 "changes": fold_changes(run), **({"usage": usage} if usage else {})}})
+                                 "changes": fold_changes(run), **({"usage": usage} if usage else {}),
+                                 **({"sources": sources} if sources else {})}})
         i = j
     return out
 

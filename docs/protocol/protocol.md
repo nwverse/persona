@@ -1147,7 +1147,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "fold":{"items":1294,"tools":647,"thoughts":110,     // kind=fold only (only when the request carries fold_work): a folded stretch of work, see "Folded work"; may carry tasks, images, usage
          "errors":3,"tool_names":["Bash","Read","Edit"],  // failed tool results and the tools called (at most 10); absent from older nodes
          "until":"...","through_seq":6890,"through_id":"…#0",
-         "changes":[{"path":"/…/a.go","add":12,"del":3,"exact":true}]},  // the files its successful edits changed; [] when none
+         "changes":[{"path":"/…/a.go","add":12,"del":3,"exact":true}],   // the files its successful edits changed; [] when none
+         "sources":[{"url":"https://example.com/page","title":"…"}]},   // the web pages its successful web calls used; absent when none
  "image":{"mime":"image/png","data":"base64"}}        // image only (images in tool_result are also split into image items, with tool_use_id)
 
 // Interaction: something that needs a person
@@ -3333,6 +3334,15 @@ with one item of `kind: fold` (`transcript.FoldWork`):
   always there, `[]` when the run edited nothing, so an app tells that from a fold an older node made, which has no list and leaves the edits
   unknown. The web's changed-files card counts a folded run by it, so the card is the same before and after a reload; the cases both read
   are in `spec/fixtures/fold-changes/cases.json`. Old clients ignore it.
+- `fold.sources` is the web pages this run's successful web calls used (`transcript.foldSources`, #9132), so a reply shows its
+  sources without opening the run: first the pages it opened (WebFetch, and Codex's open page, which comes as one; `url` only),
+  then the results its searches returned (WebSearch: each entry of Claude Code's `Links: [{"title","url"}, …]` lines, or each
+  `title  url` line of a Codex web search; a line with only a domain names no page), each URL once (a later mention gives one
+  without a `title` its title), at most 10 (`proto.FoldSourcesMax`). Only `http` / `https` URLs without white space count; a
+  title is trimmed and cut past 200 characters. A call counts when its result is in the run and is not an error. In a result
+  the hub cut (`full_size`) a Links list keeps its entries before the cut one, and a Codex list loses its last line. Omitted
+  when there are none, and from older nodes. The web's Sources row reads it, so the row is the same before and after a
+  reload; the cases both read are in `spec/fixtures/fold-sources/cases.json`. Old clients ignore it.
 - `fold.usage` is what the folded items used (their `usage`, "Token usage on items"): entries without an `id` summed per
   `model` and `fast`, entries with one as they are. Omitted when none of them carried usage, and from older nodes. Old
   clients ignore it.
