@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
 )
 
@@ -191,6 +192,7 @@ func TestInboxHistoryPromotionStaysStableAcrossGroups(t *testing.T) {
 	other.MessageID, other.ChatID, other.CreateTime = "om_other", "oc_other", "2030-01-01T00:01:00Z"
 	second := first
 	second.MessageID, second.MessagePosition, second.CreateTime = "om_second", "12", "2030-01-01T00:02:00Z"
+	second.Content = json.RawMessage(`"Second request"`)
 	followup := first
 	followup.MessageID, followup.MessagePosition, followup.CreateTime = "om_followup", "13", "2030-01-01T00:03:00Z"
 	followup.Content = json.RawMessage(`"Unindexed follow-up"`)
@@ -201,5 +203,139 @@ func TestInboxHistoryPromotionStaysStableAcrossGroups(t *testing.T) {
 	got := inboxThings(t, c)["larkcli:chat:oc_example"]
 	if got.Last != followup.MessageID || !strings.Contains(got.Preview, "Unindexed follow-up") {
 		t.Fatalf("a later group rewound the history-discovered follow-up: %+v", got)
+	}
+	current, history, _ := strings.Cut(got.Context, "Background history (context only, not new requests):")
+	if !strings.Contains(current, "Current messages (new activity):") {
+		t.Fatalf("missing current messages: %q", got.Context)
+	}
+	for _, text := range []string{"First request", "Second request", "Unindexed follow-up"} {
+		if strings.Count(current, text) != 1 || strings.Contains(history, text) {
+			t.Fatalf("incoming activity %q was lost or moved into history: %q", text, got.Context)
+		}
+	}
+}
+
+func TestInboxInterleavedIncomingMetadataStaysCurrent(t *testing.T) {
+	for _, topic := range []string{"", "omt_example_topic"} {
+		for _, historyKind := range []string{"complete", "missing_metadata", "partial", "unavailable"} {
+			t.Run("topic="+topic+"/"+historyKind, func(t *testing.T) {
+				old := adapter.Message{MessageID: "om_old", MessagePosition: "1", ChatID: "oc_example",
+					ChatType: "p2p", ThreadID: topic, CreateTime: "2029-07-01T00:00:00Z",
+					ChatPartner: json.RawMessage(`{"id":"ou_example_peer","name":"Example peer"}`),
+					Sender:      adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`"Old background"`)}
+				first := old
+				first.MessageID, first.MessagePosition, first.CreateTime = "om_first", "10", "2030-01-01T00:00:00Z"
+				first.Content = json.RawMessage(`"First request"`)
+				second := first
+				second.MessageID, second.MessagePosition, second.CreateTime = "om_second", "12", "2030-01-01T00:00:20Z"
+				second.Content = json.RawMessage(`"Second request"`)
+				if topic != "" {
+					first.ChatType, second.ChatType = "group", "group"
+					first.Mentions, second.Mentions = []adapter.Mention{{ID: "ou_example_user"}}, []adapter.Mention{{ID: "ou_example_user"}}
+				}
+				other := first
+				other.MessageID, other.ChatID, other.ThreadID = "om_other", "oc_other", ""
+				other.ChatType, other.Mentions, other.CreateTime = "p2p", nil, "2030-01-01T00:00:10Z"
+				other.Content = json.RawMessage(`"Unrelated request"`)
+				history := []adapter.Message{second, other, first, old}
+				switch historyKind {
+				case "missing_metadata":
+					for i := range history {
+						history[i].ChatType, history[i].ChatPartner, history[i].ThreadID = "", nil, ""
+						history[i].MessagePosition, history[i].CreateTime = "", "2030-01-01 00:00"
+					}
+				case "partial":
+					history = []adapter.Message{first, old}
+				}
+				c := followupConnector(t, []adapter.Message{first, other, second}, history)
+				if historyKind == "unavailable" {
+					t.Setenv("LARKCLI_FAKE_CONTEXT", filepath.Join(t.TempDir(), "missing.json"))
+				}
+				if _, err := c.Poll(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				thread := "larkcli:chat:oc_example"
+				if topic != "" {
+					thread += ":thread:" + topic
+				}
+				got := inboxThings(t, c)[thread]
+				if got.Last != second.MessageID || got.Preview != "Second request" || !got.At.Equal(messageTime(second)) {
+					t.Fatalf("incoming reply target or preview changed: %+v", got)
+				}
+				if topic == "" && (got.Kind != "dm" || got.Title != "Example peer") {
+					t.Fatalf("history replaced incoming direct-chat metadata: %+v", got)
+				}
+				current, background, _ := strings.Cut(got.Context, "Background history (context only, not new requests):")
+				if !strings.Contains(current, "Current messages (new activity):") {
+					t.Fatalf("missing current messages: %q", got.Context)
+				}
+				for _, text := range []string{"First request", "Second request"} {
+					if strings.Count(current, text) != 1 || strings.Contains(background, text) {
+						t.Fatalf("incoming activity %q was lost or moved into history: %q", text, got.Context)
+					}
+				}
+				if strings.Contains(current, "Old background") || strings.Contains(got.Context, "Unrelated request") {
+					t.Fatalf("unrelated activity entered current context: %q", got.Context)
+				}
+			})
+		}
+	}
+}
+
+func TestInboxIncomingIDsAreNotPromotedFromHistory(t *testing.T) {
+	first := adapter.Message{MessageID: "om_first", MessagePosition: "10", ChatID: "oc_example",
+		ChatType: "p2p", CreateTime: "2030-01-01T00:00:00Z",
+		Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`"First request"`)}
+	second := first
+	second.MessageID, second.MessagePosition, second.CreateTime = "om_second", "12", "2030-01-01T00:02:00Z"
+	second.Content = json.RawMessage(`"Second request"`)
+	historyCopy := first
+	historyCopy.MessagePosition, historyCopy.CreateTime, historyCopy.ChatType = "99", "2030-01-01T00:10:00Z", ""
+	historyCopy.Content = json.RawMessage(`"History copy of first"`)
+	c := followupConnector(t, nil, []adapter.Message{historyCopy, second})
+	group := &inboxGroup{key: messageKey(first), chatID: first.ChatID,
+		messages: []adapter.Message{first, second}, latest: second}
+	got := c.thingForGroup(context.Background(), group, "ou_example_user")
+	if got.Last != second.MessageID || got.Preview != "Second request" {
+		t.Fatalf("a history copy superseded an incoming message: %+v", got)
+	}
+	if strings.Contains(got.Context, "History copy of first") || strings.Count(got.Context, "First request") != 1 {
+		t.Fatalf("history metadata replaced or duplicated incoming content: %q", got.Context)
+	}
+}
+
+func TestInboxAttachmentPreviewUsesNormalizedLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name, messageType, label string
+	}{
+		{"image", "image", "image"},
+		{"file", "file", "file"},
+		{"audio", "audio", "audio"},
+		{"video", "media", "video"},
+		{"sticker", "sticker", "sticker"},
+		{"card", "interactive", "card"},
+		{"normalized", " IMAGE ", "image"},
+		{"unknown", strings.Repeat("unknown\n", 100), "message"},
+	} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			t.Run(tc.name+"/"+string(lang), func(t *testing.T) {
+				message := adapter.Message{MessageID: "om_attachment", ChatID: "oc_example", ChatType: "p2p",
+					MsgType: tc.messageType, CreateTime: "2030-01-01T00:00:00Z",
+					Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`{"image_key":"img_example"}`)}
+				c := followupConnector(t, []adapter.Message{message}, []adapter.Message{message})
+				ctx := i18n.With(context.Background(), lang)
+				if _, err := c.Poll(ctx); err != nil {
+					t.Fatal(err)
+				}
+				got := inboxThings(t, c)["larkcli:chat:oc_example"]
+				want := "[" + i18n.T(lang, "hub-connectors.larkcli_placeholder_"+tc.label) + "]"
+				if got.Last != message.MessageID || got.Preview != want {
+					t.Fatalf("attachment preview=%q, want %q (last=%q)", got.Preview, want, got.Last)
+				}
+				if !strings.Contains(got.Context, "["+tc.label+"]") || tc.name == "unknown" && strings.Contains(got.Context, "unknown") {
+					t.Fatalf("attachment context exposed an unnormalized type: %q", got.Context)
+				}
+			})
+		}
 	}
 }

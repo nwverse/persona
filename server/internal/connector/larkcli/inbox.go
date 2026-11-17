@@ -218,7 +218,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	}
 
 	// Search results are normally newest first, but ordering is not part of
-	// the shortcut contract. Sort before applying the consecutive grouping rule.
+	// the shortcut contract. Sort before grouping each conversation's incoming batch.
 	// Direct chats read from their own history: what search has not indexed yet still comes in. A failed sweep
 	// doesn't lose what search found; the round keeps it and reports the error at the end.
 	direct, directErr := c.sweepDirectChats(ctx)
@@ -635,7 +635,6 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 	}
 	c.inboxMu.Unlock()
 	var out []*inboxGroup
-	var current *inboxGroup
 	byKey := map[string]*inboxGroup{}
 	for _, message := range messages {
 		key := messageKey(message)
@@ -671,10 +670,10 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 			keep = true
 		}
 		if !keep {
-			current = nil
 			continue
 		}
-		if current == nil || current.key != key {
+		current := byKey[key]
+		if current == nil {
 			current = &inboxGroup{key: key, chatID: message.ChatID, threadID: topicID(message), chatName: message.ChatName}
 			out = append(out, current)
 			byKey[key] = current
@@ -704,12 +703,19 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	}
 	contextMessages = visible
 	currentMessages := append([]adapter.Message(nil), group.messages...)
+	currentIDs := make(map[string]struct{}, len(currentMessages))
+	for _, message := range currentMessages {
+		currentIDs[message.MessageID] = struct{}{}
+	}
 	// History can already contain a follow-up which search has not indexed. Only
 	// unseen eligible activity in this chat/topic can supersede the search hit.
 	c.inboxMu.Lock()
 	_, allChat := c.inboxAllChats[group.chatID]
 	c.inboxMu.Unlock()
 	for _, message := range contextMessages {
+		if _, incoming := currentIDs[message.MessageID]; incoming {
+			continue // History metadata cannot change an incoming message's identity or freshness.
+		}
 		if message.Deleted || messageKey(message) != group.key || message.Sender.ID == me || !after(message, latest) {
 			continue
 		}
@@ -728,6 +734,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		}
 		latest = message
 		currentMessages = append(currentMessages, message)
+		currentIDs[message.MessageID] = struct{}{}
 		group.replied = false
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}
@@ -736,7 +743,6 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 			group.replied = true
 		}
 	}
-	text := messageText(latest)
 	thread := "larkcli:chat:" + group.chatID
 	if group.threadID != "" {
 		thread += ":thread:" + group.threadID
@@ -771,10 +777,6 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
 		tags = append(tags, senderTag)
 	}
-	currentIDs := make(map[string]struct{}, len(currentMessages))
-	for _, message := range currentMessages {
-		currentIDs[message.MessageID] = struct{}{}
-	}
 	var history []adapter.Message
 	for _, message := range contextMessages {
 		if _, current := currentIDs[message.MessageID]; !current {
@@ -787,7 +789,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Label:   label,
 		Title:   title,
 		Sender:  latest.Sender.Name,
-		Preview: firstLine(text),
+		Preview: firstLine(inboxMessageText(latest, lang)),
 		Context: prompts.RenderLarkCLIInboxContext(prompts.LarkCLIInboxContext{
 			Current: contextText(currentMessages, me),
 			History: contextText(history, me),
@@ -1122,6 +1124,30 @@ func messageText(message adapter.Message) string {
 	return cardText(rawText(message.Content))
 }
 
+func inboxMessageText(message adapter.Message, lang i18n.Lang) string {
+	if text := strings.TrimSpace(messageText(message)); text != "" {
+		return text
+	}
+	key := "hub-connectors.larkcli_placeholder_message"
+	switch strings.ToLower(strings.TrimSpace(message.MsgType)) {
+	case "":
+		return ""
+	case "image":
+		key = "hub-connectors.larkcli_placeholder_image"
+	case "file":
+		key = "hub-connectors.larkcli_placeholder_file"
+	case "audio":
+		key = "hub-connectors.larkcli_placeholder_audio"
+	case "media", "video":
+		key = "hub-connectors.larkcli_placeholder_video"
+	case "sticker":
+		key = "hub-connectors.larkcli_placeholder_sticker"
+	case "interactive":
+		key = "hub-connectors.larkcli_placeholder_card"
+	}
+	return "[" + i18n.T(lang, key) + "]"
+}
+
 var (
 	cardOpen  = lazyre.New(`<card(?:\s+title="([^"]*)")?\s*>`)
 	cardClose = lazyre.New(`</card>`)
@@ -1194,10 +1220,7 @@ const (
 func contextText(messages []adapter.Message, me string) string {
 	var b strings.Builder
 	for _, message := range messages {
-		text := strings.TrimSpace(messageText(message))
-		if text == "" && message.MsgType != "" {
-			text = "[" + message.MsgType + "]"
-		}
+		text := inboxMessageText(message, i18n.En)
 		if text == "" {
 			continue
 		}
