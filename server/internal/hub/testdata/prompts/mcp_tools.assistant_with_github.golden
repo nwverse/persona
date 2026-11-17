@@ -2065,25 +2065,25 @@
   },
   {
     "name": "conversations_list",
-    "description": "List Persona's own conversations (the 对话 sidebar), newest activity first: id, title, tags, last activity, whether it is the main conversation, whether it is running now, and the gist of its last message. Archived ones are left out unless `include_archived`. This conversation is marked. Use it to find a conversation the user means (\"the one about the trip\") before reading, renaming, archiving, tagging or messaging it.",
+    "description": "List your Persona conversations, newest activity first: id, title, tags, last activity, main/running state and last-message gist. Archived ones need `include_archived`; this conversation is marked. Use it to identify the user's conversation before reading, renaming, archiving, tagging or messaging it.",
     "input_schema": {
       "type": "object",
       "properties": {
         "query": {
           "type": "string",
-          "description": "only conversations whose title or last message contains this (case-insensitive)"
+          "description": "case-insensitive match on title or last message"
         },
         "tag": {
           "type": "string",
-          "description": "one exact tag"
+          "description": "exact tag to match"
         },
         "include_archived": {
           "type": "boolean",
-          "description": "also list archived conversations (marked as such)"
+          "description": "include archived conversations (marked as such)"
         },
         "limit": {
           "type": "integer",
-          "description": "how many (default 30, max 100)"
+          "description": "default 30, max 100"
         }
       }
     }
@@ -2182,7 +2182,7 @@
   },
   {
     "name": "conversation_tags_set",
-    "description": "Replace a conversation's tags ([] clears them); at most 10 of 32 characters. Own space only, and only when the user asks: never invent tags. This conversation is a valid id.",
+    "description": "Replace a conversation's tags; [] clears them. These user-defined labels group conversations in apps and lists. They are trimmed and de-duplicated, at most 10 of 32 characters each. Tag only conversations in your own space when the user asks for tags or grouping; never invent them. This conversation is a valid id.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2192,21 +2192,21 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "full id or its first 8 characters"
+          "description": "full id or first 8 characters"
         },
         "tags": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "the full new list"
+          "description": "complete replacement list; [] clears all"
         }
       }
     }
   },
   {
     "name": "conversation_new",
-    "description": "Start a new Persona conversation with an opening message and return its id at once (it does not wait for the answer). For work that deserves its own thread, when the user asks for one. The message arrives marked as coming from this conversation; it is named after its first turn like any new conversation. It is told to send its result back with conversation_send; if a turn of it fails, or ends without it ever having sent anything back, Persona leaves one notice here (once per conversation). An organization policy may keep some conversations read-only, including starting another conversation from them: such a call is refused with the policy's reason: do not retry, follow it.",
+    "description": "Start a Persona conversation with an opening message; return its id now. Use for user-requested separate threads. The message is marked as coming from this one; the new conversation is named after its first turn and told to report with conversation_send. Failure or no report leaves one notice per conversation. An organization read-only policy may refuse; follow its reason instead of retrying. Add `tags` only if asked.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2215,21 +2215,21 @@
       "properties": {
         "text": {
           "type": "string",
-          "description": "the opening message: everything the new conversation needs, it does not see this one"
+          "description": "everything the new conversation needs; it does not see this one"
         },
         "tags": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "initial tags, only when asked"
+          "description": "initial tags; trimmed and de-duplicated, at most 10 of 32 characters each"
         }
       }
     }
   },
   {
     "name": "conversation_send",
-    "description": "Send a message to another Persona conversation (not this one). If it is running, the message waits until its current turn ends; if the user is talking in it, until they have been quiet for 2 minutes. The result says which. The message arrives marked as coming from this conversation, so the other side can answer with conversation_send. Conversations passing messages back and forth are limited (a few requests from the user's message, a few messages per pair in ten minutes): your first message back to the conversation whose message you are working on is its answer and adds no hop. No reply just to acknowledge. An organization policy may stop some conversations from forwarding work to the main or a leader conversation; such a send is refused with the policy's reason: do not retry, follow it. Passing on the owner's own words to the main conversation stays allowed: start the message with their verbatim words.",
+    "description": "Send a message to another Persona conversation (not this one). It waits for the current turn if running, or for 2 minutes of user quiet if they are talking; the result says which. Marked as from this one, it lets the other side answer with conversation_send. Forwarding allows a few requests per user message and a few messages per pair in ten minutes; your first reply to the conversation you are answering is its answer and adds no hop. Do not reply just to acknowledge. Policy refusals to main or a leader state why: follow it and do not retry. Owner-verbatim words to main stay allowed: start with them.",
     "input_schema": {
       "type": "object",
       "required": [

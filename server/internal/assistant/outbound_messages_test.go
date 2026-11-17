@@ -464,46 +464,91 @@ func TestOutboundTransportRechecksTheActualScope(t *testing.T) {
 	}
 }
 
+func TestOutboundStandingSettingKeepsScopeAndProposalGuard(t *testing.T) {
+	h, st, _, _ := outboundTestHub(t)
+	ctx := context.Background()
+	grant := messageTestGrant("inbox_reply")
+	grant.ID = ""
+	change, err := h.setStandingAuthorizations(ctx, standingJSON(t, StandingAuthorizations{
+		Authorizations: []StandingAuthorization{grant},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !change.applyChecksProposal {
+		t.Fatal("standing settings must keep the original approved revision")
+	}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		if !strings.HasPrefix(change.card(lang), messageScopeText(lang, *grant.Messages)+"\n\n") {
+			t.Fatalf("%s card lost its explicit message scope: %s", lang, change.card(lang))
+		}
+	}
+	if err := st.PutSetting(ctx, standingAuthorizationsKey, StandingAuthorizations{
+		Revision: 1, Authorizations: []StandingAuthorization{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := change.apply(ctx); !errors.Is(err, errStandingConflict) {
+		t.Fatalf("stale scope approval: %v", err)
+	}
+	list, err := h.standingAuthorizations(ctx)
+	if err != nil || list.Revision != 1 || len(list.Authorizations) != 0 {
+		t.Fatalf("stale approval changed authorizations: %+v, %v", list, err)
+	}
+}
+
 func TestOutboundOwnerApprovalCardShowsScopeAndDoesNotSelfApprove(t *testing.T) {
-	for _, owner := range []bool{false, true} {
-		t.Run(fmt.Sprint(owner), func(t *testing.T) {
-			h, st, _, _ := outboundTestHub(t)
-			done := make(chan *httptest.ResponseRecorder, 1)
-			go func() {
-				done <- serve(h.Service, "POST", "/api/v1/assistant/outbound-messages",
-					`{"revision":0,"scope":{"channel":"larkcli","target":"oc_example_group","scenario":"inbox_reply","identity":"bot"}}`)
-			}()
-			card, ok := awaitCard(h.Service)
-			if !ok || card.Kind != proto.IxPermission || !strings.Contains(card.Summary, "oc_example_group") ||
-				!strings.Contains(card.Summary, "larkcli") || !strings.Contains(card.Summary, "bot") && !strings.Contains(card.Summary, "机器人") {
-				t.Fatalf("missing scope card: %+v", card)
-			}
-			before, _ := h.standingAuthorizations(context.Background())
-			if len(before.Authorizations) != 0 {
-				t.Fatal("active before owner approval")
-			}
-			yes := true
-			answer := proto.Resolution{Allow: &yes}
-			if !owner {
-				answer.AnsweredBy = proto.AnsweredByAssistant
-			}
-			if _, err := h.Action(context.Background(), Action{Op: "answer", InteractionID: card.ID, Answer: standingJSON(t, answer)}); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case response := <-done:
-				if response.Code != 200 {
-					t.Fatalf("approval response: %d %s", response.Code, response.Body)
+	for _, edit := range []string{"scope", "identity"} {
+		for _, owner := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%v", edit, owner), func(t *testing.T) {
+				h, st, _, _ := outboundTestHub(t)
+				done := make(chan *httptest.ResponseRecorder, 1)
+				body := `{"revision":0,"scope":{"channel":"larkcli","target":"oc_example_group","scenario":"inbox_reply","identity":"bot"}}`
+				if edit == "identity" {
+					body = `{"identity":"user"}`
 				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("approval did not finish")
-			}
-			var registry StandingAuthorizations
-			_, _ = st.Setting(context.Background(), standingAuthorizationsKey, &registry)
-			if (len(registry.Authorizations) == 1) != owner {
-				t.Fatalf("owner=%v registry=%+v", owner, registry)
-			}
-		})
+				go func() {
+					done <- serve(h.Service, "POST", "/api/v1/assistant/outbound-messages", body)
+				}()
+				card, ok := awaitCard(h.Service)
+				if !ok || card.Kind != proto.IxPermission || card.CanClarify || card.MachineID != "" || card.SessionID != "" {
+					t.Fatalf("missing settings-page owner card: %+v", card)
+				}
+				if edit == "scope" && (!strings.Contains(card.Summary, "oc_example_group") ||
+					!strings.Contains(card.Summary, "larkcli") || !strings.Contains(card.Summary, "bot") && !strings.Contains(card.Summary, "机器人")) {
+					t.Fatalf("missing scope card: %+v", card)
+				}
+				before, _ := h.standingAuthorizations(context.Background())
+				if len(before.Authorizations) != 0 {
+					t.Fatal("active before owner approval")
+				}
+				yes := true
+				answer := proto.Resolution{Allow: &yes}
+				if !owner {
+					answer.AnsweredBy = proto.AnsweredByAssistant
+				}
+				if _, err := h.Action(context.Background(), Action{Op: "answer", InteractionID: card.ID, Answer: standingJSON(t, answer)}); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case response := <-done:
+					if response.Code != 200 {
+						t.Fatalf("approval response: %d %s", response.Code, response.Body)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("approval did not finish")
+				}
+				var registry StandingAuthorizations
+				_, _ = st.Setting(context.Background(), standingAuthorizationsKey, &registry)
+				if (len(registry.Authorizations) == 1) != (owner && edit == "scope") {
+					t.Fatalf("owner=%v registry=%+v", owner, registry)
+				}
+				identity, err := h.outboundIdentity(context.Background())
+				if err != nil || (identity == "user") != (owner && edit == "identity") {
+					t.Fatalf("owner=%v identity=%s error=%v", owner, identity, err)
+				}
+			})
+		}
 	}
 }
 

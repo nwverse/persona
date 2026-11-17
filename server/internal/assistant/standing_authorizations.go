@@ -219,7 +219,7 @@ func (s *Service) setStandingAuthorizations(ctx context.Context, value json.RawM
 	}
 	oldJSON, _ := json.MarshalIndent(before, "", "  ")
 	newJSON, _ := json.MarshalIndent(after, "", "  ")
-	return &ownChange{cardText: func(l i18n.Lang) string {
+	return &ownChange{applyChecksProposal: true, cardText: func(l i18n.Lang) string {
 		text := ""
 		for _, grant := range after.Authorizations {
 			if grant.Messages != nil && !slices.ContainsFunc(before.Authorizations, func(old StandingAuthorization) bool { return old.ID == grant.ID }) {

@@ -474,6 +474,8 @@ Revocation first deletes the persisted grant, then calls node `assistant.permiss
 
 If the node is offline, too old, fails to acknowledge the reset, or the conversation belongs to an external runtime without a permission-reset protocol, deletion still succeeds with `restart_required: true`. The web retains a warning: **revocation takes effect after the conversation restarts**. Restart the conversation's process in that runtime before continuing; merely reopening the web page does not clear process permissions. Retrying the DELETE also retries the reset even when the row is already gone.
 
+Assistant-owned cards that can prepare their operation also offer **Have a question** on Web and Feishu. The question leaves the same card pending and returns a non-final Clarifying tool result; only a later fresh owner Allow can execute it once. Owner routing, stale rechecks, the 24-hour answer-time budget, terminal delivery, restart behavior, and the `fleet.ask_prepared` compatibility protocol are specified in [Approval clarification](approval-clarification.md).
+
 ## Password card (#1137)
 
 When the main chat needs a password only the user knows (typically a computer's sudo password), the Agent never asks for it in the chat. The assistant-only tool `secret_run` (`server/internal/assistant/secret_run.go`, description in `prompts/mcp/assistant/secret_run.md`) proposes the exact commands; the user reads them in the Persona app (iPhone, Mac, Vision Pro, Android or the web), types the password into the card and taps Run. The target computer's node runs exactly those commands, giving the password to the one that runs `sudo -S`. The Agent gets exit codes and output that never held the password, never the password.
