@@ -355,7 +355,8 @@ struct TokenUsagePage: View {
                     totals(days)
                     section(String(localized: "Each Day", comment: "Token usage page: the calendar's heading")) {
                         VStack(alignment: .leading, spacing: Theme.Space.m) {
-                            TokenDayLine(days: days, picked: pickedDay)
+                            // Today's and the 30 days' totals are the page's first row: here only a picked day's own.
+                            if pickedDay != nil { TokenDayLine(days: days, picked: pickedDay) }
                             UsageCalendar(days: days.days, picked: $pickedDay)
                             HeatLegend(low: String(localized: "Less [Heat Legend]", comment: "A heat grid's faintest squares"),
                                        high: String(localized: "More [Heat Legend]", comment: "A heat grid's fullest squares"))
