@@ -25,7 +25,7 @@ final class DevModeUITests: XCTestCase {
     /// Lets a sheet or the keyboard finish moving before a picture.
     @MainActor private func settle(_ app: XCUIApplication) {
         _ = app.wait(for: .runningForeground, timeout: 1)
-        Thread.sleep(forTimeInterval: 1.2)
+        Thread.sleep(forTimeInterval: 3)
     }
 
     @MainActor private func shot(_ name: String, _ look: String) {
@@ -110,6 +110,9 @@ final class DevModeUITests: XCTestCase {
         XCTAssertTrue(element("dev-send.persona", app).exists)
         settle(app)
         shot("5-send", look)
+        // Again a little later: the sheet has stopped moving, the two pictures are the same.
+        Thread.sleep(forTimeInterval: 3)
+        shot("5-send-later", look)
         element("dev-send.persona", app).tap()
 
         let card = element("file-attachments", app)
