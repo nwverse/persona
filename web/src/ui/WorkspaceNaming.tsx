@@ -2,7 +2,8 @@ import { useId, useRef, useState } from "react";
 import { t } from "../i18n";
 import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
-import { loadTaskRepositories, repositoryRequestOptions, useRepositoryRequestContext, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
+import { loadTaskRepositories, repositoryRequestOptions, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
+import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
 import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
 import { settingsInputClass } from "../views/settings/SettingsParts";
@@ -107,30 +108,33 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
     setError(fallback);
   };
   const invalidate = () => { sequence.current++; setResult(undefined); setPreviewBusy(false); setError(""); };
+  const refresh = async (keepDraft: boolean) => {
+    const info = await api<WorkspaceNamingSettings>("/assistant", repositoryRequestOptions(context));
+    if (!context.isCurrent()) return;
+    if (info.manager !== manager || info.workspace_naming_version !== WORKSPACE_NAMING_VERSION) { setLoaded(true); setSupported(false); return; }
+    let rules = info.workspace_rules ?? {};
+    if (todoId) {
+      const [record, set] = await Promise.all([loadWorkspaceRules(context, todoId), loadTaskRepositories(context, todoId)]);
+      if (!context.isCurrent()) return;
+      rules = record.workspace_rules; setRevision(record.revision); setRepositories(set.repositories);
+      const available = set.repositories.map((r) => r.repo_id);
+      // A removed repository must not survive invisibly in the next preview request.
+      setSelected((current) => keepDraft ? current.filter((id) => available.includes(id)) : available);
+    }
+    invalidate();
+    if (!keepDraft) setDraft(rules);
+    // The freshly fetched rules are the dirty-comparison baseline even when the draft is kept, so a
+    // clear the server did not persist stays visible as unsaved and can be retried.
+    setSaved(rules);
+    setInherited(todoId ? info.effective_workspace_rules ?? {} : { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" });
+    if (!keepDraft) setMachine(info.machine_id ?? "");
+    setSupported(true); setLoaded(true);
+  };
   const load = async (keepDraft = false) => {
     if (!context.isCurrent() || saving.current) return;
     saving.current = true; setBusy(true); setError("");
-    try {
-      const info = await api<WorkspaceNamingSettings>("/assistant", repositoryRequestOptions(context));
-      if (!context.isCurrent()) return;
-      if (info.manager !== manager || info.workspace_naming_version !== WORKSPACE_NAMING_VERSION) { setLoaded(true); setSupported(false); return; }
-      let rules = info.workspace_rules ?? {};
-      if (todoId) {
-        const [record, set] = await Promise.all([loadWorkspaceRules(context, todoId), loadTaskRepositories(context, todoId)]);
-        if (!context.isCurrent()) return;
-        rules = record.workspace_rules; setRevision(record.revision); setRepositories(set.repositories);
-        const available = set.repositories.map((r) => r.repo_id);
-        // A removed repository must not survive invisibly in the next preview request.
-        setSelected((current) => keepDraft ? current.filter((id) => available.includes(id)) : available);
-      }
-      if (!keepDraft) setDraft(rules);
-      // The freshly fetched rules are the dirty-comparison baseline even when the draft is kept, so a
-      // clear the server did not persist stays visible as unsaved and can be retried.
-      setSaved(rules);
-      setInherited(todoId ? info.effective_workspace_rules ?? {} : { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" });
-      if (!keepDraft) setMachine(info.machine_id ?? "");
-      setSupported(true); setLoaded(true);
-    } catch { if (context.isCurrent()) setError(t("workspace-naming.failed")); }
+    try { await refresh(keepDraft); }
+    catch { if (context.isCurrent()) setError(t("workspace-naming.failed")); }
     finally { if (context.isCurrent()) { saving.current = false; setBusy(false); } }
   };
   const save = async () => {
@@ -140,6 +144,12 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
       const response = await saveWorkspaceRules(context, todoId, revision, draft);
       if (!context.isCurrent()) return;
       setSaved({ ...draft }); if (todoId) setRevision(response.revision);
+      if (todoId) {
+        // Keep the confirmed write if a follow-up read fails; recovery retries
+        // reads, while a fresh record supplies the next save's baseline and CAS.
+        try { await refresh(true); }
+        catch { if (context.isCurrent()) setError(t("workspace-naming.failed")); }
+      }
     } catch (error) { if (context.isCurrent()) failure(error, t("workspace-naming.save_failed")); }
     finally { if (context.isCurrent()) { saving.current = false; setBusy(false); } }
   };

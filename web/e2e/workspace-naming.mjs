@@ -193,6 +193,48 @@ try {
       assert.equal(await editor.locator("[data-naming-repo]").count(), 1);
       assert.equal(await editor.locator("[data-naming-branch]").innerText(), `recovered/${todo.id}`);
       await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `recovered-${scheme}-${width}.jpg`) });
+
+      // Another settings editor changes the fallback while this task remains open.
+      const changedDefault = await context.request.put(origin + "/api/v1/assistant", { headers: fixtureHeaders, data: {
+        workspace_rules: { task_directory_template: "fresh/{task-id}" },
+      } });
+      assert(changedDefault.ok(), "change only this fixture's assistant fallback");
+      await field.fill("saved/{task-id}");
+      await editor.getByRole("button", { name: "Save", exact: true }).click();
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-workspace-naming] input')].some((el) => el.placeholder === "Assistant default: fresh/{task-id}"));
+      assert.equal(await taskFolder.inputValue(), "", "refresh keeps the inherited field blank");
+      assert.equal(await field.inputValue(), "saved/{task-id}", "refresh preserves the saved draft");
+      assert.equal(await editor.getByLabel("Preview on computer", { exact: true }).inputValue(), "server");
+      const freshPreview = page.waitForResponse((response) => response.url().endsWith(previewPath));
+      await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
+      const fresh = await freshPreview;
+      assert.equal(fresh.status(), 200);
+      assert.equal(fresh.request().postDataJSON().machine_id, "server");
+      assert.equal((await fresh.json()).plan.root_path, `/home/example/workspace/fresh/${todo.id}`, "the displayed fallback matches the actual manager/Node preview");
+      if (width === 390) {
+        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "1"));
+        await editor.scrollIntoViewIfNeeded();
+      }
+      await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `fresh-default-${scheme}-${width}.jpg`) });
+      if (width === 390) {
+        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
+        // Paint the whole enlarged element; the task page virtualizes offscreen content.
+        await page.setViewportSize({ width, height: 6000 });
+        await editor.scrollIntoViewIfNeeded();
+        await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `fresh-default-${scheme}-${width}-large.jpg`) });
+        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "1"));
+      }
+
+      const computer = editor.getByLabel("Preview on computer", { exact: true });
+      await computer.selectOption("");
+      await field.fill("../invalid");
+      await editor.getByRole("button", { name: "Save", exact: true }).click();
+      await editor.getByRole("button", { name: "Reload saved settings", exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector('[data-workspace-naming] [role=alert]'));
+      assert.equal(await computer.inputValue(), "", "recovery preserves an explicit empty computer choice");
+      assert.equal(await field.inputValue(), "../invalid", "recovery preserves the failed draft");
+      assert(await editor.getByRole("button", { name: "Preview naming", exact: true }).isDisabled(), "Reload does not silently choose a preview target");
+      await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `retained-selection-${scheme}-${width}.jpg`) });
       const restored = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
         expected_revision: removed.revision, expected_catalog_revision: catalog.catalog_revision, repositories: inputRows,
       } });

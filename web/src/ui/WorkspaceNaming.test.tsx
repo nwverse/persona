@@ -9,6 +9,10 @@ import { WorkspaceNaming, WorkspaceNamingPreview } from "./WorkspaceNaming";
 import type { WorkspaceNamingPreview as Preview } from "../lib/workspace-naming";
 import type { TaskRepository } from "../lib/task-repositories";
 
+vi.mock("../lib/store", () => ({ useStore: (select: (state: { machines: { id: string; name: string }[] }) => unknown) => select({ machines: [
+  { id: "box", name: "First computer" }, { id: "other-box", name: "Second computer" },
+] }) }));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
 let root: Root, host: HTMLDivElement, calls: Call[];
@@ -112,6 +116,7 @@ it("shows the effective assistant fallback for tasks and clears only the task ov
   expect(save.path).toBe("/todos/todo_example/workspace-rules");
   expect(JSON.parse(save.init.body as string)).toEqual({ expected_revision: 4, workspace_rules: { base_directory: null, task_directory_template: null, branch_template: "task/{task-id}" } });
   await answer(save, { todo_id: "todo_example", revision: 5, workspace_rules: { branch_template: "task/{task-id}" } });
+  await refreshTask({ todo_id: "todo_example", revision: 5, workspace_rules: { branch_template: "task/{task-id}" } }, { ...settings, effective_workspace_rules: fallback });
   expect(field.value).toBe(""); expect(button("Save").disabled).toBe(true);
   await click("Preview naming"); expect(JSON.parse(calls.at(-1)!.init.body as string).workspace_rules.task_directory_template).toBeNull();
 });
@@ -131,6 +136,66 @@ const taskRuleCalls = () => calls.filter((call) => call.path.endsWith("/workspac
 const taskRepositoryCalls = () => calls.filter((call) => call.path.endsWith("/repositories"));
 const taskSettings = { ...settings, effective_workspace_rules: defaults };
 const taskRepositories = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 0, repositories: [] };
+const refreshTask = async (record: { todo_id: string; revision: number; workspace_rules: Record<string, string> }, info = taskSettings) => {
+  expect(calls.at(-1)!.path).toBe("/assistant");
+  await answer(calls.at(-1)!, info);
+  await answer(taskRuleCalls().at(-1)!, record);
+  await answer(taskRepositoryCalls().at(-1)!, taskRepositories);
+};
+
+it("refreshes effective task defaults and the saved revision after a confirmed save without replacing the draft", async () => {
+  await render("assistant", "todo_example"); await click("Workspace naming");
+  await answer(calls[0], taskSettings);
+  await answer(taskRuleCalls()[0], { todo_id: "todo_example", revision: 4, workspace_rules: { task_directory_template: "custom/{task-id}" } });
+  await answer(taskRepositoryCalls()[0], taskRepositories);
+  await type(""); await click("Save");
+  await answer(calls.at(-1)!, { todo_id: "todo_example", revision: 5, workspace_rules: {} });
+  const refresh = calls.at(-1)!;
+  expect(refresh.path).toBe("/assistant");
+  expect(refresh.init.method ?? "GET").toBe("GET");
+  await answer(refresh, { ...taskSettings, machine_id: "other-box", effective_workspace_rules: { ...defaults, task_directory_template: "fresh/{task-id}" } });
+  // Another writer committed after this editor's save. Reload establishes the
+  // current baseline/revision, while the explicit local clear remains a draft.
+  await answer(taskRuleCalls().at(-1)!, { todo_id: "todo_example", revision: 6, workspace_rules: { branch_template: "other/{task-id}" } });
+  await answer(taskRepositoryCalls().at(-1)!, taskRepositories);
+  const field = document.querySelectorAll("input")[1];
+  expect(field.value).toBe(""); expect(field.placeholder).toBe("Assistant default: fresh/{task-id}");
+  expect(button("Save").disabled).toBe(false);
+  await click("Preview naming"); const preview = calls.at(-1)!;
+  expect(JSON.parse(preview.init.body as string)).toMatchObject({ machine_id: "box", workspace_rules: { task_directory_template: null, branch_template: null } });
+  await answer(preview, { status: "incomplete", sample: false, diagnostics: [] });
+  await click("Save"); expect(JSON.parse(calls.at(-1)!.init.body as string).expected_revision).toBe(6);
+});
+
+it("preserves the chosen preview computer and layout on recovery while refreshing saved rules", async () => {
+  await render(); await click("Workspace naming"); await answer(calls[0], settings);
+  const [computer, layout] = [...document.querySelectorAll("select")];
+  await act(async () => { computer.value = "other-box"; computer.dispatchEvent(new Event("change", { bubbles: true })); layout.value = "root"; layout.dispatchEvent(new Event("change", { bubbles: true })); });
+  await type("draft/{task-id}"); await click("Preview naming");
+  await answer(calls.at(-1)!, { error: "unavailable" }, 503);
+  await click("Reload saved settings"); await answer(calls.at(-1)!, { ...settings, workspace_rules: { branch_template: "fresh/{task-id}" } });
+  expect(computer.value).toBe("other-box"); expect(layout.value).toBe("root");
+  expect(document.querySelectorAll("input")[1].value).toBe("draft/{task-id}");
+  await click("Preview naming");
+  expect(JSON.parse(calls.at(-1)!.init.body as string)).toMatchObject({ machine_id: "other-box", layout: "root", workspace_rules: { task_directory_template: "draft/{task-id}" } });
+});
+
+it("retains an acknowledged task save when refreshing defaults fails and retries only reads", async () => {
+  await render("assistant", "todo_example"); await click("Workspace naming");
+  await answer(calls[0], taskSettings);
+  await answer(taskRuleCalls()[0], { todo_id: "todo_example", revision: 4, workspace_rules: {} });
+  await answer(taskRepositoryCalls()[0], taskRepositories);
+  await type("saved/{task-id}"); await click("Save");
+  await answer(calls.at(-1)!, { todo_id: "todo_example", revision: 5, workspace_rules: { task_directory_template: "saved/{task-id}" } });
+  await answer(calls.at(-1)!, { error: "unavailable" }, 503);
+  expect(button("Save").disabled).toBe(true);
+  expect(document.querySelectorAll("input")[1].value).toBe("saved/{task-id}");
+  await click("Reload saved settings");
+  await refreshTask({ todo_id: "todo_example", revision: 5, workspace_rules: { task_directory_template: "saved/{task-id}" } });
+  expect(calls.filter((call) => call.init.method === "PUT")).toHaveLength(1);
+  await type(""); await click("Save");
+  expect(JSON.parse(calls.at(-1)!.init.body as string)).toMatchObject({ expected_revision: 5, workspace_rules: { task_directory_template: null } });
+});
 
 it("drops removed repositories on reload while preserving the draft and explicit preview selection", async () => {
   const repo = (id: string): TaskRepository => ({ repo_id: id, requested_ref: { kind: "default" }, links: [], source_snapshot: {
@@ -184,6 +249,7 @@ it("keeps a cleared task override after a failed save and reload, then retries w
   expect(retry.path).toBe("/todos/todo_example/workspace-rules");
   expect(JSON.parse(retry.init.body as string)).toEqual({ expected_revision: 4, workspace_rules: { base_directory: null, task_directory_template: null, branch_template: null } });
   await answer(retry, { todo_id: "todo_example", revision: 5, workspace_rules: {} });
+  await refreshTask({ todo_id: "todo_example", revision: 5, workspace_rules: {} });
   expect(button("Save").disabled).toBe(true);
 });
 

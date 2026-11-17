@@ -4,11 +4,12 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { ApiError, errorText } from "../lib/api";
 import {
-  cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkView, useRepositoryRequestContext,
+  cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkView,
   saveTaskRepositories, validRepositoryAlias,
   type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RepositoryLinkInput, type RequestedRef,
   type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositorySet,
 } from "../lib/task-repositories";
+import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
 import type { RepositoryIdentity } from "../lib/repository-identity";
 import { Group, Pill, Row, RowFailed, settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Collapse, Dialog, IconButton, Loading, Menu, toast, useMenu } from "./atoms";

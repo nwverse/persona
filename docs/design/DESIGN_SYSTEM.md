@@ -1835,6 +1835,9 @@ compact row, stacked full-width on phones; a task's repository choices sit above
 that row, and the result carries no routine planning time, time zone or
 disclaimer text. A failed save retains its draft; reloading
 updates the saved baseline without replacing local edits.
+After a task save, refresh its saved revision and effective Assistant defaults
+without replacing the draft, computer, layout or remaining repository selection.
+If that read fails, keep the acknowledged save and offer the same read recovery.
 Changing a field, computer or assistant retires earlier previews. The panel
 changes no creation mode and starts nothing. This is a secondary settings
 surface, not another workspace management destination.

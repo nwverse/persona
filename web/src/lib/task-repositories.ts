@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useRef } from "react";
 import type { Todo } from "./todos";
 import { api, credentialOwner, getToken, pastHub } from "./api";
 import { MANAGER_HEADER } from "./manager-choice";
@@ -139,15 +138,6 @@ export type RepositoryRequestContext = { manager: string; owner: string; token: 
 export function repositoryRequestContext(manager: string, owner: string, active: () => boolean): RepositoryRequestContext {
   return { manager, owner, token: getToken(), isCurrent: () => active() && credentialOwner() === owner };
 }
-/** Keeps repository requests tied to the mounted editor and its current connection. */
-export function useRepositoryRequestContext(manager: string, owner: string) {
-  const alive = useRef(true);
-  const identity = useRef("");
-  identity.current = `${manager}:${owner}`;
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  return useMemo(() => repositoryRequestContext(manager, owner, () => alive.current && identity.current === `${manager}:${owner}`), [manager, owner]);
-}
-
 export function repositoryRequestOptions(context: RepositoryRequestContext) {
   if (!context.isCurrent()) throw new Error("The editor connection changed");
   return { token: context.token, tokenOwner: context.owner, isAuthContextCurrent: context.isCurrent, headers: { [MANAGER_HEADER]: context.manager } };

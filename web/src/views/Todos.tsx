@@ -1,5 +1,6 @@
 import { NewTodoRepositoryBindings, TodoRepositoryBindings } from "../ui/TaskRepositoryBindingsEditor";
-import { createTodoWithRepositories, useRepositoryRequestContext, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
 import { hasRequestPieces } from "../lib/request-pieces";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
