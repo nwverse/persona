@@ -109,10 +109,31 @@ width and Chinese word boundaries do not matter (the rule `assistant_search` alr
 (`chatsearch.IndexText`). With `include_tools`, also tool names, tool input (after `proto.RedactArgs`) and tool output.
 Never thinking, injected prompts or images.
 
+**Which sessions**: Agent sessions only, the ones the node would list as the user's, by one predicate shared with the
+listing so the two cannot drift (PR 2 lifts it out of `server/internal/node/sessions_offline.go` and the Codex
+registry). Left out, by the rules the listing already uses:
+
+- assistant conversations, the health space and meeting rooms: `isAssistantProject` (the assistant's projects
+  directory, its `-health` sibling, meeting-room directories, the former state directory's names), and Codex threads
+  whose start directory is the assistant's (`identity.IsAssistantDir`, `server/internal/node/codex_registry.go`).
+  `assistant_search` keeps those, so nothing is found twice;
+- other platforms' runs (`agentFiltered`), one-shot `claude -p` runs (`oneShotRun`) and launcher health checks
+  (`isLauncherCheckRun`);
+- directories outside the node's session scope (`sessionScopeAllows`) and blocked ones (`claudeDirBlocked`,
+  `cwdBlocked`).
+
+The list's time window (`offlineWindow`, `codexWindow`) and its small-file rule do not apply: content search reaches
+further back than the list. mnemo's hits go through the same predicate (section 2).
+
+**What a hit is**: an item `session.items` returns. The raw bytes of a line are only a prefilter; a file with a line
+that may match is read through `transcript.File`, whose branch tree leaves out lines on a branch abandoned by a rewind
+or an edit and whose `History` notices a rewritten file, and the words are matched on the visible items it yields. So
+an abandoned message never gives a hit, and every `item_id` and `seq` returned opens in `session.items`.
+
 **Answer** (at most `limit` sessions, 3 hits each, 64 KiB in all):
 
 ```json
-{"backend": "mnemo", "partial": false, "searched_back_to": null, "more": true,
+{"backend": "mnemo", "partial": false, "searched_back_to": null, "more": true, "uncovered": {"codex_app": 0},
  "sessions": [{"session_id": "…", "harness": "claude", "cwd": "…", "started_at": "…", "updated_at": "…",
                "hits": [{"item_id": "…#2", "seq": 412, "role": "assistant", "ts": "…",
                          "snippet": "…the retry budget comes from RELAY_RETRY_BUDGET, so the fix was…",
@@ -123,9 +144,21 @@ Never thinking, injected prompts or images.
 A hit's `seq` and `item_id` are the ones `session.items` uses, so a client lands on the item. Transcript paths are
 never in the answer.
 
-**Coverage**: Claude transcripts in every non-blocked config directory, Codex rollouts (live and archived) in every
-Codex home the node reads, and Codex App chats through the node's history files. Sessions served by other programs'
-APIs are counted and reported as `not_covered` so the App can say so; covering them is later work per program.
+**Coverage**: the Agent sessions above in Claude transcripts in every non-blocked config directory, Codex rollouts
+(live and archived) in every Codex home the node reads, and Codex App chats.
+
+Codex App chats need a step first. The node's history file for a chat (`codexAppHistoryPath`) is written or brought
+up to date only when the chat is opened or watched (`refreshCodexAppHistory`,
+`server/internal/node/codex_apphistory.go`), so a chat never opened in Persona has none, and an old one may lack the
+latest turns. Before matching, the node lists
+the eligible App threads from the App's database (`codexAppThreads`), newest first, and brings each history up to date
+with a form of `refreshCodexAppHistory` that takes the search's context and deadline (PR 2 adds it; today's callers
+keep their behavior). A thread the budget did not reach is not called searched: the answer counts it in
+`uncovered.codex_app` and sets `partial`. The first search on a computer with many never-opened App chats writes their
+histories, within the budget; later searches only append what changed.
+
+Sessions served by other programs' APIs are counted in `uncovered` too (by program) so the App can say so; covering
+them is later work per program.
 
 ### 2. Where the matching runs: three options
 
@@ -152,8 +185,8 @@ mnemo's numbers; PR 2 measures them on a synthetic corpus.
 answer, so the App and the manager never know which one ran (`backend` is for the coverage line only).
 
 - **Scan (always there)**: transcript files newest first by modification time; each line is checked against the
-  folded words on its raw bytes (ASCII case-folded) and only lines that can match are parsed with the transcript
-  parser and matched on their decoded, folded text. A word with characters that JSON may escape (quotes, `<`, `>`,
+  folded words on its raw bytes (ASCII case-folded) and a file with a line that can match is read through
+  `transcript.File` and matched on its visible items (section 1). A word with characters that JSON may escape (quotes, `<`, `>`,
   `&`, `\`) or that NFKC changes is not used to skip lines, so the shortcut never drops a real match. The scan stops
   when `limit` sessions have hits (`more: true`) or at `budget_ms` (2.5 s by default), which answers `partial: true`
   with `searched_back_to`, the modification time of the last file it finished. One scan at a time per node; a new search
@@ -164,13 +197,16 @@ answer, so the App and the manager never know which one ran (`backend` is for th
   `mnemo search --json --host local --limit <n> [--source] [--cwd] [--since] -- <words>` with the same budget.
   `--host local` keeps mnemo from searching its own SSH remotes, so it never reaches a computer Persona does not know
   and never duplicates another node's hits. For each hit the node:
-  - keeps it only if `path` is a transcript it reads itself (not blocked, in a known config directory or Codex home);
+  - keeps it only if `path` is a transcript it reads itself (not blocked, in a known config directory or Codex home)
+    and section 1's predicate keeps its session (not an assistant, health or meeting chat, not another platform's run);
   - maps it to its own session id (a Codex thread outside the legacy home has an opaque `c0de-` id,
     `docs/protocol/protocol.md`) and uses `lineno` as `seq`;
-  - reads that one line again, applies section 1's rule, redaction and snippet, and drops the hit if the line no
-    longer matches (the file changed since mnemo's sync). mnemo's own `snippet` and `body` are never forwarded;
+  - finds the visible item at that line through `transcript.File` and applies section 1's rule, redaction and
+    snippet to it; the hit is dropped if the line is not a visible item (a branch abandoned by a rewind or an edit)
+    or no longer matches (the file changed since mnemo's sync). mnemo's own `snippet` and `body` are never forwarded;
   - drops `archived: true` hits (mnemo's copy of a log the Agent deleted: Persona cannot open them).
-  Then the node scans the Codex App history files mnemo cannot see, within what is left of the budget. If mnemo is
+  Then the node brings the Codex App histories up to date and scans them (section 1), within what is left of the
+  budget, since mnemo cannot see those chats. If mnemo is
   missing, too old, fails or runs out of time, the node scans instead and says so in its answer.
 - Persona never runs `mnemo index` or `reindex`, never reads mnemo's configuration and never installs it. mnemo
   syncs its own index before each search (about 0.1 s when nothing changed, per its docs); that is mnemo's behavior on
@@ -309,11 +345,16 @@ A new route rather than a new mode of `search=`:
    tests and the `assistant_search` tests pass unchanged; `cmd/persona-node`'s guard passes once PR 2 imports it.
 2. **Node scan and `session.search`** with `session_search_v1` and its row in `docs/protocol/protocol.md`. Tests on a
    temporary home with Claude, Codex and Codex App history fixtures: Chinese, width and case; words in different
-   items do not match; blocked directories; each secret shape from `share_sanitize.go` redacted in snippets; a match
-   inside a secret dropped; the budget giving `partial` and `searched_back_to`; cancellation; the size caps; a
+   items do not match; blocked directories; assistant, health-space and meeting-room chats and an assistant-started
+   Codex thread give no hits or snippets while an ordinary session beside them does; rewind and edit fixtures where an
+   abandoned message gives no hit and every returned `item_id` opens through `session.items`; a never-opened Codex App
+   chat and an App history behind its database both found, and a budget too small for them counted in
+   `uncovered.codex_app`; each secret shape from `share_sanitize.go` redacted in snippets; a match inside a secret
+   dropped; the budget giving `partial` and `searched_back_to`; cancellation; the size caps; a
    benchmark on a synthetic corpus, numbers in the PR. Never the developer's real home.
 3. **The mnemo backend.** A fake `mnemo` script on `PATH` in tests: too old or missing leads to a scan; remote-host
-   hits, unknown paths, blocked folders and `archived` hits are dropped; a changed line is dropped; mnemo's snippet is
+   hits, unknown paths, blocked folders, assistant and health chats, lines on an abandoned branch and `archived` hits
+   are dropped; a changed line is dropped; mnemo's snippet is
    never forwarded; a timeout falls back to a scan.
 4. **Manager fan-out, route and relay**, the feature, the route scope, the architecture guard's table list, and
    `scripts/mock/mock_hub.py` answering the route. Tests with fake computers: slow (timeout), offline (no call),
