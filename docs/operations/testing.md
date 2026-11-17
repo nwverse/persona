@@ -1180,6 +1180,11 @@ an ssh alias or URL host spelled the same; it only takes back a config value mad
 (hosts with a domain, addresses, emails, paths, ids), a word listed plainly in either `private-words.txt`, and the home directory stay private.
 A `!` line that is not ASCII letters only is searched as written, with a warning naming its line, not its value. The waiver lives where the values are
 read, so every scan that takes them from `privacy_check.py` honours it (the hooks, `merge-pr.sh`, `release.sh`, `scripts/release/check_bundle_privacy.py`).
+**App identifiers** (#9461): a reverse-DNS value held only under a `bundle_id`, `application_id` or `app_group` key (`app.bundle_id`, `app.watch_widget_bundle_id`,
+`android.application_id`, `app.app_group`, …) matches as a whole identifier, not continued by a letter, digit, `_` or `-`. Everything derived from it
+with dots (`group.<id>`, `<id>.watchkitapp.widgets`, `<TEAM ID>.<id>`) still matches; a longer identifier that only starts the same way (`<id>d`,
+`<id>-node`, a public default committed on purpose) does not, where a substring match failed every whole-repo scan on that machine. The same value
+also held under another key, or listed in `private-words.txt`, keeps the substring match; `scripts/release/check_bundle_privacy.py` keeps its own matching.
 **Names blocked on every machine** (#4967): specific vendor and internal-repository names never enter the repo, in any spelling (case, hyphens, underscores, spaces, camel case). Rules live in `BANNED_NAMES` in the script, their only location in the repo.
 CI enforces them without private config. Needed capabilities belong in extensions that supply their own names; the main repo uses generic wording ("relay", "extension-provided IM connector"). Test examples concatenate pieces to avoid matching themselves.
 A word listed only lowercase/uppercase/titlecase isn't matched across an internal lowercase→uppercase camel boundary (`fooBar`): ordinary-word identifiers (tokens/SF Symbols) can accidentally contain sensitive words, falsely blocking repo scans/web `prebuild` (#3819). To block camelcase too, list a boundary-bearing form (`FooBar`).

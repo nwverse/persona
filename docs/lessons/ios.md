@@ -2862,3 +2862,61 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
   edges). At the default size it looked fine.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
+
+## A page put back beneath a kept item learns of the item from the item's own appearance (2026-11-16, #9053)
+
+A place's kept stack (`ShellPlaces`) comes back as a `NavigationPath`, which can't be read element by element, so the
+Inbox list rebuilt beneath a kept item can't see which item is on top of it. SwiftUI makes that list (its `@State` fresh)
+but runs its `onAppear` only when Back reveals it, and on that pop the revealed page's `onAppear` runs before the popped
+page's `onDisappear`. So the item page records itself on appear and clears itself on disappear (`InboxBarLanding`), and
+the list reads the record on its first appearance only, landing on the item's section; later appearances (an item it
+pushed itself, a chain link) leave its choice alone. `InboxSectionBarUITests.testAnItemBroughtBackLandsTheListOnItsChoice`
+walks it on an iPad, the layout whose sidebar can leave the place with an item open; with the read turned off it fails.
+In the Sidebar layout (#8359, also the iPad's Separate layout since #8367) the Inbox is the page's root, not pushed: brought
+back, the new list appears at once, before the kept item's page, so the record was empty when it looked. The record keeps
+the item last in front after its page goes, and bringing a place back with a kept path puts it in front again first
+(`InboxBarLanding.broughtBack`, from `AssistantView.show` and the Sidebar layout's pick).
+
+## A scroll to an id lands on the item that owns it, not on a frame widened around it (2026-11-17, #9053)
+
+The Inbox's section bar must scroll a chosen chip clear of the strip's edge fade (`.edgeFade()`, 24 pt). Giving each chip
+a clear background widened by the fade and an id of its own, then `ScrollViewProxy.scrollTo` that id, moved the strip
+exactly as far as scrolling to the chip itself: the chip stopped under the fade. Neither order helped (the id on the
+padding, whose own frame stays the chip's, or on the widened `Color.clear` inside it). `scrollTo` has no margin, and an
+anchor only lines up the same unit point of the chip and the strip. What works: measure the chips in the content's
+coordinate space (`onGeometryChange` into a store that redraws nothing), read the offset in view
+(`onScrollGeometryChange`), work out the least offset that clears the fade (`CapsuleReveal.offset`, pure and tested),
+and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
+checks the chip's frame against the strip's.
+
+## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
+
+`AssistantView.show` returns the place in front to its root by `backToRoot()` then appending the place's route again, in
+one update: the path goes `[inbox]` → `[]` → `[inbox]`, SwiftUI sees the same root, and keeps the same page with its
+`@State` (scroll offset, the section bar's choice). Its `onAppear` doesn't run again either. A page that must start over
+on every entry (the Inbox opens on Needs you) can't rely on being built anew: `show(.inbox)` bumps
+`AppModel.inboxEntries` when it goes to the root, and visionOS's tab, which the `TabView` keeps up, bumps it when the tab
+is picked or routed to; the page resets on `.onChange(of:)`. A kept path (`ShellPlaces`) puts a different root first,
+so that page is new and lands by itself. The Sidebar layout's pick goes through `SidebarPageRoots` instead, and a pick of
+the root in front (no move, or a pop to it) bumps the counter there. Reviewers caught it at runtime with the Inbox on FYI and a route to the Inbox
+(`personactl navigate inbox --keep`, the widget's and the quick action's way in); `InboxSectionBarUITests` now walks it.
+
+## The newest end out of reach after a far landing (2026-11-16, #7382, #1942)
+
+- **What happened**: in Persona's main conversation a long newest answer's last lines sat under the capsule row and the
+  composer, and a drag there sprang back; ↓ was gone because the offset said the list was at its end. Reproduced on the
+  mock hub (`NewestEndReachTests`, `MOCK_LONG_ASSISTANT=1 MOCK_TASKS=1`, history paging on): opened again at a saved place
+  far up (`landEntry`), then flicked back to the newest end by finger.
+- **Why**: after a landing far from the newest end, the flipped `LazyVStack` places the rows between there and the newest
+  end by estimated heights and never corrects them once a finger brings them in. Rows taller than estimated put the newest
+  line over the end sentinel, before the scroll view's end (measured −590 pt: the newest line's top should be 16, the
+  rows' spacing past the sentinel); shorter ones left thousands of points of blank room before it (3,600–35,000 pt), with
+  older rows drawn past the newest. Which of the two depends on the run; ↓ (`ChatJumpRun`) always got it right.
+- **Fix**: the sentinel and the newest line report where the stack placed them, in the stack's own coordinate space
+  (`ChatPin.space`, which scrolling does not change, so the reports come only with layout). When they disagree and the
+  newest line is on screen with nothing moving the list, the list is built again at its newest end
+  (`ChatView.mendMisplacedStart`, logged under `chat-landing`). `probe.chat-rows` has `newestY` and `startMends`.
+- **Also**: building the list again (`listBuild`) left `ChatPin.list` nil: the old list's `Finder` probe, leaving the
+  window after the new one came in, handed the pin the outgoing scroll view. The probe now takes the list only on its way in.
+- XCUITest's frame of a text in a misplaced list can be thousands of points off the screen while the probe says the line
+  is drawn: check the probe's numbers, not only frames.

@@ -1,7 +1,8 @@
-//! Bounded fence, table, final-block-marker, inline and math-end projection of Apple's `StreamRepair`.
+//! Bounded fence, table, final-block-marker, inline, math-end and plain-open-fence projection of Apple's
+//! `StreamRepair`.
 //!
-//! MathMarkdown's `display` predicate is included only for end reporting; formula rewriting, rendering and
-//! `plainOpenFence` are not implemented.
+//! MathMarkdown's `display` predicate is included only for end reporting; formula rewriting and rendering are not
+//! implemented. The plain-fence projection takes the caller's drawn-info predicate as explicit input.
 
 use serde::{Deserialize, Serialize};
 use unicode_general_category::GeneralCategory;
@@ -16,6 +17,18 @@ pub struct Input {
 pub struct Projection {
     pub repaired: String,
     pub end: &'static str,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlainFenceInput {
+    pub text: String,
+    /// Exact info strings for which the caller draws a picture. This replaces Apple's `drawn` closure.
+    pub drawn: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlainFenceProjection {
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -500,6 +513,46 @@ fn project_end(text: &str) -> &'static str {
         return "math";
     }
     if scan.table().is_some() { "table" } else { "text" }
+}
+
+/// Apple `StreamRepair.plainOpenFence`: strip only the still-open fence's drawn info string. Its Scan trimming is
+/// space/tab/CR, while the subsequent info predicate uses Foundation `.whitespacesAndNewlines`.
+pub fn plain_open_fence(input: &PlainFenceInput) -> PlainFenceProjection {
+    let text = &input.text;
+    if !text.contains("```") && !text.contains("~~~") {
+        return PlainFenceProjection { text: text.clone() };
+    }
+    let scan = Scan::new(text);
+    let Some(ref open) = scan.fence else {
+        return PlainFenceProjection { text: text.clone() };
+    };
+    let line = scan.lines[open.line];
+    let scalars = text.chars().collect::<Vec<_>>();
+    let mut run = scan.scalar_offset(open.line);
+    let line_end = run + line.chars().count();
+    while run < line_end && is_space_like(scalars[run]) {
+        run += 1;
+    }
+    while run < line_end && scalars[run] == open.character {
+        run += 1;
+    }
+    let info = scalars[run..line_end]
+        .iter()
+        .collect::<String>()
+        .trim_matches(is_whitespace_and_newline)
+        .to_owned();
+    let text = if !info.is_empty() && input.drawn.contains(&info) {
+        scalars[..run].iter().collect::<String>() + &scalars[line_end..].iter().collect::<String>()
+    } else {
+        text.clone()
+    };
+    PlainFenceProjection { text }
+}
+
+fn is_whitespace_and_newline(character: char) -> bool {
+    matches!(character, '\t'..='\r')
+        || unicode_general_category::get_general_category(character) == GeneralCategory::SpaceSeparator
+        || matches!(character, '\u{0085}' | '\u{2028}' | '\u{2029}')
 }
 
 /// Apple `MathMarkdown.display`: a trimmed line containing exactly one formula. Its inline scanner uses Swift

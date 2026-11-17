@@ -1,11 +1,12 @@
 // An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017, #9241).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
-// answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
+// sort's three iOS-derived held cases (#9033), answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
 // overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
 // viewed_images (ordinary post-overlay plus source-derived folded expected objects).
 // The stream_repair replay (22 fence + 19 marker/boundary + 39 table/boundary complete objects) mirrors the Apple
-// Swift assertions and existing JNI-derived boundaries. Expectations are independently transcribed from Apple
+// Swift assertions and existing JNI-derived boundaries. The separate plain_open_fence replay (#9563) uses #9515's
+// five explicit Apple assertions and 31 source-derived controls. Expectations are independently transcribed from Apple
 // tests/source and that replay, never derived from the Rust output. Every object compares both `repaired` and `end`.
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
 // compact separators), so object key order is insignificant while every value, array order and Unicode string is exact.
@@ -686,7 +687,7 @@ static void expect_empty(Projection projection, const char *domain, const char *
     persona_core_bytes_free(result);
 }
 
-/* ---------- sort (the original #8560 smoke, now semantic) ---------- */
+/* ---------- sort (empty-list smoke plus the iOS-derived held-row projections) ---------- */
 
 static int check_sort(const char *fixtures) {
     char path[4096];
@@ -702,6 +703,27 @@ static int check_sort(const char *fixtures) {
     JValue *actual = project_case(persona_core_project_sort, jget(found, "input"));
     if (!actual || !jequal(actual, jget(found, "expected"))) fail("sort", "empty_list", "projection differs from the fixture");
     jfree(actual);
+    jfree(doc);
+
+    static const char *const manifest[] = {
+        "held_quiet_row_keeps_unread_state_section", "held_quiet_space_stays_active", "held_row_stays_out_of_quiet_idle_fold",
+    };
+    snprintf(path, sizeof(path), "%s/sort/held.json", fixtures);
+    doc = load_json(path);
+    cases = jget(doc, "cases");
+    if (jcount(cases) != sizeof(manifest) / sizeof(manifest[0])) {
+        fail("sort", "held manifest", "exact held case count differs"); jfree(doc); return 1;
+    }
+    for (size_t i = 0; i < sizeof(manifest) / sizeof(manifest[0]); i++) {
+        const JValue *c = jat(cases, i);
+        const char *name = jstr(jget(c, "name"));
+        if (!name || !manifest_has(manifest, sizeof(manifest) / sizeof(manifest[0]), name)) {
+            fail("sort", "held manifest", "added, dropped or renamed held case"); continue;
+        }
+        actual = project_case(persona_core_project_sort, jget(c, "input"));
+        if (!actual || !jequal(actual, jget(c, "expected"))) fail("sort", name, "projection differs from the iOS-derived fixture");
+        jfree(actual);
+    }
     jfree(doc);
     expect_empty(persona_core_project_sort, "sort", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_sort, "sort", "invalid_json", "{\"sessions\":[}");
@@ -954,8 +976,123 @@ static void check_stream_repair(void) {
            fence_matched, marker_matched, table_matched);
 }
 
-/* ---------- answer + display_answer ---------- */
+/* ---------- plain_open_fence (#9515, #9563) ---------- */
 
+/* The five explicit Apple assertions and 31 source-derived controls are reused verbatim from the independently
+ * reviewed #9515 Kotlin corpus. Every input has an independent complete {text} expectation and an explicit drawn
+ * array; the core never infers the predicate from the expected output. */
+typedef struct {
+    const char *input;
+    const char *drawn[2];
+    size_t drawn_count;
+    const char *text;
+    const char *source;
+} PlainFenceCase;
+
+#define MERMAID_MATH {"mermaid", "math"}, 2
+#define NO_DRAWN {NULL, NULL}, 0
+
+static void check_plain_open_fence(void) {
+    static const PlainFenceCase cases[] = {
+        {"看图：\n```mermaid\ngraph TD", MERMAID_MATH, "看图：\n```\ngraph TD", "Apple explicit"},
+        {"  ~~~ math \nx^2\n", MERMAID_MATH, "  ~~~\nx^2\n", "Apple explicit"},
+        {"```mermaid\ngraph TD\n```\n", MERMAID_MATH, "```mermaid\ngraph TD\n```\n", "Apple explicit"},
+        {"```mermaid\na\n```\n```swift\nlet", MERMAID_MATH, "```mermaid\na\n```\n```swift\nlet", "Apple explicit"},
+        {"```swift\nlet", MERMAID_MATH, "```swift\nlet", "Apple explicit"},
+        {"", MERMAID_MATH, "", "empty input"},
+        {"mermaid", MERMAID_MATH, "mermaid", "no fence run"},
+        {"`mermaid`", MERMAID_MATH, "`mermaid`", "inline code span"},
+        {"``mermaid\nx", MERMAID_MATH, "``mermaid\nx", "two opener backticks"},
+        {"```code```\nx", MERMAID_MATH, "```code```\nx", "extra opener backtick"},
+        {"    ```mermaid\nx", MERMAID_MATH, "    ```\nx", "four-column indentation"},
+        {"\t~~~math \nx", MERMAID_MATH, "\t~~~\nx", "tab indentation"},
+        {"````math \nx", MERMAID_MATH, "````\nx", "four-character opener"},
+        {"```mermaid", MERMAID_MATH, "```", "opener only"},
+        {"```mermaid\n", MERMAID_MATH, "```\n", "opener and newline"},
+        {"```mermaid\r", MERMAID_MATH, "```", "trailing CR"},
+        {"```mermaid\r\nx", MERMAID_MATH, "```\nx", "CRLF"},
+        {"\r```mermaid\nx", MERMAID_MATH, "\r```\nx", "leading CR"},
+        {"```mermaid\xc2\xa0\nx", MERMAID_MATH, "```\nx", "trailing NBSP"},
+        {"\xc2\xa0```mermaid\nx", MERMAID_MATH, "\xc2\xa0```mermaid\nx", "leading NBSP"},
+        {"```\x0bmermaid\nx", MERMAID_MATH, "```\nx", "vertical tab before info"},
+        {"```mermaid\xc2\x85\nx", MERMAID_MATH, "```\nx", "NEL after info"},
+        {"```mermaid\xe2\x80\xa8\nx", MERMAID_MATH, "```\nx", "line separator after info"},
+        {"```mermaid\xe2\x80\xa9\nx", MERMAID_MATH, "```\nx", "paragraph separator after info"},
+        {"```mermaid extra\nx", MERMAID_MATH, "```mermaid extra\nx", "complete predicate"},
+        {"```MERMAID\nx", MERMAID_MATH, "```MERMAID\nx", "case-sensitive predicate"},
+        {"```mermaid\nx\n~~~\n", MERMAID_MATH, "```\nx\n~~~\n", "different-character closer"},
+        {"````mermaid\nx\n```\n", MERMAID_MATH, "````\nx\n```\n", "shorter closer"},
+        {"```mermaid\nx\n```\n~~~math\ny", MERMAID_MATH, "```mermaid\nx\n```\n~~~\ny", "open math fence"},
+        {"$$\n```mermaid\nx", MERMAID_MATH, "$$\n```mermaid\nx", "fence-looking line inside math"},
+        {"```mermaid\n$$\nx", MERMAID_MATH, "```\n$$\nx", "math-looking line inside fence"},
+        {"```mermaid\nx", {"math", NULL}, 1, "```mermaid\nx", "wrong drawn predicate"},
+        {"```mermaid\nx", NO_DRAWN, "```mermaid\nx", "empty drawn input"},
+        {"```mermaid extra\nx", {"mermaid extra", NULL}, 1, "```\nx", "complete drawn info"},
+        {"```图 e\xcc\x81 \nx", {"图 e\xcc\x81", NULL}, 1, "```\nx", "decomposed Unicode info"},
+    };
+    size_t matched = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const PlainFenceCase *c = &cases[i];
+        JValue *input = repair_input(c->input);
+        JValue *drawn = jnew(J_ARRAY);
+        for (size_t j = 0; j < c->drawn_count; j++) {
+            if (!drawn) fail("plain_open_fence", c->source, "invalid drawn array");
+            jpush(drawn, jstring(c->drawn[j]));
+        }
+        jset(input, "drawn", drawn);
+        JValue *actual = project_case(persona_core_project_plain_open_fence, input);
+        JValue *expected = jnew(J_OBJECT);
+        jset(expected, "text", jstring(c->text));
+        if (!input || !expected || jcount(expected) != 1 || !actual) {
+            fail("plain_open_fence", c->source, "empty projection or incomplete expected object");
+        } else if (!jequal(actual, expected)) {
+            fail("plain_open_fence", c->source, "complete {text} object differs");
+        } else {
+            matched++;
+        }
+        jfree(expected);
+        jfree(actual);
+        jfree(input);
+    }
+    if (matched != 35) fail("plain_open_fence", "manifest", "expected exactly 35 complete positive objects");
+    expect_empty(persona_core_project_plain_open_fence, "plain_open_fence", "missing_drawn", "{\"text\":\"```mermaid\"}");
+    expect_empty(persona_core_project_plain_open_fence, "plain_open_fence", "missing_text", "{\"drawn\":[]}");
+    expect_empty(persona_core_project_plain_open_fence, "plain_open_fence", "wrong_text_type", "{\"text\":1,\"drawn\":[]}");
+    expect_empty(persona_core_project_plain_open_fence, "plain_open_fence", "wrong_drawn_type", "{\"text\":\"x\",\"drawn\":1}");
+    expect_empty(persona_core_project_plain_open_fence, "plain_open_fence", "wrong_drawn_item", "{\"text\":\"x\",\"drawn\":[1]}");
+    expect_empty(persona_core_project_plain_open_fence, "plain_open_fence", "invalid_json", "not JSON");
+    {
+        JValue *input = repair_input("看图：\n```mermaid\ngraph TD");
+        JValue *drawn = jnew(J_ARRAY);
+        jpush(drawn, jstring("mermaid"));
+        jset(input, "drawn", drawn);
+        JValue *actual = project_case(persona_core_project_plain_open_fence, input);
+        JValue *wrong = jnew(J_OBJECT);
+        jset(wrong, "text", jstring("看图：\n```mermaid\ngraph TD"));
+        if (jequal(actual, wrong)) fail("plain_open_fence", "wrong_complete_expectation", "a wrong expectation compared equal");
+        jfree(wrong);
+        jfree(actual);
+        jfree(input);
+    }
+    printf("c-abi: plain_open_fence %zu/35 complete {text} objects; malformed inputs and wrong expectations rejected\n", matched);
+}
+
+static void check_plain_open_fence_wrong_predicate(void) {
+    JValue *input = repair_input("```swift\nx");
+    JValue *drawn = jnew(J_ARRAY);
+    jpush(drawn, jstring("mermaid"));
+    jpush(drawn, jstring("math"));
+    jset(input, "drawn", drawn);
+    JValue *actual = project_case(persona_core_project_plain_open_fence, input);
+    JValue *wrong = jnew(J_OBJECT);
+    jset(wrong, "text", jstring("```\nx"));
+    if (jequal(actual, wrong)) fail("plain_open_fence", "wrong_non_drawn_expectation", "a wrong expectation compared equal");
+    jfree(wrong);
+    jfree(actual);
+    jfree(input);
+}
+
+/* ---------- answer + display_answer ---------- */
 static const char *const question_manifest[] = {
     "all_answered_can_submit_from_earlier_page", "blank_other_cannot_submit", "blank_other_uses_picks",
     "empty_answer_cannot_submit", "last_page_missing_answer_returns_to_gap", "multiple_other_overrides_picks",
@@ -1570,12 +1707,12 @@ static void check_viewed_images(const char *fixtures) {
     jfree(fold_expected);
     jfree(fold_actual);
     jfree(input);
+    JValue *empty_fold_input = jclone(jget(fold_case, "input"));
     jfree(folds);
 
     expect_empty(persona_core_project_viewed_images, "viewed_images", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_viewed_images, "viewed_images", "invalid_json", "not JSON");
     expect_empty(persona_core_project_viewed_images, "viewed_images", "no_work", "{\"items\":[]}");
-    JValue *empty_fold_input = jclone(jget(fold_case, "input"));
     JValue *empty_fold_actual = project_case(persona_core_project_viewed_images, empty_fold_input);
     if (empty_fold_actual) fail("viewed_images", "no_fold_images", "fold without images returned a viewed line");
     jfree(empty_fold_actual);
@@ -1592,7 +1729,7 @@ int main(int argc, char **argv) {
     }
     /* Fail closed: every fixture this client replays must exist and parse before any comparison runs. */
     static const char *const required[] = {
-        "sort/filters.json", "stream-chunks/split.json", "answer/questions.json", "answer/recommended.json",
+        "sort/filters.json", "sort/held.json", "stream-chunks/split.json", "answer/questions.json", "answer/recommended.json",
         "lines/ios/differences.json", "lines/folds.json", "lines/frozen.json", "lines/layout.json",
         "lines/queued.json", "lines/rebuild.json", "lines/structure.json", "lines/tasks.json",
         "lines/wakes.json", "lines/work.json", "wire-envelope/frames.json",
@@ -1610,6 +1747,8 @@ int main(int argc, char **argv) {
     check_sort(argv[1]);
     check_stream(argv[1]);
     check_stream_repair();
+    check_plain_open_fence();
+    check_plain_open_fence_wrong_predicate();
     check_answer_file(argv[1], "questions.json", 0, 15);
     check_answer_file(argv[1], "recommended.json", 1, 9);
     check_answer_boundaries();
@@ -1621,6 +1760,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, stream_repair 80 complete objects, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort empty+3 held, answer 15+9, stream 21, stream_repair 80 complete objects, plain_open_fence 35 complete objects plus negative controls, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }

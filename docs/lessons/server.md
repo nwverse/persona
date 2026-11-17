@@ -1,5 +1,51 @@
 # Lessons: hub / node and networking
 
+## Journal recovery before changing live update files (#6921)
+
+A fence saying an update started cannot restore a Web directory renamed before `pending.json`
+was saved. Save all program preimages first, then sync a complete recovery journal before
+replacing programs, and save the Web rename intent before moving it. Recovery must tolerate
+an intent whose rename never ran and a Web directory already restored by an earlier attempt.
+Restore first; only successful restoration permits deleting markers or staging. Startup pruning
+must honor retained recovery ownership too. Exercise abrupt process exits between the actual
+renames and pending publication, not only returned installation errors.
+Propagate restoration and exec failures through both Hub startup entry points: a boolean
+"update pending" cannot block a failed recovery when no pending marker exists. Keep the
+adoption journal and staging until the restored executable runs, so a failed exec can retry.
+The Edge callback must distinguish no matching update from failed restoration: returning only
+"not restored" can make activation fall back to the partially restored binary path. Propagate
+an error through slot/control activation and confirmation timeout, stop the Edge, and keep
+both journals/staging for repair. Test actual file failures and every callback consumer.
+
+Interruption consent belongs to the accepted operation. A manual request delayed in service
+discovery must not set `now` on a later attempt that overtook it; reject it after discovery,
+while preserving explicit confirmation of the currently accepted waiting attempt.
+
+Cancellation cleanup needs its own time budget: first signal the whole child group with SIGINT,
+escalate within bounded waits, and defer repeated cancellation while resuming paused writers.
+A failed resume keeps its coordination marker; successful resume does not make an interrupted
+snapshot publishable.
+
+`pg_dump` does not expand a connection URI stored in `PGDATABASE`: real libpq treats it
+as the database name. Parse URI or keyword connections with `PQconninfoParse` and pass
+explicit fields through their documented environment bindings; reject unsupported fields
+before pausing writers. A fake dump cannot prove this works. Use an owned PostgreSQL cluster,
+restore its synthetic dump, and inspect the actual child command line for credential leaks.
+
+Recovery metadata is editable input even when the snapshot has an ownership marker.
+Validate its complete schema and exact artifact mapping before reading payloads, then check
+the staged native hash independently. History verification and extraction must share the
+same canonical path and link rules; a checksum alone cannot make an unsafe tar safe.
+
+Run recovery on the oldest supported interpreter, not just the current Python. Early 3.9/3.11
+patch releases lack `extractall(filter=...)`; later security backports make the minor version
+alone an unreliable capability test. Recovery uses a single restricted writer on Python 3.9+:
+validate the complete inventory, create private directories and exclusive regular files, then
+create links last, without archive ownership or unsafe modes. Python 3.9 also needs `Z` UTC
+timestamps normalized to an explicit offset before `fromisoformat`. Exercise actual interpreter
+versions, legal recovery and hostile archives; a newer Python or mocked signature cannot prove
+that an older operator environment can recover its data.
+
 ## Validate the APNs signing curve before a push (#9438)
 
 ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
@@ -552,6 +598,9 @@ Successful checks may refresh release metadata and failed checks may advance the
 last-check time, but neither may replace an active update's state, progress or error.
 Apply the guard in the shared check path used by manual, startup and hourly checks,
 and keep automatic installation and held-release recording out of confirmation.
+The install script's separate checksum refresh needs the same protection: load the saved
+channel before fetching, recheck it after the response, and mutate availability under the
+install-state mutex. A result from the old channel must not replace a new selection.
 Regression tests must observe the state while the request is blocked as well as
 after success or failure; checking only the final state misses a transient
 `checking` event that already hid the progress in every client.
@@ -1791,6 +1840,12 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Move the bytes, not the request: `http.request_streamed` keeps the whole envelope (auth, caller, receipts, the answer) on the bus and sends only a large body on a relay of its own, in 256 KiB messages, read whole before the route runs. Nothing about the request's meaning changes, so there is nothing to keep in step but the body. A stream that fails is refused before anything ran, so the hub can send the request inline after it without running it twice.
 - Separate HTTP requests were never ordered by the bus (the hub reads each body before calling, the manager runs each call in its own goroutine), so a side stream breaks no order anyone relied on: a flow that needs one request after another waits for the first's answer.
 - Prove a stall with a control: `TestLargeBodyDoesNotHoldUpTheBus` throttles the manager's reads and measures a small call during a large upload both ways (3 ms streamed, 2.5 s inline). Without the inline run failing its own bound, a too-fast test link would pass for a fix.
+
+## Rows nobody sees still cost every push (2026-11-14, #6836)
+
+- A machine's list told the hub carried a row for every archive record, kept without expiry, and the hub dropped all of them (`Hub.shown`) before anything reached an app. At 8,000 records and 200 live sessions, one session changing cost the manager 23 ms and 110 MB, the bus a 5.9 MB message, and the hub 4.4 ms and 27 MB. A list that is filtered at the far end grows with what it filters: send what the far end shows, and what it only looks up by id on its own, when it changes.
+- Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
+- A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
 
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 

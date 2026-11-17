@@ -3,7 +3,8 @@ import SwiftUI
 
 // Settings › Appearance (2026-11-01): laid out like Connectors, one row per thing that changes how the app looks
 // (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
-// Glow While Replying is a switch in place, not a page: it is one on/off choice (iOS only, `ComposerGlow`).
+// Glow While Replying is a switch in place, not a page: it is one on/off choice (iOS only, `ComposerGlow`); so is
+// Return Key Sends beside it, the composer's other choice (iOS only, `ReturnSends`, #8178).
 // The home screen icon is the Avatar's, not a row of its own (#3203). Picking anything
 // there rebuilds the whole tree (`AppModel.look`); the settings path lives in AppModel, so the
 // rebuilt app is back on the same page.
@@ -17,6 +18,9 @@ struct AppearanceSection: View {
     @StoredValue(NavigationLayout.key) private var navigation = ""
     #endif
     @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
+    #if os(iOS)
+    @StoredValue(ReturnSends.enabledKey) private var returnSends = false
+    #endif
 
     var body: some View {
         Section {
@@ -77,6 +81,12 @@ struct AppearanceSection: View {
                                       symbol: Theme.Icon.composerGlow, tint: Theme.Hue.purple,
                                       accessibilityID: "settings-composer-glow", isOn: $composerGlow)
                 }
+                #if os(iOS)
+                SettingsSwitchRow(title: String(localized: "Return Key Sends"),
+                                  detail: String(localized: "Send with Return; Shift-Return starts a new line"),
+                                  symbol: Theme.Icon.enter, tint: Theme.Hue.blue,
+                                  accessibilityID: "settings-return-sends", isOn: $returnSends)
+                #endif
             }
             .bareListRow()
         } header: {

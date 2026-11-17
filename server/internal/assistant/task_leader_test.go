@@ -171,7 +171,19 @@ func TestTaskLeaderGetsRestrictedTaskPlanAndWorkersDoNot(t *testing.T) {
 		t.Fatalf("an agent of no task got task_plan: %v", got)
 	}
 
+	for _, session := range []string{"", "s1"} {
+		if got := leaderToolNames(s.runtimeLeaderTools(ctx, "box", session, false)); !slices.Equal(got, []string{"task_plan", "task_review"}) {
+			t.Fatalf("runtime leader tools for %q: %v", session, got)
+		}
+	}
+	if got := s.runtimeLeaderTools(ctx, "box", "s1", true); len(got) != 0 {
+		t.Fatalf("guest received runtime leader tools: %v", got)
+	}
+
 	w := planWorker(t, s, f, nil)
+	if got := s.runtimeLeaderTools(ctx, "box", w.Agents[0].SessionID, false); len(got) != 0 {
+		t.Fatalf("worker received runtime leader tools: %v", got)
+	}
 	if got := leaderToolNames(s.sessionMCPTools(ctx, "box", w.Agents[0].SessionID, false, false)); slices.Contains(got, "task_plan") {
 		t.Fatalf("a worker got task_plan: %v", got)
 	}
