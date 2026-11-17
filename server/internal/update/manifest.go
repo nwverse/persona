@@ -27,7 +27,7 @@ type Manifest struct {
 	Protocol    int             `json:"protocol"`
 	Notes       string          `json:"notes,omitempty"`
 	Channel     string          `json:"channel,omitempty"` // absent: the existing stable feed; beta: prereleases only
-	Files       map[string]File `json:"files"` // "linux-amd64" -> its download
+	Files       map[string]File `json:"files"`             // "linux-amd64" -> its download
 	// Ancestors is every commit the release's code contains (EncodeAncestors of git rev-list <commit>): a hub installs
 	// it by itself only when its own commit is one of them (Build.Hold).
 	Ancestors string `json:"ancestors,omitempty"`
