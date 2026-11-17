@@ -213,7 +213,7 @@ func TestScreenDialJoinsTheSession(t *testing.T) {
 	r.n.screens.byID["K"].result = rfbLoginSignedIn
 	r.n.screens.mu.Unlock()
 	var gotLink []bool
-	r.n.screenStart = func(_ context.Context, _, _ string, _, link bool, _ func()) (bool, error) {
+	r.n.screenStart = func(_ context.Context, _, _ string, _, link, _ bool, _ func()) (bool, error) {
 		gotLink = append(gotLink, link)
 		return link, nil
 	}

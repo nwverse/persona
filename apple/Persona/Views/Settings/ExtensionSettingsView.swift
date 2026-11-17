@@ -45,11 +45,14 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
     var body: some View {
         Group {
             enabled
-            Section {
-                if !hasConfiguration { Text("No configuration required").foregroundStyle(.secondary) }
-            } header: {
-                SettingsHeading(String(localized: "Extension configuration"))
-                    .accessibilityIdentifier("extension-section-configuration")
+            // Every group of a configuration has a heading of its own; this one stands only over there being none (#8853).
+            if !hasConfiguration {
+                Section {
+                    Text("No configuration required").foregroundStyle(.secondary)
+                } header: {
+                    SettingsHeading(String(localized: "Extension configuration"))
+                        .accessibilityIdentifier("extension-section-configuration")
+                }
             }
             configuration.disabled(lifecycle.busy)
             information

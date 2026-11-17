@@ -4,6 +4,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -141,10 +142,13 @@ type Hub struct {
 	others    managerStates // the other managers' (manager_state.go)
 	moving    moves         // who carries what changing (ownership_moves.go)
 	// userLocale: the user's language, an i18n.Lang; langs: each device's language that decides it (locale.go)
-	userLocale   atomic.Value
-	langs        userLangs
-	apps         clientApps   // the apps' versions as they last said (client_apps.go)
-	deleted      deletedBook  // conversations taken out of the apps' lists (deleted_sessions.go)
+	userLocale atomic.Value
+	langs      userLangs
+	apps       clientApps  // the apps' versions as they last said (client_apps.go)
+	deleted    deletedBook // conversations taken out of the apps' lists (deleted_sessions.go)
+
+	deletedConversationContent map[[2]string]bool // Manager/conversation transport tombstones; guarded by mu.
+
 	secret       secretState  // secretkey.go
 	devtok       devTokens    // device token lookups (devicetokens.go)
 	shareIngress shareIngress // anonymous admission limits; no sharing business state
@@ -227,7 +231,10 @@ func Run(ctx context.Context, b update.Build) error {
 	claimInherited() // before anything can start a process: runHub starts the manager before it listens (listen.go)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	// An update that keeps failing goes back before anything else can fail, the config included (selfupdate.go).
-	updating := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
+	updating, err := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
+	if err != nil {
+		return fmt.Errorf("update recovery: %w", err)
+	}
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err

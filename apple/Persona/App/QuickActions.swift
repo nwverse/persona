@@ -15,7 +15,7 @@ enum QuickAction: String, CaseIterable {
 
     var item: UIApplicationShortcutItem {
         let (title, symbol): (String, String) = switch self {
-        case .meetingRecording: (String(localized: "Record [Recordings Section ef2821]"), Theme.Icon.recording)
+        case .meetingRecording: (MeetingWords.start, Theme.Icon.recording)
         case .newConversation: (String(localized: "New Chat [Quick Actions ea4b29]"), Theme.Icon.compose)
         case .inbox: (String(localized: "Inbox"), Theme.Icon.inbox)
         }
@@ -56,18 +56,36 @@ enum QuickAction: String, CaseIterable {
         case .meetingRecording:
             Task { await MeetingRecorder.shared.startMeeting(inForeground: true) }
         case .newConversation:
-            model.selectedTab = .assistant
-            // As the drawer's New Chat: the shell takes Assistant back to its root (a pushed inbox included), the old tabs only
-            // need the conversation gone.
-            if let shell = model.tabRouter as? ShellState {
-                shell.show(.newConversation)
-                shell.drawer.close()
-            } else {
-                model.assistantCurrent = nil
-            }
+            model.openNewAssistant()
         case .inbox: model.selectedTab = .mail
         }
         return true
+    }
+}
+
+@MainActor extension AppModel {
+    /// The home-screen New Chat action's navigation, shared with the dictate control.
+    func openNewAssistant() {
+        noteNewAssistantChat()
+        selectedTab = .assistant
+        // As the drawer's New Chat: either router takes Assistant back to its root (a pushed inbox included); without
+        // one yet, the cold launch only needs the conversation gone.
+        if let router = tabRouter {
+            router.show(.newConversation)
+            (router as? ShellState)?.drawer.close()
+        } else {
+            assistantCurrent = nil
+        }
+    }
+
+    /// Clear the old conversation before the first view can run, so a cold launch keeps the control's new conversation.
+    func openNewAssistantForDictation() {
+        assistantCurrent = nil
+        dictationRequest = DictationRequest()
+        #if DEBUG
+        ShellTrace.shared.note("dictation request installed")
+        #endif
+        openNewAssistant()
     }
 }
 

@@ -306,7 +306,11 @@ func (s *Service) launcherRoutes() {
 				result := proto.LauncherCheck{Agent: "api", Model: config.Model, Answer: textfmt.Clip(textfmt.OneLine(answer), 200), OK: err == nil,
 					Millis: int(time.Since(started).Milliseconds())}
 				if err != nil {
-					result.Error = textfmt.Clip(textfmt.OneLine(err.Error()), 400)
+					message := err.Error()
+					if explanation := directCallFailureExplanation(s.requestCtxLang(ctx), err); explanation != "" {
+						message = explanation + ": " + message
+					}
+					result.Error = textfmt.Clip(textfmt.OneLine(message), 400)
 				}
 				apierr.WriteJSON(w, map[string]any{"check": result})
 				return
@@ -324,13 +328,18 @@ func (s *Service) launcherRoutes() {
 			apierr.Call(w, err)
 			return
 		}
+		observed, _ := s.launcherHealth(ctx, machine, r.PathValue("name"))
 		var res proto.LauncherCheck
-		if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": r.PathValue("name")}, &res); err != nil {
+		params := map[string]any{"name": r.PathValue("name")}
+		if r.URL.Query().Get("purpose") == "assistant" {
+			params["purpose"] = "assistant"
+		}
+		if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, params, &res); err != nil {
 			apierr.Call(w, err)
 			return
 		}
 		if res.OK {
-			s.recordTestPassed(ctx, machine, r.PathValue("name"), res)
+			s.recordTestPassed(ctx, machine, r.PathValue("name"), res, observed)
 		}
 		apierr.WriteJSON(w, map[string]any{"machine": machine, "check": res})
 	})
@@ -513,7 +522,7 @@ func (s *Service) machineLauncherRoutes() {
 		apierr.WriteJSON(w, out)
 	})
 	s.handle("GET /api/v1/machines/{mid}/launchers/{name}/models", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 70*time.Second)
+		ctx, cancel := context.WithTimeout(withLauncherPurpose(r.Context(), r.URL.Query().Get("purpose")), 70*time.Second)
 		defer cancel()
 		mid := r.PathValue("mid")
 		if _, ok := s.device(ctx, mid); !ok {

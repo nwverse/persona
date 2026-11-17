@@ -14,6 +14,12 @@ struct PersonaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                #if os(iOS)
+                .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
+                #endif
+                #if DEBUG && os(iOS)
+                .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
+                #endif
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
                 .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
@@ -32,7 +38,7 @@ struct PersonaApp: App {
                         if let key = model.resolve(path: link.machine + "/" + link.session) { model.open(key) }
                         return
                     }
-                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(askingEnd: RecordingLink.endID(url)); return } // the recording's activity
                     if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
@@ -145,6 +151,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
+        // Developing Persona carries on recording when it was left on (#9460); reads two defaults otherwise.
+        DevMode.shared.launch(tab: UserDefaults.standard.string(forKey: "app.tab").flatMap(AppTab.init(rawValue:)) ?? .assistant)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
         UNUserNotificationCenter.current().delegate = self
         Task { await ExtensionNotificationActions.preserveAndRegister { NotificationActions.categories } }
@@ -154,6 +162,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
+        UrgentCallPush.shared.start()
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
@@ -163,6 +173,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             AppModel.shared.adopt([cfg] + more)
         }
         let d = UserDefaults.standard
+        #if os(iOS)
+        if d.bool(forKey: "showUrgentCallSample") { // the urgent call page, from the mock hub (UrgentCallCenter.showSample)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                UrgentCallCenter.shared.showSample()
+            }
+        }
+        #endif
         // `-openPairLink <persona://pair?…>`: pairs as a scanned link does (`pair`, then the device token trade), unlike
         // `-pairURL`; `-openPairLinkTimes 2` handles the same link again a few seconds later (#2766).
         if let s = d.string(forKey: "openPairLink"), let cfg = ServerConfig(pairURL: s) {
@@ -269,6 +287,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             AppModel.shared.selectedTab = .assistant
             AppModel.shared.assistantCurrent = nil
         }
+        #if os(iOS)
+        // `-openDictationControl YES`: the Dictate to Persona control's intent, including its cold-start request.
+        if d.bool(forKey: "openDictationControl") { OpenPersonaDictationIntent.open(AppModel.shared) }
+        #endif
         if let id = d.string(forKey: "openAssistantManager") { AppModel.shared.openAssistantManagerWhenListed(id) }
         AppModel.shared.debugShowNewChat = d.bool(forKey: "showNewChat")
         // `-simulateTap <machine>/<session>`: what tapping a push does, 4 s after launch (on another screen by then).
@@ -327,6 +349,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #if os(iOS)
         // `-openDayCatchUp YES`: runs the all-day catch-up now (the simulator never runs background tasks).
         if UserDefaults.standard.bool(forKey: "openDayCatchUp") { Task { _ = await RecordingDayCatchUp.catchUp() } }
+        MeetingReplay.startIfAsked() // `-showMeetingReplay <tape>|sample` (#9417)
+        MeetingTapeRecorder.startIfAsked() // `-openMeetingAudio <file>`: the meeting it records writes a tape
         #endif
         #endif
         WatchSync.shared.activate()
@@ -432,6 +456,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
         #if os(iOS)
+        // An urgent call's companion notification (UrgentCallCenter): answers the call while it rings, else opens its
+        // conversation.
+        let callInfo = response.notification.request.content.userInfo
+        if let call = callInfo[UrgentCallCenter.callKey] as? String {
+            let group = callInfo[PushCrypto.groupKey] as? String ?? ""
+            nonisolated(unsafe) let done = completionHandler
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    UrgentCallCenter.shared.opened(callID: call, group: group)
+                    done()
+                }
+            }
+            return
+        }
         // "Recording paused" (MeetingRecorder.notifyPaused): open Recordings; coming to the front resumes it.
         if response.notification.request.content.userInfo[RecordingLink.notificationKey] != nil {
             nonisolated(unsafe) let done = completionHandler

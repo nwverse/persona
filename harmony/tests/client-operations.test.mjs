@@ -28,6 +28,7 @@ registerHooks({
       if (specifier.startsWith('.')) return {url:new URL(specifier.endsWith('.ets') || specifier.endsWith('.ts') ? specifier : specifier + '.ets',context.parentURL).href,shortCircuit:true};
     }
     if((context.parentURL?.endsWith('/NavigationContext.ets')||context.parentURL?.endsWith('/ChatDraftStore.ets')||context.parentURL?.endsWith('/Compatibility.ets'))&&specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
+    if(context.parentURL?.endsWith('/QuestionWorkspace.ets') && specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
     if(context.parentURL?.endsWith('/InteractionDecision.ets')&&specifier.startsWith('.'))return {url:new URL(specifier+'.ets',context.parentURL).href,shortCircuit:true};
     return next(specifier, context);
   },
@@ -121,6 +122,7 @@ test('a stale form cannot submit values to a replacement request',async()=>{
 test('a late approval or interrupt failure cannot overwrite another conversation state',async()=>{
   for (const action of ['answer','stop']) {
     const {model}=fixture(), request=decision(model), wait=deferred();
+    if (action === 'stop') model.selected.state = 'working';
     model.repository.resolve=()=>wait.promise; model.repository.stop=()=>wait.promise;
     const result=action==='answer'?model.answer('approve',{},request):model.stop();
     model.selected=new ResourceRow('chat-two','Other','session'); model.error=''; model.operationState='';
@@ -561,4 +563,114 @@ test('a machine-directory notification requests fresh scoped facts instead of ap
   assert.equal(model.machines[0].id,'owned');
   t.mock.timers.tick(100);await Promise.resolve();
   assert.deepEqual(scopes,[owner]);assert.equal(model.machines[0].id,'owned');
+});
+
+
+test('selecting a context only stages this conversation draft and sends no message',async()=>{
+ const {model,writes}=fixture();model.canCompose=()=>true;model.persistDraft=async()=>{};
+ const item=new ResourceRow('reference','Reference','knowledge');item.group=model.profile.id;item.manager=model.profile.manager;
+ const target=model.target();assert.equal(await model.addDraftContext(item,target,model.connectionGeneration(),model.scope()),true);
+ assert.equal(model.target(),target);assert.equal(writes.length,0);
+ const references=JSON.parse(model.sourceContext).contexts;assert.equal(references.at(-1).id,'reference');assert.equal(references[0].id,'source');
+});
+test('a context from a different owner is not staged',async()=>{
+ const {model}=fixture();model.canCompose=()=>true;const before=model.sourceContext;let writes=0;model.persistDraft=async()=>writes++;
+ const item=new ResourceRow('reference','Reference','todo');item.manager='other';
+ assert.equal(await model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope()),false);assert.equal(writes,0);assert.equal(model.sourceContext,before);
+});
+test('promoting a quoted message preserves its text and attachment metadata through the next send',async()=>{
+ const {model,writes}=fixture();model.canCompose=()=>true;model.persistDraft=async()=>{};
+ model.features=['persona_contracts_v1'];
+ const legacy={kind:'message',title:'Quoted reply',item_id:'quoted-item',machine_id:'machine-one',session_id:'chat-one',manager:model.profile.manager,
+  text:'Quoted details <tag> & meaning',images:[{id:'image-one',mime_type:'image/png',width:640,height:480}],
+  files:[{name:'notes.txt',path:'/fixture/notes.txt',size:42}],metadata:{reference:'retained'}};
+ model.sourceContext=JSON.stringify(legacy);
+ const item=new ResourceRow('todo-reference','Todo','todo');item.manager=model.profile.manager;
+ assert.equal(await model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope()),true);
+ assert.deepEqual(JSON.parse(model.sourceContext).contexts[0],legacy);
+ assert.equal(await model.send(),true);assert.equal(writes.length,1);
+ const serialized=writes[0][1].match(/^<persona-context[^>]*>([\s\S]*?)<\/persona-context>/)[1];
+ const sent=JSON.parse(serialized.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'));
+ assert.deepEqual(sent,legacy);assert.match(writes[0][1],/todo-reference/);
+});
+test('a Knowledge handoff preserves a legacy message reference already in the main draft',async()=>{
+ const {model,writes}=fixture();model.features=['persona_contracts_v1'];
+ model.selected.kind='conversation';model.selected.manager=model.profile.manager;
+ const legacy={kind:'message',title:'Quoted reply',text:'Keep the quoted text',images:[{id:'image-one'}],files:[{name:'notes.txt',size:42}]};
+ model.sourceContext=JSON.stringify(legacy);model.persistDraft=async()=>{};
+ model.viewFor=async()=>model;model.openMain=async()=>model.selected;
+ const source=new ResourceRow('knowledge-one','Knowledge','knowledge');source.manager=model.profile.manager;
+ await model.handoff(source);
+ const contexts=JSON.parse(model.sourceContext).contexts;assert.deepEqual(contexts[0],legacy);assert.equal(contexts[1].id,source.id);
+ assert.equal(await model.send(),true);assert.equal(writes.length,1);
+ assert.match(writes[0][1],/Keep the quoted text/);assert.match(writes[0][1],/image-one/);assert.match(writes[0][1],/knowledge-one/);
+});
+test('route admission survives draft, outbox and mutation journals for plain and prepared messages',async()=>{
+ const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ for(const preparedSend of [false,true])for(const boundary of ['draft','outbox','mutation']){
+  const {model}=fixture();let allowed=true,posts=0;const put=model.local.put.bind(model.local),beforeRequest=globalThis.clientTestRequest;
+  const repo=new HubRepository({managerId:model.profile.manager,hubId:model.profile.id},model.local);model.repository=repo;
+  model.local.put=async(key,value)=>{await put(key,value);if(boundary==='draft'&&key.startsWith('draft:')||boundary==='outbox'&&key.startsWith('outbox:'))allowed=false;};
+  const entered=deferred(),gate=deferred(),begin=repo.mutations.begin.bind(repo.mutations);
+  if(boundary==='mutation')repo.mutations.begin=async(...args)=>{const record=await begin(...args);entered.resolve();await gate.promise;return record;};
+  globalThis.clientTestRequest=async(_path,method)=>{if(method==='POST')posts++;return '{}';};
+  const draft=model.draft,context=model.sourceContext;
+  const prepared={repository:repo,generation:model.connectionGeneration(),scope:model.scope(),modelTarget:model.target(),row:model.selected,text:'Prepared message',images:[]};
+  try{
+   const sending=preparedSend?model.sendPrepared(prepared,draft,context,()=>allowed):model.send(()=>allowed);
+   if(boundary==='mutation'){await entered.promise;allowed=false;gate.resolve();}
+   assert.equal(await sending,false);assert.equal(posts,0);assert.equal(model.draft,draft);assert.equal(model.sourceContext,context);
+  }finally{globalThis.clientTestRequest=beforeRequest;}
+ }
+});
+
+test('failed context persistence restores the old context without replacing a newer edit',async()=>{
+ for(const newer of [false,true]){
+  const {model}=fixture();model.canCompose=()=>true;const before=model.sourceContext,wait=deferred();model.persistDraft=()=>wait.promise;
+  const item=new ResourceRow('reference','Reference','inbox');item.manager=model.profile.manager;
+  const pending=model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope());
+  if(newer){model.sourceContext='newer-context';model.draftRevision='newer-revision';}
+  wait.reject(Error('disk unavailable'));assert.equal(await pending,false);assert.equal(model.sourceContext,newer?'newer-context':before);
+ }
+});
+
+
+test('knowledge contexts retain their entry kind when IDs collide across categories',async()=>{
+ const {model,writes}=fixture();model.canCompose=()=>true;model.persistDraft=async()=>{};model.sourceContext='';
+ for(const path of ['projects','docs','docs']){const row=new ResourceRow('shared-id','Reference','knowledge');row.path=path;row.manager=model.profile.manager;assert.equal(await model.addDraftContext(row,model.target(),model.connectionGeneration(),model.scope()),true);}
+ const refs=JSON.parse(model.sourceContext).contexts;assert.equal(refs.length,2);assert.deepEqual(refs.map(r=>r.entry_kind),['projects','docs']);assert.equal(writes.length,0);assert.match(model.prepareMessageText('Inspect'),/entry_kind/);
+});
+
+
+test('interrupt is active-turn only and its pending admission retires with the route',async()=>{
+ const {model}=fixture();let posts=0;model.repository.stop=async()=>posts++;
+ assert.equal(model.canStop(),false);await model.stop();assert.equal(posts,0);
+ model.selected.state='working';assert.equal(model.canStop(),true);let visible=true;const gate=deferred(),entered=deferred();
+ model.repository.stop=async(row,admit)=>{entered.resolve();await gate.promise;if(admit())posts++;};
+ const stopping=model.stop(()=>visible);await entered.promise;assert.equal(model.stopPending(),true);assert.equal(model.canStop(),false);
+ visible=false;gate.resolve();await stopping;assert.equal(posts,0);assert.equal(model.stopPending(),false);
+});
+
+test('question resolution rechecks journal-delayed scope, request, capability and active-sheet admission',async()=>{
+ const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ const {QuestionWorkspace}=await import('../entry/src/main/ets/models/QuestionWorkspace.ets');
+ for(const retirement of ['none','same-content','sheet','native-dismiss','request','owner','target','capability','uncertain-refresh']){
+  const {model}=fixture();delete model.canApprove;model.selected.kind='conversation';model.selected.manager='personal';model.selected.raw=JSON.stringify({source_kind:'native',capabilities:{read:true,send:true,approve:true}});model.decisionReadyTarget=model.target();
+  const raw={id:'question-admission',kind:'question',tool_name:'ask_user',resumable:true,status:'open',manager:'personal',machine_id:'machine-one',session_id:'chat-one',can_cancel:true,questions:[{question:'Which?',options:[{label:'A'}]}]};
+  model.decisionRefreshSequence=1;model.replacePendingDecisions([raw],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);const request=model.personaQuestions[0];assert.ok(request);assert.equal(model.canApprove(),true);
+  const repo=new HubRepository({managerId:'personal',hubId:model.profile.id},model.local);model.repository=repo;const entered=deferred(),gate=deferred(),begin=repo.mutations.begin.bind(repo.mutations);repo.mutations.begin=async(...args)=>{const record=await begin(...args);entered.resolve();await gate.promise;return record;};
+  const workspace=new QuestionWorkspace();assert.equal(workspace.open(model,true,request),true);const sheet=workspace.beginPresentation(),admit=workspace.ticket(sheet);
+  let posts=0,visible=true;const previous=globalThis.clientTestRequest;globalThis.clientTestRequest=async(_path,method)=>{if(method==='POST')posts++;return '{}';};
+  try{
+   const answering=model.answer('answer',{'Which?':'A'},request,()=>visible&&admit());await entered.promise;assert.equal(request.status,'pending');
+   if(retirement==='sheet')visible=false;else if(retirement==='native-dismiss')workspace.dismiss(sheet,()=>{assert.equal(admit(),false);gate.resolve();});else if(retirement==='request')model.replacePendingDecisions([{...raw,questions:[{question:'Which?',options:[{label:'B'}]}]}],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);else if(retirement==='same-content')model.replacePendingDecisions([raw],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);else if(retirement==='owner')model.generation++;else if(retirement==='target')model.selected=new ResourceRow('other','Other','conversation');else if(retirement==='capability')model.selected.raw=JSON.stringify({source_kind:'native',capabilities:{approve:false}});
+   if(retirement==='uncertain-refresh'){
+    model.unresolvedWrites=[{path:'/api/v1/interactions/'+request.id+'/resolve'}];
+    model.replacePendingDecisions([raw],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);
+    assert.equal(model.pendingDecisions[0],request);assert.equal(request.status,'unknown');
+   }
+   gate.resolve();await answering;assert.equal(posts,['none','same-content'].includes(retirement)?1:0,retirement);assert.equal(repo.mutations.blocked().length,0);if(['sheet','native-dismiss'].includes(retirement))assert.equal(request.status,'open');
+   if(retirement==='uncertain-refresh')assert.equal(request.status,'unknown','a newer authoritative uncertainty must not reopen after admission fails');
+  }finally{gate.resolve();globalThis.clientTestRequest=previous;}
+ }
 });

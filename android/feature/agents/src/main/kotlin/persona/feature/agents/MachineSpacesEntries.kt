@@ -23,6 +23,16 @@ import persona.core.navigation.MachineSpacesRoute
 import persona.core.navigation.Navigator
 import persona.core.navigation.SpaceRoute
 import java.time.Instant
+import persona.core.contracts.Session
+import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.AgentSpace
+
+/** Keep every project member, with the held marker captured by the main projection, rather than its idle-folded rows. */
+internal fun machineSpaceRows(sessions: List<Session>, spaces: List<AgentSpace>, machineId: String,
+    preferences: AgentsPreferencesSnapshot): List<AgentSession> = spaces.filter { it.machineId == machineId }.flatMap { space ->
+    sessions.filter { it.machineId == space.machineId && it.spaceId == space.members.first().session.spaceId }
+        .map { member -> member.listSession(preferences).copy(heldInList = space.members.any { it.session.key == member.key && it.heldInList }) }
+}
 
 /**
  * A computer's projects as a destination of its own ([MachineSpacesRoute]): in a wide window it opens beside the Agents list
@@ -52,7 +62,8 @@ private fun MachineSpacesDestination(route: MachineSpacesRoute, navigator: Navig
         val model = viewModel(key = "machine-spaces:${wiring.scope}:${operations?.operations?.scope.orEmpty()}") {
             AgentsViewModel(dependencies.sessions(), dependencies.interactions(), dependencies.connection(), dependencies.sender(),
                 dependencies.preferences(), operations, wiring.mainSender, scope, renamer, hubGroups = dependencies.groups(),
-                listContext = kotlinx.coroutines.Dispatchers.Default)
+                listContext = kotlinx.coroutines.Dispatchers.Default, listAdapter = dependencies.listAdapter(),
+                visibleChat = dependencies.visibleChat(), heldChat = dependencies.heldChat())
         }
         MachineSpacesPage(route, model, navigator)
     }
@@ -70,7 +81,7 @@ private fun MachineSpacesPage(route: MachineSpacesRoute, model: AgentsViewModel,
             while (true) { now = Instant.now(); delay(30_000) }
         }
     }
-    val rows = remember(page.spaces, route.machineId) { page.spaces.filter { it.machineId == route.machineId }.flatMap { it.members } }
+    val rows = machineSpaceRows(page.sessions, page.spaces, route.machineId, page.preferences)
     MachineSpacesScreen(
         machineId = route.machineId, machine = page.machines.firstOrNull { it.id == route.machineId }, rows = rows,
         preferences = page.preferences, now = now, loaded = page.loaded,

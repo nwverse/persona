@@ -57,6 +57,11 @@ const (
 	// revs and parts; docs/assistant/meeting-minutes.md "Phase 2b: highlights"). The hub lists meeting_highlights only
 	// while the default manager names it beside CapabilityMeetingLiveView.
 	CapabilityMeetingHighlights = "meeting_highlights"
+	// CapabilityMeetingNotes: the manager takes a room meeting's notes role (#8851: room.attendance and the timeline's
+	// roles may be notes, a room that keeps the topics and highlights while Persona answers nothing, …/ask refused
+	// with not_attending; docs/assistant/meeting-minutes.md "The notes role (#8851)"). The hub lists meeting_notes
+	// only while the default manager names it beside CapabilityMeetingLiveView.
+	CapabilityMeetingNotes = "meeting_notes"
 	// CapabilityMeetingEcho: the manager takes Persona's echo marked on a meeting's upload (#5905: the segments' echo
 	// and the spoken spans, its own copy of the rule, echo lines kept but left out of the minutes, the summary and the
 	// follow-up; docs/assistant/meeting-minutes.md "Persona's echo"). The hub lists meeting_echo only while the default
@@ -169,6 +174,9 @@ const (
 // HandoffApprover is set by the hub on a card's answer from a device that may approve a hand-off card; Human on a new
 // conversation a person's own app opens.
 type HTTPRequest struct {
+	// OwnerAnswer is the hub's verified full-device provenance for a relayed card answer.
+	// It never comes from HTTP headers or the resolution body.
+	OwnerAnswer     bool                       `json:"owner_answer,omitempty"`
 	Caller          *devicewire.Caller         `json:"caller,omitempty"`
 	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
 	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
@@ -204,6 +212,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
+	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
 	"GET /api/v1/assistant/north-star",
@@ -242,6 +251,7 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
+	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
 	"GET /api/v1/assistant/repositories",
 	"GET /api/v1/assistant/repositories/{id}",
@@ -353,6 +363,8 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// The owner's name from the web (#8877).
+	"PUT /api/v1/recordings/{id}/title",
 	// All-day recordings' appends (kb_day.go there, #4741).
 	"POST /api/v1/recordings/{id}/segments",
 	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").

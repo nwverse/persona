@@ -37,10 +37,11 @@ const check = (ok, what, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${what}${detail ? `: ${detail}` : ""}`);
   if (!ok) failures.push(what);
 };
-const KINDS = ["projects", "topics", "chats", "people", "docs", "meetings", "events", "recordings"];
+// Recordings have no chip of their own: they are listed under Meetings (#8871).
+const KINDS = ["projects", "topics", "chats", "people", "docs", "meetings", "events"];
 const NAMES = {
-  "zh-Hans": ["项目", "主题", "会话", "人", "文档", "会议", "日程", "录音"],
-  en: ["Projects", "Topics", "Chats", "People", "Docs", "Meetings", "Events", "Recordings"],
+  "zh-Hans": ["项目", "主题", "会话", "人", "文档", "会议", "日程"],
+  en: ["Projects", "Topics", "Chats", "People", "Docs", "Meetings", "Events"],
 };
 const LOADING = { "zh-Hans": "加载中", en: "Loading" };
 const LAYOUTS = [
@@ -103,7 +104,7 @@ try {
           await page.waitForTimeout(250);
           const now = await chips(page);
           if (!seen || !shows) unheld.push(`${kind}${seen ? "" : " (read not held)"}${shows ? "" : " (no Loading)"}`);
-          if (kind === "recordings") await clip("recordings-loading");
+          if (kind === "meetings") await clip("meetings-loading"); // its recordings read too, not held
           release();
           await loading.first().waitFor({ state: "detached", timeout: 10_000 }).catch(() => unheld.push(`${kind} (still loading)`));
           await page.unroute(list);
@@ -118,7 +119,7 @@ try {
         }
         check(unheld.length === 0, `${label}: each kind loads with Loading under the chips while its list read is held`, unheld.join("; "));
         check(moved.length === 0, `${label}: no chip moves as each kind is picked, while it loads and once drawn`, moved.slice(0, 3).join("; "));
-        await clip("recordings");
+        await clip("events");
         await context.close();
       }
     }

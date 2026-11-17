@@ -59,15 +59,20 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 		return nil
 	}
 	execution := executionOption(options)
-	if err := execution.check(launcher); err != nil {
+	if err := execution.checkModel(); err != nil {
 		return err
 	}
 	if launcher == "" || !shellcmd.NameRe.MatchString(launcher) {
 		return fmt.Errorf("invalid launcher %q", launcher)
 	}
+	if err := n.validAssistantModes(context.Background(), launcher, "", execution.Effort); err != nil {
+		return err
+	}
 	if err := n.ensureManaged(context.Background(), launcher); err != nil {
 		return err
 	}
+	// The main chat's spare starts with its window as the main conversation's start carries it (assistantSend, #7314).
+	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.IsMain, execution.MainCompactWindow)
 	if agent, err := n.assistantAgent(context.Background(), launcher); err != nil {
 		return err
 	} else if agent == "claude" {

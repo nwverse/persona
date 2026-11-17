@@ -290,22 +290,38 @@ func triageNormalizePRURL(raw string) string {
 	return strings.ToLower(strings.TrimRight(raw, "/"))
 }
 
-// triageWaitingForMerge requires a fresh observation of the same open, non-draft PR. PR facts are display signals on
-// the existing todo lifecycle: active Agents and genuine owner decisions retain priority, while stale or legacy
-// delivery/stage hints cannot claim that a PR is waiting for merge.
-func triageWaitingForMerge(t listedTodo, status string, now time.Time) bool {
-	facts := t.PRStatus
-	if t.DoneAt != nil || facts == nil || t.PRURL == "" || triageNormalizePRURL(t.PRURL) != triageNormalizePRURL(facts.URL) || facts.State != "open" || facts.Draft || facts.CheckedAt.IsZero() {
-		return false
+// triageOpenPRs are t's PRs with a fresh observation saying open and non-draft: its current PR first, then its earlier
+// ones newest first (#7935). Stale, absent or mismatched facts count for nothing.
+func triageOpenPRs(t Todo, now time.Time) []TodoPRStatus {
+	fresh := func(f TodoPRStatus) bool {
+		age := now.Sub(f.CheckedAt)
+		return f.State == "open" && !f.Draft && !f.CheckedAt.IsZero() && age >= 0 && age <= triagePRStatusFreshFor
 	}
-	age := now.Sub(facts.CheckedAt)
-	if age < 0 || age > triagePRStatusFreshFor {
+	var out []TodoPRStatus
+	if f := t.PRStatus; f != nil && t.PRURL != "" && triageNormalizePRURL(t.PRURL) == triageNormalizePRURL(f.URL) && fresh(*f) {
+		out = append(out, *f)
+	}
+	for _, f := range t.OtherPRs {
+		if triageNormalizePRURL(f.URL) != triageNormalizePRURL(t.PRURL) && fresh(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// triageWaitingForMerge requires a fresh observation of an open, non-draft PR of the task, its current one or an
+// earlier one still open (#7935). PR facts are display signals on the existing todo lifecycle: active Agents and
+// genuine owner decisions retain priority, while stale or legacy delivery/stage hints cannot claim that a PR is
+// waiting for merge.
+func triageWaitingForMerge(t listedTodo, status string, now time.Time) bool {
+	if t.DoneAt != nil || len(triageOpenPRs(t.Todo, now)) == 0 {
 		return false
 	}
 	if status == "failed" || status == "needs_you" || status == "interrupted" || status == "working" || status == "waiting" {
 		return false
 	}
-	if triageReviewState(t.Todo) == reviewNeedsUser || t.Ask != nil && (t.Ask.Outcome == outcomeDecide || t.Ask.Outcome == outcomeCannot) {
+	dismissed := t.DecisionReview != nil && t.DecisionReview.DismissalID != ""
+	if !dismissed && (triageReviewState(t.Todo) == reviewNeedsUser || t.Ask != nil && (t.Ask.Outcome == outcomeDecide || t.Ask.Outcome == outcomeCannot)) {
 		return false
 	}
 	return true
@@ -356,6 +372,8 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	ask := triageOpenAsk(t.Ask)
 	at := func(section, rule string) todoTriage { return todoTriage{Section: section, Rule: rule, Last: last} }
 	review := triageReviewState(t.Todo)
+	// The owner chose Don't handle on this decision round (task_review_dismissals.go): it no longer waits on them.
+	dismissed := t.DecisionReview != nil && t.DecisionReview.DismissalID != ""
 	// An open concern closes only with the secretary's report: nothing else files it with the finished ones.
 	concern := t.Kind == db.KindConcern && t.DoneAt == nil
 	// rule 8's signals: a turn nobody has seen, a review not done yet, an ask that says done / please verify
@@ -377,7 +395,7 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageDone, ruleFailedStart)
 	case status == "needs_you" || status == "interrupted":
 		return at(triageWaiting, ruleAgentAsks)
-	case t.DoneAt == nil && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
+	case t.DoneAt == nil && !dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
 		return at(triageWaiting, ruleOwnerDecides)
 	case !settled && !(finished && !seen(last) && review != reviewParked) && triageWaitingForMerge(t, status, now):
 		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open. A parked

@@ -4,7 +4,7 @@
 // the composer's context chips, the composer's permission picker).
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   globalThis.IntersectionObserver ??= class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } } as unknown as typeof IntersectionObserver;
@@ -76,6 +76,13 @@ const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 let host: HTMLDivElement;
 let root: Root;
 let fetcher: ReturnType<typeof vi.fn>;
+// An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and draws again when it
+// is in. Loaded here first, it is in before a test counts renders: cold, under a full parallel run, it came in during the
+// pushes and counted as one of their renders.
+beforeAll(async () => {
+  await import("../../lib/compare-runs");
+});
+
 beforeEach(() => {
   localStorage.clear();
   // the first page has one reply already, so the assistant's face starts from what the pushes keep showing
@@ -190,18 +197,20 @@ it("the assistant: the header draws again only when what its face reads changes"
   expect(renders.chips).toBe(0);
 });
 
-it("the main conversation's composer has the model pill; another Persona conversation's has none (#5032, #5033, #6911)", async () => {
+it("the main conversation's composer has the model pill, without an effort chip (#5032, #5033)", async () => {
   getState().assistant = { machine_id: "mac", launcher: "claude", main: "s1", conversations: [] };
   await open(<ChatView mid="mac" sid="s1" assistant />);
   expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
   expect(host.querySelector(`button[title="${t("chat-sessioninfo.effort")}"]`)).toBeNull(); // no effort chip
-  // A leader, the supervisor or another assistant conversation is not the main one: no per-conversation picker.
-  act(() => root.render(<></>));
+});
+
+it("a Persona conversation that is not the main one has the model pill too, as the hub keeps its pick (#9248)", async () => {
   getState().assistant = { machine_id: "mac", launcher: "claude", main: "other", conversations: [] };
   await open(<ChatView mid="mac" sid="s1" assistant />);
-  expect(host.querySelector("[data-model-pill]")).toBeNull();
-  // An Agent's session still gets its own pill.
-  act(() => root.render(<></>));
+  expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
+});
+
+it("an Agent's session has its own model pill", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   expect(host.querySelector("[data-model-pill]")).not.toBeNull();
 });

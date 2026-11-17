@@ -57,6 +57,10 @@
       "sf": "macwindow",
       "phosphor": "app-window"
     },
+    "recent": {
+      "sf": "clock.arrow.circlepath",
+      "phosphor": "arrow-counter-clockwise"
+    },
     "calendarView": {
       "sf": "calendar",
       "phosphor": "calendar-blank"
@@ -694,8 +698,8 @@
       "phosphor": "eye"
     },
     "voiceChannel": {
-      "sf": "waveform.and.mic",
-      "phosphor": "waveform"
+      "sf": "phone.fill",
+      "phosphor": "phone"
     },
     "voiceConnecting": {
       "sf": "antenna.radiowaves.left.and.right",

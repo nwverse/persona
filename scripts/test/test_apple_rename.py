@@ -87,8 +87,8 @@ class AppleRenameTests(unittest.TestCase):
             'Persona/Intents/AskPersonaIntent.swift': ['AskPersonaIntent'],
             'Persona/Intents/PersonaStatusIntent.swift': ['PersonaStatusIntent'],
             'Persona/Intents/PersonaShortcuts.swift': ['PersonaShortcuts'],
-            'PersonaWidgets/PersonaControls.swift': ['AskPersonaControl', 'PersonaAgentsControl'],
-            'LiveActivity/PersonaControlIntents.swift': ['OpenPersonaAssistantIntent', 'OpenPersonaAgentsIntent'],
+            'PersonaWidgets/PersonaControls.swift': ['AskPersonaControl', 'PersonaAgentsControl', 'DictatePersonaControl'],
+            'LiveActivity/PersonaControlIntents.swift': ['OpenPersonaAssistantIntent', 'OpenPersonaAgentsIntent', 'OpenPersonaDictationIntent'],
             'LiveActivity/PersonaActivityAttributes.swift': ['PersonaActivityAttributes'],
         }
         for path, names in expected.items():
@@ -99,6 +99,7 @@ class AppleRenameTests(unittest.TestCase):
         controls = (APPLE / 'PersonaWidgets/PersonaControls.swift').read_text()
         self.assertIn('kind: "persona.control.ask"', controls)
         self.assertIn('kind: "persona.control.agents"', controls)
+        self.assertIn('kind: "persona.control.dictate"', controls)
         info = plistlib.loads((APPLE / 'PersonaNotify/Info.plist').read_bytes())
         self.assertEqual(info['NSExtension']['NSExtensionPrincipalClass'], '$(PRODUCT_MODULE_NAME).NotificationService')
         self.assertIn('PersonaPushKeychainGroup', info)
@@ -159,7 +160,9 @@ class AppleRenameTests(unittest.TestCase):
         self.assertIn('AssistantRootTab()', tabs)
         self.assertIn('AgentsRootTab()', tabs)
         self.assertRegex(tabs, r'#if !os\(iOS\)\s+InboxRootTab\(\)\s+SettingsRootTab\(\)\s+#endif')
-        self.assertRegex(tabs, r'#if os\(iOS\)(?:(?!#endif)[\s\S])*?\.modifier\(PadRoutes\(router: pad\)\)\s+#endif')
+        # Inside the iOS-only block; more iOS-only modifiers may follow it there (#8367 added the heads' line-up).
+        self.assertRegex(tabs, r'#if os\(iOS\)(?:(?!#endif)[\s\S])*?\.modifier\(PadRoutes\(router: pad\)\)'
+                               r'(?:(?!#if|#endif)[\s\S])*?#endif')
         for name in ('Assistant', 'Agents', 'Inbox', 'Settings'):
             self.assertRegex(root, r'private struct ' + name + r'RootTab: TabContent')
         routes = root.split('final class PadRouter: TabRouter {', 1)[1].split('private struct PadRoutes:', 1)[0]

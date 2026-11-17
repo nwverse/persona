@@ -7,7 +7,8 @@ import OSLog
 /// The phone's half of the recording Live Activity (docs/apple/live-activity.md「Recording」): one activity while this phone
 /// records, any recording (a meeting's or a note), started with it and ended with it. It follows `RecordingCapture` (state,
 /// a call's interruption) and the recording's entry (its title once the calendar is read, bookmarks); the time is counted
-/// by the system from `runningSince`, so a recording that runs on needs no updates. A meeting with the live view (#3862
+/// by the system from `runningSince`, so a recording that runs on needs only its once-a-minute `aliveAt`, which lets the
+/// activity go stale when iOS ends the app (#9108). A meeting with the live view (#3862
 /// phase 2) also carries its current topic and latest line: an answer, a phase or anything else goes at once, a new line
 /// or topic at most every 5 seconds (`hold`).
 @MainActor final class RecordingActivity {
@@ -71,7 +72,9 @@ import OSLog
             asked.flatMap { e in e.answer.map { Answer(text: $0, at: seen(.ask, e.id.uuidString, now: now)) } },
             said.map { Answer(text: $0.text, at: seen(.call, $0.id, now: now)) },
         ])
-        let topic = entry.attendance?.liveView == true ? MeetingTopic.current(MeetingConversation.shared.meeting(id).topics)?.title : nil
+        let topics = entry.attendance?.liveView == true ? MeetingConversation.shared.meeting(id).topics : []
+        let topic = MeetingTopic.current(topics)?.title
+        let topicPlace = Self.place(of: topic, in: topics)
         // Talk (#3862 phase 4): whether a span is open, read here so the activity follows it at once.
         let talking = MeetingCall.shared.talk?.recording == id
         // Hub transcription (#3862 phase 5): the hub's latest line while it transcribes, else the phone's own, said so.
@@ -79,10 +82,14 @@ import OSLog
         let hub = transcription.meeting(id)
         let transcribed = hub.hubMode
             ? Transcribed(hubLine: hub.lines.last?.text, shown: transcription.shown(id, role: entry.attendance?.role ?? .off)) : nil
-        let content = Self.content(entry: entry, recording: state == .recording, interrupted: interrupted,
-                                   elapsed: capture.timeline, previous: previous, now: now,
-                                   answer: answered?.text, answeredAt: answered?.at,
-                                   topic: topic, roomMissing: roomMissing, talking: talking, transcribed: transcribed)
+        let drawn = Self.content(entry: entry, recording: state == .recording, interrupted: interrupted,
+                                 elapsed: capture.timeline, previous: previous, now: now,
+                                 answer: answered?.text, answeredAt: answered?.at,
+                                 topic: topic, topicPlace: topicPlace, roomMissing: roomMissing, talking: talking,
+                                 transcribed: transcribed)
+        // Once a minute while it records, the activity hears it still does (#9108): when iOS ends the app, it goes stale.
+        let content = Self.alive(drawn, now: now)
+        if let alive = content.aliveAt { wake(at: Date(timeIntervalSince1970: alive + Self.aliveEvery)) }
         // The answer gives way to the latest line 60 s after it came: looked at again then.
         if content.answer != nil, entry.attendance?.liveView == true, let at = answered?.at,
            at.addingTimeInterval(Self.answerShown) > now {
@@ -162,27 +169,46 @@ import OSLog
     /// Screen says "On iPhone: …").
     nonisolated static func content(entry: RecordingEntry, recording: Bool, interrupted: Bool, elapsed: Double,
                                     previous: Content?, now: Date, answer: String? = nil, answeredAt: Date? = nil,
-                                    topic: String? = nil, roomMissing: Bool = false, talking: Bool = false,
-                                    transcribed: Transcribed? = nil) -> Content {
+                                    topic: String? = nil, topicPlace: TopicPlace? = nil, roomMissing: Bool = false,
+                                    talking: Bool = false, transcribed: Transcribed? = nil) -> Content {
         let phase: Content.Phase = recording ? .recording : interrupted ? .interrupted : .paused
         let keep = recording && previous?.phase == .recording
         let since = recording ? (keep ? previous?.runningSince : nil) ?? now.timeIntervalSince1970 - elapsed : nil
         let attended = MeetingAsk.canAsk(entry, roomMissing: roomMissing)
-        let liveView = attended && entry.attendance?.liveView == true
+        // The topic and the latest line come while the room follows the meeting, Persona in it or not (#8851).
+        let liveView = entry.attended && !roomMissing && entry.attendance?.liveView == true
         let answer = attended ? Self.cut(answer, Self.answerLength) : nil
         let hubLines = transcribed?.shown.hubLines == true
         let line = liveView ? Self.cut(hubLines ? transcribed?.hubLine : entry.attendance?.live.last?.text, Self.lineLength) : nil
         let fresh = answeredAt.map { now.timeIntervalSince($0) < Self.answerShown } ?? true
         let showsAnswer = answer != nil && (line == nil || fresh)
         let fellBack = !showsAnswer && line != nil && !hubLines && transcribed?.shown.fellBack == true
-        return Content(phase: phase, runningSince: since, elapsed: keep ? previous?.elapsed ?? elapsed : elapsed,
+        let shownTopic = liveView ? Self.cut(topic, Self.topicLength) : nil
+        var content = Content(phase: phase, runningSince: since, elapsed: keep ? previous?.elapsed ?? elapsed : elapsed,
                        title: String(entry.displayTitle.prefix(Self.titleLength)), meeting: entry.isMeeting, marks: entry.marks.count,
                        persona: attended ? entry.attendance?.role.rawValue : nil,
                        answer: showsAnswer ? answer : nil,
-                       topic: liveView ? Self.cut(topic, Self.topicLength) : nil,
+                       topic: shownTopic,
                        line: showsAnswer ? nil : line,
                        talking: MeetingCallRule.talkOffered(entry, roomMissing: roomMissing) ? recording && talking : nil,
                        fellBack: fellBack ? true : nil)
+        if shownTopic != nil, let topicPlace {
+            content.topicNumber = topicPlace.number
+            content.topicCount = topicPlace.count
+        }
+        return content
+    }
+
+    /// Where a topic stands among the room's topics (#8731 V4, "2 / 4"): its place from 1 and how many there are. nil
+    /// without a topic, or one the list doesn't hold.
+    nonisolated struct TopicPlace: Hashable, Sendable {
+        var number: Int
+        var count: Int
+    }
+
+    nonisolated static func place(of topic: String?, in topics: [MeetingTopic]) -> TopicPlace? {
+        guard let topic, let index = topics.firstIndex(where: { $0.title == topic }) else { return nil }
+        return TopicPlace(number: index + 1, count: topics.count)
     }
 
     /// How long to hold `next` back when `shown` went out at `sentAt` (pure, for the tests): an answer, a phase, the
@@ -214,6 +240,25 @@ import OSLog
     /// A new line or topic updates the activity at most this often.
     nonisolated static let throttle: TimeInterval = 5
 
+    /// While it records, the app confirms it this often (`aliveAt`, on the minute) ...
+    nonisolated static let aliveEvery: TimeInterval = 60
+    /// ... and the activity goes stale this long after the last confirmation: two missed minutes and some, so a busy
+    /// moment never makes it stale while the app runs (#9108).
+    nonisolated static let staleAfter: TimeInterval = 150
+
+    /// `content` with the minute the app confirms it still records (`aliveAt`), nil when it doesn't record (pure).
+    nonisolated static func alive(_ content: Content, now: Date) -> Content {
+        var c = content
+        c.aliveAt = c.phase == .recording ? (now.timeIntervalSince1970 / aliveEvery).rounded(.down) * aliveEvery : nil
+        return c
+    }
+
+    /// When an activity showing `content` goes stale (the system's `staleDate`): `staleAfter` past its `aliveAt`; never
+    /// while it doesn't record (pure).
+    nonisolated static func staleDate(_ content: Content) -> Date? {
+        content.aliveAt.map { Date(timeIntervalSince1970: $0 + staleAfter) }
+    }
+
     /// While recording, a higher relevance than the Fleet activity's (1 at most): the island shows the recording.
     nonisolated static let relevance: Double = 2
 
@@ -232,7 +277,8 @@ import OSLog
         guard activity(id) == nil else { return }
         do {
             _ = try Activity.request(attributes: RecordingActivityAttributes(recordingID: id.uuidString),
-                                     content: ActivityContent(state: content, staleDate: nil, relevanceScore: Self.relevance),
+                                     content: ActivityContent(state: content, staleDate: staleDate(for: content),
+                                                              relevanceScore: Self.relevance),
                                      pushType: nil)
         } catch {
             // Live Activities off for Persona in Settings: the recording goes on without one.
@@ -241,9 +287,31 @@ import OSLog
     }
 
     private func update(_ activity: Activity<RecordingActivityAttributes>, _ content: Content) {
+        #if DEBUG
+        if Self.sampleStale { return }
+        #endif
         nonisolated(unsafe) let a = activity
-        let state = ActivityContent(state: content, staleDate: nil, relevanceScore: Self.relevance)
+        let state = ActivityContent(state: content, staleDate: staleDate(for: content), relevanceScore: Self.relevance)
         Task { await a.update(state) }
+    }
+
+    #if DEBUG
+    /// `-showMeetingSample stopped` (#9129): a running recording's activity goes stale 3 seconds after it is requested,
+    /// as it does once iOS ended the app, so the island and the Lock Screen draw it stopped. Not at once: an activity
+    /// requested with a stale date already past is never shown. No update follows it.
+    static var sampleStale = false
+    private var sampleStaleAt: Date?
+    #endif
+
+    /// The stale date the system gets for `content` (`staleDate`).
+    private func staleDate(for content: Content) -> Date? {
+        #if DEBUG
+        if Self.sampleStale, content.aliveAt != nil {
+            if sampleStaleAt == nil { sampleStaleAt = .now.addingTimeInterval(3) }
+            return sampleStaleAt
+        }
+        #endif
+        return Self.staleDate(content)
     }
 
     private func endAll() {

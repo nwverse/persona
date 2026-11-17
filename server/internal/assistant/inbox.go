@@ -62,6 +62,7 @@ type InboxItem struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 	Tier        string     `json:"tier,omitempty"` // empty until triaged
 	Summary     string     `json:"summary,omitempty"`
+	Body        string     `json:"body,omitempty"` // an assistant row's text as Markdown (inbox_post.go, #9041)
 	Reason      string     `json:"reason,omitempty"`
 	Read        bool       `json:"read,omitempty"` // read somewhere else (Feishu, another mail client)
 	DoneAt      *time.Time `json:"done_at,omitempty"`
@@ -263,6 +264,7 @@ func (it *InboxItem) listed() InboxItem {
 	if it.Agent != nil { // the copy is encoded after the lock is released
 		a := *it.Agent
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
+		a.ProcessingTurn = ""
 		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
 	}

@@ -1,3 +1,5 @@
+import { forgetSentHistory } from "./send-history";
+import { availableConversation, clearConversationDeletions, conversationDeleted, conversationKeyDeleted, deletedConversation, hasDeletedConversations, rememberConversationDeleted } from "./conversation-deleted";
 import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
@@ -7,7 +9,7 @@ import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
-import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_AGENTS_ONLY_FEATURE, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
+import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
@@ -159,7 +161,16 @@ function notifySoon() {
 }
 
 function set(patch: Partial<State>) {
-  state = holdSeen({ ...state, ...patch }, patch);
+  const next = { ...state, ...patch };
+  // Most sessions never encounter a deletion: only filter affected collections once one is known.
+  if (hasDeletedConversations()) {
+    for (const [mid, list] of Object.entries(patch.sessions ?? {})) {
+      if (!list.every(availableConversation)) next.sessions = { ...next.sessions, [mid]: list.filter(availableConversation) };
+    }
+    if (patch.sessionSummaries?.every(availableConversation) === false) next.sessionSummaries = next.sessionSummaries.filter(availableConversation);
+    if (patch.assistant?.conversations.every(availableConversation) === false) next.assistant = { ...patch.assistant, conversations: patch.assistant.conversations.filter(availableConversation) };
+  }
+  state = holdSeen(next, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);
   if (pushing) notifySoon();
   else notify();
@@ -221,8 +232,58 @@ onRuntimeChanges((upsert, remove) => {
   const known = new Set(Object.values(state.sessions).flat().map(runtimeIdentity));
   const updates = runtimeSessions.isSummary() ? [] : upsert.filter((row) => known.has(runtimeIdentity(row)));
   applyCompleteSessions(updates, remove);
+  followConversations(upsert);
   keepTaskRows(upsert, remove.map(runtimeRemoval));
 });
+
+/** What a summary row (`waiting` present) says by leaving a field out: none (docs/protocol/protocol.md "Summary rows"). */
+const SUMMARY_FLAGS = ["quiet", "awaits_reply", "starting", "awaiting_first_message", "start_error", "start_error_code",
+  "turn_error", "turn_error_kind", "turn_error_code", "turn_error_resets_at", "turn_error_resumes"] as const;
+
+/** `row` as a changed list row says it is now: a complete row is the row; a summary row goes over the fields it
+ *  carries (state, last words, markers), and the details it never carries (items' arrays, queued) stay. */
+function listedOver(row: Session, listed: Session): Session {
+  if (typeof listed.waiting !== "boolean") return sameValue(listed, row) ? row : listed;
+  const next: Session = { ...row, ...listed, background_working: listed.background_working, background_waiting: listed.background_waiting };
+  for (const key of SUMMARY_FLAGS) if (!(key in listed)) delete next[key];
+  return sameValue(next, row) ? row : next;
+}
+
+/** The assistant's conversations follow the list's changed rows (#9049). A socket in list mode (`sessions_list`) gets
+ *  hints, never `sessions` / `sessions_delta`, so nothing else moves them: the Persona sidebar and All chats kept the
+ *  state of the last /assistant read, and a conversation read mid-turn kept spinning after its turn had ended until a
+ *  reload, a send or opening it. Its row in the conversations and the detail kept of it (which those lists lay over
+ *  them) both take the change; no other row is made or kept. */
+function followConversations(upsert: Session[]) {
+  const a = state.assistant;
+  if (!a || !upsert.length) return;
+  const changed = new Map<string, Session>();
+  for (const row of upsert) if (row.machine_id === a.machine_id) changed.set(row.session_id, row);
+  if (!changed.size) return;
+  const ids = new Set(a.conversations.map((c) => c.session_id));
+  let moved = false;
+  const conversations = a.conversations.map((c) => {
+    const row = changed.get(c.session_id);
+    const next = row ? listedOver(c, row) : c;
+    if (next !== c) moved = true;
+    return next;
+  });
+  // A complete list's rows went to the kept details already (applyCompleteSessions above).
+  const kept = state.sessions[a.machine_id];
+  let keptMoved = false;
+  const nextKept = !kept || !runtimeSessions.isSummary() ? kept : kept.map((s) => {
+    const row = changed.get(s.session_id);
+    if (!row || !(s.assistant || ids.has(s.session_id))) return s;
+    const next = listedOver(s, row);
+    if (next !== s) keptMoved = true;
+    return next;
+  });
+  if (!moved && !keptMoved) return;
+  set({
+    ...(moved ? { assistant: { ...a, conversations } } : {}),
+    ...(keptMoved && nextKept ? { sessions: { ...state.sessions, [a.machine_id]: nextKept } } : {}),
+  });
+}
 
 /** The runtime identities of the open tasks' agents. */
 function openTaskAgents(): Set<string> {
@@ -324,6 +385,8 @@ async function lookUpCardSessions() {
 
 /** A clicked filtered row may not belong to the unfiltered first page. Keep a small hint until exact lookup finishes. */
 export function rememberSessionRow(row: Session) {
+  if (row.deleted) { markConversationDeleted(row.machine_id, row.session_id); return; }
+  if (!availableConversation(row)) return;
   const id = runtimeIdentity(row);
   rowHints.delete(id);
   rowHints.set(id, row);
@@ -343,7 +406,7 @@ export function getState() {
 }
 
 export function getSession(mid: string, sid: string): Session | undefined {
-  return (state.sessions[mid] ?? []).find((s) => s.session_id === sid)
+  return deletedConversation(mid, sid) ?? (state.sessions[mid] ?? []).find((s) => s.session_id === sid)
     ?? state.assistant?.conversations.find((s) => s.machine_id === mid && s.session_id === sid)
     ?? state.sessionSummaries.find((s) => s.machine_id === mid && s.session_id === sid)
     ?? rowHints.get(runtimeIdentity({ machine_id: mid, session_id: sid } as Session));
@@ -352,6 +415,8 @@ export function getSession(mid: string, sid: string): Session | undefined {
 /** Complete snapshots replace optional fields as well: omitted task arrays must not survive from an older snapshot.
  *  `also` goes in the same update (one render for both). */
 export function applyCompleteSessions(rows: Session[], remove: string[] = [], also: Partial<State> = {}) {
+  for (const row of rows) if (row.deleted) markConversationDeleted(row.machine_id, row.session_id);
+  rows = rows.filter(availableConversation);
   if (!rows.length && !remove.length) return;
   const by = { ...state.sessions };
   const updates = new Map<string, Map<string, Session>>();
@@ -786,7 +851,6 @@ function onMessage(msg: Record<string, unknown>) {
   switch (msg.type) {
     case "hello": {
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
-      helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       // a hub that folds side sessions into their parent's chat (#7944): set before the features, which redraw the lists
@@ -799,10 +863,15 @@ function onMessage(msg: Record<string, unknown>) {
         hubName: typeof msg.hub_name === "string" ? msg.hub_name : "",
         mesh: Array.isArray(mesh) ? mesh : [],
       });
+      // After the state has this hello's features: a hook reads them. The desktop's registration (lib/attention-signals.ts)
+      // took an empty list for a hub without desktop_unregister and closed this socket, so a desktop app with system
+      // notifications off never got a live update after loading. Also: a hub that came back may serve a new web build
+      // (lib/new-version.ts).
+      helloHooks.forEach((f) => f());
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
-      const agentsMode = state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE);
+      const agentsMode = supportsPagedAgents(state.features);
       const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
       const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
@@ -830,9 +899,13 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
-        if (agentsMode && usedAgentsList) runtimeAgents.invalidate();
         void refreshAgentSessions();
         void refreshAgentPrefs();
+      }
+      // Overview and attention signals need counts even when the paged sidebar is closed. Read at once when a
+      // reconnect may have missed changes, without waiting for another hint (docs/lessons/web.md, #6362).
+      if (agentsMode && (!isResumed(msg) || !runtimeAgents.getSnapshot().loaded)) {
+        void runtimeAgents.load().catch(() => {});
       }
       directionTreeAwaitsHello(false); // after followDirections started its read: those waiting share it
       break;
@@ -854,7 +927,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
       runtimeSessions.invalidate();
-      if (state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE)) {
+      if (supportsPagedAgents(state.features)) {
         const agentsList = runtimeAgents.getSnapshot();
         if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
       }
@@ -897,8 +970,12 @@ function onMessage(msg: Record<string, unknown>) {
     case "interaction_reanswered":
       noteReanswer(msg.id as string, answersIn((msg.resolution as { answers?: unknown } | undefined)?.answers));
       break;
+    case "conversation_deleted":
+      markConversationDeleted(msg.machine_id as string, msg.session_id as string);
+      break;
     case "items": {
       const e = msg as unknown as ItemsEvent;
+      if (conversationDeleted(e.machine_id, e.session_id)) break;
       sessionListeners.get(key(e.machine_id, e.session_id))?.forEach((l) => l.items?.(e));
       break;
     }
@@ -920,6 +997,7 @@ function onMessage(msg: Record<string, unknown>) {
       todosPushed();
       break;
     case "delta":
+      if (conversationDeleted(msg.machine_id as string, msg.session_id as string)) break;
       sessionListeners.get(key(msg.machine_id as string, msg.session_id as string))?.forEach((l) => l.delta?.(msg.text as string));
       break;
   }
@@ -1019,10 +1097,27 @@ export function putLaunch(launch: AgentLaunch) {
 }
 
 export function setOutbox(key: string, list: OutboxEntry[]) {
+  if (conversationKeyDeleted(key)) list = [];
   const next = { ...state.outbox };
   if (list.length) next[key] = list;
   else delete next[key];
   set({ outbox: next });
+}
+
+/** Applies only the hub's successful deletion or its authoritative tombstone/event. */
+export function markConversationDeleted(mid: string, sid: string) {
+  rememberConversationDeleted(mid, sid);
+  forgetSentHistory(key(mid, sid));
+  const id = runtimeIdentity({ machine_id: mid, session_id: sid } as Session);
+  rowHints.delete(id);
+  const outbox = { ...state.outbox };
+  delete outbox[key(mid, sid)];
+  const taskRows = { ...state.taskRows };
+  delete taskRows[id];
+  for (const [manager, info] of assistantByManager) assistantByManager.set(manager, { ...info, conversations: info.conversations.filter(availableConversation) });
+  send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+  sessionListeners.delete(key(mid, sid));
+  set({ outbox, taskRows, sessions: state.sessions, sessionSummaries: state.sessionSummaries, assistant: state.assistant });
 }
 
 // A deleted conversation leaves the list right away; the hub's next sessions push agrees (docs/protocol/protocol.md DELETE /sessions).
@@ -1033,6 +1128,8 @@ export function dropSession(mid: string, sid: string) {
 }
 
 export function upsertSession(s: Session) {
+  if (s.deleted) { markConversationDeleted(s.machine_id, s.session_id); return; }
+  if (!availableConversation(s)) return;
   const list = state.sessions[s.machine_id] ?? [];
   const i = list.findIndex((x) => x.session_id === s.session_id);
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
@@ -1397,7 +1494,7 @@ export async function refreshAssistant() {
   try {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return;
-    const assistant = { ...a, conversations: a.conversations ?? [] };
+    const assistant = { ...a, conversations: (a.conversations ?? []).filter(availableConversation) };
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
     if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
@@ -1562,6 +1659,7 @@ function resendSeen() {
 
 export function reset() {
   disconnect();
+  clearConversationDeletions();
   resetMessageFeedback();
   cursor = NO_CURSOR; // another login: another stream
   hubAway = false; // and its own first connection

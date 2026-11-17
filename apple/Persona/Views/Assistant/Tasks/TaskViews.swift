@@ -136,6 +136,8 @@ enum TaskPlace {
 @MainActor @Observable final class PlanChoices {
     /// Start These Directly: this kind of task starts without asking from now on.
     var remember = false
+    /// Let the scheduled task whose run planned this start this kind by itself from now on (#8045).
+    var scheduleGrant = false
     var editing = false
     /// Each task's ultracode as set on the card (#12), by index; the assistant's where it is not.
     var ultra: [Int: Bool] = [:]
@@ -193,6 +195,7 @@ struct PlanCard: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            if let title = grantTitle { PlanScheduleGrant(title: title, choices: picked) }
             if !actionsPinned { PlanActions(plan: plan, choices: picked) }
         }
         .card(padding: Theme.Space.l)
@@ -201,9 +204,17 @@ struct PlanCard: View {
                 picked.editing = false
                 let blocked = Ultracode.blockedMachines(edits)
                 let sent = Ultracode.editsToSend(plan, edits: edits, blocked: { blocked.contains($0) })
-                Task { await store.start(plan, edits: sent, remember: picked.remember) }
+                Task { await store.start(plan, edits: sent, remember: picked.remember, scheduleGrant: picked.grantsSchedule(plan)) }
             }
         }
+    }
+
+    /// The name under which the card offers "Let … Start These by Itself" (#8045), nil where it offers nothing.
+    private var grantTitle: String? {
+        #if DEBUG
+        if StartGrantSample.on, plan.tasks.contains(where: { !$0.isReadOnly }) { return plan.grantableSchedule?.title ?? StartGrantSample.title }
+        #endif
+        return plan.grantableSchedule?.title
     }
 
     private func settled(symbol: String, text: String, failed: [PlanTask]) -> some View {
@@ -222,6 +233,53 @@ struct PlanCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+#if DEBUG
+/// `-showStartGrantSample YES` (#8045, screenshots against a mock hub that has no start grants): every open plan with a
+/// task that changes files offers the schedule's option, and a scheduled task's editor lists two kinds.
+enum StartGrantSample {
+    static let on = UserDefaults.standard.bool(forKey: "showStartGrantSample")
+    static let title = Locale.current.language.languageCode?.identifier == "zh" ? "周报" : "Weekly report" // i18n-ignore
+    static let kinds = ["macbook|/Users/me/code/weather|edit", "studio|/Users/me/notes|read"]
+}
+#endif
+
+extension PlanChoices {
+    /// Whether Start lets the plan's scheduled task start this kind by itself: ticked, and offered on this plan.
+    func grantsSchedule(_ plan: TaskPlan) -> Bool { scheduleGrant && plan.grantableSchedule != nil }
+}
+
+/// "Let “…” Start These by Itself" under Start These Directly (#8045), on a plan a scheduled task's own run made: drawn
+/// as that one, with what it covers under it.
+struct PlanScheduleGrant: View {
+    var title: String
+    var choices: PlanChoices
+
+    var body: some View {
+        let name = title.isEmpty ? String(localized: "This Scheduled Task") : title
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Button {
+                withAnimation(Theme.Motion.state) { choices.scheduleGrant.toggle() }
+            } label: {
+                Label {
+                    Text("Let “\(name)” Start These by Itself").buttonLabelLine()
+                } icon: {
+                    // the same mark as Start These Directly's, so the two read as one group
+                    ThemedIcon(choices.scheduleGrant ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                }
+                .font(Theme.Font.caption)
+                .foregroundStyle(choices.scheduleGrant ? Theme.accent : .secondary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(choices.scheduleGrant ? .isSelected : [])
+            Text("Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page.")
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -248,7 +306,7 @@ struct PlanActions: View {
         Button {
             let blocked = Ultracode.blockedMachines(plan.tasks)
             let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: choices.ultra), blocked: { blocked.contains($0) })
-            Task { await store.start(plan, edits: edits, remember: choices.remember) }
+            Task { await store.start(plan, edits: edits, remember: choices.remember, scheduleGrant: choices.grantsSchedule(plan)) }
         } label: {
             Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Start"))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
@@ -421,7 +479,7 @@ struct FeedLine: View {
             // A routine's facts (#2320); a body this build can't read leaves the card out, never the feed around it.
             if let brief = item.brief { BriefCard(brief: brief, group: group, conversation: item.conversation) }
         case .message:
-            if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
+            if let id = item.ref, !store.isLater(item) { MessageCard(item: item, itemID: id) }
         case .inboxSuggestion:
             // A hand-off conversation's write-back (#5932); a body this build can't read leaves the card out.
             if let id = item.ref, let card = item.handoffCard { HandoffCardView(item: item, card: card, itemID: id) }

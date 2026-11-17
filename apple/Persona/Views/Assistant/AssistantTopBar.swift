@@ -103,7 +103,7 @@ struct AssistantTopBar: View {
             .sheet(isPresented: Binding(get: { typingFor != nil && key != nil }, set: { if !$0 { typingFor = nil } }),
                    onDismiss: { Task { await loadModelOptions() } }) {
                 if let l = typingFor {
-                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, initial: typedPick(l),
+                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, purpose: "assistant", initial: typedPick(l),
                                     note: String(localized: "This chat uses it from the next message.")) { id in pick(l, model: id) }
                 }
             }
@@ -112,8 +112,10 @@ struct AssistantTopBar: View {
                 if UserDefaults.standard.bool(forKey: "showInfo") { try? await Task.sleep(for: .seconds(2)); showInfo = true }
             }
             #endif
-        .task(id: model.hubRef(machineID)) {
-            launchers = ((try? await model.launchers(model.hubRef(machineID))) ?? []).filter(\.runsAssistant)
+        .task(id: "\(model.hubRef(machineID).path)|\(model.assistantLauncherRequestRevision)") {
+            if let answer = try? await model.assistantLaunchers(model.hubRef(machineID)), !Task.isCancelled {
+                launchers = answer.launchers.filter(\.runsAssistant)
+            }
             await loadModelOptions()
         }
     }
@@ -170,6 +172,7 @@ struct AssistantTopBar: View {
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.xxs)
         .frame(height: Self.height, alignment: .top)
+        .barScreenshotBanner()
         .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
     }
     #endif
@@ -271,6 +274,7 @@ struct AssistantTopBar: View {
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.xxs)
         .frame(height: Self.height, alignment: .top)
+        .barScreenshotBanner()
         .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
         .connectionDetails($showLink)
         .modifier(ShellBarAtRest(page: 0)) // ShellMovingBar stands in while the strip slides
@@ -321,6 +325,7 @@ struct AssistantTopBar: View {
         #endif
         .padding(.top, Self.topInset)
         .frame(height: Self.height, alignment: .top)
+        .barScreenshotBanner()
         .background(alignment: .top) {
             // Solid down to the bar's bottom edge, fading out below it (fading under the pill let the messages show
             // through the name).
@@ -491,14 +496,14 @@ struct AssistantTopBar: View {
     /// Each launcher's /model list; a failure just leaves the submenu without entries.
     private func loadModelOptions() async {
         let machine = model.hubRef(machineID)
-        guard let api = model.api(machine.group), !launchers.isEmpty else { return }
+        guard let api = model.api(machine.group), !launchers.isEmpty, !Task.isCancelled else { return }
         await withTaskGroup(of: (String, [AgentModelOption]?).self) { group in
             for l in launchers {
-                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name)) }
+                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name, purpose: "assistant")) }
             }
             // An empty answer counts too (the last typed ID forgotten); a failed one keeps what was there.
             for await (name, options) in group {
-                if let options { modelOptions[name] = options }
+                if let options, !Task.isCancelled { modelOptions[name] = options }
             }
         }
     }
@@ -719,6 +724,25 @@ extension AppModel {
 /// `TopFog` behind a floating bar, as its background: from the top of the screen (under the status bar) down to `solid`
 /// below the safe area's top, then fading out over `fade`, and across the whole width. On iPhone Duo's outer screen
 /// the status bar stands at the side: a fog only as wide as the page stopped beside it, a hard edge (#283).
+private extension View {
+    /// What a screenshot shows of the bar (#9508): the assistant's avatar and name with "(Persona)" in its row of
+    /// buttons, down to where the fog starts to fade (the fog under both carries on below). Under the bar the page's
+    /// color with the fog's own over it, so at rest the bar looks as it did; under the banner the page's color alone.
+    func barScreenshotBanner() -> some View {
+        screenshotBanner(solid: AssistantTopBar.fogSolid, fade: Theme.Space.m) {
+            ZStack {
+                Theme.pageBackground
+                Rectangle().fill(.regularMaterial)
+                Theme.pageBackground.opacity(0.82)
+            }
+        } bannerBackdrop: {
+            Theme.pageBackground
+        } banner: {
+            ScreenshotBannerContent(row: (AssistantTopBar.topInset, Theme.Size.tapTarget))
+        }
+    }
+}
+
 struct BarFog: View {
     var solid: CGFloat
     var fade: CGFloat

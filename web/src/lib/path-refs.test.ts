@@ -83,6 +83,17 @@ describe("findPathRefs", () => {
     expect(codePathRef("/tmp/x/a.md")).toMatchObject({ path: "/tmp/x/a.md", line: undefined });
   });
 
+  it("finishes quickly on a long part without an extension, in backticks and in text (#8894)", () => {
+    // a 32-character hash as the last part: the relative branch fails for want of an extension, and overlapping
+    // branches in a name would try every way to split the hash before giving up
+    const key = "bucket/2024/1/1/0123456789abcdef0123456789abcdef";
+    const started = performance.now();
+    expect(paths(`the image key is \`${key}\``)).toEqual([]);
+    expect(paths(`the image key is ${key} in the store`)).toEqual([]);
+    expect(paths(`saved to /srv/${key} and ~/${key}/`)).toEqual([`/srv/${key}`, `~/${key}/`]);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
   it("asks about each path once", () => {
     expect(uniquePaths(findPathRefs("src/a.ts:1 src/a.ts:2 `src/a.ts`"))).toEqual(["src/a.ts"]);
   });

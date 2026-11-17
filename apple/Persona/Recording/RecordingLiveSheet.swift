@@ -16,12 +16,19 @@ import SwiftUI
 @MainActor @Observable final class RecordingLivePresenter {
     static let shared = RecordingLivePresenter()
     private(set) var serial = 0
+    /// The recording whose End was tapped on the Lock Screen or in the Dynamic Island (#8731 V4), lowercase: its page asks
+    /// "End the Meeting?" (or "Stop Recording?") once it shows, then `endAsked()` clears it.
+    private(set) var endAsking: String?
     @ObservationIgnored private var heldAt: Date?
 
-    func open() {
+    func open(askingEnd: String? = nil) {
         heldAt = nil
+        endAsking = askingEnd
         serial += 1
     }
+
+    /// The page asked (or the recording it named isn't the one running).
+    func endAsked() { endAsking = nil }
 
     func holdOnAppear(now: Date = .now) { heldAt = now }
 
@@ -50,7 +57,8 @@ private struct RecordingLiveSheetPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $presented) { RecordingLiveSheet() }
+            // The meeting room is the whole screen (#8731 v2): a meeting app's, not a sheet over the page.
+            .fullScreenCover(isPresented: $presented) { RecordingLiveSheet() }
             // A hidden shell page never gets onDisappear: the tab-aware pair keeps one host presenting at a time.
             .onTabVisibility(appear: {
                 visible = true
@@ -113,8 +121,8 @@ struct RecordingLiveSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
         }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+        // Dark while the meeting records (E1: as meeting apps are), the app's own look once it ended.
+        .preferredColorScheme(wrapUp ? nil : .dark)
         .onChange(of: capture.state, initial: true) { old, new in follow(from: old, to: new) }
         .onChange(of: capture.error, initial: true) { if capture.state != .idle { liveError = capture.error } }
         .onChange(of: ask.exchanges) { mirror() }

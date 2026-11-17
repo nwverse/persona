@@ -145,16 +145,21 @@ describe("the kind chips", () => {
   it("read only their kind, whichever is selected, and stay while the next kind loads", async () => {
     render("docs");
     const names = chips();
-    expect(names).toEqual(["项目", "主题", "会话", "人", "文档", "会议", "日程", "录音"]);
+    expect(names).toEqual(["项目", "主题", "会话", "人", "文档", "会议", "日程"]); // recordings are under 会议 (#8871)
     await answer(requests[0], { items: [entry, { ...entry, id: "two" }, { ...entry, id: "three" }], tags: [] });
     expect(chips()).toEqual(names);
 
-    render("recordings");
-    expect(selectedTab()?.textContent).toBe("录音");
-    expect(chips()).toEqual(names); // the row is still there while recordings load, and no chip changed
+    // Meetings read the imported meetings and the recordings (#8871), and show once both answered.
+    render("meetings");
+    expect(selectedTab()?.textContent).toBe("会议");
+    expect(chips()).toEqual(names); // the row is still there while meetings load, and no chip changed
     expect(host.textContent).toContain("加载中");
+    expect(requests.slice(1).map((r) => r.path)).toEqual(["/kb/meetings", "/kb/recordings"]);
     await answer(requests[1], { items: [], tags: [] });
+    expect(host.textContent).toContain("加载中");
+    await answer(requests[2], { items: [], tags: [] });
     expect(chips()).toEqual(names);
-    expect(host.textContent).toContain("还没有录音");
+    expect(host.textContent).toContain("还没有会议");
+    expect(host.textContent).toContain("在手机上开的会议、记的笔记");
   });
 });
