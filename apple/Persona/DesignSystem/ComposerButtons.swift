@@ -77,12 +77,13 @@ private struct WritingMicPress: ViewModifier {
 extension Dictation {
     /// A mic's tap: a second one ends it; otherwise what is heard goes after what `text` holds, and why it could not
     /// start shows as a toast. The draft and `hints` tell it the language spoken (`DictationLanguage`).
-    func toggle(into text: Binding<String>, hints: () -> [String] = { [] }) {
+    func toggle(into text: Binding<String>, hints: () -> [String] = { [] }, onFailure: (() -> Void)? = nil) {
         if isListening { stop(); return }
         let typed = text.wrappedValue
         let base = typed.isEmpty || typed.last?.isWhitespace == true ? typed : typed + " "
         start(hints: [typed] + hints(), update: { heard in text.wrappedValue = base + heard }) { problem in
             AppModel.shared.toast = Toast(problem, style: .error)
+            onFailure?()
         }
     }
 }

@@ -670,6 +670,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params)
 	}
 	switch method {
+	case nodeproto.OwnerInterrupt:
+		method = "session.interrupt"
+		ctx, _ = withOwnerDelivery(ctx)
+	case nodeproto.OwnerCardAnswer:
+		method = "codex.answer"
+		ctx, _ = withOwnerDelivery(ctx)
+	}
+	switch method {
 	case "workspace.naming.resolve":
 		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
