@@ -28,6 +28,7 @@ RECORDS = [
     "function coreProjectStreamChunks(input: string): string",
     "function coreProjectStreamRepair(input: string): string",
     "function coreProjectPlainOpenFence(input: string): string",
+    "function coreProjectViewedImages(input: string): string",
     "function coreProjectTaskIndex(input: string): string",
     "function coreProjectTurns(input: string): string",
 ]
