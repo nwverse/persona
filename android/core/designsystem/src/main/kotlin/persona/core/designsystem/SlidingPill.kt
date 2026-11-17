@@ -30,22 +30,23 @@ import kotlin.math.roundToInt
  * One pill behind the chosen segment, Glass only.
  *
  * A tap moves the pill's frame on [PersonaTheme.motion.enter], the iPhone's `Theme.Motion.state`
- * (`apple/Shared/Design/Theme.swift` `Motion.state`, snappy 0.25 s, bounce 0.15). That is the shell
- * switch's pill (`apple/Persona/DesignSystem/ShellComponents.swift` `SwitchMotion`: upright line 305,
- * across the top line 316) and the `matchedGeometryEffect` id `"pill"` (lines 179–214). A segmented
- * picker on iOS is the system's sliding thumb (`Picker` `.segmented`, for example
- * `apple/Persona/Views/Session/ReviewPage.swift`); #9586 maps that tap onto the same state spring.
- * The thumb's own UIKit curve is not in this repo.
+ * (`apple/Shared/Design/Theme.swift` line 726, `Animation.snappy(duration: 0.25)`), through
+ * `Tokens.Motion.State`. That is the shell switch's pill (`apple/Persona/DesignSystem/ShellComponents.swift`
+ * `SwitchMotion`: the Duo tab bar line 325, across the top line 336) and the `matchedGeometryEffect` id
+ * `"pill"` (lines 206 and 221, only when the switch is outside a shell). A segmented picker on iOS is the
+ * system's sliding thumb (`Picker` `.segmented`, for example `apple/Persona/Views/Session/ReviewPage.swift`);
+ * #9586 maps that tap onto the same state spring. The thumb's own UIKit curve is not in this repo.
  *
  * [fraction], when the caller has a pager position, places the pill there with no spring of its own.
- * iOS `PagerPill` (`ShellComponents.swift` 238–241) reads `shell.pager.position` only while
+ * iOS `PagerPill` (`ShellComponents.swift` 243–245) reads `shell.pager.position` only while
  * `shellPillFollowsStrip` is set (`ShellView.swift` 226 and 259), and `ShellPager.drag` writes that
  * position with animations off (`ShellPager.swift` 81–83). Equal segments then match
- * `offset = position * (width / n)`. Android's home switch has no strip, so it passes no fraction.
+ * `offset = position * (width / n)`. The Duo tab bar does not use `PagerPill` (line 124); it marks the
+ * chosen item in place. Android's home switch has no strip, so it passes no fraction.
  *
- * System animations off put the pill on the choice at once, as the upright switch does
- * (`SwitchMotion` line 305, `reduceMotion ? nil`). The horizontal switch does not read Reduce Motion
- * (line 316); Android still stops, with the rest of its motion.
+ * System animations off put the pill on the choice at once, as the Duo tab bar does
+ * (`SwitchMotion` line 325, `reduceMotion ? nil`). The horizontal switch does not read Reduce Motion
+ * (line 336); Android still stops, with the rest of its motion.
  */
 @Composable
 internal fun GlassSlidingPill(
