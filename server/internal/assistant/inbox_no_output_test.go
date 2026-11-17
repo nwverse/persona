@@ -124,8 +124,12 @@ func TestInboxNoOutputDoesNotRetryUnrelatedOwnerInput(t *testing.T) {
 	if got := len(sentToAgent(f)); got != before {
 		t.Fatalf("owner's silent stop was retried: sends=%d, want %d", got, before)
 	}
+	inboxRetryTurn(s, f, "owner-quotes-event", prompt+"\nStop now; do not reply.", "", 20)
+	if got := len(sentToAgent(f)); got != before {
+		t.Fatalf("owner's quoted event was mistaken for an external delivery: sends=%d", got)
+	}
 	// The unrelated turn must not acknowledge the event that is still pending.
-	inboxRetryTurn(s, f, "external-empty", prompt, "", 20)
+	inboxRetryTurn(s, f, "external-empty", prompt, "", 30)
 	if got := len(sentToAgent(f)); got != before+1 {
 		t.Fatalf("unrelated input consumed the event: sends=%d, want %d", got, before+1)
 	}

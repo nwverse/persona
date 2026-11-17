@@ -135,7 +135,7 @@ func (s *Service) taskInboxTurnEnded(ctx context.Context, t Todo, last proto.Ses
 		changed := false
 		for id, e := range events {
 			if e.Todo != t.ID || e.Machine != last.MachineID || e.Session != last.SessionID ||
-				!strings.Contains(ask, e.Prompt) {
+				ask != strings.TrimSpace(e.Prompt) {
 				continue
 			}
 			matched = true
