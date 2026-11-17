@@ -220,7 +220,7 @@ Chat page:
   earlier openings (a machine's dev server loads again only when opened). Inside the sheet an edge swipe goes back and forward. Selected web text gets AI edit (enter request, immediately send to Agent) and
   Add as context (quote strip above input, sent with next message); native Lark docs use title-bar Add as context for the whole document. Message context is
   `<persona-context kind="context|edit" title="…" url="…">selected text</persona-context>`, raw tags hidden.
-- This-hub links (#2696, `Shared/HubPageLink.swift`, `App/HubPageRouting.swift`): assistant links to this hub's web pages (#2194) open native App pages, not website cards:
+- This-hub links (#2696, `Shared/HubPageLink.swift`, `App/HubPageRouting.swift`; the route table every client follows: `docs/protocol/deep-links.md`): assistant links to this hub's web pages (#2194) open native App pages, not website cards:
   `/s/<machine>/<session>`, `/t/<machine>/<space>/<slot>/<session>` open Agent chat; `/persona/<id>`, `/persona/<id>` open Persona chat; `?at=<item id>` scrolls and flashes the message
   (same as quote navigation; fetch a few older pages if missing, otherwise stop at latest); `/todos?id=<id>`, `/todos/<id>` present to-do details. Session ids may be unique prefixes (web #2464).
   This hub matches host + port, ignoring http/https: paired group addresses, active socket address, mesh endpoints, hello `public_url`; reverse-proxy subpath must match its prefix.
