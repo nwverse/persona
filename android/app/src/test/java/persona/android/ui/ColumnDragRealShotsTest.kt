@@ -2,9 +2,14 @@ package persona.android.ui
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.view.View
+import android.view.ViewGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,12 +18,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import android.graphics.Color as AndroidColor
@@ -41,6 +50,7 @@ import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.AssistantSnapshot
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JPage
+import persona.core.designsystem.JShellDrawer
 import persona.core.designsystem.PersonaTheme
 import persona.feature.assistant.AssistantSidebarContent
 import java.io.File
@@ -48,6 +58,7 @@ import java.io.File
 /**
  * The real Assistant column at the foldable widths, Glass, light and dark.
  * Colour blocks live in SidebarColumnDragShotsTest. These frames are the ones a review looks at.
+ * #9803 also uses this harness for Persona-root resting shots and exclusion-rect checks.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -65,7 +76,123 @@ class ColumnDragRealShotsTest {
     @Config(qualifiers = "en-w951dp-h673dp-mdpi")
     @Test fun besideFoldable() = frames(over = false, prefix = "beside", windowDp = 951f, widthPx = 951, heightPx = 673)
 
-    private fun frames(over: Boolean, prefix: String, windowDp: Float, widthPx: Int, heightPx: Int) {
+    /**
+     * #9803 PR evidence: real phone shell at Persona root (drawer closed), Glass light and dark.
+     * Publishes a leading systemGestureExclusionRects band; a pushed page publishes none.
+     */
+    @Config(qualifiers = "en-w411dp-h891dp-mdpi")
+    @Test fun phonePersonaRootEdgeEvidence() {
+        val evidence = evidenceDir()
+        var dark by mutableStateOf(false)
+        var dragEnabled by mutableStateOf(true)
+        lateinit var host: View
+        rule.setContent {
+            host = LocalView.current
+            PersonaTheme(style = AppStyle.Glass, darkTheme = dark, reduceMotion = true) {
+                val scope = rememberCoroutineScope()
+                val (snapshot, repository, main) = assistantFixture()
+                JShellDrawer(
+                    opened = false,
+                    onDismiss = {},
+                    modifier = Modifier.testTag("shot").width(411.dp).height(891.dp),
+                    dragEnabled = dragEnabled,
+                    drawer = {
+                        AssistantSidebarContent(
+                            snapshot, repository, main.key, scope, demo = true,
+                            onOpen = {}, onAction = {}, onSettings = {}, onInbox = {}, onKnowledge = {},
+                            onTodos = null, todoCount = 0, showTodos = false, inboxCount = 0,
+                            settingsCount = 0, settingsDot = false, settingsBadge = null,
+                            pages = emptyList(), onPage = {}, onRetired = {},
+                            fullWindowSearch = false,
+                        )
+                    },
+                ) {
+                    JPage("Assistant") { padding ->
+                        Box(Modifier.fillMaxSize().padding(padding)) {
+                            Text("The trip outline is ready.")
+                        }
+                    }
+                }
+            }
+        }
+        val insets = WindowInsetsCompat.Builder()
+            .setInsets(WindowInsetsCompat.Type.systemGestures(), Insets.of(48, 0, 48, 0))
+            .setInsets(WindowInsetsCompat.Type.mandatorySystemGestures(), Insets.of(48, 0, 48, 0))
+            .build()
+        rule.runOnIdle { ViewCompat.dispatchApplyWindowInsets(host, insets) }
+        rule.waitForIdle()
+        for (isDark in listOf(false, true)) {
+            dark = isDark
+            dragEnabled = true
+            rule.waitForIdle()
+            rule.onNodeWithText("The trip outline is ready.").assertExists()
+            val bitmap = saveEvidence(evidence, "real-phone-glass-${if (isDark) "dark" else "light"}")
+            assertEquals(411, bitmap.width)
+            assertEquals(891, bitmap.height)
+            assertTrue("phone root exclusion ${leadingExclusionRects(host)}", leadingExclusionRects(host).isNotEmpty())
+        }
+        dragEnabled = false
+        rule.waitForIdle()
+        assertTrue("pushed page clears exclusion", leadingExclusionRects(host).isEmpty())
+    }
+
+    /**
+     * #9803 PR evidence: real foldable shell at Persona root with the column hidden (the state that
+     * publishes the exclusion), Glass light and dark. A pushed detail publishes none.
+     */
+    @Config(qualifiers = "en-w951dp-h673dp-mdpi")
+    @Test fun foldablePersonaRootEdgeEvidence() {
+        val evidence = evidenceDir()
+        var dark by mutableStateOf(false)
+        var detailAtRoot by mutableStateOf(true)
+        lateinit var host: View
+        rule.setContent {
+            host = LocalView.current
+            PersonaTheme(style = AppStyle.Glass, darkTheme = dark, reduceMotion = true) {
+                val scope = rememberCoroutineScope()
+                val (snapshot, repository, main) = assistantFixture()
+                AssistantPaneFrame(
+                    regular = true, showSidebar = true, shown = false, overlay = false, drags = true,
+                    detailAtRoot = detailAtRoot, paneShown = true, hinges = emptyList(),
+                    modifier = Modifier.testTag("shot"),
+                    sidebar = {
+                        AssistantSidebarContent(
+                            snapshot, repository, main.key, scope, demo = true,
+                            onOpen = {}, onAction = {}, onSettings = {}, onInbox = {}, onKnowledge = {},
+                            onTodos = null, todoCount = 0, showTodos = false, inboxCount = 0,
+                            settingsCount = 0, settingsDot = false, settingsBadge = null,
+                            pages = emptyList(), onPage = {}, onRetired = {},
+                            fullWindowSearch = true,
+                            onFoldColumn = { },
+                        )
+                    },
+                ) {
+                    JPage("Assistant") { padding ->
+                        Box(Modifier.fillMaxSize().padding(padding)) {
+                            Text("The trip outline is ready.")
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        for (isDark in listOf(false, true)) {
+            dark = isDark
+            detailAtRoot = true
+            rule.waitForIdle()
+            rule.onNodeWithText("Weekend plans").assertDoesNotExist()
+            rule.onNodeWithText("The trip outline is ready.").assertExists()
+            val bitmap = saveEvidence(evidence, "real-foldable-951x673-glass-${if (isDark) "dark" else "light"}")
+            assertEquals(951, bitmap.width)
+            assertEquals(673, bitmap.height)
+            assertTrue("foldable root exclusion ${leadingExclusionRects(host)}", leadingExclusionRects(host).isNotEmpty())
+        }
+        detailAtRoot = false
+        rule.waitForIdle()
+        assertTrue("pushed detail clears exclusion", leadingExclusionRects(host).isEmpty())
+    }
+
+    private fun assistantFixture(): Triple<AssistantSnapshot, AssistantRepository, Session> {
         val choice = AssistantManagerChoice.current.value
         val main = Session("computer", "assistant", title = "Main conversation", assistant = true)
         val recent = main.copy(sessionId = "recent", title = "Weekend plans", updatedAt = "2026-11-12T09:00:00Z")
@@ -77,6 +204,36 @@ class ColumnDragRealShotsTest {
             override val assistant = MutableStateFlow(snapshot)
             override suspend fun refresh() = Unit
         }
+        return Triple(snapshot, repository, main)
+    }
+
+    private fun evidenceDir(): File =
+        File(System.getenv("ROOT_EDGE_SHOTS") ?: "/tmp/persona-leader/shots-9803").also { it.mkdirs() }
+
+    private fun saveEvidence(out: File, name: String): Bitmap {
+        val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+        File(out, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        println("wrote ${File(out, "$name.png").absolutePath} ${bitmap.width}x${bitmap.height}")
+        return bitmap
+    }
+
+    private fun leadingExclusionRects(host: View): List<Rect> {
+        val found = mutableListOf<Rect>()
+        fun walk(view: View) {
+            for (rect in view.systemGestureExclusionRects) {
+                if (rect.width() > 0 && rect.left <= 80) found += Rect(rect)
+            }
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) walk(view.getChildAt(i))
+            }
+        }
+        walk(host)
+        walk(host.rootView)
+        return found.distinctBy { "${it.left},${it.top},${it.right},${it.bottom}" }
+    }
+
+    private fun frames(over: Boolean, prefix: String, windowDp: Float, widthPx: Int, heightPx: Int) {
+        val (snapshot, repository, main) = assistantFixture()
         var dark by mutableStateOf(false)
         var shown by mutableStateOf(false)
         rule.setContent {

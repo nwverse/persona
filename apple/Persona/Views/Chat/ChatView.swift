@@ -857,7 +857,10 @@ struct ChatView: View {
                 })
         }
         .stackSegment()
-        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
+        // Presented here, pushed in Knowledge: the ✕ belongs to the sheet (#9653).
+        .sheet(item: $openedKnowledge) { entry in
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
+        }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
         #if DEBUG
