@@ -465,10 +465,8 @@ struct AssistantView: View {
                     if model.assistantSwitches != switches { mainComing = true }
                 }
                 if mainComing {
-                    // Until a conversation is on screen, or the settings are read and there is no main conversation to pick:
-                    // up to 10 s, since a pick that lands after the page was pushed goes back to the root (a launch with
-                    // `-openChatsFresh` reads the main conversation from the hub, which a busy Mac answers late).
-                    for _ in 0..<40 where model.assistantCurrent == nil && !(model.assistantConfig != nil && model.assistantMain == nil) {
+                    // Until a conversation is on screen, or the settings are read and there is no main conversation to pick.
+                    for _ in 0..<20 where model.assistantCurrent == nil && !(model.assistantConfig != nil && model.assistantMain == nil) {
                         try? await Task.sleep(for: .milliseconds(250))
                     }
                 }
