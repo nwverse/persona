@@ -378,7 +378,20 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // pages as its own folding section (lib/sidebar-pages.ts arrangeSections, views/Sidebar.tsx PageGroup), and the
 // arrangement goes to and from the hub with the start page (lib/start-page.ts). The editor is in the Settings chunk.
 // Main's room is kept on top.
-export const FIRST_SCREEN_BUDGET = 482_526;
+// #9132: a finished reply's Sources row is a chunk of its own (views/chat/TurnSources.tsx with lib/turn-sources.ts and
+// its words); the first screen keeps only SegmentView's check for a web call and the lazy entry, the smallest of four
+// layouts tried (mounting it under every exchange, or riding the reply bar's chunk, cost more). 85 B in ja, measured in
+// one environment against main 21cd52cc2 (ja 482,104 B to 482,189 B; en 478,990 B to 479,075 B, zh-Hans 479,859 B to
+// 479,944 B). Main had 422 B of room; the budget stays.
+// #9751: Just finished (lib/agent-groups.ts justFinished, the paged list's section in lib/session-groups.ts, the seen
+// outbox's unseen rows in lib/seen-outbox.ts) adds 112 B in ja, measured in one environment against main 7f756aa00a (ja
+// 482,373 B to 482,485 B; en 479,275 B to 479,391 B, zh-Hans 480,079 B to 480,221 B). Main had 153 B of room; the
+// budget stays.
+// 2026-11-17 (#9847): #9784 landed on a main that had moved since its measurement and added 270 B in ja, not 112 B
+// (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
+// so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
+// separate work.
+export const FIRST_SCREEN_BUDGET = 482_683;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

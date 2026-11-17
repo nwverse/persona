@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## A lazy waiting row needs a lazy ordering boundary (#9390)
+
+Ordering an unopened tray from its shared classifier imports the age computation on the first screen even when the
+row is lazy. Keep canonical classification and counts unchanged; order the waiting list inside its existing lazy
+boundary. To-dos similarly orders only the already-classified waiting groups in its lazy page, preserving the other
+sections and counts. Check the boundary regression and every language's measured first-screen budget; do not hide
+growth with an exemption, a larger budget or unrelated catalog changes. New waiting copy stays in its own lazy namespace.
+On a clickable task row, stop propagation only for links, controls and the portalled editor. Stopping every click
+on a metadata wrapper makes its plain text a dead area: test both text-to-row selection and separate control actions.
+Copying a reminder should dismiss the editor only after success, so the phone's confirmation toast does not cover
+its footer. Keep the editor on failure, and do not discard text edited while clipboard permission was pending.
+
 ## Transcript cut sizes are bytes, not characters (#9442)
 
 A page's `full_size` signals a truncated item and measures the original UTF-8 bytes; the displayed text may also
@@ -16,6 +28,8 @@ when no usable timestamp was returned; a file that stopped safely must not look 
 
 Do not format a past event with the UTC offset at page load: daylight-saving changes can shift the displayed time
 and date. Resolve the browser's local offset at the event's instant, and test both seasonal directions across midnight.
+Chart axes too (#9863): a step added to one offset-shifted start drifts an hour off midnight across a change; lay each
+day's round times out with `Date`'s local fields (`clockTicks` in `web/src/lib/machine-detail.ts`).
 
 ## ZIP preview limits must check actual bytes (#9384)
 

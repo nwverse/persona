@@ -16,14 +16,14 @@ import (
 var idleCompactPolicy = assistantwire.IdleCompaction{Enabled: true, IdleMinutes: 30, ContextTokens: 300000}
 
 type idleCompactSink struct {
-	lockedBuf
+	syncBuffer
 	compact chan struct{}
 }
 
 func (s *idleCompactSink) Close() error { return nil }
 
 func (s *idleCompactSink) Write(line []byte) (int, error) {
-	n, err := s.lockedBuf.Write(line)
+	n, err := s.syncBuffer.Write(line)
 	var v struct {
 		Type    string `json:"type"`
 		Message struct {

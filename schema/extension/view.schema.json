@@ -12,6 +12,9 @@
     "TextStyle": {
       "description": "title and headline (UI version 6) are a section's big title and a small heading; an older app draws them as body.",
       "type": "string", "enum": ["body", "secondary", "caption", "code", "title", "headline"]},
+    "ProgressStyle": {
+      "description": "A progress drawing hint: bar (the default) or ring.",
+      "type": "string", "enum": ["bar", "ring"]},
     "FieldKind": {
       "description": "date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline the text with \\n.",
       "type": "string", "enum": ["text", "secret", "number", "toggle", "choice", "date", "time", "datetime", "multichoice", "multiline"]},
@@ -144,13 +147,14 @@
       "required": ["type", "label", "value"]
     },
     "ProgressComponent": {
-      "description": "A bar filled to ratio (0 to 1).",
+      "description": "Progress toward a goal, filled to ratio (0 to 1).",
       "type": "object", "x-since": 1,
       "properties": {
         "type": {"const": "progress"},
         "key": {"type": "string", "maxLength": 128, "x-since": 3},
         "label": {"type": "string", "minLength": 1, "maxLength": 2000},
         "ratio": {"type": "number", "minimum": 0, "maximum": 1, "x-go-pointer": true},
+        "style": {"$ref": "#/$defs/ProgressStyle", "description": "A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring; other surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not accept this field."},
         "detail": {"type": "string", "maxLength": 2000},
         "tone": {"$ref": "#/$defs/Tone"}
       },

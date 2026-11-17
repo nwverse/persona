@@ -207,6 +207,10 @@ type Node struct {
 	// (switch_share.go, attach.go); nil until the first use when attach set none (switches).
 	share atomic.Pointer[switchShare]
 
+	// The pi family's panes listed by their fallback id, and omp's stopped sessions (pifamily.go, ompdisk.go).
+	familySeen map[string]familySeenPane // omp pane -> first seen (zero: there when the node started), last session
+	ompDisk    *ompDiskState
+
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
@@ -395,6 +399,7 @@ func New(version string) (*Node, error) {
 		n.screenStart = n.startScreenHelper                                                                   // Persona Screen, the live screen's video helper (#3954)
 		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn}                           // Persona Input (#7775)
 		n.phones = &phoneScreens{logf: n.logger.Printf, signed: n.screens.signedIn, attach: n.screens.attach} // Phone Screen (#9314)
+		go n.phones.restoreLeftovers(context.Background())                                                    // what a helper that died left (#9500)
 	}
 	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
 	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
@@ -497,6 +502,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		}()
 	}
 	go n.meterUsage(ctx, n.stateReady)
+	go n.backfillUsage(ctx, n.stateReady) // the days before the hub's history, once (usage_backfill.go)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
@@ -660,6 +666,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.handleUpdate(ctx, method, params)
 	}
 	switch method {
+	case nodeproto.OwnerInterrupt:
+		method = "session.interrupt"
+		ctx, _ = withOwnerDelivery(ctx)
+	case nodeproto.OwnerCardAnswer:
+		method = "codex.answer"
+		ctx, _ = withOwnerDelivery(ctx)
+	}
+	switch method {
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
 	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
@@ -706,7 +720,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Model                   string        `json:"model"`
 		ModelFingerprint        string        `json:"model_fingerprint"`
 		SupervisionInstructions *string       `json:"supervision_instructions"`
-		Runtime                 string        `json:"runtime"`
 		ConfigDir               string        `json:"config_dir"`
 		Prompt                  string        `json:"prompt"`
 		ResumeSessionID         string        `json:"resume_session_id"`
@@ -769,12 +782,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Purpose        string                        `json:"purpose"`        // launchers.models/check: assistant runs outside the Agent engine
 		Configured     bool                          `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
 		Guest          *guestParams                  `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
+		Origin         string                        `json:"origin"`         // assistant.send: the manager-recorded source of this conversation
 		NewSessionID   string                        `json:"new_session_id"` // assistant.send: start the new conversation under this id
 		Raw            json.RawMessage               `json:"-"`
 
 		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
 
 	}
+	// The "runtime" an older hub sends with assistant.send, assistant.warm and session.send is not read: every assistant
+	// conversation runs on Claude Code's CLI.
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
@@ -927,6 +943,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err // the runtime would take the message without the switch (launcher_switch.go)
 		}
 		if res, err, handled := n.runtimeHandle(ctx, h, method, params); handled {
+			return res, err
+		}
+	} else if n.ompStopped(method, p.SessionID) { // a stopped omp: a notice, no send (ompcalls.go)
+		if res, err, handled := n.ompOfflineCalls(method, p.SessionID); handled {
 			return res, err
 		}
 	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {
@@ -1161,7 +1181,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		def, err := n.launcherDefinition(ctx, p.Name)
 		return map[string]any{"definition": def}, err
 	case "launchers.check": // what a start in that host (the default host when none) would run (#8140)
-		return n.launcherCheck(withLauncherPurpose(withStartHost(ctx, p.Host), p.Purpose), p.Name), nil
+		return n.launcherCheck(withLauncherPurpose(withStartHost(ctx, p.Host), p.Purpose), p.Name, p.Model), nil
 	case "claude.auth_status": // whether Claude Code is signed in as the launcher runs it, no model request (claudeauth.go)
 		return n.claudeAuthStatus(ctx, p.Name)
 	case "launchers.repair": // the hub's launcher health (docs/server/launcher-health.md)
@@ -1331,7 +1351,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
+		ctx := withStartHost(ctx, p.Host)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, instead, err := n.startOnEngineRuntime(ctx, rp)
 			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
@@ -1339,11 +1359,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") && launcherAgentType(p.Launcher) != ompAgent {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal})
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
-			execution: modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal}}
+			execution: modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
@@ -1405,7 +1425,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1465,7 +1485,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.handoff": // what a new main conversation is told about the old one
 		return n.assistantHandoff(p.SessionID)
 	case "assistant.warm":
-		return ok(n.assistantWarm(p.Cwd, p.Launcher, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), ConfigDir: p.ConfigDir, IsMain: p.IsMain, MainCompactWindow: p.MainCompact}).withSupervision(p.SupervisionInstructions)))
+		return ok(n.assistantWarm(p.Cwd, p.Launcher, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, ConfigDir: p.ConfigDir, IsMain: p.IsMain, MainCompactWindow: p.MainCompact}).withSupervision(p.SupervisionInstructions)))
 	case "assistant.memory":
 		var a memoryOp
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -1485,7 +1505,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
 		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
 		var owner *ownerDelivery
-		if opts.OwnerInput {
+		if opts.OwnerInput && ownerInputExact(params) {
 			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
 		}
 		err := n.sends.once(opts.ClientMsgID, func() error {
@@ -1495,7 +1515,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
+					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
 					return err
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
@@ -1740,7 +1760,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &a)
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			return nil, err
+			return nil, readErr(err)
 		}
 		n.refresh(p.SessionID, f)
 		it, err := f.Full(a.ItemID)
@@ -1758,7 +1778,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &a)
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			return nil, err
+			return nil, readErr(err)
 		}
 		n.refresh(p.SessionID, f)
 		it, err := f.Full(a.ItemID)
@@ -1776,7 +1796,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			return nil, err
+			return nil, readErr(err)
 		}
 		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
 			return nil, err
