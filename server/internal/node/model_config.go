@@ -51,6 +51,8 @@ type modelExecution struct {
 	// Goal: a Claude Code /goal condition typed after the first message of a new start is in (startgoal.go). Per start,
 	// never part of a fingerprint, never kept for a resume.
 	Goal string `json:"-"`
+	// InPane is session.start's in_pane: a failed start's kept tab to start in (startremedy.go).
+	InPane string `json:"-"`
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {

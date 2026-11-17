@@ -442,10 +442,12 @@ fun JRadio(selected: Boolean, onClick: (() -> Unit)?, modifier: Modifier = Modif
 data class JSegment(val label: String, val count: Int? = null, val status: Status? = null, val countTone: Status? = null)
 
 /**
- * A small set of mutually exclusive filters: a sliding pill in glass, underlined text tabs in brief, a ruled
- * strip of cells on the board. [compact] reduces spacing only; text keeps the ambient font scale. [revealIn]: the
- * [modifier]'s sideways scroll, in which the selected option is kept whole in sight ([revealWhenSelected]), [revealMargin]
- * clear of an edge with more past it (where a fade covers it).
+ * A small set of mutually exclusive filters. On Glass one pill slides to the chosen segment
+ * (`GlassSlidingPill`, `Theme.Motion.state`) and the label colour fades with it. An index outside
+ * the list draws no pill. Brief keeps underlined text tabs and Board a ruled strip of cells.
+ * [compact] reduces spacing only; text keeps the ambient font scale. [revealIn]: the [modifier]'s sideways scroll, in
+ * which the selected option is kept whole in sight ([revealWhenSelected]), [revealMargin] clear of an edge with more past
+ * it (where a fade covers it).
  */
 @Composable
 fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false,
@@ -467,23 +469,34 @@ internal fun JSegmentedStrip(options: List<JSegment>, selected: Int, onSelect: (
     val type = PersonaTheme.type
     fun text(segment: JSegment) = segment.label + (segment.count?.let { " $it" } ?: "")
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(
-            modifier.clipDrawing(CircleShape).background(palette.surface)
+        // One pill, not a background on each segment. iOS: the system's sliding thumb (`Picker` `.segmented`).
+        AppStyle.Glass -> GlassSlidingPill(
+            selected = selected,
+            count = options.size,
+            color = palette.action,
+            modifier = modifier.clipDrawing(CircleShape).background(palette.surface)
                 .border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), CircleShape)
                 .padding(if (compact) Tokens.Space.xxs else 4.dp.dense),
-        ) {
-            options.forEachIndexed { index, segment ->
-                val on = index == selected
-                val spoken = segment.countTone?.let { spokenCount(segment.label, segment.count) }
-                Box(
-                    Modifier.revealWhenSelected(revealIn, on, revealMargin).clip(CircleShape).background(if (on) palette.action else Color.Transparent)
-                        .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }
-                        .padding(horizontal = if (compact) Tokens.Space.s else 16.dp.dense, vertical = 9.dp.dense),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (segment.countTone == null) Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
-                    else TonedSegmentLabel(segment, type.labelSmall, if (on) palette.onAction else palette.ink2, onFill = on)
+            segmentModifier = { index -> Modifier.revealWhenSelected(revealIn, index == selected, revealMargin) },
+        ) { index ->
+            val segment = options[index]
+            val on = index == selected
+            val spoken = segment.countTone?.let { spokenCount(segment.label, segment.count) }
+            Box(
+                Modifier.clip(CircleShape)
+                    .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }
+                    .padding(horizontal = if (compact) Tokens.Space.s else 16.dp.dense, vertical = 9.dp.dense),
+                contentAlignment = Alignment.Center,
+            ) {
+                // One weight, as this row always had. Only the colour fades (`GlassSegmentLabel`).
+                val label: @Composable (String) -> Unit = {
+                    GlassSegmentLabel(
+                        it, selected = on, selectedColor = palette.onAction, idleColor = palette.ink2,
+                        style = type.labelSmall, softWrap = false,
+                    )
                 }
+                if (segment.countTone == null) label(text(segment))
+                else TonedSegmentLabel(segment, type.labelSmall, if (on) palette.onAction else palette.ink2, onFill = on, label = label)
             }
         }
         AppStyle.Brief -> {
@@ -569,12 +582,16 @@ internal fun peekGap(widths: List<Int>, viewport: Int, gap: Int, peek: Int, leas
     return gap
 }
 
-/** A [JSegment] with a toned count: its label, then the count's capsule (none at 0); [onFill]: on the selected pill's fill. */
+/**
+ * A [JSegment] with a toned count: its label, then the count's capsule (none at 0); [onFill]: on the selected pill's fill.
+ * [label] draws the label (Glass's fades with its sliding pill).
+ */
 @Composable
 private fun TonedSegmentLabel(segment: JSegment, style: androidx.compose.ui.text.TextStyle, color: Color, modifier: Modifier = Modifier,
-                              onFill: Boolean = false) {
+                              onFill: Boolean = false,
+                              label: @Composable (String) -> Unit = { Text(it, style = style, color = color, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text(segment.label, style = style, color = color, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        label(segment.label)
         val tone = segment.countTone ?: return@Row
         segment.count?.takeIf { it > 0 }?.let { Spacer(Modifier.width(JChipTokens.countGap)); JToneCount(it, tone, onFill = onFill) }
     }
