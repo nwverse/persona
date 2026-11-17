@@ -381,6 +381,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		if list[i].Assistant {
 			list[i].Archived = shown[list[i].SessionID].Archived
+			list[i].Tags = rowTagsOf(shown[list[i].SessionID].Tags)
 			v := shown[list[i].SessionID]
 			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
 			list[i].ModelPick = v.ModelPick                                                         // what its next messages run on (model_pick.go)
