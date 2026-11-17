@@ -148,10 +148,10 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
     }
 
     @MainActor private func dismissSoftwareKeyboard() {
-        let hide = app.buttons.matching(NSPredicate(format: "label IN %@", ["隐藏键盘", "Hide Keyboard", "收起键盘"])).firstMatch
-        XCTAssertTrue(hide.waitForExistence(timeout: 5), "no system Hide Keyboard button")
-        hide.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Hide Keyboard did not dismiss the keyboard")
+        let field = app.textFields["full-search-field"].firstMatch
+        XCTAssertTrue(field.exists && field.isHittable, "the regular search field is not reachable for Return")
+        field.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Return did not dismiss the keyboard")
     }
 
     @MainActor private func assertFullSearchVisible(_ step: String, expected: String? = nil) -> XCUIElement {
