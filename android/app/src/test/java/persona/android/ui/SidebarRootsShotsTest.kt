@@ -250,6 +250,8 @@ class SidebarRootsShotsTest {
                     // The left of the column, short of where a page sliding out of the slot could cover it.
                     assertTrue("$size $styleName $tone drill-down leaves the sidebar column put",
                         matches(leftStrip(columnAtRest, 240), leftStrip(pushMid, 240)))
+                    // The whole column, including the edge a slide used to paint (#9896).
+                    assertColumnUntouched(columnAtRest, pushMid, "$size $styleName $tone mid-push")
                 }
                 settle(1_000)
                 val pushEnd = shot("window")
@@ -281,6 +283,9 @@ class SidebarRootsShotsTest {
                     advance(80)
                     val popMid = shot("window")
                     save(popMid, "$size-inbox-pop-mid-$styleName-$tone")
+                    if (columnAtRest != null) {
+                        assertColumnUntouched(columnAtRest, popMid, "$size $styleName $tone mid-pop")
+                    }
                     settle(1_000)
                     val popEnd = shot("window")
                     save(popEnd, "$size-inbox-pop-end-$styleName-$tone")
@@ -461,6 +466,17 @@ class SidebarRootsShotsTest {
     }
 
     private fun maskSidebarHeader(bitmap: Bitmap): Bitmap = mask(bitmap, 320, 220)
+
+    /** Exact RGBA of the beside column (320dp at mdpi). A push stays in the detail slot. */
+    private fun assertColumnUntouched(rest: Bitmap, frame: Bitmap, label: String) {
+        val width = minOf(320, rest.width, frame.width)
+        val height = minOf(rest.height, frame.height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                assertEquals("$label column pixel ($x,$y)", rest.getPixel(x, y), frame.getPixel(x, y))
+            }
+        }
+    }
 
     private fun leftStrip(bitmap: Bitmap, width: Int): Bitmap =
         Bitmap.createBitmap(bitmap, 0, 0, minOf(width, bitmap.width), bitmap.height)
