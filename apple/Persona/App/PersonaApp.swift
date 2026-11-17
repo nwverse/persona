@@ -379,6 +379,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #if DEBUG
         RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending|overview`
         #if os(iOS)
+        MeetingReminders.showIfAsked() // `-showMeetingReminder start|open`, after the made-up meetings are cleared
+        #endif
+        #if os(iOS)
         Task { await RecordingSamples.installDaySampleIfAsked() } // `-showDaySample today|paused|recap|pending|failed`
         #endif
         #if os(iOS)
@@ -512,6 +515,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     if opened { MeetingRecorder.openRecordings() }
+                    done()
+                }
+            }
+            return
+        }
+        // A calendar meeting's reminder (MeetingReminders, #8731 G2): Start starts the meeting, a tap opens Meetings.
+        if let meeting = MeetingReminders.meeting(response.notification.request.content.userInfo) {
+            nonisolated(unsafe) let done = completionHandler
+            let action = response.actionIdentifier
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    MeetingReminders.respond(action: action, meeting: meeting)
                     done()
                 }
             }

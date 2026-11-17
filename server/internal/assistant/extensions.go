@@ -75,6 +75,9 @@ type ExtensionTools interface {
 	// ConnectorTool says whether name is a connector's tool (an extension's), not Cua's or ego's: what a guest
 	// conversation may be given (guest.go).
 	ConnectorTool(name string) bool
+	// ToolAccess classifies an extension-owned tool without executing it. Read-only connector tools and subscription
+	// reads may be used by an Inbox handling chat; writes, computer control and unknown extension actions may not.
+	ToolAccess(name string) (known, readOnly bool)
 	AssistantSummary(ctx context.Context, tool, summary string) (string, bool)
 	AssistantLark(ctx context.Context) (proto.AssistantLark, error)
 	// AnswerComputerElicit answers the node's computer.elicit (LCU runtime confirmations on the phone/web cards).
