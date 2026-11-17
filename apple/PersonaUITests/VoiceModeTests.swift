@@ -164,4 +164,42 @@ final class VoiceModeTests: XCTestCase {
         while Date.now < gone, (try log(hub)["closes"] as? Int) == closes { Thread.sleep(forTimeInterval: 0.2) }
         XCTAssertEqual(try log(hub)["closes"] as? Int, closes + 1, "Stop did not end the voice chat")
     }
+
+    /// A full-screen picture of the voice chat's own conversation (#9887 review). Where the viewer hides the page (it
+    /// reports leaving), the voice chat goes on with the bar back to it over the viewer, and the bar's tap closes the
+    /// viewer (the conversation is the one already open, so opening it again would not), the bar going once the page
+    /// shows again. Where the page counts as shown under the viewer (iOS 26's zoom presentation), no bar shows over it,
+    /// and closing the viewer finds the voice chat's own bar. Either way the voice chat goes on. The blog conversation's
+    /// pictures need the mock with MOCK_TURN_IMAGES=many as well; skipped without.
+    @MainActor func testTheBarBackClosesAPictureOverItsConversation() throws {
+        let app = try launch(["-openSession", "studio/a1f3c2d4-0000-4000-8000-000000000003", "-openVoice", "silent"])
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons
+            .matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
+        if allow.waitForExistence(timeout: 5) { allow.tap() }
+        let status = element(app, "voice-status")
+        XCTAssertTrue(status.waitForExistence(timeout: 30), "no voice bar:\n\(app.debugDescription)")
+        let picture = app.buttons["viewed-image-0"]
+        guard picture.waitForExistence(timeout: 15) else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_VOICE=1 and MOCK_TURN_IMAGES=many")
+        }
+        picture.tap()
+        let close = app.buttons["viewer-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10), "the picture did not open\n\(app.debugDescription)")
+        let bar = app.buttons["voice-return-bar"]
+        if bar.waitForExistence(timeout: 5) {
+            shot(app, "picture-1-bar")
+            bar.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5), "the bar left the picture over its conversation\n\(app.debugDescription)")
+            XCTAssertTrue(bar.waitForNonExistence(timeout: 5), "the bar stayed with its conversation in front")
+        } else {
+            shot(app, "picture-1-no-bar")
+            close.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5), "the viewer did not close")
+            XCTAssertFalse(bar.exists, "a bar back to the voice chat on its own page")
+        }
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "the voice chat's own bar is not back\n\(app.debugDescription)")
+        shot(app, "picture-2-back")
+        element(app, "voice-end").tap()
+        XCTAssertTrue(element(app, "voice-bar").waitForNonExistence(timeout: 5), "结束 left the bar")
+    }
 }

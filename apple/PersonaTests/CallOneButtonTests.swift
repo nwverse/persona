@@ -117,6 +117,39 @@ struct CallOneButtonTests {
         #expect(guarded.upperBound < ends.lowerBound)
     }
 
+    /// End and Call while the call on still dials (the system has not handed its Start back: no audio yet), or is held
+    /// with its audio gone (#9887 review): the hang-up's End comes back from the system a moment later, and only then is
+    /// the new conversation called. Waiting for the audio alone returned at once, found the old call still on and showed
+    /// it instead, so the new call was never placed and the End hung the old one up after.
+    @Test func endAndCallWaitsForTheOldCallsEndWithoutItsAudio() async throws {
+        for held in [false, true] {
+            let rig = CallRig()
+            let old: PersonaCall
+            if held {
+                let (call, _) = await rig.connected()
+                rig.system.act(.pause(true), call.id)
+                rig.system.deactivate()
+                #expect(call.held && !rig.voice.audio.active, "held without its audio")
+                old = call
+            } else {
+                old = await rig.dial()
+                #expect(old.phase == .dialing && !rig.voice.audio.active)
+            }
+            let what = held ? "held" : "dialling"
+            let other = SessionKey(group: rig.voice.key.group, machineID: "m2", sessionID: "s9")
+            let placing = Task { await rig.calls.callConversation(other, endingCall: true) }
+            await rig.voice.waitUntil { rig.system.requests.contains(.end) }
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(rig.calls.ownerCall === old && old.phase.isLive, "\(what): the new call before the old one ended")
+            rig.system.act(.end, old.id)
+            await placing.value
+            #expect(old.phase == .ended(.hungUp), "\(what)")
+            let next = try #require(rig.calls.ownerCall)
+            // This process has no hub for the new call's group: it is refused there, after it was made for the conversation.
+            #expect(next !== old && next.kind == .owner(group: other.group, key: other), "\(what): the new conversation was not called")
+        }
+    }
+
     // MARK: What the pages show
 
     /// The call screen and the bar show the conversation: an Agent session's title, its agent and machine, its mark; another
@@ -128,6 +161,30 @@ struct CallOneButtonTests {
         #expect(other?.title == "修登录页" && other?.detail == "Persona" && other?.agent == nil)
         #expect(CallConversation.make(session: Self.session(#","assistant":true"#), main: true, assistant: "Persona", machine: nil) == nil)
         #expect(CallConversation.make(session: nil, main: false, assistant: "Persona", machine: nil) == nil)
+    }
+
+    /// Another assistant's conversation opened without switching (from the Inbox, a notification, a link; #9887 review):
+    /// the call names the assistant it belongs to under its title, as its top bar does, not the selected one.
+    @Test func anotherAssistantsConversationNamesItsOwn() throws {
+        let roster = ManagerRoster(managers: [
+            HubManager(id: "assistant", name: "助手", online: true, isDefault: true, builtin: true), // i18n-ignore: a test's names
+            HubManager(id: "m-1", name: "工作", online: true), // i18n-ignore: a test's names
+            HubManager(id: "m-2", name: "家里", online: true), // i18n-ignore: a test's names
+        ], defaultID: "assistant")
+        let hub = FakeHub()
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "call-owner-" + UUID().uuidString))
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        model.connectOnly(.demo)
+        model.managerRosters[""] = roster
+        let away = try JSON.decoder.decode(Session.self, from: Data(
+            #"{"machine_id":"NAS","session_id":"c-away","title":"周末计划","state":"idle","assistant":true,"manager":"m-2"}"#.utf8))
+        model.applySessions(Dictionary(grouping: [away], by: \.machineRef))
+        model.selectAssistantManager("m-1")
+        #expect(model.assistantShownName == "工作")
+        let key = SessionKey(machineID: "NAS", sessionID: "c-away")
+        let conversation = try #require(CallConversation.make(key, model: model))
+        #expect(conversation.title == "周末计划" && conversation.detail == "家里", "the selected assistant named as its owner: \(conversation)")
+        #expect(VoiceEntry.callTitle(key, model: model) == "周末计划")
     }
 
     /// The call's title is the conversation's (or the assistant's name for the main one); the question elsewhere names it.
@@ -149,6 +206,22 @@ struct CallOneButtonTests {
     }
 
     // MARK: The + rows and the in-app voice chat's survival
+
+    /// The bar back to the voice chat asks its page to close what covers it (a full-screen picture, the terminal) and goes
+    /// only when that page shows again, not at the tap (#9887 review: under a picture of the same conversation, opening it
+    /// again changed nothing and the bar went, leaving the picture up).
+    @Test func theBarBackClosesItsPagesCovers() throws {
+        let calls = try Self.code("Persona/Calls/PersonaCalls.swift")
+        let back = try #require(calls.range(of: "func returnToVoiceChat("))
+        let body = String(calls[back.upperBound...].prefix(300))
+        #expect(body.contains("voiceCalls.returnTo(chat.key)") && !body.contains("voiceCalls.returned("), "the bar goes at the tap")
+        let chat = try Self.code("Persona/Views/Chat/ChatView.swift")
+        #expect(chat.contains(".onChange(of: VoiceCalls.shared.returning == key) { _, back in if back { closeCovers() } }"))
+        let close = try #require(chat.range(of: "private func closeCovers() {"))
+        let covers = String(chat[close.upperBound...].prefix(300))
+        #expect(covers.contains("viewingImages = nil") && covers.contains("showTerminal = false"))
+        #expect(chat.contains(".onTabVisibility(appear: { [key] in VoiceCalls.shared.returned(key) }"), "the page showing takes the bar away")
+    }
 
     /// No + row offers voice or a call; the in-app voice chat goes on in the background and away from its page on iOS.
     @Test func theRulesInTheSources() throws {

@@ -154,8 +154,11 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     /// The system's session only, on the simulator: its input is tried once the session is the call's.
     private var probeLater = false
     /// The app's session only: interrupted (a phone call, Siri, another app's audio), and not resumed yet (#9887): nothing
-    /// starts the engine again until `resume`.
+    /// starts the engine again until `resume`, not a route change and not new rates (`reconfigure`).
     private var interruptedNow = false
+    /// The app's session only: new rates came while it was interrupted (a `ready` before the first one's audio, or after
+    /// a reconnect): kept in `format`, and the engine wired for them by `resume`.
+    private var rewireOnResume = false
     var onRunning: (@MainActor () -> Void)?
     var onStarting: (@MainActor () -> Void)?
 
@@ -347,6 +350,12 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     func reconfigure(_ format: VoiceAudioFormat) throws {
         guard format != self.format else { return }
         self.format = format
+        // Interrupted (#9887): the engine stays down, as the system left it; `resume` wires it for these rates. Started
+        // now it would be refused while the other audio has the session, and the voice chat would end instead of pausing.
+        if owner == .app, interruptedNow {
+            rewireOnResume = engine != nil
+            return
+        }
         guard let engine else { return }
         engine.stop()
         try rewire(engine)
@@ -377,6 +386,8 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     func resume() throws {
         guard owner == .app, events != nil else { return }
         interruptedNow = false
+        let newRates = rewireOnResume
+        rewireOnResume = false
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setActive(true)
@@ -386,7 +397,9 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         }
         activated = true
         guard let engine else { return }
-        guard !engine.isRunning else { return }
+        // Running again by itself, and at the rates it runs at: nothing to do.
+        guard !engine.isRunning || newRates else { return }
+        engine.stop()
         do {
             try rewire(engine)
         } catch {
@@ -398,6 +411,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     func stop() {
         probeLater = false
         interruptedNow = false
+        rewireOnResume = false
         for token in observers { NotificationCenter.default.removeObserver(token) }
         observers = []
         if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }

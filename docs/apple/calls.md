@@ -18,7 +18,10 @@ never stops the call.
   twins (`AttachMoreSection.common`). CarPlay, Siri and App Shortcuts, Recents and the DEBUG switches stay. The icon
   shows where a call can start (`VoiceAvailability`, as before: a read-only conversation, a meeting's room or a hub
   without a usable voice extension has none); the call asks the same rules again once the hub answered and refuses with
-  the same note (`VoiceUnavailableNote.make`).
+  the same note (`VoiceUnavailableNote.make`). VoiceOver hears what a tap does there (`VoiceEntry.iconLabel`, through
+  `ShellComposerBar`'s `voiceLabel` to both of `ComposerVoiceButton`'s shapes): "Call This Conversation" on the iPhone
+  (asked first while a call is on elsewhere), "Show Call" in the conversation the call is with, "Start Voice Chat" where
+  the icon is the voice chat in the app; the meeting's own button stays "Voice Chat".
 - **On the iPhone it places a system call to the conversation it is in** (`VoiceEntry.start` → `VoiceEntry.choose` →
   `PersonaCalls.callConversation`): the main conversation, another assistant conversation or an Agent session. The call's
   kind carries the key (`CallKind.owner(group:key:)`; nil for the main conversation found as the call is placed, which is
@@ -29,15 +32,19 @@ never stops the call.
   only the value (what Recents shows is a device-checklist line). **Recents, Siri and CarPlay always call the main
   conversation** (`callPersona`).
 - **The call screen and the bar show the conversation** (`PersonaCall.conversation`, `CallConversation`, fixed when the
-  call is made): for the main conversation the assistant's look and name, as before; for an Agent session its
-  runtime's mark (`CallAgentFace`: Claude's, Codex's, TRAE's, else the agent's letter, on the well's disc) and its
-  title, with "<agent> · <machine>" under it; for another assistant conversation the assistant's look and the
-  conversation's title, with the assistant's name under it. The urgent call's page is always the assistant's.
+  call is made): for the main conversation the assistant's look and name, as before; for an Agent session its runtime's
+  mark (`CallAgentFace`: Claude's, Codex's, TRAE's, else the agent's letter, on the well's disc) and its title, with
+  "<agent> · <machine>" under it; for another assistant conversation the assistant's look and the conversation's title,
+  with the name of the assistant it belongs to under it (`assistantShownName(in:)`: another assistant's conversation
+  opened from the Inbox, a notification or a link, without switching, names its own, as its top bar does; the system's
+  handle stays the selected assistant's name). The urgent call's page is always the assistant's.
 - **While a call is live**: the icon in the conversation the call is with opens the call screen; in any other it asks
-  "End the call with <name> and call <this conversation>?" (**End and Call**, destructive, or **Cancel**, which keeps the
-  call; `VoiceUnavailableNote.callElsewhereFirst`, `VoiceProceed.callConversation`). The yes hangs the call up, waits (at
-  most 1 s) for the system to let its audio go, then places the new one. #9290's guards (dictation, recordings,
-  disconnect) apply to every system call.
+  "End the call with <name> and call <this conversation>?" (**End and Call**, destructive, or **Cancel**, which keeps
+  the call; `VoiceUnavailableNote.callElsewhereFirst`, `VoiceProceed.callConversation`). The yes hangs the call up and
+  waits (at most 2 s, `PersonaCalls.endForVoiceChat`) for it to end, which the system's End brings back a moment later
+  whether or not the call had its audio yet (still dialling, or held with its audio gone), and for the system to let its
+  audio go; then it places the new one (a call still on after the wait is shown instead). #9290's guards (dictation,
+  recordings, disconnect) apply to every system call.
 - **Fallback to the voice chat in the app**, only where a system call can't be used: a device other than the iPhone
   (the iPad and Apple Vision Pro; the Mac and the watch have no voice), the system refusing the Start (the existing
   fallback: a toast says why, `insteadLine`, and the voice chat starts on the same conversation). When the call path's
@@ -46,11 +53,13 @@ never stops the call.
 - **The fallback survives switching away** (iOS, `VoiceCalls`): the background and the lock no longer end it (it keeps
   its audio session, the app's `audio` background mode keeps it running, the microphone indicator shows; the idle rule
   stays; in the background the voice's levels stop, so only the audio and its socket work: iOS's background CPU limit);
-  leaving its page keeps it, with a bar back to it at the top in the call's window (`VoiceReturnPill`, `voice-return-bar`;
-  a tap goes back to its conversation); an interruption (a phone call, Siri) pauses it on hold and it goes on when the
-  interruption ends with `shouldResume` and the session comes back (`PhoneVoiceAudio.resume`). Its group's tunnels stay
-  open in the background while it is on (`AppModel.callTunnelGroup`). On Apple Vision Pro, with no bar to come back by,
-  the background and leaving the page still end it.
+  leaving its page keeps it, with a bar back to it at the top in the call's window (`VoiceReturnPill`,
+  `voice-return-bar`; a tap goes back to its conversation and closes what covers its page, a full-screen picture or the
+  terminal (`VoiceCalls.returnTo`), and the bar goes once the page shows again, `VoiceCalls.returned`); an interruption
+  (a phone call, Siri) pauses it on hold and it goes on when the interruption ends with `shouldResume` and the session
+  comes back (`PhoneVoiceAudio.resume`). Its group's tunnels stay open in the background while it is on
+  (`AppModel.callTunnelGroup`). On Apple Vision Pro, with no bar to come back by, the background and leaving the page
+  still end it.
 - **Where the fallback still ends**: Stop; another call or voice chat starting (one at a time); a recording or dictation
   taking the microphone; the idle rule (ten quiet minutes with nothing handed over open and the conversation not
   working); three failed reconnects, the hub refusing the socket, an incompatible extension, an unusable model, a fatal
@@ -58,8 +67,10 @@ never stops the call.
   interruption that ends without `shouldResume`, or whose session will not come back (ended with Continue, as before);
   Persona's urgent call answered; iOS ending the app (a swipe up in the app switcher, memory or background CPU limits).
 - **Caveat** (documented, not changed): the idle rule does not end a call while its conversation works, so a call to an
-  Agent on a long task can stay open in the background for as long as the task runs (the upstream is paused while
-  quiet, so it is not billed).
+  Agent on a long task can stay open in the background for as long as the task runs (the upstream is paused while quiet,
+  so it is not billed). In the background whether it works is the voice connection's word, not the app's copy of the
+  session, which is not updated there (docs/assistant/voice.md 6.5 "Idle"): the upstream paused or waking for the work,
+  or a card asked by voice. Once the task is done the quiet minutes count again.
 
 The page is a full-screen call screen that can be minimised to a "return to call" bar
 (`docs/design/DESIGN_SYSTEM.md`, "Call screen" and "Return-to-call bar"). The call is the assistant's: the screen shows
@@ -231,12 +242,12 @@ dropped: a newer call's page and alert stay.
 - One call at a time, and nothing ends a system call by itself. The phone icon in another conversation asks "End the
   call with <name> and call <this conversation>?" on the iPhone ("One phone button"). A voice chat in another
   conversation (the phone icon on the iPad, Continue on an ended voice chat) asks first: "End the call with <name> and
-  start a voice chat here?"
-  (**End Call and Start**, destructive, or **Cancel**, which keeps the call; `VoiceUnavailableNote.endCallFirst`). Only
-  the yes ends the call and waits (at most 1 s) for the system to let its audio go before the voice chat opens its own
-  (`VoiceCalls.start(endingCall: true)`, `VoiceCalls.endSystemCall`, which `PersonaCalls.endForVoiceChat` answers); it is
-  refused if an urgent call rang meanwhile. Without the yes `VoiceCalls` refuses it, touching nothing
-  (`VoiceUnavailableNote.systemCallOn`). The phone icon in the call's own conversation shows the call screen.
+  start a voice chat here?" (**End Call and Start**, destructive, or **Cancel**, which keeps the call;
+  `VoiceUnavailableNote.endCallFirst`). Only the yes ends the call and waits (at most 2 s) for it to end and the system
+  to let its audio go before the voice chat opens its own (`VoiceCalls.start(endingCall: true)`,
+  `VoiceCalls.endSystemCall`, which `PersonaCalls.endForVoiceChat` answers); it is refused if an urgent call rang
+  meanwhile. Without the yes `VoiceCalls` refuses it, touching nothing (`VoiceUnavailableNote.systemCallOn`). The phone
+  icon in the call's own conversation shows the call screen.
 - An urgent call rings during a call to Persona: it is reported as always (iOS ends an app that does not report a VoIP
   push's call), and the system offers Hold & Accept, End & Accept or Decline. Pause and End reach the call to Persona
   through its machine; after the urgent call, the app unpauses it.
@@ -375,26 +386,29 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
 
 - Unit (`apple/PersonaTests/`): `CallOneButtonTests` (#9887: the icon's choice per context, the question with a call
   elsewhere, the call's kind carrying its key and its voice bound to it, the fixed handle and the redial to the main
-  conversation, a refused Start falling back with its line, the conversation on the pages, the voice chat's bar),
-  `VoiceCallsTests` (the voice chat surviving the background and leaving its page, the interruption's pause and resume),
-  `CallScreenTests` (no voice or call rows in +; the long texts: whole for VoiceOver, the reason's line never cut, the
-  name and the line between Minimize and the controls on a large and a short phone at the largest size, the bar's time
-  kept); `CallMachineTests` (every rule above), `PersonaCallsTests` (the manager with
-  `FakeCallSystem` and fake voices: start, reports, activation and the watchdog, mute, hold, interruptions, our own
-  second call, end paths, refusals before Start, tunnels, the urgent exclusion), `CallSourceTests` (one manager, no
-  CallKit, the system's session left alone), `CallScreenTests` (the screen's states and layout), `CallPersonaIntentTests`,
-  the `UrgentCall*Tests` suites, `VoiceCallsTests`, `VoiceConversationTests` (`.call`, hold frames, `surface`),
-  `LocalProxyRouteTests` and the CarPlay suites; `CallRecentsTests` (#9887: the outgoing call's members update before
-  `startedConnecting` once the system has the conversation, the incoming path unchanged, Developing Persona's Call
-  handle picking the kind, both kinds in the configuration, the log's steps); `CallFollowUpTests` (the assistant's name on the system call and the
-  ring, the guards following the live call, voice chat refused or asked, dictation and recordings refused, web media
-  suspended, the call keeping its microphone, the assistant's look per state, the call's window, the bar's room, the
-  template icon; and from the second review: a disconnect refused while the call talks through the hub, the call
-  keeping the look and name it was made with, a package's pictures decoded off the main actor, an ended call's audio
-  waited for, an urgent call during the hand-off said to the question, dictation asked again after its permission, a
-  paused recording stopped under a call leaving its session, a start stopped by a call during the Bluetooth search or
-  the microphone prompt, the icon drawn off the main actor before the manager, the bar's room watched only in front);
-  `CallSourceTests` also checks every audio-session site's verdict, that every way in asks first, and those rules
+  conversation, a refused Start falling back with its line, the conversation on the pages and whose it is with another
+  assistant's conversation open, the voice chat's bar, End and Call while the old call dials or is held without its
+  audio), `VoiceCallsTests` (the voice chat surviving the background and leaving its page, the bar staying until its
+  page shows, the interruption's pause and resume, new rates during the pause, the idle rule in the background going by
+  the voice connection), `CallScreenTests` (no voice or call rows in +; the long texts: whole for VoiceOver, the
+  reason's line never cut, the name and the line between Minimize and the controls on a large and a short phone at the
+  largest size, the bar's time kept; the phone icon's label in both shapes and three languages); `CallMachineTests`
+  (every rule above), `PersonaCallsTests` (the manager with `FakeCallSystem` and fake voices: start, reports, activation
+  and the watchdog, mute, hold, interruptions, our own second call, end paths, refusals before Start, tunnels, the
+  urgent exclusion), `CallSourceTests` (one manager, no CallKit, the system's session left alone), `CallScreenTests`
+  (the screen's states and layout), `CallPersonaIntentTests`, the `UrgentCall*Tests` suites, `VoiceCallsTests`,
+  `VoiceConversationTests` (`.call`, hold frames, `surface`), `LocalProxyRouteTests` and the CarPlay suites;
+  `CallRecentsTests` (#9887: the outgoing call's members update before `startedConnecting` once the system has the
+  conversation, the incoming path unchanged, Developing Persona's Call handle picking the kind, both kinds in the
+  configuration, the log's steps); `CallFollowUpTests` (the assistant's name on the system call and the ring, the guards
+  following the live call, voice chat refused or asked, dictation and recordings refused, web media suspended, the call
+  keeping its microphone, the assistant's look per state, the call's window, the bar's room, the template icon; and from
+  the second review: a disconnect refused while the call talks through the hub, the call keeping the look and name it
+  was made with, a package's pictures decoded off the main actor, an ended call's audio waited for, an urgent call
+  during the hand-off said to the question, dictation asked again after its permission, a paused recording stopped under
+  a call leaving its session, a start stopped by a call during the Bluetooth search or the microphone prompt, the icon
+  drawn off the main actor before the manager, the bar's room watched only in front); `CallSourceTests` also checks
+  every audio-session site's verdict, that every way in asks first, and those rules
   (`whatTheSecondReviewFoundStaysFixed`).
 - UI (`apple/PersonaUITests/`, against `MOCK_VOICE=1` `scripts/mock/mock_hub.py`, `docs/operations/testing.md`):
   `CallScreenTests` (each sample, largest text, the app's text size, the bar, the phone icon as the one voice entry

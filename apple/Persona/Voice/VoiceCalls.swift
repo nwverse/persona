@@ -21,6 +21,10 @@ import UIKit
     private(set) var current: VoiceConversation?
     /// The phone's voice chat is on and its page is not (#9887): the bar back to it shows at the top (`CallWindow`).
     private(set) var away = false
+    /// The bar back to the voice chat was tapped: its conversation, until its page shows again (`returned`). That page
+    /// closes what covers it (a full-screen picture, the terminal: `ChatView`); the bar stays until it shows, so a cover
+    /// that stayed up would still have the bar over it.
+    private(set) var returning: SessionKey?
 
     /// The phone's voice chat goes on away from its page and in the background (iOS; on Apple Vision Pro it ends there,
     /// with no bar to come back by).
@@ -93,7 +97,7 @@ import UIKit
         let call = VoiceConversation(key: key, extensionID: extensionID, surface: surface, recent: recent, deps: deps)
         current = call
         away = false
-        call.showsLevels(!inBackground)
+        call.appInBackground(inBackground)
         // The phone's voice chat goes on in the background, through its group's tunnels (`AppModel.callTunnelGroup`):
         // once it ends there, they close.
         if watchesApp, surface == .phone { call.onEnded = { [group = key.group] _ in AppModel.shared.callEnded(group: group) } }
@@ -111,7 +115,7 @@ import UIKit
         }
         current = call
         away = false
-        call.showsLevels(!inBackground)
+        call.appInBackground(inBackground)
         await call.begin()
     }
 
@@ -135,6 +139,7 @@ import UIKit
     private func clear() {
         current = nil
         if away { away = false }
+        if returning != nil { returning = nil }
     }
 
     /// Continue on the ended call bound to `key` (not a system call's). Not while Persona's urgent call is on, nor while
@@ -189,8 +194,17 @@ import UIKit
         clear()
     }
 
+    /// The bar back to the voice chat bound to `key` was tapped (#9887): its page is asked to close what covers it
+    /// (`returning`). The bar goes only once that page shows again (`returned`), not at the tap: the conversation may be
+    /// the one already open under a full-screen picture, which opening it again does not close.
+    func returnTo(_ key: SessionKey) {
+        guard away, current?.key == key else { return }
+        returning = key
+    }
+
     /// The page bound to `key` shows again: the bar back to its voice chat goes.
     func returned(_ key: SessionKey) {
+        if returning == key { returning = nil }
         guard away, current?.key == key else { return }
         away = false
     }
@@ -203,17 +217,19 @@ import UIKit
 
     /// The app went to the background. On iOS the phone's voice chat goes on (#9887 one button: switching away never
     /// stops it), with its audio session, its socket and the idle rule; the voice's levels, which only the orb reads,
-    /// stop until the app is back, so nothing but the audio works there (iOS's background CPU limit). On Apple Vision
-    /// Pro it ends, as before; the car's goes on.
+    /// stop until the app is back, so nothing but the audio works there (iOS's background CPU limit). The idle rule
+    /// takes whether its conversation works from the voice connection there, not from the app's sessions, which are not
+    /// updated in the background (`VoiceConversation.appInBackground`). On Apple Vision Pro it ends, as before; the
+    /// car's goes on.
     func appDidEnterBackground() {
         inBackground = true
-        current?.showsLevels(false)
+        current?.appInBackground(true)
         if !Self.keepsChatAway { end(.background, from: .phone) }
     }
 
-    /// The app is coming back to the front: the levels again.
+    /// The app is coming back to the front: the levels again, and the app's sessions for the idle rule.
     func appWillEnterForeground() {
         inBackground = false
-        current?.showsLevels(true)
+        current?.appInBackground(false)
     }
 }

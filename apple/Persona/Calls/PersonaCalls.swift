@@ -231,10 +231,11 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// the call's window shows the bar back to it.
     var awayVoiceChat: VoiceConversation? { voiceCalls.awayChat }
 
-    /// The bar back to the phone's voice chat tapped: its conversation opens, and the bar goes.
+    /// The bar back to the phone's voice chat tapped: its conversation opens and closes what covers it (a full-screen
+    /// picture of that same conversation: `VoiceCalls.returnTo`); the bar goes once its page shows (`VoiceCalls.returned`).
     func returnToVoiceChat(_ chat: VoiceConversation) {
+        voiceCalls.returnTo(chat.key)
         AppModel.shared.open(chat.key)
-        voiceCalls.returned(chat.key)
     }
 
     func call(_ id: UUID) -> PersonaCall? { calls.first { $0.id == id } }
@@ -485,21 +486,33 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         }
     }
 
-    /// Another chat's voice (a page's Voice Chat, CarPlay's Talk to Persona, Continue: `VoiceCalls.endSystemCall`): the
-    /// call to Persona ends (one call at a time) and its audio goes before the voice chat opens its own (at most a
-    /// second): the system's deactivation would otherwise interrupt the new session. A call that ended already (hung up
-    /// from AirPods or the system's call UI while the question was up) is not hung up again, but the system may still
-    /// hold its audio until its deactivation comes: that is waited for all the same, as for any call of ours whose audio
-    /// the system has not let go yet.
+    /// Another chat's voice (a page's Voice Chat, CarPlay's Talk to Persona, Continue: `VoiceCalls.endSystemCall`), or
+    /// End and Call to another conversation (`callConversation(endingCall:)`): the call to Persona ends (one call at a
+    /// time) and its audio goes before the next opens its own: the system's deactivation would otherwise interrupt the
+    /// new session. The hang-up's end is waited for whether or not the call ever had its audio (#9887: one still
+    /// dialling, or held with its audio gone, ends only when the system's End comes back, a moment later), so the next
+    /// call or voice chat never finds it still on. A call that ended already (hung up from AirPods or the system's call
+    /// UI while the question was up) is not hung up again, but the system may still hold its audio until its
+    /// deactivation comes: that is waited for all the same, as for any call of ours whose audio the system has not let
+    /// go yet. At most `handOffWait`; a call still on after it is shown instead (`callConversation`).
     func endForVoiceChat() async {
         let owner = ownerCall.flatMap { $0.sample ? nil : $0 }
         if let owner, owner.phase.isLive { hangUp(owner.id) }
-        let holding = calls.filter { !$0.sample && $0.machine.audioActive }
-        guard !holding.isEmpty else { return }
-        for _ in 0..<20 where holding.contains(where: { $0.machine.audioActive || ($0 === owner && $0.phase.isLive) }) {
-            try? await Task.sleep(for: .milliseconds(50))
+        let ours = calls.filter { !$0.sample }
+        func waiting() -> Bool { owner?.phase.isLive == true || ours.contains { $0.machine.audioActive } }
+        let steps = Int(Self.handOffWait / Self.handOffStep)
+        for _ in 0..<steps where waiting() {
+            try? await Task.sleep(for: Self.handOffStep)
+        }
+        if let owner, owner.phase.isLive {
+            Self.log.notice("call \(owner.id.uuidString, privacy: .public): still on after the hang-up's wait (\(String(describing: owner.phase), privacy: .public))")
         }
     }
+
+    /// How long `endForVoiceChat` waits at most for the call to end and the system to let its audio go, looking again
+    /// every `handOffStep`.
+    static let handOffWait: Duration = .seconds(2)
+    static let handOffStep: Duration = .milliseconds(50)
 
     /// An in-app voice chat (the phone's, the car's) ends before a system call takes the audio: its `stop` would
     /// deactivate the session under the call.

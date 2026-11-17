@@ -312,6 +312,42 @@ struct CallScreenTests {
         shot(window, "call-long-bar-\(type)")
     }
 
+    /// The composer's phone icon says what its tap does (#9887 review), in both its shapes (round in send's place, plain
+    /// beside stop) and in each language: on the iPhone it calls this conversation, in the conversation a call is with it
+    /// shows that call, and where it is the voice chat in the app it starts that. The meeting's own button stays Voice Chat.
+    @Test func thePhoneIconSaysWhatItDoes() async throws {
+        defer { try? automation(false) }
+        #expect(VoiceEntry.iconLabel(ownCall: false, systemCalls: true) == String(localized: "Call This Conversation"))
+        #expect(VoiceEntry.iconLabel(ownCall: true, systemCalls: true) == String(localized: "Show Call"))
+        #expect(VoiceEntry.iconLabel(ownCall: true, systemCalls: false) == String(localized: "Show Call"))
+        #expect(VoiceEntry.iconLabel(ownCall: false, systemCalls: false) == String(localized: "Start Voice Chat"))
+        let keys = ["Call This Conversation", "Show Call", "Start Voice Chat"]
+        let words: [String: [String]] = [
+            "en": keys,
+            "zh-Hans": ["呼叫这段对话", "显示通话", "开始语音对话"], // i18n-ignore: the catalog's words
+            "ja": ["この会話に電話", "通話を表示", "音声チャットを開始"], // i18n-ignore: the catalog's words
+        ]
+        for (language, expected) in words.sorted(by: { $0.key < $1.key }) {
+            let path = try #require(Bundle.main.path(forResource: language, ofType: "lproj"), "no \(language) strings")
+            let bundle = try #require(Bundle(path: path))
+            let labels = keys.map { bundle.localizedString(forKey: $0, value: nil, table: nil) }
+            #expect(labels == expected, "\(language)")
+            for round in [true, false] {
+                let label = labels[round ? 0 : 2]
+                let button = ComposerVoiceButton(round: round, id: "phone-icon", label: label) {}
+                let (window, found) = try await hosted(button, CGSize(width: 120, height: 80), .large, ids: ["phone-icon"])
+                window.isHidden = true
+                #expect(found["phone-icon"]?.label == label, "\(language), \(round ? "round" : "plain"): \(found["phone-icon"]?.label ?? "no icon")")
+            }
+        }
+        let bar = try Self.code("Persona/DesignSystem/ShellComposerBar.swift")
+        #expect(bar.contains("ComposerVoiceButton(round: stop == nil, id: \"shell-composer-voice\", label: voiceLabel ??"))
+        let chat = try Self.code("Persona/Views/Chat/ChatView.swift")
+        #expect(chat.contains("voiceLabel: VoiceEntry.iconLabel(key),"), "the composer passes no label")
+        let meeting = try Self.code("Persona/Recording/MeetingPageBar.swift")
+        #expect(meeting.contains("ComposerVoiceButton(round: false, id: \"meeting-voice\") {"), "the meeting's button keeps Voice Chat")
+    }
+
     /// The name takes two lines at the regular text sizes and three from xLarge up (as much of a long title as two hold
     /// at the default size), the caption more than the two that cut a long answer, and none once the call is over.
     @Test func theNameAndTheCaptionTakeTheirLines() {

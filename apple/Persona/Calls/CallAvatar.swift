@@ -14,9 +14,11 @@ nonisolated struct CallConversation: Equatable, Sendable {
     var agent: AgentKind?
 
     /// `key`'s conversation as the app has it now; nil for the main conversation, or one the app does not list (it is
-    /// shown as the assistant's).
+    /// shown as the assistant's). Whose it is: the assistant the conversation belongs to, which is not the selected one
+    /// for another assistant's conversation opened from the Inbox, a notification or a link (`assistantShownName(in:)`,
+    /// as its top bar says). The system's handle stays the selected assistant's name (`CallHandle`).
     @MainActor static func make(_ key: SessionKey, model: AppModel) -> CallConversation? {
-        make(session: model.session(key), main: model.assistantMain == key, assistant: model.assistantShownName,
+        make(session: model.session(key), main: model.assistantMain == key, assistant: model.assistantShownName(in: key),
              machine: model.machines.first { $0.id == key.machineID }?.name)
     }
 

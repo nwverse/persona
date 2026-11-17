@@ -63,13 +63,29 @@ extension VoiceSupport {
         }
     }
 
+    /// What the phone icon in `key`'s conversation says to VoiceOver (#9887 review): what its tap does there now, as
+    /// `choose` picks it. The call screen while a call is with this conversation; on the iPhone a system call to it (asked
+    /// first while a call is on elsewhere: the question says so); elsewhere the voice chat in the app.
+    static func iconLabel(_ key: SessionKey) -> String {
+        #if os(iOS)
+        iconLabel(ownCall: PersonaCalls.shared.isOwnerCallConversation(key), systemCalls: placesSystemCall)
+        #else
+        iconLabel(ownCall: false, systemCalls: false)
+        #endif
+    }
+
+    nonisolated static func iconLabel(ownCall: Bool, systemCalls: Bool) -> String {
+        if ownCall { return String(localized: "Show Call") }
+        return systemCalls ? String(localized: "Call This Conversation") : String(localized: "Start Voice Chat")
+    }
+
     /// What the page calls `key`'s conversation in the question before a call to it (#9887): the assistant's name for
     /// the main conversation, else its title.
     static func callTitle(_ key: SessionKey, model: AppModel) -> String {
         #if os(iOS)
         if let conversation = CallConversation.make(key, model: model) { return conversation.title }
         #endif
-        return model.assistantShownName
+        return model.assistantShownName(in: key)
     }
 
     /// What a start does: says something at once (nil: nothing to say, the call screen came up), or is ready to begin

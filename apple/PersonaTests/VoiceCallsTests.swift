@@ -121,6 +121,118 @@ struct VoiceCallsTests {
         #expect(carCalls.current?.phase == .ended(.interrupted))
     }
 
+    /// New rates while the phone's voice chat is paused by an interruption (#9887 review): its first `ready` came after
+    /// the interruption began, or a reconnect's did. The audio takes them as it comes back, before its resume, not
+    /// while the other audio has the session (the fake refuses a reconfigure then, as an engine start would be refused):
+    /// the voice chat stays paused instead of ending.
+    @Test func newRatesDuringAnInterruptionWaitForItsEnd() async throws {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
+        let socket = try #require(rig.socket)
+        let chat = try #require(calls.current)
+        rig.audio.emit(.interrupted)
+        rig.audio.reconfigureError = VoiceAudioError.engine
+        socket.ready(rig.key, input: 24000, output: 16000)
+        #expect(chat.phase.isLive && chat.held && chat.pausedByInterruption, "the first ready under the interruption ended it")
+        #expect(rig.audio.reconfigured.isEmpty)
+        rig.audio.reconfigureError = nil
+        rig.audio.emit(.interruptionEnded(shouldResume: true))
+        #expect(rig.audio.reconfigured == [VoiceAudioFormat(inputRate: 24000, outputRate: 16000)])
+        #expect(rig.audio.steps == ["reconfigure", "resume"], "the rates before the audio comes back")
+        #expect(!chat.held && chat.phase.isLive)
+
+        // A reconnect's ready at other rates during the next interruption.
+        rig.audio.emit(.interrupted)
+        rig.audio.reconfigureError = VoiceAudioError.engine
+        socket.drop()
+        await rig.advance(1, sleepers: 2)
+        let second = try #require(rig.socket)
+        #expect(second !== socket)
+        second.ready(rig.key, input: 16000, output: 24000)
+        #expect(chat.phase.isLive && chat.held, "a reconnect's ready under the interruption ended it")
+        rig.audio.reconfigureError = nil
+        rig.audio.emit(.interruptionEnded(shouldResume: true))
+        #expect(rig.audio.reconfigured.last == VoiceAudioFormat(inputRate: 16000, outputRate: 24000))
+        #expect(rig.audio.steps.suffix(2) == ["reconfigure", "resume"] && !chat.held && chat.phase.isLive)
+
+        // Out of an interruption new rates go to the audio at once, as before.
+        let count = rig.audio.reconfigured.count
+        second.drop()
+        await rig.advance(1, sleepers: 2)
+        try #require(rig.socket).ready(rig.key, input: 24000, output: 24000)
+        #expect(rig.audio.reconfigured.count == count + 1)
+    }
+
+    /// The idle rule in the background (#9887 review): the app's sessions are not updated there (its socket to the hub is
+    /// closed), so a conversation it last saw working must not keep the call open for ever. While the task runs the
+    /// extension has the upstream paused, which keeps the call; once the voice's socket says it is done (the run done,
+    /// the upstream woken, the result said) ten quiet minutes end it, though the app's copy still says working. In front
+    /// that copy counts again.
+    @Test func inTheBackgroundTheIdleRuleGoesByTheVoiceNotAStaleSession() async throws {
+        let working = VoiceRig.session(#"{"machine_id":"m1","session_id":"s1","status":"working","state":"working"}"#)
+        let rig = VoiceRig()
+        rig.session = working
+        let calls = VoiceCalls()
+        await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
+        let socket = try #require(rig.socket)
+        socket.ready(rig.key)
+        let chat = try #require(calls.current)
+        socket.deliver(#"{"type":"run","id":"r1","task":"跑测试","state":"working","msg_ids":["r1"],"base_seq":10}"#)
+        socket.deliver(#"{"type":"link","state":"paused"}"#)
+        calls.appDidEnterBackground()
+        #expect(chat.sessionStale)
+        await rig.advance(900)
+        #expect(chat.phase.isLive, "the task goes on in the background: its run is open")
+        socket.deliver(#"{"type":"run","id":"r1","task":"跑测试","state":"done","msg_ids":["r1"],"base_seq":10}"#)
+        await rig.advance(900)
+        #expect(chat.phase.isLive, "the conversation still works on something: the upstream stays paused for it")
+        socket.deliver(#"{"type":"link","state":"waking"}"#)
+        socket.deliver(#"{"type":"link","state":"live"}"#)
+        socket.deliver(#"{"type":"transcript","id":"a1","role":"assistant","text":"测试都过了。","final":true}"#)
+        #expect(rig.session?.state == .working, "the app's copy, not updated in the background")
+        await rig.advance(570)
+        #expect(chat.phase.isLive)
+        await rig.advance(30)
+        #expect(chat.phase == .ended(.idle), "the task was done: ten quiet minutes end it")
+
+        // In front the app's copy is kept up to date and counts: working, the call stays.
+        let front = VoiceRig()
+        front.session = working
+        let frontCalls = VoiceCalls()
+        await frontCalls.start(front.key, extensionID: "voice", surface: .phone, deps: front.deps)
+        try #require(front.socket).ready(front.key)
+        let frontChat = try #require(frontCalls.current)
+        frontCalls.appDidEnterBackground()
+        frontCalls.appWillEnterForeground()
+        #expect(!frontChat.sessionStale)
+        await front.advance(900)
+        #expect(frontChat.phase.isLive, "the conversation works")
+    }
+
+    /// The bar back to the voice chat tapped (#9887 review): its page is asked to close what covers it (`returning`), and
+    /// the bar stays until that page shows again, so a full-screen picture over the same conversation never keeps the
+    /// cover up with the bar gone.
+    @Test func theBarStaysUntilItsPageShows() async throws {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
+        let chat = try #require(calls.current)
+        calls.leave(rig.key) // a full-screen picture of the same conversation covers its page
+        #expect(calls.awayChat === chat)
+        calls.returnTo(SessionKey(machineID: "m1", sessionID: "other"))
+        #expect(calls.returning == nil, "another conversation asks nothing")
+        calls.returnTo(rig.key)
+        #expect(calls.returning == rig.key && calls.away && calls.awayChat === chat, "the bar went at the tap")
+        calls.returned(rig.key)
+        #expect(calls.returning == nil && !calls.away && calls.awayChat == nil)
+        // Ended while its page was asked to show: nothing stays asked.
+        calls.leave(rig.key)
+        calls.returnTo(rig.key)
+        calls.end(.user, from: .phone)
+        #expect(calls.returning == nil && !calls.away)
+    }
+
     @Test func leavingAPageDoesNotEndTheCarsCall() async {
         let rig = VoiceRig()
         let calls = VoiceCalls()

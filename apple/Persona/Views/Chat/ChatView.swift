@@ -830,6 +830,9 @@ struct ChatView: View {
             VoiceCalls.shared.returned(new)
         }
         .onTabVisibility(appear: { [key] in VoiceCalls.shared.returned(key) }, disappear: { [key] in VoiceCalls.shared.leave(key) })
+        // The bar back to this conversation's voice chat tapped over a cover of this page (#9887: a full-screen picture,
+        // the terminal): the cover goes, and the page showing again takes the bar away (`VoiceCalls.returnTo`).
+        .onChange(of: VoiceCalls.shared.returning == key) { _, back in if back { closeCovers() } }
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
         let activityMiddle = AnyView(activityTop)
@@ -4508,6 +4511,16 @@ struct ChatView: View {
         return true
     }
 
+    /// What covers this page full screen goes (the bar back to its voice chat was tapped, #9887): the picture viewer and
+    /// the terminal. Their dismissal shows the page again, which takes the bar away (`VoiceCalls.returned`).
+    private func closeCovers() {
+        if viewingImages != nil { viewingImages = nil }
+        if showTerminal {
+            showTerminal = false
+            resumeOnOpen = false // as its own dismissal does
+        }
+    }
+
     private func appeared() {
             ChatTrace.shared.note(shownKey, "open items=\(store.items.count) covered=\(store.covered)")
             #if DEBUG
@@ -5991,6 +6004,7 @@ struct Composer: View, Equatable {
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
+                                 voiceLabel: VoiceEntry.iconLabel(key),
                                  modesTitle: modesTitle,
                                  modesDisclosure: assistantModelPickAvailable,
                                  quotes: contexts,

@@ -330,8 +330,15 @@ struct VoiceDeps {
     /// The phone's voice chat is paused by an interruption (a phone call, Siri, another app's audio), until its end says
     /// it may go on (#9887).
     @ObservationIgnored private(set) var pausedByInterruption = false
+    /// Rates a `ready` asked for while paused by an interruption (the first one came after it began, or a reconnect's):
+    /// the audio takes them as it comes back (`interruptionEnded`), not under the other audio (#9887).
+    @ObservationIgnored private var formatOnResume: VoiceAudioFormat?
     /// The voice's levels reach `levels` (the orb's): not while the app is in the background, where nobody sees them.
     @ObservationIgnored private var levelsShown = true
+    /// The app's word on the bound conversation (`deps.session`) is not kept up to date: in the background the app's
+    /// socket to the hub is closed (`AppModel.suspendLinks`), so the state it last said (working, perhaps) may long be
+    /// over while this call goes on there (#9887). The idle rule takes the voice connection's own word then (`targetBusy`).
+    @ObservationIgnored private(set) var sessionStale = false
     /// Told once it ended, after everything went (`VoiceCalls`: the background tunnels of its group may close).
     @ObservationIgnored var onEnded: (@MainActor (VoiceEnd) -> Void)?
 
@@ -449,9 +456,17 @@ struct VoiceDeps {
         if speaking { speaking = false }
         if held { held = false }
         pausedByInterruption = false
+        formatOnResume = nil
         phase = .ended(reason)
         deps.callEvents?(.ended(reason))
         onEnded?(reason)
+    }
+
+    /// The app went to the background (`on`) or came back (`VoiceCalls`): the levels stop there, and the app's word on
+    /// the conversation is not kept up to date there (`sessionStale`).
+    func appInBackground(_ on: Bool) {
+        showsLevels(!on)
+        sessionStale = on
     }
 
     /// Whether the voice's levels reach the orb: off in the background (nothing sees them there, and each is a hop to
@@ -764,7 +779,13 @@ struct VoiceDeps {
         timers["ready"]?.cancel()
         let wanted = VoiceAudioFormat(inputRate: r.inputRate, outputRate: r.outputRate)
         if wanted != format {
-            do { try audio?.reconfigure(wanted) } catch { return end(.audioFailed) }
+            if pausedByInterruption {
+                // Paused by an interruption (#9887): set up for these rates as the audio comes back. Now it would start
+                // the engine under the other audio, and a refusal would end the voice chat instead of pausing it.
+                formatOnResume = wanted
+            } else {
+                do { try audio?.reconfigure(wanted) } catch { return end(.audioFailed) }
+            }
             format = wanted
         }
         Self.formats[Self.formatKey(key.group, extensionID)] = wanted
@@ -873,6 +894,11 @@ struct VoiceDeps {
                 // Only when the system says the audio may go on, and the session comes back; else it ends as before, with
                 // Continue.
                 guard resume else { return end(.interrupted) }
+                // New rates that came meanwhile first: the audio, still interrupted, keeps them and comes back with them.
+                if let wanted = formatOnResume {
+                    formatOnResume = nil
+                    do { try audio?.reconfigure(wanted) } catch { return end(.audioFailed) }
+                }
                 do {
                     try audio?.resume()
                 } catch {
@@ -887,8 +913,14 @@ struct VoiceDeps {
         }
     }
 
-    /// Whether the bound conversation works or waits on the user: a call is not idle then.
+    /// Whether the bound conversation works or waits on the user: a call is not idle then. The app's word on it while it
+    /// is kept up to date. In the background (`sessionStale`) the voice connection's own, never a state from before
+    /// (#9887): the extension pauses the upstream while the conversation works on something the call waits for, and
+    /// only then (docs/assistant/voice.md 4.9: paused or waking), and asks about a card by voice while one waits on the
+    /// user. A finished task wakes it to say so, and the quiet minutes then count as for an idle conversation; so they
+    /// do with an extension that does not pause (no `suspend`), which says neither.
     private var targetBusy: Bool {
+        if sessionStale { return link == .paused || link == .waking || askingID != nil }
         guard let state = deps.session(key)?.state else { return false }
         return state == .working || state == .needsYou
     }

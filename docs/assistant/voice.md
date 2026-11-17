@@ -39,12 +39,13 @@ Phase one is done and this document follows the code; how it was split into issu
 **Limits**
 
 - Plans and tool permissions are never answered by voice: the call names the kind of card that waits, and you tap it (decision 5, 4.7).
-- A call lives only on screen: on a phone, going to the background, leaving the chat or an incoming call ends it (6.5), and its captions are not saved into the conversation (section 2's table).
+- A call's captions are not saved into the conversation (section 2's table).
+- What ends a call depends on its kind (6.5, 6.12; #9887): on the iPhone the phone icon places a **system call**, which the background, the lock and leaving the chat never end (an incoming call is the system's to hold it for, or to end it with End & Accept, as for any call). The **voice chat in the app** (the iPad, or an iPhone where the system will not place the call) goes on in the background, locked and away from its chat on iOS, with a bar back to it, and an incoming call pauses it until that call is over; on **Apple Vision Pro** going to the background or leaving the chat still ends it. **CarPlay**'s call follows the car, not the phone's foreground (6.5).
 - No voice on the Mac, and Android opens voice for the main chat only.
 
 **Meeting calls** (#3862 phase 4, `meeting` in `features`): a call bound to a recorded meeting's room conversation (`start` with `mode: "meeting"` and `recording_id`, checked with the hub's `GET …/live`: else `not_meeting_room`), connected for the whole meeting on the recorder's own capture, hearing only what the user says while holding Talk (`talk` frames: between them the extension feeds the upstream silence itself and drops the app's audio; Talk's audio goes in either transcription mode), with `delegate_task` to the room as its only tool, the room's own last questions and answers as its snapshot, `voice/meeting.md` as its instructions (the owner's name only, never their notes), no observed runs and no pausing. A room takes no other call (`meeting_room`). The contract is [meeting-minutes.md](./meeting-minutes.md) "Phase 4: realtime voice in the meeting"; how the extension does it, 4.16.
 
-**Not yet** (phase two, unscheduled): saved captions interleaved by time in the thread; background and lock-screen calls (Live Activities); switching chats by voice; voice on the Mac and the watch; Android's entry for agents; an entry without a chat (`ShellHome`); dedicated realtime-voice settings with `POST /test` (5.6); other upstream protocols (decision 3) and several upstreams in the App.
+**Not yet** (phase two, unscheduled): saved captions interleaved by time in the thread; switching chats by voice; voice on the Mac and the watch; Android's entry for agents; an entry without a chat (`ShellHome`); dedicated realtime-voice settings with `POST /test` (5.6); other upstream protocols (decision 3) and several upstreams in the App.
 
 **GPT-Live constraints** (upstream docs and existing code, expanded through tests in #3495)
 
@@ -77,7 +78,7 @@ Phase one is done and this document follows the code; how it was split into issu
 1. **Entry**:
    - The voice button is always present when the composer is empty, whether or not the Agent is working.
    - Collapsed row: idle `[+][composer][dictation][voice]`; working `[+][composer][voice][stop]`, with dictation moved to the expanded row.
-   - The "+" menu also has "Voice Chat".
+   - The voice button is the phone icon (#9887, 6.1): on the iPhone it places a system call to this chat (6.12; steps 2 and 3 then happen on the call screen), on the iPad it starts the voice chat in the app below. iOS's "+" menu has no voice row; Apple Vision Pro's composer, which has no phone icon, keeps "Voice Chat" in its "+" menu.
 2. **Start**:
    - First tap prompts for microphone permission. After approval, the composer becomes a **call bar** in place.
    - The microphone records immediately. Up to 3 seconds before `ready` are buffered and sent on connection, so speech right after tapping is not lost.
@@ -163,11 +164,11 @@ Phase one is done and this document follows the code; how it was split into issu
 **L. Suspend, leave, end**
 
 - **Suspend (save cost)**: while the Agent works, after 60 seconds without speech or anything to say, the extension temporarily closes the upstream; the call bar says "Waiting for Claude · Voice paused". Speech or a result reconnects automatically in about 1 second; speech meanwhile is buffered, not lost (measured in #3505: the wake starts 0.2 seconds after you speak and is up 0.4 seconds later, so the fast layer answers only about 0.2 seconds later than without a pause; a result starts being spoken about 1.6 seconds after it comes back).
-- **End**: any of these ends the call (CarPlay calls are unaffected by the phone's foreground/background state):
+- **End** (the voice chat in the app; a system call on the iPhone ends only by hanging up, the idle rule, a fatal error or another call, 6.12): any of these ends it (CarPlay calls are unaffected by the phone's foreground/background state):
   - tap "End";
-  - leave this chat page, or the shell hides it;
-  - App enters background;
-  - incoming phone call.
+  - on Apple Vision Pro: leave this chat page, the shell hides it, or the app enters the background. On iOS these no longer end it (#9887): leaving the page leaves it on with a bar back to it at the top, and it goes on in the background and locked (6.5);
+  - an incoming phone call that does not let it go on: on iOS a call (or Siri, or another app's audio) pauses it on hold, and it goes on when that is over and iOS says it may; otherwise, and on Apple Vision Pro and CarPlay, it ends;
+  - ten idle minutes (6.5).
 - Already sent instructions still finish, with normal push notifications.
 - On passive ending, leave a row "Voice ended · Continue" in place until leaving the page. "Continue" reconnects and speaks work completed while disconnected.
 
@@ -182,7 +183,7 @@ All UI text is localized; raw upstream text appears only in "Details".
 
 | Situation | Seen / heard | Source |
 | --- | --- | --- |
-| No voice extension, disabled extension, or old hub | No voice button. "Voice Chat" in "+" says "Realtime voice is not enabled on the hub" and "Open Settings" (only full devices get "Open Settings") | No running `kind=voice`, or `/info` 404 |
+| No voice extension, disabled extension, or old hub | No phone icon. On Apple Vision Pro "Voice Chat" in "+" says "Realtime voice is not enabled on the hub" and "Open Settings"; on iOS a system call that the hub refuses (from Recents, Siri, CarPlay) says the same in its alert (only full devices get "Open Settings") | No running `kind=voice`, or `/info` 404 |
 | Extension enabled but upstream incomplete (no address or Key) | Same, with "Realtime voice service is not configured" | `needs_setup` / `/info.setup` |
 | Upstream 401 / 403 | Tone. "Cannot connect to realtime voice service (invalid Key, or region unsupported)", with "Open Settings", "Retry" | `error{code: "upstream_forbidden", fatal}` |
 | Upstream 503 | "Realtime voice service temporarily unavailable", with "Retry" | `upstream_unavailable` |
@@ -1252,13 +1253,13 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
     the microphone indicator shows, the idle rule stays, its group's tunnels stay open, and the voice's levels stop until
     the app is back (`VoiceCalls.appDidEnterBackground`, `VoiceConversation.showsLevels`, `VoiceUplink.levelsPaused`),
     so nothing but its audio and socket works there. On Apple Vision Pro it ends when the app goes to the background.
-- **Leave chat**: ChatView's key changes (`onChange(of: key)`), or `.onTabVisibility` reports the page is no longer in front (back, replaced, hidden in the shell); both call `VoiceCalls.leave` (#3508). On iOS that leaves the voice chat on with a bar back to it at the top (`VoiceCalls.away`, `VoiceReturnPill` in the call's window; a tap opens its conversation, and the page showing again, `VoiceCalls.returned`, takes the bar away); on Apple Vision Pro it ends.
-- **Incoming call** (audio-session interruption began): the phone's voice chat pauses (#9887: on hold as 6.12 describes, the extension told when it lists `hold`) and goes on when the interruption ends with `shouldResume` and the session comes back (`VoiceAudio.resume`); without it, it ends with Continue as before; CarPlay's ends. A `.call` holds through it (6.12). Recording/dictation starts: end. Call claims mic with `RecordingMicrophone.claim(_:givingWay:)`; a later recording/dictation claim ends call and yields. A `.call` claims it without giving way: nothing in the app ends a system call by itself (dictation and recordings are refused while one is live, `docs/apple/calls.md` "Nothing in the app ends a call"). Conversely, active recording/dictation blocks call (`microphoneBusy`).
+- **Leave chat**: ChatView's key changes (`onChange(of: key)`), or `.onTabVisibility` reports the page is no longer in front (back, replaced, hidden in the shell, covered full screen: the terminal, or the picture viewer where the system counts the page as gone, which iOS 26's zoom presentation does not); both call `VoiceCalls.leave` (#3508). On iOS that leaves the voice chat on with a bar back to it at the top (`VoiceCalls.away`, `VoiceReturnPill` in the call's window); on Apple Vision Pro it ends. A tap on the bar opens its conversation and asks its page to close what covers it (`VoiceCalls.returnTo`, `returning`: ChatView closes its picture viewer and terminal); the bar goes only when the page shows again (`VoiceCalls.returned`), never at the tap: the conversation may be the one already open under a full-screen picture, which opening it again does not close.
+- **Incoming call** (audio-session interruption began): the phone's voice chat pauses (#9887: on hold as 6.12 describes, the extension told when it lists `hold`) and goes on when the interruption ends with `shouldResume` and the session comes back (`VoiceAudio.resume`); without it, it ends with Continue as before; CarPlay's ends. Nothing starts its engine while it is paused: not a route change, and not new rates from a `ready` that comes meanwhile (the first one, or a reconnect's): those are kept and the engine is wired for them as the audio comes back (`VoiceConversation` reconfigures before `resume`; `PhoneVoiceAudio.reconfigure` only keeps them while interrupted), since an engine started under the other audio would be refused and end the voice chat. A `.call` holds through it (6.12). Recording/dictation starts: end. Call claims mic with `RecordingMicrophone.claim(_:givingWay:)`; a later recording/dictation claim ends call and yields. A `.call` claims it without giving way: nothing in the app ends a system call by itself (dictation and recordings are refused while one is live, `docs/apple/calls.md` "Nothing in the app ends a call"). Conversely, active recording/dictation blocks call (`microphoneBusy`).
 - **Disconnect**: 3 retries after 1, 4, 10 seconds with `resume`; all fail → `ended(.lost)`, "Continue" remains on page.
   - New connections reset prior `link`, asking card, nonfatal hints; new connection reports them again. Discard unplayed prior audio.
   - Hub handshake rejection: 401 token, 403 answer-only end directly (`rejected`), no retry. 404 ends only if no connection has reached `ready` since this start; after a successful connection, 404 means extension reapplication (config change, disable/enable, upgrade: remove registry entry, await old process), counts as failed retry.
   - Handshake rejection can concurrently fail pending start send, ping, receive; order uncertain, all paths carry handshake status (`HubVoiceSocket.finish`).
-- **Idle**: end after 10 minutes without speech, open runs, or working target. Server suspension handles most cost savings (4.9). A `.call` on hold does not count the minutes, and starts them again when the hold ends.
+- **Idle**: end after 10 minutes without speech, open runs, or working target. Server suspension handles most cost savings (4.9). A `.call` on hold does not count the minutes, and starts them again when the hold ends. In the front "working target" is the app's own copy of the session (`VoiceDeps.session`: working or waiting on the user). In the background the app's socket to the hub is closed (`AppModel.suspendLinks`) and that copy is not updated, so the idle rule takes the voice connection's word instead (#9887, `VoiceConversation.appInBackground`, `sessionStale`): the target works while the extension has the upstream paused or waking (it pauses only while the conversation works on something the call waits for, 4.9) or asks a card by voice. A task that finished in the background (its run done, the result said) lets the quiet minutes count again, though the app's copy still says working; an extension without `suspend` gives no such word, so there ten quiet minutes in the background end the call whatever the target does.
 
 ### 6.6 Design system (add missing tokens first; `Shared/` must compile for watchOS 10)
 

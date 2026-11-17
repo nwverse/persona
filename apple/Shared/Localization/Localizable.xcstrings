@@ -32172,6 +32172,29 @@
       },
       "extractionState" : "manual"
     },
+    "Call This Conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call This Conversation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話に電話"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "呼叫这段对话"
+          }
+        }
+      }
+    },
     "Call ended" : {
       "localizations" : {
         "en" : {
@@ -147086,6 +147109,29 @@
         }
       }
     },
+    "Show Call" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示通话"
+          }
+        }
+      }
+    },
     "Show Call [Voice Bar]" : {
       "localizations" : {
         "en" : {
@@ -152172,6 +152218,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Start Voice Chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Voice Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声チャットを開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始语音对话"
+          }
+        }
+      }
     },
     "Start What I Ask Right Away" : {
       "extractionState" : "manual",
