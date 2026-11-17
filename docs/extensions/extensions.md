@@ -253,10 +253,13 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 | Type | Allowed keywords | Form |
 | --- | --- | --- |
 | `string` | `title`, `description`, `default`, `enum` (with labels: `oneOf: [{"const", "title"}]`), `format` (`uri` / `email` / `hostname` / `machine` / `launcher`), `x-os` (only with `machine`: a list of `darwin` / `linux` / `windows`), `pattern`, `minLength`, `maxLength` | Text field; with `enum`, a picker; with `format: machine` or `launcher`, a picker of the hub's machines or launchers (below) |
-| `integer`, `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field; the iOS and Android apps add a stepper to an `integer`, held to `minimum` / `maximum` |
+| `integer` | Descriptive keywords, `enum`, `minimum`, `maximum`, `x-step` (a positive JSON integer from 1 to 9007199254740991, only for `integer`) | Number field; the iOS, Mac and Android apps add a stepper, held to `minimum` / `maximum`. `x-step` sets how much each tap adds or subtracts (1 when absent); it does not restrict typed or saved values |
+| `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field |
 | `boolean` | Descriptive keywords | Toggle; with `x-confirm` (one sentence), turning it on first asks that sentence in the same dialog as a machine's toggle (below), titled with the field's title; Cancel leaves it off, Turn On sets it for Save; turning off doesn't ask |
 | `array` | `items` must be `string` (may have `enum`), `minItems`, `maxItems`, `uniqueItems` | Editable list; with `enum` in `items`, multi-select; with `format: machine` in `items`, one toggle per machine (below) |
 | `object` | Top level only, containing only the scalars and arrays above; may have its own `required` | A group |
+
+**Integer steppers (`x-step`)**: the hub returns the hint as `step` in `form.fields`. It is not `multipleOf`: with `x-step: 250`, a value of 2100 can still be typed and saved, and the next tap moves it to 2350 or 1850, within `minimum` / `maximum`. Older apps ignore `step` and use 1. Only a hub with `x-step` installs a manifest that uses it: declare a matching `engines.persona`.
 
 **Machines (`format: machine`)**: the value is the id of a machine on this hub.
 - A list of these values (`{"type": "array", "items": {"type": "string", "format": "machine", "x-os": ["darwin"]}}`) is drawn on the App's and web's settings page as **one toggle per machine**: machine name, online or not, plus Cua status for computer-control extensions (those contributing `computer`). `x-os` lists only machines on those systems.
