@@ -28,6 +28,14 @@ struct PersonaApp: App {
                 .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
+                // A link to one of Persona's pages opens in the app on every screen that has no link handling of its own
+                // (#9926, docs/protocol/deep-links.md); any other link opens as it did.
+                .environment(\.openURL, OpenURLAction { url in
+                    guard let opened = model.openOwnLink(url) else { return .systemAction }
+                    if case .sheet(let page) = opened { model.linkSheet = page }
+                    return .handled
+                })
+                .rootHubLinkSheet($model.linkSheet)
                 #if os(iOS)
                 // A redial from the Phone app's Recents (#9290), where SwiftUI hands it over rather than the scene's delegate;
                 // the two are one tap (`PersonaCalls.continueActivity` takes it once).
@@ -52,6 +60,11 @@ struct PersonaApp: App {
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
                     if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
+                    // A page of Persona's (persona://open<path>, an older persona:// form, #9926): only opens it.
+                    if let opened = model.openOwnLink(url) {
+                        if case .sheet(let page) = opened { model.linkSheet = page }
+                        return
+                    }
                     // A computer's pairing link (「添加电脑」, Add computer) is for Persona Link on that computer, not for this device (#4198).
                     if ServerConfig.isComputerLink(url) {
                         model.toast = Toast(String(localized: "Open this link on the computer you're adding"))

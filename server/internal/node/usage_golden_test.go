@@ -21,7 +21,7 @@ var updateUsageGolden = flag.Bool("update-usage-golden", false, "write testdata/
 // The usage meter's and the backfill's buckets over every transcript fixture (transcript/testdata) laid out as a
 // computer keeps them, with a fork, a subagent and a workflow agent copying replies of their session, against
 // testdata/usage-meter.golden.json. The code before the usage adapters (#9924: a parser per file name) wrote that
-// file; the adapters count exactly what it counted. Write it again (-update-usage-golden) only for a change that
+// file; the adapters count exactly what it counted (#9984 only added each bucket's agent). Write it again (-update-usage-golden) only for a change that
 // means to count differently, and say so in the change.
 func TestUsageMeterGolden(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")

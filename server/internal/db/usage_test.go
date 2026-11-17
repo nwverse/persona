@@ -188,7 +188,7 @@ func TestUsageHistory(t *testing.T) {
 
 	// Two spans: the old hour and its next, then up to now and a minute; every machine summed, then each apart.
 	bounds := []time.Time{old, old.Add(time.Hour), old.Add(2 * time.Hour), now.Add(time.Minute)}
-	spans, err := d.UsageSpans(ctx, bounds, false)
+	spans, err := d.UsageSpans(ctx, bounds, UsageSum)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,14 +196,14 @@ func TestUsageHistory(t *testing.T) {
 		spans[1].Span != 1 || spans[1].Output != 4 || spans[2].Span != 2 || spans[2].Output != 8 || spans[0].Machine != "" {
 		t.Fatalf("spans = %+v", spans)
 	}
-	spans, err = d.UsageSpans(ctx, bounds[:2], true)
+	spans, err = d.UsageSpans(ctx, bounds[:2], UsageByMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(spans) != 2 || spans[0].Machine != "m1" || spans[0].Output != 3 || spans[1].Machine != "m2" || spans[1].Output != 16 {
 		t.Fatalf("by machine = %+v", spans)
 	}
-	if spans, err := d.UsageSpans(ctx, bounds[:1], false); err != nil || spans != nil {
+	if spans, err := d.UsageSpans(ctx, bounds[:1], UsageSum); err != nil || spans != nil {
 		t.Fatalf("one bound = %+v, %v", spans, err)
 	}
 }
@@ -217,34 +217,97 @@ func TestUsageBackfill(t *testing.T) {
 	if err := d.PutUsage(ctx, "m1", []proto.UsageBucket{{Minute: h2.Add(10 * time.Minute).Unix(), Model: "opus", Output: 5, Requests: 1}}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := d.UsageBackfill(ctx, "m1"); err != nil || !b.Through.IsZero() || !b.Done.IsZero() || b.Hours != 0 {
+	if b, err := d.UsageBackfill(ctx, "m1", "claude"); err != nil || !b.Through.IsZero() || !b.Done.IsZero() || b.Hours != 0 {
 		t.Fatalf("before = %+v, %v", b, err)
 	}
 	hour := func(at time.Time, model string, out int64) proto.UsageBucket {
 		return proto.UsageBucket{Minute: at.Unix(), Model: model, Launcher: "claude", CacheRead: 100, Output: out, Requests: 1}
 	}
 	sent := []proto.UsageBucket{hour(h1, "opus", 1), hour(h1, "sonnet", 2), hour(h2, "opus", 40), hour(h3, "opus", 8)}
-	stored, err := d.PutUsageBackfill(ctx, "m1", sent, h3, false)
+	stored, err := d.PutUsageBackfill(ctx, "m1", nil, sent, h3, false)
 	if err != nil || stored != 2 { // h1 (both models) and h3; h2 had the live meter's minute
 		t.Fatalf("stored %d, %v", stored, err)
 	}
 	// Sent again (a scan that was cut off before its record): nothing more.
-	if stored, err = d.PutUsageBackfill(ctx, "m1", sent, h3, false); err != nil || stored != 0 {
+	if stored, err = d.PutUsageBackfill(ctx, "m1", nil, sent, h3, false); err != nil || stored != 0 {
 		t.Fatalf("again: stored %d, %v", stored, err)
 	}
-	spans, err := d.UsageSpans(ctx, []time.Time{h1, h2, h3, h3.Add(time.Hour)}, false)
+	spans, err := d.UsageSpans(ctx, []time.Time{h1, h2, h3, h3.Add(time.Hour)}, UsageSum)
 	if err != nil || len(spans) != 3 || spans[0].Output != 3 || spans[1].Output != 5 || spans[2].Output != 8 || spans[0].Requests != 2 {
 		t.Fatalf("spans = %+v, %v", spans, err)
 	}
 	// The last request: no hours, done. Through stays the latest, done is kept.
-	if _, err := d.PutUsageBackfill(ctx, "m1", nil, time.Time{}, true); err != nil {
+	if _, err := d.PutUsageBackfill(ctx, "m1", nil, nil, time.Time{}, true); err != nil {
 		t.Fatal(err)
 	}
-	b, err := d.UsageBackfill(ctx, "m1")
+	b, err := d.UsageBackfill(ctx, "m1", "")
 	if err != nil || !b.Through.Equal(h3) || b.Done.IsZero() || b.Hours != 2 {
 		t.Fatalf("record = %+v, %v", b, err)
 	}
-	if b, _ := d.UsageBackfill(ctx, "m2"); !b.Done.IsZero() {
+	if b, _ := d.UsageBackfill(ctx, "m2", ""); !b.Done.IsZero() {
 		t.Fatalf("another machine's = %+v", b)
+	}
+}
+
+// Usage by agent (#9984): a bucket of each agent is a row of its own, kept apart through the rollups and summed apart
+// by UsageSpans; the backfill keeps a record per agent (the legacy agents one), and stores an agent's hour when the
+// machine had none of that agent's usage in it (the legacy agents and the rows from before count together).
+func TestUsageByAgent(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().Truncate(time.Hour)
+	old := now.Add(-9 * 24 * time.Hour) // hours no other test here uses
+	b := func(at time.Time, agent string, out int64) proto.UsageBucket {
+		return proto.UsageBucket{Minute: at.Unix(), Model: "m", Launcher: "l", Agent: agent, CacheRead: 10, Output: out, Requests: 1}
+	}
+	if err := d.PutUsage(ctx, "agents", []proto.UsageBucket{b(old.Add(5*time.Minute), "claude", 1), b(old.Add(5*time.Minute), "codex", 2),
+		b(old.Add(6*time.Minute), "claude", 4), b(old.Add(5*time.Minute), "", 8)}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RollupUsage(ctx, now.Add(-27*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RollupUsageHours(ctx, now.Add(-7*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// UsageSpans sums every machine: the other tests' rows are elsewhere in time.
+	bounds := []time.Time{old, old.Add(time.Hour)}
+	spans, err := d.UsageSpans(ctx, bounds, UsageByAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 3 || spans[0].Agent != "" || spans[0].Output != 8 || spans[1].Agent != "claude" || spans[1].Output != 5 ||
+		spans[1].Requests != 2 || spans[2].Agent != "codex" || spans[2].Output != 2 || spans[0].Machine != "" {
+		t.Fatalf("by agent = %+v", spans)
+	}
+
+	// The backfill: pi's hour goes in beside the legacy agents' usage, Claude Code's does not (the hour had theirs),
+	// and once pi's hour is there it is not stored again.
+	h1, h2 := old, old.Add(time.Hour)
+	sent := []proto.UsageBucket{b(h1, "pi", 16), b(h1, "claude", 32), b(h2, "claude", 64)}
+	stored, err := d.PutUsageBackfill(ctx, "agents", []string{"claude", "codex", "pi"}, sent, h2, false)
+	if err != nil || stored != 2 { // pi's h1 and Claude Code's h2
+		t.Fatalf("stored %d, %v", stored, err)
+	}
+	if stored, err = d.PutUsageBackfill(ctx, "agents", []string{"pi"}, sent[:1], h1, true); err != nil || stored != 0 {
+		t.Fatalf("again: stored %d, %v", stored, err)
+	}
+	spans, err = d.UsageSpans(ctx, []time.Time{h1, h2, h2.Add(time.Hour)}, UsageByAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// h1: "", claude, codex and now pi; h2: claude.
+	if len(spans) != 5 || spans[3].Agent != "pi" || spans[3].Output != 16 || spans[4].Span != 1 || spans[4].Agent != "claude" || spans[4].Output != 64 {
+		t.Fatalf("after the backfill = %+v", spans)
+	}
+	legacy, err := d.UsageBackfill(ctx, "agents", "codex")
+	if err != nil || legacy.Hours != 1 || !legacy.Through.Equal(h2) || !legacy.Done.IsZero() {
+		t.Fatalf("legacy record = %+v, %v", legacy, err)
+	}
+	pi, err := d.UsageBackfill(ctx, "agents", "pi")
+	if err != nil || pi.Hours != 1 || !pi.Through.Equal(h2) || pi.Done.IsZero() {
+		t.Fatalf("pi's record = %+v, %v", pi, err)
+	}
+	if UsageBackfillRecord("traex") != "" || UsageBackfillRecord("opencode") != "opencode" {
+		t.Fatal("records")
 	}
 }

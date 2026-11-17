@@ -81,6 +81,8 @@ struct ChatView: View {
     @State private var showTodoDetail = false
     /// A task a hub link in this chat opened (`/todos?id=…`, #2696): its detail rises like a link.
     @State private var linkedTodo: TodoDetailRoute?
+    /// A knowledge entry or computer a link in this chat opened (#9926); a to-do keeps `linkedTodo`.
+    @State private var hubSheet: HubLinkSheet?
     @State private var showLink = false
     /// The Mac's chat column has room for its title in the title bar's row (`macTitleRow`).
     @State private var macWide = true
@@ -889,6 +891,7 @@ struct ChatView: View {
         #endif
         // Pushed into the detail column in regular width (iPad, #2816), a sheet otherwise.
         .stackSegment()
+        .hubLinkSheet($hubSheet)
         .detailPresentation(item: $linkedTodo) { r in
             DetailStack {
                 TodoDetailView(todoID: r.id).sheetDone { linkedTodo = nil }
@@ -1288,6 +1291,12 @@ struct ChatView: View {
             guard let k = model.linkedConversation(group, id: id) else { return false }
             target = k
             item = at
+        default:
+            // Any other page of the route table (#9926): where the app has it, a detail over this chat.
+            guard let opened = model.openHubPage(page, group: group) else { return false }
+            Haptics.tap()
+            if case .sheet(let s) = opened { hubSheet = s }
+            return true
         }
         Haptics.tap()
         if target == key || target == shownKey { // this chat: only to the message
@@ -1361,7 +1370,8 @@ struct ChatView: View {
             openPlan: { planOpen = true },
             openFold: openFold,
             jumpToCall: { jumpToCall($0) },
-            openQuote: { jumpToQuoted($0) })
+            openQuote: { jumpToQuoted($0) },
+            openAppLink: { openHubPage($0) })
     }
 
     /// Folds or opens a work line without moving what you were reading. In the upside-down list the newest end holds
@@ -7700,6 +7710,9 @@ struct WorkStepView: View, Equatable {
         var openFold: (Item) async throws -> Void = { _ in }
         var jumpToCall: (String) -> Void = { _ in }
         var openQuote: (ContextRef) -> Bool = { _ in false }
+        /// An app link to one of Persona's pages (`persona://open<path>`, an older `persona://` form, #9926): true when it
+        /// opened.
+        var openAppLink: (URL) -> Bool = { _ in false }
     }
 
     private var handlers = Handlers()
@@ -7743,6 +7756,9 @@ struct WorkStepView: View, Equatable {
             return .handled
         }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let self else {
+            // A link to one of Persona's pages written into a message (#9926): handed to the system it came back to
+            // `onOpenURL` and went nowhere.
+            if self?.handlers.openAppLink(url) == true { return .handled }
             // Mac: NSWorkspace would run any scheme it names (LinkPolicy).
             #if os(macOS)
             return LinkPolicy.system(url)
