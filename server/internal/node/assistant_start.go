@@ -345,11 +345,11 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		args = append(args, "--model", model)
 	}
 	// bypassPermissions only takes as a flag at start; the other modes are set with a control request (syncAssistantModes).
-	var startMode string
+	var startMode, wantMode string
 	if !spare {
-		if mode, _ := n.modesOf(id); mode == proto.ModeBypass {
-			startMode = mode
-			args = append(args, "--permission-mode", mode)
+		if wantMode, _ = n.modesOf(id); wantMode == proto.ModeBypass {
+			startMode = wantMode
+			args = append(args, "--permission-mode", wantMode)
 		}
 	}
 	if resume {
@@ -393,6 +393,19 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		n.logger.Printf("assistant %s: started on the Agent SDK: resumes with claude itself in its recorded profile, not the claude launcher", short(id))
 	}
 	cmd := n.assistantCLICommand(shell, launcher, cwd, itself, args, env)
+	// Interactive Claude Code in place of claude -p when the setting asks for it (assistant_tui.go): the bridge gets
+	// both commands, and runs the print-mode one when the interactive one does not start.
+	tui, tuiNote := tuiWanted(execution, guest, spare, round, wantMode)
+	var tuiMode, tuiEffort string
+	var tuiLine []byte
+	if tui {
+		tuiMode, tuiEffort = n.tuiStartModes(id, wantMode, execution)
+		full := withStartModes(args, tuiMode, tuiEffort)
+		interactive := n.assistantCLICommand(shell, launcher, cwd, itself, tuiArgs(full), env)
+		printCmd := n.assistantCLICommand(shell, launcher, cwd, itself, full, env)
+		cmd, tuiLine = n.assistantTUICommand(tuiSpec{Session: id, Cwd: cwd, Resume: resume, AcceptBypass: tuiMode == proto.ModeBypass,
+			ConfigDirs: slices.Compact(append([]string{envValue(env, "CLAUDE_CONFIG_DIR")}, n.claudeConfigDirs()...))}, interactive, printCmd)
+	}
 	cmd.SysProcAttr = osproc.GroupAttr() // so stop() can kill the whole group
 	msysCmdLine(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -415,10 +428,17 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, fmt.Errorf("start %s: %w", launcher, startErr)
 	}
 	started = true
+	if tuiLine != nil {
+		// The bridge reads its spec before anything else; one that cannot take it is a start that failed (awaitStart).
+		_, _ = stdin.Write(tuiLine)
+	}
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: execution, fingerprint: n.executionFingerprint(launcher, execution),
 		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
-		round: round.anchor != "", toolSet: round.toolSet}
+		round: round.anchor != "", toolSet: round.toolSet, tui: tui, tuiNote: tuiNote}
+	if tui {
+		p.mode, p.effort = tuiMode, tuiEffort // its start flags: nothing to set by control request (syncAssistantModes)
+	}
 	if !spare {
 		n.mu.Lock()
 		n.procs[id] = p

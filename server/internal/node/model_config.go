@@ -45,6 +45,10 @@ type modelExecution struct {
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
+	// Interactive: run a Claude conversation as interactive Claude Code instead of claude -p (assistant_tui.go), the
+	// assistant's claude_interactive setting. Part of the fingerprint, so a change resumes an idle conversation in a
+	// new process; omitted when off, so fingerprints from before it stay the same.
+	Interactive bool `json:",omitempty"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`

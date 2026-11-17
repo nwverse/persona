@@ -251,6 +251,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InterjectBackground != nil {
 			v.InterjectBackground = in.InterjectBackground
 		}
+		if in.ClaudeInteractive != nil {
+			v.ClaudeInteractive = in.ClaudeInteractive
+		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
 		}

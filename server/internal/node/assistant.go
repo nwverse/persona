@@ -113,10 +113,15 @@ type assistantProc struct {
 	tasksRevision uint64   // changes to background evidence, including invalidation
 	context       int      // tokens in the conversation's context at its last request (claude), or after a compaction
 	compactIdleAt int
-	compacting    bool     // an idle compaction is running (compactIdle)
-	compacted     bool     // compactIdle ran in this process: it is let go when idle again
-	manual        bool     // the compaction running is the user's (assistant_compact.go): its end is reported
-	requested     bool     // its first request was logged
+	compacting    bool // an idle compaction is running (compactIdle)
+	compacted     bool // compactIdle ran in this process: it is let go when idle again
+	manual        bool // the compaction running is the user's (assistant_compact.go): its end is reported
+	requested     bool // its first request was logged
+	// tui: started as interactive Claude Code through `personad assistant-tui` (assistant_tui.go). tuiNote: why it
+	// runs claude -p although interactive was asked for (the bridge fell back, or a recent fallback holds new starts
+	// off); "" when it runs as asked.
+	tui           bool
+	tuiNote       string
 	stderrTail    []string // its last assistantStderrTail stderr lines (watchAssistantStderr)
 	claudeVersion string   // the Claude Code its system/init named (claude_code_version), "" before it
 
@@ -597,7 +602,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// goes into a plain resume with every tool below rather than into the round's process (assistant_round.go).
 		n.awaitRoundTurn(ctx, p)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools) {
+	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || n.tuiEffortStale(p, execution) || p.instructionsStale() || otherTools) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		if otherTools {
@@ -909,6 +914,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			ParentToolUseID *string                     `json:"parent_tool_use_id"`
 			IsError         bool                        `json:"is_error"`
 			Result          string                      `json:"result"`
+			Reason          string                      `json:"reason"` // tuiFallbackSubtype: why interactive did not start
 			ModelUsage      map[string]claudeModelUsage `json:"modelUsage"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
@@ -942,8 +948,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					p.busy, p.lastActive = true, time.Now()
 				}
 				p.mu.Unlock()
-				p.started() // a round's process's start; any other's started with its first line
-				n.toolsAtStart(p.id, ev.Tools)
+				p.started()          // a round's process's start; any other's started with its first line
+				if ev.Tools != nil { // an interactive Claude Code's bridge names none (assistant_tui.go)
+					n.toolsAtStart(p.id, ev.Tools)
+				}
 				if resumed {
 					n.notifySessionsSoon()
 				}
@@ -959,6 +967,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				if manual {
 					n.compactionEnded(p.id, "")
 				}
+				continue
+			}
+			if ev.Subtype == tuiFallbackSubtype {
+				n.tuiFellBack(p, ev.Reason)
 				continue
 			}
 			if ev.Subtype != "background_tasks_changed" {
@@ -1172,7 +1184,25 @@ func (p *assistantProc) needsRestartFor(mode string) bool {
 
 // needsRestartForLocked is needsRestartFor with p.mu held.
 func (p *assistantProc) needsRestartForLocked(mode string) bool {
+	if p.agent == "claude" && p.tui && p.tuiNote == "" {
+		// Interactive Claude Code takes its permission mode as a start flag only (assistant_tui.go).
+		return mode != "" && cmpMode(mode) != cmpMode(p.mode)
+	}
 	return p.agent == "claude" && mode == proto.ModeBypass && !p.canBypass
+}
+
+// cmpMode is a permission mode for comparing: no mode is the default one.
+func cmpMode(m string) string {
+	if m == "" {
+		return "default"
+	}
+	return m
+}
+
+// effortNeedsRestartLocked: an interactive process takes its effort as a start flag only, so another one needs a new
+// process (assistant_tui.go). p.mu is held.
+func (p *assistantProc) effortNeedsRestartLocked(effort string) bool {
+	return p.agent == "claude" && p.tui && p.tuiNote == "" && effort != "" && effort != p.effort
 }
 
 // rememberTasks keeps a conversation's running background tasks in the session state (the hub's Postgres), so a
