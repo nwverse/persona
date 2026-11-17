@@ -1,7 +1,4 @@
 {
-  "Persona\/App\/ExtensionSystemPresentation.swift" : {
-    "trailingClose" : 1
-  },
   "Persona\/DevMode\/DevSend.swift" : {
     "ownClose" : 1
   },
@@ -16,67 +13,6 @@
   },
   "Persona\/Screen\/VNCPiPDiagnostics.swift" : {
     "ownClose" : 1
-  },
-  "Persona\/Views\/Assistant\/ArchivedConversationsView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Assistant\/AutoConversationsView.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Assistant\/MainConversationActionsView.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Assistant\/OnboardingChecklist.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Assistant\/ReadinessViews.swift" : {
-    "ownClose" : 2
-  },
-  "Persona\/Views\/Assistant\/Tasks\/PlaceMap.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Assistant\/Tasks\/TaskSheets.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Chat\/AssistantModelSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/AttachSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/ChatExportSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/ChatPlan.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Chat\/ChatView.swift" : {
-    "ownClose" : 1,
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Chat\/ContextPicker.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/FileEditSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/FileViewer.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/ForwardSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/ImageEditor.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Chat\/MessageViews.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Chat\/SideSessionsViews.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/Chat\/ToolViews.swift" : {
-    "trailingClose" : 1
   },
   "Persona\/Views\/Chats\/NodeActions.swift" : {
     "ownClose" : 2
@@ -130,33 +66,15 @@
   "Persona\/Views\/Inbox\/Lark\/MessagingComposeSheet.swift" : {
     "ownClose" : 1
   },
-  "Persona\/Views\/Interactions\/DelegateViews.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Interactions\/InteractionViews.swift" : {
-    "trailingClose" : 2
-  },
   "Persona\/Views\/Knowledge\/KBTopicViews.swift" : {
     "trailingClose" : 1
   },
   "Persona\/Views\/Knowledge\/KnowledgeView.swift" : {
     "ownClose" : 1
   },
-  "Persona\/Views\/Link\/LinkSheet.swift" : {
-    "ownClose" : 1
-  },
-  "Persona\/Views\/Link\/PreviewChooser.swift" : {
-    "trailingClose" : 1
-  },
   "Persona\/Views\/Mail\/MailViews.swift" : {
     "ownClose" : 2,
     "trailingClose" : 1
-  },
-  "Persona\/Views\/NewChat\/LauncherBlockedHelp.swift" : {
-    "trailingClose" : 1
-  },
-  "Persona\/Views\/NewChat\/NewChatView.swift" : {
-    "ownClose" : 1
   },
   "Persona\/Views\/Session\/FileInfoSheet.swift" : {
     "trailingClose" : 1
