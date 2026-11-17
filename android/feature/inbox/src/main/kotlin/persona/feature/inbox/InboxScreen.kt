@@ -27,6 +27,7 @@ import persona.core.contracts.api.SUBSCRIPTIONS_UI
 import persona.core.navigation.ConnectionSettingsRoute
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** [onOpenCard]: the app opens a request card outside any session on Agents (#5610); without it, Agents opens. */
@@ -55,13 +56,25 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val query = currentFilters.query
     val source = currentFilters.source
     val kind = currentFilters.kind
-    val section = currentFilters.section
     val expanded = currentFilters.expanded
     val grouping = currentFilters.grouping
     val folds = currentFilters.folds
+    // The section bar (#9053, docs/assistant/inbox.md "Section bar"): Needs you each time the Inbox is entered (All when
+    // a kept search comes with it), kept while in it (an item opened and closed, a refresh, a filter), never across
+    // visits, so a remembered FYI or Done never hides new requests. InboxPreferences.section, which the old bays kept,
+    // is no longer read. "" until the bar is first moved: the entry follows the stored search text until then. An item
+    // opened from outside the list lands it where the item is ([InboxLanding]), from the first frame.
+    val landing = LocalInboxLanding.current
+    var barChosen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(landing?.pending?.choice.orEmpty()) }
+    var barSaved by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    val bar = if (barChosen.isEmpty()) InboxBar.entered(query) else InboxBar.State(barChosen, barSaved.ifEmpty { null })
+    val chosen = bar.chosen
+    fun moveBar(state: InboxBar.State) { barChosen = state.chosen; barSaved = state.saved.orEmpty() }
     var preferenceError by remember { mutableStateOf(false) }
     val preferenceWrites = remember(repository) { kotlinx.coroutines.sync.Mutex() }
     fun filter(value: InboxPreferences) {
+        // Search text appearing sets the choice aside and shows All; cleared (typed away or by Clear filters), it comes back.
+        if (value.query != query) moveBar(InboxBar.searched(bar, query, value.query))
         filters = value
         scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
@@ -71,6 +84,29 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 finally { preferenceWrites.unlock() }
             }
         }
+    }
+    // The landing taken: the list shows the item's choice, All with Collapsed open (a fold kept with the others, read from
+    // the stored ones so an early landing never writes the defaults over them); Back from the item returns here. A list
+    // already showing the item stays. One moved beside the item it opened goes back when that page closes. An entry
+    // ([InboxLanding.enter]) puts the list back as it opens.
+    LaunchedEffect(landing?.pending) {
+        val page = landing?.pendingPage
+        val to = landing?.take() ?: return@LaunchedEffect
+        if (to == InboxLanding.ENTERED) { barChosen = ""; barSaved = ""; return@LaunchedEffect }
+        val moved = InboxBar.landed(bar, to)
+        if (page != null && moved != bar) landing?.moved(page, bar)
+        moveBar(moved)
+        if (to.openCollapsed) {
+            val stored = filters ?: repository.preferences.first()
+            if (InboxBar.NOISE !in stored.expanded) filter(stored.copy(expanded = stored.expanded + InboxBar.NOISE))
+        }
+    }
+    // The page that moved this list beside it closed: the choice it had comes back.
+    LaunchedEffect(landing?.restore) { landing?.takeRestore()?.let(::moveBar) }
+    // Drawn: an item opened from another item beside this list moves it ([InboxLanding.landBeside]).
+    DisposableEffect(landing) {
+        landing?.let { it.drawn++ }
+        onDispose { landing?.let { it.drawn-- } }
     }
     val listStates = rememberSaveableStateHolder()
     var error by remember { mutableStateOf<String?>(null) }
@@ -109,18 +145,28 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         items = items, interactions = snapshot.interactions, sessions = snapshot.sessions,
         mutes = snapshot.mutes, settings = settings,
     )
-    val result = list(InboxListSettings(source, kind, query, expanded.toSet() + section))
+    // A choice draws its section open; All folds as the user left it.
+    val listSettings = InboxListSettings(source, kind, query, if (chosen == InboxBar.ALL) expanded.toSet() else expanded.toSet() + chosen)
+    val result = list(listSettings)
     // In progress: the hub says so (`status`, inbox phase 1), or, from an older hub, the AI twin is drafting a reply.
     fun working(row: InboxRow) = row.type == InboxRowType.Item && records[row.id]?.agentWorking == true
     // A hub that sends `status` calls the section In progress; an older hub's is the AI twin's "Persona is working on it" as before.
     val eventHub = snapshot.records.any { it.item.status != null }
     // The summary speaks for the whole inbox, so it reads the unfiltered list.
     val overall = if (query.isEmpty() && source.isEmpty() && kind.isEmpty()) result else list(InboxListSettings())
-    val displayGroups = inboxDisplayGroups(result, persona.core.contracts.CoreText.plain(res.getString(
+    val bySection = inboxDisplayGroups(result, persona.core.contracts.CoreText.plain(res.getString(
         if (eventHub) R.string.inbox_section_working else R.string.inbox_group_working)), ::working)
-    val groups = displayGroups.filter { section.isEmpty() || it.id == section }
-    val needsCount = needsYouCount(result, ::working)
-    val allCount = result.groups.sumOf { it.count }
+    // Done's counts from the hub (#3016) only count with no filter or search on, since they count everything.
+    val filtering = query.isNotBlank() || source.isNotEmpty() || kind.isNotEmpty()
+    // The bar's choices and counts over the rows as shown (an older hub's AI-twin rows In progress), and what an empty
+    // choice says; the hub's day counts keep Done in it while the list holds no done item.
+    val barView = InboxBar.bar(bySection, chosen, listSettings, if (filtering) null else history.days[historyManager]?.sumOf { it.count })
+    // Done chosen on the hub's counts alone: drawn with its counted groups, which read their own pages as they open.
+    val displayGroups = if (InboxBar.DONE !in barView.shown || bySection.any { it.id == InboxBar.DONE }) bySection
+        else bySection + InboxGroup(InboxBar.DONE, persona.core.contracts.CoreText.of(persona.core.contracts.CoreText.Key.InboxDone),
+            emptyList(), emptyList(), folded = false)
+    // A choice draws its section alone; All draws every section, folding as before.
+    val groups = if (chosen == InboxBar.ALL) displayGroups else displayGroups.filter { it.id == chosen }
     val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + snapshot.records.map { record ->
         record.item.account to record.sourceLabel.ifBlank { if (record.feedId != null) res.getString(R.string.inbox_source_lark) else record.item.account.ifBlank { res.getString(R.string.inbox_source_mail) } }
     }.filter { it.first.isNotEmpty() }.distinctBy { it.first }
@@ -265,7 +311,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     fun allTargets(shown: List<InboxGroup>) = shown.filter { it.id != "done" }.flatMap { it.rows }
         .filter { it.type == InboxRowType.Item }.mapNotNull { records[it.id] }
         .filterNot { it.item.isDone }.distinctBy { it.item.id }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) }
-    val bulk = allTargets(groups)
+    // Clean up all keeps its scope whatever the bar shows: every open item under the filters and search.
+    val bulk = allTargets(displayGroups)
     // Groups (#2576): one row is one item. Only open ones Persona isn't working on can be picked.
     fun rowRecords(row: InboxRow): List<InboxRecord> = listOfNotNull(records[row.id])
     fun selectable(row: InboxRow): Boolean = row.type == InboxRowType.Item && !working(row) &&
@@ -273,9 +320,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val zone = java.time.ZoneId.systemDefault()
     val locale = currentLocale
     val now = java.time.Instant.now()
-    // Done's counts from the hub (#3016), per manager ("" the default): only with no filter or search on, since they count
-    // everything; then each group shows "n" of what is loaded and Show older pages back from the newest.
-    val filtering = query.isNotBlank() || source.isNotEmpty() || kind.isNotEmpty()
+    // Done's counts from the hub (#3016), per manager ("" the default): only with no filter or search on ([filtering]);
+    // then each group shows "n" of what is loaded and Show older pages back from the newest.
     fun subsOf(group: InboxGroup, manager: String = ""): List<InboxShownGroup> = if (group.folded) emptyList() else
         inboxSectionGroups(group.id, group.rows, grouping, now, zone, res, locale, ::rowRecords,
             cardAt = { row -> interactions[row.id]?.createdAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() } },
@@ -299,6 +345,11 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val doneOpen = groups.any { it.id == "done" && !it.folded }
     // Another assistant is another history (a new [history]): read it too when Done is already open.
     LaunchedEffect(doneOpen, history) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
+    // With no done item in the list, the hub's counts say whether Done has any (#9053): read once on entry, not its pages,
+    // after the list is in (cached or read), so a list that holds done items asks nothing.
+    val listIn = snapshot.refreshes > 0 || snapshot.records.isNotEmpty()
+    val countDone = listIn && !filtering && result.groups.none { it.id == InboxBar.DONE }
+    LaunchedEffect(countDone, history) { if (countDone) history.count(historyManagers, zone) }
     // Done's total with the hub's counts (#3016): what its groups add up to, folded or not, for the Done chip and Done's
     // title alike; with a filter or search on, or no counts, what is loaded.
     fun doneTotal(done: InboxGroup, manager: String): Int {
@@ -306,11 +357,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         return inboxSectionGroups("done", done.rows, grouping, now, zone, res, locale, ::rowRecords, cardAt = { null }, doneDays = days)
             .takeIf { it.isNotEmpty() }?.sumOf { it.count } ?: done.count
     }
-    val doneCount = result.groups.firstOrNull { it.id == "done" }?.let { done -> doneTotal(done, historyManager) } ?: 0
     // Show older at the end of Done: for the managers whose hub doesn't count, and for all of them while filtering.
     val olderManagers = if (filtering) historyManagers else historyManagers.filter { it.orEmpty() !in history.days }
     val showOlder = doneOpen && !history.counting && olderManagers.isNotEmpty() && (history.more || history.failed || history.loading)
-    val scopeText = bulkScope(res, section, sources.firstOrNull { it.first == source && source.isNotEmpty() }?.second,
+    val scopeText = bulkScope(res, "", sources.firstOrNull { it.first == source && source.isNotEmpty() }?.second,
         if (kind == "agent") res.getString(R.string.inbox_kind_agent) else kindLabel(res, kind), query)
     var showMore by remember { mutableStateOf(false) }
     // Clean up all files every open item of the current view (filters and search) in one request, recorded as dismissed
@@ -323,9 +373,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     if (showMore) {
+        // By source / By time (#2576) sits here rather than in a row of its own over the list (#9053): QuickFilterBar has
+        // no trailing control (only the Agents tab's home capsule has one), its five choices already run past a phone's
+        // width, and "List controls" puts grouping in a grouping control or the ⋯, where the Agents list's QuickFilterBar
+        // form keeps its own. Only where it applies: Done is always by time and In progress never grouped.
+        val groupings = if (chosen == InboxBar.DONE || chosen == InboxBar.WORKING) emptyList() else listOf(
+            JAction(res.getString(R.string.inbox_grouping_source), checked = grouping != InboxGroups.TIME, section = res.getString(R.string.inbox_grouping_title)) {
+                filter(currentFilters.copy(grouping = InboxGroups.SOURCE)) },
+            JAction(res.getString(R.string.inbox_grouping_time), checked = grouping == InboxGroups.TIME) {
+                filter(currentFilters.copy(grouping = InboxGroups.TIME)) },
+        )
         JActionSheet(title = stringResource(R.string.inbox_title), onDismiss = { showMore = false },
-            actions = listOf(
-                JAction(bulkLabel(res, bulk.size, scopeText), PhIcons.Checks, enabled = bulk.isNotEmpty()) { cleanAll() },
+            actions = groupings + listOf(
+                JAction(bulkLabel(res, bulk.size, scopeText), PhIcons.Checks, enabled = bulk.isNotEmpty(), separatorBefore = groupings.isNotEmpty()) { cleanAll() },
                 JAction(res.getString(R.string.inbox_mutes_title), PhIcons.Prohibit, separatorBefore = true) { showMutes = true },
                 JAction(res.getString(R.string.inbox_rules_title), PhIcons.Target) { showRules = true },
             ) + listOfNotNull(
@@ -407,10 +467,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // Loading shows only while there is nothing to show yet: a row put in over a shown list pushes it down, then goes.
     val loadingFirst = snapshot.loading && snapshot.records.isEmpty() && snapshot.interactions.isEmpty()
     val failedEmpty = snapshot.records.isEmpty() && !loadingFirst && (error ?: snapshot.error) != null
-    // One remembered list per filter. The query and the folds stay out of the key: a new key recreates the page, so
-    // typing would drop the search field's focus (and the keystroke) and folding a section would jump to the top.
-    listStates.SaveableStateProvider(listOf(source, kind, section).toString()) {
-        val scroll = rememberLazyListState()
+    // One remembered list per filter, and in it one scroll per choice of the section bar (#9053). The query, the folds
+    // and the choice stay out of the key: a new key recreates the page, so typing would drop the search field's focus
+    // (and the keystroke), folding a section would jump to the top, and a search moving the bar to All would do both.
+    listStates.SaveableStateProvider(listOf(source, kind).toString()) {
+        val scrolls = InboxBar.CHOICES.map { rememberLazyListState() }
+        // A search keeps the scroll of the choice it set aside, so the list stays put while typing.
+        val scroll = scrolls[InboxBar.CHOICES.indexOf(if (query.isEmpty()) chosen else bar.saved ?: chosen).coerceAtLeast(0)]
         // "Jump to" scrolls once the page has been built with the group open (the list scrolls only by index).
         LaunchedEffect(jumpTo) {
             val key = jumpTo ?: return@LaunchedEffect
@@ -465,19 +528,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
           val keyed = KeyedListScope(tapScope, listIndex.positions)
           with(keyed) {
             item("filters") {
-                QuickFilterBar(listOf(Bay(stringResource(R.string.inbox_bay_needs_you), needsCount, Status.NeedsYou), Bay(stringResource(R.string.inbox_bay_all), allCount),
-                    Bay(stringResource(R.string.inbox_done), doneCount)),
-                    selected = when (section) { "action" -> 0; "done" -> 2; else -> 1 },
-                    onSelect = { filter(currentFilters.copy(section = listOf("action", "", "done")[it])) })
+                // The section bar (#9053): Needs you's rows in its tone, In progress and FYI's in the neutral one, Done and All none.
+                val bays = barView.choices.map { choice ->
+                    Bay(inboxChoiceTitle(choice.id), choice.count, Status.NeedsYou.takeIf { choice.id == InboxBar.ACTION },
+                        countTone = when (choice.tone) { InboxBar.Tone.Needs -> Status.NeedsYou; InboxBar.Tone.Neutral -> Status.Idle; null -> null })
+                }
+                // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight, while
+                // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4), and the edge
+                // that cuts choices off fades so the strip reads as one that scrolls.
+                QuickFilterBar(bays, selected = barView.choices.indexOfFirst { it.id == chosen },
+                    onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true,
+                    fadeCut = true)
                 Spacer(Modifier.height(Tokens.Space.s))
                 JSearchField(query, { filter(currentFilters.copy(query = it)) }, stringResource(R.string.inbox_search_hint))
-                // Needs you, FYI and Collapsed by source or by time (#2576); Done is always by time.
-                if (section != "done") {
-                    Spacer(Modifier.height(Tokens.Space.s))
-                    JSegmented(listOf(JSegment(stringResource(R.string.inbox_grouping_source)), JSegment(stringResource(R.string.inbox_grouping_time))),
-                        if (grouping == InboxGroups.TIME) 1 else 0,
-                        { filter(currentFilters.copy(grouping = if (it == 1) InboxGroups.TIME else InboxGroups.SOURCE)) })
-                }
             }
             // New items waiting outside the list for triage (#1773): one line over the first item until triage is ok.
             InboxTriageText.banner(res, snapshot.triage)?.let { banner -> item("triage") { InboxTriageNotice(banner) } }
@@ -500,8 +563,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 JNotice(notice, actionLabel = sectionReader.retry?.let { stringResource(R.string.inbox_retry) },
                     onAction = sectionReader.retry)
             } }
-            if (groups.isEmpty() && !loadingFirst) item("empty") {
-                val filtered = query.isNotEmpty() || source.isNotEmpty() || kind.isNotEmpty() || section.isNotEmpty()
+            // Nothing for the choice to draw (#9053): All caught up only when nothing is open anywhere, which under All
+            // still draws Done below it; a chosen section with nothing says so in its own words, the counts right above.
+            barView.empty?.takeIf { !loadingFirst }?.let { empty -> item("empty") {
+                val filtered = query.isNotEmpty() || source.isNotEmpty() || kind.isNotEmpty()
                 when {
                     // The hub's list leaves out an assistant that is offline: its inbox is not empty, it is out of reach.
                     // With items kept, a search or filter that finds none is "no match", not offline.
@@ -509,13 +574,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     !filtered && failedEmpty -> JEmptyState(stringResource(R.string.inbox_empty_failed_title), stringResource(R.string.inbox_empty_failed_text), action = {
                         JButton(stringResource(R.string.inbox_retry), { refresh() }, enabled = !refreshing, kind = JButtonKind.Secondary)
                     })
-                    query.isNotBlank() -> JEmptyState(stringResource(R.string.inbox_empty_search_title), stringResource(R.string.inbox_empty_search_text, query.trim()), icon = PhIcons.MagnifyingGlass)
-                    snapshot.records.isEmpty() && snapshot.interactions.isEmpty() -> JEmptyState(stringResource(R.string.inbox_empty_title),
-                        stringResource(R.string.inbox_empty_text), icon = PhIcons.Tray)
+                    empty == InboxBar.Empty.Section -> InboxSectionEmpty(chosen)
                     // A source or kind that hides every open item is not "all caught up": the Inbox outside it may still
-                    // hold some. The filter mark and Clear filters are the way back (#7550). A bay with nothing, and no
-                    // such filter, keeps the check.
-                    source.isNotEmpty() || kind.isNotEmpty() -> JEmptyState(
+                    // hold some. The filter mark and Clear filters are the way back (#7550).
+                    empty == InboxBar.Empty.Filtered -> JEmptyState(
                         stringResource(R.string.inbox_empty_filtered_title), stringResource(R.string.inbox_empty_filtered_text),
                         icon = PersonaIcons.filter,
                         action = {
@@ -525,9 +587,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             }, kind = JButtonKind.Secondary)
                         },
                     )
+                    empty == InboxBar.Empty.NoMatch -> JEmptyState(stringResource(R.string.inbox_empty_search_title), stringResource(R.string.inbox_empty_search_text, query.trim()), icon = PhIcons.MagnifyingGlass)
+                    snapshot.records.isEmpty() && snapshot.interactions.isEmpty() -> JEmptyState(stringResource(R.string.inbox_empty_title),
+                        stringResource(R.string.inbox_empty_text), icon = PhIcons.Tray)
                     else -> JEmptyState(stringResource(R.string.inbox_empty_caught_up_title), stringResource(R.string.inbox_empty_caught_up_text), icon = PhIcons.CheckCircle)
                 }
-            }
+            } }
             // Rows of a group (#2576: in a selection a tap picks, a long-press starts one).
             fun rows(prefix: String, shown: List<InboxRow>) = itemsIndexed(shown, key = { _, row -> "$prefix${row.type}:${row.id}" }, contentType = { _, row -> row.type }) { index, row ->
                 val position = GroupPosition.of(index, shown.size)
@@ -571,31 +636,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             onClick = { markAll(allTargets(listOf(group)), InboxBulkAction.Done, animate = true) }) // InboxView.swift:1143
                         else -> null
                     }
+                    // Inside a choice the section's title stays as a heading with its actions and does not fold, as
+                    // In progress's always does (#9053); under All a tap folds it as before.
+                    val foldable = chosen == InboxBar.ALL && group.id != "working"
                     JSectionHeader(
                         title = title,
                         // Done with the hub's counts (#3016): all of it, as its groups add up, not just what is loaded.
                         count = if (group.id == "done") doneTotal(group, manager) else group.count,
                         status = when (group.id) { "action" -> Status.NeedsYou; "working" -> Status.Working; else -> null },
-                        trailing = if (group.id == "working") null else if (group.folded) stringResource(R.string.inbox_expand) else stringResource(R.string.inbox_collapse),
+                        trailing = if (!foldable) null else if (group.folded) stringResource(R.string.inbox_expand) else stringResource(R.string.inbox_collapse),
                         open = !group.folded, trailingIsFoldAction = true,
-                        onClick = if (group.id == "working") null else ({
-                            // The fold animates (InboxView.swift:1127, Done at :1029). Leaving a bay does not
-                            // (chip animated: false, :1292): that swap is applied first, and only the fold arms.
-                            val leaving = section == group.id
-                            val open = group.id in expanded
-                            if (!leaving) {
-                                animateChange { filter(currentFilters.copy(expanded = if (open) expanded - group.id else expanded + group.id)) }
-                            } else if (open) {
-                                filter(currentFilters.copy(section = ""))
-                                val folded = expanded - group.id
-                                scope.launch {
-                                    androidx.compose.runtime.withFrameNanos { }
-                                    animateChange { filter(currentFilters.copy(section = "", expanded = folded)) }
-                                }
-                            } else {
-                                // The bay was holding this section open, so the toggle does not move its rows.
-                                filter(currentFilters.copy(section = "", expanded = expanded + group.id))
-                            }
+                        onClick = if (!foldable) null else ({
+                            // The fold animates (InboxView.swift:1127, Done at :1029).
+                            animateChange { filter(currentFilters.copy(expanded = if (group.id in expanded) expanded - group.id else expanded + group.id)) }
                         }),
                         // A section without groups is one group: its tick picks it all, folded or not.
                         leading = if (sectionPickable.isNotEmpty()) ({ InboxGroupTick(sectionPickable, picked, title) { picked = it } }) else null,
@@ -693,6 +746,28 @@ private fun inboxGroupTitle(group: InboxGroup): String = when (group.id) {
     "noise" -> stringResource(R.string.inbox_section_folded)
     "done" -> stringResource(R.string.inbox_done)
     else -> group.title.text()
+}
+
+/** A choice's name in the section bar (#9053): the words the section's own heading uses, In progress for any hub. */
+@Composable
+private fun inboxChoiceTitle(id: String): String = stringResource(when (id) {
+    InboxBar.ACTION -> R.string.inbox_bay_needs_you
+    InboxBar.WORKING -> R.string.inbox_section_working
+    InboxBar.FYI -> R.string.inbox_group_fyi
+    InboxBar.DONE -> R.string.inbox_done
+    else -> R.string.inbox_bay_all
+})
+
+/** A chosen section with nothing in it (#9053): its own words, never "All caught up" while other sections hold rows. */
+@Composable
+private fun InboxSectionEmpty(chosen: String) {
+    val (title, text) = when (chosen) {
+        InboxBar.WORKING -> R.string.inbox_empty_working_title to R.string.inbox_empty_section_text
+        InboxBar.FYI -> R.string.inbox_empty_fyi_title to R.string.inbox_empty_section_text
+        InboxBar.DONE -> R.string.inbox_empty_done_title to R.string.inbox_empty_done_text
+        else -> R.string.inbox_empty_action_title to R.string.inbox_empty_section_text
+    }
+    JEmptyState(stringResource(title), stringResource(text), icon = if (chosen == InboxBar.DONE) PersonaIcons.inbox else PersonaIcons.success)
 }
 
 /** A tier's name, as the item's header tags it. */

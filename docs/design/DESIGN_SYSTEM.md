@@ -834,7 +834,7 @@ Search may take query operators and scopes; they live inside the search field.
 A list keeps no standing search field of its own beside the app's one search (#6589, the web's Agents list): **Search chats** (⌘K) finds its rows with the list's operators (`machine:`, `project:`, `harness:`, `model:`, `state:`, `is:pinned`, `since:`), a match on the row's name first, then its project or computer, then what is inside it, and its **Filter Agents list** (⇧↵) puts the query on the list in place, as a filter chip whose text reopens ⌘K. ⌘K's own **Filter** button, at the end of its field, offers the list's filter choices (computer, project, status, harness, model, Pinned, updated within) and writes each into the query as its operator, the number of operators on it, so a choice stays text to read and change and no hint line has to name the operators. The list's filter button sits on the list's title row, with the list's other menu buttons, and says how many filters are on, as iOS keeps its Agents filter (the computer) in the top bar's list menu with the chosen one a chip over the list.
 
 - **iOS Agents filter capsule** (#7033, owner-approved final E; whole labels, #9121): `CapsuleFilterBar` below search is one fully rounded surface (`Theme.card`, `Theme.cardStroke`, `Theme.Size.hairline`). Android's `JAgentFilterCapsule` (`AgentFilterCapsule.kt`, #7034) follows the same rule. Only the existing quick filters scroll horizontally; their availability, counts and defaults are unchanged. **Every filter shows its whole name, always**, in every language and at every text size: never two characters and an ellipsis, never a name cut to fit, and a chip is as wide chosen as not (no focus or width animation). A strip whose names do not fit scrolls; the web's quick filters show whole names too, wrapping onto more lines. An edge with more past it fades out over `Theme.Size.fadeEdge` (`.edgeFade()`, a mask, as the space tab strip's): the trailing edge while content lies past it, the leading edge once the strip has scrolled from its start, so a cut-off chip reads as "more"; where nothing is hidden the chips are drawn as they are. The chosen filter keeps its highlight (`Theme.FilterCapsule.selection`, `Theme.Motion.standard`) and scrolls to the strip's middle where it can; counts never truncate. Reduce Motion turns the highlight's animation and the scroll to a chosen filter into plain changes, and the fade has no animation of its own, so it snaps. At the trailing end, a 44 pt `Theme.Icon.capsuleGrouping` control stays fixed behind a hairline of `Theme.FilterCapsule.separatorHeight` (22 pt); its menu contains only `DevGrouping.offeredNow` and checks the current grouping. The former separate grouping pill is removed. Personal Agents keeps its separate navigation entry, outside the capsule. Spoken filter labels remain complete, including counts and selection. Why: the owner requested one compact row without mixing grouping choices into state filters; this serves people monitoring Agents, not Assistant. #9121 dropped the two-character label of #7033 and #7034: in Chinese and Japanese it saved no width and could change the meaning (完成未看, "done, not seen yet", read 完成…, "done"). The Mac's segmented control and the web are unchanged.
-- **Inbox section bar** (#9053, `docs/assistant/inbox.md` "Section bar"): a filter of states, drawn with each client's quick-filter component (iOS `CapsuleFilterBar`, Android `QuickFilterBar`, the web Agents filter bar's look) with Needs you, In progress, FYI, Done and All. Needs you and All always show; the others while they have rows or are chosen; Collapsed stays under All. Needs you carries the `.needs` `CountBadge`, In progress and FYI the neutral one, Done and All none. It opens on Needs you on each entry and is not kept across visits; All is the stacked page as before, the filter's reset. Grouping sits in the bar's trailing menu, not in a row of its own. Why: the stacked page put FYI and Done several screens below a long Needs you; a bar that lands on Needs you keeps what needs the user first and one tap from everything else (3.4 "Sessions that need the user": the Needs you count stays in sight from every choice).
+- **Inbox section bar** (#9053, `docs/assistant/inbox.md` "Section bar"): a filter of states, drawn with each client's quick-filter component (iOS `CapsuleFilterBar`, Android `QuickFilterBar`, the web Agents filter bar's look) with Needs you, In progress, FYI, Done and All. Needs you and All always show; the others while they have rows or are chosen; Collapsed stays under All. Needs you carries the `.needs` `CountBadge`, In progress and FYI the neutral one, Done and All none. It opens on Needs you on each entry and is not kept across visits; All is the stacked page as before, the filter's reset. Grouping sits in the bar's trailing menu, not in a row of its own; on Android it is "Group by" in the Inbox's ⋯ sheet, since `QuickFilterBar` has no trailing control and its five choices already run past a phone's width (hidden while In progress or Done is chosen, as the menu is). Why: the stacked page put FYI and Done several screens below a long Needs you; a bar that lands on Needs you keeps what needs the user first and one tap from everything else (3.4 "Sessions that need the user": the Needs you count stays in sight from every choice).
 
 - **HarmonyOS Agents groups** (#8966): the existing native grouping Select offers By Status (default), By Machine and By Project. It reuses the native list, Select and 48 vp control tokens, not a new style or a second flat/repository/worktree taxonomy. The shared Rust projection owns pinned, quiet, folded and filtered rows and their counts. Group headers expose the current localized state/machine/space title, state counts and a 48 vp Expand/Collapse control; quiet projects have an explicit idle-projects heading. Default idle sections stay folded; the header expands them and their rows with the core's `folded`, `expanded_idle` and `expanded_quiet` settings. A folded header still exposes Needs You. All labels ship in en, zh-Hans and ja. The previous native sorter and debug shadow are deleted; no release-only platform-specific sorter remains. These rules serve people monitoring Agents and follow iOS, rather than adding an independent HarmonyOS presentation.
 
@@ -2311,6 +2311,33 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
 
+### After the meeting (#8731 V3)
+
+A meeting that ended is one screen: `MeetingPage`'s after mode. It opens after End in the meeting room, and from the
+Meetings list and Knowledge for every meeting recording (`RecordingOpen`). Notes and all-day recordings keep their
+recording page.
+
+- **The bar:** in the sheet its ✕ at the leading corner (`SheetClose`, #9653), pushed its back button. Trailing, the ⋯
+  menu: Rename and **Recording Details**, the recording's page (`RecordingDetailView`, with its audio, sharing,
+  regenerating and deleting). That page shows no Talk about this meeting, since it was opened from here.
+- **From the top:**
+  - the name, then when it ran, how long, who was in it (you, and Persona if it answered at any point) and Cloud
+    transcription when the hub transcribed it (`MeetingAfterHeader`);
+  - the **summary card** (`MeetingSummaryCard`): the minutes' headline and at most three core conclusions, or the first
+    two points of older minutes, then three counts: decisions, to-dos and open questions (`MeetingAfterSummary`).
+    While the minutes are on their way the card holds where they are (Writing the minutes…), and the summary comes in
+    its place;
+  - the **to-dos**: the minutes' own Action Items card, with Add to To-Dos and Add All (`MinutesCard`);
+  - the **meeting map** (`MeetingMapCard`): the minutes' topics with their bullets, else the topics the room kept during
+    the meeting, else no map (`MeetingAfterMap`). Its first five topics are drawn as the meeting room's Map page draws
+    them (`MeetingTopicMapRows`), and **Full Screen** opens that page (`MeetingTopicMap`);
+  - the parts by name (`MeetingTabRow`, as the meeting room's): **Minutes** (the full minutes, as on the recording's
+    page, each card boxed: `minutesBoxed`), **Transcript**, **Photos** (a room meeting that took photos) and
+    **Conversation** (the room's thread and the follow-up). Conversation shows wherever the room or a follow-up has one,
+    since the composer writes there.
+- **The composer:** "Talk with Persona about this meeting" stays in the bar. Typing opens Conversation, which follows its
+  newest end as the thread did; the other parts open at the top.
+
 ### The meeting room (#8731 v2)
 
 A room meeting records in a meeting app's room: full screen and dark in both appearances (E1, as meeting apps are; the
@@ -2350,12 +2377,9 @@ page the user watches during the meeting is the page they keep writing in after 
   aside instead, and only the Live page folds (its Live box to its newest line). The Highlights page keeps its card
   whole, Full Transcript included, since the card is that page. At accessibility sizes a one-line header (dot, time, menu, Hide)
   stays fixed, the rest scrolls as one, nothing folds, and the bar stays pinned.
-- **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
-  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
-  sheet and where the minutes push opened the page, not when pushed from the recording's page, whose Back returns there) kept
-  above the thread rather than scrolled away with it (the thread follows its end), the room's thread, the **After the
-  Meeting** divider, the follow-up's thread, and the composer alone in the bar. At accessibility sizes and while the
-  keyboard is up the card is one fixed line (the minutes' state, Open as an icon with its name as the label), and the
+- **Structure, after**: since #8731 V3, "After the meeting" above: the facts, summary, to-dos and map over the parts by
+  name, the Conversation part holding the room's thread, the **After the Meeting** divider and the follow-up's thread, and
+  the composer alone in the bar. While the keyboard is up the screen is the conversation under one fixed line (the minutes' state, Open as an icon with its name as the label), and the
   title scrolls with the thread. While the hub would still answer `409 meeting_running` the composer is disabled with a
   caption that says why: the end still on its way ("in a moment"), the end refused or the sync paused (the sync's own
   problem; the hub ends such a meeting 12 hours after its last stored upload), or an older manager without the follow-up.
