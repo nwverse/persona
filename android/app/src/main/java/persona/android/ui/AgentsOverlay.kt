@@ -22,7 +22,8 @@ import persona.android.navigation.PaneSplits
 import persona.android.navigation.AppNavigator
 import persona.android.navigation.isDetailDestination
 import persona.core.designsystem.JSidebarColumn
-import persona.core.designsystem.LocalPaneListToggle
+import persona.core.designsystem.LocalSplitDetail
+import persona.core.designsystem.SplitDetailContext
 import persona.core.designsystem.DetailPlaceholder
 import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JPage
@@ -72,7 +73,15 @@ private class AgentsOverlayScene(
         JSidebarColumn(sidebar = { entries.first().Content() }, width = PaneSplits.DefaultLeft.dp,
             pageStart = PaneSplits.DefaultLeft.dp, shown = shown.value, overlay = true,
             onDismiss = { shown.value = false }, insetSidebar = false) {
-            CompositionLocalProvider(LocalPaneListToggle provides if (entries.size == 2) ({ shown.value = true }) else null) {
+            CompositionLocalProvider(
+                LocalSplitDetail provides SplitDetailContext(
+                    isFirstPage = entries.size == 2,
+                    listHidden = true,
+                    onShowList = { shown.value = true },
+                )
+            ) {
+                // iOS SplitNavigation.swift:125-146, 178-208: a sidebar value replaces the detail stack immediately;
+                // only the overlaid list slides away with Theme.Motion.layout. Keep this scene's key fixed.
                 if (detail != null) detail.Content() else emptyDetail()
             }
         }

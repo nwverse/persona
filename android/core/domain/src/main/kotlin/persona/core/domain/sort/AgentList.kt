@@ -57,14 +57,19 @@ enum class AgentSort {
 
 enum class AgentGrouping {
     Repo, MachineSpace, State, Todo,
+    /**
+     * By Machine (#9319, iOS `DevGrouping.machine`): one foldable section per computer with live agents, flat rows in the
+     * list's sort order, idle agents behind "N more idle".
+     */
+    Machine,
     /** By App (#9199, iOS `DevGrouping.app`): a section per desktop app, then terminal engines, then Other. */
     App,
     /** Recently Used (#9199, iOS `DevGrouping.recent`): one flat latest-first list, no group headings. */
     Recent,
     /** The hub's direction tree (#4352): direction › to-do › agent, the rest under "No to-do"; never the default. */
     Direction,
-    // Retained for callers of the original list projection; stored preferences migrate to MachineSpace.
-    Space, Machine;
+    // Retained for callers of the original list projection; a stored "Space" preference migrates to MachineSpace.
+    Space;
 
     companion object {
         /** A phone that never chose a grouping gets "By repository" (#2252, as iOS #2108); any stored choice keeps its own. */
@@ -72,13 +77,17 @@ enum class AgentGrouping {
             null, Repo.name -> Repo
             State.name -> State
             Todo.name -> Todo
+            Machine.name -> Machine
             App.name -> App
             Recent.name -> Recent
             Direction.name -> Direction
             else -> MachineSpace
         }
-        /** Menu order: existing groupings, then By App and Recently Used before By pinned (iOS puts them before direction). */
-        val selectable = listOf(Repo, MachineSpace, State, Todo, App, Recent, Direction)
+        /**
+         * Menu order matches iOS `DevGrouping` relative to the groupings Android shows: By Machine after By to-do and
+         * before By App / Recently Used / By pinned (#9319).
+         */
+        val selectable = listOf(Repo, MachineSpace, State, Todo, Machine, App, Recent, Direction)
     }
 }
 
@@ -173,8 +182,9 @@ data class AgentMachineGroup(
  */
 fun agentRank(session: AgentSession, mutes: AgentPreferences = AgentPreferences()): Int = when {
     session.state == AgentState.NeedsYou -> 0
-    (session.state == AgentState.Working || session.state == AgentState.Unread || session.isWaiting) && mutes.mutes(session) -> 6
-    session.state == AgentState.Unread -> 1
+    (session.state == AgentState.Working || session.state == AgentState.Unread ||
+        session.isQuiet && session.heldInList || session.isWaiting) && mutes.mutes(session) -> 6
+    session.state == AgentState.Unread || session.isQuiet && session.heldInList -> 1
     session.awaitsReply(mutes) -> 2
     session.state == AgentState.Working -> if (session.waitsInBackground) 4 else 3
     session.isWaiting -> 5
@@ -215,8 +225,10 @@ fun buildAgentList(
     settings: AgentListSettings = AgentListSettings(), todos: List<Todo> = emptyList(),
     /** The hub's direction tree, which "By direction" ([AgentGrouping.Direction]) is built from; null: none to group by. */
     directions: DirectionTree? = null,
+    /** The open agent that was Unread when opened (iOS `AgentListOrder.held`), until its chat is left. */
+    held: String? = null,
 ): AgentListResult {
-    val listed = foldRows(sessions, settings.hierarchy)
+    val listed = foldRows(sessions.map { it.copy(heldInList = it.id == held) }, settings.hierarchy)
     // By App and Recently Used list every agent (offline included), so a subtask hangs under its parent even when the
     // parent is offline (iOS `CodexTasks.build` with `runs: nil`).
     val runs: ((AgentSession) -> Boolean)? = when (settings.grouping) {
@@ -468,11 +480,30 @@ fun buildFlatAgentList(
             }
             noTodo(live.filter { it.session.key !in placed }, above)
         }
-        AgentGrouping.Machine -> (if (latest) machines.sortedByDescending { m ->
-            live.filter { it.session.machineId == m.id }.mapNotNull { it.sortDate }.maxOrNull() } else machines).forEach { machine ->
-            val rows = ordered(live.filter { it.session.machineId == machine.id })
-            if (rows.isNotEmpty()) result += group("machine/${machine.id}", CoreText.plain(machine.name), rows,
-                if (quick || showIdle("machine-${machine.id}")) rows else rows.filter(::stays))
+        AgentGrouping.Machine -> {
+            // iOS `machineSections` / `machineOrder`: computers that have live agents, in hub order; under Recently
+            // Updated the one with the latest agent first. Flat rows (no project/engine tabs), idle folded behind
+            // "N more idle" with key `machine-<id>` (AgentsViewModel.idleKey).
+            val shown = (if (latest) machines.sortedByDescending { m ->
+                live.filter { it.session.machineId == m.id }.mapNotNull { it.sortDate }.maxOrNull()
+            } else machines).filter { m -> live.any { it.session.machineId == m.id } }
+            shown.forEach { machine ->
+                val rows = ordered(live.filter { it.session.machineId == machine.id })
+                val id = "machine/${machine.id}"
+                val folded = id in settings.folded
+                val idleKey = "machine-${machine.id}"
+                val idle = if (quick || settings.query.isNotEmpty()) emptyList() else rows.filterNot(::stays)
+                val visible = when {
+                    folded -> emptyList()
+                    quick || showIdle(idleKey) -> rows
+                    else -> rows.filter(::stays)
+                }
+                // stateCounts stays null: the shared agents_list fixtures and Rust/iOS/Harmony projections emit none for
+                // Machine groups; the Agents screen counts from [rows] for the section header (#9319 rework).
+                result += AgentListGroup(id, CoreText.plain(machine.displayName), rows, visible, folded,
+                    idleFold = idle.takeIf { it.isNotEmpty() }?.let { IdleFold(it, open = idleKey in settings.expandedIdle) },
+                    waitingInBackground = waiting(rows))
+            }
         }
         AgentGrouping.App -> {
             // Offline included (iOS By App): every unpinned row the filter left, not only live ones.

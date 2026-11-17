@@ -126,6 +126,9 @@ build() {
   version="$(git describe --tags --match 'v[0-9]*' --always --dirty)-$(date +%Y%m%d%H%M)"
   if [ "${UNIVERSAL:-}" = 1 ]; then archs=(arm64 x86_64); else archs=("$(uname -m)"); fi
   mkdir -p "$OUT"
+  # The runtime packages persona-node carries, the Claude Code plugin among them (docs/operations/link.md "Claude Code
+  # plugin"); without this the node builds with none and says the plugin is unavailable.
+  (cd server && go generate ./internal/runtimepkg)
   for a in "${archs[@]}"; do
     local goarch=$a
     [ "$a" = x86_64 ] && goarch=amd64

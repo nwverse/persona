@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -45,8 +47,44 @@ class HomeChrome(
 
 val LocalHomeChrome = staticCompositionLocalOf<HomeChrome?> { null }
 val LocalHomeDrawer = staticCompositionLocalOf { false }
-/** Only a list-picked root under an overlaid column replaces Back with the existing sidebar control. */
-val LocalPaneListToggle = staticCompositionLocalOf<(() -> Unit)?> { null }
+
+/**
+ * Split-pane context for a detail page in a two-pane or overlaid list-detail layout (matching iOS `SplitDetail`).
+ * Null in single-pane layouts, sheets, full-screen overlays, or sub-views (e.g. Files/Git) that keep their own Back.
+ */
+@Immutable
+data class SplitDetailContext(
+    val isFirstPage: Boolean,
+    val listHidden: Boolean = false,
+    val onShowList: (() -> Unit)? = null,
+)
+
+val LocalSplitDetail = compositionLocalOf<SplitDetailContext?> { null }
+
+/** Leading header control resolved from [SplitDetailContext] and a page's own [onBack] callback. */
+sealed interface DetailLeading {
+    data object Hidden : DetailLeading
+    data class ShowList(val onClick: () -> Unit) : DetailLeading
+    data class Back(val onClick: () -> Unit) : DetailLeading
+}
+
+/**
+ * Resolves the leading header control for a detail page (matching iOS `hidesBack` / `backShowsList`):
+ * - First page with the list shown beside it: [DetailLeading.Hidden].
+ * - First page with the list hidden or overlaid: [DetailLeading.ShowList] to bring the list back.
+ * - Pushed page, compact/single-pane layout, or no split context: [DetailLeading.Back].
+ */
+fun resolveDetailLeading(split: SplitDetailContext?, onBack: (() -> Unit)?): DetailLeading? {
+    if (onBack == null) return null
+    if (split != null && split.isFirstPage) {
+        if (split.listHidden) {
+            split.onShowList?.let { return DetailLeading.ShowList(it) }
+        } else {
+            return DetailLeading.Hidden
+        }
+    }
+    return DetailLeading.Back(onBack)
+}
 
 @Composable
 private fun drawerSpec(): FiniteAnimationSpec<Float> = drawerSpec(PersonaTheme.style, PersonaTheme.reduceMotion)
@@ -117,7 +155,7 @@ fun JSidebarColumn(
     content: @Composable () -> Unit,
 ) {
     val progress by animateFloatAsState(if (shown) 1f else 0f,
-        drawerSpec(), label = "sidebar-column")
+        sidebarColumnSpec(PersonaTheme.style, PersonaTheme.reduceMotion), label = "sidebar-column")
     val palette = PersonaTheme.palette
     val visible = sidebar != null && progress > 0f
     val modal = sidebar != null && overlay && shown

@@ -12,6 +12,9 @@ import PersonaWire
 /// nothing, fields, search, filter and more are not drawn; links open as usual.
 struct ExtensionViewRenderer: View {
     @Environment(\.assistantHTMLRendering) private var htmlContext
+    /// UI version 8: the page's width, where its page measured it (rows side by side need it), and the text size.
+    @Environment(\.extensionPageWidth) private var pageWidth
+    @Environment(\.dynamicTypeSize) private var typeSize
     var view: ExtensionView
     var model: (any ExtensionViewControlling)?
     /// The first section's title when it has none of its own (a launcher's section: what the extension calls it).
@@ -34,16 +37,46 @@ struct ExtensionViewRenderer: View {
         }
         ForEach(ExtensionParts.of(view, heading: heading, includeHTML: htmlContext != nil)) { g in
             Section {
-                ForEach(g.items) { item in
-                    ExtensionItemRow(item: item.component, model: model, link: $link)
+                if sideBySide(g) {
+                    // UI version 8: a run of rows side by side is one list row (no hairlines between them, as on the
+                    // web); each row's button is its own (borderless), and a swipe would move them all.
+                    ForEach(ExtensionPartsBlock.of(g.items, columns: g.columns)) { block in
+                        switch block.content {
+                        case .one(let item): ExtensionItemRow(item: item.component, model: model, link: $link)
+                        case .rows(let items):
+                            ExtensionColumnsLayout(most: g.columns, minimum: ExtensionColumns.minimum(typeSize)) {
+                                ForEach(items) { item in
+                                    ExtensionItemRow(item: item.component, model: model, link: $link)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .environment(\.extensionRowSwipes, false)
+                        }
+                    }
+                } else {
+                    ForEach(g.items) { item in
+                        ExtensionItemRow(item: item.component, model: model, link: $link)
+                    }
                 }
                 if let more = g.more, let model { ExtensionMoreRow(more: more, model: model, link: $link) }
             } header: {
-                if let t = g.title, !t.isEmpty { SettingsHeading(t) }
+                // UI version 8: a section's icon and link beside its title; one without them keeps its plain title.
+                if let s = g.head {
+                    ExtensionSectionHead(section: s, title: g.title, place: .list, model: model, link: $link)
+                } else if let t = g.title, !t.isEmpty { SettingsHeading(t) }
             } footer: {
                 if let f = g.footer, !f.isEmpty { Text(f) }
             }
         }
+    }
+
+    /// The part's rows go side by side: its section asks for it (`columns`) and its page is wide enough for two.
+    private func sideBySide(_ g: ExtensionParts) -> Bool {
+        guard g.columns > 1, let pageWidth else { return false }
+        return ExtensionColumns.count(width: ExtensionColumns.listRowWidth(pageWidth), minimum: ExtensionColumns.minimum(typeSize),
+                                      gap: Theme.Space.m, most: g.columns) > 1
     }
 }
 
@@ -66,6 +99,10 @@ struct ExtensionParts: Identifiable {
     var footer: String?
     var more: ExtensionMore?
     var items: [Item]
+    /// UI version 8: the section, on its first part, when its title has an icon or a link beside it.
+    var head: ExtensionSection? = nil
+    /// UI version 8: how many of its rows sit side by side where there is room (its section's `columns`).
+    var columns = 1
 
     static func of(_ view: ExtensionView, heading: String? = nil, includeHTML: Bool = false) -> [ExtensionParts] {
         var out: [ExtensionParts] = []
@@ -91,7 +128,8 @@ struct ExtensionParts: Identifiable {
                 let title = j == 0 ? (s.title?.isEmpty == false ? s.title : (out.isEmpty ? heading : nil)) : nil
                 let last = j == parts.count - 1
                 out.append(ExtensionParts(id: s.key.map { "k:" + $0 + ".part:\(j)" } ?? "\(out.count)", title: title, footer: last ? s.footer : nil, more: last ? s.more : nil,
-                                          items: part))
+                                          items: part, head: j == 0 && ExtensionSectionHead.wanted(s) ? s : nil,
+                                          columns: ExtensionColumns.rowColumns(s)))
             }
         }
         return out
@@ -442,28 +480,18 @@ struct ExtensionViewStack: View {
                 let i = entry.index
                 let s = entry.section
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    if titles ?? cards, let t = (s.title?.isEmpty == false ? s.title : (i == 0 ? heading : nil)), !t.isEmpty {
+                    let title = titles ?? cards ? (s.title?.isEmpty == false ? s.title : (i == 0 ? heading : nil)) : nil
+                    if ExtensionSectionHead.wanted(s) {
+                        // UI version 8: its icon and link beside the title; with them, a card that draws no section
+                        // titles (an overview card) shows the section's own, so the link says where it goes.
+                        ExtensionSectionHead(section: s, title: title ?? s.title, place: .stack, model: model, link: $link)
+                            .padding(.horizontal, Theme.Space.xs)
+                    } else if let t = title, !t.isEmpty {
                         Text(t).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
                             .padding(.horizontal, Theme.Space.xs)
                     }
-                    let items = s.items.enumerated().compactMap { j, item -> ExtensionParts.Item? in
-                        if case .unknown = item { return nil }
-                        if case .html = item, htmlContext == nil { return nil }
-                        return ExtensionParts.Item(id: ExtensionParts.Item.id(item, section: i, index: j), component: item)
-                    }
-                    if !items.isEmpty || (s.more != nil && model != nil) {
-                        let body = VStack(alignment: .leading, spacing: Theme.Space.m) {
-                            ForEach(items) { entry in
-                                Group {
-                                    if case .divider = entry.component { Divider() } else {
-                                        ExtensionItemRow(item: entry.component, model: model, link: $link)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }
-                                .transition(.opacity)
-                            }
-                            if let more = s.more, let model { ExtensionMoreRow(more: more, model: model, link: $link) }
-                        }
+                    if s.items.contains(where: { !Self.leftOut($0, html: htmlContext != nil) }) || (s.more != nil && model != nil) {
+                        let body = ExtensionSectionItems(section: s, index: i, model: model, link: $link)
                         if cards { body.card() } else { body }
                     }
                     if let f = s.footer, !f.isEmpty {
@@ -476,6 +504,14 @@ struct ExtensionViewStack: View {
         // Drawn again with blocks that came or went, they fade in and out and the rest moves (#37); a model's redraw
         // comes animated already (`ExtensionMotion.redraw`), this covers a View changed by its caller (a card).
         .animation(reduceMotion ? nil : Theme.Motion.layout, value: ExtensionMotion.blocks(view))
+    }
+
+    /// A component left out of a section (`ExtensionSectionItems` draws the rest): one this app does not know, and the
+    /// assistant's HTML outside its chat.
+    nonisolated static func leftOut(_ c: ExtensionComponent, html: Bool) -> Bool {
+        if case .unknown = c { return true }
+        if case .html = c, !html { return true }
+        return false
     }
 }
 
@@ -614,6 +650,10 @@ struct ExtensionPageView: View {
                     // One container, so that the page's own identifier (extension-ui-ready) stays on it and does not
                     // replace its first control's (it took the back row's and the code's).
                     .accessibilityElement(children: .contain)
+            } else if let v = page.view, v.wantsPageWidth {
+                // UI version 8 (#9158): a columns view is a grid of cards once the page is wide enough, its list
+                // otherwise; a section's rows go side by side by the same width.
+                ExtensionWidthPage(view: v, model: page, link: $link) { form }
             } else {
                 form
             }

@@ -56,7 +56,7 @@ class SidebarColumnTest {
         var toggles = 0
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
-                CompositionLocalProvider(LocalPaneListToggle provides { toggles++ }) {
+                CompositionLocalProvider(LocalSplitDetail provides SplitDetailContext(isFirstPage = true, listHidden = true, onShowList = { toggles++ })) {
                     val close = { backs++; opened = false }
                     if (opened) {
                         if (sheet) JSheet(onDismiss = close) { JTopBar("Sheet", onBack = close) }

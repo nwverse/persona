@@ -116,10 +116,14 @@ fun ChatTopBar(
             }
         }
     }
-    val listToggle = LocalPaneListToggle.current
+    val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val back: @Composable () -> Unit = {
-        if (listToggle != null) JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), listToggle)
-        else onBack?.let { JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), it) }
+        when (leading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick)
+            is DetailLeading.Back -> JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), leading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> Unit
+        }
     }
     when (style) {
         AppStyle.Glass -> Box(modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp.dense, vertical = 6.dp.dense)) {
@@ -205,7 +209,13 @@ fun WorkGroup(
     terminalLabel: String = "",
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val body: @Composable ColumnScope.() -> Unit = { if (expanded) content() else peek?.invoke(this) }
+    // Content under the header fades over the space it takes (iOS ToolGroupView ForEach.unfolding, ToolViews.swift:342,
+    // via toggleInPlace, ChatPin.swift:707-726). Folding removes it at once. Sibling chat-list steps are not this slot.
+    val edge = rememberOpenEdge()
+    val revealing = edge.revealing(expanded)
+    val body: @Composable ColumnScope.() -> Unit = {
+        if (expanded) Column(Modifier.unfolding(revealing)) { content() } else peek?.invoke(this)
+    }
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val spoken = stringResource(R.string.designsystem_with_state, summary,
@@ -250,13 +260,13 @@ fun WorkGroup(
         }
     }
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Column(modifier.fillMaxWidth().animateContentSize(PersonaTheme.motion.size())) { glassHeader(); body() }
-        AppStyle.Brief -> Column(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm).animateContentSize(PersonaTheme.motion.size())) {
+        AppStyle.Glass -> Column(modifier.fillMaxWidth()) { glassHeader(); body() }
+        AppStyle.Brief -> Column(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm)) {
             header(); if (expanded || peek != null) { Spacer(Modifier.height(4.dp.dense)); body() }
         }
         AppStyle.Board -> Column(
             modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm).clip(RoundedCornerShape(10.dp.corner)).background(palette.surface)
-                .border(1.dp, palette.line, RoundedCornerShape(10.dp.corner)).animateContentSize(PersonaTheme.motion.size()),
+                .border(1.dp, palette.line, RoundedCornerShape(10.dp.corner)),
         ) { header(); body() }
     }
 }
