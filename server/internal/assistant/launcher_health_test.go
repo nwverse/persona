@@ -574,8 +574,8 @@ func TestLauncherHealthRecheckThrottleAndFailure(t *testing.T) {
 	}
 }
 
-// Unknown usage-limit resets keep their periodic cadence; a launcher missing from the terminal's shell cannot be
-// rechecked in the probe's login shell, where it runs fine.
+// A fresh usage limit waits for the recheck throttle (TestUsageLimitRuleUnknownResetIsRechecked: after it); a
+// launcher missing from the terminal's shell cannot be rechecked in the probe's login shell, where it runs fine.
 func TestLauncherHealthRecheckSkipsSpecialRecords(t *testing.T) {
 	s, f := launcherHealthHub(t)
 	ctx := context.Background()

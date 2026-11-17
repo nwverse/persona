@@ -23,8 +23,8 @@ func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher str
 	observed, _ := s.launcherHealth(ctx, machine, launcher)
 	params := map[string]any{"name": launcher}
 	if observed.Kind == errKindUsageLimit && observed.unusable() {
-		if model := usageLimitModel.FindStringSubmatch(observed.Error); model != nil {
-			params["model"] = strings.ToLower(model[1])
+		if models := observed.limitModels(); len(models) > 0 {
+			params["model"] = models[0] // one family per probe; a pass clears it and the next probe asks the next
 		}
 	}
 	var res proto.LauncherCheck
@@ -297,18 +297,16 @@ func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string
 
 // launcherUnusableNow is launcherUnusable after one on-the-spot probe of a failing record, for a start about to
 // move or be refused because of it: the record can lag behind a fix, so a pass clears it and the start stays on the
-// asked machine (#2018). Known usage-limit resets can be superseded by restored quota (#9386); fresh limit evidence
-// waits through the same throttle before probing. Unknown resets keep their periodic cadence. A terminal-shell
-// failure cannot be settled by the probe's login shell; only a real start clears it.
+// asked machine (#2018). A usage limit can be over before its reset, or with its reset unknown (#9386): it is probed
+// too, once its evidence is healthRecheckThrottle old, and the claim's throttle spaces the probes after that. A
+// terminal-shell failure cannot be settled by the probe's login shell; only a real start clears it.
 func (s *Service) launcherUnusableNow(ctx context.Context, machine, launcher string) (LauncherHealth, bool) {
 	r, bad := s.launcherUnusable(ctx, machine, launcher)
 	if !bad || r.Kind == errKindNotInTerminal {
 		return r, bad
 	}
-	if r.Kind == errKindUsageLimit {
-		if _, known := r.limitReset(); !known || time.Since(r.CheckedAt) < healthRecheckThrottle {
-			return r, bad
-		}
+	if r.Kind == errKindUsageLimit && time.Since(r.CheckedAt) < healthRecheckThrottle {
+		return r, bad
 	}
 	s.recheckLauncherNow(ctx, machine, launcher)
 	// The shared follow-up may have finished between the first read and the throttled claim. Decide from its

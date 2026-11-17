@@ -38,8 +38,18 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   If the probe passes (the launcher was fixed after the record, for example a CLI installed or a PATH corrected), the record is cleared to `ok` at once and the start stays on the asked machine.
   If it fails again, or the machine cannot answer, the usual reroute applies. Concurrent starts for the same machine × launcher wait for one probe (single flight), and a probe is not repeated
   within 30 seconds (`healthRecheckThrottle`), so a burst of starts does not turn into a burst of probes. This also covers the case where periodic checks are off: no manual button is needed.
-  A `usage_limit` with a known reset is also rechecked (#9386): quota can recover before `resets_at`, so a passing probe clears it early. Fresh limit evidence waits 30 seconds before any on-demand probe; subsequent attempts share the same throttle. A failed probe records its current usage-limit evidence, including a later reset, and still refuses a fixed-machine start without launching an Agent. Model-family limits (Opus, Sonnet, Haiku) request that family explicitly and clear only when the answering model matches; an older node or runtime that ignores the model cannot clear another family's limit. Probe results compare the record's pre-request timestamp under its lock, so a newer failure wins over an in-flight result. Admission rereads the published record rather than trusting the raw probe answer.
-  Two records are not rechecked this way: a `usage_limit` whose reset is unknown (it keeps the periodic cadence) and `not_in_terminal` (the probe's login shell cannot reproduce the terminal's failure; only a real successful start clears it).
+  A `usage_limit` is also rechecked (#9386), whether its reset is known or not: quota can recover before `resets_at`, so a passing probe clears it early. Fresh limit evidence waits 30 seconds before any on-demand probe; subsequent attempts share the same throttle. A failed probe still refuses a fixed-machine start without launching an Agent.
+  The record's usage-limit evidence (`limit_models`: the model families whose own limit is used up, none for a limit that names no family; `resets_at`) changes only by these rules:
+
+  | Evidence | What it may change |
+  | --- | --- |
+  | A new usage-limit failure (a probe, a start, an Agent's turn) | Error text and check time; adds the families it names; keeps the later of two known resets. Words that name no family or reset ("usage limit reached") take nothing away. |
+  | An older result (a probe whose record changed while it ran) | A usage-limit failure only adds families and a later reset to a limit in force. Anything else of it, a pass included, is dropped. |
+  | A pass (a probe, the apps' Test) taken against the current record | Clears the families of the model that answered; a limit that names no family clears on any answer. Families it does not cover stay limited, and the next probe asks for one of them. |
+  | Any other failure (timeout, auth, terminal) while a limit is in force | Nothing: it did not reach the quota. |
+
+  A probe for a family limit requests that family; an older node or runtime that ignores the model answers with another family and clears nothing. Probe results compare the record's pre-request timestamp under its lock. Admission rereads the published record rather than trusting the raw probe answer.
+  `not_in_terminal` is not rechecked this way: the probe's login shell cannot reproduce the terminal's failure; only a real successful start clears it.
 - An Agent's own usage limit is recorded too (#1710, source `session`): when a turn ends on the subscription's usage limit (`docs/assistant/agent-work.md` "Usage limits") with a reset still ahead,
   and the session names its launcher, that launcher on that computer is marked `usage_limit` until the reset. Nothing runs for it: no check (it would spend a request to be refused) and no repair.
   The main chat's conversations count as well (they run the computer's launcher under the same sign-in). Each turn a background task wakes meets the same limit again; it is recorded once.
@@ -134,7 +144,7 @@ set `default` if you want it to wait for your approval at every step. Member hub
 
 ## API for the board
 
-- `GET /api/v1/launchers/health?state=blocked&machine=`: all records (or filtered by state or computer), `{records: [{machine, launcher, state, kind, error, checked_at, source, fails, missing_fails?, repair?, blocked_reason?, resets_at?}]}`.
+- `GET /api/v1/launchers/health?state=blocked&machine=`: all records (or filtered by state or computer), `{records: [{machine, launcher, state, kind, error, checked_at, source, fails, missing_fails?, repair?, blocked_reason?, resets_at?, limit_models?}]}`.
 - `POST /api/v1/launchers/health/check?machine=&launcher=`: check right now (without parameters, all online computers), returns this run's results.
 - A state change broadcasts a `launcher_health` event (`{type, record}`, only to connected clients, not a push).
   The "decisions / blocked / progress" board reads `state=blocked` records, or subscribes to this event, to list what is blocked.

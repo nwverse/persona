@@ -110,6 +110,9 @@ type LauncherHealth struct {
 	// ResetsAt: Kind is errKindUsageLimit and this is when the limit resets (read off the check's words when they name a
 	// time zone, or an agent's own record of the limit): the launcher counts as unusable until then, and no longer after.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// LimitModels: Kind is errKindUsageLimit and these model families' own limits are used up (opus, sonnet, haiku);
+	// none: the limit names no family, and any model's answer shows it is over (recordHealth's merge rules).
+	LimitModels []string `json:"limit_models,omitempty"`
 }
 
 // LauncherFixed is the latest repair of a launcher.
@@ -314,6 +317,15 @@ func (r LauncherHealth) limitReset() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return *r.ResetsAt, true
+}
+
+// limitModels are the model families r's usage limit holds for; a record from before limit_models has them in its
+// error's words.
+func (r LauncherHealth) limitModels() []string {
+	if len(r.LimitModels) > 0 {
+		return r.LimitModels
+	}
+	return limitFamilies(r.Error)
 }
 
 // resetNote is how agents_list's lines and a detour's reason say when r's usage limit resets ("" without one):
