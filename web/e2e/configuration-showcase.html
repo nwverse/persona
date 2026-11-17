@@ -7,7 +7,7 @@
      ConfigurationForm draws them (#9877, docs/web/web.md "Configuration forms"), opened on the Vite dev server and never
      part of a build. The default view is three genuine-looking module documents over in-memory sources
      (configuration-showcase-data.mjs); nothing is read from or written to real settings or storage, and the mock framing
-     is deliberately not shown (the user asked for the real appearance). ?scenario= selects a coverage case
+     stays out of the rendered settings view. ?scenario= selects a coverage case
      (overview/default, slow, load-fail, reject, conflict, unconfirmed, contract, empty, unsupported); the navigation is
      not drawn. The page checks its own documents with the real parser and shows a red line if one is invalid.
      web/e2e/configuration-showcase.mjs drives and captures it. -->
