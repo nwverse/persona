@@ -136,6 +136,22 @@ func TestContextKeepsRecentBackgroundBeforeTheNewMessages(t *testing.T) {
 		t.Fatalf("quiet chat:\n%s\nwant\n%s", got, want)
 	}
 
+	// Search may print no positions: its copies of one minute's messages then order by id, the follow-up ("om_a…")
+	// before the request ("om_z…"), not as the chat has them. The new messages still start at the request.
+	request := message(10, 3, "can you review it?")
+	request.MessageID = "om_z_request"
+	ack := message(10, 3, "looking")
+	ack.Sender = adapter.Sender{ID: "ou_example_user", Name: "Example user"}
+	followup := message(10, 3, "still need it")
+	followup.MessageID = "om_a_followup"
+	unpositioned := func(m adapter.Message) adapter.Message { m.MessagePosition = ""; return m }
+	background := message(9, 20, "earlier question")
+	in := []adapter.Message{background, request, ack, followup}
+	if got, want := contextFor(in, []adapter.Message{unpositioned(followup), unpositioned(request)}, ""),
+		line(background)+"\n"+markNew+"\n"+line(request)+"\n"+contextText([]adapter.Message{ack}, "")+"\n"+line(followup); got != want {
+		t.Fatalf("search without positions:\n%s\nwant\n%s", got, want)
+	}
+
 	// Nothing earlier: no divider; and the new messages without fresh ones named are all new.
 	if got, want := contextFor(fresh, fresh, ""), lines(fresh...); got != want {
 		t.Fatalf("only new: %q, want %q", got, want)

@@ -1170,18 +1170,42 @@ const markNew = "—— 新消息 ——" // i18n-ignore: the divider the models
 // the first of fresh, the ones this round found; see contextHistory), markNew when there is any, then from the first of
 // fresh on. Without fresh every message is new.
 func contextFor(messages, fresh []adapter.Message, me string) string {
-	split := 0
-	if len(fresh) > 0 {
-		first := fresh[0]
-		for _, message := range fresh[1:] {
-			if messageLess(message, first) {
-				first = message
-			}
-		}
-		for split < len(messages) && messages[split].MessageID != first.MessageID && messageLess(messages[split], first) {
-			split++
+	return contextAround(messages, firstFresh(messages, fresh), me)
+}
+
+// firstFresh is where the new messages start in messages: at the first one that is one of fresh by id. Ordering fresh
+// itself cannot say: search may print no positions, so its copies of one minute's messages order by id, not as the
+// chat has them. Without ids, at the first message not before the earliest of fresh; without fresh, at the start.
+func firstFresh(messages, fresh []adapter.Message) int {
+	ids := make(map[string]bool, len(fresh))
+	for _, message := range fresh {
+		if message.MessageID != "" {
+			ids[message.MessageID] = true
 		}
 	}
+	for i, message := range messages {
+		if ids[message.MessageID] {
+			return i
+		}
+	}
+	if len(fresh) == 0 {
+		return 0
+	}
+	first := fresh[0]
+	for _, message := range fresh[1:] {
+		if messageLess(message, first) {
+			first = message
+		}
+	}
+	split := 0
+	for split < len(messages) && messageLess(messages[split], first) {
+		split++
+	}
+	return split
+}
+
+// contextAround is contextFor's text, the new messages starting at messages[split].
+func contextAround(messages []adapter.Message, split int, me string) string {
 	earlier, recent := messages[:split], messages[split:]
 	// the earlier ones kept start at from: the last contextEarlier, less those older than contextHistory before the first
 	// new message (or of no known time), but never fewer than contextEarlierKeep
