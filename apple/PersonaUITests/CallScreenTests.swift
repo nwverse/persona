@@ -158,6 +158,47 @@ final class CallScreenTests: XCTestCase {
         small.terminate()
     }
 
+    // MARK: Long texts
+
+    /// An Agent session's long title, a long answer, a long reason and an urgent call's long title (#9887's polish), in
+    /// the samples' places: `-showCallSampleName`, `-showCallSampleCaption`, `-showCallSampleReason`,
+    /// `-showUrgentCallSampleTitle`.
+    private static let longName = "重构支付服务的订单对账模块并补齐集成测试和回归用例"
+    private static let longCaption = "我看了一下，对账模块的问题出在部分退款的金额汇总上，昨晚的批次里有十七笔对不上。"
+        + "这几笔的流水号和订单号我已经整理好，放在会话里了。修复的办法是按支付渠道分别汇总，再补一组覆盖部分退款的集成测试。"
+        + "回归用例我列了二十条，全部跑完大约要四十分钟。要不要我现在就开始改？"
+    private static let longReason = "这台电脑上的语音扩展一直没有响应，已经自动重试了三次仍然失败，请确认电脑在线后再打一次"
+    private static let longUrgentTitle = "生产环境支付服务的订单对账任务连续三次失败，需要你决定是否回滚到昨天的版本并暂停今晚的批量结算"
+    private static let longTexts = ["-showCallSampleName", longName, "-showCallSampleCaption", longCaption,
+                                    "-showCallSampleReason", longReason]
+
+    /// The long texts on the connected call screen, the ended one, the bar over the main conversation and the urgent call's
+    /// page, at the app's own text size and the largest (`long-<what>[-ax].png`): the screenshots before and after the
+    /// layout's polish. The urgent page needs the mock's call too (MOCK_URGENT_CALL=1).
+    @MainActor func testTheLongTexts() throws {
+        for largest in [false, true] {
+            let suffix = largest ? "-ax" : ""
+            for state in ["connected", "ended"] {
+                let app = try sample(state, largest: largest, args: Self.main + Self.longTexts)
+                shot("long-\(state)\(suffix)", app)
+                app.terminate()
+            }
+            let app = try sample("connected", largest: largest, args: Self.main + Self.longTexts)
+            app.buttons["call-minimise"].tap()
+            XCTAssertTrue(app.buttons["call-return-bar"].waitForExistence(timeout: 10), "no bar back to the call\n\(app.debugDescription)")
+            Thread.sleep(forTimeInterval: 1.5)
+            shot("long-bar\(suffix)", app)
+            app.terminate()
+
+            let urgent = try launch(Self.main + ["-showUrgentCallSample", "YES", "-showUrgentCallSampleTitle", Self.longUrgentTitle],
+                                    largest: largest)
+            XCTAssertTrue(urgent.buttons["urgentCall.hangUp"].waitForExistence(timeout: 30), "no urgent call page\n\(urgent.debugDescription)")
+            Thread.sleep(forTimeInterval: 1.5)
+            shot("long-urgent\(suffix)", urgent)
+            urgent.terminate()
+        }
+    }
+
     /// `Theme.Size.callControl` and `tapTarget` at the default text size (the UI tests do not link the app's tokens).
     private static let control: CGFloat = 72
     private static let tapTarget: CGFloat = 44

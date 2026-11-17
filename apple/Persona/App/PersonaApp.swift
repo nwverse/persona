@@ -184,12 +184,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let d = UserDefaults.standard
         #if os(iOS)
         // `-showUrgentCallSample YES|held`: the urgent call page, from the mock hub (UrgentCallCenter.showSample); `held`
-        // on hold with Resume.
+        // on hold with Resume. `-showUrgentCallSampleTitle <text>`: its title instead of the mock's (a long one).
         let urgentSampleHeld = d.string(forKey: "showUrgentCallSample") == "held"
         if d.bool(forKey: "showUrgentCallSample") || urgentSampleHeld {
+            let title = d.string(forKey: "showUrgentCallSampleTitle")
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                UrgentCallCenter.shared.showSample(held: urgentSampleHeld)
+                UrgentCallCenter.shared.showSample(held: urgentSampleHeld, title: title)
             }
         }
         // `-openOwnerCall YES`: calls Persona (#9290) once the hub is there, as the main conversation's Call does (on the
@@ -208,11 +209,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended|speaking|…`: the call page's
-        // state, with no system and no audio (PersonaCalls.showSample).
+        // state, with no system and no audio (PersonaCalls.showSample). `-showCallSampleName <text>`,
+        // `-showCallSampleCaption <text>`, `-showCallSampleReason <text>`: the name (the page's and the bar's), the latest
+        // words and why it ended, instead of the sample's own (long texts for the screenshots).
         if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
+            let name = d.string(forKey: "showCallSampleName"), caption = d.string(forKey: "showCallSampleCaption")
+            let reason = d.string(forKey: "showCallSampleReason")
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                PersonaCalls.shared.showSample(sample)
+                PersonaCalls.shared.showSample(sample, name: name, caption: caption, reason: reason)
             }
         }
         #endif

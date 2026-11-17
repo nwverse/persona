@@ -277,12 +277,15 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
 - `-showCallSample <state>`: the call screen with no system, audio or hub: `dialing`, `connecting`, `connected`,
   `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`
   (the assistant speaking, its ring swelling) (`PersonaCalls.showSample`). A sample guards nothing ("Nothing in the app
-  ends a call").
+  ends a call"). `-showCallSampleName <text>`, `-showCallSampleCaption <text>` and `-showCallSampleReason <text>` put
+  long texts in the sample's name (the page's and the bar's), latest words and end reason (`CallScreenTests`'
+  `testTheLongTexts`).
 - `-openOwnerCall YES`: calls Persona once the hub is there, as a redial would (in the Simulator through
   `SimulatedCallSystem`); `-openOwnerCallSeconds <n>` hangs up n seconds after it connected.
 - `-showSystemCallService YES`: the Simulator on the real LiveCommunicationKit (it ends every call, see above).
 - `-showUrgentCallSample YES`: the answered urgent call's page (Mute, Speaker, Hang Up); `held`: on hold after an
-  interruption its audio did not come back from (On Hold, with Resume beside them).
+  interruption its audio did not come back from (On Hold, with Resume beside them). `-showUrgentCallSampleTitle <text>`:
+  its title instead of the mock's.
 
 ## Tests
 

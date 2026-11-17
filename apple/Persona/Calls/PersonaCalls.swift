@@ -15,7 +15,12 @@ import os
     let assistant: CallAssistant
     /// The assistant's name as the call carries it (`CallHandle.name`): what the system's call UI, the Lock Screen and
     /// Recents show, and what the call screen and the bar say under its look.
-    var name: String { assistant.name }
+    var name: String {
+        #if DEBUG
+        if let sampleName { return sampleName }
+        #endif
+        return assistant.name
+    }
     private(set) var phase: CallPhase
     private(set) var muted = false
     /// On hold, and why (the system's pause first).
@@ -50,6 +55,8 @@ import os
     /// A sample has no voice: what one would show, its connection being picked up again and its latest caption.
     fileprivate(set) var sampleReconnecting = false
     fileprivate(set) var sampleCaption: String?
+    /// A sample's name in the assistant's place (`-showCallSampleName`): a long one, for the screenshots.
+    fileprivate(set) var sampleName: String?
     /// A sample of the assistant speaking (its ring swelling as with a voice at this level).
     fileprivate(set) var sampleSpeaking = false
     var sampleLevel: Double { sampleSpeaking ? 0.6 : 0 }
@@ -629,10 +636,14 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     }
 
     /// A call to Persona's page in each of its states, with no system, no audio and no hub (`-showCallSample <state>`).
-    func showSample(_ sample: Sample) {
+    /// `name`, `caption` and `reason` stand in for the assistant's name (on the page and the bar), its latest words and
+    /// why the call ended (`-showCallSampleName`, `-showCallSampleCaption`, `-showCallSampleReason`): long texts for the
+    /// screenshots.
+    func showSample(_ sample: Sample, name: String? = nil, caption: String? = nil, reason: String? = nil) {
         for old in calls where old.sample { remove(old) }
         let call = add(kind: .owner(group: AppModel.shared.hub?.group ?? ""), direction: .outgoing)
         call.sample = true
+        call.sampleName = name
         let now = clock.now
         var events: [CallEvent] = []
         if sample != .dialing { events += [.known, .startAction] }
@@ -651,7 +662,7 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
             // Connected 42 seconds ago, as the urgent call's sample.
             _ = call.machine.handle(event, at: event == .voiceReady ? now.addingTimeInterval(-42) : now)
         }
-        if sample == .ended { call.note = String(localized: "Can't reach the hub") }
+        if sample == .ended { call.note = reason ?? String(localized: "Can't reach the hub") }
         switch sample {
         case .speaker, .mutedSpeaker: route.show(.speaker)
         case .audioRoute: route.show(.bluetooth("AirPods Pro")) // i18n-ignore: a device's name in a DEBUG sample
@@ -660,7 +671,7 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         call.sampleReconnecting = sample == .reconnecting
         call.sampleSpeaking = sample == .speaking
         if call.machine.phase.connectedSince != nil {
-            call.sampleCaption = "好的，明早九点的会我帮你改到十点了，也跟大家说了一声。" // i18n-ignore: a DEBUG sample's caption
+            call.sampleCaption = caption ?? "好的，明早九点的会我帮你改到十点了，也跟大家说了一声。" // i18n-ignore: a DEBUG sample's caption
         }
         call.sync()
         presented = true
