@@ -129,15 +129,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val mailTransport by repository.mailTransport.collectAsStateWithLifecycle()
 
     val haptics = rememberHaptics()
-    fun refresh(collectNow: Boolean = true) {
-        if (refreshing) return
-        refreshing = true
+    /**
+     * [pull] drives the list's pull indicator. A background refresh must not: iOS shows that indicator
+     * only from `.refreshable` (`InboxView.swift:916`) and a center progress only while the list is empty
+     * (`InboxView.swift:917`). The empty list already uses `JLoading` via `loadingFirst`.
+     */
+    fun refresh(collectNow: Boolean = true, pull: Boolean = true) {
+        if (pull && refreshing) return
+        if (pull) refreshing = true
         scope.launch {
             try { if (collectNow) repository.refreshNow() else repository.refresh(); error = null }
             catch (e: CancellationException) { throw e }
-            // Background refreshes stay quiet; a pull or tap reports its result.
             catch (e: Exception) { error = res.getString(R.string.inbox_refresh_failed) }
-            finally { refreshing = false }
+            finally { if (pull) refreshing = false }
         }
     }
     val failedCompletions = remember(repository) {
@@ -200,7 +204,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
     if (showRules) InboxRulesSheet(repository, onDismiss = { showRules = false })
     ruleTarget?.let { InboxPolicySheet(repository, it, onDismiss = { ruleTarget = null }) }
-    LaunchedEffect(repository) { refresh(collectNow = false) }
+    LaunchedEffect(repository) { refresh(collectNow = false, pull = false) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
     fun allTargets(shown: List<InboxGroup>) = shown.filter { it.id != "done" }.flatMap { it.rows }

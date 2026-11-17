@@ -21,6 +21,18 @@ internal class AppNavigator(
     /** Returns true when the Persona home shows this conversation itself; the flag says whether to switch to it. */
     private val openAssistant: (ChatRoute, Boolean) -> Boolean = { _, _ -> false },
     inboxReturns: List<ChatRoute>? = null,
+    /**
+     * Regular width: a route to a sidebar place (or a child of one) switches that root instead of pushing
+     * onto whatever root is in front. Returns true when it did, so the caller must not also push.
+     * iOS selects the place, then sets the path (`AssistantView` open-from-outside, AssistantView.swift:601–605).
+     */
+    private val openPlace: (NavKey) -> Boolean = { false },
+    /**
+     * Regular width, the stack is only a place root: Back switches to the conversation instead of leaving
+     * the app. iOS `leavePlace` selects the conversation with the place's path (`AssistantView.swift:680–686`)
+     * after `assistantReveal` (`AppModel.swift:427–429`, 1355–1362). Returns true when it switched.
+     */
+    private val leavePlaceRoot: () -> Boolean = { false },
 ) : Navigator {
     /**
      * Pages [navigate] pushed onto another tab's stack, and the tab each was opened from: back from such a page returns
@@ -203,6 +215,9 @@ internal class AppNavigator(
         // The sourced-Persona path does not use Router.restore, but an already-visible kindless reopen needs the same
         // exact-key retention. A page buried below a newer detail keeps the existing push/pop chain behavior.
         val retained = if (chat?.kind == null) stack.lastOrNull()?.takeIf { sameKindlessTarget(it, route) } else null
+        // A place route at regular width replaces the root. Pushing it here would insert Inbox under To-dos
+        // once restoreSecondaryParents runs (Router.kt:203–227). A drill on the place already in front returns false.
+        if (target == AppTab.Persona && openPlace(route)) return retained ?: route
         if (retained == null && stack.last() != route) stack.add(route)
         restoreSecondaryParents(stack)
         return retained ?: route
@@ -258,7 +273,11 @@ internal class AppNavigator(
     override fun back() {
         val from = selectedTab()
         val stack = stacks.getValue(from)
-        if (stack.size <= 1) return
+        if (stack.size <= 1) {
+            // A pushed page pops. A place that is the whole stack switches to the conversation (item 4, item 5).
+            if (from == AppTab.Persona) leavePlaceRoot()
+            return
+        }
         val page = stack.removeAt(stack.lastIndex)
         val origin = openedFrom.remove(page)
         val source = inboxSource(page)

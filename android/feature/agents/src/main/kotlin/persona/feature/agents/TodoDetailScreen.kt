@@ -92,7 +92,7 @@ fun TodoDetailScreen(
     }
 
     if (todo == null) {
-        JPage(title = stringResource(R.string.agents_todo_detail), onBack = if (LocalRootLeading.current != null) null else onBack) {
+        JPage(title = stringResource(R.string.agents_todo_detail), onBack = if (LocalIsSidebarRoot.current) null else onBack) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 JEmptyState(stringResource(R.string.agents_todo_gone), stringResource(R.string.agents_todo_gone_hint))
             }
@@ -169,7 +169,7 @@ fun TodoDetailScreen(
 
     JPage(
         title = stringResource(R.string.agents_todo_detail),
-        onBack = if (LocalRootLeading.current != null) null else onBack,
+        onBack = if (LocalIsSidebarRoot.current) null else onBack,
         actions = {
             JIconButton(PhIcons.DotsThree, stringResource(R.string.agents_todo_more), { menuOpen = true })
         },

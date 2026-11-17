@@ -241,7 +241,14 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val assistantStack = rememberNavBackStack(AssistantRoute,
         *listOfNotNull(saved.chats[AppTab.Persona]?.takeIf { !embeddedAssistant }).toTypedArray())
     val agentsStack = rememberNavBackStack(AgentsRoute, *listOfNotNull(saved.chats[AppTab.Agents]).toTypedArray())
-    val stacks = mapOf(AppTab.Persona to assistantStack, AppTab.Agents to agentsStack)
+    // Each regular-width root keeps its own stack. Persona points at whichever one is in front.
+    val hosts = remember { SidebarRootHosts(assistantStack) }
+    val stacks = remember {
+        mutableStateMapOf<AppTab, MutableList<NavKey>>(AppTab.Persona to assistantStack, AppTab.Agents to agentsStack)
+    }
+    // Not saveable: pageRoots is remember, so a saved flag would skip adopt after process death (item 7).
+    val adoptedVisibleRoot = remember { mutableStateOf(false) }
+    var pendingPlace by remember { mutableStateOf<NavKey?>(null) }
     val sidebar = remember { AssistantSidebarHost() }
     val sidebarOperations = rememberCoroutineScope()
     val sidebarState = rememberSaveableStateHolder()
@@ -268,20 +275,70 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
     fun showAssistantHome() {
+        pendingPlace = null
+        if (hosts.current !== assistantStack) hosts.foldOntoConversation()
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
+        stacks[AppTab.Persona] = assistantStack
+        pageRoots.adoptVisible(AssistantRoute)
         selected = AppTab.Persona
+    }
+    /** Point Persona's navigator at the host now in front. */
+    fun showHost(root: NavKey, next: List<NavKey>) {
+        hosts.activate(root, next)
+        stacks[AppTab.Persona] = hosts.current
     }
     fun sidebarDestination(key: NavKey) {
         dismissSidebar()
+        pendingPlace = null
         selected = AppTab.Persona
+        // A drawer pick is a root too, so unfolding promotes it. A conversation drill is not marked.
+        pageRoots.markOpenedAsRoot(key)
         if (!windowRegular.value) {
             // The phone drawer still pushes the place over the conversation (sidebar-navigation.md section 6).
+            if (hosts.current !== assistantStack) hosts.foldOntoConversation()
             pushCompactSidebarPlace(assistantStack, key)
+            stacks[AppTab.Persona] = assistantStack
+            pageRoots.adoptVisible(AssistantRoute)
             return
         }
         // Regular width: replace the root. A switch is not animated; a re-pick pops (SidebarPageRoots.Step.animated).
-        val step = pageRoots.select(key, assistantStack.drop(1))
-        replaceBackStack(assistantStack, step.stack)
+        val step = pageRoots.select(key, hosts.current.drop(1))
+        showHost(step.root, step.stack)
+    }
+    /**
+     * A route to a place at regular width. Before the window is measured this remembers [key] and lets the
+     * compact push stand; the first regular frame applies it before promoting whatever sits above the conversation.
+     * Returns true when the caller must not also push.
+     */
+    fun openPlace(key: NavKey): Boolean {
+        val place = placeRootFor(key) ?: return false
+        pageRoots.markOpenedAsRoot(place)
+        if (!windowRegular.value) {
+            pendingPlace = key
+            return false
+        }
+        // Already on that place: a child is a drill. The place itself is a re-pick (pop to its root).
+        if (pageRoots.current == place && key != place) return false
+        val step = pageRoots.select(place, hosts.current.drop(1))
+        // A child opened from outside replaces the saved path (AssistantView.swift:601–605).
+        val next = if (key == place) step.stack else listOf(place, key)
+        showHost(place, next)
+        selected = AppTab.Persona
+        return true
+    }
+    /**
+     * The stack is only a place root. Switch to the conversation without a push or a pop
+     * (`leavePlace`, AssistantView.swift:680–686; `assistantReveal`, AppModel.swift:1355–1362).
+     */
+    fun leavePlaceRoot(): Boolean {
+        if (!windowRegular.value || selected != AppTab.Persona) return false
+        val stack = stacks.getValue(AppTab.Persona)
+        if (stack.size != 1) return false
+        val root = stack.firstOrNull() ?: return false
+        if (root == AssistantRoute) return false
+        val step = pageRoots.select(AssistantRoute, emptyList())
+        showHost(step.root, step.stack)
+        return true
     }
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
@@ -317,14 +374,16 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun openAssistant(key: NavKey, select: Boolean): Boolean {
         val conversation = assistantTarget(key) ?: return false
         if (select) {
+            pendingPlace = null
             if (windowRegular.value) {
                 // Another conversation while this one is in front starts at its root, with no pop
                 // (SidebarPageRoots.select contentChanged, SidebarPageRoots.swift:90–91).
-                val step = pageRoots.select(AssistantRoute, assistantStack.drop(1), contentChanged = true)
-                replaceBackStack(assistantStack, step.stack)
+                val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
+                showHost(step.root, step.stack)
             } else {
-                val stack = stacks.getValue(AppTab.Persona)
-                while (stack.size > 1) stack.removeAt(stack.lastIndex)
+                if (hosts.current !== assistantStack) hosts.foldOntoConversation()
+                while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
+                stacks[AppTab.Persona] = assistantStack
             }
             selected = AppTab.Persona
         }
@@ -336,13 +395,16 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val agentPreferences = remember(session) { session.preferences.snapshots }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
-    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
+    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns,
+        openPlace = { openPlace(it) }, leavePlaceRoot = { leavePlaceRoot() }) }
     fun openResolved(route: ResolvedRoute): AppTab {
         // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
         // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
         val hadInboxOrigin = navigator.hasInboxOrigin(route.key)
         navigator.noteDirectOpen(route.key)
-        return if (!hadInboxOrigin && openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+        if (!hadInboxOrigin && openAssistant(route.key, true)) return AppTab.Persona
+        if (openPlace(route.key)) return AppTab.Persona
+        return route.open(stacks)
     }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
     fun openWithCard(route: ResolvedRoute) {
@@ -353,7 +415,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         initialRoute?.let { route ->
             navigator.noteDirectOpen(route.key)
             // The first frame already shows the requested conversation, not the home's default one.
-            assistantTarget(route.key)?.let { assistantRequest = it } ?: route.open(stacks)
+            assistantTarget(route.key)?.let { assistantRequest = it } ?: run {
+                if (!openPlace(route.key)) route.open(stacks)
+            }
             route.pairingLink?.let { MainActivity.pendingPairLink.value = it }
             if (openNavigation.value === initialLaunch) openNavigation.value = null
         }
@@ -417,7 +481,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             )
         }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
     }
-    val visible = stacks.getValue(selected).lastOrNull()
+    val visible = (if (selected == AppTab.Persona) hosts.current else stacks.getValue(selected)).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
     LaunchedEffect(visibleChat) {
         val agent = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }?.let { SessionKey(it.machineId, it.sessionId) }
@@ -435,7 +499,10 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     /** Swap a placeholder destination (an inbox deep link) for the page that shows it, keeping its position. */
     fun replace(from: NavKey, to: NavKey) {
-        stacks.values.forEach { stack -> stack.indexOf(from).takeIf { it >= 0 }?.let { stack[it] = to } }
+        val seen = java.util.IdentityHashMap<MutableList<NavKey>, Unit>()
+        (hosts.allStacks() + listOf(agentsStack)).forEach { stack ->
+            if (seen.put(stack, Unit) == null) stack.indexOf(from).takeIf { it >= 0 }?.let { stack[it] = to }
+        }
     }
     // The pages extensions draw for their connectors' inbox items (inbox_item, #1683): the inbox list and inbox links
     // open those. An item whose page broke opens its own page, which says so until "Retry" tries the extension's page again.
@@ -461,12 +528,16 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect
         val pages = InboxItemPages(currentItemPlaces, nativeChats = currentNativeInboxChats)
-        stacks.values.forEach { stack -> pages.swaps(stack.toList(), provisionalPages, currentRecords).forEach { (from, to) -> replace(from, to) } }
+        val seen = java.util.IdentityHashMap<MutableList<NavKey>, Unit>()
+        (hosts.allStacks() + listOf(agentsStack)).forEach { stack ->
+            if (seen.put(stack, Unit) == null) pages.swaps(stack.toList(), provisionalPages, currentRecords).forEach { (from, to) -> replace(from, to) }
+        }
         provisionalPages.clear()
     }
     // An extension enabled since the hub was last read draws its items as soon as the inbox shows.
-    LaunchedEffect(selected, assistantStack.lastOrNull(), agentsStack.lastOrNull(), extensionSlots) {
-        if (stacks.getValue(selected).any { it == InboxRoute }) extensionSlots?.loadInboxItems()
+    LaunchedEffect(selected, hosts.current.lastOrNull(), agentsStack.lastOrNull(), extensionSlots) {
+        val stack = if (selected == AppTab.Persona) hosts.current else stacks.getValue(selected)
+        if (stack.any { it == InboxRoute }) extensionSlots?.loadInboxItems()
     }
     // The inbox's triage banner (#1773): "Configure" opens Settings › Models › "Message filtering", offered only when this device can read that
     // model use (a device that may only read and answer cannot, nor a hub without it). Asked once per hub when the
@@ -567,32 +638,65 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // is a column beside the Assistant page, and Settings shows its list beside the page it opens (RegularWindow.kt).
         val regular = isRegularWindow(windowWidth.value, windowHeight.value)
         SideEffect { windowRegular.value = regular }
-        // Folding puts the conversation back under a place root; unfolding promotes that place to the root.
-        // The top entry does not change, so this is not a page transition (iOS keeps the phone drawer as it was).
+        // Once, from the restored visible stack. A saved flag would skip this after process death, because
+        // pageRoots is remember and resets with it (item 7). Offscreen place hosts are not restored.
+        SideEffect {
+            if (!adoptedVisibleRoot.value) {
+                adoptedVisibleRoot.value = true
+                pageRoots.adoptVisible(hosts.current.firstOrNull() ?: AssistantRoute)
+            }
+        }
+        // Folding puts the visible place back under the conversation. Unfolding promotes it only when that
+        // place was opened as a root. A deep link that arrived before the window was measured goes first,
+        // so a compact prefix is not promoted instead of it.
         LaunchedEffect(regular) {
             if (regular) {
-                val promoted = regularPromotion(assistantStack.toList())
-                if (promoted != null) {
-                    pageRoots.adoptVisible(promoted.first())
-                    replaceBackStack(assistantStack, promoted)
-                } else if (assistantStack.firstOrNull() == AssistantRoute) {
-                    pageRoots.adoptVisible(AssistantRoute)
+                val pending = pendingPlace
+                if (pending != null) {
+                    pendingPlace = null
+                    val place = placeRootFor(pending)
+                    if (place != null) {
+                        pageRoots.markOpenedAsRoot(place)
+                        replaceBackStack(assistantStack, listOf(AssistantRoute))
+                        val next = if (pending == place) listOf(place) else listOf(place, pending)
+                        pageRoots.adoptVisible(place)
+                        showHost(place, next)
+                    }
+                } else {
+                    val promoted = regularPromotion(assistantStack.toList(), pageRoots::openedAsRoot)
+                    if (promoted != null) {
+                        // Pop the suffix first so AssistantRoute itself is not removed, then show the place host.
+                        replaceBackStack(assistantStack, listOf(AssistantRoute))
+                        pageRoots.adoptVisible(promoted.first())
+                        showHost(promoted.first(), promoted)
+                    } else if (hosts.current === assistantStack) {
+                        pageRoots.adoptVisible(assistantStack.firstOrNull() ?: AssistantRoute)
+                        stacks[AppTab.Persona] = assistantStack
+                    }
                 }
             } else {
-                compactPrefix(assistantStack.toList())?.let { replaceBackStack(assistantStack, it) }
+                hosts.foldOntoConversation()
+                stacks[AppTab.Persona] = hosts.current
+                pageRoots.adoptVisible(assistantStack.firstOrNull() ?: AssistantRoute)
             }
         }
         var seenAssistant by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(currentAssistant.id) {
             val previous = seenAssistant
             seenAssistant = currentAssistant.id
-            if (previous == null || previous == currentAssistant.id || !windowRegular.value) return@LaunchedEffect
-            // Another assistant forgets every root (SidebarPageRoots.forget, SidebarPageRoots.swift:108–111).
-            replaceBackStack(assistantStack, pageRoots.forget().stack)
+            if (previous == null || previous == currentAssistant.id) return@LaunchedEffect
+            // Another assistant forgets every root, at any width (SidebarPageRoots.forget, SidebarPageRoots.swift:108–111).
+            pendingPlace = null
+            pageRoots.forget()
+            hosts.forgetPlaces()
+            replaceBackStack(assistantStack, listOf(AssistantRoute))
+            stacks[AppTab.Persona] = assistantStack
         }
         val widePhone = !regular && listsBesideDetails(windowWidth.value, windowHeight.value)
+        // Read here so a host switch recomposes the column, the shade and the pane policy together.
+        val personaStack = hosts.current
         val panePolicies = AppTab.entries.associateWith { tab ->
-            assistantPanePolicy(tab, stacks.getValue(tab), regular, widePhone)
+            assistantPanePolicy(tab, if (tab == AppTab.Persona) personaStack else stacks.getValue(tab), regular, widePhone)
         }
         // Lists sit beside their details in a regular window and when expanded; also on a wide phone on its side.
         // Panes share the window's one background; between them only a little space, no second surface or rule.
@@ -658,8 +762,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                             // Health, Schedule and New chat draw inside the conversation page. iOS Health selects the
                             // conversation and then backToRoot() (AssistantView.swift:700–703, 739–741), so that page
                             // is what is showing. These actions are not their own navigation roots on Android.
-                            pageRoots.select(AssistantRoute, assistantStack.drop(1), contentChanged = true)
-                            replaceBackStack(assistantStack, listOf(AssistantRoute))
+                            // contentChanged already returns an empty path, so step.stack is that conversation root.
+                            val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
+                            showHost(step.root, step.stack)
                             selected = AppTab.Persona
                         } else showAssistantHome()
                         sidebar.action = action
@@ -701,7 +806,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     },
                     // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                     fullWindowSearch = regular,
-                    shadedPlace = if (regular && selected == AppTab.Persona) sidebarShadeKey(assistantStack.firstOrNull() ?: AssistantRoute) else null,
+                    shadedPlace = if (regular && selected == AppTab.Persona) sidebarShadeKey(personaStack.firstOrNull() ?: AssistantRoute) else null,
                     onFoldColumn = onFoldColumn)
             }
         }
@@ -769,10 +874,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 val assistantRoot = entry.contentKey == assistantRootKey
                 // A place root uses the conversation's sidebar button, never a chevron (sidebar-navigation.md section 6;
                 // iOS sidebarRootPage, SidebarPageRoots.swift:159–165, and SplitNavigation.swift:130–133).
-                val stackRootKey = assistantStack.firstOrNull()?.let { NavEntry<NavKey>(it) {}.contentKey }
+                // Each host supplies its own root (LocalHostRoot). A hidden host stays a place root, so showing it
+                // does not flash Back. Settings and Pairing also set LocalRootLeading; LocalIsSidebarRoot is this test.
+                val hostRoot = LocalHostRoot.current
+                val persona = currentSelected.value == AppTab.Persona
+                val rootKey = hostRoot ?: if (persona) hosts.current.firstOrNull() else null
+                val stackRootKey = rootKey?.let { NavEntry<NavKey>(it) {}.contentKey }
                 val placeRoot = showsPlaceRootLeading(
                     regular = currentRegular.value,
-                    persona = selected == AppTab.Persona,
+                    persona = persona,
                     primary = primary,
                     entryIsStackRoot = stackRootKey != null && entry.contentKey == stackRootKey,
                 )
@@ -783,6 +893,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     val content: @Composable () -> Unit = {
                         CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
                             LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
+                            LocalIsSidebarRoot provides placeRoot,
                             LocalRootLeading provides if (placeRoot) { { currentLeading.value(true) } } else null,
                             LocalRootBack provides if (primary || placeRoot) null else navigator::back,
                             LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
@@ -899,8 +1010,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         ReleaseTextInputOnChange(sidebarOverlayShown.value)
         ReleaseTextInputOnChange(agentsOverlayShown.value)
         ReleaseTextInputOnChange(settingsOpened)
-        // Back on the first page of Agents, Inbox or Settings goes to Persona; back on the Persona home leaves the app
-        // (2026-11-01, the user's call; it used to go back through the tabs shown before).
+        // Back on the first page of Agents goes to Persona. Back on a place root returns to the conversation
+        // (the handler on that host). Back on the conversation leaves the app (2026-11-01, the user's call).
         BackHandler(selected != AppTab.Persona && stacks.getValue(selected).size <= 1) { navigator.selectTab(AppTab.Persona) }
         // Turned on its side, a phone's camera cutout or its three-button navigation bar sits on the left or right: the
         // shell keeps clear of them, while the background still runs under them (2026-11-02, the old app's shell did so).
@@ -924,13 +1035,14 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         val shown = tab == selected
                         val back = rememberNavigationEventDispatcherOwner(enabled = shown)
                         // The row of what the detail pane shows is marked in the list, however the page was opened.
-                        val detail = detailOf(stacks.getValue(tab))
+                        val tabStack = if (tab == AppTab.Persona) personaStack else stacks.getValue(tab)
+                        val detail = detailOf(tabStack)
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val policy = panePolicies.getValue(tab)
                         val sceneDirective = if (policy.singleRightStack) directive.onePane() else directive
                         val listDetail = rememberShellListDetail(
                             tab, sceneDirective, maxWidth, paneHinges, detailOpen = detail != null,
-                            store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)),
+                            store = paneStore, collapsible = canCollapseList(tabStack),
                             initialCollapsed = tab == AppTab.Agents && !agentsListShown.value,
                             onCollapsedChange = if (tab == AppTab.Agents) { collapsed ->
                                 val nextShown = !collapsed
@@ -948,7 +1060,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                             } else null,
                         )
                         val agentsOverlay = rememberAgentsOverlayStrategy(columnsOver && tab == AppTab.Agents &&
-                            stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown) {
+                            tabStack.drop(1).all(::isDetailDestination), agentsOverlayShown) {
                             val barHeight = remember { mutableIntStateOf(0) }
                             CompositionLocalProvider(LocalHomeChrome provides HomeChrome(items, selected.name,
                                 onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
@@ -961,7 +1073,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         }
                         val agentsTabSplit = rememberAgentsTabSplit(
                             tab = tab,
-                            stack = stacks.getValue(tab),
+                            stack = tabStack,
                             twoPanes = sceneDirective.maxHorizontalPartitions > 1 && !columnsOver,
                             listHidden = listDetail.listHidden,
                             onShowList = listDetail::expand,
@@ -989,14 +1101,91 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                         entryProvider = { key -> panes(key, policy.singleRightStack) })
                                 }
                                 if (tab == AppTab.Persona) {
+                                    SideEffect { stacks[AppTab.Persona] = hosts.current }
                                     val foldSidebarColumn: (() -> Unit)? =
                                         if (showsSidebarColumnFoldButton(regular, columnsOver)) ({ setSidebarColumnBeside(false) }) else null
-                                    // One sidebar owner outside the entry stack survives root → Inbox → detail → Back.
+                                    // AssistantPaneFrame's content is not inline, so BoxWithConstraints.maxWidth
+                                    // cannot be read inside it. Capture it here, where this scope still has it.
+                                    val paneMaxWidth = maxWidth
+                                    // One sidebar owner outside every root's NavDisplay. Each visited root keeps its own
+                                    // display, placed only while it is in front, so a swap does not pop the one left behind.
                                     AssistantPaneFrame(regular, policy.keepSharedSidebar,
                                         shown = if (columnsOver) sidebarOverlayShown.value else sidebarColumnShown.value,
                                         modifier = if (shown) Modifier else Modifier.unplaced(),
                                         sidebar = { sharedSidebar("shared-sidebar-column", foldSidebarColumn) }, hinges = paneHinges,
-                                        overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false }, content = display)
+                                        overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false }) {
+                                        Box(Modifier.fillMaxSize()) {
+                                            // Always this loop, even with only the conversation visited, so its
+                                            // SaveableStateHolder is not recreated when a second host appears.
+                                            // Compact composes only the conversation host: a place key must not be
+                                            // composed twice once folding has pushed it onto that stack.
+                                            val hostIds = if (currentRegular.value) hosts.visited else listOf(SidebarRootHosts.CONVERSATION)
+                                            hostIds.forEach { hostId ->
+                                                val hostStack = hosts.stack(hostId)
+                                                // No return@key: a labeled return from inline key() compiles an illegal <anonymous> method.
+                                                if (hostStack != null) key(hostId) {
+                                                    val hostShown = shown && hosts.current === hostStack
+                                                    val hostBack = rememberNavigationEventDispatcherOwner(enabled = hostShown)
+                                                    val hostPolicy = assistantPanePolicy(tab, hostStack, currentRegular.value, widePhone)
+                                                    val hostDirective = if (hostPolicy.singleRightStack) directive.onePane() else directive
+                                                    val hostDetail = detailOf(hostStack)
+                                                    val hostList = rememberShellListDetail(
+                                                        tab, hostDirective, paneMaxWidth, paneHinges, detailOpen = hostDetail != null,
+                                                        store = paneStore, collapsible = canCollapseList(hostStack),
+                                                    )
+                                                    val hostSplit = rememberAgentsTabSplit(
+                                                        tab = tab, stack = hostStack,
+                                                        twoPanes = hostDirective.maxHorizontalPartitions > 1 && !columnsOver,
+                                                        listHidden = hostList.listHidden, onShowList = hostList::expand,
+                                                    )
+                                                    val hostTransitions = rememberPageTransitions()
+                                                    val hostDecorators = listOf(
+                                                        rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+                                                        rememberViewModelStoreNavEntryDecorator<NavKey>(),
+                                                        chrome,
+                                                    )
+                                                    // CREATED while covered: collectors stop, and the composition
+                                                    // (drafts, local operations, running effects) stays.
+                                                    ShellTabLifecycle(hostShown) {
+                                                        CompositionLocalProvider(
+                                                            LocalNavigationEventDispatcherOwner provides hostBack,
+                                                            LocalHostRoot provides hostStack.firstOrNull(),
+                                                            LocalDetailKey provides hostDetail,
+                                                            LocalAgentsTabSplit provides hostSplit,
+                                                            persona.feature.settings.LocalExtensionPageVisible provides hostShown,
+                                                        ) {
+                                                            NavDisplay(
+                                                                backStack = hostStack,
+                                                                modifier = Modifier.fillMaxSize().then(if (hostShown) Modifier else Modifier.unplaced()),
+                                                                onBack = navigator::back,
+                                                                entryDecorators = hostDecorators,
+                                                                sceneStrategies = listOf(hostList.strategy),
+                                                                transitionSpec = {
+                                                                    if (personaSceneRootSwapped(currentRegular.value, true, initialState, targetState)) noPageMotion()
+                                                                    else hostTransitions.push
+                                                                },
+                                                                popTransitionSpec = {
+                                                                    if (personaSceneRootSwapped(currentRegular.value, true, initialState, targetState)) noPageMotion()
+                                                                    else hostTransitions.pop
+                                                                },
+                                                                predictivePopTransitionSpec = { hostTransitions.predictivePop },
+                                                                entryProvider = { key -> panes(key, hostPolicy.singleRightStack) },
+                                                            )
+                                                            val hostRoot = hostStack.firstOrNull()
+                                                            // After NavDisplay, so a place root takes Back. An open overlay
+                                                            // still closes first (the handler inside the page). The
+                                                            // conversation root leaves the app. iOS has no system Back.
+                                                            val overlayOpen = currentColumnsOver.value && sidebarOverlayShown.value
+                                                            BackHandler(hostShown && currentRegular.value && !overlayOpen &&
+                                                                hostStack.size <= 1 && hostRoot != null && hostRoot != AssistantRoute) {
+                                                                navigator.back()
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 } else display()
                             }
                         }
@@ -1097,6 +1286,9 @@ internal fun PaneScaffoldDirective.onePane() = PaneScaffoldDirective(
 
 /** The rail's key for an extension's page: never one of the tabs' names. */
 private fun extensionRailKey(extension: String, ui: String) = extensionSidebarKey(extension, ui)
+
+/** The root of the NavDisplay this entry is composed in. Hidden hosts keep their own so they do not flash Back. */
+private val LocalHostRoot = compositionLocalOf<NavKey?> { null }
 
 /** Placed nowhere: measured and kept composed, never drawn and never hit. */
 private fun Modifier.unplaced(): Modifier = layout { measurable, constraints ->

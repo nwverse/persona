@@ -236,8 +236,10 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
 **Android** (#9667). A regular window — the sidebar column beside the page, or over it — follows this section. `SidebarPageRoots`
 (`android/app/src/main/java/persona/android/navigation/SidebarPageRoots.kt`) is the pure model, with the same steps as `SidebarPageRoots.swift`: a place
 replaces the Assistant stack's root and does not animate; a drill-down pushes; each root keeps its path; picking the root in
-front pops; the shaded row follows the root (`AssistantSidebarShade`). The root's top-leading control is the conversation's
-sidebar button (`resolveHomeLeadingAction`), never Back. The compact phone drawer is unchanged and still pushes the place over
-the conversation. Health and Scheduled Tasks are not navigation destinations on Android; picking them shows the conversation
-page, where those screens already open.
+front pops; the shaded row follows the root (`AssistantSidebarShade`). Each root stays composed while another is in front, so a
+place keeps its list, filter and scroll, and the conversation keeps its non-saveable history, local operations, running effects
+and list anchor. The root's top-leading control is the conversation's sidebar button (`resolveHomeLeadingAction`), never Back.
+System Back at a place root returns to the conversation as a root switch, with no push or pop. System Back at the conversation
+root leaves the app. The compact phone drawer is unchanged and still pushes the place over the conversation. Health and
+Scheduled Tasks are not navigation destinations on Android; picking them shows the conversation page, where those screens already open.
 

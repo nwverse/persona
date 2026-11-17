@@ -122,8 +122,8 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
                     notificationStore: ExtensionNotificationActionStore = ExtensionNotificationActionStore.shared,
                     notificationLocked: (suspend () -> Boolean)? = null) {
     // Depth 0 is the sidebar root: the shell's sidebar button replaces Back (iOS sidebarRootPage). Deeper pages keep Back.
-    // onPop and "Set Up with…" still call [onBack], which pops the route.
-    val barBack = if (depth == 0 && LocalRootLeading.current != null) null else onBack
+    // onPop and "Set Up with…" still call [onBack]. On a lone root that switches to the conversation (AppNavigator.back).
+    val barBack = if (depth == 0 && LocalIsSidebarRoot.current) null else onBack
     val notification = if (notificationActionToken == null) null else {
         val context = LocalContext.current
         val activity = context as? Activity

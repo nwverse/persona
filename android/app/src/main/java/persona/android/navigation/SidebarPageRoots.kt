@@ -44,6 +44,12 @@ internal class SidebarPageRoots {
     private val saved = mutableMapOf<NavKey, List<NavKey>>()
 
     /**
+     * Places opened as their own root (a sidebar or drawer pick, or a route to that place).
+     * A drill opened from the conversation is not here, so unfolding does not promote it (#9667).
+     */
+    private val openedAsRootIds = mutableSetOf<String>()
+
+    /**
      * [root] is picked while the page shows [path] over the current root.
      * [contentChanged]: the root is the one in front but shows something else (another conversation).
      */
@@ -63,10 +69,18 @@ internal class SidebarPageRoots {
     fun drill(value: NavKey, over: List<NavKey>): Step =
         Step(current, over + value, Move.DrillDown)
 
+    /** The user opened [key] as a root (sidebar, drawer, or a route to that place), not as a conversation drill. */
+    fun markOpenedAsRoot(key: NavKey) {
+        openedAsRootIds += sidebarHostId(key)
+    }
+
+    fun openedAsRoot(key: NavKey): Boolean = sidebarHostId(key) in openedAsRootIds
+
     /** Another assistant: back to the conversation, nothing kept (SidebarPageRoots.swift:108–111). */
     fun forget(): Step {
         current = AssistantRoute
         saved.clear()
+        openedAsRootIds.clear()
         return Step(AssistantRoute, emptyList(), Move.SwitchRoot)
     }
 
@@ -150,12 +164,41 @@ internal fun compactPrefix(stack: List<NavKey>): List<NavKey>? {
 }
 
 /**
- * Unfolding: a compact stack `[conversation, place, …drills]` becomes `[place, …drills]`.
- * Returns null when the entry above the conversation is not a sidebar place (a conversation drill stays).
+ * Unfolding: a compact stack `[conversation, place, …drills]` becomes `[place, …drills]`
+ * only when [openedAsRoot] says that place was opened as a root. A to-do or extension page
+ * opened from the conversation stays a drill with Back (ShellChat opens `TodoDetailRoute`).
+ * Returns null when the entry above the conversation is not a sidebar place.
  */
-internal fun regularPromotion(stack: List<NavKey>): List<NavKey>? {
+internal fun regularPromotion(stack: List<NavKey>, openedAsRoot: (NavKey) -> Boolean = { true }): List<NavKey>? {
     if (stack.size < 2 || stack.first() != AssistantRoute || !isSidebarPlaceRoot(stack[1])) return null
+    if (!openedAsRoot(stack[1])) return null
     return stack.drop(1)
+}
+
+/**
+ * The sidebar place a regular-width route should switch to, or null when [key] stays a drill
+ * on whatever root is in front. Inbox children are included because `restoreSecondaryParents`
+ * would otherwise insert `InboxRoute` under another root (Router.kt). A to-do opened from the
+ * conversation is not a place route (item 6).
+ */
+internal fun placeRootFor(key: NavKey): NavKey? = when {
+    isInboxDestination(key) -> InboxRoute
+    key == TodosRoute -> TodosRoute
+    key == KnowledgeRoute -> KnowledgeRoute
+    key == MachinesRoute -> MachinesRoute
+    else -> null
+}
+
+/** Stable id for the NavDisplay that keeps [root] composed while another root is in front. */
+internal fun sidebarHostId(root: NavKey): String = when (root) {
+    AssistantRoute -> SidebarRootHosts.CONVERSATION
+    InboxRoute -> "inbox"
+    TodosRoute -> "todos"
+    KnowledgeRoute -> "knowledge"
+    MachinesRoute -> "machines"
+    is TodoDetailRoute -> "todo:${root.todoId}"
+    is ExtensionUiRoute -> "extension:${root.extensionId}/${root.uiId}"
+    else -> "other:${root::class.qualifiedName ?: "route"}"
 }
 
 /** The leading control of a place root at regular width: the conversation's sidebar button, never Back. */

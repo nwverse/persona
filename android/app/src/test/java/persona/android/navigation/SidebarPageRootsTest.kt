@@ -6,8 +6,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import androidx.navigation3.runtime.NavKey
+import androidx.compose.runtime.mutableStateListOf
+import persona.core.navigation.AgentsRoute
+import persona.core.navigation.AppTab
 import persona.core.navigation.AssistantRoute
 import persona.core.navigation.ExtensionUiRoute
+import persona.core.navigation.InboxItemRoute
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.MachineDetailRoute
 import persona.core.navigation.MachinesRoute
@@ -174,6 +178,113 @@ class SidebarPageRootsTest {
         assertFalse(showsPlaceRootLeading(regular = true, persona = true, primary = true, entryIsStackRoot = true))
         assertFalse(showsPlaceRootLeading(regular = true, persona = true, primary = false, entryIsStackRoot = false))
         assertFalse(showsPlaceRootLeading(regular = true, persona = false, primary = false, entryIsStackRoot = true))
+    }
+
+    @Test
+    fun unfoldingPromotesOnlyAPlaceOpenedAsARoot() {
+        assertNull(regularPromotion(listOf(AssistantRoute, TodoDetailRoute("from-chat"))) { false })
+        assertEquals(
+            listOf(InboxRoute, InboxItemRoute("i")),
+            regularPromotion(listOf(AssistantRoute, InboxRoute, InboxItemRoute("i"))) { it == InboxRoute },
+        )
+        val roots = SidebarPageRoots()
+        assertFalse(roots.openedAsRoot(TodoDetailRoute("from-chat")))
+        roots.markOpenedAsRoot(InboxRoute)
+        assertTrue(roots.openedAsRoot(InboxRoute))
+        roots.forget()
+        assertFalse(roots.openedAsRoot(InboxRoute))
+    }
+
+    @Test
+    fun placeRoutesSwitchAndConversationDrillsDoNot() {
+        assertEquals(InboxRoute, placeRootFor(InboxItemRoute("i")))
+        assertEquals(InboxRoute, placeRootFor(InboxRoute))
+        assertEquals(TodosRoute, placeRootFor(TodosRoute))
+        assertEquals(KnowledgeRoute, placeRootFor(KnowledgeRoute))
+        assertEquals(MachinesRoute, placeRootFor(MachinesRoute))
+        assertNull(placeRootFor(TodoDetailRoute("from-chat")))
+        assertNull(placeRootFor(MachineDetailRoute("m")))
+        assertNull(placeRootFor(ExtensionUiRoute("ext", "page", "Page")))
+        assertEquals(SidebarRootHosts.CONVERSATION, sidebarHostId(AssistantRoute))
+        assertEquals("inbox", sidebarHostId(InboxRoute))
+        assertEquals("todo:abc", sidebarHostId(TodoDetailRoute("abc")))
+        assertEquals("extension:ext/page", sidebarHostId(ExtensionUiRoute("ext", "page", "Page")))
+    }
+
+    @Test
+    fun anotherRootKeepsTheConversationList() {
+        val conversation = mutableStateListOf<NavKey>(AssistantRoute)
+        val hosts = SidebarRootHosts(conversation)
+        hosts.activate(InboxRoute, listOf(InboxRoute, InboxItemRoute("i")))
+        assertTrue(hosts.stack(SidebarRootHosts.CONVERSATION) === conversation)
+        assertEquals(listOf(AssistantRoute), conversation.toList())
+        hosts.activate(AssistantRoute, listOf(AssistantRoute))
+        assertEquals(listOf(InboxRoute, InboxItemRoute("i")), hosts.stack("inbox")!!.toList())
+        hosts.activate(InboxRoute, listOf(InboxRoute, InboxItemRoute("i")))
+        hosts.foldOntoConversation()
+        assertEquals(listOf(AssistantRoute, InboxRoute, InboxItemRoute("i")), conversation.toList())
+        assertEquals(listOf(SidebarRootHosts.CONVERSATION), hosts.visited.toList())
+        assertTrue(hosts.current === conversation)
+    }
+
+    @Test
+    fun aPlaceRouteAtRegularWidthDoesNotPushUnderAnotherRoot() {
+        val conversation = mutableStateListOf<NavKey>(AssistantRoute)
+        val hosts = SidebarRootHosts(conversation)
+        val roots = SidebarPageRoots()
+        hosts.activate(TodosRoute, listOf(TodosRoute))
+        roots.adoptVisible(TodosRoute)
+        roots.markOpenedAsRoot(TodosRoute)
+        val todos = hosts.stack("todos")!!
+        val stacks = mutableMapOf<AppTab, MutableList<NavKey>>(
+            AppTab.Persona to hosts.current,
+            AppTab.Agents to mutableStateListOf(AgentsRoute),
+        )
+        val navigator = AppNavigator(stacks, { AppTab.Persona }, {}, openPlace = { key ->
+            val place = placeRootFor(key) ?: return@AppNavigator false
+            if (roots.current == place && key != place) return@AppNavigator false
+            roots.markOpenedAsRoot(place)
+            val step = roots.select(place, hosts.current.drop(1))
+            val next = if (key == place) step.stack else listOf(place, key)
+            hosts.activate(place, next)
+            stacks[AppTab.Persona] = hosts.current
+            true
+        }, leavePlaceRoot = {
+            if (hosts.current.size != 1 || hosts.current.first() == AssistantRoute) return@AppNavigator false
+            val step = roots.select(AssistantRoute, emptyList())
+            hosts.activate(step.root, step.stack)
+            stacks[AppTab.Persona] = hosts.current
+            true
+        })
+        navigator.navigate(InboxItemRoute("item-1"))
+        assertEquals(listOf(TodosRoute), todos.toList())
+        assertEquals(listOf(InboxRoute, InboxItemRoute("item-1")), hosts.current.toList())
+        assertEquals(listOf(AssistantRoute), conversation.toList())
+        navigator.back()
+        assertEquals(listOf(InboxRoute), hosts.current.toList())
+        navigator.back()
+        assertEquals(listOf(AssistantRoute), hosts.current.toList())
+        assertEquals(listOf(InboxRoute), hosts.stack("inbox")!!.toList())
+    }
+
+    @Test
+    fun aDrillOnThePlaceInFrontStillPushes() {
+        val conversation = mutableStateListOf<NavKey>(AssistantRoute)
+        val hosts = SidebarRootHosts(conversation)
+        val roots = SidebarPageRoots()
+        hosts.activate(InboxRoute, listOf(InboxRoute))
+        roots.adoptVisible(InboxRoute)
+        val stacks = mutableMapOf<AppTab, MutableList<NavKey>>(
+            AppTab.Persona to hosts.current,
+            AppTab.Agents to mutableStateListOf(AgentsRoute),
+        )
+        val navigator = AppNavigator(stacks, { AppTab.Persona }, {}, openPlace = { key ->
+            val place = placeRootFor(key) ?: return@AppNavigator false
+            if (roots.current == place && key != place) return@AppNavigator false
+            true
+        })
+        navigator.navigate(InboxItemRoute("item-1"))
+        assertEquals(listOf(InboxRoute, InboxItemRoute("item-1")), hosts.current.toList())
     }
 
     private fun personaRootSwapped(regular: Boolean, persona: Boolean, from: NavKey?, to: NavKey?): Boolean =
