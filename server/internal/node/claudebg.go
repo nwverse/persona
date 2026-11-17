@@ -386,39 +386,22 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 	return true, unconfirmed()
 }
 
-// peerFromModeKey carries session.send's from_mode (withPeerFromMode).
-type peerFromModeKey struct{}
-
-// withPeerFromMode marks a send that is not the owner's own with the permission-mode class of its words, as the assistant
-// stated it (session.send's from_mode, which the hub drops from every other caller); anything but bypass or prompting
-// states nothing.
-func withPeerFromMode(ctx context.Context, mode string) context.Context {
-	if mode != peerModeBypass && mode != peerModePrompting {
-		return ctx
-	}
-	return context.WithValue(ctx, peerFromModeKey{}, mode)
-}
-
 // peerAttest is the from-mode the node states in a message to session id, which claude c has open (claudepeer.go). It
-// is the class of whoever's words the message carries, never one made up to suit the session (#9607):
-//   - the owner's own message (owner_input, which only the hub's check of the owner's own app sets): the class of the
-//     session itself, as the session's own transcript says it now (peerSessionClass). That is an authorization, and the
-//     only one: the person who owns the session is the one its permission prompts and held messages wait on, and what
-//     they type at its terminal goes in at once whatever its mode; the inbox is how their words reach it from the phone.
-//     bypass when the transcript says bypassPermissions; nothing otherwise (a session that prompts takes a message that
-//     states none, and a plan session may count as either).
-//   - any other message: the class the assistant stated for its words (withPeerFromMode: a task worker's mode, for a
-//     supervision message to its leader), or nothing when none was stated. A message from a session that prompts is
-//     never stated as bypass, so a bypass session holds it for approval as Claude Code means it to.
+// is the class of whoever's words the message carries, bound to evidence taken when the message is sent, and stated
+// only where that evidence is reliable (#9607):
+//   - the owner's own message (owner_input, which only the hub's check of a full-role device's own typed message sets,
+//     ownerInputExact): it goes in as the session's own user's words, the one authorization the node acts on. The
+//     person who owns the session is the one its permission prompts and held messages wait on, and what they type at its
+//     terminal goes in whatever its mode. bypass when the session's own transcript says bypassPermissions now
+//     (peerSessionClass); nothing otherwise (a session that prompts takes a message that states none; plan may be
+//     either class). A stale record can only make the session hold the message, never take more than its owner could.
+//   - anything else (supervision, another Agent's message, a card answer, a Stop): nothing. The node cannot bind such
+//     words to the permission mode they were written in, so a bypass session holds them for approval at the computer.
 func (n *Node) peerAttest(ctx context.Context, c claudeProc, id string) string {
-	if ownerDeliveryOf(ctx) != nil {
-		if peerSessionClass(n, c, id) == peerModeBypass {
-			return peerModeBypass
-		}
-		return ""
+	if ownerDeliveryOf(ctx) != nil && peerSessionClass(n, c, id) == peerModeBypass {
+		return peerModeBypass
 	}
-	mode, _ := ctx.Value(peerFromModeKey{}).(string)
-	return mode
+	return ""
 }
 
 // peerSessionClass is the from-mode class session id runs in, from the transcript in claude c's own config directory
@@ -486,7 +469,7 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 		offset = st.Size()
 	}
 	stop := prompts.PeerStop()
-	p.fromMode = n.peerAttest(ctx, c, id) // a Stop states no class: no owner mark comes with it
+	p.fromMode = n.peerAttest(ctx, c, id) // a Stop carries no owner mark (#9645): it states none
 	err = peerSendAt(ctx, p, id, stop, peerNow)
 	var pe *errPeer
 	if asPeer(err, &pe) {

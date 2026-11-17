@@ -469,7 +469,8 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	if len(entries) == 0 {
 		return false
 	}
-	if err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept); err != nil {
+	delivered := func(ctx context.Context) { s.leaderRetryDelivered(ctx, lead, entries, kept) }
+	if err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept, delivered); err != nil {
 		var escalated leaderEscalated
 		if errors.As(err, &escalated) {
 			// The current process's escalation/retry owns this message. Do not restore its pending entry and escalate it
@@ -503,42 +504,41 @@ type leaderEscalated struct{ err error }
 func (e leaderEscalated) Error() string { return e.err.Error() }
 func (e leaderEscalated) Unwrap() error { return e.err }
 
-// sendToLeader sends text, the supervision message for signals kept, into the leader agent's session, stating the
-// permission-mode class of its workers' words (supervisionFromMode). A closed agent is resumed in the background (that
-// takes minutes): when that fails the signals are escalated and retried (escalateLeaderMessage). A send the node refuses
-// because the agent has stopped (agent_stopped: read-only until the user's Resume, node stopped.go) goes the same way at
-// once (#8518): another digest would only be refused again. So does a send the node says may have arrived (delivered
-// unknown or yes: a Claude's inbox read it but its session was not seen taking it, or typing failed part way), as an
-// unconfirmed one (#9607): the next digest must not pile another copy on it, and it is not told either (no Told, its
-// deduplication released), so the conversation above hears of it once and the leader gets it again only after a growing wait.
-// A session its computer does not list, or a send that failed otherwise, is a leaderUnreachable for the caller, which
-// puts the signals back for the next digest.
-func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) error {
+// sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. It states no
+// permission-mode class for the words (#9607): the assistant cannot bind a worker's report to the mode the worker wrote
+// it in, so a bypass leader outside Persona's terminals holds it for approval at its computer. A closed agent is resumed
+// in the background (that takes minutes): when that fails the signals are escalated and retried (escalateLeaderMessage).
+// A send the node refuses because the agent has stopped (agent_stopped: read-only until the user's Resume, node
+// stopped.go) goes the same way at once (#8518): another digest would only be refused again. So does a send the node
+// says may have arrived (delivered unknown or yes: a Claude's inbox read it but its session was not seen taking it, or
+// typing failed part way), as an unconfirmed one (#9607): the next digest must not pile another copy on it, and it is not
+// told either. A retry the leader takes calls delivered, which tells them then. A session its computer does not list, or
+// a send that failed otherwise, is a leaderUnreachable for the caller, which puts the signals back for the next digest.
+func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal, delivered func(context.Context)) error {
 	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !ok {
 		return leaderUnreachable{errors.New("the leader's session is not listed")}
 	}
-	mode := s.supervisionFromMode(ctx, kept)
 	if c.Status == proto.StatusOffline {
 		go func() {
-			if err := s.sendToLeaderNow(context.Background(), lead, text, mode); err != nil {
+			if err := s.sendToLeaderNow(context.Background(), lead, text); err != nil {
 				s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
-				s.escalateLeaderMessage(lead, kept, text, mode, nodeMayHaveTaken(err))
+				s.escalateLeaderMessage(lead, kept, text, nodeMayHaveTaken(err), delivered)
 			}
 		}()
 		return nil
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer cancel()
-	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, leaderSendParams(lead.SessionID, text, mode), nil); err != nil {
+	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
 		if refusedWith(err, proto.CodeAgentStopped) {
 			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
-			s.escalateLeaderMessage(lead, kept, text, mode, false)
+			s.escalateLeaderMessage(lead, kept, text, false, delivered)
 			return leaderEscalated{err}
 		}
 		if nodeMayHaveTaken(err) {
 			s.logf("task leader %s: the message may have reached it, not confirmed: %v", short(lead.SessionID), err)
-			s.escalateLeaderMessage(lead, kept, text, mode, true)
+			s.escalateLeaderMessage(lead, kept, text, true, delivered)
 			return leaderEscalated{err}
 		}
 		return leaderUnreachable{err}
@@ -546,64 +546,28 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 	return nil
 }
 
-// leaderSendParams is session.send's params for a supervision message: from_mode, when known, is the permission-mode
-// class of the words it carries, which a node states to a Claude outside Persona's terminals (node claudebg.go,
-// #9607). The hub passes from_mode on only from the assistant's own calls.
-func leaderSendParams(session, text, mode string) map[string]any {
-	params := sendParams(session, text, false)
-	if mode != "" {
-		params["from_mode"] = mode
+// leaderRetryDelivered records what a digest records for a supervision message the leader took, once a retry got it
+// there (escalateLeaderMessage): the deduplication of its entries, its parked tasks' and turns' Told. Until then they
+// stay untold with their deduplication released, so a manager restarted meanwhile delivers them again from its ledger;
+// after it, a restarted manager finds them told and does not (#9607).
+func (s *Service) leaderRetryDelivered(ctx context.Context, lead TodoAgent, entries []prompts.SuperviseEntry, kept []superviseSignal) {
+	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	if _, _, _, err := s.reserveSupervision(ctx, entries, kept, time.Now()); err != nil {
+		s.logf("supervise: task leader %s took the retried message; deduplication not recorded: %v", short(lead.SessionID), err)
 	}
-	return params
-}
-
-// The permission-mode classes of Claude Code's cross-session envelope (from-mode).
-const (
-	fromModeBypass    = "bypass"
-	fromModePrompting = "prompting"
-)
-
-// modeClass is the from-mode class of a session running in permission mode mode, "" when it cannot be told: plan, which
-// Claude Code counts as bypass when bypass is available to that session (nothing here says whether it is), another
-// runtime's mode, or none.
-func modeClass(mode string) string {
-	switch mode {
-	case proto.ModeBypass:
-		return fromModeBypass
-	case "default", "acceptEdits", "auto", "dontAsk":
-		return fromModePrompting
-	}
-	return ""
-}
-
-// supervisionFromMode is the from-mode class of a supervision message for signals kept: of the workers whose words it
-// carries. prompting when one of their sessions runs in a mode that prompts; else bypass when every signal names a
-// session running in bypass permissions mode; else "" (not stated): a signal names no session, or one whose class is not
-// known. Never the leader's own class: a worker in a mode that prompts must not reach a bypass leader as if it bypassed.
-func (s *Service) supervisionFromMode(ctx context.Context, kept []superviseSignal) string {
-	class := fromModeBypass
-	for _, g := range kept {
-		c, ok := s.session(ctx, g.Machine, g.Session)
-		if g.Session == "" || !ok {
-			class = ""
-			continue
-		}
-		switch modeClass(c.PermissionMode) {
-		case fromModePrompting:
-			return fromModePrompting
-		case "":
-			class = ""
-		}
-	}
-	return class
+	s.parkedDueTold(ctx, kept)
+	s.turnsTold(ctx, kept)
+	s.logf("supervise: %d signal(s) to task leader %s on a retry", len(kept), short(lead.SessionID))
 }
 
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
 // leaderResumeTime. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
-func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text, mode string) error {
+func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string) error {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.leaderResumeTime())
 	defer cancel()
-	return s.call(sctx, lead.MachineID, DeviceSessionSend, leaderSendParams(lead.SessionID, text, mode), nil)
+	return s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil)
 }
 
 // escalateLeaderMessage handles supervision message text for signals kept that could not be put into the leader's
@@ -611,9 +575,10 @@ func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text, mod
 // was not seen taking (uncertain). Each worker's signal becomes a decision for the conversation above the leader,
 // naming the worker (so that conversation can review it) and saying the leader could not be reached, or may not have
 // received it; and in any case, with or without a conversation above, the message is tried again on the leader itself
-// with a growing wait, until it is taken or the leader's task is closed (its workers are then rehomed). The retry runs
-// on its own context: it must outlive the call that started it.
-func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, text, mode string, uncertain bool) {
+// with a growing wait, until it is taken (then delivered records it) or the leader's task is closed (its workers are
+// then rehomed). The retry runs on its own context: it must outlive the call that started it. It lives in this process
+// only: a restarted manager delivers the untold signals from its ledger instead.
+func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, text string, uncertain bool, delivered func(context.Context)) {
 	ctx := context.Background()
 	for _, g := range kept {
 		if w, ok := s.todoNow(g.Todo); ok {
@@ -632,7 +597,10 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, 
 				return // the leader's task is closed: its workers were rehomed, nobody is left to tell
 			}
 			s.logf("task leader %s: trying the undelivered supervision message again", short(lead.SessionID))
-			if err := s.sendToLeaderNow(ctx, lead, text, mode); err == nil {
+			if err := s.sendToLeaderNow(ctx, lead, text); err == nil {
+				if delivered != nil {
+					delivered(ctx)
+				}
 				return
 			}
 			wait = leaderRetryBackoff(wait)

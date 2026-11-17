@@ -43,9 +43,6 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if err != nil {
 		return err
 	}
-	if method == "session.send" {
-		raw = assistantFromMode(ctx, raw)
-	}
 	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw}
 	if devicewire.IsSessionStart(method) || method == "session.send" {
 		attachNodeCaller(ctx, &p)

@@ -2,6 +2,7 @@ package devices
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -46,5 +47,43 @@ func TestOwnerInputParams(t *testing.T) {
 	}
 	if _, err := ownerInputParams(devicewire.NodeCall{}, json.RawMessage(`[1]`)); err == nil {
 		t.Error("params that are not an object were passed on")
+	}
+}
+
+// A caller cannot claim the owner mark in another letter case either: a node decodes owner_input into a struct field,
+// whose match ignores case (#9607). Every variant is dropped, and the mark is written back only for the owner's own
+// typed message, once, as owner_input.
+func TestOwnerInputParamsDropsEveryCase(t *testing.T) {
+	human := devicewire.NodeCall{Caller: &devicewire.Caller{Kind: "device"}, Submission: &devicewire.Submission{ID: "h1", Kind: "human_input"}}
+	for _, key := range []string{"owner_input", "OWNER_INPUT", "Owner_Input", "owner_Input"} {
+		for name, p := range map[string]devicewire.NodeCall{
+			"no caller":                 {},
+			"system":                    {Caller: &devicewire.Caller{Kind: "system"}},
+			"device, no human input":    {Caller: &devicewire.Caller{Kind: "device"}},
+			"the owner's typed message": human,
+		} {
+			raw, _ := json.Marshal(map[string]any{"session_id": "x", "text": "hi", key: true, "OWNER_input": true})
+			out, err := ownerInputParams(p, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var asNode struct {
+				OwnerInput bool `json:"owner_input"`
+			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(out, &asNode) != nil || json.Unmarshal(out, &fields) != nil {
+				t.Fatalf("%s %s: %s", name, key, out)
+			}
+			marks := 0
+			for k := range fields {
+				if strings.EqualFold(k, "owner_input") {
+					marks++
+				}
+			}
+			want := name == "the owner's typed message"
+			if asNode.OwnerInput != want || (want && (marks != 1 || string(fields["owner_input"]) != "true")) || (!want && marks != 0) {
+				t.Errorf("%s with %s: %s", name, key, out)
+			}
+		}
 	}
 }

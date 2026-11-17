@@ -127,10 +127,6 @@ type sendOpts struct {
 	// human-input marker and drops any a caller sent). A Claude outside Persona's terminals at rest takes it as the
 	// person's input through Persona's plugin when it has it (ccplugin.go); every other message keeps its inbox.
 	OwnerInput bool `json:"owner_input"`
-	// FromMode: the permission-mode class (bypass, prompting) of whoever's words these are, which the assistant states
-	// for a task worker's words to its leader; the hub drops it from every other caller. A Claude outside Persona's
-	// terminals is told it as the envelope's from-mode (claudebg.go peerAttest, #9607); "" states none.
-	FromMode string `json:"from_mode"`
 	// readBox: a screen that cannot be read refuses (unreadBoxMessage) instead of passing for an empty box. After a
 	// command that may still sit in the box (ultracode.go), not knowing is not enough to type after it.
 	readBox bool
