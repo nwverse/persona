@@ -51,6 +51,7 @@ import persona.core.navigation.ConversationKind
 import persona.core.navigation.InboxItemRoute
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.RouteSource
+import persona.core.navigation.TodoDetailRoute
 
 /**
  * [SidebarRootsRuntime] is the composable [Root] calls for width changes, one display per host, and
@@ -199,6 +200,60 @@ class SidebarRootsRuntimeTest {
     }
 
     @Test
+    fun foldingATodoRootThenUnfoldingKeepsTheInboxEntry() {
+        val world = world()
+        world.window.noteSize(951f, 673f)
+        world.pageRoots.markOpenedAsRoot(InboxRoute)
+        world.hosts.activate(InboxRoute, listOf(InboxRoute))
+        val todo = TodoDetailRoute("x")
+        var regular by mutableStateOf(true)
+        var births = 0
+        rule.setContent {
+            Theme {
+                Hosts(world, regular) {
+                    val born = remember { births++; births }
+                    Text("inbox-$born", Modifier.testTag("inbox-birth"))
+                }
+            }
+        }
+        rule.waitForIdle()
+        assertEquals("inbox-1", text("inbox-birth"))
+        rule.runOnIdle {
+            world.pageRoots.markOpenedAsRoot(todo)
+            world.hosts.activate(todo, listOf(todo))
+        }
+        rule.waitForIdle()
+        regular = false
+        rule.waitForIdle()
+        assertEquals(1, births)
+        assertTrue(world.hosts.visited.contains("inbox"))
+        regular = true
+        rule.waitForIdle()
+        rule.runOnIdle { world.hosts.activate(InboxRoute, listOf(InboxRoute)) }
+        rule.waitForIdle()
+        assertEquals("inbox-1", text("inbox-birth"))
+        assertEquals(1, births)
+    }
+
+    @Test
+    fun pushingARouteAlreadyOnAnotherHostTrimsThatTop() {
+        val world = world()
+        world.window.noteSize(951f, 673f)
+        val chat = ChatRoute("machine", "chat-x", ConversationKind.Agent)
+        world.conversation.add(chat)
+        world.hosts.activate(InboxRoute, listOf(InboxRoute))
+        rule.setContent {
+            Theme { Hosts(world, regular = true) { Text("Inbox", Modifier.testTag("page-inbox-body")) } }
+        }
+        rule.waitForIdle()
+        assertEquals(listOf(AssistantRoute, chat), world.conversation.toList())
+        rule.runOnIdle { world.hosts.current.add(chat) }
+        rule.waitForIdle()
+        assertEquals(listOf(InboxRoute, chat), world.hosts.current.toList())
+        assertEquals(listOf(AssistantRoute), world.conversation.toList())
+    }
+
+    @Test
     fun backFromAgentsShowsTheInboxItemThroughTheRuntime() {
         val world = world()
         world.window.noteSize(951f, 673f)
@@ -295,6 +350,8 @@ private fun Hosts(
                 entry<InboxItemRoute> { route ->
                     Text(route.itemId, Modifier.testTag("page-item").fillMaxSize())
                 }
+                entry<TodoDetailRoute> { Text("To-do", Modifier.fillMaxSize()) }
+                entry<ChatRoute> { Text("Chat", Modifier.fillMaxSize()) }
             },
         )
     }

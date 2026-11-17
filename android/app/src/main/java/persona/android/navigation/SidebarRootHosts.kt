@@ -23,7 +23,7 @@ import persona.core.navigation.AssistantRoute
  * UnifiedSidebar.swift:67–74).
  *
  * Folding a fixed place prefixes the conversation on that same list, so the page is not rebuilt.
- * A to-do root is copied onto the conversation list and dropped, which is the phone's push.
+ * A to-do root is copied onto the conversation list and that host is dropped. Fixed places stay.
  */
 internal class SidebarRootHosts(val conversation: MutableList<NavKey>) {
     private val places = mutableMapOf<String, SnapshotStateList<NavKey>>()
@@ -62,7 +62,8 @@ internal class SidebarRootHosts(val conversation: MutableList<NavKey>) {
     /**
      * Folding. A fixed place stays on its own list: the conversation is inserted under it so Back
      * still reaches a conversation entry, and that list is not rebuilt. Anything else is copied
-     * onto the conversation list, and place hosts are dropped first so a key is not composed twice.
+     * onto the conversation list and that host is dropped. Fixed places stay composed; [trimComposedClashes]
+     * pops a duplicate top. iOS keeps each root's path (`docs/design/sidebar-navigation.md`).
      */
     fun foldOntoConversation() {
         if (current !== conversation) {
@@ -75,11 +76,16 @@ internal class SidebarRootHosts(val conversation: MutableList<NavKey>) {
             }
             val visible = current.toList()
             val prefixed = if (visible.firstOrNull() == AssistantRoute) visible else listOf(AssistantRoute) + visible
-            visited.clear()
-            visited.add(CONVERSATION)
-            places.clear()
+            val dropped = hostIdOf(current)
+            if (dropped != CONVERSATION) {
+                visited.remove(dropped)
+                places.remove(dropped)
+            }
+            if (CONVERSATION !in visited) visited.add(0, CONVERSATION)
             replaceBackStack(conversation, prefixed)
             current = conversation
+            releaseLeftHosts()
+            trimComposedClashes()
         } else {
             compactPrefix(conversation.toList())?.let { replaceBackStack(conversation, it) }
         }
@@ -181,7 +187,7 @@ internal class SidebarRootHosts(val conversation: MutableList<NavKey>) {
      * also on the visible stack, so that route is not composed twice. A stack is never emptied:
      * its last entry stays even when that entry is covered on the visible stack.
      */
-    private fun trimComposedClashes() {
+    internal fun trimComposedClashes() {
         val visible = current.toList()
         fun trim(stack: MutableList<NavKey>) {
             if (stack === current) return

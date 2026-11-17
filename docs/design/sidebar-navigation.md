@@ -240,7 +240,7 @@ front pops; the shaded row follows the root (`AssistantSidebarShade`). The conve
 Knowledge and Computers) stay composed while another is in front, so the conversation keeps its non-saveable history, local
 operations, running effects and list anchor, and those places keep their list, filter and scroll. Folding inserts the
 conversation under that same list and unfolding removes it, so that page is not rebuilt. A to-do opened as its own root, or an
-extension page, keeps only its path and is composed only while it is in front (`SidebarRootHosts`). A place the phone drawer
+extension page, keeps only its path and is composed only while it is in front (`SidebarRootHosts`). Folding that root copies it onto the conversation and leaves the fixed places composed. A place the phone drawer
 pushed over the conversation is promoted onto its own host when the window becomes regular, and that promotion rebuilds the
 page. The root's top-leading control is the conversation's sidebar button (`resolveHomeLeadingAction`), never Back.
 System Back at a place root returns to the conversation as a root switch, with no push or pop. System Back at the conversation

@@ -4,12 +4,16 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
@@ -58,6 +62,39 @@ class InboxAppearRefreshTest {
         assertEquals(0, progressBars())
     }
 
+    @Test
+    fun aBackgroundRefreshInFlightSkipsTheNextOne() {
+        val hold = CompletableDeferred<Unit>()
+        val first = CountingInbox().also { it.hold = hold }
+        val skipped = CountingInbox()
+        val after = CountingInbox()
+        val repository = mutableStateOf<InboxRepository>(first)
+        val owner = rule.runOnUiThread {
+            Owner().also { it.registry.currentState = Lifecycle.State.RESUMED }
+        }
+        rule.setContent {
+            val current by repository
+            CompositionLocalProvider(LocalLifecycleOwner provides owner) {
+                PersonaTheme(reduceMotion = true) { InboxScreen(current, navigator) }
+            }
+        }
+        rule.waitUntil(5_000) { first.refreshes.get() >= 1 }
+        skipped.snapshot.value = inboxSnapshot("SkippedListToken")
+        rule.runOnIdle { repository.value = skipped }
+        rule.waitForIdle()
+        rule.onNodeWithText("SkippedListToken").assertExists()
+        assertEquals(1, first.refreshes.get())
+        assertEquals(0, skipped.refreshes.get())
+        rule.runOnIdle { hold.complete(Unit) }
+        rule.waitForIdle()
+        after.snapshot.value = inboxSnapshot("AfterListToken")
+        rule.runOnIdle { repository.value = after }
+        rule.waitForIdle()
+        rule.onNodeWithText("AfterListToken").assertExists()
+        assertEquals(1, after.refreshes.get())
+        assertEquals(0, skipped.refreshes.get())
+    }
+
     private fun progressBars() = rule.onAllNodes(
         SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo),
     ).fetchSemanticsNodes().size
@@ -69,13 +106,14 @@ class InboxAppearRefreshTest {
 
     private class CountingInbox : InboxRepository {
         val refreshes = AtomicInteger(0)
+        var hold: CompletableDeferred<Unit>? = null
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
-        override val snapshot = MutableStateFlow(InboxSnapshot(records = listOf(
-            InboxRecord(InboxItem("lark:f2:120", kind = "group", title = "项目群", sender = "示例同事", preview = "周四",
-                tier = "fyi", updatedAt = "2026-11-04T08:10:00Z"), sourceLabel = "飞书"),
-        )))
+        override val snapshot = MutableStateFlow(inboxSnapshot("项目群"))
         override val connectionState = MutableStateFlow(ConnectionState.Online)
-        override suspend fun refresh() { refreshes.incrementAndGet() }
+        override suspend fun refresh() {
+            refreshes.incrementAndGet()
+            hold?.await()
+        }
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit
         override suspend fun refreshConversation(feedId: String) = Unit
@@ -92,3 +130,8 @@ class InboxAppearRefreshTest {
         override fun selectTab(tab: AppTab) = Unit
     }
 }
+
+private fun inboxSnapshot(title: String) = InboxSnapshot(records = listOf(
+    InboxRecord(InboxItem("lark:f2:120", kind = "group", title = title, sender = "示例同事", preview = "周四",
+        tier = "fyi", updatedAt = "2026-11-04T08:10:00Z"), sourceLabel = "飞书"),
+))

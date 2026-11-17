@@ -120,7 +120,11 @@ internal class SidebarPlaceWindow {
                 val place = placeRootFor(waiting)
                 if (place != null) {
                     pageRoots.markOpenedAsRoot(place)
-                    replaceBackStack(assistantStack, listOf(AssistantRoute))
+                    // Keep a conversation restored before this push. The pending route (and its place
+                    // parent) is the only suffix to cut. iOS puts the item on the Inbox path and leaves
+                    // the conversation's path (`AssistantView.openFromOutside`, AssistantView.swift:597–605;
+                    // `SidebarPageRoots.select`, SidebarPageRoots.swift:88–97).
+                    dropPendingPush(assistantStack, place, waiting)
                     val next = if (waiting == place) listOf(place) else listOf(place, waiting)
                     pageRoots.adoptVisible(place)
                     showHost(place, next)
@@ -150,4 +154,34 @@ internal class SidebarPlaceWindow {
             pageRoots.adoptVisible(shown)
         }
     }
+}
+
+/**
+ * Root's [openPlace]. [showHost] runs for a regular-width switch. A compact retained host returns
+ * true without [showHost], so the Persona stack is pointed at the host in front before the caller
+ * continues (a restored chat must land on that host, not on the conversation list).
+ */
+internal fun openSidebarPlace(
+    key: NavKey,
+    window: SidebarPlaceWindow,
+    pageRoots: SidebarPageRoots,
+    hosts: SidebarRootHosts,
+    showHost: (NavKey, List<NavKey>) -> Unit,
+    assignPersona: (MutableList<NavKey>) -> Unit,
+    selectPersona: () -> Unit,
+): Boolean {
+    val placed = window.openPlace(key, pageRoots, hosts, showHost, selectPersona)
+    if (placed) assignPersona(hosts.current)
+    return placed
+}
+
+/**
+ * Remove the pending push from the conversation list. Anything before the place or the pending key
+ * stays, including a chat restored at cold start. No such suffix: leave the list as it is.
+ */
+internal fun dropPendingPush(stack: MutableList<NavKey>, place: NavKey, pendingKey: NavKey) {
+    val cut = stack.indexOfFirst { it == place || it == pendingKey }
+    if (cut < 0) return
+    val kept = stack.take(cut)
+    replaceBackStack(stack, if (kept.isEmpty()) listOf(AssistantRoute) else kept)
 }

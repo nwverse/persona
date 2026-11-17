@@ -313,9 +313,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
      * compact push stand; the first regular frame applies it before promoting whatever sits above the conversation.
      * Returns true when the caller must not also push.
      */
-    fun openPlace(key: NavKey): Boolean = window.openPlace(key, pageRoots, hosts, ::showHost) {
-        selected = AppTab.Persona
-    }
+    fun openPlace(key: NavKey): Boolean = openSidebarPlace(
+        key, window, pageRoots, hosts, ::showHost, { stacks[AppTab.Persona] = it },
+    ) { selected = AppTab.Persona }
     /**
      * The stack is only a place root. Switch to the conversation without a push or a pop
      * (`leavePlace`, AssistantView.swift:682–686; `assistantReveal`, AppModel.swift:1381 and :1393;

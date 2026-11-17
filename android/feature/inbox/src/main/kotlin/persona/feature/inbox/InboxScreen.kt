@@ -81,6 +81,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         if (snapshot.refreshes > 0 && snapshot.error == null) error = null
     }
     var refreshing by remember { mutableStateOf(false) }
+    // Silent reload skips while one is already running (InboxStore.reload, InboxStore.swift:243–244).
+    var backgroundInFlight by remember { mutableStateOf(false) }
     val pending = remember { mutableStateMapOf<String, Boolean>() }
     // Selection (#2576): a long-press on a row starts it, Back or the bar's ← ends it.
     var selecting by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
@@ -139,12 +141,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
      */
     fun refresh(collectNow: Boolean = true, pull: Boolean = true) {
         if (pull && refreshing) return
-        if (pull) refreshing = true
+        if (!pull && (backgroundInFlight || refreshing)) return
+        if (pull) refreshing = true else backgroundInFlight = true
         scope.launch {
             try { if (collectNow) repository.refreshNow() else repository.refresh(); error = null }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { error = res.getString(R.string.inbox_refresh_failed) }
-            finally { if (pull) refreshing = false }
+            finally { if (pull) refreshing = false else backgroundInFlight = false }
         }
     }
     val failedCompletions = remember(repository) {

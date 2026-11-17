@@ -303,6 +303,25 @@ class SidebarPageRootsTest {
     }
 
     @Test
+    fun foldingATodoRootKeepsTheInboxHost() {
+        val conversation = mutableStateListOf<NavKey>(AssistantRoute)
+        val hosts = SidebarRootHosts(conversation)
+        hosts.activate(InboxRoute, listOf(InboxRoute, InboxItemRoute("i")))
+        val todo = TodoDetailRoute("x")
+        hosts.activate(todo, listOf(todo))
+        hosts.foldOntoConversation()
+        assertEquals(listOf(AssistantRoute, todo), conversation.toList())
+        assertTrue(hosts.current === conversation)
+        assertNull(hosts.stack("todo:x"))
+        assertEquals(listOf(InboxRoute, InboxItemRoute("i")), hosts.stack("inbox")!!.toList())
+        assertTrue(hosts.visited.contains("inbox"))
+        assertFalse(hosts.unfoldPrefixedPlace())
+        hosts.activate(InboxRoute, listOf(InboxRoute, InboxItemRoute("i")))
+        assertTrue(hosts.current === hosts.stack("inbox"))
+        assertEquals(listOf(InboxRoute, InboxItemRoute("i")), hosts.current.toList())
+    }
+
+    @Test
     fun unfoldingStripsAPrefixLeftOnAHostThatIsNotInFront() {
         val conversation = mutableStateListOf<NavKey>(AssistantRoute)
         val hosts = SidebarRootHosts(conversation)
@@ -366,6 +385,23 @@ class SidebarPageRootsTest {
     }
 
     @Test
+    fun applyingAPendingInboxItemKeepsTheRestoredConversation() {
+        val chat = ChatRoute("machine", "chat-x", ConversationKind.Agent)
+        val conversation = mutableStateListOf<NavKey>(AssistantRoute, chat)
+        val hosts = SidebarRootHosts(conversation)
+        val roots = SidebarPageRoots()
+        val window = SidebarPlaceWindow()
+        val opened = window.openPlace(InboxItemRoute("fresh"), roots, hosts, { _, _ -> }) {}
+        assertFalse(opened)
+        conversation.add(InboxRoute)
+        conversation.add(InboxItemRoute("fresh"))
+        window.noteSize(951f, 673f)
+        window.onWidth(true, hosts, conversation, roots, { root, next -> hosts.activate(root, next) }) {}
+        assertEquals(listOf(AssistantRoute, chat), conversation.toList())
+        assertEquals(listOf(InboxRoute, InboxItemRoute("fresh")), hosts.current.toList())
+    }
+
+    @Test
     fun backFromAgentsAtRegularWidthUsesTheInboxHost() {
         val opened = regularInboxNavigator()
         val chat = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item-1"))
@@ -387,6 +423,42 @@ class SidebarPageRootsTest {
         assertEquals(listOf(AgentsRoute), opened.agents.toList())
         assertEquals(listOf(AssistantRoute), opened.conversation.toList())
         assertEquals(listOf(InboxRoute, InboxItemRoute("item-1"), chat), opened.hosts.current.toList())
+    }
+
+    @Test
+    fun restoringAnInboxAgentAtCompactWidthLandsOnTheRetainedHost() {
+        val conversation = mutableStateListOf<NavKey>(AssistantRoute)
+        val hosts = SidebarRootHosts(conversation)
+        val roots = SidebarPageRoots()
+        val window = SidebarPlaceWindow()
+        window.noteSize(400f, 800f)
+        hosts.activate(InboxRoute, listOf(InboxRoute))
+        val agents = mutableStateListOf<NavKey>(AgentsRoute)
+        val stacks = mutableMapOf<AppTab, MutableList<NavKey>>(
+            AppTab.Persona to conversation,
+            AppTab.Agents to agents,
+        )
+        var selected = AppTab.Agents
+        val navigator = AppNavigator(
+            stacks, { selected }, { selected = it },
+            chatTab = { AppTab.Persona },
+            openPlace = { key ->
+                openSidebarPlace(key, window, roots, hosts, { root, next ->
+                    hosts.activate(root, next)
+                    stacks[AppTab.Persona] = hosts.current
+                }, { stacks[AppTab.Persona] = it }) { selected = AppTab.Persona }
+            },
+        )
+        val chat = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item-1"))
+        agents.add(chat)
+        navigator.restoreChatTabs()
+        assertEquals(listOf(AgentsRoute), agents.toList())
+        assertEquals(listOf(AssistantRoute), conversation.toList())
+        assertTrue(stacks.getValue(AppTab.Persona) === hosts.current)
+        assertEquals(
+            listOf(AssistantRoute, InboxRoute, InboxItemRoute("item-1"), chat),
+            hosts.current.toList(),
+        )
     }
 
     private class RegularInbox(val conversation: androidx.compose.runtime.snapshots.SnapshotStateList<NavKey>,
@@ -416,7 +488,9 @@ class SidebarPageRootsTest {
             stacks, { opened.selected }, { opened.selected = it },
             chatTab = chatTab,
             openPlace = { key ->
-                window.openPlace(key, roots, hosts, ::show) { opened.selected = AppTab.Persona }
+                openSidebarPlace(key, window, roots, hosts, ::show, { stacks[AppTab.Persona] = it }) {
+                    opened.selected = AppTab.Persona
+                }
             },
             leavePlaceRoot = {
                 window.leavePlaceRoot(opened.selected == AppTab.Persona, stacks.getValue(AppTab.Persona), roots, ::show)

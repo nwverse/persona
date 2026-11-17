@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.navigation3.runtime.NavKey
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
@@ -61,9 +62,11 @@ internal fun SidebarRootsRuntime(
     LaunchedEffect(regular) {
         window.onWidth(regular, hosts, assistantStack, pageRoots, showHost, assignPersona)
     }
+    // A navigate or restore pushes onto the host list without activate. Trim before the next frame
+    // so that route is not composed on two hosts (docs/design/sidebar-navigation.md).
+    SideEffect { hosts.trimComposedClashes() }
     // Every visited host, at both widths. Folding a fixed place keeps it on its own list, so a
-    // compact frame must keep composing it. A to-do copied onto the conversation list has already
-    // left [SidebarRootHosts.visited].
+    // compact frame must keep composing it. Folding a to-do drops only that host.
     hosts.visited.forEach { hostId ->
         val hostStack = hosts.stack(hostId) ?: return@forEach
         key(hostId) {
