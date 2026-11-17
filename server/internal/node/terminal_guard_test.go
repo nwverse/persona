@@ -48,11 +48,12 @@ func TestOnlyUserActionsClosePanes(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
-			nodeMethod := false
+			nodeMethod, keptClaimMethod := false, false
 			if fn.Recv != nil {
 				if ptr, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
 					typ, _ := ptr.X.(*ast.Ident)
 					nodeMethod = typ != nil && typ.Name == "Node"
+					keptClaimMethod = typ != nil && typ.Name == "keptClaim"
 				}
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -67,6 +68,7 @@ func TestOnlyUserActionsClosePanes(t *testing.T) {
 				recv, _ := sel.X.(*ast.Ident)
 				closes := (sel.Sel.Name == "close" || sel.Sel.Name == "closeAfterExit") && recv != nil && recv.Name == "n" ||
 					sel.Sel.Name == "PaneClose" && nodeMethod ||
+					sel.Sel.Name == "guardedClose" && (nodeMethod || keptClaimMethod) ||
 					sel.Sel.Name == "Close" && len(c.Args) == 4 // host.Organizer.Close(ctx, pane, workspace, tab)
 				if closes && !slices.Contains(found, fn.Name.Name) {
 					found = append(found, fn.Name.Name)
