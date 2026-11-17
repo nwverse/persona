@@ -47,7 +47,8 @@ export function findPathRefs(text: string, limit = 40): PathRef[] {
   }
   for (const m of text.matchAll(TEXT)) {
     const ref = fromMatch(m, m.index);
-    if (ref && !out.some((r) => r.start === ref.start && r.end === ref.end)) out.push(ref);
+    // A whole code path owns its final dots; do not offer a different, shortened filename if it is missing.
+    if (ref && !out.some((r) => r.start === ref.start && (r.end === ref.end || /^\.+$/.test(text.slice(ref.end, r.end))))) out.push(ref);
   }
   out.sort((a, b) => a.start - b.start || b.end - a.end);
   return out.slice(0, limit);
@@ -60,7 +61,7 @@ export function codePathRef(code: string): PathRef | undefined {
   if (!t || t.startsWith("//") || t.includes("://")) return undefined;
   const w = WHOLE.exec(t);
   if (w) {
-    const ref = fromMatch(w, 0);
+    const ref = fromMatch(w, 0, false);
     if (ref && ref.path.split("/").filter(Boolean).length >= (ref.path.startsWith("~") ? 1 : 2)) return shift(ref, lead);
   }
   for (const m of t.matchAll(TEXT)) {
@@ -75,11 +76,11 @@ function shift(r: PathRef, by: number): PathRef {
   return { ...r, start: r.start + by, end: r.end + by };
 }
 
-function fromMatch(m: RegExpMatchArray, at: number): PathRef | undefined {
+function fromMatch(m: RegExpMatchArray, at: number, trimPunctuation = true): PathRef | undefined {
   let path = m[1];
   const lineText = m[0].slice(path.length);
   // A sentence's full stop (or an ellipsis) is not part of the path, unless the path is only dots.
-  if (!lineText) path = path.replace(/(?<=[^./])\.+$/, "");
+  if (!lineText && trimPunctuation) path = path.replace(/(?<=[^./])\.+$/, "");
   if (!path || path === "~" || path === "/" || /^~?\/+$/.test(path)) return undefined;
   const num = (s?: string) => (s ? Number(s) : undefined);
   const line = num(m[2] ?? m[4]);
