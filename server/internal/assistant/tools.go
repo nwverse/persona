@@ -64,6 +64,9 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return proto.TextResult(err.Error(), true)
 	}
 	call.Name = compat.Tool(call.Name)
+	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name); refused {
+		return res
+	}
 	args := call.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
