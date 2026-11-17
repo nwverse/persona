@@ -226,7 +226,10 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "the lines an execution Agent's start is checked against on every computer: enabled, load_per_core, min_memory_bytes, " +
 				"max_claude_procs (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
 				"direction_cap_by_direction keys are a supervisor conversation id or a direction's displayed name and win over " +
-				"direction_cap_by_project, which wins over direction_cap and the code default; get first and send the whole object",
+				"direction_cap_by_project, which wins over direction_cap and the code default. launcher_groups (none by default) caps " +
+				"running tasks across launchers that share one budget, on every computer: each {name, launchers (exact launcher names), " +
+				"cap}, a launcher in one group at most; a task held by a full group stays queued until it has room. " +
+				"Get first and send the whole object",
 			Value: "the full AdmissionSettings JSON object from get; a nil pointer keeps the code default, every set line must be positive"},
 			get: s.getAdmission,
 			set: s.setAdmission},
