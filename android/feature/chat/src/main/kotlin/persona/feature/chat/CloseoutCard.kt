@@ -3,8 +3,10 @@ package persona.feature.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -116,12 +118,14 @@ internal fun CloseoutCard(closeout: Closeout, artifacts: List<WorkArtifact>, ses
     val expanded = stringResource(persona.core.designsystem.R.string.designsystem_expanded)
     val collapsed = stringResource(persona.core.designsystem.R.string.designsystem_collapsed)
     val fieldsMax = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * CloseoutFieldsShare).toDp() }
-    // iOS CloseoutCard.swift:48: withAnimation(Theme.Motion.reveal) { open.toggle() }. Same reveal both ways; Reduce Motion jumps.
-    // Fade only, as chat `.unfolding` / `Modifier.unfolding`: the block takes its height at once and opacity
-    // follows Theme.Motion.reveal (`Theme.swift:784`). Height expand would leave a different resting layout.
+    // iOS CloseoutCard.swift:48: withAnimation(Theme.Motion.reveal) { open.toggle() }. The details use the
+    // default .opacity transition, so height and fade both follow Theme.Motion.reveal (`Theme.swift:784`),
+    // opening and closing; not `.unfolding`. Reduce Motion jumps (nil animation).
     val reduceMotion = PersonaTheme.reduceMotion
-    val enter = if (reduceMotion) EnterTransition.None else fadeIn(SharedMotion.reveal())
-    val exit = if (reduceMotion) ExitTransition.None else fadeOut(SharedMotion.reveal())
+    val enter = if (reduceMotion) EnterTransition.None
+        else fadeIn(SharedMotion.reveal()) + expandVertically(SharedMotion.reveal(), expandFrom = Alignment.Top)
+    val exit = if (reduceMotion) ExitTransition.None
+        else fadeOut(SharedMotion.reveal()) + shrinkVertically(SharedMotion.reveal(), shrinkTowards = Alignment.Top)
     // A neutral card in every style: where it stands is said by the head's mark and words, never by the container.
     JCard(modifier.fillMaxWidth().testTag("closeout-card"), padding = Tokens.Space.m) {
         Row(

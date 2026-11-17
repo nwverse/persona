@@ -1,10 +1,12 @@
 {
   "files": {
     "android/app/src/main/java/persona/android/ui/PaneDividers.kt": 1,
-    "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt": 2,
+    "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt": 4,
+    "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Glass.kt": 1,
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/KeyCaps.kt": 1,
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Page.kt": 2,
     "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsScreen.kt": 1,
+    "android/feature/chat/src/main/kotlin/persona/feature/chat/AssistantTasks.kt": 1,
     "android/feature/chat/src/main/kotlin/persona/feature/chat/StructuredContent.kt": 1
   },
   "version": 1

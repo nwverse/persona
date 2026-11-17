@@ -217,7 +217,7 @@ class ColumnDragRealShotsTest {
     }
 
     private fun evidenceDir(): File =
-        File(System.getenv("ROOT_EDGE_SHOTS") ?: "/tmp/persona-leader/shots-9803").also { it.mkdirs() }
+        File(System.getenv("ROOT_EDGE_SHOTS") ?: "build/root-edge-shots").also { it.mkdirs() }
 
     private fun saveEvidence(out: File, name: String): Bitmap {
         val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()

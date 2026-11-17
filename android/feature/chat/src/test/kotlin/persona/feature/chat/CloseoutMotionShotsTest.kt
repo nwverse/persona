@@ -42,8 +42,9 @@ import java.io.File
 
 /**
  * Closeout card fold uses [persona.core.designsystem.SharedMotion.reveal] as iOS `CloseoutCard.swift:48`
- * (`Theme.Motion.reveal`). Mid-reveal frames and resting captures go to `/tmp/persona-leader/shots-9897/`
- * (or `persona.shots`). Resting open/folded screens are pixel-identical with Reduce Motion on a fresh card.
+ * (`Theme.Motion.reveal`): fade + vertical expand/shrink (default opacity + height under withAnimation).
+ * Mid-reveal frames and resting captures go to `persona.shots` (default `build/closeout-motion-shots`).
+ * Resting open/folded screens are pixel-identical with Reduce Motion on a fresh card.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -51,7 +52,7 @@ import java.io.File
 class CloseoutMotionShotsTest {
     @get:Rule val rule = createComposeRule()
 
-    private val out = File(System.getProperty("persona.shots") ?: "/tmp/persona-leader/shots-9897").also { it.mkdirs() }
+    private val out = File(System.getProperty("persona.shots") ?: "build/closeout-motion-shots").also { it.mkdirs() }
     private val closeout = Closeout(
         "done",
         did = listOf("Retry the import once when the hub restarts", "Added a test for the restart path"),

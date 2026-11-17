@@ -17,14 +17,23 @@ TOKENISH = re.compile(
     r'PersonaTheme\.motion|motion\.(enter|size|quick|standard|count|breathe|state|layout)|'
     r'PageTransitionTokens|sidebarColumnSpec|drawerSpec|columnDragSettleSpring|ColumnDrag\.'
 )
-TWEEN_NUM = re.compile(r'\btween\s*\(\s*(?:duration\s*=\s*)?\d')
+# tween / spring / snap may carry a type argument: tween<Float>(900), spring<T>(...), snap<Float>(0).
+TYPE_ARGS = r'(?:<[^<>]*>)?'
+# Compose's named duration is durationMillis; older / wrong "duration =" still matched so drift fails.
+DURATION_NAMED = r'(?:(?:durationMillis|duration)\s*=\s*)?'
+TWEEN_NUM = re.compile(rf'\btween\s*{TYPE_ARGS}\s*\(\s*{DURATION_NAMED}\d')
 SPRING_LIT = re.compile(
-    r'\bspring\s*\(\s*(?:[^)]*?(?:dampingRatio|stiffness)\s*=\s*(?:[\d.]+|Spring\.))'
+    rf'\bspring\s*{TYPE_ARGS}\s*\(\s*(?:[^)]*?(?:dampingRatio|stiffness)\s*=\s*(?:[\d.]+|Spring\.))'
 )
 KEYFRAMES = re.compile(r'\bkeyframes\s*\(')
-SNAP_NUM = re.compile(r'\bsnap\s*\(\s*\d')
+SNAP_NUM = re.compile(rf'\bsnap\s*{TYPE_ARGS}\s*\(\s*\d')
 ANIMATED_VISIBILITY = re.compile(r'\bAnimatedVisibility\s*\(')
 CROSSFADE = re.compile(r'\bCrossfade\s*\(')
+ANIMATED_CONTENT = re.compile(r'\bAnimatedContent\s*\(')
+ANIMATE_CONTENT_SIZE = re.compile(r'\.animateContentSize\s*\(')
+ANIMATE_AS_STATE = re.compile(
+    r'\banimate(?:Float|Dp|Int|Offset|Color|Value|Size|IntSize|IntOffset)AsState\s*\('
+)
 
 
 def matching_paren(code, open_idx):
@@ -39,6 +48,83 @@ def matching_paren(code, open_idx):
                 return i
         i += 1
     return len(code) - 1
+
+
+def call_head(code, start, limit=800):
+    """Arguments of a call before its trailing lambda / trailing brace content."""
+    open_idx = code.find('(', start)
+    if open_idx < 0:
+        return ''
+    end = matching_paren(code, open_idx)
+    return code[open_idx + 1:end]
+
+
+def split_top_level_args(args):
+    """Comma-split call arguments, ignoring commas inside nested () [] {} <> and strings."""
+    parts = []
+    buf = []
+    depth = 0
+    angle = 0
+    quote = None
+    i = 0
+    while i < len(args):
+        ch = args[i]
+        if quote:
+            buf.append(ch)
+            if ch == '\\' and i + 1 < len(args):
+                buf.append(args[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            buf.append(ch)
+        elif ch in '([{':
+            depth += 1
+            buf.append(ch)
+        elif ch in ')]}':
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch == '<' and depth == 0:
+            angle += 1
+            buf.append(ch)
+        elif ch == '>' and angle:
+            angle -= 1
+            buf.append(ch)
+        elif ch == ',' and depth == 0 and angle == 0:
+            parts.append(''.join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    tail = ''.join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def is_named(arg):
+    return bool(re.match(r'^[A-Za-z_][A-Za-z0-9_]*\s*=', arg))
+
+
+def has_animation_spec_arg(args):
+    """True when the call passes an animationSpec (named or a positional FiniteAnimationSpec)."""
+    if re.search(r'\banimationSpec\s*=', args):
+        return True
+    for arg in split_top_level_args(args):
+        if is_named(arg):
+            # Named args after the target: only animationSpec counts as a spec.
+            continue
+        # Positional: first is targetValue; a second positional is the animationSpec.
+        # We only know we have a positional after seeing more than one positional.
+        # Handled below by counting positionals.
+    positionals = [a for a in split_top_level_args(args) if not is_named(a)]
+    # targetValue [, animationSpec] [, label] is unusual as positional label; Compose uses named label.
+    # A second positional argument is the animationSpec.
+    return len(positionals) >= 2
 
 
 def literal_hits(code):
@@ -72,6 +158,29 @@ def literal_hits(code):
         if 'animationSpec' in head:
             continue
         hits.append((code.count('\n', 0, start) + 1, 'Crossfade-default'))
+    for match in ANIMATED_CONTENT.finditer(code):
+        start = match.start()
+        args = call_head(code, start)
+        if re.search(r'\btransitionSpec\s*=', args):
+            continue
+        hits.append((code.count('\n', 0, start) + 1, 'AnimatedContent-default'))
+    for match in ANIMATE_CONTENT_SIZE.finditer(code):
+        start = match.start()
+        args = call_head(code, start)
+        # Default when there is no positional FiniteAnimationSpec and no animationSpec=.
+        # Named alignment= alone still uses the default animationSpec.
+        if re.search(r'\banimationSpec\s*=', args):
+            continue
+        if any(not is_named(a) for a in split_top_level_args(args) if a):
+            continue
+        hits.append((code.count('\n', 0, start) + 1, 'animateContentSize-default'))
+    for match in ANIMATE_AS_STATE.finditer(code):
+        start = match.start()
+        args = call_head(code, start)
+        if has_animation_spec_arg(args):
+            continue
+        hits.append((code.count('\n', 0, start) + 1, 'animateAsState-default'))
+    hits.sort(key=lambda item: (item[0], item[1]))
     return hits
 
 
@@ -112,11 +221,19 @@ def regressions(current, baseline):
         limit = baseline['files'].get(path, 0)
         if actual > limit:
             failures.append(f'{path}: {actual} literal animation specs, baseline {limit}')
-    for path in baseline['files']:
-        if path not in current['files'] and baseline['files'][path]:
-            # A file that disappeared is fine (deleted or cleared); only rising counts fail.
-            pass
     return failures
+
+
+def update_raises(current, baseline):
+    """Files that would raise the baseline (higher count or a new file). Counts may only go down."""
+    rises = []
+    for path, actual in sorted(current['files'].items()):
+        limit = baseline['files'].get(path)
+        if limit is None:
+            rises.append(f'{path}: new file with {actual} literal animation specs')
+        elif actual > limit:
+            rises.append(f'{path}: {actual} literal animation specs, baseline {limit}')
+    return rises
 
 
 def reduction_hint(current, baseline):
@@ -136,13 +253,20 @@ def main():
     parser.add_argument('--baseline', type=Path, default=BASELINE, help='baseline file')
     parser.add_argument('--report', type=Path, help="also write this run's counts here")
     parser.add_argument('--update-baseline', action='store_true',
-                        help='accept the current counts and rewrite the baseline')
+                        help='accept a reduction of the current counts and rewrite the baseline '
+                             '(refuses any rise or new file)')
     args = parser.parse_args()
     current = scan(args.root)
     payload = json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
     if args.report:
         args.report.write_text(payload)
     if args.update_baseline:
+        if args.baseline.is_file():
+            baseline = json.loads(args.baseline.read_text())
+            rises = update_raises(current, baseline)
+            if rises:
+                print('Refusing to raise the motion baseline (counts may only go down):\n' + '\n'.join(rises))
+                return 1
         args.baseline.write_text(json.dumps(baseline_of(current), ensure_ascii=False, indent=2, sort_keys=True) + '\n')
         print('motion baseline written')
         return 0
