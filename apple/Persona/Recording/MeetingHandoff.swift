@@ -236,6 +236,7 @@ struct MeetingHandoffSheet: View {
                             .font(Theme.Font.caption)
                             .foregroundStyle(Theme.danger)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityElement(children: .combine) // the mark and the reason, read as one
                             .accessibilityIdentifier("meeting-handoff-problem")
                     }
                     Button { Task { await send() } } label: {
