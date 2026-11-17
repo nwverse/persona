@@ -226,12 +226,13 @@ const (
 	InteractionsAnswer = "interactions.answer"
 )
 
-// ModelBinding is what a purpose runs on: a provider (launcher.<name> for a launcher) with a model and effort.
+// ModelBinding is what a purpose runs on: a provider (launcher.<name> for a launcher) with a model and effort. A
+// binding an older hub stored with the main chat's "runtime" ("cli" or "agentsdk") reads without it, as the CLI every
+// assistant conversation runs on; the key is gone from the next write.
 type ModelBinding struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
-	Runtime  string `json:"runtime,omitempty"` // main chat only: cli (default) or agentsdk; kept across a provider change
 	// ConfigDir is the main chat's only: the Claude profile its new conversations start in (#4633). None is Persona's
 	// own profile (the default); "legacy" is this computer's existing Claude Code setup. Kept across a provider change;
 	// an existing conversation keeps the profile it was started in.
