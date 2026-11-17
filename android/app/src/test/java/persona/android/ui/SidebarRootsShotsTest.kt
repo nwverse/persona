@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasClickAction
@@ -79,6 +80,7 @@ import persona.android.R
 import persona.android.navigation.HomeLeadingAction
 import persona.android.navigation.SidebarPageRoots
 import persona.android.navigation.SidebarRootHosts
+import persona.android.navigation.applySidebarDestination
 import persona.android.navigation.noPageMotion
 import persona.android.navigation.personaSceneRootSwapped
 import persona.android.navigation.placeRootFor
@@ -117,11 +119,13 @@ import persona.feature.agents.TodosScreen
 import persona.feature.assistant.AssistantSidebarContent
 import persona.feature.inbox.InboxConversations
 import persona.feature.inbox.InboxEventRoute
+import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.InboxPreferences
 import persona.feature.inbox.InboxRecord
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.InboxScreen
 import persona.feature.inbox.InboxSnapshot
+import persona.feature.inbox.LocalInboxLanding
 import persona.feature.inbox.LarkConversation
 import persona.feature.inbox.ReplyDraft
 import persona.feature.inbox.ReplyRequest
@@ -163,7 +167,9 @@ class SidebarRootsShotsTest {
         val inbox = ShotInbox(listOf(
             item("first", "Approve Friday launch"),
             item("second", "Review budget update"),
+            item("third", "Weekly note", tier = "fyi"),
         ))
+        val landing = InboxLanding()
         var dark by mutableStateOf(false)
         val columnShown = mutableStateOf(true)
         val overlayShown = mutableStateOf(overlay)
@@ -172,11 +178,16 @@ class SidebarRootsShotsTest {
         val roots = SidebarPageRoots()
         fun pick(key: NavKey) {
             overlayShown.value = false
-            roots.markOpenedAsRoot(key)
-            val step = roots.select(key, hosts.current.drop(1))
-            hosts.activate(step.root, step.stack)
+            applySidebarDestination(
+                key, regular = true, roots, hosts, conversation,
+                showHost = { root, next -> hosts.activate(root, next) },
+                assignPersona = {},
+                landing = landing,
+                records = inbox.snapshot.value.records,
+            )
         }
         fun reset() {
+            landing.clear()
             roots.forget()
             hosts.forgetPlaces()
             replaceBackStack(conversation, listOf(AssistantRoute))
@@ -188,7 +199,7 @@ class SidebarRootsShotsTest {
             scenario.onActivity { activity ->
                 activity.setContent {
                     PersonaTheme(style = AppStyle.Glass, darkTheme = dark, reduceMotion = false) {
-                        SidebarRootsHarness(snapshot, repository, inbox, hosts, roots, overlay, columnShown, overlayShown, ::pick)
+                        SidebarRootsHarness(snapshot, repository, inbox, hosts, roots, overlay, columnShown, overlayShown, landing, ::pick)
                     }
                 }
             }
@@ -309,6 +320,20 @@ class SidebarRootsShotsTest {
                 assertNoVisibleChevron(inboxAgain, "$size $tone inbox again", overlay)
                 if (overlay) placedSidebar().assertExists()
                 save(inboxAgain, "$size-todos-inbox-end-glass-$tone")
+
+                if (!overlay) {
+                    rule.onNode(hasText("FYI") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected)).performClick()
+                    settle(1_000)
+                    rule.onNodeWithText("Weekly note").assertExists()
+                    rule.onNode(hasText("To-dos") and hasClickAction()).performClick()
+                    settle(1_000)
+                    rule.onNode(hasText("Inbox") and hasClickAction()).performClick()
+                    settle(1_000)
+                    rule.onNode(hasText("Needs you") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected)).assertIsSelected()
+                    rule.onNodeWithText("Approve Friday launch").assertExists()
+                    rule.onNodeWithText("Weekly note").assertDoesNotExist()
+                    save(shot("window"), "$size-inbox-needs-you-after-fyi-glass-$tone")
+                }
 
                 scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
                 settle(1_000)
@@ -439,6 +464,7 @@ private fun SidebarRootsHarness(
     overlay: Boolean,
     columnShown: androidx.compose.runtime.MutableState<Boolean>,
     overlayShown: androidx.compose.runtime.MutableState<Boolean>,
+    landing: InboxLanding,
     pick: (NavKey) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -495,7 +521,7 @@ private fun SidebarRootsHarness(
     }
     val transitions = rememberPageTransitions()
     val shown = if (overlay) overlayShown.value else columnShown.value
-    CompositionLocalProvider(LocalIndication provides QuietIndication) {
+    CompositionLocalProvider(LocalIndication provides QuietIndication, LocalInboxLanding provides landing) {
     Box(Modifier.fillMaxSize().testTag("window")) {
         JSidebarColumn(
             sidebar = {
@@ -612,9 +638,9 @@ private class ShotInbox(records: List<InboxRecord>) : InboxRepository {
     override suspend fun downloadFile(file: persona.feature.inbox.LarkPart.File): String = error("not used")
 }
 
-private fun item(id: String, title: String) = InboxRecord(
+private fun item(id: String, title: String, tier: String = "action") = InboxRecord(
     InboxItem(id, account = "chat", kind = "group", title = title, sender = "Avery",
-        preview = "The launch checklist is ready.", summary = "Ready for a decision", tier = "action", status = "action",
+        preview = "The launch checklist is ready.", summary = "Ready for a decision", tier = tier, status = tier,
         updatedAt = "2026-11-13T10:00:00Z", version = "v-$id"),
     source = "lark", sourceLabel = "Chat connector", feedId = "shared-room", isGroup = true,
     groupName = "Planning room", count = 2, read = false, event = InboxEventFields(status = "action"),

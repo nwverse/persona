@@ -297,23 +297,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         dismissSidebar()
         window.clearPending()
         selected = AppTab.Persona
-        // A drawer pick is a root too, so unfolding promotes it. A conversation drill is not marked.
-        pageRoots.markOpenedAsRoot(key)
-        if (!window.regular) {
-            // The phone drawer still pushes a place that has no host yet over the conversation
-            // (sidebar-navigation.md section 6). A fixed place that already has a host is shown on
-            // that host, so the drawer's push does not compose it a second time.
-            if (!hosts.showRetainedCompact(key, listOf(key))) {
-                hosts.showConversation()
-                pushCompactSidebarPlace(assistantStack, key)
-            }
-            stacks[AppTab.Persona] = hosts.current
-            pageRoots.adoptVisible(AssistantRoute)
-            return
-        }
-        // Regular width: replace the root. A switch is not animated; a re-pick pops (SidebarPageRoots.Step.animated).
-        val step = pageRoots.select(key, hosts.current.drop(1))
-        showHost(step.root, step.stack)
+        // Regular: SidebarPageRoots.select, then the Inbox enters or lands (inboxPicked,
+        // AssistantView.swift:633–640). Compact: the drawer keeps a host, and an Inbox item on it
+        // (show, AssistantView.swift:567–569). applySidebarDestination marks the root.
+        applySidebarDestination(
+            key, window.regular, pageRoots, hosts, assistantStack, ::showHost,
+            { stacks[AppTab.Persona] = it },
+            inboxLandings.getValue(AppTab.Persona),
+            session.inbox.snapshot.value.records,
+        )
     }
     /**
      * A route to a place at regular width. Before the window is measured this remembers [key] and lets the
@@ -527,10 +519,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val provisionalPages = remember(session.identity) { mutableSetOf<NavKey>() }
     val notePage = remember(provisionalPages) { { page: NavKey -> provisionalPages += page; Unit } }
     val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage, nativeChats = nativeInboxChats)
-    // A landing is for the Inbox list under the item that set it: once its stack holds no Inbox list, nothing will take
-    // it, and it must not move a list entered later; a page that moved the list beside it closing puts its choice back (#9053).
+    // A landing follows the Inbox host, which stays composed while another root is in front (#9667).
+    // The visible stack alone would clear it on the way to To-dos or the conversation. A page that
+    // moved the list beside it still puts its choice back when that page leaves the Inbox host (#9053).
     LaunchedEffect(inboxLandings) {
-        snapshotFlow { stacks.mapValues { (_, stack) -> stack.toList() } }.collect { held -> settleLandings(held, inboxLandings) }
+        snapshotFlow {
+            hosts.visited.toList()
+            hosts.current
+            hosts.allStacks().map { it.toList() } to stacks.mapValues { (_, stack) -> stack.toList() }
+        }.collect { (personaHosts, held) -> settleLandings(held, inboxLandings, personaHosts) }
     }
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect

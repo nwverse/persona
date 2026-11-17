@@ -11,11 +11,17 @@ import org.junit.Test
 import persona.core.contracts.InboxEventFields
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.InboxEntry
+import persona.core.domain.inbox.InboxBar
 import persona.core.domain.inbox.InboxItem
+import persona.core.navigation.AppTab
+import persona.core.navigation.AssistantRoute
 import persona.core.navigation.InboxItemRoute
+import persona.core.navigation.InboxRoute
 import persona.core.navigation.LarkChatRoute
+import persona.core.navigation.TodosRoute
 import persona.feature.inbox.InboxEventRoute
 import persona.feature.inbox.InboxItemPages
+import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.InboxRecord
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.InboxSnapshot
@@ -119,5 +125,86 @@ class InboxHistoryLinksTest {
         assertNull(resolve(InboxItemRoute("history"), inbox, loaded = false))
         assertEquals(InboxDestination.Open(LarkRoute("room")), resolve(LarkChatRoute("room"), inbox))
         assertTrue(inbox.calls.isEmpty())
+    }
+
+    /**
+     * #9667: leaving the Inbox root for To-dos does not drop a landing the composed Inbox host still holds.
+     * An empty host list still settles the visible stack, so a landing nobody took is dropped as before.
+     */
+    @Test fun leavingTheInboxHostKeepsTheLandingTheVisibleRootWouldDrop() {
+        val done = InboxRecord(InboxItem("history", kind = "dm", title = "Historical event", doneAt = "2026-11-01T10:00:00Z"),
+            feedId = "room", source = "lark")
+        val landing = InboxLanding().apply { land(done) }
+        val inboxHost = listOf(InboxRoute, InboxItemRoute("history"))
+        val todos = listOf(TodosRoute)
+        val conversation = listOf(AssistantRoute, InboxRoute)
+        settleLandings(
+            mapOf(AppTab.Persona to todos),
+            mapOf(AppTab.Persona to landing),
+            personaHosts = listOf(conversation, inboxHost, todos),
+        )
+        assertEquals(InboxBar.Landing("done", false), landing.pending)
+        assertEquals(inboxHost, inboxHostStack(todos, listOf(conversation, inboxHost, todos)))
+        assertEquals(conversation, inboxHostStack(conversation, listOf(conversation)))
+        assertNull(inboxHostStack(listOf(AssistantRoute), listOf(listOf(AssistantRoute), todos)))
+
+        landing.enter()
+        settleLandings(
+            mapOf(AppTab.Persona to todos),
+            mapOf(AppTab.Persona to landing),
+            personaHosts = listOf(listOf(AssistantRoute), listOf(InboxRoute)),
+        )
+        assertEquals("entering stays until the composed list takes it", InboxBar.Landing("", false), landing.pending)
+
+        settleLandings(
+            mapOf(AppTab.Persona to listOf(AssistantRoute)),
+            mapOf(AppTab.Persona to landing),
+            personaHosts = listOf(listOf(AssistantRoute), todos),
+        )
+        assertNull(landing.pending)
+    }
+
+    /** #9481 / #9667: inboxPicked (AssistantView.swift:633–640) and the drawer (AssistantView.swift:567–569). */
+    @Test fun aSidebarReturnToTheInboxRootEntersAndAKeptItemLands() {
+        val fyi = InboxRecord(InboxItem("note", kind = "dm", title = "Weekly note", tier = "fyi"), feedId = "room", source = "lark")
+        val landing = InboxLanding()
+        val entered = InboxBar.Landing("", false)
+        inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.None), landing, null)
+        assertEquals(entered, landing.pending)
+        inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.PopToRoot), landing, fyi)
+        assertEquals(entered, landing.pending)
+        inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.SwitchRoot), landing, fyi)
+        assertEquals(entered, landing.pending)
+        val kept = SidebarPageRoots.Step(InboxRoute, listOf(InboxEventRoute("note")), SidebarPageRoots.Move.SwitchRoot)
+        inboxSidebarPicked(kept, landing, inboxRecordOnPath(kept.path, listOf(fyi)))
+        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+        inboxSidebarPicked(
+            SidebarPageRoots.Step(InboxRoute, listOf(InboxItemRoute("missing")), SidebarPageRoots.Move.SwitchRoot),
+            landing,
+            null,
+        )
+        assertEquals("no record: the composed list keeps its choice", InboxBar.Landing("fyi", false), landing.pending)
+        inboxSidebarPicked(SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.DrillDown), landing, fyi)
+        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+        inboxSidebarPicked(SidebarPageRoots.Step(TodosRoute, emptyList(), SidebarPageRoots.Move.SwitchRoot), landing, fyi)
+        assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+
+        val item = InboxItemRoute("note")
+        assertEquals(
+            SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.None),
+            compactInboxPick(listOf(InboxRoute), inFront = true),
+        )
+        assertEquals(
+            SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.PopToRoot),
+            compactInboxPick(listOf(InboxRoute, item), inFront = true),
+        )
+        assertEquals(
+            SidebarPageRoots.Step(InboxRoute, emptyList(), SidebarPageRoots.Move.SwitchRoot),
+            compactInboxPick(null, inFront = false),
+        )
+        assertEquals(
+            SidebarPageRoots.Step(InboxRoute, listOf(item), SidebarPageRoots.Move.SwitchRoot),
+            compactInboxPick(listOf(AssistantRoute, InboxRoute, item), inFront = false),
+        )
     }
 }

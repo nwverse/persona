@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,8 +22,12 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -37,12 +42,24 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.runBlocking
 import persona.android.navigation.AppNavigator
 import persona.android.navigation.SidebarPageRoots
 import persona.android.navigation.SidebarPlaceWindow
 import persona.android.navigation.SidebarRootHosts
+import persona.android.navigation.applySidebarDestination
+import persona.android.navigation.inboxDestinationWithLookup
+import persona.android.navigation.openSidebarPlace
+import persona.android.navigation.settleLandings
+import persona.core.contracts.api.AssistantManagerChoice
+import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.InboxEntry
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
+import persona.core.domain.inbox.InboxBar
+import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AgentsRoute
 import persona.core.navigation.AppTab
 import persona.core.navigation.AssistantRoute
@@ -50,8 +67,24 @@ import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConversationKind
 import persona.core.navigation.InboxItemRoute
 import persona.core.navigation.InboxRoute
+import persona.core.navigation.Navigator
 import persona.core.navigation.RouteSource
 import persona.core.navigation.TodoDetailRoute
+import persona.core.navigation.TodosRoute
+import persona.feature.inbox.InboxEventRoute
+import persona.feature.inbox.InboxItemPages
+import persona.feature.inbox.InboxLanding
+import persona.feature.inbox.InboxPreferences
+import persona.feature.inbox.InboxRecord
+import persona.feature.inbox.InboxRepository
+import persona.feature.inbox.InboxScreen
+import persona.feature.inbox.InboxSnapshot
+import persona.feature.inbox.LarkConversation
+import persona.feature.inbox.LarkPart
+import persona.feature.inbox.LocalInboxLanding
+import persona.feature.inbox.ReplyDraft
+import persona.feature.inbox.ReplyRequest
+import persona.feature.inbox.ReplyTarget
 
 /**
  * [SidebarRootsRuntime] is the composable [Root] calls for width changes, one display per host, and
@@ -290,6 +323,173 @@ class SidebarRootsRuntimeTest {
         assertFalse(placed("page-conversation"))
     }
 
+    /**
+     * #9481: the composed Inbox opens on Needs you when the sidebar enters it at its root
+     * (inboxPicked, AssistantView.swift:633–640; InboxView.swift:206). A kept item stays, and the
+     * list lands on that item's choice (broughtBack, InboxBar.swift:222–224; land at InboxView.swift:977–981).
+     */
+    @Test
+    fun sidebarInboxEntersOnNeedsYouAndAKeptItemLandsOnItsChoice() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        try {
+            val world = world()
+            world.window.noteSize(951f, 673f)
+            val landing = InboxLanding()
+            val action = inboxRow("act", "Approve Friday launch", "action")
+            val fyi = inboxRow("note", "Weekly note", "fyi")
+            val repo = BarInbox(listOf(action, fyi))
+            showInbox(world, landing, repo, regular = true)
+            pick(world, landing, repo, InboxRoute)
+            choice("Needs you").assertIsSelected()
+            rule.onNodeWithText("Approve Friday launch").assertExists()
+
+            choice("FYI").performClick()
+            rule.waitForIdle()
+            choice("FYI").assertIsSelected()
+            rule.onNodeWithText("Weekly note").assertExists()
+
+            pick(world, landing, repo, TodosRoute)
+            pick(world, landing, repo, InboxRoute)
+            choice("Needs you").assertIsSelected()
+            rule.onNodeWithText("Approve Friday launch").assertExists()
+            rule.onNodeWithText("Weekly note").assertDoesNotExist()
+
+            choice("FYI").performClick()
+            rule.waitForIdle()
+            pick(world, landing, repo, InboxRoute)
+            choice("Needs you").assertIsSelected()
+
+            rule.runOnIdle { world.hosts.current.add(InboxEventRoute("note")) }
+            rule.waitForIdle()
+            assertEquals("note", text("page-event"))
+            pick(world, landing, repo, TodosRoute)
+            pick(world, landing, repo, InboxRoute)
+            assertEquals(listOf(InboxRoute, InboxEventRoute("note")), world.hosts.current.toList())
+            assertEquals("note", text("page-event"))
+            rule.runOnIdle { world.hosts.current.removeAt(world.hosts.current.lastIndex) }
+            rule.waitForIdle()
+            choice("FYI").assertIsSelected()
+            rule.onNodeWithText("Weekly note").assertExists()
+        } finally {
+            AssistantManagerChoice.reset()
+        }
+    }
+
+    /**
+     * An InboxItemRoute opened from outside lands the list (InboxLink), and switching to To-dos does
+     * not clear that landing. Back shows the item's choice. The compact drawer keeps an item on the
+     * retained host (show, AssistantView.swift:567–569) and enters when nothing was kept.
+     */
+    @Test
+    fun anOutsideItemLandsAcrossAHostSwitchAndTheDrawerKeepsThatItem() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        try {
+            val world = world()
+            world.window.noteSize(951f, 673f)
+            val landing = InboxLanding()
+            val action = inboxRow("act", "Approve Friday launch", "action")
+            val fyi = inboxRow("note", "Weekly note", "fyi")
+            val repo = BarInbox(listOf(action, fyi))
+            var regular by mutableStateOf(true)
+            showInbox(world, landing, repo, regular = { regular })
+            pick(world, landing, repo, InboxRoute)
+            choice("Needs you").assertIsSelected()
+
+            pick(world, landing, repo, TodosRoute)
+            rule.runOnIdle {
+                val opened = openSidebarPlace(
+                    InboxItemRoute("note"), world.window, world.pageRoots, world.hosts, world.show, {}, {},
+                )
+                assertTrue(opened)
+            }
+            rule.waitForIdle()
+            runBlocking {
+                inboxDestinationWithLookup(
+                    InboxItemRoute("note"), repo.snapshot.value.records, true, InboxItemPages(), repo, found = landing::land,
+                )
+            }
+            rule.waitForIdle()
+            settlePersona(world, landing)
+            assertEquals(InboxBar.Landing("fyi", false), landing.pending)
+            pick(world, landing, repo, TodosRoute)
+            settlePersona(world, landing)
+            assertEquals("To-dos does not drop the Inbox host's landing", InboxBar.Landing("fyi", false), landing.pending)
+            pick(world, landing, repo, InboxRoute)
+            assertEquals(listOf(InboxRoute, InboxItemRoute("note")), world.hosts.current.toList())
+            rule.runOnIdle { world.hosts.current.removeAt(world.hosts.current.lastIndex) }
+            rule.waitForIdle()
+            choice("FYI").assertIsSelected()
+
+            pick(world, landing, repo, TodosRoute)
+            regular = false
+            rule.waitForIdle()
+            pick(world, landing, repo, InboxRoute, regularNow = false)
+            choice("Needs you").assertIsSelected()
+            rule.onNodeWithText("Weekly note").assertDoesNotExist()
+
+            rule.runOnIdle { world.hosts.stack("inbox")?.add(InboxEventRoute("note")) }
+            rule.waitForIdle()
+            pick(world, landing, repo, TodosRoute, regularNow = false)
+            pick(world, landing, repo, InboxRoute, regularNow = false)
+            val kept = world.hosts.stack("inbox")!!.toList()
+            assertEquals(listOf(AssistantRoute, InboxRoute, InboxEventRoute("note")), kept)
+            rule.runOnIdle { world.hosts.stack("inbox")?.removeAt(world.hosts.stack("inbox")!!.lastIndex) }
+            rule.waitForIdle()
+            choice("FYI").assertIsSelected()
+        } finally {
+            AssistantManagerChoice.reset()
+        }
+    }
+
+    private fun pick(world: World, landing: InboxLanding, repo: BarInbox, key: NavKey, regularNow: Boolean = true) {
+        rule.runOnIdle {
+            applySidebarDestination(
+                key, regularNow, world.pageRoots, world.hosts, world.conversation, world.show, {},
+                landing, repo.snapshot.value.records,
+            )
+        }
+        rule.waitForIdle()
+        settlePersona(world, landing)
+    }
+
+    private fun settlePersona(world: World, landing: InboxLanding) {
+        settleLandings(
+            mapOf(AppTab.Persona to world.hosts.current.toList()),
+            mapOf(AppTab.Persona to landing),
+            world.hosts.allStacks().map { it.toList() },
+        )
+    }
+
+    private fun choice(label: String) =
+        rule.onNode(hasText(label) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected))
+
+    private fun showInbox(world: World, landing: InboxLanding, repo: BarInbox, regular: Boolean) {
+        showInbox(world, landing, repo, regular = { regular })
+    }
+
+    private fun showInbox(world: World, landing: InboxLanding, repo: BarInbox, regular: () -> Boolean) {
+        rule.setContent {
+            Theme {
+                Hosts(world, regular()) {
+                    val navigator = remember {
+                        object : Navigator {
+                            override fun navigate(key: NavKey) { world.hosts.stack("inbox")?.add(key) }
+                            override fun back() {
+                                val stack = world.hosts.stack("inbox") ?: return
+                                if (stack.size > 1) stack.removeAt(stack.lastIndex)
+                            }
+                            override fun selectTab(tab: AppTab) = Unit
+                        }
+                    }
+                    CompositionLocalProvider(LocalRippleConfiguration provides null, LocalInboxLanding provides landing) {
+                        InboxScreen(repo, navigator)
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+    }
+
     private fun back() {
         rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
@@ -350,7 +550,11 @@ private fun Hosts(
                 entry<InboxItemRoute> { route ->
                     Text(route.itemId, Modifier.testTag("page-item").fillMaxSize())
                 }
+                entry<InboxEventRoute> { route ->
+                    Text(route.itemId, Modifier.testTag("page-event").fillMaxSize())
+                }
                 entry<TodoDetailRoute> { Text("To-do", Modifier.fillMaxSize()) }
+                entry<TodosRoute> { Text("To-dos", Modifier.testTag("page-todos").fillMaxSize()) }
                 entry<ChatRoute> { Text("Chat", Modifier.fillMaxSize()) }
             },
         )
@@ -360,4 +564,26 @@ private fun Hosts(
 private fun Modifier.unplacedForRuntimeTest(): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
     layout(placeable.width, placeable.height) {}
+}
+
+private fun inboxRow(id: String, title: String, tier: String) = InboxRecord(
+    InboxItem(id, kind = "dm", title = title, sender = "Example Person", preview = "A short note.",
+        tier = tier, updatedAt = "2026-11-13T10:00:00Z", version = "v-$id"),
+    source = "lark", sourceLabel = "Lark", feedId = "room",
+)
+
+private class BarInbox(records: List<InboxRecord>) : InboxRepository {
+    override val entries = MutableStateFlow(emptyList<InboxEntry>())
+    override val snapshot = MutableStateFlow(InboxSnapshot(records = records, loading = false, refreshes = 1))
+    override val connectionState = MutableStateFlow(ConnectionState.Online)
+    override val preferences = MutableStateFlow(InboxPreferences())
+    override suspend fun refresh() = Unit
+    override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
+    override suspend fun loadOlder(feedId: String) = Unit
+    override suspend fun refreshConversation(feedId: String) = Unit
+    override suspend fun setDone(itemId: String, done: Boolean) = Unit
+    override suspend fun readDraft(target: ReplyTarget): ReplyDraft? = null
+    override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) = Unit
+    override suspend fun reply(target: ReplyTarget, request: ReplyRequest) = Unit
+    override suspend fun downloadFile(file: LarkPart.File): String = error("not used")
 }
