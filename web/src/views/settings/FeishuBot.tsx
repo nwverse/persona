@@ -409,8 +409,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
               <div className="flex items-start gap-3 px-4 py-2.5">
                 <Icon name="chat" size={15} className="mt-0.5 shrink-0 text-accent" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[13px] text-ink">{t("settings-feishubot.source_report_full_title")}</div>
-                  <div id={fullReplyDetail} className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{t("settings-feishubot.source_report_full_detail")}</div>
+                  <div className="text-sm text-ink">{t("settings-feishubot.source_report_full_title")}</div>
+                  <div id={fullReplyDetail} className="mt-0.5 text-xs leading-snug text-ink-3">{t("settings-feishubot.source_report_full_detail")}</div>
                 </div>
                 <Switch on={fullReply} disabled={saving} describedBy={fullReplyDetail} label={t("settings-feishubot.source_report_full_title")} onChange={(on) => void run(t("settings-feishubot.save_failed"), () => updateBot({ source_report_full_reply: on }))} />
               </div>
@@ -419,8 +419,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
               <div className="flex items-start gap-3 px-4 py-2.5">
                 <Icon name="clock" size={15} className="mt-0.5 shrink-0 text-accent" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[13px] text-ink">{t("settings-feishubot.source_report_delay_title")}</div>
-                  <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{t("settings-feishubot.source_report_delay_detail")}</div>
+                  <div className="text-sm text-ink">{t("settings-feishubot.source_report_delay_title")}</div>
+                  <div className="mt-0.5 text-xs leading-snug text-ink-3">{t("settings-feishubot.source_report_delay_detail")}</div>
                 </div>
                 <select
                   value={reportDelay}
