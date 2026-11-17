@@ -56,9 +56,11 @@ struct TaskDetailSheet: View {
         #if os(iOS)
         // A sheet has no edge-back of its own: a rightward swipe from the leading edge closes it like ✕ (#5603). The
         // gesture runs beside the page's own, so taps, scrolling and selection inside it are not taken.
+        // Not when pushed: the stack's own swipes go back there, and a drag over the whole page took the swipe back from
+        // anywhere from it (#9971).
         .simultaneousGesture(DragGesture(minimumDistance: Theme.Size.edgeBackZone / 2).onEnded { drag in
             if !pushed && Self.edgeSwipeCloses(start: drag.startLocation, translation: drag.translation) { dismiss() }
-        })
+        }, including: pushed ? .subviews : .all)
         #endif
     }
 

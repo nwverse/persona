@@ -57,7 +57,7 @@ final class SecondaryPageBackTests: XCTestCase {
         assertConversation("Back from the Agent's chat")
 
         link("todo_dispatch_starting").tap()
-        XCTAssertTrue(app.staticTexts["正在开 Agent"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(startingPage.waitForExistence(timeout: 10), app.debugDescription)
         let startingBack = oneBack("the starting task's page")
         XCTAssertEqual(startingBack.frame.midX, agentBack.frame.midX, accuracy: 2,
                        "Back moved: \(startingBack.frame) on the starting page, \(agentBack.frame) on the Agent's chat")
@@ -73,30 +73,89 @@ final class SecondaryPageBackTests: XCTestCase {
         launch(sideBars: false)
         guard wide else { throw XCTSkip("pushed beside the sidebar in regular width only; a phone's sheet: TaskPageBackTests") }
         link("todo_dispatch_starting").tap()
-        XCTAssertTrue(app.staticTexts["正在开 Agent"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(startingPage.waitForExistence(timeout: 10), app.debugDescription)
         let back = oneBack("the starting task's page")
         shot("starting-header")
         back.tap()
         assertConversation("Back from the starting task's page")
     }
 
-    /// A rightward swipe from the middle of the page goes back: on the Agent's chat (its header hides the system bar), and
-    /// in regular width on the starting task's page (its own header, the bar hidden too).
-    @MainActor func testASwipeFromTheMiddleGoesBack() throws {
+    /// Under side bars Back is the system's (`ChatView.systemBack`), and a rightward swipe from the middle of the Agent's
+    /// chat goes back (iOS 26's swipe back from anywhere).
+    @MainActor func testUnderSideBarsASwipeFromTheMiddleOfTheAgentsChatGoesBack() throws {
+        launch(sideBars: true)
+        link("todo_task_widget").tap()
+        assertChat(Self.widgetAgent)
+        _ = oneBack("the Agent's chat")
+        swipeRight(from: app.buttons.matching(identifier: "chat.title").firstMatch, below: 160)
+        assertConversation("a swipe from the middle of the Agent's chat")
+    }
+
+    /// The same on a task's page before its Agent is up (regular width, where it is pushed).
+    @MainActor func testUnderSideBarsASwipeFromTheMiddleOfAStartingTaskGoesBack() throws {
+        launch(sideBars: true)
+        guard wide else { throw XCTSkip("pushed beside the sidebar in regular width only; a phone's sheet closes from its edge") }
+        link("todo_dispatch_starting").tap()
+        let starting = startingPage
+        XCTAssertTrue(starting.waitForExistence(timeout: 10), app.debugDescription)
+        _ = oneBack("the starting task's page")
+        swipeRight(from: starting, below: 0)
+        assertConversation("a swipe from the middle of the starting task's page")
+    }
+
+    /// With the page's own header (the system's bar and Back hidden: iPad, iPhone, the open Duo upright), UIKit gives the
+    /// swipe back from anywhere no touch; the swipe from the leading edge goes back there (`SwipeBack.swift`).
+    @MainActor func testWithItsOwnHeaderTheEdgeSwipeGoesBack() throws {
         launch(sideBars: false)
         link("todo_task_widget").tap()
         assertChat(Self.widgetAgent)
         sleep(1)
         swipeRight(from: app.buttons.matching(identifier: "chat.title").firstMatch, below: 160)
-        assertConversation("a swipe from the middle of the Agent's chat")
+        XCTExpectFailure("UIKit leaves a page that hides the system's Back out of the swipe back from anywhere (#9971)",
+                         options: { let o = XCTExpectedFailure.Options(); o.isStrict = false; return o }()) {
+            XCTAssertTrue(conversation.waitForExistence(timeout: 3) && conversation.isHittable, "the swipe from the middle went back")
+        }
+        if !conversation.isHittable {
+            // From the page's leading edge: beside the open sidebar that is the line between them.
+            let page = app.windows.firstMatch.frame
+            let column = app.descendants(matching: .any)["unified-sidebar"].firstMatch
+            let edge = column.exists && column.isHittable ? column.frame.maxX + 2 : 2
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: edge, dy: page.midY))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: min(page.maxX - 8, edge + 400), dy: page.midY)))
+        }
+        assertConversation("a swipe from the leading edge of the Agent's chat")
+    }
 
-        guard wide else { return }
-        link("todo_dispatch_starting").tap()
-        let starting = app.staticTexts["正在开 Agent"].firstMatch
-        XCTAssertTrue(starting.waitForExistence(timeout: 10), app.debugDescription)
+    /// On the Agent's Files the swipe is the pane's first (back to the chat, as its ‹ is), and only then the page's.
+    @MainActor func testOnFilesTheSwipeGoesToTheChatFirst() throws {
+        launch(sideBars: true)
+        link("todo_task_widget").tap()
+        assertChat(Self.widgetAgent)
+        // Files from the chat's ⋯ (`-openPane` would put the conversation on it too).
+        let more = app.buttons.matching(NSPredicate(format: "identifier == 'chat.more' OR label IN %@", ["更多", "More"]))
+            .allElementsBoundByIndex.first { $0.exists && $0.isHittable }
+        XCTAssertNotNil(more, "no ⋯ on the Agent's chat:\n\(app.debugDescription)")
+        more?.tap()
+        XCTAssertTrue(app.buttons["文件"].firstMatch.waitForExistence(timeout: 5), "no Files in ⋯:\n\(app.debugDescription)")
+        app.buttons["文件"].firstMatch.tap()
+        let files = app.descendants(matching: .any)["files.pane"].firstMatch
+        XCTAssertTrue(files.waitForExistence(timeout: 15), "Files did not open:\n\(app.debugDescription)")
         sleep(1)
-        swipeRight(from: starting, below: 0)
-        assertConversation("a swipe from the middle of the starting task's page")
+        files.swipeRight(velocity: .fast)
+        XCTAssertTrue(files.waitForNonExistence(timeout: 5), "the swipe did not leave Files:\n\(app.debugDescription)")
+        XCTAssertTrue(app.buttons.matching(identifier: "chat.title").firstMatch.exists, "the swipe on Files left the Agent's page")
+        XCTAssertFalse(conversation.isHittable, "the swipe on Files went back to the conversation")
+        sleep(1)
+        swipeRight(from: app.buttons.matching(identifier: "chat.title").firstMatch, below: 160)
+        // Back on the chat the system's Back shows again, but UIKit does not take the swipe from anywhere up again on a page
+        // that showed it only after it came (#9971, docs/lessons/ios.md); Back and the edge swipe go back.
+        XCTExpectFailure("the swipe back from anywhere after Files (#9971)",
+                         options: { let o = XCTExpectedFailure.Options(); o.isStrict = false; return o }()) {
+            XCTAssertTrue(conversation.waitForExistence(timeout: 3) && conversation.isHittable, "the swipe after Files did not go back")
+        }
+        if !conversation.isHittable { _ = oneBack("the Agent's chat after Files").tap() }
+        assertConversation("Back from the Agent's chat after Files")
     }
 
     // MARK: - Steps
@@ -125,18 +184,22 @@ final class SecondaryPageBackTests: XCTestCase {
 
     // MARK: - Helpers
 
-    @MainActor private func launch(sideBars: Bool) {
+    @MainActor private func launch(sideBars: Bool, extra: [String] = []) {
         app = XCUIApplication()
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-ui.scheme", "system", "-tab", "assistant",
                                "-dev.openChat", "", "-openAssistant", Self.main, "-app.navigation", "sidebar", "-probes", "YES",
-                               "-sideBars", sideBars ? "YES" : "NO"]
+                               "-sideBars", sideBars ? "YES" : "NO"] + extra
         app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1"
         app.launchPinned()
         XCTAssertTrue(conversation.waitForExistence(timeout: 20), app.debugDescription)
     }
 
-    @MainActor private var wide: Bool { app.windows.firstMatch.frame.width > 700 }
+    /// The task's page while its Agent starts: its message, which the conversation's card does not have (the card says
+    /// 正在开 Agent too).
+    @MainActor private var startingPage: XCUIElement { app.staticTexts["开好以后这里就是它的对话。"].firstMatch }
+
+    @MainActor private var wide: Bool { app.windows.firstMatch.frame.width >= 600 }
 
     /// The main conversation's In Progress entry: the conversation is in front.
     @MainActor private var conversation: XCUIElement { app.buttons["action-bar.running"] }
@@ -163,11 +226,14 @@ final class SecondaryPageBackTests: XCTestCase {
         while Date.now < deadline {
             if link.exists {
                 let frame = link.frame
-                let top = tabs.exists ? tabs.frame.maxY : app.frame.minY
+                // Clear of the top bar: the Sidebar layout's (the drawer's face, the title) is not the shell's tabs.
+                let top = max(tabs.exists ? tabs.frame.maxY : app.frame.minY, 120)
                 let bottom = dock.exists ? dock.frame.minY : app.frame.maxY
                 if link.isHittable, frame.minY >= top, frame.maxY <= bottom { return link }
-                let at = link.exists ? link : app.windows.firstMatch
-                if frame.minY < top { at.swipeDown(velocity: .slow) } else { at.swipeUp(velocity: .slow) }
+                // On the conversation's middle, not the card: one scrolled out of view has no frame to swipe on.
+                let window = app.windows.firstMatch
+                let from = window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: frame.minY < top ? 0.35 : 0.65))
+                from.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: frame.minY < top ? 0.6 : 0.4)))
             }
             usleep(400_000)
         }
@@ -185,7 +251,7 @@ final class SecondaryPageBackTests: XCTestCase {
 
     /// The page's one way back, hittable, read once the page has settled.
     @MainActor private func oneBack(_ step: String) -> XCUIElement {
-        let backs = app.buttons.matching(NSPredicate(format: "label IN %@", ["返回", "Back"]))
+        let backs = app.buttons.matching(NSPredicate(format: "identifier == 'BackButton' OR label IN %@", ["返回", "Back"]))
         XCTAssertTrue(backs.firstMatch.waitForExistence(timeout: 10), "\(step): no Back:\n\(app.debugDescription)")
         sleep(1)
         let shown = backs.allElementsBoundByIndex.filter { $0.exists && $0.isHittable }
@@ -200,9 +266,9 @@ final class SecondaryPageBackTests: XCTestCase {
         XCTAssertFalse(app.buttons.matching(identifier: "chat.title").firstMatch.exists, "\(step): the Agent's chat is still up")
     }
 
-    /// A slow rightward drag that starts in the middle of the page (`below` points under the element, at its middle
+    /// A rightward drag (slow unless `fast`, a flick) that starts in the middle of the page (`below` points under the element, at its middle
     /// horizontally), far from the leading edge, the way a thumb swipes back.
-    @MainActor private func swipeRight(from element: XCUIElement, below: CGFloat) {
+    @MainActor private func swipeRight(from element: XCUIElement, below: CGFloat, fast: Bool = false) {
         XCTAssertTrue(element.waitForExistence(timeout: 10), app.debugDescription)
         let window = app.windows.firstMatch
         let frame = element.frame
@@ -210,7 +276,7 @@ final class SecondaryPageBackTests: XCTestCase {
         let origin = window.coordinate(withNormalizedOffset: .zero)
         origin.withOffset(start)
             .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: min(window.frame.maxX - 8, start.dx + 320), dy: start.dy)),
-                   withVelocity: .slow, thenHoldForDuration: 0)
+                   withVelocity: fast ? .fast : .slow, thenHoldForDuration: 0)
     }
 
     @MainActor private func shot(_ name: String) {

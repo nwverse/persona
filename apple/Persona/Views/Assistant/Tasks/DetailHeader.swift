@@ -5,9 +5,10 @@ import SwiftUI
 /// the title (and a line under it), ⋯. It hides the system bar: the header is the page's only one.
 ///
 /// Under side bars (iPhone Duo's outer display, its inner display on its side) the way out and ⋯ are the system bar's
-/// items instead, where the agent's page puts them once it is there (`ChatView.sideBarItems`): Back stays at the top of
-/// the side column before and after the agent is up, never at the top left first (#9971; HIG "Designing for iPhone
-/// Duo": the top of the vertical axis is for Back or Close, and the default bar placement stays).
+/// items instead, where the agent's page puts them once it is there (`ChatView.sideBarItems`; pushed, Back is the
+/// system's own, `ChatView.systemBack`): Back stays at the top of the side column before and after the agent is up,
+/// never at the top left first (#9971; HIG "Designing for iPhone Duo": the top of the vertical axis is for Back or
+/// Close, and the default bar placement stays).
 struct DetailHeader<Mark: View, Items: View, Line: View>: View {
     var title: String
     var showsMenu = false
@@ -16,9 +17,13 @@ struct DetailHeader<Mark: View, Items: View, Line: View>: View {
     @ViewBuilder var line: Line
     @Environment(\.dismiss) private var dismiss
     @Environment(\.detailPushed) private var pushed
-    @State private var sideBars = false
-
     var body: some View {
+        // From the first drawing: pushed under side bars, the system's Back is there as the page comes, which the swipe
+        // back from anywhere needs.
+        WithVerticalBars { header(sideBars: $0) }
+    }
+
+    private func header(sideBars: Bool) -> some View {
         HStack(spacing: Theme.Space.s) {
             if !sideBars { leaveButton }
             mark
@@ -41,15 +46,17 @@ struct DetailHeader<Mark: View, Items: View, Line: View>: View {
         .padding(.top, Theme.Space.l) // below the sheet's grabber
         .padding(.bottom, Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .readsVerticalBars($sideBars)
         // Its own header: no bar over it, except under side bars, where the bar is the side column with its buttons.
+        // Pushed, Back there is the system's own, as on the agent's page (`ChatView.systemBack`): the same place, and the
+        // swipe back from anywhere works with it only; a sheet has no Back of the system's, so its ✕ is ours.
         .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(sideBars)
         .toolbar {
             if sideBars {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Label(leaveLabel, systemImage: leaveSymbol) }
-                        .accessibilityIdentifier("detail-header.leave")
+                if !pushed {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { dismiss() } label: { Label(leaveLabel, systemImage: leaveSymbol) }
+                            .accessibilityIdentifier("detail-header.leave")
+                    }
                 }
                 if showsMenu {
                     ToolbarItem(placement: .topBarTrailing) {
