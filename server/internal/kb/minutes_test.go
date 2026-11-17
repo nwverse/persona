@@ -301,11 +301,18 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	if got := listedMeetingID(t, e, recID); got != "m1" {
 		t.Errorf("later: the list's meeting_id %q", got)
 	}
-	// The meetings list names the app it came from, for the one row's mark.
+	// The meetings list and the recording's links name the app it came from, for the one row's mark and its page.
 	for _, en := range e.List(KindMeeting, "") {
 		if want := map[string]string{"m1": "lark"}[en.ID]; en.Source != want {
 			t.Errorf("meetings list: %s's source %q, want %q", en.ID, en.Source, want)
 		}
+	}
+	d, err := e.Get(KindRecording, recID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(d.Links, func(l Entry) bool { return l.Kind == KindMeeting && l.ID == "m1" }); i < 0 || d.Links[i].Source != "lark" {
+		t.Errorf("links: %+v", d.Links)
 	}
 	if o := recordingNow(t, e, old); o.ImportedMeeting != nil {
 		t.Errorf("a recording that ended two days before: linked to %+v", o.ImportedMeeting)
