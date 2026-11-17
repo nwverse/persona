@@ -1,7 +1,7 @@
 // Fixture-only data and in-memory sources for the configuration showcase (web/e2e/configuration-showcase.html, docs/web/web.md
 // "Configuration forms"): several independent mock module documents, drawn by the real ConfigurationForm so a person can
-// open, operate and compare them with no hub, server or real setting. Every source keeps its values in this page's memory;
-// nothing is read from or written to storage, and no file here is part of a build.
+// open, operate and compare them with no hub, server or real setting. Every source keeps its values in this page's memory
+// and reads or writes no storage; no file here is part of a build.
 //
 // The mock documents' text is written in the three client languages here because it is fixture data, not interface
 // strings: the app's own shell (buttons, errors) still comes from the real catalogs, and a configuration source localizes
@@ -32,9 +32,9 @@ export function shell(lang) {
     ),
     mockBanner: T(
       lang,
-      "Mock data. Nothing here is saved: each source lives in this page's memory, and no real setting or storage is read or written.",
-      "模拟数据。这里的更改不会被保存：每个数据源只存在于本页内存中，也不会读取或写入任何真实设置或存储。",
-      "モックデータです。ここでの変更は保存されません。各ソースはこのページのメモリだけに存在し、実際の設定やストレージは読み書きしません。",
+      "Mock data. Changes are kept in this page's memory until you refresh; the forms read and write only these mock sources.",
+      "模拟数据。更改只保存在本页的内存中，刷新页面即会丢失；各表单只读写这些模拟数据源。",
+      "モックデータです。変更はこのページのメモリに保持され、再読み込みすると失われます。フォームが読み書きするのはこれらのモックソースだけです。",
     ),
     instructions: T(
       lang,
@@ -66,22 +66,22 @@ export function scenarios(lang) {
     {
       id: "load-fail",
       label: T(lang, "Failed first load", "首次载入失败", "初回読み込みの失敗"),
-      note: T(lang, "The shared example's first read fails; Try again loads it.", "共享示例第一次读取会失败，点「重试」即可载入。", "共有例の最初の読み込みが失敗します。「再試行」で読み込めます。"),
+      note: T(lang, "Only the shared example is shown: its first read fails, and Try again loads it.", "只显示共享示例：它第一次读取会失败，点「重试」即可载入。", "共有例だけを表示しています。最初の読み込みが失敗します。「再試行」で読み込めます。"),
     },
     {
       id: "reject",
       label: T(lang, "Field rejected", "字段被拒绝", "項目の拒否"),
-      note: T(lang, "In Daily digest, change the topic and Save: the first save is rejected with the module's own message; saving again succeeds.", "在「每日摘要」里修改主题并保存：第一次保存会被拒绝，并显示模块自己的提示；再次保存即可成功。", "「デイリーダイジェスト」で件名を変えて保存すると、最初の保存はモジュール自身のメッセージで拒否されます。もう一度保存すると成功します。"),
+      note: T(lang, "Only Daily digest is shown. Change the topic and Save: the first save is rejected with the module's own message; saving again succeeds.", "只显示「每日摘要」。修改主题并保存：第一次保存会被拒绝，并显示模块自己的提示；再次保存即可成功。", "「デイリーダイジェスト」だけを表示しています。件名を変えて保存すると、最初の保存はモジュール自身のメッセージで拒否されます。もう一度保存すると成功します。"),
     },
     {
       id: "conflict",
       label: T(lang, "Revision conflict", "版本冲突", "リビジョンの競合"),
-      note: T(lang, "In Daily digest, change the topic and Save: another writer got there first, so the save reports a conflict. Reload keeps your text and shows theirs.", "在「每日摘要」里修改主题并保存：另一个写入方抢先保存，因此报告冲突。重新载入后会保留你输入的内容，并显示对方的值。", "「デイリーダイジェスト」で件名を変えて保存すると、別の書き手が先に保存したため競合します。再読み込みすると入力内容は残り、相手の値が表示されます。"),
+      note: T(lang, "Only Daily digest is shown. Change the topic and Save: another writer got there first, so the save reports a conflict. Reload refreshes the baseline while your text stays; review it, then save again.", "只显示「每日摘要」。修改主题并保存：另一个写入方抢先保存，因此报告冲突。重新载入会刷新基线，你输入的内容仍会保留；确认后再保存一次。", "「デイリーダイジェスト」だけを表示しています。件名を変えて保存すると、別の書き手が先に保存したため競合します。再読み込みすると基準が更新され、入力内容は残ります。確認してからもう一度保存してください。"),
     },
     {
       id: "unconfirmed",
       label: T(lang, "Unconfirmed save", "保存结果未知", "保存の未確認"),
-      note: T(lang, "In Daily digest, change the topic and Save: the request never gets an answer, so the form says the save is unconfirmed and Reload is required before trying again.", "在「每日摘要」里修改主题并保存：请求得不到回应，表单会提示保存结果未知，必须先重新载入才能再试。", "「デイリーダイジェスト」で件名を変えて保存すると、応答が返らず「保存を確認できません」と表示されます。再試行の前に再読み込みが必要です。"),
+      note: T(lang, "Only Daily digest is shown. Change the topic and Save: the request never gets an answer, so the form says the save is unconfirmed and Reload is required before trying again.", "只显示「每日摘要」。修改主题并保存：请求得不到回应，表单会提示保存结果未知，必须先重新载入才能再试。", "「デイリーダイジェスト」だけを表示しています。件名を変えて保存すると、応答が返らず「保存を確認できません」と表示されます。再試行の前に再読み込みが必要です。"),
     },
     {
       id: "empty",
@@ -500,17 +500,24 @@ export function buildShowcase(scenario = "default", lang = "zh-Hans", options = 
     };
   }
   const behavior = chosen === "reject" ? "reject" : chosen === "conflict" ? "conflict" : chosen === "unconfirmed" ? "unconfirmed" : null;
+  const sharedModule = () =>
+    mod("showcase-shared", clone(allTypes), {
+      note: note("shared"),
+      sourceLabel: T(lang, "Shared contract example", "共享契约示例", "共有契約の例"),
+      readFailures: chosen === "load-fail" ? 1 : 0,
+    });
+  const digestModule = () => mod("showcase-digest", digestDoc(lang), { note: note("digest"), behavior });
+  // A failure scenario shows only the module it happens in, so its error controls are visible without scrolling through
+  // every other form. The full set keeps all five.
+  if (chosen === "load-fail") return { scenario: chosen, modules: [sharedModule()] };
+  if (behavior) return { scenario: chosen, modules: [digestModule()] };
   return {
     scenario: chosen,
     modules: [
       mod("showcase-terminal", terminalDoc(lang), { note: note("terminal") }),
-      mod("showcase-digest", digestDoc(lang), { note: note("digest"), behavior }),
+      digestModule(),
       mod("showcase-editor", editorDoc(lang), { note: note("editor") }),
-      mod("showcase-shared", clone(allTypes), {
-        note: note("shared"),
-        sourceLabel: T(lang, "Shared contract example", "共享契约示例", "共有契約の例"),
-        readFailures: chosen === "load-fail" ? 1 : 0,
-      }),
+      sharedModule(),
       mod("showcase-empty", emptyDoc(lang), { note: note("empty") }),
     ],
   };

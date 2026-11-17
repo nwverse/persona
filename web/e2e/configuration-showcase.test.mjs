@@ -63,6 +63,15 @@ describe("the showcase in every language", () => {
     expect(overview.modules.map((module) => module.key)).toEqual(buildShowcase("default", "en", FAST).modules.map((module) => module.key));
   });
 
+  it("focuses each failure scenario on its affected module and keeps all five in the full set", () => {
+    const keys = (id) => buildShowcase(id, "en", FAST).modules.map((module) => module.key);
+    expect(keys("default")).toEqual(["showcase-terminal", "showcase-digest", "showcase-editor", "showcase-shared", "showcase-empty"]);
+    expect(keys("overview")).toEqual(keys("default"));
+    expect(keys("slow")).toEqual(keys("default"));
+    expect(keys("load-fail")).toEqual(["showcase-shared"]);
+    for (const id of ["reject", "conflict", "unconfirmed"]) expect(keys(id), id).toEqual(["showcase-digest"]);
+  });
+
   it("covers every control kind and select presentation across the full showcase", () => {
     const kinds = new Set();
     const presentations = new Set();

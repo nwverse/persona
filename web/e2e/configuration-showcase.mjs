@@ -62,7 +62,7 @@ const open = async (page, scenario) => {
 };
 
 try {
-  // The full showcase at every size and theme, plus the Chinese view the user asked for.
+  // The full showcase at every size and theme, plus the Simplified Chinese view.
   for (const [theme, width, size, language = "en"] of [["light", 1280], ["dark", 1280], ["light", 390], ["dark", 390], ["light", 390, "large"], ["light", 1280, undefined, "zh-Hans"], ["light", 390, undefined, "zh-Hans"]]) {
     const tag = `showcase-${width}-${theme}${size ? `-${size}` : ""}${language === "zh-Hans" ? "-zh" : ""}`;
     const { ctx, page } = await context(theme, width, size, language);
@@ -123,6 +123,10 @@ try {
     const { ctx, page } = await context(theme, width);
     await open(page, scenario);
     if (await sideways(page)) fail(`${tag}: the scenario scrolls sideways`);
+    const drawn = await page.$$eval("[data-showcase-module]", (els) => els.map((e) => e.getAttribute("data-showcase-module")));
+    const focused = scenario === "load-fail" ? ["showcase-shared"] : ["reject", "conflict", "unconfirmed"].includes(scenario) ? ["showcase-digest"] : null;
+    if (focused && drawn.join(",") !== focused.join(",")) fail(`${tag}: focused modules ${drawn}`);
+    if (focused) ok(`${tag}: focused on ${focused[0]}`);
 
     if (scenario === "slow") {
       const enabled = field(page, "showcase-digest", "enabled");
