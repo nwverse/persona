@@ -732,7 +732,11 @@ def usage_history_hours(n):
         if m["id"] in weights:
             machines.append({"id": m["id"], "name": m["name"], **{k: int(v * weights[m["id"]] / all_w) for k, v in total.items()}})
     machines.sort(key=lambda x: -(x["in"] + x["cache_write"] + x["cache_read"] + x["out"]))
-    return {"zone": time.strftime("%Z") or "UTC", "hours": hours, "machines": machines, "total": total, "stored": True}
+    # Each agent's share (#9984), largest first; "" is usage kept before the hub counted agents apart.
+    agents = [{"agent": a, **{k: int(v * f) for k, v in total.items()}}
+              for a, f in (("claude", 0.62), ("codex", 0.21), ("opencode", 0.08), ("pi", 0.05), ("", 0.04))]
+    return {"zone": time.strftime("%Z") or "UTC", "hours": hours, "machines": machines, "agents": agents, "total": total,
+            "stored": True}
 
 
 def sess(mid, sid, title, cwd, status, state, space, sidx, slot, slidx, minutes, last, agent="claude", pending=0, **kw):
@@ -11716,7 +11720,7 @@ BRIEF_PLAIN = ("早报 · 周一 结论：上午有一节辅导课，下午没�
 
 def assistant_brief(mode):
     base = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")
-    url = base + "/s/macbook/" + BLOG
+    url = base + "/persona/" + ASK1  # the conversation's page, as the hub writes it (deeplink.Conversation, #9928)
     if mode == "before":
         one = " ".join(BRIEF_MD.split())
         summary, preview, body = one[:200] + "…", one[:120] + "…", None
@@ -13256,6 +13260,15 @@ def _many_item(section, i, n):
 MOCK_INBOX_MANY = _many_counts(os.environ.get("MOCK_INBOX_MANY", "").strip())
 for _section, _n in MOCK_INBOX_MANY.items():
     INBOX.extend(_many_item(_section, _i, _n) for _i in range(_n))
+# The first Needs-you item's Related line names the first done and the first collapsed item: an item opened from inside the
+# Inbox, which moves the section bar only beside the item (docs/assistant/inbox.md "Section bar"). Its one-entry chain
+# makes it an event, whose body (InboxEvent.tsx) is where Related is drawn.
+if MOCK_INBOX_MANY.get("action"):
+    _rel = [_many_item(_s, 0, MOCK_INBOX_MANY[_s]) for _s in ("done", "noise") if MOCK_INBOX_MANY.get(_s)]
+    if _rel:
+        _first = next(x for x in INBOX if x["id"] == "many:action:0")
+        _first["related"] = [{"id": x["id"], "title": x["title"], "source": x["source"]} for x in _rel]
+        _first["chain"] = [{"id": "c1", "at": _first["updated_at"], "kind": "received", "text": "收到 1 条新消息", "count": 1}]  # i18n-ignore: mock data
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -17877,6 +17890,36 @@ if os.environ.get("MOCK_TABLE_CHIPS") == "1":
 | Tools | Only two: `list_items`, `list_item_details` |
 | Config | Reads `~/.config/weather/mcp-endpoint-settings.json` and falls back to the defaults when it is missing |"""
     ITEMS[TABLE_CHIPS] = [it("user", "text", 5, text="Does the MCP endpoint work?"), it("assistant", "text", 2, text=_chips)]
+
+# A table whose first column wraps in one row and that has empty cells (#10012): the table is as tall as its rows, the
+# paragraph after it starts under its last row. MOCK_TABLE_WRAP=1 adds it as a finished reply in an Agents chat
+# (TableWrapTests); /mock/say?preset=table_wrap&stream=1 streams it into every open conversation.
+TABLE_WRAP_TEXT = """先看总时长，按几种做法分开算：
+
+| 做法 | 拿到第一版 | 全部完成 |
+| --- | --- | --- |
+| 自己做，熟手 | 约 20 天 | |
+| 自己做，一般 | 约 26 天 | 约 35 天 |
+| 自己做，新手 | 约 33 天 | |
+| 请人帮忙，约 $22 | | 约 23 天 |
+| 全部外包，约 $88 | 约 6 天 | 约 15 天 |
+
+这张表放得下，每一格都是一行。
+
+再算上混合的做法：
+
+| 做法 | 拿到第一版 | 全部完成 |
+| --- | --- | --- |
+| 自己做，一般 | 约 26 天 | 约 35 天 |
+| 请人帮忙，约 $22 | | 约 23 天 |
+| 混合做，核心部分自己做，其余外包 | 约 12 天 | |
+
+表格后的这一段从最后一行下面开始。"""
+TABLE_WRAP = "a1f3c2d4-0000-4000-8000-000000010012"
+if os.environ.get("MOCK_TABLE_WRAP") == "1":
+    SESSIONS.append(sess("macbook", TABLE_WRAP, "装修排期", "/Users/me/code/weather", "done", "unread", "weather", 1, "plan", 5, 2,
+                         "表格后的这一段从最后一行下面开始。"))
+    ITEMS[TABLE_WRAP] = [it("user", "text", 5, text="几种做法各要多久？"), it("assistant", "text", 2, text=TABLE_WRAP_TEXT)]
 
 # MOCK_WIDE=1: an Agents chat whose reply has a table that fits, one that does not and a code block with a long line,
 # then a short reply in a turn of its own (SwipeWideContentTests, #5737: a drag to the left scrolls what scrolls sideways, else quotes).
@@ -22671,6 +22714,7 @@ graph TD
 ```
 
 Tell me if you want the upload sped up too.""",
+    "table_wrap": TABLE_WRAP_TEXT,
 }
 
 
