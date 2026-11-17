@@ -101,25 +101,28 @@ struct RecordingLiveSheet: View {
             ZStack {
                 if wrapUp, let held {
                     if roomMeeting(held) {
+                        // After the meeting (#8731 V3) the page has the bar: its ✕ at the leading corner, its ⋯ (#9653).
                         MeetingPage(id: held, mode: .after, captureError: stopError, close: { dismiss() })
                             .transition(swap(arriving: true))
                     } else {
                         RecordingWrapUp(id: held, captureError: stopError, finish: { dismiss() })
+                            .toolbar(.hidden, for: .navigationBar)
                             .transition(swap(arriving: true))
                     }
                 } else if let held {
                     if roomMeeting(held) {
                         MeetingPage(id: held, mode: .live, exchanges: exchanges, close: { dismiss() })
+                            .toolbar(.hidden, for: .navigationBar)
                             .transition(swap(arriving: false))
                     } else {
                         RecordingLiveView(id: held, exchanges: exchanges, hide: { dismiss() })
+                            .toolbar(.hidden, for: .navigationBar)
                             .transition(swap(arriving: false))
                     }
                 }
             }
             .themedGroupedPage()
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .navigationBar)
         }
         // Dark while the meeting records (E1: as meeting apps are), the app's own look once it ended.
         .preferredColorScheme(wrapUp ? nil : .dark)

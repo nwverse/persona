@@ -320,7 +320,7 @@ struct KnowledgeView: View {
     /// conversation), and a swipe deletes it as the Meetings page's rows do (#4938), asked first.
     private func recordingRow(_ e: KBEntry, id: UUID) -> some View {
         NavigationLink {
-            if RecordingLibrary.shared.entry(id)?.isDay == true { RecordingDayView(id: id) } else { RecordingDetailView(id: id) }
+            if RecordingLibrary.shared.entry(id)?.isDay == true { RecordingDayView(id: id) } else { RecordingOpen(id: id) }
         } label: { KBRow(entry: e) }
             .accessibilityIdentifier("kb.recording")
             // Rename (#8873): a touch and hold, and VoiceOver's actions; not a day, named by its date.
