@@ -44,10 +44,13 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     var interactive = false { didSet { if interactive != oldValue { enable() } } }
     /// Zoomed in or back to fitted, for ⋯'s Zoom In / Zoom to Fit (after the change, never during the page's update).
     var onZoom: (Bool) -> Void = { _ in }
-    /// Where the Mac's whole picture is drawn, in screen points, as it moves (the page's, for the small window's
-    /// transition, #6333); nil: not reported.
-    var onPicture: ((CGRect) -> Void)?
-    private var reported: CGRect?
+    /// Where the Mac's whole picture is drawn, and the part of it shown (one display), in screen points, as they move
+    /// (the page's, for the small window's transition, #6333); nil: not reported.
+    var onPicture: ((VNCPagePicture) -> Void)?
+    private var reported: VNCPagePicture?
+    /// The small window's source (VNCPiP): its frames come already cut to this part of the framebuffer (Phone Screen's
+    /// display, RFBSession.smallWindowPart), so they are laid out as that part alone; nil: whole frames.
+    var framesCut: CGRect? { didSet { if framesCut != oldValue { setNeedsLayout() } } }
     /// The part of the framebuffer shown, in pixels; nil: all of it. A new one starts unzoomed, with the pointer on it
     /// (moved to its middle when it was elsewhere): Trackpad Mode clicks and drags where the pointer is.
     var region: CGRect? {
@@ -152,8 +155,10 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         return s.width > 0 ? s : CGSize(width: 16, height: 10)
     }
 
-    /// The part of the framebuffer shown: the region while it lies on the framebuffer, else all of it.
+    /// The part of the framebuffer shown: the frames' cut, else the region while it lies on the framebuffer, else all
+    /// of it.
     private var visible: CGRect {
+        if let framesCut, !framesCut.isEmpty { return framesCut }
         let whole = CGRect(origin: .zero, size: screenSize)
         guard let region, !region.isEmpty, whole.contains(region) else { return whole }
         return region
@@ -200,7 +205,8 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         CATransaction.setDisableActions(true)
         let port = viewport
         clip.frame = port.rect
-        display.frame = port.framebufferFrame(screenSize)
+        // Frames already cut to the part shown fill it; whole ones are drawn whole and clipped to it.
+        display.frame = framesCut != nil ? CGRect(origin: .zero, size: port.rect.size) : port.framebufferFrame(screenSize)
         #if os(iOS) && canImport(PersonaScreenKit)
         if showsVideo, let v = session?.video {
             video.isHidden = !v.showing
@@ -216,10 +222,11 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             // visionOS has no screen (and no small window, `VNCPiP.supported`): the window's own points.
             let space: any UICoordinateSpace = window
             #endif
-            let whole = convert(display.frame.offsetBy(dx: port.rect.minX, dy: port.rect.minY), to: space)
-            if whole != reported {
-                reported = whole
-                onPicture(whole)
+            let picture = VNCPagePicture(whole: convert(port.framebufferFrame(screenSize).offsetBy(dx: port.rect.minX, dy: port.rect.minY), to: space),
+                                         shown: convert(port.rect, to: space))
+            if picture != reported {
+                reported = picture
+                onPicture(picture)
             }
         }
         if let s = session {
@@ -235,11 +242,11 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             pointerLayer.isHidden = s.phase != .live || !port.visible.contains(s.pointer)
             #if DEBUG
             // UI tests measure (the frame rate, the latency) and look (the pointer's size in points, #3075; the zoom and
-            // where the pointer is drawn, #6196).
-            accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@;pointer=%.0fx%.0f;zoom=%.2f;at=%.0f,%.0f;picture=%@;drawn=%.0fx%.0f", // i18n-ignore
+            // where the pointer is drawn, #6196; the small window's source's frames cut to Phone Screen's display, in pixels).
+            accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@;pointer=%.0fx%.0f;zoom=%.2f;at=%.0f,%.0f;picture=%@;drawn=%.0fx%.0f;cut=%.0fx%.0f", // i18n-ignore
                                         s.fps, s.latency ?? -1, mode.rawValue, pointerLayer.frame.width, pointerLayer.frame.height,
                                         port.rect.width / max(fitted.width, 1), at.x, at.y, video.isHidden ? "vnc" : "video",
-                                        port.rect.width, port.rect.height) // i18n-ignore
+                                        port.rect.width, port.rect.height, framesCut?.width ?? 0, framesCut?.height ?? 0) // i18n-ignore
             #endif
         }
         CATransaction.commit()
@@ -561,8 +568,8 @@ struct VNCScreen: UIViewRepresentable {
     var onView: (VNCScreenUIView) -> Void = { _ in }
     /// Zoomed in or back to fitted.
     var onZoom: (Bool) -> Void = { _ in }
-    /// Where the whole picture is drawn, in screen points (VNCScreenUIView.onPicture).
-    var onPicture: ((CGRect) -> Void)? = nil
+    /// Where the whole picture and the part shown are drawn, in screen points (VNCScreenUIView.onPicture).
+    var onPicture: ((VNCPagePicture) -> Void)? = nil
 
     func makeUIView(context: Context) -> VNCScreenUIView {
         let v = VNCScreenUIView()

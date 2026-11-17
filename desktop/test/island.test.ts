@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ISLAND_ROWS, ISLAND_SIDE, LIST_WIDTH, NOTCH_WIDTH, ROW_HEIGHT, hasNotch, islandDisplay, islandRect, islandSides, islandState } from "../src/island-model.js";
+import { ISLAND_URL, islandFile } from "../src/island-page.js";
 
 const row = (n: number, extra: Record<string, unknown> = {}) => ({ title: `Example agent ${n}`, state: "working", label: "Working", line: "", route: `/s/computer/session-${n}`, ...extra });
 
@@ -54,4 +55,22 @@ test("the island sits around the notch of the built-in display, or as a pill at 
 
   const pill = islandRect(external, false, 0);
   assert.deepEqual(pill, { x: 1512 + Math.round((2560 - 2 * ISLAND_SIDE) / 2), y: -200, width: 2 * ISLAND_SIDE, height: 25 });
+});
+
+test("the island's scheme serves its page's three files and nothing else", () => {
+  assert.equal(ISLAND_URL, "persona-island://app/island.html");
+  for (const name of ["island.html", "island.css", "island.cjs"]) {
+    const file = islandFile(`persona-island://app/${name}`);
+    assert.ok(file?.startsWith("file://") && file.endsWith(`/island/${name}`), `${name}: ${file}`);
+    assert.equal(islandFile(`persona-island://app/${name}`, "HEAD"), file);
+  }
+  assert.equal(islandFile(ISLAND_URL, "POST"), undefined);
+  for (const raw of [
+    "persona-island://app/island-preload.cjs", "persona-island://app/main.js", "persona-island://app/locales/en.json",
+    "persona-island://app/", "persona-island://app/island/island.html", "persona-island://app/../main.js",
+    "persona-island://app/%2e%2e/main.js", "persona-island://app/island%2Ehtml", "persona-island://app/..\\main.js",
+    "persona-island://other/island.html", "persona-island://app:1/island.html", "persona-island://someone@app/island.html",
+    "persona-island://app/island.html?x=1", "persona-island://app/island.html#top", "persona-setup://app/island.html",
+    "file:///island.html", "https://app/island.html", "not a url",
+  ]) assert.equal(islandFile(raw), undefined, raw);
 });

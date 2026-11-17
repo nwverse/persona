@@ -48,6 +48,19 @@ const external = []; // addresses handed to the system browser
 let island; // the shell's notch island (island.ts), seen with the web's first state
 /** The rows the island keeps: the web's last ones, none once their page is gone. */
 const islandRows = () => island?.state.rows.length ?? 0;
+/** What a Mac draws: the island's page from the shell's own scheme, as a packaged app must load it (its fuses keep
+ *  file:// out of the asar), with its stylesheet (the black pill) and its script (the leading count). */
+async function islandDrawn() {
+  const w = island?.window;
+  if (!w || w.isDestroyed()) throw new Error("no island window");
+  const url = w.webContents.getURL();
+  const seen = w.webContents.isLoading() ? { loading: true } : await w.webContents.executeJavaScript(
+    "({ pill: getComputedStyle(document.querySelector('#island')).backgroundColor, left: document.querySelector('#left').textContent })");
+  if (url !== "persona-island://app/island.html" || seen.pill !== "rgb(0, 0, 0)" || !/^\d+\+?$/.test(seen.left ?? "")) {
+    throw new Error(`the island's page at ${url} shows ${JSON.stringify(seen)}`);
+  }
+  return seen;
+}
 const notifyRequests = []; // what the renderer asked for over the production IPC
 const badges = []; // every count the renderer sent
 const localSettings = []; // the shell-owned options window, observed without exposing it to the hub page
@@ -333,6 +346,7 @@ async function hubChangeScenario() {
     // The island on (#7669), with the first hub's agents in it: none of them may stay once that hub's window is gone.
     await page("window.personaDesktop.setIslandEnabled(true)");
     const firstHubRows = await until("the first hub's agents in the island", islandRows);
+    const drawn = process.platform === "darwin" ? await until("the island's page drawing the first hub's agents", islandDrawn) : undefined;
     await page("window.personaDesktop.setLaunchAtLogin(true)");
     // Linux has no login-item service; the production getter truthfully reports false there. The round trip must
     // work on the shipping platforms, while the hub-change assertion here is about IPC surviving, not a Linux autostart.
@@ -390,7 +404,7 @@ async function hubChangeScenario() {
     const accepted = await page(`window.personaDesktop.notify({title: 'Second hub notification', body: 'Bridge after the hub change', tag: 'second-hub-smoke', route: ${JSON.stringify(route)}})`);
     if (!accepted) throw new Error("the replacement hub's production notify IPC was refused");
     await until("second hub native notification", () => shown.find(n => n.title === "Second hub notification"));
-    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0, islandRows: { firstHub: firstHubRows, afterChange: 0, secondHub: secondHubRows } };
+    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0, islandRows: { firstHub: firstHubRows, afterChange: 0, secondHub: secondHubRows }, ...(drawn ? { islandDrawn: drawn } : {}) };
   });
 }
 
@@ -425,14 +439,8 @@ async function subpathScenario() {
   await lockWithdraws("close"); // a hub without desktop_unregister: only closing the socket withdraws (docs/desktop/desktop.md)
 }
 
-async function main() {
+async function main(created) {
   await mkdir(output, { recursive: true });
-  const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
-  // The same module instance main.js imports: the island it makes is the one seen here.
-  const { NotchIsland } = await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "island.js")).href);
-  const setIslandState = NotchIsland.prototype.setState;
-  NotchIsland.prototype.setState = function setState(...args) { island = this; return setIslandState.apply(this, args); };
-  await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
   win = await created;
   win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(String(event.message).slice(0, 300)); });
   await until("first load", () => !win.webContents.isLoading() && win.webContents.getURL().startsWith(hub.href), 45_000);
@@ -474,4 +482,11 @@ async function finish(error) {
   console.log(`desktop e2e ${scenario}: ${ok ? "PASS" : "FAIL"}${error ? ` (${result.error})` : consoleErrors.length ? ` (renderer errors: ${consoleErrors.join(" | ")})` : ""}`);
   app.exit(ok ? 0 : 1);
 }
-main().then(() => finish(), error => finish(error));
+// The production entry loads before the app can become ready: it registers the island's scheme as it is evaluated, which
+// Electron takes only before ready. The same module instance main.js imports: the island it makes is the one seen here.
+const { NotchIsland } = await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "island.js")).href);
+const setIslandState = NotchIsland.prototype.setState;
+NotchIsland.prototype.setState = function setState(...args) { island = this; return setIslandState.apply(this, args); };
+const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
+await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
+main(created).then(() => finish(), error => finish(error));
