@@ -2077,6 +2077,20 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   are listed, then **Show all N models** (显示全部 N 个; N 件をすべて表示), which opens that provider's view. A row whose name
   is cut short shows the whole model ID as its second line (monospace, wrapping, two lines at most); on a touch screen,
   which has no tooltips, every row whose name is not its ID shows the ID there instead of the provider's name.
+- **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
+  runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
+  order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
+  thinking levels and release channels such as `-medium` or `-preview` are not tiers). The family is read from the
+  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
+  (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
+  families. Vendors come in the order the list first names them, other families by first mention. Within a family the
+  newest version leads (every row of it, a 1M-context one too) and says **Latest** (最新; 最新) when older ones exist; the
+  older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
+  opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
+  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
+  has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
+  per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
+  buried the newest of each family (the user's ask, 2026-11-17).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
@@ -2170,7 +2184,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   and a lazy-loaded status strip above the composer names the actual and configured launchers and opens the existing
   **New main chat…** dialog (#4662). The Main chat settings editor shows the same explanation from its provider draft.
   A same-kind default, an unloaded launcher list, an unknown default or a conversation pick shows no strip.
-- **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
+- **Tests**: `lib/model-families.test.ts` (families from IDs, order, folding, what never folds, the newest under a
+  search), `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
   send refusals are the switch's), `lib/assistant-panel.test.ts` (a Persona chat's setup and where it comes from, its pill,
@@ -2183,7 +2198,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   (the footer and context row), `ChatView.awaiting.test.tsx` (a refused switch keeps the words in the box), `ChatView.chrome-renders.test.tsx` (the
   pill on both composers),
   `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the mock's `MOCK_MODEL_PANEL_USAGE=1`
-  scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
+  scenario supplies synthetic weekly windows without reading a real account; `MOCK_MODEL_PICK=1 MOCK_MODEL_FAMILIES=1` gives a Persona chat long lists of several families (a Claude account with
+  every pinned version, Codex's GPT lines, a gateway mixing Claude, GPT, Gemini and others); `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
   the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own;
   its `gpt-5.5-codex` catalog row advertises Fast for the new-chat checks, while `gpt-5.5` is the negative control; a
