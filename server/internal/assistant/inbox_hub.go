@@ -93,7 +93,38 @@ func (s *Service) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 // ("": no such guard; inboxSent).
 func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) error {
 	var sent assistantwire.InboxSent
-	err := s.appCall(ctx, AppInbox, inboxReplyMethod, map[string]any{"source": source, "reply": r, "send_id": sendID}, &sent)
+	params := map[string]any{"source": source, "reply": r, "send_id": sendID}
+	if source == "larkcli" {
+		identity, err := s.outboundIdentity(ctx)
+		if err != nil {
+			return err
+		}
+		params["sender_identity"] = identity
+	}
+	approval, automatic := ctx.Value(outboundApprovalKey{}).(outboundApproval)
+	if automatic || params["sender_identity"] == "user" {
+		var policy struct {
+			SenderIdentity bool `json:"sender_identity"`
+		}
+		if err := s.appCall(ctx, AppInbox, assistantwire.InboxMessagePolicy, map[string]any{}, &policy); err != nil || !policy.SenderIdentity {
+			return errors.New("message not sent: upgrade the extension manager before using outward-message settings")
+		}
+	}
+	send := func() error { return s.appCall(ctx, AppInbox, inboxReplyMethod, params, &sent) }
+	var err error
+	if automatic {
+		approval.Thread = r.Thread
+		params["sender_identity"] = approval.Identity
+		if approval.Kind == "standing_authorization" && approval.Scenario == "inbox_reply" {
+			// Rewording a failed/uncertain draft must not turn it into a new
+			// automatic attempt against the same incoming message.
+			sendID = "auto-reply:" + namedClientID(source+"\n"+r.Thread+"\n"+r.Last+"\n"+approval.Identity)
+			params["send_id"] = sendID
+		}
+		err = s.auditedMessage(ctx, source, messageTarget(r.Thread), r.Text, sendID, approval, send)
+	} else {
+		err = send()
+	}
 	s.inboxSent(sent, sendID)
 	return err
 }

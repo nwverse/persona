@@ -31,6 +31,7 @@ import { TaskTrust } from "./TaskTrust";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
+const OutboundMessages = lazyPage(() => import("./OutboundMessages").then((m) => m.OutboundMessages));
 const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
 
 interface AssistantState extends AgentAutoNamingState {
@@ -103,6 +104,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 }
 
 function AssistantSettingsForManager({ manager, owner, bare }: { manager: string; owner: string; bare?: boolean }) {
+  const [outboundRevision, setOutboundRevision] = useState(0);
   const [notesSaves] = useState(() => aboutMeSaves(manager, owner));
   const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
   const persona = usePersona();
@@ -454,9 +456,14 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      <PageBoundary page="outbound-messages">
+        <Suspense fallback={<Loading />}>
+          <OutboundMessages manager={manager} changed={() => setOutboundRevision(n => n + 1)} />
+        </Suspense>
+      </PageBoundary>
       <PageBoundary page="standing-authorizations">
         <Suspense fallback={<Group anchor="standing-authorizations" title={t("settings-standing.title")}><Loading /></Group>}>
-          <StandingAuthorizations manager={manager} />
+          <StandingAuthorizations key={outboundRevision} manager={manager} />
         </Suspense>
       </PageBoundary>
 

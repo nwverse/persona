@@ -113,6 +113,18 @@ describe("how the gate let it through", () => {
     expect(allowedBy({ kind: "conversation_always" })).toMatchObject({ label: "本对话始终允许", tone: "neutral" });
   });
 
+  it("shows an automatic send's exact authorization and does not call pending or failed delivery sent", () => {
+    const base = { kind: "standing_authorization", authorization_id: "sa_example", scenario: "inbox_reply" };
+    expect(allowedBy({ ...base, outcome: "sent" }).detail).toContain("sa_example");
+    expect(allowedBy({ ...base, outcome: "sent" }).tone).toBe("neutral");
+    for (const outcome of ["pending", "failed_or_unknown"] as const) {
+      const detail = allowedBy({ ...base, outcome });
+      expect(detail.tone).toBe("orange");
+      expect(detail.detail).toContain("sa_example");
+      expect(detail.label).not.toBe(allowedBy({ ...base, outcome: "sent" }).label);
+    }
+  });
+
   it("the card: the user's own answer says no more than that they agreed on a card (the ledger can't say which device)", () => {
     expect(allowedBy({ kind: "card", interaction_id: "ix-1" })).toEqual({ label: "你在确认卡片上同意", tone: "neutral", detail: "弹出了确认卡片，你点了允许。" });
     expect(allowedBy({ kind: "card" })).toMatchObject({ label: "你在确认卡片上同意", tone: "neutral" });

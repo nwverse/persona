@@ -310,6 +310,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 	}
 	id := it.ID
+	version := it.SuggestSeq
 	b.settle(w)
 	b.mu.Unlock()
 	// An undone suggestion gets no card, and the conversation hears it failed: the inbox must not promise what a
@@ -317,6 +318,9 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	// something else moved meanwhile stays (that move's save writes the row) and goes on as kept.
 	if s.saveWrites(ctx, []*inboxWrite{w}, "its suggestion"); w.undone {
 		return id, nil, from, titleIgnored, errInboxNotPersisted
+	}
+	if sent, err := s.autoSendSuggestion(ctx, id, version); sent || err != nil {
+		return id, nil, from, titleIgnored, err
 	}
 	if card != nil {
 		s.messageCard(ctx, id, *card)

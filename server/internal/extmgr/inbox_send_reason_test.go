@@ -100,6 +100,8 @@ func TestInboxReplyFailuresAreCoded(t *testing.T) {
 		name, thread, body, code string
 		missingBin               bool
 	}{
+		{name: "bot is not in the group", thread: chat, code: assistantwire.CodeInboxBotNotInChat,
+			body: stderr(`{"error":{"type":"api","code":230002,"message":"Bot not in the chat"}}`)},
 		{name: "not installed", thread: chat, missingBin: true, code: assistantwire.CodeInboxSourceUnavailable},
 		{name: "signed out", thread: chat, code: assistantwire.CodeInboxSourceSignedOut,
 			body: stderr(`{"error":{"type":"authentication","subtype":"not_logged_in","message":"t-EXAMPLE-SECRET-TOKEN: stderr"}}`)},

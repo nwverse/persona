@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## Approval waiting is not delivery waiting (#9762)
+
+Settings and the Sent ledger can share a localization namespace. Keep the
+permission-card waiting message separate from a pending delivery outcome;
+reusing `pending` silently replaced the approval instructions with a delivery
+badge. Exercise the pending card and the outcome badge independently.
+
 ## A lazy waiting row needs a lazy ordering boundary (#9390)
 
 Ordering an unopened tray from its shared classifier imports the age computation on the first screen even when the
