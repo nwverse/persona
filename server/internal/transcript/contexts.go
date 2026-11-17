@@ -19,12 +19,16 @@ var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(
 
 var contextAttrRe = lazyre.New(`\s+(\w+)="([^"]*)"`)
 
+const interjectTitle = "插话" // i18n-ignore: canonical model-context title, not UI copy.
+
 // StripInterject removes the node's model-only mid-turn acknowledgement note
 // from presentation and echo matching. Keep owner-selected context inspectable;
 // the input written to the model is unchanged. The canonical title is pinned by
 // node.TestInterjectNote and recognized by the clients for older servers.
 func StripInterject(s string) string {
-	if !strings.Contains(s, "-context") {
+	// Ordinary snapshots can be large. Avoid scanning and copying their blocks
+	// unless the canonical title (possibly encoded as numeric entities) can occur.
+	if !strings.Contains(s, "-context") || (!strings.Contains(s, interjectTitle) && !strings.Contains(s, "&#")) {
 		return s
 	}
 	return contextBlockRe.ReplaceAllStringFunc(s, func(block string) string {
@@ -38,7 +42,7 @@ func StripInterject(s string) string {
 				title = html.UnescapeString(attr[2])
 			}
 		}
-		if kind == "context" && title == "插话" {
+		if kind == "context" && title == interjectTitle {
 			return ""
 		}
 		return block
