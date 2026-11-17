@@ -1,14 +1,12 @@
 // The route table every client follows (docs/protocol/deep-links.md, #9926): which links are pages of Persona's, and
-// which page. Two kinds of link name one: a web link to this hub (this page's origin and the addresses its hello
-// advertises, under the sub-path it is served at) and an app link (persona://open<path>, the desktop app's
-// persona://open?route=, and the older persona://session|task|kb|settings|extension forms). The iPhone
+// which page. On the web a link to this hub is read by its router (lib/links.ts hubPage); this module reads the app links
+// (persona://open<path>, the desktop app's persona://open?route=, and the older persona://session|task|kb|settings|
+// extension forms) into the path of the page they name, when one is opened (off the first screen). The iPhone
 // (apple/Shared/HubPageLink.swift) and Android read the same table; spec/fixtures/deep-links/cases.json is what every
-// client checks. Only the keys a page lists are read: a link only opens a page, it never signs in or acts.
-//
-// Kept free of the pages' own modules (settings, knowledge): lib/links.ts, on the first screen, uses it.
+// client checks (lib/deep-links.test.ts for both kinds of link here). Only the keys a page lists are read: a link only
+// opens a page, it never signs in or acts.
 import { APP_SCHEMES, assistantPath } from "./compatibility";
-import { stripBase } from "./base";
-import type { LinkRoute } from "./links";
+
 
 export type DeepPage =
   | { page: "persona" }
@@ -112,15 +110,6 @@ export function pageOfPath(path: string, search = ""): DeepPage | null {
       if (p.length === 2 && p[1] === "new") return { page: "persona-new" };
       return p.length === 2 ? clean({ page: "conversation", id: p[1]!, machine: v("machine"), manager: v("manager"), at: v("at") }) : null;
   }
-}
-
-/** The page a web link is when its origin is one of `origins` (this page's and the hub's advertised ones) and it is
- *  under `base` (the sub-path); null for another site, a link with a user name or password, or a path the table does not
- *  have. */
-export function webPage(u: URL, origins: readonly string[], base: string): DeepPage | null {
-  if ((u.protocol !== "http:" && u.protocol !== "https:") || u.username || u.password || !origins.includes(u.origin)) return null;
-  if (base && u.pathname !== base && !u.pathname.startsWith(base + "/")) return null;
-  return pageOfPath(stripBase(u.pathname, base), u.search);
 }
 
 /** A route as the desktop app's first form carries it (`route=`): one leading "/", never "//", no backslash or control
@@ -231,19 +220,8 @@ export function pagePath(p: DeepPage): string {
   }
 }
 
-/** Where an app link goes, as lib/links.ts opens it: an Agent's conversation in place (as persona://session links
- *  always did), a task, a conversation, or any other page of the table in place; null when it names no page. */
-export function appRoute(url: string): Extract<LinkRoute, { kind: "session" | "task" | "conversation" | "page" }> | null {
+/** The path in this web app an app link opens (lib/links.ts opens it as a link to this hub); null when it names no page. */
+export function appPath(url: string): string | null {
   const p = appLinkPage(url);
-  if (!p) return null;
-  switch (p.page) {
-    case "session":
-      return { kind: "session", mid: p.machine, sid: p.session, ...(p.at ? { at: p.at } : {}) };
-    case "conversation":
-      return { kind: "conversation", sid: p.id, ...(p.machine ? { mid: p.machine } : {}), ...(p.manager ? { manager: p.manager } : {}), ...(p.at ? { at: p.at } : {}) };
-    case "todo":
-      return { kind: "task", id: p.id };
-    default:
-      return { kind: "page", path: pagePath(p) };
-  }
+  return p ? pagePath(p) : null;
 }
