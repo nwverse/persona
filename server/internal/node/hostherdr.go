@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -98,7 +99,7 @@ func typedHerdrAgent(launch host.Launcher, kind string, shells ...string) string
 // takesAssign: shells (names or paths, "-zsh" for a login shell) are there and each is one of assignShells.
 func takesAssign(shells ...string) bool {
 	for _, s := range shells {
-		if !assignShells[paneShellName(s)] {
+		if !assignShells[strings.TrimPrefix(filepath.Base(s), "-")] {
 			return false
 		}
 	}

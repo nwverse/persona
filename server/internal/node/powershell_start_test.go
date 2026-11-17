@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/orcart"
+	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 )
 
 const powerShellTestBash = `C:\Program Files\Git\bin\bash.exe`
@@ -132,45 +134,36 @@ func TestPowerShellStartLines(t *testing.T) {
 	}
 }
 
-func TestWindowsPowerShellProgram(t *testing.T) {
-	for _, tc := range []struct {
-		shell string
-		want  bool
-	}{
-		{"powershell", true}, {"powershell.exe", true}, {"POWERSHELL.EXE", true}, {"pwsh", true}, {"-pwsh.exe", true}, {"PWSh.ExE", true},
-		{`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, true},
-		{`C:\Program Files\PowerShell\7\pwsh.exe`, true},
-		{"bash", false}, {`C:\Program Files\Git\bin\bash.exe`, false}, {"cmd.exe", false}, {"zsh", false},
-	} {
-		if got := windowsPowerShellProgram(tc.shell); got != tc.want {
-			t.Errorf("%q: %v, want %v", tc.shell, got, tc.want)
-		}
-	}
-}
-
 func TestWindowsPaneShellDecision(t *testing.T) {
 	bash := `C:\Program Files\Git\bin\bash.exe`
 	for _, tc := range []struct {
 		name       string
+		classic    bool
 		host       string
 		foreground []string
 		config     string
 		want       []string
 	}{
-		{"host PowerShell wins", "POWERSHELL.EXE", []string{bash}, "cmd.exe", []string{windowsPowerShellPane}},
-		{"host Bash wins", bash, []string{"pwsh.exe"}, "cmd.exe", []string{"bash"}},
-		{"foreground PowerShell wins over config", "", []string{`C:\Program Files\PowerShell\7\pwsh.exe`}, bash, []string{windowsPowerShellPane}},
-		{"foreground innermost Bash wins over config", "", []string{"powershell.exe", bash}, "cmd.exe", []string{"bash"}},
-		{"foreground cmd", "", []string{"powershell.exe", `C:\Windows\System32\CMD.EXE`}, bash, []string{windowsCmdPane}},
-		{"foreground error falls through to config", "", nil, bash, []string{"bash"}},
-		{"empty foreground falls through to config", "", []string{}, bash, []string{"bash"}},
-		{"unknown foreground falls through to config", "", []string{"powershell.exe", "node.exe"}, bash, []string{"bash"}},
-		{"config cmd", "", nil, `C:\Windows\System32\cmd.exe`, []string{windowsCmdPane}},
-		{"unknown config keeps direct behavior", "", nil, "unknown-program.exe", []string{"unknown-program.exe"}},
-		{"PowerShell default", "", nil, "", []string{windowsPowerShellPane}},
+		{"host PowerShell wins", false, "POWERSHELL.EXE", []string{bash}, "cmd.exe", []string{windowsPowerShellPane}},
+		{"host pwsh wins on classic", true, "pwsh.exe", []string{bash}, "cmd.exe", []string{windowsPowerShellPane}},
+		{"host Bash stays as reported", false, "bash", []string{"pwsh.exe"}, "cmd.exe", []string{"bash"}},
+		{"host Bash path stays as reported", false, bash, nil, "", []string{bash}},
+		{"host cmd keeps main behavior", false, "cmd.exe", nil, "", []string{"cmd.exe"}},
+		{"nonclassic unnamed keeps main fallback", false, "", nil, "", []string{""}},
+		{"foreground PowerShell wins over config", true, "", []string{`C:\Program Files\PowerShell\7\pwsh.exe`}, bash, []string{windowsPowerShellPane}},
+		{"foreground innermost Bash keeps direct main bytes", true, "", []string{"powershell.exe", bash}, "cmd.exe", []string{""}},
+		{"foreground POSIX shell keeps direct main bytes", true, "", []string{"zsh"}, "powershell.exe", []string{""}},
+		{"foreground cmd", true, "", []string{"powershell.exe", `C:\Windows\System32\CMD.EXE`}, bash, []string{windowsCmdPane}},
+		{"foreground error falls through to config", true, "", nil, bash, []string{""}},
+		{"empty foreground falls through to config", true, "", []string{}, "powershell.exe", []string{windowsPowerShellPane}},
+		{"unknown foreground falls through to config", true, "", []string{"powershell.exe", "node.exe"}, bash, []string{""}},
+		{"config PowerShell", true, "", nil, "PWSh.ExE", []string{windowsPowerShellPane}},
+		{"config cmd", true, "", nil, `C:\Windows\System32\cmd.exe`, []string{windowsCmdPane}},
+		{"unknown config keeps direct main bytes", true, "", nil, "unknown-program.exe", []string{""}},
+		{"PowerShell default", true, "", nil, "", []string{windowsPowerShellPane}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := windowsPaneShellDecision(tc.host, tc.foreground, tc.config); !reflect.DeepEqual(got, tc.want) {
+			if got := windowsPaneShellDecision(tc.classic, tc.host, tc.foreground, tc.config); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("decision = %q, want %q", got, tc.want)
 			}
 		})
@@ -183,75 +176,149 @@ func TestWindowsPaneShellDecisionGitBashNames(t *testing.T) {
 		`C:\Program Files\Git\bin\bash.exe`,
 		`C:/Program Files/Git/BIN/BaSh.ExE`,
 	} {
-		if got := windowsPaneShellDecision("", nil, shell); !reflect.DeepEqual(got, []string{"bash"}) {
-			t.Errorf("%q: decision = %q, want bash", shell, got)
+		if got := windowsPaneShellDecision(true, "", nil, shell); !reflect.DeepEqual(got, []string{""}) {
+			t.Errorf("%q: decision = %q, want main's unnamed-shell direct behavior", shell, got)
 		}
 	}
 }
 
-// origin/main with an unreported Windows pane typed cmd directly without an environment prefix. With a reported bash
-// it used agentCommand plus startScript/startLine: this config result must reproduce those exact bytes, not the
-// PowerShell handoff and not a newly invented Bash line. Both literals are goldens from origin/main's old code path.
-func TestWindowsConfigGitBashUsesMainReportedBashBytes(t *testing.T) {
-	n, _ := testNode(t)
-	n.dir = "/tmp/node dir"
-	const cmd = "claude --session-id 0e000000-0000-4000-8000-0000000000aa"
-	const path = `/tmp/node dir/agent start.sh`
-	const anchor = "session id"
-	const mainTyped = `. '/tmp/node dir/agent start.sh' && true 'session id'`
-	const mainFile = "command rm -f -- '/tmp/node dir/agent start.sh'\n" +
-		"unset PERSONA_ASSISTANT JARVIS_ASSISTANT PERSONA_ASSISTANT_BIN JARVIS_ASSISTANT_BIN " +
-		"PERSONA_SESSION_ID JARVIS_SESSION_ID PERSONA_SPACE JARVIS_SPACE PERSONA_GUEST JARVIS_GUEST " +
-		"CLAUDE_CODE_AUTO_COMPACT_WINDOW ENABLE_TOOL_SEARCH CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH " +
-		"CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET " +
-		"CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_EFFORT CLAUDE_PID CLAUDE_PLUGIN_DATA && " +
-		"PERSONA_HOME='/tmp/node dir' claude --session-id 0e000000-0000-4000-8000-0000000000aa\n"
-	shells := windowsPaneShellDecision("", nil, `C:\Program Files\Git\bin\BASH.EXE`)
-	if unreported := n.agentCommand(cmd, shellQuote, ""); unreported != cmd {
-		t.Fatalf("main's unreported direct command changed: %q", unreported)
+// These literals were printed by TestR3MainGoldens running in an archived origin/main checkout. They are not derived
+// from this branch. The direct command deliberately uses a Windows node directory: main omits its environment prefix.
+const (
+	r3MainDirect       = `claude --session-id 0e000000-0000-4000-8000-0000000000aa --settings 'C:'\\'Users'\\'u'\\'settings.json' --mcp-config 'C:'\\'node dir/mcp.json' --allowedTools 'mcp__persona__report_to_supervisor,mcp__jarvis__report_to_supervisor,mcp__persona__todo_decisions,mcp__jarvis__todo_decisions,mcp__persona__todo_decision_add,mcp__jarvis__todo_decision_add,mcp__persona__todo_bind_thread,mcp__jarvis__todo_bind_thread,mcp__persona__task_plan,mcp__jarvis__task_plan,mcp__persona__task_review,mcp__jarvis__task_review'`
+	r3MainStartPath    = `C:\node dir\agent start.sh`
+	r3MainAnchor       = "session id"
+	r3MainHostBashFile = `command rm -f -- 'C:'\\'node dir'\\'agent start.sh'
+unset PERSONA_ASSISTANT JARVIS_ASSISTANT PERSONA_ASSISTANT_BIN JARVIS_ASSISTANT_BIN PERSONA_SESSION_ID JARVIS_SESSION_ID PERSONA_SPACE JARVIS_SPACE PERSONA_GUEST JARVIS_GUEST CLAUDE_CODE_AUTO_COMPACT_WINDOW ENABLE_TOOL_SEARCH CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_EFFORT CLAUDE_PID CLAUDE_PLUGIN_DATA && PERSONA_HOME='C:'\\'node dir' claude
+`
+	r3MainHostBashTyped = `. 'C:'\\'node dir'\\'agent start.sh' && true 'session id'`
+	r3MainResume        = `claude --resume 0e000000-0000-4000-8000-0000000000aa --settings "C:\\Users\\u\\settings.json" --mcp-config "C:\\node dir/mcp.json" --allowedTools mcp__persona__report_to_supervisor,mcp__jarvis__report_to_supervisor,mcp__persona__todo_decisions,mcp__jarvis__todo_decisions,mcp__persona__todo_decision_add,mcp__jarvis__todo_decision_add,mcp__persona__todo_bind_thread,mcp__jarvis__todo_bind_thread,mcp__persona__task_plan,mcp__jarvis__task_plan,mcp__persona__task_review,mcp__jarvis__task_review`
+	r3MainOrca          = "cd -- /tmp/r3-main-orca && " + r3MainDirect + "\r"
+)
+
+func r3MainDirectCommand(t *testing.T, n *Node) string {
+	t.Helper()
+	got := n.claudeCommandLine(claudeLaunch{Launcher: "claude", Settings: `C:\Users\u\settings.json`},
+		"--session-id "+startID, shellQuote)
+	if got != r3MainDirect {
+		t.Fatalf("main command golden no longer matches its old code path:\n%q\nwant:\n%q", got, r3MainDirect)
 	}
-	reportedBashFile := startScript(path, n.agentCommand(cmd, shellQuote, "bash"))
-	if reportedBashFile != mainFile {
-		t.Fatalf("origin/main reported-bash golden no longer matches the old path:\n%q\nwant:\n%q", reportedBashFile, mainFile)
-	}
-	if got := startScript(path, n.agentStartCommand(cmd, shellQuote, shells...)); got != mainFile {
-		t.Fatalf("configured Git Bash start file:\n%q\nwant origin/main reported-bash bytes:\n%q", got, mainFile)
-	}
-	if !n.typesStartFile(&herdrHost{}, shells...) {
-		t.Fatal("configured Git Bash did not select main's reported-bash start file")
-	}
-	if got := startLine(path, anchor, "bash"); got != mainTyped {
-		t.Fatalf("origin/main reported-bash typed golden changed: %q", got)
-	}
-	if got := startLineChoice(cmd, path, anchor, powerShellTestBash, true, shells...); got != mainTyped {
-		t.Fatalf("typed = %q, want origin/main reported-bash %q", got, mainTyped)
+	return got
+}
+
+func TestWindowsUnchangedDirectStartsUseMainBytes(t *testing.T) {
+	n := &Node{dir: `C:\node dir`}
+	direct := r3MainDirectCommand(t, n)
+	bash := `C:\Program Files\Git\bin\bash.exe`
+	for _, tc := range []struct {
+		name       string
+		classic    bool
+		host       string
+		foreground []string
+		config     string
+		launch     host.Launcher
+	}{
+		{"classic foreground Git Bash", true, "", []string{"powershell.exe", bash}, "", &herdrHost{}},
+		{"classic config Git Bash", true, "", nil, bash, &herdrHost{}},
+		{"classic foreground POSIX shell", true, "", []string{"zsh"}, "", &herdrHost{}},
+		{"host-named unknown", false, "unknown-program.exe", nil, "", &herdrHost{}},
+		{"host-named cmd", false, "cmd.exe", nil, "", &herdrHost{}},
+		{"config unknown", true, "", nil, "unknown-program.exe", &herdrHost{}},
+		{"Orca unnamed", false, "", nil, "", &orcaHost{}},
+		{"Tern unnamed", false, "", nil, "", &ternHost{}},
+		{"herdr-core unnamed", false, "", nil, "", &herdrCoreHost{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shells := windowsPaneShellDecision(tc.classic, tc.host, tc.foreground, tc.config)
+			if err := windowsPaneShellError(shells...); err != nil {
+				t.Fatalf("main-compatible start was refused: %v", err)
+			}
+			useStartFile := n.typesStartFile(tc.launch, shells...)
+			if useStartFile {
+				t.Fatal("main's direct start moved to a start file")
+			}
+			cmd := n.agentStartCommand(direct, shellQuote, shells...)
+			if cmd != r3MainDirect {
+				t.Fatalf("payload = %q, want main %q", cmd, r3MainDirect)
+			}
+			if got := startLineChoice(cmd, r3MainStartPath, r3MainAnchor, powerShellTestBash, useStartFile, shells...); got != r3MainDirect {
+				t.Fatalf("typed = %q, want main %q", got, r3MainDirect)
+			}
+		})
 	}
 }
 
-func TestPowerShellPaneUsesTheForegroundShell(t *testing.T) {
-	bash := `C:\Program Files\Git\bin\bash.exe`
-	for _, tc := range []struct {
-		name   string
-		shells []string
-		want   bool
-	}{
-		{"PowerShell", []string{windowsPowerShellPane}, true},
-		{"Bash from PowerShell", []string{windowsPowerShellPane, bash}, false},
-		{"PowerShell from Bash", []string{bash, windowsPowerShellPane}, true},
-		{"none", nil, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := powerShellPane(tc.shells...); got != tc.want {
-				t.Fatalf("powerShellPane(%v) = %v, want %v", tc.shells, got, tc.want)
-			}
-			line := startLineChoice("claude", `C:\node dir\start.sh`, startID, powerShellTestBash, true, tc.shells...)
-			if tc.want && !strings.HasPrefix(line, "& ") {
-				t.Fatalf("foreground PowerShell did not get its handoff: %q", line)
-			}
-			if !tc.want && len(tc.shells) > 0 && strings.HasPrefix(line, "& ") {
-				t.Fatalf("foreground Bash got PowerShell syntax: %q", line)
-			}
-		})
+func TestWindowsHostNamedBashUsesMainBytes(t *testing.T) {
+	n := &Node{dir: `C:\node dir`}
+	shells := windowsPaneShellDecision(false, "bash", nil, "")
+	payload := n.agentStartCommand("claude", shellQuote, shells...)
+	if got := startScript(r3MainStartPath, payload); got != r3MainHostBashFile {
+		t.Fatalf("start file = %q, want main %q", got, r3MainHostBashFile)
+	}
+	if !n.typesStartFile(&herdrHost{}, shells...) {
+		t.Fatal("host-reported bash lost main's start file")
+	}
+	if got := startLineChoice(payload, r3MainStartPath, r3MainAnchor, powerShellTestBash, true, shells...); got != r3MainHostBashTyped {
+		t.Fatalf("typed = %q, want main %q", got, r3MainHostBashTyped)
+	}
+}
+
+func TestWindowsAdoptedPaneUsesMainBytes(t *testing.T) {
+	n := &Node{dir: `C:\node dir`}
+	direct := r3MainDirectCommand(t, n)
+	created := &host.Created{Pane: host.PaneRef{Kind: host.Herdr, ID: "w1:p1"}}
+	ctx := withAdoptedPane(context.Background(), created, []string{"bash", "pwsh"})
+	shells := n.startPaneShells(ctx, &herdrHost{}, created)
+	if !reflect.DeepEqual(shells, []string{"bash", "pwsh"}) {
+		t.Fatalf("adopted shells = %q, want main's raw stack", shells)
+	}
+	cmd := n.agentStartCommand(direct, shellQuote, shells...)
+	useStartFile := n.typesStartFile(&herdrHost{}, shells...)
+	if useStartFile {
+		t.Fatal("adopted PowerShell stack moved to a start file")
+	}
+	if got := startLineChoice(cmd, r3MainStartPath, r3MainAnchor, powerShellTestBash, useStartFile, shells...); got != r3MainDirect {
+		t.Fatalf("typed = %q, want main %q", got, r3MainDirect)
+	}
+}
+
+func TestWindowsHerdrRestoreUsesMainBytes(t *testing.T) {
+	old := herdrPaneShell
+	herdrPaneShell = func() string { return "" }
+	t.Cleanup(func() { herdrPaneShell = old })
+	n := &Node{dir: `C:\node dir`}
+	argv, ok := n.claudeResumeArgv(claudeLaunch{Launcher: "claude", Settings: `C:\Users\u\settings.json`}, startID)
+	if !ok || !reflect.DeepEqual(argv, []string{"eval", r3MainResume}) {
+		t.Fatalf("resume_argv = %q, %v, want main %q", argv, ok, []string{"eval", r3MainResume})
+	}
+}
+
+func TestWindowsOrcaUnnamedShellUsesMainBytes(t *testing.T) {
+	const cwd = "/tmp/r3-main-orca"
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cwd) })
+	fake := orcarttest.New(t)
+	fake.SetWorktrees(orcarttest.Worktree("wt-r3", cwd, "refs/heads/main"))
+	h := newOrcaHost(&orcart.Client{MetaPath: fake.MetaPath})
+	created, err := h.CreateSpace(context.Background(), cwd, "tab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shells := windowsPaneShellDecision(false, created.Shell, nil, "")
+	n := &Node{dir: `C:\node dir`}
+	cmd := n.agentStartCommand(r3MainDirect, shellQuote, shells...)
+	useStartFile := n.typesStartFile(h, shells...)
+	typed := startLineChoice(cmd, r3MainStartPath, r3MainAnchor, powerShellTestBash, useStartFile, shells...)
+	if typed != r3MainDirect {
+		t.Fatalf("Orca command = %q, want main %q", typed, r3MainDirect)
+	}
+	if err := h.Run(context.Background(), created.Pane, typed); err != nil {
+		t.Fatal(err)
+	}
+	if writes := fake.Writes(); len(writes) != 1 || writes[0].Text != r3MainOrca {
+		t.Fatalf("Orca writes = %v, want main %q", writes, r3MainOrca)
 	}
 }
 
@@ -369,22 +436,6 @@ func TestPowerShellStartFileReadsBashrc(t *testing.T) {
 	}
 }
 
-func TestOrcaRunLinePowerShell(t *testing.T) {
-	start := powerShellStartLine(powerShellTestBash, `C:\node dir\agent-start.sh`, startID)
-	cwd := `C:\O'Brien\$HOME` + "`" + ` & ; 雪`
-	want := "Set-Location -LiteralPath " + powerShellQuote(cwd) + " -ErrorAction Stop; " + start + "\r"
-	if got := orcaRunLine("windows", cwd, start); got != want {
-		t.Fatalf("Orca PowerShell line = %q, want %q", got, want)
-	}
-	// A configured Git Bash pane and every Unix start retain Orca's existing POSIX prefix byte-for-byte.
-	for _, tc := range []struct{ goos, command string }{{"windows", "claude --session-id x"}, {"linux", start}, {"darwin", start}} {
-		want := "cd -- " + shellQuote(cwd) + " && " + tc.command + "\r"
-		if got := orcaRunLine(tc.goos, cwd, tc.command); got != want {
-			t.Errorf("%s: %q, want %q", tc.goos, got, want)
-		}
-	}
-}
-
 func TestPowerShellStartParseErrorIsRetyped(t *testing.T) {
 	line := powerShellStartLine(powerShellTestBash, `C:\node dir\agent-start.sh`, startID)
 	probe := &startProbe{anchor: startID}
@@ -492,9 +543,8 @@ func TestTypeStartWindowsCmdIsRefusedBeforeFileOrInput(t *testing.T) {
 		name   string
 		shells []string
 	}{
-		{"host", windowsPaneShellDecision("cmd.exe", nil, "")},
-		{"foreground", windowsPaneShellDecision("", []string{"powershell.exe", "cmd.exe"}, "")},
-		{"config", windowsPaneShellDecision("", nil, `C:\Windows\System32\cmd.exe`)},
+		{"foreground", windowsPaneShellDecision(true, "", []string{"powershell.exe", "cmd.exe"}, "")},
+		{"config", windowsPaneShellDecision(true, "", nil, `C:\Windows\System32\cmd.exe`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, _ := herdrNode(t)

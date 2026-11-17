@@ -26,26 +26,24 @@ func windowsPowerShellProgram(shell string) bool {
 	return shell == "powershell" || shell == "pwsh"
 }
 
-// windowsShellProgram is shellProgram for Windows names, including cmd.exe. The last foreground program must pass it
-// before its answer can replace config. Other programs fall through to config rather than being guessed as shells.
+// windowsShellProgram recognizes a shell only for a new classic-herdr pane's decision. The shared shellProgram and
+// takesAssign retain main's behavior; case, slashes and .exe are normalized only here.
 func windowsShellProgram(shell string) bool {
 	name := windowsShellName(shell)
-	return name == "cmd" || shells[name]
+	return name == "cmd" || windowsPowerShellProgram(shell) || shells[name]
 }
 
-// windowsPaneShellKind canonicalizes known Windows shells so the existing takesAssign and start-line choices see the
-// same shell name on every OS. Unknown programs keep their original value and retain main's direct-command behavior.
-func windowsPaneShellKind(shell string) string {
+// windowsClassicShellKind maps only the two failing classic-pane cases to new behavior. A POSIX or unknown shell gets
+// main's unnamed-shell value, so its directly typed command and environment stay byte-for-byte unchanged.
+func windowsClassicShellKind(shell string) string {
 	name := windowsShellName(shell)
 	switch {
 	case name == "powershell" || name == "pwsh":
 		return windowsPowerShellPane
 	case name == "cmd":
 		return windowsCmdPane
-	case shells[name]:
-		return name
 	default:
-		return shell
+		return ""
 	}
 }
 
@@ -55,19 +53,23 @@ func windowsForegroundUsable(foreground []string) bool {
 	return len(foreground) > 0 && windowsShellProgram(foreground[len(foreground)-1])
 }
 
-// windowsPaneShellDecision is the pure Windows source order: host report, usable foreground, herdr config, then
-// PowerShell (herdr's default). The Windows integration supplies config only for classic herdr and only when needed.
-func windowsPaneShellDecision(hostShell string, foreground []string, configShell string) []string {
+// windowsPaneShellDecision narrows the change to a host that names PowerShell and to a new classic-herdr pane. Every
+// unnamed nonclassic pane returns main's empty fallback. A host-named non-PowerShell shell stays exactly as reported.
+func windowsPaneShellDecision(classic bool, hostShell string, foreground []string, configShell string) []string {
 	if hostShell != "" {
-		return []string{windowsPaneShellKind(hostShell)}
+		if windowsPowerShellProgram(hostShell) {
+			return []string{windowsPowerShellPane}
+		}
+		return []string{hostShell}
+	}
+	if !classic {
+		return []string{""}
 	}
 	if windowsForegroundUsable(foreground) {
-		// Only the innermost process receives the typed line. Keeping an ancestor PowerShell in this new-pane
-		// answer would also make takesAssign reject the whole stack and lose the start file's environment prefix.
-		return []string{windowsPaneShellKind(foreground[len(foreground)-1])}
+		return []string{windowsClassicShellKind(foreground[len(foreground)-1])}
 	}
 	if configShell != "" {
-		return []string{windowsPaneShellKind(configShell)}
+		return []string{windowsClassicShellKind(configShell)}
 	}
 	return []string{windowsPowerShellPane}
 }
@@ -80,11 +82,10 @@ func windowsPaneShellError(shells ...string) error {
 	return nil
 }
 
-// powerShellPane reports whether the foreground pane shell reads PowerShell and therefore needs a PowerShell outer
-// start line. Adopted-pane process stacks are parent-first: only the last program receives the typed line, so a
-// PowerShell that launched Git Bash must not override the active Bash prompt.
+// powerShellPane reports only the singleton sentinel made by windowsPaneShellDecision. Adopted stacks remain main's
+// raw programs and never select the handoff.
 func powerShellPane(shells ...string) bool {
-	return len(shells) > 0 && shells[len(shells)-1] == windowsPowerShellPane
+	return len(shells) == 1 && shells[0] == windowsPowerShellPane
 }
 
 // startCommandShells are the shells that read the command inside a start file. A Windows PowerShell pane only reads

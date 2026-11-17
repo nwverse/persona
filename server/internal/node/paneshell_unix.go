@@ -12,7 +12,7 @@ import (
 // foreground request or config read, so Unix starts keep their exact inputs and typed bytes.
 func (n *Node) freshPaneShells(_ context.Context, _ host.Launcher, created *host.Created) []string {
 	if created.Shell != "" {
-		return paneShellKinds([]string{created.Shell})
+		return []string{created.Shell}
 	}
-	return paneShellKinds([]string{herdrPaneShell()})
+	return []string{herdrPaneShell()}
 }

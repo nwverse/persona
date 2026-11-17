@@ -219,12 +219,12 @@ func adoptedPane(ctx context.Context) *host.Created {
 // user picked, else the shell the host opened, falling back to herdr's shell when the host does not report one.
 func paneShells(ctx context.Context, created *host.Created) []string {
 	if a, ok := ctx.Value(adoptedPaneKey{}).(adopted); ok {
-		return paneShellKinds(a.shells)
+		return a.shells
 	}
 	if created.Shell != "" {
-		return paneShellKinds([]string{created.Shell})
+		return []string{created.Shell}
 	}
-	return paneShellKinds([]string{herdrPaneShell()})
+	return []string{herdrPaneShell()}
 }
 
 // startPaneShells resolves the shell for one start. An adopted pane reuses the foreground answer already gathered by

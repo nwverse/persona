@@ -128,12 +128,6 @@ func systemdRun() (string, bool) {
 // [terminal] default_shell in herdr's config is not looked at). A var for tests.
 var herdrPaneShell = sync.OnceValue(userShell)
 
-// paneShellKinds leaves Unix pane shells as the host reported them.
-func paneShellKinds(shells []string) []string { return shells }
-
-// paneShellName keeps Unix's existing case-sensitive shell-name handling.
-func paneShellName(name string) string { return strings.TrimPrefix(filepath.Base(name), "-") }
-
 // userShell is the user's login shell: $SHELL, else the account's (launchd does not set SHELL), else zsh / sh.
 func userShell() string {
 	if s := os.Getenv("SHELL"); strings.HasPrefix(s, "/") {
