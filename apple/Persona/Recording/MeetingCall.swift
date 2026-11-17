@@ -73,8 +73,6 @@ import OSLog
     nonisolated enum Note: Equatable, Sendable {
         /// Asked without the call, and the transcript holds no words for the span.
         case nothingHeard
-        /// Let go almost at once: Talk is held while speaking.
-        case holdLonger
         /// The page's talk window ended by itself after 20 seconds without speech (`MeetingTalkWindow`, #9658).
         case quiet
         /// The page's talk window reached its 60 seconds.

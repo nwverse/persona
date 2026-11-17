@@ -74157,48 +74157,68 @@
       },
       "extractionState" : "manual"
     },
-    "Hold Talk while you speak, then let go." : {
-      "extractionState" : "manual",
+    "Talk turned off after 20 seconds without speech." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hold Talk while you speak, then let go."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "说话时按住“说话”，说完再松开。"
+            "value" : "Talk turned off after 20 seconds without speech."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "話している間は「話す」を押し続け、話し終えたら指を離してください。"
+            "value" : "20 秒間話し声がなかったため、「話す」をオフにしました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "20 秒没听到说话，“说话”已关闭。"
           }
         }
       }
     },
-    "Hold while you speak. Persona answers when you let go." : {
-      "extractionState" : "manual",
+    "Talk turned off after a minute." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hold while you speak. Persona answers when you let go."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "说话时按住，松开后 Persona 回答。"
+            "value" : "Talk turned off after a minute."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "話している間は押し続けてください。指を離すと Persona が答えます。"
+            "value" : "1 分経ったため、「話す」をオフにしました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已满一分钟，“说话”已关闭。"
+          }
+        }
+      }
+    },
+    "Tap to talk and tap again when you’re done, or hold while you speak." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap to talk and tap again when you’re done, or hold while you speak."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タップして話し、話し終えたらもう一度タップしてください。押したまま話して指を離すこともできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点开始说，说完再点一下；也可以按住说，松手发出。"
           }
         }
       }
@@ -119364,25 +119384,24 @@
         }
       }
     },
-    "Persona didn’t hear anything. Hold Talk while you speak." : {
-      "extractionState" : "manual",
+    "Persona didn’t hear anything. Tap Talk and speak, or hold it while you speak." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Persona didn’t hear anything. Hold Talk while you speak."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona 没听到内容。说话时请按住“说话”。"
+            "value" : "Persona didn’t hear anything. Tap Talk and speak, or hold it while you speak."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Persona には何も聞こえませんでした。話している間は「話す」を押し続けてください。"
+            "value" : "Persona には何も聞こえませんでした。「話す」をタップして話すか、押したまま話してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 没听到内容。请轻点“说话”再说，或按住“说话”说。"
           }
         }
       }
