@@ -6,5 +6,6 @@
   "assistant_message": "助手主动编写的消息",
   "bot": "机器人",
   "user": "本人",
-  "send_confirm": "发送这条消息吗？\n渠道：{channel}\n会话：{target}\n发送身份：{identity}\n\n{text}"
+  "send_confirm": "发送这条消息吗？\n渠道：{channel}\n会话：{target}\n发送身份：{identity}\n\n{text}",
+  "scope_changed": "授权、接收会话或发送身份已变化，未发送。请刷新设置，确认需要的生效范围。"
 }

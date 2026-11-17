@@ -334,6 +334,36 @@ func TestOutboundSettingsRequireAFullOwnerDevice(t *testing.T) {
 	}
 }
 
+func TestOutboundTransportRechecksTheActualScope(t *testing.T) {
+	for _, change := range []string{"recipient", "identity", "revocation", "invalid recipient"} {
+		t.Run(change, func(t *testing.T) {
+			h, st, c, _ := outboundTestHub(t)
+			g := messageTestGrant("inbox_reply")
+			target := "oc_example_group"
+			switch change {
+			case "recipient":
+				target = "oc_different_group"
+			case "identity":
+				_ = st.PutSetting(context.Background(), outboundIdentityKey, "user")
+			case "invalid recipient":
+				g.Messages.Target, target = "", "unexpected"
+			}
+			list := StandingAuthorizations{Revision: 1, Authorizations: []StandingAuthorization{g}}
+			if change == "revocation" {
+				list.Authorizations = nil
+			}
+			_ = st.PutSetting(context.Background(), standingAuthorizationsKey, list)
+			ctx := context.WithValue(context.Background(), outboundApprovalKey{}, outboundApproval{
+				ID: g.ID, Kind: "standing_authorization", Scenario: "inbox_reply", Identity: "bot",
+			})
+			err := h.connectorReply(ctx, "larkcli", connectorMessage(target, "Do not send outside the checked scope."), "scope-race")
+			if err == nil || len(c.identities) != 0 || len(st.audit) != 0 {
+				t.Fatalf("changed %s escaped the final scope check: sends=%v audit=%+v err=%v", change, c.identities, st.audit, err)
+			}
+		})
+	}
+}
+
 func TestOutboundOwnerApprovalCardShowsScopeAndDoesNotSelfApprove(t *testing.T) {
 	for _, owner := range []bool{false, true} {
 		t.Run(fmt.Sprint(owner), func(t *testing.T) {

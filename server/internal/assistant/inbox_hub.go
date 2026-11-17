@@ -8,6 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // What the inbox asks of the hub: its settings, the sources' (a mail's text, a reply, a connector's group tools…),
@@ -102,6 +103,17 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 		params["sender_identity"] = identity
 	}
 	approval, automatic := ctx.Value(outboundApprovalKey{}).(outboundApproval)
+	if automatic && approval.Kind == "standing_authorization" {
+		// Collection may have updated the item after its suggestion was checked.
+		// Authorize the actual recipient at the transport boundary, not the snapshot.
+		grant, err := s.messageGrant(ctx, source, messageTarget(r.Thread), approval.Scenario, approval.Identity)
+		if err != nil {
+			return err
+		}
+		if grant == nil || grant.ID != approval.ID || params["sender_identity"] != approval.Identity {
+			return i18n.Err("assistant-outbound.scope_changed")
+		}
+	}
 	if automatic || params["sender_identity"] == "user" {
 		var policy struct {
 			SenderIdentity bool `json:"sender_identity"`

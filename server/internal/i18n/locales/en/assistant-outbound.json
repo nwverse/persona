@@ -6,5 +6,6 @@
   "assistant_message": "Assistant-authored messages",
   "bot": "Bot",
   "user": "Me",
-  "send_confirm": "Send this message?\nChannel: {channel}\nChat: {target}\nSender: {identity}\n\n{text}"
+  "send_confirm": "Send this message?\nChannel: {channel}\nChat: {target}\nSender: {identity}\n\n{text}",
+  "scope_changed": "The authorization, recipient, or sender changed. Nothing was sent. Refresh the settings and confirm the intended scope."
 }

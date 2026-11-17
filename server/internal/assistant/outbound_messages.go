@@ -110,6 +110,9 @@ func (s *Service) setOutboundIdentity(ctx context.Context, raw json.RawMessage) 
 }
 
 func (s *Service) messageGrant(ctx context.Context, channel, target, scenario, identity string) (*StandingAuthorization, error) {
+	if channel != "larkcli" || !validMessageChat(target) {
+		return nil, nil
+	}
 	list, err := s.standingAuthorizations(ctx)
 	if err != nil {
 		return nil, err
