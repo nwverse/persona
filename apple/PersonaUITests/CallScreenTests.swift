@@ -252,9 +252,15 @@ final class CallScreenTests: XCTestCase {
     }
 
     /// The composer's phone icon is the one voice entry (#9887 one button): + › More offers neither Voice Chat nor Call
-    /// Persona, in the main conversation or an Agent's, and the icon is in both composers.
+    /// Persona, in the main conversation or an Agent's, and the icon is in both composers, saying it calls this
+    /// conversation (`main-composer-phone.png`, `agent-composer-phone.png`).
     @MainActor func testThePhoneIconIsTheOneVoiceEntry() throws {
         let app = try launch(Self.main)
+        let icon = app.descendants(matching: .any).matching(identifier: "shell-composer-voice").firstMatch
+        XCTAssertTrue(icon.waitForExistence(timeout: 90), "no phone icon in the main conversation's composer\n\(app.debugDescription)")
+        XCTAssertEqual(icon.label, "呼叫这段对话", "the phone icon does not say it calls this conversation")
+        Thread.sleep(forTimeInterval: 2)
+        shot("main-composer-phone", app)
         try openMore(app)
         XCTAssertFalse(app.buttons["composer-menu-voice"].exists, "Voice Chat in More")
         XCTAssertFalse(app.buttons["composer-menu-call"].exists, "Call Persona in More")
@@ -273,8 +279,11 @@ final class CallScreenTests: XCTestCase {
         app.terminate()
 
         let agent = try launch(Self.agent)
-        XCTAssertTrue(agent.descendants(matching: .any).matching(identifier: "shell-composer-voice").firstMatch.waitForExistence(timeout: 40),
-                      "no phone icon in an Agent's composer\n\(agent.debugDescription)")
+        let agentIcon = agent.descendants(matching: .any).matching(identifier: "shell-composer-voice").firstMatch
+        XCTAssertTrue(agentIcon.waitForExistence(timeout: 40), "no phone icon in an Agent's composer\n\(agent.debugDescription)")
+        XCTAssertEqual(agentIcon.label, "呼叫这段对话", "the Agent's phone icon does not say it calls this conversation")
+        Thread.sleep(forTimeInterval: 2)
+        shot("agent-composer-phone", agent)
         try openMore(agent)
         XCTAssertFalse(agent.buttons["composer-menu-voice"].exists, "Voice Chat in an Agent's More")
         XCTAssertFalse(agent.buttons["composer-menu-call"].exists, "Call Persona in an Agent's More")
@@ -458,9 +467,10 @@ final class CallScreenTests: XCTestCase {
     }
 
     /// The phone icon in an Agent's conversation (#9887 one button): a system call to that session (the mock's start has
-    /// its target and `surface: call`), the call screen showing its title and its agent; the Home Screen, another app
-    /// for 15 s, locked for 15 s, back: the audio kept going up and no voice socket closed; End. The counts go to
-    /// `agent-call.json` beside the screenshots.
+    /// its target and `surface: call`), the call screen showing its title and its agent; the bar over its conversation and
+    /// over the main conversation, whose phone icon asks before it ends the call (Cancel keeps it); the Home Screen,
+    /// another app for 15 s, locked for 15 s, back: the audio kept going up and no voice socket closed; End. The counts go
+    /// to `agent-call.json` beside the screenshots.
     @MainActor func testACallFromAnAgentsConversation() throws {
         let hub = try hub
         var steps: [[String: Any]] = []
@@ -502,7 +512,24 @@ final class CallScreenTests: XCTestCase {
         XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call")
         XCTAssertTrue(bar.label.contains(title), "the bar does not name the conversation \(title): \(bar.label)")
         Thread.sleep(forTimeInterval: 1.5)
-        try step("minimised", app, shot: "agent-call-bar")
+        try step("minimised", app, shot: "agent-call-bar-own")
+
+        // Another page, the main conversation: the bar over it names the Agent's conversation; its phone icon asks before
+        // it ends this call (End and Call, naming both), and Cancel keeps the call.
+        let back = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).firstMatch
+        if back.waitForExistence(timeout: 5) { back.tap() }
+        let assistant = app.buttons["shell-assistant"].firstMatch
+        XCTAssertTrue(assistant.waitForExistence(timeout: 10), "no Assistant switch\n\(app.debugDescription)")
+        assistant.tap()
+        let mainIcon = app.descendants(matching: .any).matching(identifier: "shell-composer-voice").firstMatch
+        XCTAssertTrue(mainIcon.waitForExistence(timeout: 20), "no phone icon in the main conversation\n\(app.debugDescription)")
+        XCTAssertTrue(bar.waitForExistence(timeout: 5) && bar.isHittable, "no bar over the main conversation\n\(app.debugDescription)")
+        XCTAssertTrue(bar.label.contains(title), "the bar over the main conversation does not name \(title): \(bar.label)")
+        Thread.sleep(forTimeInterval: 2)
+        try step("main conversation", app, shot: "agent-call-bar")
+        mainIcon.tap()
+        try confirmAndCancel(app, shot: "agent-call-question", yes: "结束并呼叫", message: "当前通话会结束", callWith: title)
+        try step("phone icon in the main conversation, Cancel", app)
 
         XCUIDevice.shared.press(.home)
         sleep(2)
@@ -731,16 +758,18 @@ final class CallScreenTests: XCTestCase {
     }
 
     /// The question before the phone icon (or a voice chat) ends the call: it names the assistant, and Cancel keeps the
-    /// call. `yes`: its yes button (End and Call for the phone icon on the iPhone, #9887); `message`: words of its message.
+    /// call. `yes`: its yes button (End and Call for the phone icon on the iPhone, #9887); `message`: words of its message;
+    /// `callWith`: whom the call is with (the assistant's name, or an Agent's conversation's title).
     @MainActor private func confirmAndCancel(_ app: XCUIApplication, shot name: String, yes: String = "结束通话并开始",
-                                             message words: String = "通话会结束") throws {
-        let ask = app.alerts.matching(NSPredicate(format: "label CONTAINS %@", "结束与 Persona 的通话")).firstMatch
+                                             message words: String = "通话会结束", callWith: String = "Persona") throws {
+        let question = "结束与 \(callWith) 的通话"
+        let ask = app.alerts.matching(NSPredicate(format: "label CONTAINS %@", question)).firstMatch
         XCTAssertTrue(ask.waitForExistence(timeout: 10), "no question before ending the call\n\(app.debugDescription)")
         let endAndStart = ask.buttons[yes].firstMatch
         XCTAssertTrue(endAndStart.exists, "no \(yes)\n\(app.debugDescription)")
         Thread.sleep(forTimeInterval: 1)
         // Its words are above its buttons: the bar's room once pushed the alert's title down and its message under them.
-        let title = ask.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "结束与 Persona 的通话")).firstMatch
+        let title = ask.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", question)).firstMatch
         let message = ask.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
         XCTAssertTrue(message.exists, "no message under the question\n\(app.debugDescription)")
         XCTAssertLessThanOrEqual(title.frame.maxY, message.frame.minY + 1, "the message is not under the title")
