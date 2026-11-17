@@ -5,9 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -193,7 +191,7 @@ func (n *Node) backfillScan(ctx context.Context, files []backfillFile, start, en
 		if !f.overlaps(start, end) {
 			continue
 		}
-		if _, err := m.scanSlice(ctx, f.path, f.st, start, end, lim); err != nil {
+		if _, err := m.scanSlice(ctx, f.usagePath, start, end, lim); err != nil {
 			return nil, err
 		}
 	}
@@ -224,21 +222,20 @@ func backfillChunks(buckets []proto.UsageBucket, size int) [][]proto.UsageBucket
 	return append(out, buckets[start:])
 }
 
-// scanSlice reads path from about start (startOffset, from its start when small) through lim until its lines are
-// past end (backfillPast of them in a row), as scan reads what a file gained; read is how far it got.
-func (m *usageMeter) scanSlice(ctx context.Context, path string, st os.FileInfo, start, end time.Time, lim *readLimiter) (read int64, err error) {
-	f, err := os.Open(path)
+// scanSlice reads f from about start (startOffset, from its start when small) through lim until its lines are past
+// end (backfillPast of them in a row), as scan reads what a file gained; read is how far it got.
+func (m *usageMeter) scanSlice(ctx context.Context, f usagePath, start, end time.Time, lim *readLimiter) (read int64, err error) {
+	fh, err := os.Open(f.path)
 	if err != nil {
 		return 0, ctx.Err()
 	}
-	defer f.Close()
-	uf := &usageFile{session: usageSession(path)}
-	off, probed := startOffsetFrom(path, st.Size(), start, backfillSmall)
+	defer fh.Close()
+	off, probed := startOffsetFrom(f.path, f.st.Size(), start, backfillSmall)
 	if err := lim.wait(ctx, int(probed)); err != nil { // the search's reads count against the rate too
 		return 0, err
 	}
-	codex := strings.HasPrefix(filepath.Base(path), "rollout-")
-	r := &limitedReader{ctx: ctx, r: io.NewSectionReader(f, off, st.Size()-off), lim: lim}
+	uf := newUsageFile(f, off)
+	r := &limitedReader{ctx: ctx, r: io.NewSectionReader(fh, off, f.st.Size()-off), lim: lim}
 	past := 0
 	read = off + eachLineAt(r, func(line []byte, _, _ int64) bool {
 		if ts := firstTime(line); !ts.IsZero() {
@@ -248,10 +245,8 @@ func (m *usageMeter) scanSlice(ctx context.Context, path string, st os.FileInfo,
 				return false
 			}
 		}
-		if codex {
-			m.codexLine(uf, line, start)
-		} else {
-			m.claudeLine(uf, line, start)
+		if rec, ok := uf.parser.Line(line); ok {
+			m.add(uf, rec, start)
 		}
 		return true
 	})
