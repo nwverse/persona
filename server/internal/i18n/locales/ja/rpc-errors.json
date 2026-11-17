@@ -82,5 +82,6 @@
   "assistant_supervision_busy": "この会話のタスク管理の役割が変わりました。現在の作業が終わってから、もう一度お試しください。何も送信していません。",
   "assistant_supervision_runtime": "タスク管理には Claude Code または Codex の会話を使ってください。この Agent は独立した管理用の指示に対応していません。何も開始・送信していません。",
   "assistant_supervision_node_outdated": "ここでタスクを管理する前に、このコンピューターの Persona Link を更新してください。現在のバージョンは独立したタスク指示を適用できません。何も開始・送信していません。",
-  "omp_resume_unknown": "この omp セッションは、まだ Persona から再開できません。コンピューターで omp --resume を使って続けてください。何も送信していません。"
+  "omp_resume_unknown": "この omp セッションのファイルが見つからないため、Persona からは再開できません。コンピューターで omp --resume を使って続けてください。何も送信していません。",
+  "omp_stopped": "この omp セッションは停止しているため、この操作はできません。メッセージを送ると、コンピューターで続きを再開します。"
 }

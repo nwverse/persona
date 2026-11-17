@@ -82,5 +82,6 @@
   "assistant_supervision_busy": "This conversation's task-follow-up role changed. Wait for its current work to finish, then try again. Nothing was sent.",
   "assistant_supervision_runtime": "Use a Claude Code or Codex conversation for task follow-up. This Agent does not support its separate instructions. Nothing was started or sent.",
   "assistant_supervision_node_outdated": "Update this computer's Persona Link before following up tasks here. Its current version cannot apply separate task instructions. Nothing was started or sent.",
-  "omp_resume_unknown": "Persona can’t resume this omp session from here yet. Continue it on the computer with omp --resume. Nothing was sent."
+  "omp_resume_unknown": "Persona can’t find this omp session’s file, so it can’t resume it from here. Continue it on the computer with omp --resume. Nothing was sent.",
+  "omp_stopped": "This omp session has stopped, so this can’t be done. Send a message to continue it on the computer."
 }
