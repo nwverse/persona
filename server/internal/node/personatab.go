@@ -8,10 +8,10 @@ import (
 
 // Every tab Persona opens for an agent is marked with personaTabToken (herdr keeps a pane's metadata tokens until the
 // pane goes; a herdr restart drops them). When the agent exits — by itself, by /exit, or stopped by Persona
-// (retire.go) — the tab stays with the shell it ran in: Persona never closes an agent's terminal on its own, only the
-// user does (#4754, docs/integrations/engines.md "Agents run in a terminal"). Until then the node closed such a tab
-// once its shell had sat untouched for ten minutes (#851); that sweep is gone. The mark names the session the
-// terminal was opened for.
+// (retire.go) — the tab stays with the shell it ran in (#4754, docs/integrations/engines.md "Agents run in a
+// terminal"), for the user to read and Resume in, until it has sat unchanged for the grace period: then the node
+// closes it (finished_close.go, #10111), on herdr only a tab with this mark. The mark names the session the terminal was
+// opened for.
 
 // personaTabToken marks a pane Persona opened for an agent; its value is the session id when the start knew it.
 const personaTabToken = "persona_tab"
