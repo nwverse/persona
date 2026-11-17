@@ -9,13 +9,16 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 type inboxRetryFailStore struct {
 	Store
-	fail atomic.Bool
+	fail         atomic.Bool
+	failFeed     atomic.Bool
+	feedFailures atomic.Int32
 }
 
 func (s *inboxRetryFailStore) PutSetting(ctx context.Context, key string, value any) error {
@@ -23,6 +26,14 @@ func (s *inboxRetryFailStore) PutSetting(ctx context.Context, key string, value 
 		return errors.New("retry ledger unavailable")
 	}
 	return s.Store.PutSetting(ctx, key, value)
+}
+
+func (s *inboxRetryFailStore) AppendFeed(ctx context.Context, row db.FeedRow) error {
+	if s.failFeed.Load() && row.Kind == feedRouted {
+		s.feedFailures.Add(1)
+		return errors.New("routed feed unavailable")
+	}
+	return s.Store.AppendFeed(ctx, row)
 }
 
 func inboxRetryEvent(todo, key string) superviseSignal {
@@ -174,6 +185,56 @@ func TestInboxNoOutputFailedRedeliveryNamesEvent(t *testing.T) {
 	}
 	if got := len(sentToAgent(f)); got > before+1 {
 		t.Fatalf("more than one redelivery was attempted: %d", got-before)
+	}
+}
+
+func TestInboxNoOutputRedeliveryFeedFailureWaitsForActualTurn(t *testing.T) {
+	for _, answer := range []string{"I read the review and am fixing it.", ""} {
+		name := "answered"
+		if answer == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := &inboxRetryFailStore{Store: repositorystore.New(todoTestDB(t))}
+			s, f, todo := inboxRetryService(t, st)
+			g := inboxRetryEvent(todo.ID, "review-1")
+			s.inboxToAgent(ctx, g)
+			sent := sentToAgent(f)
+			prompt, before := sent[len(sent)-1], len(sent)
+			id := namedClientID("task inbox\n" + todo.ID + "\n" + g.Key)
+			st.failFeed.Store(true)
+			inboxRetryTurn(s, f, "empty-1", prompt, "", 10)
+			if got := len(sentToAgent(f)); got != before+1 || st.feedFailures.Load() != 1 {
+				t.Fatalf("redelivery not accepted before the feed failed: sends=%d, feed failures=%d",
+					got, st.feedFailures.Load())
+			}
+			if got := unhandledInboxSignals(s); len(got) != 0 {
+				t.Fatalf("accepted redelivery was reported as failed before its turn ended: %+v", got)
+			}
+			// Reload the pending event to check the persisted outcome, not just a queued notice.
+			s.tasks.turns.mu.Lock()
+			s.tasks.turns.loaded = false
+			s.tasks.turns.mu.Unlock()
+			s.recoverTaskInboxEvents(ctx)
+			if !s.taskInboxUnhandled(ctx, id) || len(unhandledInboxSignals(s)) != 0 {
+				t.Fatal("feed failure discarded the event or persisted a false delivery failure")
+			}
+			inboxRetryTurn(s, f, "retry-result", prompt, answer, 20)
+			if got := len(sentToAgent(f)); got != before+1 {
+				t.Fatalf("feed failure spent another retry: sends=%d, want %d", got, before+1)
+			}
+			signals := unhandledInboxSignals(s)
+			if answer != "" {
+				if len(signals) != 0 || s.taskInboxUnhandled(ctx, id) {
+					t.Fatalf("the retry's answer did not acknowledge its event: %+v", signals)
+				}
+			} else if len(signals) != 1 || signals[0].Inbox.URL != g.Inbox.URL ||
+				signals[0].Inbox.Sender != g.Inbox.Sender ||
+				!strings.Contains(signals[0].Detail, "produced no output") {
+				t.Fatalf("the retry's empty result did not name the unhandled event: %+v", signals)
+			}
+		})
 	}
 }
 

@@ -638,6 +638,11 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 			return err
 		}
 		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant})
+		if err != nil && event != nil {
+			// The node already accepted this event; a feed failure cannot revoke delivery.
+			s.logf("task %s: external-event delivery feed: %v", t.ID, err)
+			return nil
+		}
 		return err
 	}
 	if c.Status == proto.StatusOffline && wait {
