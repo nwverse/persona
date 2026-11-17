@@ -477,7 +477,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive, onEditTags }: {
           {s.tags && s.tags.length > 0 && (
             <span data-testid="row-tags" className="mt-1 flex flex-wrap gap-1">
               {s.tags.map((tag) => (
-                <span key={tag} title={t("assistant-history.tag_mark", { tag })} className="inline-flex h-[18px] items-center gap-0.5 whitespace-nowrap rounded-full bg-field px-1.5 text-[10.5px] font-medium text-ink-2">
+                <span key={tag} title={t("assistant-history.tag_mark", { tag })} className="inline-flex h-[18px] items-center gap-0.5 whitespace-nowrap rounded-full bg-field px-1.5 text-label font-medium text-ink-2">
                   <Icon name="tag" size={9} stroke={2.2} />
                   {tag}
                 </span>
@@ -620,7 +620,7 @@ function TagsDialog({ s, onClose, onSave }: { s: Conversation; onClose: () => vo
         {tags.length > 0 && (
           <ul className="mt-2.5 flex flex-wrap gap-1.5">
             {tags.map((tag) => (
-              <li key={tag} className="inline-flex h-7 items-center gap-1 rounded-control bg-field pl-2.5 pr-1 text-[12px] text-ink-2">
+              <li key={tag} className="inline-flex h-7 items-center gap-1 rounded-control bg-field pl-2.5 pr-1 text-label text-ink-2">
                 <Icon name="tag" size={11} stroke={2} className="shrink-0" />
                 <span className="max-w-[220px] truncate">{tag}</span>
                 <IconButton icon="x" size={20} iconSize={11} label={t("assistant-history.tags_remove", { tag })} disabled={busy} onClick={() => setTags((cur) => cur.filter((x) => x !== tag))} />
@@ -628,7 +628,7 @@ function TagsDialog({ s, onClose, onSave }: { s: Conversation; onClose: () => vo
             ))}
           </ul>
         )}
-        <p role={error ? "alert" : undefined} className={cx("mt-1.5 text-[11.5px] leading-relaxed", error ? "text-red" : "text-ink-3")}>
+        <p role={error ? "alert" : undefined} className={cx("mt-1.5 text-submeta leading-relaxed", error ? "text-red" : "text-ink-3")}>
           {error || t("assistant-history.tags_hint", { max: TAGS_MAX, length: TAG_MAX_LENGTH })}
         </p>
       </form>
