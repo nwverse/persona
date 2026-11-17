@@ -2653,3 +2653,10 @@ nothing ran the old build after the new one.
 - Lesson: a 409 the client swallows hides a broken ownership model until something else (here a cleanup) depends on
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
+
+## A new screenshot is not an old resolved exchange (#9124)
+
+Triage reads `[Image: ...]` as text, not the image's contents. Preserve the newest message separately from the
+conversation so an earlier answer or acknowledgement cannot silently close a later screenshot reporting a new
+failure. Stub-model tests prove that input contract and saving the result, not the real model's semantic accuracy;
+keep an original attachment and a live triage readback as separate acceptance evidence.

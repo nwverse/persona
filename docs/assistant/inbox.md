@@ -228,6 +228,11 @@ a summary up to 40 characters, and a short reason:
   no markers, so their absence there says nothing and the kind and text decide (#9124). Grouping's input names the other side of a direct chat in
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
+  For a `larkcli` human DM, the triage input also names the newest message's preview separately from the conversation.
+  An older answer or acknowledgement does not resolve a later request. An `[Image: ...]` marker is an unread image,
+  not its contents: a new work-related DM screenshot still needs the owner to look or respond unless explicit text
+  makes it informational or confirms that the current issue is resolved. This does not add OCR or a fixed connector
+  tier; the model and the user's rules still decide. Already-triaged FYI items are not replayed automatically (#9124).
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
   records the one its tier was given under (`triage_rev`, kept, not listed; a rule tier given under the current criteria stays,
   unless it is provisional: below). Each triage pass also takes up to 8 open Needs you items tiered under an older revision (newest activity first): Lark and

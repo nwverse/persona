@@ -358,6 +358,9 @@ func (b *inboxBook) promptItem(it *InboxItem) prompts.InboxItem {
 	if it.Connector != nil {
 		p.Source = it.Source
 		p.Described = b.kindWords(it.Source, it.Kind)
+		if it.Source == "larkcli" && it.Kind == KindDM {
+			p.Latest = it.Preview
+		}
 	}
 	return p
 }
