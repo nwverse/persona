@@ -18,6 +18,7 @@ export interface PersonaCoreNative {
   coreProjectStreamChunks(input: string): string;
   coreProjectStreamRepair(input: string): string;
   coreProjectPlainOpenFence(input: string): string;
+  coreProjectViewedImages(input: string): string;
   coreProjectTaskIndex(input: string): string;
   coreProjectTurns(input: string): string;
 }

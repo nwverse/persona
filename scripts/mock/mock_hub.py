@@ -21068,6 +21068,73 @@ if os.environ.get("MOCK_RENDER"):
     MOCK_TREE[MOCK_REPO + "/docs/算法.md"] = "# 降雨预报的算法\n\n" + RENDER_MD + (
         "\n\n## 时序\n\n```mermaid\nsequenceDiagram\n  participant W as 小组件\n  participant A as App\n  participant S as 服务器\n"
         "  W->>A: 时间线请求\n  A->>S: GET /v1/forecast\n  S-->>A: 6 小时预报\n  A-->>W: Timeline\n```\n")
+# Pictures in replies (#9474, #9473): the hub's remote image route draws made-up pictures, their shape named by the
+# address (tall-, wide-, pano-, square-, small-; fail- answers fetch_failed), a gradient picked by the number in it,
+# scaled to fit `size` and never enlarged. MOCK_REMOTE_IMAGES=0 is a hub from before it (no feature, 404).
+# MOCK_REPLY_IMAGES=1 adds a turn to the release-notes conversation whose reply names such pictures: a pair under a
+# line of text and a portrait alone right under one (the shape replies take), a landscape one and a run of eight in
+# paragraphs of their own, one inside a line, one that fails.
+REMOTE_IMAGES = os.environ.get("MOCK_REMOTE_IMAGES") != "0"
+_features_without_remote_images = features
+
+
+def features():
+    return _features_without_remote_images() + (["remote_images"] if REMOTE_IMAGES else [])
+
+
+_REMOTE_SHAPES = {"tall": (1080, 1440), "wide": (1600, 1200), "pano": (3000, 1000), "square": (1200, 1200), "small": (96, 96)}
+_REMOTE_COLORS = [((244, 237, 229), (228, 211, 192)), ((168, 199, 230), (125, 139, 152)), ((231, 227, 220), (200, 196, 188)),
+                  ((246, 242, 236), (201, 160, 122)), ((185, 214, 238), (122, 162, 108)), ((239, 233, 222), (127, 154, 134)),
+                  ((255, 216, 164), (200, 116, 107)), ((238, 240, 242), (45, 49, 56)), ((207, 229, 245), (230, 225, 216))]
+
+
+def mock_picture(h, name, size=0):
+    """A made-up picture named like the fixture's (shape-number.ext), at its own size or scaled to fit `size`."""
+    if name.startswith("fail-"):
+        return h.send_json({"error": "Couldn't fetch that picture. Try again later.", "code": "fetch_failed"}, 502)
+    w, hgt = _REMOTE_SHAPES.get(name.split("-", 1)[0], (1200, 900))
+    if size and max(w, hgt) > size:
+        w, hgt = (size, max(1, hgt * size // w)) if w >= hgt else (max(1, w * size // hgt), size)
+    digits = "".join(c for c in name if c.isdigit())
+    top, bottom = _REMOTE_COLORS[int(digits or 0) % len(_REMOTE_COLORS)]
+    data = _fs_png(w, hgt, top, bottom)
+    h.send_response(200)
+    h.send_header("Content-Type", "image/png")
+    h.send_header("Cache-Control", "private, max-age=86400")
+    h.send_header("Content-Length", str(len(data)))
+    h.end_headers()
+    h.wfile.write(data)
+
+
+def mock_remote_image(h, raw_query):
+    """GET /api/v1/remote-image: `url` read as written (a plus stays a plus, as the hub reads it), `size` snapped."""
+    addr = next((unquote(v) for k, _, v in (part.partition("=") for part in raw_query.split("&")) if k == "url"), "")
+    name = addr.rsplit("/", 1)[-1]
+    if not addr.startswith(("http://", "https://")):
+        return h.send_json({"error": "That picture's address can't be loaded.", "code": "bad_url"}, 400)
+    try:
+        size = int(parse_qs(raw_query).get("size", ["1024"])[0])
+    except ValueError:
+        size = 1024
+    size = next((s for s in (256, 512, 768, 1024, 1536, 2048) if size <= s), 2048) if size > 0 else 1024
+    return mock_picture(h, name, size)
+
+
+# The pictures' addresses are the mock's own /mock/pic/<name>: another origin than the app's hub, so a build from
+# before #9473 loads them straight (as large as they are), and one with it through /api/v1/remote-image.
+REPLY_PIC = "http://127.0.0.1:%d/mock/pic/" % PORT
+REPLY_IMAGES_MD = ("找到了能看到楼和屋里的照片。\n\n"
+                   "**楼和小区**（中介发的两张）\n![楼](" + REPLY_PIC + "tall-1.jpg)\n![街道](" + REPLY_PIC + "pano-4.jpg)\n"
+                   "- 楼下就是公交站，走到地铁大约 8 分钟。\n\n"
+                   "**厨房**（同一篇帖子里的照片）\n![厨房](" + REPLY_PIC + "tall-0.jpg)\n- 厨房是独立的，带洗衣机位。\n\n"
+                   "**客厅**\n\n![客厅](" + REPLY_PIC + "wide-3.jpg)\n\n"
+                   "**屋里**（帖子里一共 8 张）\n\n" + " ".join("![](" + REPLY_PIC + "%s-%d.jpg)" % (k, n) for n, k in enumerate(
+                       ["wide", "square", "tall", "wide", "square", "tall", "wide", "square"], 5)) + "\n\n"
+                   "项目的图标 ![图标](" + REPLY_PIC + "small-6.png) 跟着行高走。\n\n"
+                   "这张没取到：\n![坏图](" + REPLY_PIC + "fail-1.jpg)\n\n最后一段文字在图片下面。")
+if os.environ.get("MOCK_REPLY_IMAGES"):
+    ITEMS[RELEASE] = ITEMS.get(RELEASE, []) + [it("user", "text", 1, text="帮我找几张这套房子的照片"),
+                                               it("assistant", "text", 0, text=REPLY_IMAGES_MD)]
 MOCK_TREE["Desktop/"] = None  # listed, but macOS keeps it from personad (mock_denied)
 MOCK_COMMITS[2]["refs"] = "tag: v0.1.0"
 TIME_OFFSET = os.environ.get("MOCK_TIME_OFFSET", "")
@@ -26010,6 +26077,10 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p.startswith("/mock/pic/"): return mock_picture(self, p.rsplit("/", 1)[-1])
+        if p == "/api/v1/remote-image":
+            if not REMOTE_IMAGES: return self.send_json({"error": "not found"}, 404)
+            return mock_remote_image(self, urlparse(self.path).query)
         if p == "/api/v1/assistant/search":
             if not ASSISTANT_SEARCH: return self.send_json({"error": "not found"}, 404)
             return self.send_json(assistant_search(q.get("q", [""])[0], q.get("limit", ["30"])[0]))
