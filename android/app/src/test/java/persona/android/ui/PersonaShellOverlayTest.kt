@@ -201,6 +201,9 @@ class PersonaShellOverlayTest {
             sidebar()
             assertTrue(close().getBoundsInRoot().left.value > 0f)
             rule.runOnIdle { width.value = 673 }
+            // Unfolding closes the phone drawer on the 0.32 s spring, including with Reduce Motion
+            // (`Theme.Motion.drawer`, Theme.swift:799-801). Wait it out so the drawer's Close scrim is gone.
+            rule.mainClock.advanceTimeBy(600)
             frames()
             assertEquals(320f, close().getBoundsInRoot().left.value, 0.01f)
             assertEquals(673f, close().getBoundsInRoot().right.value, 0.01f)

@@ -209,15 +209,16 @@ private class DrawerRuntime(opened: Boolean) {
 
     /**
      * While the finger is down, the page is wherever the finger put it. Once the settle animation has
-     * finished, snap to exactly 0 or 1: a spring can stop a hair short, and that hair is enough to lift
-     * the sidebar (`AssistantSidebar.swift:69`) and change the resting shadow.
+     * finished, snap to exactly 0 or 1. Compose's spring stops about 0.01 short of the target, and that
+     * hair keeps the scrim composed and lifts the sidebar (`AssistantSidebar.swift:69`).
      */
     val shown: Float
         get() {
             val raw = if (dragging) dragProgress else anim.value
             if (dragging || anim.isRunning) return raw
-            if (settle.open && raw >= 1f - 1e-3f) return 1f
-            if (!settle.open && raw <= 1e-3f) return 0f
+            // Wider than 0.001: the spring's displacement threshold is 0.01, so a finished close sits near 0.01.
+            if (settle.open && raw >= 1f - 0.02f) return 1f
+            if (!settle.open && raw <= 0.02f) return 0f
             return raw
         }
 }
