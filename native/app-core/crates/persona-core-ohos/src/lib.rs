@@ -95,6 +95,16 @@ mod binding {
     }
 
     #[napi(catch_unwind)]
+    pub fn core_project_stream_repair(input: String) -> Result<String> {
+        to_json(&persona_core::stream_repair::project(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_plain_open_fence(input: String) -> Result<String> {
+        to_json(&persona_core::stream_repair::plain_open_fence(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
     pub fn core_project_task_index(input: String) -> Result<String> {
         to_json(&persona_core::task_index::project(&from_json(&input)?))
     }

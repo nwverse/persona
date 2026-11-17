@@ -186,6 +186,57 @@ import PersonaWire
         #expect(resolve().identity == updated.identity, "a warm catalog snapshot is reused")
     }
 
+    @Test func nativeWorkspacePinsLeadUpdatedSortingWithoutBecomingPersonaSessionPins() throws {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
+        let pinned = HostWorkspace(machineID: machine.id, source: "paseo", sourceID: "pin", title: "Pinned task", cwd: "/code/pin",
+                                   projectID: "zeta", projectName: "Zeta", pinnedAt: Date(timeIntervalSince1970: 10))
+        let plain = HostWorkspace(machineID: machine.id, source: "paseo", sourceID: "plain", title: "Plain task", cwd: "/code/plain",
+                                  projectID: "alpha", projectName: "Alpha")
+        var native = try session("native"), recent = try session("recent"), personal = try session("personal")
+        native.spaceKind = "paseo"; native.workspaceID = pinned.sourceID
+        recent.spaceKind = "paseo"; recent.workspaceID = plain.sourceID
+        native.updatedAt = Date(timeIntervalSince1970: 10); recent.updatedAt = Date(timeIntervalSince1970: 100)
+        personal.spaceKind = "paseo"; personal.workspaceID = pinned.sourceID
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"; settings.sort = "updated"
+        settings.preferences[""] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[""]!.pins.sessions = [personal.key.path]
+        let captured = AgentListProjection.Input(sessions: [recent, personal, native], machines: [machine], settings: settings,
+                                                workspaces: [plain, pinned])
+        let result = AgentListProjection.build(captured)
+        #expect(result.tree[0].repos.map(\.name) == ["Zeta", "Alpha"])
+        #expect(result.tree[0].repos[0].sessions.map(\.key) == [native.key])
+        #expect(result.pinnedAgents.map(\.key) == [personal.key], "native workspace pins never rewrite Persona's independent pins")
+    }
+
+    @Test func aNativePinnedWorkspaceKeepsItsUnloadedChatsButNotArchivedOrFilteredChats() throws {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
+        var workspace = HostWorkspace(machineID: machine.id, source: "paseo", sourceID: "task", title: "Task", cwd: "/code/project",
+                                      projectID: "app", projectName: "App", pinnedAt: Date(timeIntervalSince1970: 10))
+        var stopped = try session("stopped", state: "offline"), sibling = try session("sibling", state: "offline")
+        var archived = try session("archived", state: "offline"), otherSource = try session("other-source", state: "offline")
+        stopped.spaceKind = "paseo"; stopped.workspaceID = workspace.sourceID
+        sibling.spaceKind = "paseo"; sibling.workspaceID = "other-task"
+        archived.spaceKind = "paseo"; archived.workspaceID = workspace.sourceID; archived.archived = true
+        otherSource.spaceKind = "orca"; otherSource.workspaceID = workspace.sourceID
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        var captured = AgentListProjection.Input(sessions: [stopped, sibling, archived, otherSource], machines: [machine], settings: settings,
+                                                workspaces: [workspace])
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).map(\.key) == [stopped.key])
+        captured.settings.query = "sibling"
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).isEmpty)
+        captured.settings.query = "state:working"
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).isEmpty)
+        captured.settings.query = ""
+        captured.settings.filter = .unread
+        #expect(AgentListProjection.build(captured).tree.isEmpty)
+        captured.settings.filter = .all
+        workspace.pinnedAt = nil
+        captured.workspaces = [workspace]
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).isEmpty, "unpin restores the normal offline-session visibility rule")
+    }
+
     @Test func workspaceCatalogHonorsHubAndQuickFilters() throws {
         var machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
         machine.group = "hub-a"
@@ -280,7 +331,7 @@ import PersonaWire
 
     @Test func revisionsFasterThanOneDerivationCoalesceAndStillConverge() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), first = input([try session("first")])
         let skipped = input([try session("skipped")]), latest = input([try session("latest")])
@@ -305,7 +356,7 @@ import PersonaWire
 
     @Test func completionUsesTheLiveHoldAndNotifiesTheReaderBeforeLanding() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), next = input([try session("next")])
         _ = resolve(cache, seed, revision: 1, state: state)
@@ -325,7 +376,7 @@ import PersonaWire
 
     @Test func aLiveFenceRejectsCompletionEvenWithoutAnotherBodyEvaluation() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), next = input([try session("next")])
         _ = resolve(cache, seed, revision: 1, state: state)
@@ -343,7 +394,7 @@ import PersonaWire
 
     @Test func urgentChangesBypassAHoldAndCancelOrdinaryPreparation() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), ordinary = input([try session("ordinary")])
         let urgent = input([try session("urgent", state: "needs_you")])
@@ -368,7 +419,7 @@ import PersonaWire
         replaced.owner = ObjectIdentifier(replacement)
         for partitions in [[token], [url], [replaced], []] {
             let gate = Gate()
-            let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+            let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
             let state = State()
             let seed = input([try session("seed", group: "hub-a")]), old = input([try session("old", group: "hub-a")])
             let next = input(partitions.isEmpty ? [] : [try session("new", group: "hub-a")])
@@ -386,7 +437,7 @@ import PersonaWire
 
     @Test func anUrgentFeedRevisionRejectsCompletionBeforeTheNextBodyEvaluation() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), ordinary = input([try session("ordinary")])
         let urgent = input([try session("urgent", state: "needs_you")])
@@ -432,7 +483,7 @@ import PersonaWire
 
     @Test func aFailedWorkerRecoversFromImmutableInputBehindTheSameFences() async throws {
         struct Failure: Error {}
-        let cache = AgentListProjectionCache(compute: { _ in throw Failure() })
+        let cache = AgentListProjectionCache(compute: { _, _ in throw Failure() })
         let state = State()
         let seed = input([try session("seed")]), next = input([try session("next")])
         _ = resolve(cache, seed, revision: 1, state: state)

@@ -4675,6 +4675,9 @@ def managers_route(h, method, p):
 # modes, every recording's live log and its asks; POST /mock/recording_minutes forgets them too.
 MEETING_ATTENDANCE = os.environ.get("MOCK_NO_MEETING_ATTENDANCE") != "1"
 MEETING_ROLES = ("off", "listener", "participant")
+# A room meeting's roles (#8851): the three, and the note-taker, which follows the meeting and answers nothing. The hub
+# takes notes on a room's upload, on the hub-transcription timeline and on the audio socket; never as the default.
+ROOM_ROLES = MEETING_ROLES + ("notes",)
 MEETING_MODE = {"feed": os.environ.get("MOCK_MEETING_FEED", "ok"), "answer": os.environ.get("MOCK_MEETING_ANSWER", "ok"),
                 "answer_seconds": float(os.environ.get("MOCK_MEETING_ANSWER_SECONDS", "3")), "kb_read_only": False}
 MEETING_LIVE = {}  # recording id → its role, session, live log, fed count and asks (meeting_live)
@@ -4911,7 +4914,7 @@ def meeting_ask(h, st, body, rec):
             now = meeting_ask_now(st, stored)
             return h.send_json({"ask": now}, 202 if now["state"] == "pending" else 200) or True
     if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
-    if st["role"] == "off": return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
+    if st["role"] in ("off", "notes"): return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
     room = room_of(st["id"])
     if room is not None and room.get("state") in ("ended", "deleted"):
         return h.send_json({"error": "The meeting has ended: ask in its follow-up.", "code": "meeting_ended"}, 409) or True
@@ -5111,13 +5114,13 @@ def meeting_event_flush(rid):
 
 
 def room_role(body):
-    """The role an upload's room asks for and what was wrong with it (kb.roomRole): not a string, or not one of the three,
-    unknown_role; a role on a recording that is not a meeting not_meeting."""
+    """The role an upload's room asks for and what was wrong with it (kb.roomRole): not a string, or not one of the room's
+    roles (notes too, #8851), unknown_role; a role on a recording that is not a meeting not_meeting."""
     att = body["room"].get("attendance")
     if att is not None and not isinstance(att, str): return "", "unknown_role"
     role = (att or "").strip().lower()
     if role in ("", "off"): return "", None
-    if role not in ("listener", "participant"): return "", "unknown_role"
+    if role not in ("notes", "listener", "participant"): return "", "unknown_role"
     if recording_kind(body) != "meeting": return "", "not_meeting"
     return role, None
 
@@ -5197,7 +5200,9 @@ def conv_start(rid, part, origin, items):
 
 def room_header(rec, role):
     started = rec.get("started_at", "")
-    say = "participant: answers may be said aloud" if role == "participant" else "listener: answers are shown on screen only"
+    say = ("participant: answers may be said aloud" if role == "participant"
+           else "notes: you keep the topics and highlights only, and nobody asks you anything until the role changes" if role == "notes"
+           else "listener: answers are shown on screen only")
     return meeting_source_text(rec, f'The meeting is starting. Write nothing now.\n\n<persona-context kind="context" title="{meeting_name(rec)}" url="">\n'
                                     f"Title: {meeting_name(rec)}\nStarted: {started}\nLanguage: {rec.get('language') or 'en'}\nRole: {say}\n</persona-context>")
 
@@ -5404,7 +5409,7 @@ def room_end(rid):
     if state == "ready" and r.get("attendance"):
         rec = RECORDINGS.get(rid) or {}
         conv_append(r["machine_id"], r["session_id"], [conv_item("user", meeting_source_text(rec,
-            f'"{meeting_name(rec)}", the meeting you attend as a {r["attendance"]}, has ended. Write nothing in reply.'),
+            f'"{meeting_name(rec)}", the meeting you attend as {"the note-taker" if r["attendance"] == "notes" else "a " + r["attendance"]}, has ended. Write nothing in reply.'),
             source={"kind": "meeting", "title": meeting_name(rec)})])
     if state in ("ready", "starting", "unavailable"):
         r.update(state="ended", problem="")
@@ -6534,7 +6539,7 @@ def transcription_timeline(t, raw):
     if not isinstance(raw, dict): return
     roles, spans = raw.get("roles", []), raw.get("speaking", [])
     if not isinstance(roles, list) or not isinstance(spans, list) or len(roles) > 100 or len(spans) > 1000: return
-    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in MEETING_ROLES for r in roles): return
+    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in ROOM_ROLES for r in roles): return
     if any(not isinstance(sp, dict) or not transcription_number(sp.get("start")) or not transcription_number(sp.get("end"))
            or sp["start"] > sp["end"] or not isinstance(sp.get("text", ""), (str, type(None))) for sp in spans): return
     spans = [{"start": sp["start"], "end": sp["end"], **({"text": spoken_cut(sp["text"])} if sp.get("text") else {})} for sp in spans]
@@ -7120,7 +7125,7 @@ def transcription_socket(h, rid):
                     state["at"] = at
                     state["sentence"] = max(at, t["held"][-1][1] if t["held"] else 0)
                 elif kind == "role":
-                    if msg.get("attendance") not in MEETING_ROLES: fail("bad_frame"); break
+                    if msg.get("attendance") not in ROOM_ROLES: fail("bad_frame"); break
                     transcription_timeline(t, {"roles": [{"at": at, "attendance": msg["attendance"]}]})
                 elif kind == "speaking":
                     if type(msg.get("on")) is not bool or not isinstance(msg.get("text", ""), (str, type(None))): fail("bad_frame"); break
@@ -8102,6 +8107,38 @@ ITEMS[ASK1] = (
 # MOCK_ASSISTANT_WORKING=1 (#6230): the unanswered user message the working main conversation is on.
 if os.environ.get("MOCK_ASSISTANT_WORKING") == "1":
     ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 0.2, text="把今天的待办按优先级排一下，告诉我先做哪个。")]
+# MOCK_WAKE_AFTER_ANSWER=1 (#9140): the main conversation asked for three background checks (A), then asked something
+# else (B) and got its answer in full; each check's notification then woke the assistant with no message of the user's,
+# and it wrote about A again. Four final texts lie between two of the user's messages: each is the answer of its own
+# exchange, so the answer to B stays on screen and the woken turns follow under their notices.
+if os.environ.get("MOCK_WAKE_AFTER_ANSWER") == "1":
+    def _woke(ts_min, title, task_id):
+        return it("system", "notice", ts_min, text="Background command completed · " + title, wake=True,
+                  task={"kind": "shell", "status": "completed", "title": title, "task_id": task_id})
+
+    def _check(line, task_id, ts_min):
+        return tool("Bash", {"command": "timetable --line %s --day saturday" % line.lower(), "description": line + " line timetable",
+                             "run_in_background": True},
+                    "Command running in background with ID: %s. Output is being written to: /tmp/claude/%s.output" % (task_id, task_id), ts_min)
+
+    ITEMS[ASK1] = (
+        [it("user", "text", 30, text="Which trains to the coast run this Saturday? Check all three lines.")]
+        + _check("Coast", "bkc", 29.9) + _check("Valley", "bkv", 29.9) + _check("Harbour", "bkh", 29.9)
+        + [it("assistant", "text", 29.6, text="All three timetable checks are running in the background. I will tell you as each one comes in.")]
+        + [it("user", "text", 28.5, text="Meanwhile: what should I pack for two days there?")]
+        + [it("assistant", "text", 28.2, text="A rain jacket and a warm layer, two shirts, walking shoes and sunscreen. All of it fits in a day pack.")]
+        + [_woke(25, "Coast line timetable", "bkc")]
+        + tool("Read", {"file_path": "/tmp/claude/bkc.output"}, "08:10 Saturday: runs", 24.9)
+        + [it("assistant", "text", 24.8, text="The Coast line is in: the 08:10 runs on Saturday.")]
+        + [_woke(20, "Valley line timetable", "bkv")]
+        + [it("assistant", "text", 19.9, text="The Valley line too: the 10:40 runs, with one change.")]
+        + [_woke(10, "Harbour line timetable", "bkh")]
+        + tool("Read", {"file_path": "/tmp/claude/bkh.output"}, "13:05 Saturday: runs", 9.9)
+        + [it("assistant", "text", 9.8, text="All three are in: the 08:10, the 10:40 and the 13:05 run. Only the 08:10 is direct.")]
+    )
+    for _s in ASSISTANT:
+        if _s["session_id"] == ASK1:
+            _s.update(title="A weekend on the coast", last_text="All three are in: the 08:10, the 10:40 and the 13:05 run.")
 # MOCK_QUOTE=1: a message sent with "Quote" earlier (#2427): the main conversation's history has one that starts with a
 # `> ` block of the answer above, and a reply to it, so the bubble's quote card shows for a message from the transcript.
 if os.environ.get("MOCK_QUOTE") == "1":
@@ -11901,6 +11938,9 @@ def inbox_list(query):
 
 # What each bulk "Handled" / "Undo" asked for (POST /api/v1/inbox/done), kept at /mock/inbox_bulk.
 INBOX_BULK = []
+# Open unless /mock/inbox_done_hold: then GET /api/v1/inbox/done with `before` waits for /mock/inbox_done_release (#6661).
+INBOX_DONE_GATE = threading.Event()
+INBOX_DONE_GATE.set()
 
 
 def inbox_bulk(body):
@@ -14517,6 +14557,10 @@ if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
     # A critical weekly bar beside cc_main's / cc_team's ordinary ones (#5056); all values are synthetic.
     LAUNCHER_QUOTAS["claude"] = {"gateway": "example-subscription", "pools": [
         {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.95, resets=later(hours=36))]}]}
+    # a provider whose long name wraps to two lines in the rail (anthropic_main, with MOCK_PROVIDERS) gets a half-used
+    # weekly bar too, to check a two-line caption and the bar don't touch
+    LAUNCHER_QUOTAS["anthropic_main"] = {"gateway": "example-subscription", "pools": [
+        {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.5, resets=later(hours=36))]}]}
 # "Add provider" › "Add from plugin" (docs/extensions/extensions.md "Model providers"): the providers made-up plugins offer (GET /api/v1/launchers/presets).
 LAUNCHER_PRESETS = [
     {"id": "example-gateway/team", "plugin": "example-gateway", "name": "示例网关 · 团队", "description": "团队共用的 Claude Code 网关，按 Key 计费",
@@ -20341,6 +20385,10 @@ PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" e
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
+# The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page. Empty until something is stored;
+# MOCK_NAVIGATION=off is a hub (or a default manager) from before, which answers 404 and keeps nothing.
+NAVIGATION = {}
+NAVIGATION_START = re.compile(r"(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})")
 
 def personal_prefs():
     return dict(PERSONAL_PREFS, hidden=dict(PERSONAL_HIDDEN))
@@ -21320,6 +21368,22 @@ FAKE_BG_COLORS = {"black": (0, 0, 0), "white": (255, 255, 255), "gray": (128, 12
 FAKE_TEXT = (204, 204, 204)
 if FAKE_BG["kind"]:
     FAKE_W, FAKE_H = 1920, 1080
+# MOCK_PHONE_SCREEN=1 (#9314): the mock Mac (MOCK_SCREEN=fake) shows Phone Screen's portrait display right of its main
+# one, as the Mac does while a phone has it: the main display 480×300 pixels (240×150 points at 2×), the portrait one
+# 270×510 (135×255 points at 2×) with a terminal-like window filling it. Its computer status offers `phone_screen`, and
+# POST …/computer/phone-screen answers start / windows / place / stop (PHONE_SCREEN keeps what it was asked).
+PHONE_SCREEN = {"on": os.environ.get("MOCK_PHONE_SCREEN") == "1", "calls": [], "placed": None}
+PHONE_DISPLAY = {"id": 9, "x": 240, "y": 0, "width": 135, "height": 255, "scale": 2}
+PHONE_MAIN = {"id": 1, "x": 0, "y": 0, "width": 240, "height": 150, "scale": 2, "main": True}
+PHONE_WINDOWS = [
+    {"pid": 501, "window": 11, "app": "Terminal", "bundle": "com.apple.Terminal", "title": "~/projects/site — zsh"},
+    {"pid": 501, "window": 12, "app": "Terminal", "bundle": "com.apple.Terminal", "title": "build — npm run dev"},
+    {"pid": 502, "window": 21, "app": "Safari", "bundle": "com.apple.Safari", "title": "Docs — Getting started"},
+    {"pid": 503, "window": 31, "app": "Notes", "bundle": "com.apple.Notes", "title": "Ideas", "minimized": True},
+    {"pid": 504, "window": 41, "app": "TextEdit", "bundle": "com.apple.TextEdit", "title": "Draft.txt"},
+]
+if PHONE_SCREEN["on"]:
+    FAKE_W, FAKE_H = 750, 510
 # macOS's arrow at 1× as its Screen Sharing sends it ("#" black, "o" white), its hot spot at its tip.
 FAKE_ARROW = ["oo........", "o#o.......", "o##o......", "o###o.....", "o####o....", "o#####o...", "o######o..", "o#######o.",
               "o########o", "o########o", "o#####oooo", "o##o##+o..", "o+ooo##o..", ".o+.o##+o.", "....o+##o.", ".....o++o.",
@@ -21400,6 +21464,9 @@ def fake_frame(t=0):
     bx, by = 80 + (t * 7) % 300, 120 + (t * 3) % 120
     for y in range(FAKE_H):
         for x in range(FAKE_W):
+            if PHONE_SCREEN["on"] and (x >= 480 or y >= 300):  # Phone Screen's display: a window filling it (#9314)
+                px.append(phone_frame_pixel(x - 480, y) if x >= 480 else (0, 0, 0))
+                continue
             d, lx = divmod(x, 480)
             if bx <= x < bx + 40 and by <= y < by + 40 and not FAKE_SCROLL["on"]: px.append((255, 159, 10))
             elif 60 <= lx < 420 and 50 <= y < 250:
@@ -21411,6 +21478,15 @@ def fake_frame(t=0):
             elif d == 0: px.append((40 + y // 6, 90 + y // 8, 160))
             else: px.append((40 + y // 8, 150 + y // 6 % 60, 90))
     return px
+
+
+def phone_frame_pixel(lx, y):
+    """Phone Screen's display in the mock (#9314): a menu bar, a dark window's title bar, then lines of text."""
+    if y < 14: return (232, 232, 235)
+    if y < 34: return (58, 58, 62) if not (8 <= lx < 50 and 20 <= y < 28) else (110, 110, 116)
+    row, dy = divmod(y - 40, 14)
+    if 4 <= dy < 10 and 10 <= lx < 10 + 60 + (row * 53) % 180: return (190, 230, 190) if row % 6 == 0 else (204, 204, 204)
+    return (28, 28, 30)
 
 
 def zrle_rect(px, W, x, y, w, h, z):
@@ -21943,7 +22019,7 @@ def truth():
 # POST /mock/sync/card {"session": "<id>"}: a permission card in that session (an assistant conversation too), sent as
 # the hub sends one; answering it tells every app it ended, as the hub does (interaction_resolved).
 # GET /mock/sync/truth?session=<id>: what the chat should show: each turn's user message and its answer (the agent's
-# last words in it), the session's pending cards and its state.
+# last words in it; a wake starts a turn too), the session's pending cards and its state.
 SYNC_CARDS = {"n": 0}
 # MOCK_SYNC_REVS=1: a transcript that grows (a reply, an echoed send) moves its session's updated_at and rev and the list
 # says so, as the hub's does: what tells a page that missed the items push to catch up (#3139). Off, the list stays.
@@ -21993,6 +22069,8 @@ def sync_truth(sid):
         if x.get("role") == "user" and x.get("kind") == "text" and not x.get("injected") and not x.get("from"):
             messages.append({"from": "user", "text": x.get("text") or "", "state": "shown"})
             answer = None
+        elif x.get("wake"):
+            answer = None  # a notice that woke the idle agent starts a turn: the turn before it keeps its answer (#9140)
         elif x.get("role") == "assistant" and x.get("kind") == "text":
             if answer is None:
                 messages.append({"from": "agent", "text": x.get("text") or ""})
@@ -22497,11 +22575,12 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None, edit=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
-    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten."""
+    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten.
+    `edit`: push a successful edit of that path instead of a reply, for the transcript changes panel's live updates."""
     import time
     for send, subscribed in list(LIVE):
         for sid in list(subscribed):
@@ -22533,7 +22612,9 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                     time.sleep(late / 1000)
                 items = ITEMS[sid]
             before = items[-1]["seq"]
-            new = ([it("user", "text", 0, text=user)] if user else []) + [it("assistant", "text", 0, text=text)]
+            new = ([it("user", "text", 0, text=user)] if user else []) + (tool(
+                "Edit", {"file_path": edit, "old_string": "before", "new_string": "after " + edit}, "ok", 0,
+            ) if edit else [it("assistant", "text", 0, text=text)])
             if MOCK_SYNC_REVS:  # written now, as the hub's lines are: the page compares their time with the list's
                 for x in new:
                     x["ts"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -22741,6 +22822,9 @@ def computer_of(machine_id, enabled):
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
         c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
         if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
+    if machine_id == "macbook" and c.get("screen_sharing") and PHONE_SCREEN["on"]:  # MOCK_PHONE_SCREEN (#9314)
+        c["phone_screen"] = {"version": 1, "permission": "granted"}
+        c["displays"] = [PHONE_MAIN]
     return c
 
 
@@ -24365,7 +24449,17 @@ def markets_route(handler, p, body):
             ui += PLUGINS[volc_mock.EXT]["ui"]
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
-                    "placement": "nav_page", "size": "full", "icon": "calendar"}]
+                    "placement": "nav_page", "size": "full", "icon": "calendar",
+                    **({"group": {"id": "workbench", "title": "工作台"}} if SIDEBAR_GROUPS else {})}]
+        if SIDEBAR_GROUPS and placement in ("", "nav_page"):
+            # made-up pages naming the sidebar's groups (#9071): two more for 工作台, one each for 资产 and 家里
+            ui += [{"plugin": "example-console", "plugin_name": "Example Console", "id": i, "title": title, "placement": "nav_page",
+                    "size": "full", "icon": icon, "group": {"id": g, "title": gt}}
+                   for i, title, icon, g, gt in (("lark", "Lark", "list", "workbench", "工作台"), ("calendar", "Calendar", "calendar", "workbench", "工作台"),
+                                                 ("assets", "Assets", "money", "assets", "资产"), ("home", "Home devices", "gauge", "home", "家里"))]
+        if GAUGE_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
+                    "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -25501,6 +25595,7 @@ class H(BaseHTTPRequestHandler):
                     if conn.pop("waiting", False):
                         try: conn["redraw"]()
                         except OSError: pass
+            if q.get("clear") == ["1"]: PHONE_SCREEN["calls"].clear()
             if "slow" in q: FAKE_SCREEN["slow"] = float(q["slow"][0])
             if "down" in q:
                 FAKE_SCREEN["down"] = q["down"][0] == "1"
@@ -25510,7 +25605,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
                                    "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
                                    "events": FAKE_SCREEN["events"][-200:], "wheel_in": FAKE_SCREEN["wheel_in"],
-                                   "input": FAKE_SCREEN["input"]})
+                                   "input": FAKE_SCREEN["input"], "phone_screen": PHONE_SCREEN["calls"]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -25577,7 +25672,7 @@ class H(BaseHTTPRequestHandler):
             args = (trace["text"] if trace else SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None,
                     q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
-                    int(q.get("upto", ["0"])[0]), plan)
+                    int(q.get("upto", ["0"])[0]), plan, q.get("edit", [""])[0] or None)
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -25900,6 +25995,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
         if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
+        if p in ("/mock/inbox_done_hold", "/mock/inbox_done_release"):  # Done's group pages held / let go (#6661)
+            if p.endswith("hold"): INBOX_DONE_GATE.clear()
+            else: INBOX_DONE_GATE.set()
+            return self.send_json({"held": not INBOX_DONE_GATE.is_set()})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -26051,6 +26150,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents/prefs":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             return self.send_json(personal_prefs())
+        if p == "/api/v1/navigation":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -26109,6 +26211,10 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(days) if days else self.send_json({"error": "tz must be a time zone name"}, 400)
         if p == "/api/v1/inbox/done":
             if os.environ.get("MOCK_INBOX_HISTORY") == "none": return self.send_json({"error": "not found"}, 404)
+            # A page asked from a moment (`before`: a Done group's, an older page) waits while /mock/inbox_done_hold holds
+            # them, until /mock/inbox_done_release (at most 60 s); the list's first page does not: Jump To a group still
+            # loading (#6661, docs/operations/testing.md)
+            if (q.get("before") or [""])[0]: INBOX_DONE_GATE.wait(60)
             other = other_manager(self)  # the history is each manager's own: the others have none here
             if other: return self.send_json(*other[1]) if other[1] else self.send_json({"items": []})
             return self.send_json(inbox_done(q))
@@ -26580,6 +26686,20 @@ class H(BaseHTTPRequestHandler):
                 try: c["send"]({"type": "agents"})
                 except Exception: pass
             return self.send_json({"ok": True, "hidden": op == "hide"})
+        if p == "/api/v1/navigation" and self.command == "PUT":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            body = json.loads(self.last_body or b"{}")
+            start, pages = body.get("start"), body.get("pages")
+            if (start is None and pages is None) or (start is not None and (not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)))) \
+                    or (pages is not None and not isinstance(pages, dict)):
+                return self.send_json({"error": "start or pages, of their shapes"}, 400)
+            event = {"type": "navigation"}
+            if start is not None: NAVIGATION["start"] = event["start"] = start
+            if pages is not None: NAVIGATION["pages"] = event["pages"] = pages
+            for c in list(CLIENTS.values()):
+                try: c["send"](event)
+                except Exception: pass
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/agents/prefs" and self.command == "PUT":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             if PERSONAL_PREF_FAIL["status"]:
@@ -26646,6 +26766,24 @@ class H(BaseHTTPRequestHandler):
                     "tab_id": "%s:t%d" % (req.get("workspace_id", "w1"), n), "workspace_id": req.get("workspace_id", "w1"), "title": "zsh", "cwd": "/home/me/persona"}
             PANES_NEW[mid].append((req.get("workspace_id", "w1"), pane))
             return self.send_json({"pane": pane["pane"], "terminal": pane["terminal"], "tab_id": pane["tab_id"]})
+        if p.startswith("/api/v1/machines/") and p.endswith("/computer/phone-screen") and PHONE_SCREEN["on"]:  # #9314
+            req = json.loads(self.last_body or b"{}")
+            PHONE_SCREEN["calls"].append({k: req.get(k) for k in ("op", "width", "height", "pid", "window")})
+            op = req.get("op")
+            if op == "start":
+                return self.send_json({"display": PHONE_DISPLAY, "displays": [PHONE_MAIN, PHONE_DISPLAY]})
+            if op == "windows":
+                return self.send_json({"windows": [dict(w, **({"placed": True} if PHONE_SCREEN["placed"] == (w["pid"], w["window"]) else {}))
+                                                   for w in PHONE_WINDOWS]})
+            if op == "place":
+                w = next((w for w in PHONE_WINDOWS if (w["pid"], w["window"]) == (req.get("pid"), req.get("window"))), None)
+                if not w: return self.send_json({"error": "the window is gone", "code": "window_gone"}, 404)
+                PHONE_SCREEN["placed"] = (w["pid"], w["window"])
+                return self.send_json({"display": PHONE_DISPLAY, "placed": dict(w, placed=True)})
+            if op == "stop":
+                PHONE_SCREEN["placed"] = None
+                return self.send_json({})
+            return self.send_json({"error": "bad op", "code": "bad_request"}, 400)
         if p.startswith("/api/v1/machines/") and p.endswith("/computer/clipboard") and os.environ.get("MOCK_SCREEN") == "fake":
             FAKE_SCREEN["clipboard"] = json.loads(self.last_body or b"{}").get("text", "")  # pbcopy on the Mac (#1343)
             FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "node"})
@@ -28951,7 +29089,10 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
+MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -29529,6 +29670,8 @@ _plugins_route_without_extensions = plugins_route
 def plugins_route(handler, p, body):
     if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
         return mock_today(handler, body)
+    if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
+        return mock_quota(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29557,6 +29700,8 @@ def plugins_route(handler, p, body):
 # each card with an icon, a link beside its title, a summary line, a list and a link at the bottom. The links and the
 # bottom rows push a plain page of the card's (its state); a row's own action answers a toast. All names are invented.
 COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
+# MOCK_SIDEBAR_GROUPS=1 (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1): nav_pages naming sidebar groups (#9071)
+SIDEBAR_GROUPS = os.environ.get("MOCK_SIDEBAR_GROUPS") == "1"
 
 
 def _today_row(key, title, subtitle="", value="", **extra):
@@ -29622,6 +29767,48 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GAUGE=1 (with MOCK_EXTENSIONS=1): a made-up gateway's quota page, UI version 9's gauge (#9337): a row
+# of status tiles, then a card of three rings, each filled to the quota left with the amount in its centre and the
+# limit's name below, green while there is enough and amber once it runs low; the reset times are the card's footer.
+# Pressing the low ring answers a toast. All names and numbers are invented.
+GAUGE_MODE = os.environ.get("MOCK_EXTENSION_GAUGE") == "1"
+
+
+def _quota_ring(key, title, value, ratio, **extra):
+    color = "amber" if ratio < 0.2 else "green"
+    tile = {"key": key, "title": title, "value": value, "gauge": {"ratio": ratio, "unit": "USD", "color": color}}
+    tile.update(extra)
+    return tile
+
+
+def _quota_view():
+    return {"title": "Gateway quota", "refresh_after": 300, "sections": [
+        {"key": "status", "items": [{"type": "grid", "key": "status", "tiles": [
+            {"key": "state", "title": "Gateway", "value": "Online", "icon": "wifi", "color": "green"},
+            {"key": "keys", "title": "Keys", "subtitle": "1 paused", "value": "3", "icon": "lock"},
+            {"key": "requests", "title": "Requests today", "value": "1,284", "icon": "chart",
+             "spark": {"values": [420, 610, 580, 820, 960, 1010, 1284], "color": "blue"}},
+            {"key": "errors", "title": "Errors", "value": "0.4%", "icon": "warning", "badge": {"text": "Low", "color": "green"}},
+        ]}]},
+        {"key": "quota", "title": "Quota left", "footer": "5 hours resets in 1 h 49 min · this week resets in 1 d 16 h",
+         "items": [{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+             _quota_ring("five_hours", "5 hours", "4.69", 0.94),
+             _quota_ring("week", "This week", "38.20", 0.76),
+             _quota_ring("fable_week", "Fable this week", "0.62", 0.12, badge={"text": "Low", "color": "amber"},
+                         action={"id": "open_limit", "values": {"limit": "fable_week"}}),
+         ]}]},
+    ]}
+
+
+def mock_quota(handler, body):
+    request = json.loads(body) if body else {}
+    if request.get("action") == "open_limit":
+        handler.send_json({"toast": "Fable this week: 0.62 USD left"})
+    else:
+        handler.send_json({"view": _quota_view()})
     return True
 
 
@@ -30603,7 +30790,8 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # the requests; ?reset=1 drops every pick and restores the default; ?default=claude|codex|gone changes the launcher-list
 # default and pushes a main-chat revision for the notice's live positive, same-kind and unknown-default browser cases.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
-MODEL_PICK_DEFAULT = "claude"
+MODEL_PICK_HOME = "claude"  # the launcher-list default a reset restores
+MODEL_PICK_DEFAULT = MODEL_PICK_HOME
 MODEL_PICK_LOG = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
@@ -30624,11 +30812,23 @@ MODEL_PICK_REASONS = {
 }
 if MODEL_PICK_MODE:
     LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+# MOCK_MODEL_PICK_GROUPS=1: several Claude launchers whose names share their first word, as an owner with a few gateways
+# has them, for the model panel rail's captions ("claude-aster" reads "aster" beside "claude-max")
+if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "claude-aster", "model": "opus", "source": "persona"},
+        {"name": "claude-max", "model": "opus", "source": "persona"},
+        {"name": "claude-desktop", "model": "opus", "source": "persona"},
+        {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "claude-max"
+    for _name in ("claude-aster", "claude-max", "claude-desktop"):
+        LAUNCHER_MODELS[_name] = dict(LAUNCHER_MODELS["claude"])
 
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
-    MODEL_PICK_DEFAULT = "claude"
+    MODEL_PICK_DEFAULT = MODEL_PICK_HOME
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
@@ -30713,6 +30913,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
+MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

@@ -3,6 +3,7 @@
 package persona.android.ui
 
 import persona.android.R
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.res.stringResource
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
@@ -251,7 +252,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val sidebarState = rememberSaveableStateHolder()
     var settingsOpened by rememberSaveable { mutableStateOf(false) }
     // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
-    val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
+    // Both beside-the-page column choices start from what was kept and only persist when toggled beside the page.
+    val rememberColumns = !shell.automation && session.demo == null
+    val keptSidebarColumnShown = rememberSaveable { mutableStateOf(if (rememberColumns) saved.sidebarColumnShown else true) }
+    val keptAgentsListShown = rememberSaveable { mutableStateOf(if (rememberColumns) saved.agentsListShown else true) }
+    val columnMemory = remember(store, rememberColumns) {
+        ColumnMemory(keptSidebarColumnShown.value, keptAgentsListShown.value, persist = rememberColumns)
+    }
+    val sidebarColumnShown = rememberSaveable { mutableStateOf(columnMemory.sidebarShown) }
+    val agentsListShown = rememberSaveable { mutableStateOf(columnMemory.agentsShown) }
     // Overlays close when the tab or beside/over placement changes; the beside-column choice stays saved.
     val sidebarOverlayShown = remember { mutableStateOf(false) }
     val agentsOverlayShown = remember { mutableStateOf(false) }
@@ -311,6 +320,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         return true
     }
     val visibleAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
+    val heldAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
+    val agentPreferences = remember(session) { session.preferences.snapshots }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
@@ -358,6 +369,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         object : AgentsDependencies by session.agents {
             override fun wiring() = object : AgentsWiring { override val state = navigationWiring }
             override fun visibleChat() = visibleAgentChat
+            override fun heldChat() = heldAgentChat
         }
     }
     val assistantNavigator = remember {
@@ -379,16 +391,31 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         }
     }
     LaunchedEffect(store) {
-        snapshotFlow { ShellPosition(selected, machine, stacks.mapNotNull { (tab, stack) ->
-            stack.mapNotNull { when (it) { is ChatRoute -> it; is InteractionRoute -> it.chat; else -> null } }
-                .lastOrNull()?.let { tab to it }
-        }.toMap(), navigator.inboxReturns()) }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
+        snapshotFlow {
+            ShellPosition(
+                selected,
+                machine,
+                stacks.mapNotNull { (tab, stack) ->
+                    stack.mapNotNull { when (it) { is ChatRoute -> it; is InteractionRoute -> it.chat; else -> null } }
+                        .lastOrNull()?.let { tab to it }
+                }.toMap(),
+                navigator.inboxReturns(),
+                columnMemory.sidebarShown,
+                columnMemory.agentsShown,
+            )
+        }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
     }
     val visible = stacks.getValue(selected).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
     LaunchedEffect(visibleChat) {
-        visibleAgentChat.value = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }
-            ?.let { SessionKey(it.machineId, it.sessionId) }
+        val agent = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }?.let { SessionKey(it.machineId, it.sessionId) }
+        // Capture on entry, before ChatScreen's receipt or a conflated hub snapshot turns the row idle (iOS markSeen).
+        heldAgentChat.value = agent?.takeIf { key ->
+            sessions.firstOrNull { it.key == key }?.let {
+                it.agentState == AgentState.Unread && agentPreferences.first().seen[key.path] != "${it.updatedAt.orEmpty()}|${it.rev ?: ""}"
+            } == true
+        }
+        visibleAgentChat.value = agent
     }
     DisposableEffect(visibleChat, session.demo) {
         if (session.demo == null) Notify.viewing(visibleChat?.let { SessionKey(it.machineId, it.sessionId) })
@@ -582,7 +609,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val assistantRootKey: Any = remember { NavEntry<NavKey>(AssistantRoute) {}.contentKey }
         // The one shared sidebar, as the drawer or as the column beside the Assistant page. The two never share a key:
         // on Agents in a regular window the drawer opens while the Assistant page (kept composed) still holds its column.
-        val sharedSidebar: @Composable (String) -> Unit = { stateKey ->
+        val sharedSidebar: @Composable (String, (() -> Unit)?) -> Unit = { stateKey, onFoldColumn ->
             sidebarState.SaveableStateProvider(stateKey) {
                 AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                     onOpen = { key ->
@@ -626,30 +653,61 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                             }, headModifier = head, trailing = trailing, fallback = fallback)
                     },
                     // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
-                    fullWindowSearch = regular)
+                    fullWindowSearch = regular,
+                    onFoldColumn = onFoldColumn)
             }
         }
         // What the decorator below reads: it is remembered across compositions, these change with the window.
         val currentRegular = rememberUpdatedState(regular)
+        val currentWide = rememberUpdatedState(wide)
+        val currentSelected = rememberUpdatedState(selected)
+        val currentLifecycle = rememberUpdatedState(lifecycle)
         val currentOthersWaiting = rememberUpdatedState(othersWaiting)
         val currentConnection = rememberUpdatedState(connection)
+        // The one place the page's button and the column's own header fold or reopen the column (#9336), so both keep
+        // the same column memory (#9302).
+        val setSidebarColumnBeside: (Boolean) -> Unit = { shown ->
+            sidebarColumnShown.value = shown
+            if (columnMemory.toggleSidebarBeside(
+                    shown = shown,
+                    regular = currentRegular.value,
+                    columnsOver = currentColumnsOver.value,
+                    tabShown = currentSelected.value == AppTab.Persona,
+                    foreground = currentLifecycle.value.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED),
+                )
+            ) {
+                keptSidebarColumnShown.value = shown
+            }
+        }
         val leading: @Composable (Boolean) -> Unit = { assistantRoot ->
-            Box {
-                // The dot is spoken too: that something waits at another assistant.
-                val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
-                    if (!currentOthersWaiting.value) label
-                    else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
-                        stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
-                }
-                JPersonaButton(sidebar.personaState, sidebarLabel, {
-                    if (assistantRoot && currentRegular.value) {
-                        val shown = if (currentColumnsOver.value) sidebarOverlayShown else sidebarColumnShown
-                        shown.value = !shown.value
+            val leadingAction = resolveHomeLeadingAction(
+                assistantRoot = assistantRoot,
+                regular = currentRegular.value,
+                columnsOver = currentColumnsOver.value,
+                sidebarColumnShown = sidebarColumnShown.value,
+            )
+            when (leadingAction) {
+                HomeLeadingAction.HiddenSpacer -> JPersonaButtonRoom()
+                HomeLeadingAction.OpenDrawer,
+                HomeLeadingAction.ToggleOverlay,
+                HomeLeadingAction.ShowColumn -> Box {
+                    // The dot is spoken too: that something waits at another assistant.
+                    val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
+                        if (!currentOthersWaiting.value) label
+                        else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
+                            stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
                     }
-                    else sidebar.opened.value = true
-                })
-                // Something waits at another assistant: the switcher's badges say where, as iOS's AssistantWaitingDot.
-                if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
+                    JPersonaButton(sidebar.personaState, sidebarLabel, {
+                        when (leadingAction) {
+                            HomeLeadingAction.OpenDrawer -> sidebar.opened.value = true
+                            HomeLeadingAction.ToggleOverlay -> sidebarOverlayShown.value = !sidebarOverlayShown.value
+                            HomeLeadingAction.ShowColumn -> setSidebarColumnBeside(true)
+                            HomeLeadingAction.HiddenSpacer -> Unit
+                        }
+                    })
+                    // Something waits at another assistant: the switcher's badges say where, as iOS's AssistantWaitingDot.
+                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
+                }
             }
         }
         val currentLeading = rememberUpdatedState(leading)
@@ -662,18 +720,27 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 val primary = entry.contentKey in rootKeys
                 val assistantRoot = entry.contentKey == assistantRootKey
                 val barHeight = remember { mutableIntStateOf(0) }
+                val tabSplit = LocalAgentsTabSplit.current
+                val entrySplit = rememberEntrySplitDetail(tabSplit, entry.contentKey)
                 val page: @Composable () -> Unit = {
-                    CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
-                        LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
-                        LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
-                        LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
-                            onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
-                            leading = { currentLeading.value(assistantRoot) }) else null) {
-                        if (primary) Box(Modifier.fillMaxSize()) {
-                            entry.Content()
-                            // The home bar holds no title to say the link is down: a pill under it does, as on iOS (#4339 C14).
-                            HomeLinkPill(currentConnection.value, barHeight.intValue)
-                        } else entry.Content()
+                    val content: @Composable () -> Unit = {
+                        CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
+                            LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
+                            LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
+                            LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
+                                onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
+                                leading = { currentLeading.value(assistantRoot) }) else null) {
+                            if (primary) Box(Modifier.fillMaxSize()) {
+                                entry.Content()
+                                // The home bar holds no title to say the link is down: a pill under it does, as on iOS (#4339 C14).
+                                HomeLinkPill(currentConnection.value, barHeight.intValue)
+                            } else entry.Content()
+                        }
+                    }
+                    if (tabSplit != null) {
+                        CompositionLocalProvider(LocalSplitDetail provides entrySplit, content = content)
+                    } else {
+                        content()
                     }
                     // Register after the root page's own Back handler, even when NavDisplay composes it later.
                     BackHandler(assistantRoot && selected == AppTab.Persona && currentColumnsOver.value && sidebarOverlayShown.value) {
@@ -785,7 +852,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           AssistantStackNavigationProbe(stackEvidence.route, stackEvidence.selectedKey)
-          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
+          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar", null) }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
             // One background for the window. Pages paint the same light at the same place (PageBackdrop), so in wide
             // windows the rail, the panes and the room between them read as one surface; cards are what separate them.
@@ -803,8 +870,25 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val policy = panePolicies.getValue(tab)
                         val sceneDirective = if (policy.singleRightStack) directive.onePane() else directive
-                        val listDetail = rememberShellListDetail(tab, sceneDirective, maxWidth, paneHinges, detailOpen = detail != null,
-                            store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
+                        val listDetail = rememberShellListDetail(
+                            tab, sceneDirective, maxWidth, paneHinges, detailOpen = detail != null,
+                            store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)),
+                            initialCollapsed = tab == AppTab.Agents && !agentsListShown.value,
+                            onCollapsedChange = if (tab == AppTab.Agents) { collapsed ->
+                                val nextShown = !collapsed
+                                agentsListShown.value = nextShown
+                                if (columnMemory.toggleAgentsBeside(
+                                        shown = nextShown,
+                                        twoPanes = currentWide.value,
+                                        columnsOver = currentColumnsOver.value,
+                                        tabShown = currentSelected.value == AppTab.Agents,
+                                        foreground = currentLifecycle.value.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED),
+                                    )
+                                ) {
+                                    keptAgentsListShown.value = nextShown
+                                }
+                            } else null,
+                        )
                         val agentsOverlay = rememberAgentsOverlayStrategy(columnsOver && tab == AppTab.Agents &&
                             stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown) {
                             val barHeight = remember { mutableIntStateOf(0) }
@@ -817,14 +901,22 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                 }
                             }
                         }
+                        val agentsTabSplit = rememberAgentsTabSplit(
+                            tab = tab,
+                            stack = stacks.getValue(tab),
+                            twoPanes = sceneDirective.maxHorizontalPartitions > 1 && !columnsOver,
+                            listHidden = listDetail.listHidden,
+                            onShowList = listDetail::expand,
+                        )
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
+                                LocalAgentsTabSplit provides agentsTabSplit,
                                 persona.feature.settings.LocalExtensionPageVisible provides shown) {
                                 val display: @Composable () -> Unit = {
                                     NavDisplay(backStack = stacks.getValue(tab),
                                         modifier = Modifier.fillMaxSize().then(if (shown || tab == AppTab.Persona) Modifier else Modifier.unplaced()),
                                         onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                        sceneStrategies = listOf(agentsOverlay, listDetail),
+                                        sceneStrategies = listOf(agentsOverlay, listDetail.strategy),
                                         // A pushed page slides in over the page it came from, which stays drawn underneath; going
                                         // back, it slides away over the page below. Pages stay opaque the whole way (fading them
                                         // showed both pages' text on top of each other) and nothing in between shows the background.
@@ -837,11 +929,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                         entryProvider = { key -> panes(key, policy.singleRightStack) })
                                 }
                                 if (tab == AppTab.Persona) {
+                                    val foldSidebarColumn: (() -> Unit)? =
+                                        if (showsSidebarColumnFoldButton(regular, columnsOver)) ({ setSidebarColumnBeside(false) }) else null
                                     // One sidebar owner outside the entry stack survives root → Inbox → detail → Back.
                                     AssistantPaneFrame(regular, policy.keepSharedSidebar,
                                         shown = if (columnsOver) sidebarOverlayShown.value else sidebarColumnShown.value,
                                         modifier = if (shown) Modifier else Modifier.unplaced(),
-                                        sidebar = { sharedSidebar("shared-sidebar-column") }, hinges = paneHinges,
+                                        sidebar = { sharedSidebar("shared-sidebar-column", foldSidebarColumn) }, hinges = paneHinges,
                                         overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false }, content = display)
                                 } else display()
                             }

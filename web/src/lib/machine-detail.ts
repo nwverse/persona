@@ -336,8 +336,9 @@ export function connectionText(m: DetailMachine): string {
   return m.kind ? t("lib-machine-detail.conn_kind", { kind: m.kind }) : "";
 }
 
-/** "System": what it is, what it runs on, since when, and the versions (label, value, mono?). */
-export function systemFacts(system: SystemInfo | undefined, m: DetailMachine | undefined, nowSec: number, tz = 0): [string, string, boolean?][] {
+/** "System": what it is, what it runs on, since when, and the versions (label, value, mono?).
+ * The boot offset is resolved at the boot instant, which may be in another daylight-saving season. */
+export function systemFacts(system: SystemInfo | undefined, m: DetailMachine | undefined, nowSec: number, tz = localOffset((system?.boot_time ?? nowSec) * 1000)): [string, string, boolean?][] {
   const out: [string, string, boolean?][] = [];
   if (system?.name) out.push([t("lib-machine-detail.fact_system"), system.build ? t("lib-machine-detail.fact_system_build", { name: system.name, build: system.build }) : system.name]);
   if (system?.kernel) out.push([t("lib-machine-detail.fact_kernel"), system.kernel, true]);

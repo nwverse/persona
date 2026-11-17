@@ -16,6 +16,7 @@ type TodoPRStatus struct {
 	HeadOID   string    `json:"head_oid,omitempty"`
 	State     string    `json:"state"`
 	Draft     bool      `json:"draft"`
+	Own       bool      `json:"own,omitempty"`
 	Review    string    `json:"review"`
 	Checks    string    `json:"checks"`
 	Conflicts bool      `json:"conflicts"`
@@ -37,6 +38,9 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		Head           struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
 		Reviewers []any `json:"requested_reviewers"`
 		Teams     []any `json:"requested_teams"`
 	}
@@ -50,6 +54,15 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	}
 	if out.State != "open" {
 		return out, nil
+	}
+	if out.Draft && pr.User.Login != "" {
+		var viewer struct {
+			Login string `json:"login"`
+		}
+		// Unknown ownership must not turn someone else's draft into work for our supervisor.
+		if err := g.get(ctx, "/user", &viewer); err == nil {
+			out.Own = viewer.Login != "" && strings.EqualFold(viewer.Login, pr.User.Login)
+		}
 	}
 	if pr.Head.SHA == "" {
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
@@ -144,8 +157,8 @@ func joinCheckState(a, b string) string {
 // prsPolled bounds how many of a task's earlier PRs the poll reads besides its current one, newest first.
 const prsPolled = 4
 
-// polledPRs are the PRs of t the poll reads: its current PR, then its earlier ones newest first, skipping an earlier
-// one already known merged or closed (#7935).
+// polledPRs retains the current PR and bounded earlier sample (#7935), then includes a typed wait's source if needed.
+// A bound source outside that sample adds at most one read, never displacing another open or unknown PR.
 func polledPRs(t Todo) []string {
 	out := []string{t.PRURL}
 	known := map[string]TodoPRStatus{}
@@ -161,6 +174,18 @@ func polledPRs(t Todo) []string {
 			continue
 		}
 		out = append(out, u)
+	}
+	if r := t.Supervision.parking(); r != nil && r.Evidence != nil {
+		for i := len(t.PRs) - 1; i >= 0; i-- {
+			u := t.PRs[i]
+			if slices.Contains(out, u) || !parkWaitsOnPR(r, u) {
+				continue
+			}
+			if f, ok := known[u]; !ok || f.State != "merged" && f.State != "closed" || f.CheckedAt.Before(r.At) {
+				out = append(out, u)
+			}
+			break
+		}
 	}
 	return out
 }
@@ -237,7 +262,12 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 				s.logf("task %s: PR status: %v", t.ID, err)
 				continue
 			}
-			status.URL, status.CheckedAt = url, now.UTC()
+			observedAt := now.UTC()
+			// The pass may have started before this captured wait. Its source request cannot predate that wait.
+			if held := t.Supervision.parking(); held != nil && held.Evidence != nil && parkWaitsOnPR(held, url) && observedAt.Before(held.At) {
+				observedAt = held.At
+			}
+			status.URL, status.CheckedAt = url, observedAt
 			if err := s.applyPRStatus(ctx, t, status); err != nil {
 				s.logf("task %s: keep PR status: %v", t.ID, err)
 			}
@@ -246,6 +276,8 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 }
 
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
+	// The wait belongs to the snapshot taken before the forge request, not a park created while it was in flight.
+	held := t.Supervision.parking()
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil || current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
 		return nil
@@ -259,13 +291,6 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	// earlier PR of it is read.
 	legacyHold := old == nil && (t.Delivery != nil && t.Delivery.State == deliveryPR || t.Stage == "review" || t.Stage == "merge" && len(t.PRs) > 0)
 	terminal := status.State == "merged" || status.State == "closed"
-	// Another PR the poll follows counts as open until it is read otherwise: no wake while it may still hold the task.
-	othersOpen := false
-	for _, u := range polledPRs(t) {
-		if f := prFacts(t, u); u != status.URL && (f == nil || f.State == "open") {
-			othersOpen = true
-		}
-	}
 	// The stage's PRs are checked under the stage lock first (below): an observation of a PR an Agent reply replaced
 	// while the request was in flight changes nothing, neither the facts nor the supervision.
 	b := &s.reports
@@ -277,6 +302,17 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		return fmt.Errorf("stages could not be read")
 	}
 	cur := b.stages[t.ID]
+	var previous *TodoPRStatus
+	if cur.PR == status.URL {
+		previous = cur.PRStatus
+	} else if f, ok := cur.EarlierPRStatus[status.URL]; ok {
+		previous = &f
+	}
+	if previous != nil && status.CheckedAt.Before(previous.CheckedAt) {
+		b.mu.Unlock()
+		b.stageWriting.Unlock()
+		return nil // an older response must not replace newer facts or resolve a wait
+	}
 	switch {
 	case cur.PR == status.URL:
 		cur.PRStatus = &status
@@ -313,38 +349,38 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
+	if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
+		s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
+	}
 	if status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil {
 		// Only the current PR raises a conflict signal: the digest revalidates against the task/stage PR, so an
 		// earlier PR's conflict would be dropped there anyway.
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigPRConflict, Key: status.URL + "@" + status.HeadOID,
 			Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
 	}
-	if terminal && (wasOpen || legacyHold) && !othersOpen && t.Supervision != nil {
-		// Only the hold that waits on this PR wakes: a park waiting on an outside event or someone else whose reason
-		// names this PR (parkWaitsOnPR), the same park (its review's time) as when the PR was read, and the task still
-		// following this PR. Anything else (ongoing work, rework, a review in progress, a park for something else, a
-		// later park, a replaced PR) stays as it is, and a park comes due at its own time.
-		held, prs := t.Supervision.parking(), append([]string{status.URL}, polledPRs(t)...)
-		if parkWaitsOnPR(held, prs...) {
-			at := held.At
-			v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-				p := v.parking()
-				if p == nil || !p.At.Equal(at) || !parkWaitsOnPR(p, prs...) {
-					return false
-				}
-				now, ok := s.todoNow(t.ID)
-				if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
-					return false
-				}
-				v.State = reviewPending
-				return true
-			})
-			if err != nil {
-				return err
+	if terminal && held != nil && (wasOpen || legacyHold || held.Evidence != nil) {
+		// Typed waits reconcile terminal facts even after a failed ledger write or a restart. Legacy parks retain
+		// their transition/stage gate. Neither path may resolve a newer park or a PR that has since reopened.
+		v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+			p := v.parking()
+			if p == nil || !p.At.Equal(held.At) {
+				return false
 			}
-			if changed {
-				s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
+			now, ok := s.todoNow(t.ID)
+			if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
+				return false
 			}
+			if f := prFacts(now, status.URL); f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) || !parkPRsResolved(now, p, status.URL) {
+				return false
+			}
+			v.State = reviewPending
+			return true
+		})
+		if err != nil {
+			return err
+		}
+		if changed {
+			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
 		}
 	}
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
@@ -370,11 +406,44 @@ func (s *Service) stageFollows(id, url string) bool {
 	return st.PR == url || slices.Contains(st.PRs, url)
 }
 
-// parkWaitsOnPR says whether park r waits on one of the task's PRs at urls: it waits on an outside event or someone
-// else, and its reason names one of them, by its link or as "#N" with its number. A park for anything else (a design
-// decision, another PR, a release) is not the PRs' merge wait, even while they are open.
+// parkPRsResolved retains the multi-PR gate, using current facts under the supervision write lock. A bound earlier
+// PR may already be terminal and no longer polled: keep its source available when the last other PR resolves.
+func parkPRsResolved(t Todo, r *TaskReview, observed string) bool {
+	for _, u := range polledPRs(t) {
+		if f := prFacts(t, u); f == nil || f.State != "merged" && f.State != "closed" {
+			return false
+		}
+	}
+	var terminal []string
+	for _, u := range append([]string{t.PRURL}, t.PRs...) {
+		// An old terminal receipt is not evidence that this wait's source has stayed resolved.
+		if f := prFacts(t, u); f != nil && (f.State == "merged" || f.State == "closed") &&
+			(r.Evidence == nil || u == observed || !f.CheckedAt.Before(r.At)) {
+			terminal = append(terminal, u)
+		}
+	}
+	return parkWaitsOnPR(r, terminal...)
+}
+
+// parkWaitsOnPR uses the recorded merge source for typed waits. Only legacy parks without evidence use prose or
+// bare "#N" references; a different typed source or kind must never fall back to the reason.
 func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
 	if r == nil || r.WaitingOn != parkExternalEvent && r.WaitingOn != parkSomeoneElse {
+		return false
+	}
+	if e := r.Evidence; e != nil {
+		if e.Kind != "merge_review" || !e.Ready || r.WaitingOn != parkSomeoneElse {
+			return false
+		}
+		source := triageNormalizePRURL(e.URL)
+		if ciPRURL.FindString(source) != source || source == "" {
+			return false
+		}
+		for _, u := range urls {
+			if triageNormalizePRURL(u) == source {
+				return true
+			}
+		}
 		return false
 	}
 	reason := strings.ToLower(r.Reason)

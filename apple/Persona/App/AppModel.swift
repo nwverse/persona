@@ -288,6 +288,9 @@ final class AppModel {
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
     /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
     var agentsListReveal = 0
+    /// Bumped each time the Inbox is entered at its root (the sidebar, a widget, a quick action, its tab on visionOS),
+    /// also while its page stays up: the section bar opens on Needs You on every entry (#9053, `InboxPage`).
+    var inboxEntries = 0
 
     /// User navigation, unlike `open` (notifications / links): choosing Agents discards its retained detail.
     func selectHomeTab(_ tab: AppTab) {
@@ -329,6 +332,10 @@ final class AppModel {
             #endif
             // The shell routes it now, not when a view is next drawn (docs/apple/shell.md).
             if selectedTab != oldValue { tabRouter?.route(selectedTab, in: self) }
+            #if os(visionOS)
+            // The Inbox's own tab, which the TabView keeps up: picked, or routed to again while in front (a widget).
+            if selectedTab == .mail { inboxEntries += 1 }
+            #endif
             #if PERF_SIGNPOST
             PerfTrace.event("Tab selection", selectedTab.rawValue)
             #endif
@@ -1093,6 +1100,13 @@ final class AppModel {
         if let b = m.browser, b.enabled, b.screenSharing, let i = b.screenInput, i.reads { return i }
         return nil
     }
+    /// Phone Screen as the extension showing this Mac's screen reports it (#9314); nil when no shown extension's node has it.
+    func phoneScreen(_ ref: MachineRef) -> MachinePhoneScreen? {
+        guard let m = machine(ref) else { return nil }
+        if let c = m.computer, c.enabled, c.screenSharing, let p = c.phoneScreen, p.offered { return p }
+        if let b = m.browser, b.enabled, b.screenSharing, let p = b.phoneScreen, p.offered { return p }
+        return nil
+    }
     nonisolated static func advertisesVideo(_ m: Machine) -> Bool {
         (m.computer.map { $0.enabled && $0.screenSharing && ($0.screenVideo?.advertised ?? false) } ?? false)
             || (m.browser.map { $0.enabled && $0.screenSharing && ($0.screenVideo?.advertised ?? false) } ?? false)
@@ -1617,6 +1631,7 @@ final class AppModel {
         chats[key] = nil
         chatUse[key] = nil
         subscribers[key] = nil
+        detailAt[key] = nil
         shown.removeAll { $0.key == key }
         if visibleSession == key { visibleSession = shown.last?.key }
     }
@@ -1643,6 +1658,9 @@ final class AppModel {
     @ObservationIgnored private var filling = Set<SessionKey>()
     /// A detail or children lookup already running. The latest hint that arrived during it runs once it ends.
     @ObservationIgnored private var detailHints: [SessionKey: FetchHint] = [:]
+    /// The revision each held chat's last exact row answer stands at (`sessions_lookup`): a hint that starts there and
+    /// does not name the chat leaves that row as it was (#9479).
+    @ObservationIgnored private var detailAt: [SessionKey: String] = [:]
     @ObservationIgnored private var childHints: [SessionKey: FetchHint] = [:]
     /// Folded children of open chats, kept out of the root list window.
     let childIndex = ChildSessionIndex()
@@ -1702,7 +1720,9 @@ final class AppModel {
             // list does not have (hidden from it, or gone) is not a chat error. A transcript that cannot be read is
             // still reported, by the read of the transcript itself. The composer still needs a reason when the row
             // stays missing (#8748). A retained row the hub no longer has must leave the index so that reason shows.
-            guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else {
+            let answer = try await api.sessionListDetailAnswer(key, title: latest(key)?.title ?? "")
+            detailAt[key] = answer.revision
+            guard let full = answer.row else {
                 if retainedSessionKeys.contains(key) { dropRetainedSessionRow(key) }
                 noteMissingSessionDetail(key)
                 return
@@ -1729,9 +1749,21 @@ final class AppModel {
             applySessions([key.machineRef: Self.replacing(full, in: sessionsByMachine[key.machineRef] ?? [])])
             await refreshOpenChildren(key, hint: listHint)
         } catch {
+            detailAt[key] = nil
             if sessionIndex[key] == nil { noteMissingSessionDetail(key) }
             if isSubscribed(key), !error.isQuiet { chat(key).error = error.localizedDescription }
         }
+    }
+
+    /// A hint about other sessions: the held chat's exact row still holds, now at the hint's revision, and is not read
+    /// again (#9479; the web's rule since #6685, docs/protocol/protocol.md "Exact runtime-session detail"). Only when the
+    /// hint starts where the last exact answer stands, does not name the chat, and no read of it is out; any other hint
+    /// reads as before. Folded children keep their own gate.
+    func passesOver(_ key: SessionKey, revision: String, changes: SessionListChanges?) -> Bool {
+        guard let changes, let at = detailAt[key], at == changes.since, !changes.names(key),
+              detailHints[key]?.isRunning != true else { return false }
+        detailAt[key] = revision
+        return true
     }
 
     /// The hub answered with no row for a key we had only kept across a filtered landing: drop it so the composer
@@ -1826,6 +1858,7 @@ final class AppModel {
         guard var owners = subscribers[key], owners.remove(owner) != nil else { return }
         guard owners.isEmpty else { subscribers[key] = owners; return }
         subscribers[key] = nil
+        detailAt[key] = nil
         forgetAgentLive(key)
         if openChat != key, visibleSession != key, !shown.contains(where: { $0.key == key }) {
             clearMissingSessionDetail(key)
@@ -2563,10 +2596,16 @@ final class AppModel {
                     socket(group)?.send(subscribeMessage(key))
                 }
             }
-        case .sessionsList(let revision):
+        case .sessionsList(let revision, let changes):
             sessionLists.invalidate(group, revision: revision)
             if isHub { followNeedsYou() }
-            for key in subscribers.keys where key.group == group { Task { await refreshSessionDetail(key, listHint: revision) } }
+            for key in subscribers.keys where key.group == group {
+                if passesOver(key, revision: revision, changes: changes) {
+                    Task { await refreshOpenChildren(key, hint: revision) }
+                } else {
+                    Task { await refreshSessionDetail(key, listHint: revision) }
+                }
+            }
         case .sessions(let machineID, let list):
             // A busy hub sends each machine's list on its own, one after another: they are applied together a moment
             // later, so the pages that read the sessions update once for the lot (one SwiftUI pass, not one a machine).

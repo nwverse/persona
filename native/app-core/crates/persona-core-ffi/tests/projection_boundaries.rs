@@ -1,6 +1,6 @@
-//! Replays the answer, stream-chunk, turn, task-index and viewed-image corpora through the exported C ABI, including
-//! each returned buffer. The independently compiled C11 client (`tests/c_abi_smoke.c`) replays the same corpus from
-//! outside Rust; these tests pin the same contract for a Rust caller of the ABI, not for Swift or a device.
+//! Replays the answer, stream-chunk, stream-repair, turn, task-index and viewed-image corpora through the exported C
+//! ABI, including each returned buffer. The independently compiled C11 client (`tests/c_abi_smoke.c`) exercises the
+//! same boundary from outside Rust; these tests pin the contract for a Rust caller, not for Swift or a device.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -9,8 +9,8 @@ use std::slice;
 
 use persona_core::{
     PersonaCoreBytes, persona_core_bytes_free, persona_core_display_answer, persona_core_project_answer,
-    persona_core_project_stream_chunks, persona_core_project_task_index, persona_core_project_turns,
-    persona_core_project_viewed_images,
+    persona_core_project_plain_open_fence, persona_core_project_stream_chunks, persona_core_project_stream_repair,
+    persona_core_project_task_index, persona_core_project_turns, persona_core_project_viewed_images,
 };
 use serde_json::Value;
 
@@ -102,6 +102,65 @@ fn c_abi_stream_chunks_replays_all_cases_and_rejects_bad_input() {
     );
 }
 
+#[test]
+fn c_abi_stream_repair_calls_the_projection_and_rejects_bad_utf8_and_expectations() {
+    // Independently transcribed from StreamRepairTests.closesAnOpenCodeFenceWithItsOwnMarker and
+    // tellsWhereTheTextEnds; the second field is not derived from the projected output.
+    let expected = serde_json::json!({
+        "repaired": "text\n```ts\nconst a\n```",
+        "end": "code",
+    });
+    let input = serde_json::json!({"text": "text\n```ts\nconst a"});
+    let actual = project(persona_core_project_stream_repair, &input);
+    assert_eq!(actual, expected);
+    let mut wrong_end = expected.clone();
+    wrong_end["end"] = serde_json::json!("text");
+    assert_ne!(actual, wrong_end);
+    let mut wrong_repaired = expected.clone();
+    wrong_repaired["repaired"] = serde_json::json!("wrong");
+    assert_ne!(actual, wrong_repaired);
+    let mut extra = expected.clone();
+    extra
+        .as_object_mut()
+        .unwrap()
+        .insert("extra".to_owned(), Value::Bool(true));
+    assert_ne!(actual, extra);
+    assert!(call(persona_core_project_stream_repair, b"{\"invalid\":true}").is_none());
+    assert!(call(persona_core_project_stream_repair, b"not JSON").is_none());
+    assert!(call(persona_core_project_stream_repair, &[0xff]).is_none());
+    eprintln!("C ABI stream_repair: Rust caller, complete object, invalid UTF-8 and negatives");
+}
+
+#[test]
+fn c_abi_plain_open_fence_uses_the_independent_apple_expectation_and_rejects_bad_inputs() {
+    let input = serde_json::json!({
+        "text": "看图：\n```mermaid\ngraph TD",
+        "drawn": ["mermaid", "math"],
+    });
+    let expected = serde_json::json!({"text": "看图：\n```\ngraph TD"});
+    let actual = project(persona_core_project_plain_open_fence, &input);
+    assert_eq!(actual, expected);
+    let mut wrong = expected.clone();
+    wrong["text"] = serde_json::json!("看图：\n```mermaid\ngraph TD");
+    assert_ne!(actual, wrong);
+    let mut extra = expected.clone();
+    extra
+        .as_object_mut()
+        .unwrap()
+        .insert("extra".to_owned(), Value::Bool(true));
+    assert_ne!(actual, extra);
+    for malformed in [
+        &br#"{"text":"```mermaid"}"#[..],
+        &br#"{"drawn":[]}"#[..],
+        &br#"{"text":1,"drawn":[]}"#[..],
+        b"not JSON",
+        &[0xff],
+    ] {
+        assert!(call(persona_core_project_plain_open_fence, malformed).is_none());
+    }
+    eprintln!("C ABI plain_open_fence: independent Apple expectation, invalid UTF-8 and negatives");
+}
+
 fn lines_documents() -> Vec<Value> {
     let mut paths: Vec<PathBuf> = fs::read_dir(fixtures().join("lines"))
         .expect("lines fixtures")
@@ -180,7 +239,7 @@ fn c_abi_turns_replays_the_static_corpus_with_the_overlay() {
         }
     }
     assert_eq!(replayed.len(), 57, "the exact static turn manifest");
-    assert_eq!(turn_objects, 62, "the 54 non-empty cases hold 62 complete turn objects");
+    assert_eq!(turn_objects, 73, "the 54 non-empty cases hold 73 complete turn objects");
     assert!(call(persona_core_project_turns, b"{\"invalid\":true}").is_none());
     assert!(call(persona_core_project_turns, b"not JSON").is_none());
     eprintln!(

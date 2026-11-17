@@ -1382,6 +1382,8 @@ internal fun AssistantDrawer(
      */
     fullWindowSearch: Boolean = false,
     onFullSearch: () -> Unit = {},
+    /** Folds the sidebar column from its own header while it sits beside the page; null in a drawer or floating overlay. */
+    onFoldColumn: (() -> Unit)? = null,
 ) {
     // "All chats" opens the rest of the conversations in place: this app has no all-conversations page.
     var showAllChats by rememberSaveable { mutableStateOf(false) }
@@ -1403,6 +1405,7 @@ internal fun AssistantDrawer(
     // Regular-window column: Search opens the full-window page. Compact Glass drawer: the inline field toggles.
     val searchInHead = drawer || fullWindowSearch
     val resources = androidx.compose.ui.platform.LocalResources.current
+    val haptics = rememberHaptics()
     Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
         val headPadding = Modifier.padding(horizontal = if (drawer) Tokens.Space.l else Tokens.Space.xs).padding(top = Tokens.Space.s)
         val search: @Composable () -> Unit = {
@@ -1410,15 +1413,42 @@ internal fun AssistantDrawer(
                 if (fullWindowSearch) onFullSearch() else searchVisible = !searchVisible
             }, raised = true)
         }
-        // The head as it was (the persona's name; only the compact drawer / regular-window Search has one), where there
-        // is no switcher to show.
-        val plainHead: @Composable () -> Unit = {
-            if (searchInHead) Row(Modifier.fillMaxWidth().then(headPadding), verticalAlignment = Alignment.CenterVertically) {
-                Text(assistantName, style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink, modifier = Modifier.weight(1f))
-                search()
+        val fold: (@Composable () -> Unit)? = onFoldColumn?.let { onFold ->
+            {
+                JIconButton(
+                    PersonaIcons.sidebar,
+                    stringResource(R.string.assistant_hide_sidebar),
+                    haptics.tapped(onFold),
+                    raised = true,
+                )
             }
         }
-        if (switcher != null) switcher(headPadding, search.takeIf { searchInHead }, plainHead) else plainHead()
+        val headTrailing: (@Composable () -> Unit)? = if (searchInHead || fold != null) ({
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+            ) {
+                if (searchInHead) search()
+                fold?.invoke()
+            }
+        }) else null
+        // The head as it was (the persona's name; only the compact drawer / regular-window Search or fold button has one),
+        // where there is no switcher to show.
+        val plainHead: @Composable () -> Unit = {
+            if (headTrailing != null) Row(
+                Modifier.fillMaxWidth().then(headPadding),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    assistantName,
+                    style = PersonaTheme.type.largeTitle,
+                    color = PersonaTheme.palette.ink,
+                    modifier = Modifier.weight(1f),
+                )
+                headTrailing()
+            }
+        }
+        if (switcher != null) switcher(headPadding, headTrailing, plainHead) else plainHead()
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
             // The first row is the main conversation, as "Persona" with the app's mark, then a line (#2004, the same on
             // every platform): it is listed nowhere else, has no pin of its own, and is on show whatever the search.

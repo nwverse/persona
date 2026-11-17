@@ -222,6 +222,18 @@ final class RecordingCapture {
     }
     #endif
 
+    #if os(iOS)
+    /// The speaker turned on while a room meeting records (#8731 B2, an experiment behind Settings › Meetings' switch): its
+    /// engine turns the system's echo cancellation on from now to the end, as a meeting that starts taking part has it
+    /// (`RecordingSegmentWriter.turnOnVoiceProcessing`); the microphone stops for a moment. Nothing when it is on already
+    /// or this is no room meeting; an engine that won't start again pauses the recording, as a route change does.
+    func turnOnEchoCancellation() {
+        guard meetingCall, !cancelsEcho, let writer, state == .recording || state == .paused else { return }
+        do { cancelsEcho = try writer.turnOnVoiceProcessing(running: state == .recording) }
+        catch { microphoneChangeFailed() }
+    }
+    #endif
+
     /// Persona started or stopped attending a meeting with the live view (#3862 phase 2,
     /// `RecordingAttendance.shortSegments`): its segments are 15 seconds from now on, in front or not; the open one closes
     /// as soon as it is longer. Off again, the usual 30 / 60 s.

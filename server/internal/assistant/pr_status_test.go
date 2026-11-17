@@ -108,12 +108,13 @@ func TestPRStatusPollReturnsTerminalPRToSupervision(t *testing.T) {
 	for _, terminal := range []string{"merged", "closed"} {
 		t.Run(terminal, func(t *testing.T) {
 			s, _, task := newSupervisedService(t)
-			ctx, now := context.Background(), time.Now()
+			ctx := context.Background()
 			url := "https://github.com/example/app/pull/12"
 			s.setTaskStage(ctx, task.ID, "review", url)
 			if _, err := reviewErr(s, task.ID, mergePark(url)); err != nil {
 				t.Fatal(err)
 			}
+			now := time.Now()
 			f := &statusForge{status: TodoPRStatus{State: "open", Checks: "success", Review: "required"}}
 			s.deploy.forge = f
 			s.sweepPRStatuses(ctx, now)
@@ -225,7 +226,8 @@ func TestPRStatusIgnoresAReplacedPR(t *testing.T) {
 // mergePark parks a task on the maintainers merging the PR at url, naming it as a supervisor does.
 func mergePark(url string) map[string]any {
 	return map[string]any{"verdict": "parked", "reason": "Waiting for the maintainers to review and merge " + url,
-		"waiting_on": "someone_else", "until": "3d"}
+		"waiting_on": "someone_else", "until": "3d", "evidence": testParkEvidence("merge_review", "named maintainer", url,
+			"The named maintainer submits a review or merges the PR")}
 }
 
 func TestParkWaitsOnPR(t *testing.T) {

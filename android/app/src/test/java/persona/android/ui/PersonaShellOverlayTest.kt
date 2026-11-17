@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Rule
@@ -309,8 +310,173 @@ class PersonaShellOverlayTest {
         close().assertDoesNotExist()
     }
 
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun hidingTheSidebarBesideThePageStartsHiddenOnShellRestart() {
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            awaitText("Weekend plans")
+            assertFalse(hasDisplayedContentDescription("Sidebar"))
+            assertTrue(hasDisplayedContentDescription("Hide sidebar"))
+            val switcherOut = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals(690f, (switcherOut.left.value + switcherOut.right.value) / 2f, 0.5f)
+
+            hideSidebar()
+            assertFalse(isTextDisplayed("Weekend plans"))
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+            val switcherFolded = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals("Top-bar switcher must stay centered when hiding sidebar",
+                500f, (switcherFolded.left.value + switcherFolded.right.value) / 2f, 0.5f)
+            awaitSavedColumns(sidebar = false)
+        }
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            assertFalse(isTextDisplayed("Weekend plans"))
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+
+            sidebar()
+            awaitText("Weekend plans")
+            assertFalse(hasDisplayedContentDescription("Sidebar"))
+            assertTrue(hasDisplayedContentDescription("Hide sidebar"))
+            awaitSavedColumns(sidebar = true)
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun overThePageOverlayDismissalDoesNotOverwriteKeptSidebarChoice() {
+        val width = mutableStateOf(1000)
+        shell(width = width, automation = false) {
+            awaitText("The trip outline is ready.")
+            awaitText("Weekend plans")
+            hideSidebar()
+            assertFalse(isTextDisplayed("Weekend plans"))
+            awaitSavedColumns(sidebar = false)
+
+            rule.runOnIdle { width.value = 673 }
+            frames()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            sidebar()
+            close().assertExists()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            close().performTouchInput { click(centerRight) }
+            frames()
+            close().assertDoesNotExist()
+
+            sidebar()
+            rule.onNodeWithText("Weekend plans").performScrollTo().performClick()
+            awaitText("The weekend plan is ready.")
+            close().assertDoesNotExist()
+            awaitSavedColumns(sidebar = false)
+
+            rule.runOnIdle { width.value = 1000 }
+            frames()
+            assertFalse(isTextDisplayed("Weekend plans"))
+            awaitSavedColumns(sidebar = false)
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideAgentsDrawerNeverShowsColumnFoldButton() {
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            awaitText("Weekend plans")
+            clickText("Agents")
+            awaitText(agent.displayTitle)
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            sidebar()
+            close().assertExists()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun hidingTheAgentsListBesideThePageStartsHiddenOnShellRestart() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val resize = app.getString(persona.core.designsystem.R.string.designsystem_pane_resize)
+        val collapsedState = app.getString(persona.core.designsystem.R.string.designsystem_pane_collapsed)
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            clickText("Agents")
+            awaitText(otherAgent.displayTitle)
+            clickText(otherAgent.displayTitle)
+            awaitText("The packing list is ready.")
+            assertTrue(isTextDisplayed(agent.displayTitle))
+
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            rule.onNodeWithContentDescription(resize).assert(SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.StateDescription, collapsedState))
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            awaitSavedAgent(otherAgent.sessionId)
+            awaitSavedColumns(agents = false)
+        }
+        shell(automation = false) {
+            awaitText("The packing list is ready.")
+            rule.onNodeWithContentDescription(resize).assert(SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.StateDescription, collapsedState))
+            assertFalse(isTextDisplayed(agent.displayTitle))
+
+            rule.onNodeWithContentDescription(resize).performClick()
+            awaitText(agent.displayTitle)
+            awaitSavedColumns(agents = true)
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideAgentsHidesBackBesideListAndHeaderButtonRestoresCollapsedList() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val resize = app.getString(persona.core.designsystem.R.string.designsystem_pane_resize)
+        val collapsedState = app.getString(persona.core.designsystem.R.string.designsystem_pane_collapsed)
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            clickText("Agents")
+            awaitText(otherAgent.displayTitle)
+            clickText(otherAgent.displayTitle)
+            awaitText("The packing list is ready.")
+            assertTrue(isTextDisplayed(agent.displayTitle))
+            // First page beside the Agents list: no Back button in the header.
+            assertFalse(hasDisplayedContentDescription("Back"))
+
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            rule.onNodeWithContentDescription(resize).assert(SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.StateDescription, collapsedState))
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            assertFalse(hasDisplayedContentDescription("Back"))
+            awaitSavedColumns(agents = false)
+
+            // With the list collapsed, the header's sidebar button brings it back and records the kept choice.
+            sidebar()
+            awaitText(agent.displayTitle)
+            assertFalse(hasDisplayedContentDescription("Back"))
+            awaitSavedColumns(agents = true)
+
+            // Collapse again before restart to verify the restored collapsed state exposes the header button too.
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            awaitSavedColumns(agents = false)
+        }
+        shell(automation = false) {
+            awaitText("The packing list is ready.")
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            assertFalse(hasDisplayedContentDescription("Back"))
+
+            sidebar()
+            awaitText(agent.displayTitle)
+            awaitSavedColumns(agents = true)
+        }
+    }
+
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
         withTodos: Boolean = false, groupByTodo: Boolean = false,
+        automation: Boolean = true,
         openNavigation: MutableState<((Router) -> ResolvedRoute?)?>? = null,
         content: (@Composable (ShellSession) -> Unit)? = null,
         check: (ActivityScenario<ComponentActivity>) -> Unit) {
@@ -408,7 +574,7 @@ class PersonaShellOverlayTest {
         if (groupByTodo) kotlinx.coroutines.runBlocking { preferences.grouping(persona.core.domain.sort.AgentGrouping.Todo) }
         val session = ShellSession(hubScope.path, connection, repositories, chat, interactions, sender, assistant, inbox, preferences, tasks = tasks)
         val host = object : ShellHost {
-            override val automation = true
+            override val automation = automation
             override val posture = mutableStateOf<String?>(null)
             override val feedback = object : AppFeedback {
                 override fun failure(error: Throwable, operation: Boolean) = false
@@ -464,6 +630,12 @@ class PersonaShellOverlayTest {
         buttons[visible].performClick()
         frames()
     }
+    private fun hideSidebar() {
+        val buttons = rule.onAllNodesWithContentDescription("Hide sidebar")
+        val visible = (0 until buttons.fetchSemanticsNodes().size).single { buttons[it].isDisplayed() }
+        buttons[visible].performClick()
+        frames()
+    }
     private fun clickText(text: String) {
         val nodes = rule.onAllNodesWithText(text)
         val visible = (0 until nodes.fetchSemanticsNodes().size).single { nodes[it].isDisplayed() }
@@ -479,6 +651,23 @@ class PersonaShellOverlayTest {
         val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
         val store = ShellPositionStore(app, HubScope("overlay-test", "fixture").path)
         rule.waitUntil(10_000) { store.load().tab == tab }
+    }
+    private fun awaitSavedColumns(sidebar: Boolean? = null, agents: Boolean? = null) {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val store = ShellPositionStore(app, HubScope("overlay-test", "fixture").path)
+        rule.waitUntil(10_000) {
+            val saved = store.load()
+            (sidebar == null || saved.sidebarColumnShown == sidebar) &&
+                (agents == null || saved.agentsListShown == agents)
+        }
+    }
+    private fun isTextDisplayed(text: String): Boolean {
+        val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true)
+        return (0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }
+    }
+    private fun hasDisplayedContentDescription(description: String): Boolean {
+        val nodes = rule.onAllNodesWithContentDescription(description, useUnmergedTree = true)
+        return (0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }
     }
     private fun back(scenario: ActivityScenario<ComponentActivity>) {
         scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
