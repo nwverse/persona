@@ -42,8 +42,9 @@ nonisolated enum CallSystemState: Equatable, Sendable {
 /// The system's side of the app's calls: one per app, made the first time a call needs it (never at launch, #9264).
 @MainActor protocol CallSystem: AnyObject {
     var handler: (any CallSystemHandler)? { get set }
-    /// Asks the system to start a call to Persona, the assistant called `name` (`CallHandle.name`): the handle's value.
-    func start(_ id: UUID, name: String) async throws
+    /// Asks the system to start a call to Persona with `handle` (`CallHandle.outgoing`: the assistant's name, or
+    /// Developing Persona's placeholder address).
+    func start(_ id: UUID, handle: CallHandle) async throws
     /// An incoming call (an urgent call's ring) from the assistant called `name` (the handle's value), with the call's
     /// own `title` as its display name only.
     func reportIncoming(_ id: UUID, name: String, title: String) async throws
@@ -55,18 +56,39 @@ nonisolated enum CallSystemState: Equatable, Sendable {
     func activateAudio() async -> Bool
 }
 
-/// The name the system shows and Recents keeps for a call: the assistant's own name (`Persona.name`, "Persona" for the
-/// built-in Mochi), as the handle's value, which the system's call UI, the Dynamic Island, the Lock Screen and Recents
-/// show (they ignore the display name, FB24933340) and a Recents redial gives back. Any value redials the current hub's
-/// main conversation, so a name changed since still calls Persona.
-nonisolated enum CallHandle {
+/// The handle a call to Persona carries to the system: what its call UI, the Dynamic Island, the Lock Screen and Recents
+/// show, and what a Recents redial gives back. Its value is the assistant's own name (`Persona.name`, "Persona" for the
+/// built-in Mochi): the system shows the value and ignores the display name (FB24933340). Any value redials the current
+/// hub's main conversation, so a name changed since still calls Persona. Developing Persona's Call handle (#9887, an
+/// on-device experiment for Phone › Recents) can make it an email handle with a fixed placeholder address instead.
+nonisolated struct CallHandle: Equatable, Sendable {
+    var kind: CallHandleKind
+    var value: String
+    var displayName: String
+
     /// The product's name, for an assistant with none.
     static let fallback = "Persona" // i18n-ignore: the product's name, shown as is everywhere
+    /// The email handle's address: fixed, on the reserved `.invalid` domain (RFC 2606), so it can never reach anyone.
+    static let placeholderAddress = "persona@persona.invalid" // i18n-ignore: a placeholder address, never shown as text
 
     /// The assistant's name as a call carries it: trimmed, or the product's name when it has none.
     static func name(_ assistant: String?) -> String {
         let trimmed = assistant?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    /// A call to Persona's handle: the assistant's name, as the value of a generic handle or as the display name of the
+    /// placeholder address.
+    static func outgoing(name: String, kind: CallHandleKind) -> CallHandle {
+        switch kind {
+        case .generic: CallHandle(kind: .generic, value: name, displayName: name)
+        case .email: CallHandle(kind: .email, value: placeholderAddress, displayName: name)
+        }
+    }
+
+    /// The value as the log may say it (public): the fixed ones as they are, an assistant's own name only by its length.
+    var logged: String {
+        [Self.fallback, Self.placeholderAddress].contains(value) ? value : "<the assistant's name, \(value.count) characters>"
     }
 }
 
@@ -124,15 +146,36 @@ nonisolated enum CallMain {
     private let delegate = PersonaCallsLCKDelegate()
 
     /// Two groups so an urgent call during a call to Persona offers Hold & Accept (with one the system offers only End &
-    /// Accept and Decline, and a Start at capacity fails); calls in Recents for the redial; one handle type, `.generic`.
-    /// The system call UI's icon is the assistant's mark as a template (`CallIcon`, Mochi's silhouette): its PNG drawn
-    /// and encoded off the main actor before the manager is made (`PersonaCalls.readySystem`), and only handed in here,
-    /// on the main actor; the configuration is fixed for the manager's life.
+    /// Accept and Decline, and a Start at capacity fails); calls in Recents for the redial; two handle types, `.generic`
+    /// (the assistant's name) and `.emailAddress` (Developing Persona's Call handle, #9887: the configuration is fixed for
+    /// the manager's life, so both are declared whichever the switch says). The system call UI's icon is the assistant's
+    /// mark as a template (`CallIcon`, Mochi's silhouette): its PNG drawn and encoded off the main actor before the
+    /// manager is made (`PersonaCalls.readySystem`), and only handed in here, on the main actor.
     static func configuration(icon: Data?) -> ConversationManager.Configuration {
         ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: icon,
                                           maximumConversationGroups: 2, maximumConversationsPerConversationGroup: 1,
-                                          includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
+                                          includesConversationInRecents: true, supportsVideo: false,
+                                          supportedHandleTypes: handleTypes)
     }
+
+    /// The handle types the manager is made with.
+    static let handleTypes: Set<Handle.Kind> = [.generic, .emailAddress]
+
+    /// The owner's own side of every conversation: the local member of an incoming call and of an outgoing one's members
+    /// update.
+    static let owner = Handle(type: .generic, value: "owner") // i18n-ignore: a handle's value the system never shows
+
+    /// `handle` as LiveCommunicationKit has it.
+    static func lck(_ handle: CallHandle) -> Handle {
+        let type: Handle.Kind = switch handle.kind {
+        case .generic: .generic
+        case .email: .emailAddress
+        }
+        return Handle(type: type, value: handle.value, displayName: handle.displayName)
+    }
+
+    /// Each outgoing call's handle, from its Start until it ends: the remote member of its members update.
+    private var outgoing: [UUID: Handle] = [:]
 
     init() {
         let icon = CallIcon.ready
@@ -142,16 +185,23 @@ nonisolated enum CallMain {
         delegate.system = self
     }
 
-    func start(_ id: UUID, name: String) async throws {
-        let assistant = Handle(type: .generic, value: name, displayName: name)
+    func start(_ id: UUID, handle: CallHandle) async throws {
+        let assistant = Self.lck(handle)
+        outgoing[id] = assistant
+        Self.log.notice("call \(id.uuidString, privacy: .public): Start requested, handle \(handle.kind.rawValue, privacy: .public) \(handle.logged, privacy: .public)")
         nonisolated(unsafe) let lck = manager
-        try await lck.perform([StartConversationAction(conversationUUID: id, handles: [assistant], isVideo: false)])
+        do {
+            try await lck.perform([StartConversationAction(conversationUUID: id, handles: [assistant], isVideo: false)])
+        } catch {
+            outgoing[id] = nil
+            throw error
+        }
     }
 
     func reportIncoming(_ id: UUID, name: String, title: String) async throws {
         // The call's id stays out of the handle: it showed as "call_…" and would land in Recents. The title goes only in
         // the display name, which the system may show one day and Recents never keeps.
-        let update = Conversation.Update(localMember: Handle(type: .generic, value: "owner"),
+        let update = Conversation.Update(localMember: Self.owner,
                                          members: [Handle(type: .generic, value: name, displayName: title)],
                                          capabilities: [.pausing])
         nonisolated(unsafe) let lck = manager
@@ -165,6 +215,7 @@ nonisolated enum CallMain {
         case .mute(let on): MuteConversationAction(conversationUUID: id, isMuted: on)
         case .pause(let on): PauseConversationAction(conversationUUID: id, isPaused: on)
         }
+        Self.log.notice("call \(id.uuidString, privacy: .public): asks the system for \(String(describing: request), privacy: .public)")
         nonisolated(unsafe) let lck = manager
         nonisolated(unsafe) let one = action
         try await lck.perform([one])
@@ -172,16 +223,33 @@ nonisolated enum CallMain {
 
     func report(_ report: CallReport, for id: UUID) {
         guard let conversation = manager.conversations.first(where: { $0.uuid == id }) else {
-            Self.log.notice("call \(id.uuidString, privacy: .public): the system no longer has the conversation, report dropped")
+            Self.log.notice("call \(id.uuidString, privacy: .public): report \(report.logName, privacy: .public) dropped: the system does not have the conversation")
+            if case .ended = report { outgoing[id] = nil }
             return
         }
-        let event: Conversation.Event = switch report {
-        case .startedConnecting(let at): .conversationStartedConnecting(at)
-        case .connected(let at): .conversationConnected(at)
-        case .pausable: .conversationUpdated(Conversation.Update(capabilities: [.pausing]))
-        case .ended(let at, let why): .conversationEnded(at, Self.reason(why))
+        let state = Self.state(conversation.state)
+        let event: Conversation.Event
+        switch report {
+        case .startedConnecting(let at):
+            event = .conversationStartedConnecting(at)
+        case .connected(let at):
+            event = .conversationConnected(at)
+        case .members:
+            // The outgoing call's members (#9887): with no remote member the system has nobody to write into Recents.
+            if let remote = outgoing[id] {
+                event = .conversationUpdated(Conversation.Update(localMember: Self.owner, members: [remote], activeRemoteMembers: [remote],
+                                                                 capabilities: [.pausing]))
+                Self.log.notice("recents: call \(id.uuidString, privacy: .public): members reported (remote \(String(describing: remote.type), privacy: .public) handle, local owner), the conversation \(String(describing: state), privacy: .public)")
+            } else {
+                event = .conversationUpdated(Conversation.Update(capabilities: [.pausing]))
+                Self.log.notice("recents: call \(id.uuidString, privacy: .public): no Start handle for the members update, only pausing reported")
+            }
+        case .ended(let at, let why):
+            event = .conversationEnded(at, Self.reason(why))
+            outgoing[id] = nil
         }
         manager.reportConversationEvent(event, for: conversation)
+        Self.log.notice("call \(id.uuidString, privacy: .public): report \(report.logName, privacy: .public) sent, the conversation \(String(describing: state), privacy: .public)")
     }
 
     func knows(_ id: UUID) -> Bool { manager.conversations.contains { $0.uuid == id } }
@@ -218,7 +286,12 @@ nonisolated enum CallMain {
         switch action {
         case let a as StartConversationAction:
             kind = .start
-            fulfil = { a.fulfill(dateStarted: .now) }
+            fulfil = { [weak self] in
+                a.fulfill(dateStarted: .now)
+                // LiveCommunicationKit lists an outgoing conversation only once its Start is fulfilled (#9887).
+                let known = self?.knows(id) == true
+                Self.log.notice("call \(id.uuidString, privacy: .public): Start fulfilled, the system \(known ? "has" : "does not have yet", privacy: .public) the conversation")
+            }
         case let a as JoinConversationAction:
             kind = .join
             fulfil = { a.fulfill(dateConnected: .now) }
@@ -235,13 +308,13 @@ nonisolated enum CallMain {
             kind = .other
             fulfil = { action.fulfill() }
         }
-        Self.log.notice("call \(id.uuidString, privacy: .public): the system asks \(String(describing: kind), privacy: .public)")
+        Self.log.notice("call \(id.uuidString, privacy: .public): the system asks \(String(describing: kind), privacy: .public)\(kind == .start ? " (Start received)" : "", privacy: .public)")
         guard let handler else { return action.fail() }
         handler.system(perform: kind, for: id, fulfil: fulfil, fail: { action.fail() })
     }
 
-    fileprivate func changed(_ id: UUID, _ lckState: Conversation.State) {
-        let state: CallSystemState = switch lckState {
+    private static func state(_ lckState: Conversation.State) -> CallSystemState {
+        switch lckState {
         case .idle: .idle
         case .joining: .joining
         case .joined: .joined
@@ -250,7 +323,17 @@ nonisolated enum CallMain {
         case .left: .left
         @unknown default: .idle
         }
-        Self.log.notice("call \(id.uuidString, privacy: .public): the system's conversation is \(String(describing: state), privacy: .public)")
+    }
+
+    fileprivate func changed(_ id: UUID, _ lckState: Conversation.State, localMember: Bool) {
+        let state = Self.state(lckState)
+        if state == .left {
+            // The conversation is over: what the system writes into Recents is decided now.
+            outgoing[id] = nil
+            Self.log.notice("recents: call \(id.uuidString, privacy: .public): the system's conversation is left (local member \(localMember ? "set" : "none", privacy: .public))")
+        } else {
+            Self.log.notice("call \(id.uuidString, privacy: .public): the system's conversation is \(String(describing: state), privacy: .public)")
+        }
         handler?.system(changed: id, state: state)
     }
 
@@ -293,8 +376,8 @@ nonisolated final class PersonaCallsLCKDelegate: ConversationManagerDelegate, @u
 
     nonisolated func conversationManager(_ manager: ConversationManager, conversationChanged conversation: Conversation) {
         // Only Sendable values cross to the main actor: the conversation object need not be Sendable in every SDK.
-        let id = conversation.uuid, lckState = conversation.state
-        CallMain.run { [weak self] in self?.system?.changed(id, lckState) }
+        let id = conversation.uuid, lckState = conversation.state, localMember = conversation.localMember != nil
+        CallMain.run { [weak self] in self?.system?.changed(id, lckState, localMember: localMember) }
     }
 
     nonisolated func conversationManagerDidBegin(_ manager: ConversationManager) {}
@@ -339,7 +422,7 @@ nonisolated final class PersonaCallsLCKDelegate: ConversationManagerDelegate, @u
     /// The call whose audio the session is: the one not paused.
     private var active: UUID?
 
-    func start(_ id: UUID, name: String) async throws {
+    func start(_ id: UUID, handle: CallHandle) async throws {
         known.insert(id)
         Self.log.notice("call \(id.uuidString, privacy: .public): the stand-in starts it")
         await Task.yield() // `perform` returns before the delegate hears the action, as on a device

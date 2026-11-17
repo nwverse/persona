@@ -93,7 +93,7 @@ extension PersonaCalls {
             if let note = admission() { return refuse(call, note: note) }
             call.assistant.retake(assistant())
             do {
-                try await system.start(call.id, name: call.name)
+                try await system.start(call.id, handle: .outgoing(name: call.name, kind: handleKind()))
                 // Hung up while the system took it: its call ends too.
                 if call.phase.isEnded { try? await system.perform(.end, for: call.id) }
                 return
@@ -146,8 +146,8 @@ extension PersonaCalls {
         activityTypes.contains(activity.activityType) || activity.interaction?.intent is INStartCallIntent
     }
 
-    /// The handle the redial names (the assistant's name when it was called, `CallHandle.name`, or whatever an older
-    /// entry had): any calls the current hub's main conversation.
+    /// The handle the redial names (the assistant's name when it was called, `CallHandle.name`, Developing Persona's
+    /// placeholder address, or whatever an older entry had): any calls the current hub's main conversation.
     nonisolated static func handle(_ activity: NSUserActivity) -> String? {
         (activity.interaction?.intent as? INStartCallIntent)?.contacts?.first?.personHandle?.value
     }
@@ -159,8 +159,10 @@ extension PersonaCalls {
         let now = clock.now
         if let last = lastRedial, now.timeIntervalSince(last) < 2 { return true }
         lastRedial = now
-        let named = Self.handle(activity) == CallHandle.name(assistant().name) ? "the assistant's" : "another"
-        Self.log.notice("call: a redial (\(activity.activityType, privacy: .public), \(named, privacy: .public) name)")
+        let handle = Self.handle(activity)
+        let named = handle == CallHandle.name(assistant().name) ? "the assistant's name"
+            : handle == CallHandle.placeholderAddress ? "the placeholder address" : "another value"
+        Self.log.notice("call: a redial (\(activity.activityType, privacy: .public), \(named, privacy: .public))")
         Task { await callPersona(origin: .recents) }
         return true
     }

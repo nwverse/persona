@@ -32034,6 +32034,29 @@
         }
       }
     },
+    "Call Handle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call Handle"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話の識別子"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话标识"
+          }
+        }
+      }
+    },
     "Call Hierarchy" : {
       "localizations" : {
         "en" : {
@@ -62927,6 +62950,29 @@
         }
       }
     },
+    "Email [Call handle]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮箱"
+          }
+        }
+      }
+    },
     "Email address" : {
       "localizations" : {
         "en" : {
@@ -71113,6 +71159,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "生成的文件，先收起了"
+          }
+        }
+      }
+    },
+    "Generic [Call handle]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generic"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "汎用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通用"
           }
         }
       }

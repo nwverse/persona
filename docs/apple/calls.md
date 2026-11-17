@@ -45,15 +45,16 @@ LiveCommunicationKit in the Simulator, to see and log what it does.
 - `maximumConversationGroups: 2`, one conversation per group: an urgent call during a call to Persona offers
   **Hold & Accept** (with one group the system offers only End & Accept and Decline, and a Start at capacity fails with
   `requesttransaction` code 7).
-- `includesConversationInRecents: true` (the redial), `supportsVideo: false`, `supportedHandleTypes: [.generic]`, no
-  ringtone. `iconTemplateImageData` is the assistant's mark as a template (`CallIcon`): an alpha silhouette of Mochi
+- `includesConversationInRecents: true` (the redial), `supportsVideo: false`,
+  `supportedHandleTypes: [.generic, .emailAddress]` (the email kind for Developing Persona's Call handle below: the
+  configuration is fixed for the manager's life, so both are declared whatever the switch says), no ringtone. `iconTemplateImageData` is the assistant's mark as a template (`CallIcon`): an alpha silhouette of Mochi
   (its body and outline, its eyes cut out), 40 pt at 3× as Apple's guidance for a call app's icon asks, drawn with plain
   Core Graphics and encoded once, on a background thread, before the manager is made (`CallIcon.prepare`, awaited by
   `PersonaCalls.readySystem` before the first Start or ring; the manager's configuration is fixed for its life and is
   made on the main actor from the finished data, `CallIcon.ready`). Mochi stands for every look:
   a package's or an uploaded picture has no outline of its own to cut.
-- Every conversation is pausable: `capabilities: [.pausing]` in the incoming report and in a `conversationUpdated`
-  report for outgoing calls.
+- Every conversation is pausable: `capabilities: [.pausing]` in the incoming report and in the outgoing call's members
+  update (below).
 
 The handle is the assistant's name: `Handle(type: .generic, value: <name>, displayName: <name>)`, where the name is
 `Persona.name` of the look on screen ("Persona" for the built-in Mochi, the package's name for another look), trimmed,
@@ -67,6 +68,12 @@ member is the same value with the call's name ("Urgent: <title>" when the Lock S
 display name: the call id no longer goes in the handle (it showed as "call_…"), and the title never reaches Recents.
 The opt-in SiriKit extension still names its one contact "Persona" (it cannot read the app's look; `docs/apple/siri.md`).
 
+Developing Persona's **Call Handle** (Settings › About, while the switch is on; `docs/operations/developing-persona.md`)
+is an on-device experiment for Recents, which only a device shows: **Generic** (the default, above) or **Email**, a
+handle of kind `.emailAddress` whose value is a fixed placeholder on the reserved `.invalid` domain
+(`CallHandle.placeholderAddress`), with the assistant's name as its display name. A redial with either calls the main
+conversation. Urgent calls keep the generic handle.
+
 LiveCommunicationKit reports errors in CallKit's domains (`com.apple.CallKit.error.requesttransaction`, sometimes under
 `NSUnderlyingErrorKey`). `CallSystemError` compares them as strings. The app never imports CallKit
 (`docs/operations/release.md`, "No CallKit").
@@ -79,10 +86,14 @@ the system paused it; `.interruption`: the audio session is not the call's outsi
 deactivated with no word of why, or not given back after the system resumed the call) and whether the system's audio is
 the call's (`audioActive`). `held` is "any hold reason".
 
-- **Start (outgoing).** `StartConversationAction` → fulfil, phase `connecting`, report `startedConnecting` and
-  `pausable`, begin the engine (the voice starts), start the activation watchdog. Reports wait until the system knows
-  the conversation (it is in `conversations`: checked right after the fulfil, else on the next `conversationChanged`):
-  the system drops reports made before. The system giving up on the Start ends the call as failed.
+- **Start (outgoing).** `StartConversationAction` → fulfil, phase `connecting`, report the call's members and then
+  `startedConnecting`, begin the engine (the voice starts), start the activation watchdog. The members update (#9887) is
+  `conversationUpdated(Update(localMember: owner, members: [the call's handle], activeRemoteMembers: [the call's handle],
+  capabilities: [.pausing]))`, the owner being the incoming calls' local member: without a remote member the system has
+  nobody to write into Recents (an incoming call names its member as it is reported). Reports wait until the system
+  knows the conversation (LiveCommunicationKit lists an outgoing conversation only once its Start is fulfilled: checked
+  right after the fulfil, else on the next `conversationChanged`), in the order they were made: the system drops
+  reports made before. The system giving up on the Start ends the call as failed.
 - **Connected.** A call to Persona connects on the voice's first `ready` (report `connected`); an urgent call on Join.
 - **Audio.** The engine's audio starts only on `didActivate`. `didDeactivate` stops it and never ends the call; outside
   a pause, with no interruption to say why, it holds the call (`.interruption`, either kind's engine holds) and the
@@ -248,11 +259,25 @@ fails on a new one until it is given one):
 
 ## Recents and intents
 
-The app declares `NSUserActivityTypes` `INStartCallIntent` and `INStartAudioCallIntent` (`apple/project.yml`): Recents
-may hand either. A redial reaches `PersonaCalls.continueActivity` from the scene's delegate (cold launch:
+The system writes a call into the Phone app's Recents when it ends, for its members: an outgoing call reports them once
+the system has its conversation (the members update above), and its end goes through `EndConversationAction` or a
+`conversationEnded` report. The app declares `NSUserActivityTypes` `INStartCallIntent` and `INStartAudioCallIntent`
+(`apple/project.yml`): Recents may hand either. A redial reaches `PersonaCalls.continueActivity` from the scene's delegate (cold launch:
 `connectionOptions.userActivities`; warm: `scene(_:continue:)`) or SwiftUI's `onContinueUserActivity`, whichever
 fires; the same tap within 2 s is taken once. Any handle calls the current hub's main conversation. Siri, Shortcuts,
 Spotlight and the opt-in SiriKit extension: `docs/apple/siri.md`, "Calling Persona".
+
+### The call log (#9887)
+
+Each step of a call is one line in the `persona` subsystem, category `call` (ids, kinds and states only; an assistant's
+own name only by its length): Start requested (the conversation id, the handle's kind and value), the system's Start
+received, Start fulfilled and whether the system had the conversation then, the system having it (right after the
+fulfil, on `conversationChanged`, as it rang), every report sent (with the conversation's state), queued until the
+system has the conversation, or dropped, connected (the voice's first ready), the end (by which event, and whether
+`conversationEnded` was reported) and the conversation's state on every `conversationChanged`. The members update and
+the final `left` start with `recents:`, so `log stream --predicate 'subsystem == "persona" AND category == "call"'` (or
+Console, or Developing Persona's Export Diagnostics, whose `log.txt` keeps this launch's lines) shows whether the system
+had the members and saw the conversation leave.
 
 ## CarPlay
 
@@ -294,7 +319,9 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
   second call, end paths, refusals before Start, tunnels, the urgent exclusion), `CallSourceTests` (one manager, no
   CallKit, the system's session left alone), `CallScreenTests` (the screen's states and layout), `CallPersonaIntentTests`,
   the `UrgentCall*Tests` suites, `VoiceCallsTests`, `VoiceConversationTests` (`.call`, hold frames, `surface`),
-  `LocalProxyRouteTests` and the CarPlay suites; `CallFollowUpTests` (the assistant's name on the system call and the
+  `LocalProxyRouteTests` and the CarPlay suites; `CallRecentsTests` (#9887: the outgoing call's members update before
+  `startedConnecting` once the system has the conversation, the incoming path unchanged, Developing Persona's Call
+  handle picking the kind, both kinds in the configuration, the log's steps); `CallFollowUpTests` (the assistant's name on the system call and the
   ring, the guards following the live call, voice chat refused or asked, dictation and recordings refused, web media
   suspended, the call keeping its microphone, the assistant's look per state, the call's window, the bar's room, the
   template icon; and from the second review: a disconnect refused while the call talks through the hub, the call
@@ -322,7 +349,9 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
 ## Only a device shows
 
 - The system's call UI, the Lock Screen and Dynamic Island call, the Recents row and which activity type a redial
-  delivers.
+  delivers. After hanging up an outgoing call, Recents shows a row with the assistant's name (or the conversation's) and
+  the app's icon, and tapping it calls the main conversation; the `recents:` lines say the members were reported and the
+  conversation left. With no row, Developing Persona's Call Handle set to Email and a new call is the next check.
 - When `didActivate` arrives for an outgoing call, and whether the 5 s watchdog ever fires.
 - The engine-start system mute and its 0.5 s window; Mute and hang-up from AirPods and from the system's call UI.
 - Hold & Accept with an urgent call; whether a cellular call arrives as a pause or as an interruption, and the resume.

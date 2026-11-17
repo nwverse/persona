@@ -8,7 +8,9 @@ import Testing
     weak var handler: (any CallSystemHandler)?
     private(set) var starts: [UUID] = []
     /// The handle's value of each Start (the assistant's name).
-    private(set) var startNames: [String] = []
+    var startNames: [String] { startHandles.map(\.value) }
+    /// The handle of each Start.
+    private(set) var startHandles: [CallHandle] = []
     /// Each ring: the handle's value (the assistant's name) and the call's own name (the display name only).
     private(set) var rings: [(id: UUID, name: String, title: String)] = []
     private(set) var requests: [CallRequest] = []
@@ -28,9 +30,9 @@ import Testing
     var ringError: (any Error)?
     var activates = true
 
-    func start(_ id: UUID, name: String) async throws {
+    func start(_ id: UUID, handle: CallHandle) async throws {
         starts.append(id)
-        startNames.append(name)
+        startHandles.append(handle)
         if !startErrors.isEmpty { throw startErrors.removeFirst() }
         if knowsAtOnce { known.insert(id) }
     }
@@ -80,6 +82,8 @@ import Testing
     var assistant = "Persona"
     /// The persona on screen, when a test gives a whole one (its look and name): else the built-in named `assistant`.
     var persona: Persona?
+    /// Developing Persona's Call handle (#9887).
+    var handleKind: CallHandleKind = .generic
     /// What happened before the system's side was made, in order: "prepared" (`PersonaCalls.readySystem`), "made".
     private(set) var systemSteps: [String] = []
     private(set) lazy var calls: PersonaCalls = {
@@ -94,7 +98,7 @@ import Testing
             return deps
         }, callCategory: { [weak self] in self?.categories += 1 }, assistant: { [weak self] in
             self?.persona ?? CallRig.persona(named: self?.assistant ?? "")
-        }, prepareSystem: { [weak self] in self?.systemSteps.append("prepared") })
+        }, prepareSystem: { [weak self] in self?.systemSteps.append("prepared") }, handleKind: { [weak self] in self?.handleKind ?? .generic })
         calls.callLeft = { [weak self] in self?.left.append($0) }
         return calls
     }()
@@ -150,7 +154,7 @@ struct PersonaCallsTests {
         rig.system.act(.start, call.id)
         #expect(rig.system.fulfilled == [.start])
         #expect(call.phase == .connecting)
-        #expect(rig.system.reports.prefix(2).map { if case .startedConnecting = $0 { "connecting" } else { "\($0)" } } == ["connecting", "pausable"])
+        #expect(rig.system.reports.prefix(2).map { if case .startedConnecting = $0 { "connecting" } else { "\($0)" } } == ["members", "connecting"])
         await rig.voice.waitUntil { rig.voice.socket != nil }
         let socket = try #require(rig.voice.socket)
         #expect(socket.start?["surface"] as? String == "call")
@@ -171,7 +175,7 @@ struct PersonaCallsTests {
         rig.system.act(.start, call.id)
         #expect(rig.system.reports.isEmpty, "dropped by a system that does not have it yet")
         rig.calls.system(changed: call.id, state: .idle)
-        #expect(rig.system.reports == [.startedConnecting(rig.voice.clock.now), .pausable])
+        #expect(rig.system.reports == [.members, .startedConnecting(rig.voice.clock.now)])
     }
 
     @Test func theBackgroundAnotherPageOrTheLockNeverEndTheCall() async {

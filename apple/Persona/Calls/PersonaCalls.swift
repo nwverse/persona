@@ -136,6 +136,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     @ObservationIgnored let assistant: @MainActor () -> Persona
     /// What the system's side needs before it is made, off the main actor: its call UI's icon (`CallIcon.prepare`).
     @ObservationIgnored let prepareSystem: @MainActor () async -> Void
+    /// The kind of handle a new call to Persona carries (Developing Persona's Call handle, #9887).
+    @ObservationIgnored let handleKind: @MainActor () -> CallHandleKind
     /// A system call became live, or the last one ended (`guardsLive`): the app's media guard follows (`guardTheApp`).
     @ObservationIgnored var onLiveChange: (@MainActor (Bool) -> Void)?
     @ObservationIgnored private var wasLive = false
@@ -147,8 +149,10 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
              = { VoiceDeps.systemCall(group: $0, audio: $1, events: $2) },
          callCategory: @escaping @MainActor () async -> Void = { await PersonaCalls.setCallCategory() },
          assistant: @escaping @MainActor () -> Persona = { AppModel.shared.persona },
-         prepareSystem: @escaping @MainActor () async -> Void = { await CallIcon.prepare() }) {
+         prepareSystem: @escaping @MainActor () async -> Void = { await CallIcon.prepare() },
+         handleKind: @escaping @MainActor () -> CallHandleKind = { DevMode.shared.callHandleInUse }) {
         makeSystem = system
+        self.handleKind = handleKind
         self.assistant = assistant
         self.prepareSystem = prepareSystem
         self.clock = clock
@@ -348,10 +352,19 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// Feeds `event` to the call's machine and does what it says. `fulfil` / `fail`: the system's action being handled.
     func dispatch(_ call: PersonaCall, _ event: CallEvent, fulfil: (@MainActor () -> Void)? = nil,
                   fail: (@MainActor () -> Void)? = nil) {
+        let wasLive = call.phase.isLive, waiting = call.machine.pending.count
         let effects = call.machine.handle(event, at: clock.now)
         call.sync()
         if call.sample { return }
+        // Reports the system would drop now wait for it to have the conversation (`CallEvent.known`).
+        for queued in call.machine.pending.dropFirst(waiting) {
+            Self.log.notice("call \(call.id.uuidString, privacy: .public): report \(queued.logName, privacy: .public) queued until the system has the conversation")
+        }
         for effect in effects { run(effect, for: call, fulfil: fulfil, fail: fail) }
+        if wasLive, call.phase.isEnded {
+            let reported = effects.contains { if case .report(.ended) = $0 { true } else { false } }
+            Self.log.notice("call \(call.id.uuidString, privacy: .public): the end, by \(String(describing: event), privacy: .public) (\(reported ? "conversationEnded reported" : "the system's own end, nothing reported", privacy: .public))")
+        }
         if call.phase.isEnded { finish(call) }
         noteLive()
     }
@@ -364,7 +377,6 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         case .fail:
             fail?()
         case .report(let report):
-            Self.log.notice("call \(id.uuidString, privacy: .public): reports \(String(describing: report), privacy: .public)")
             system.report(report, for: id)
         case .begin:
             if call.kind.isUrgent { endVoiceChat(for: .urgentCall) }
@@ -440,7 +452,9 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
 
     private func heard(_ event: CallEngineEvent, from call: PersonaCall) {
         switch event {
-        case .ready: dispatch(call, .voiceReady)
+        case .ready:
+            if call.phase == .connecting { Self.log.notice("call \(call.id.uuidString, privacy: .public): connected (the voice's first ready)") }
+            dispatch(call, .voiceReady)
         case .running: dispatch(call, .engineRunning)
         case .starting: dispatch(call, .engineStarting)
         case .ended(let failed, let note):
@@ -498,7 +512,15 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
             noteLive()
             throw error
         }
-        if system.knows(id) { dispatch(call, .known) }
+        if system.knows(id) { known(call, by: "as it rang") }
+    }
+
+    /// The system has the call's conversation: the reports that waited for it go now. `path` says how it was found out
+    /// (right after Start's fulfil, a `conversationChanged`, the ring's report), for the log.
+    func known(_ call: PersonaCall, by path: String) {
+        guard !call.machine.known else { return }
+        Self.log.notice("call \(call.id.uuidString, privacy: .public): the system has the conversation (\(path, privacy: .public))")
+        dispatch(call, .known)
     }
 
     /// The urgent call's notification was tapped while it rang: answered through the system; false when it refused (the
@@ -725,7 +747,7 @@ extension PersonaCalls: CallSystemHandler {
         }
         dispatch(call, event, fulfil: fulfil, fail: fail)
         // The conversation can be in the system's list only once Start is fulfilled: what waited for it goes now.
-        if action == .start, !call.machine.known, system.knows(id) { dispatch(call, .known) }
+        if action == .start, !call.machine.known, system.knows(id) { known(call, by: "right after the Start's fulfil") }
     }
 
     func system(changed id: UUID, state: CallSystemState) {
@@ -733,7 +755,7 @@ extension PersonaCalls: CallSystemHandler {
         if state == .left {
             dispatch(call, .systemEnded)
         } else if !call.machine.known {
-            dispatch(call, .known)
+            known(call, by: "conversationChanged, \(state)")
         }
     }
 

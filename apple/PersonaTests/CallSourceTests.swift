@@ -193,7 +193,7 @@ struct CallSourceTests {
     /// The system call carries the assistant's name (#9290 follow-up): no literal handle left on the call's path.
     @Test func theSystemCallCarriesTheAssistantsName() throws {
         let system = try Self.lines("Persona/Calls/CallSystem.swift").joined(separator: "\n")
-        #expect(system.contains("Handle(type: .generic, value: name, displayName: name)"))
+        #expect(system.contains("case .generic: CallHandle(kind: .generic, value: name, displayName: name)"))
         #expect(system.contains("members: [Handle(type: .generic, value: name, displayName: title)]"))
         #expect(system.contains("iconTemplateImageData: icon") && system.contains("let icon = CallIcon.ready"))
         for path in ["Persona/Calls/CallSystem.swift", "Persona/Calls/CallScreen.swift", "Persona/Calls/OwnerCall.swift", "Persona/Calls/PersonaCalls.swift"] {
