@@ -372,9 +372,7 @@ struct HubNoticeRow: View {
     }
 
     private var closeButton: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) {
-            Button { page = false } label: { ThemedIcon(Theme.Icon.close) }.accessibilityLabel("Close")
-        }
+        SheetClose { page = false }
     }
 
     private func text(_ n: HubNotice) -> String {
