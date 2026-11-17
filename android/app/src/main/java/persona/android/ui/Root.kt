@@ -73,6 +73,8 @@ import persona.feature.inbox.InboxItemExtensionScreen
 import persona.feature.inbox.InboxItemKey
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
+import persona.feature.inbox.InboxLanding
+import persona.feature.inbox.LocalInboxLanding
 import persona.feature.inbox.ManagerLinks
 import persona.feature.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
@@ -273,12 +275,17 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         sidebarOverlayShown.value = false
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    // Where each stack's Inbox list goes when an item is opened from outside it (#9053): one per stack, so a list kept
+    // composed in a hidden tab never takes another stack's landing.
+    val inboxLandings = remember(session.identity) { AppTab.entries.associateWith { InboxLanding() } }
     fun showAssistantHome() {
         window.clearPending()
         hosts.showConversation()
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
         stacks[AppTab.Persona] = assistantStack
         pageRoots.adoptVisible(AssistantRoute)
+        // The Inbox list this closed, if any, never takes its landing; the next entry opens on Needs you.
+        inboxLandings.getValue(AppTab.Persona).clear()
         selected = AppTab.Persona
     }
     /** Point Persona's navigator at the host now in front. */
@@ -383,15 +390,23 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns,
-        openPlace = { openPlace(it) }, leavePlaceRoot = { leavePlaceRoot() }) }
+        openPlace = { openPlace(it) }, leavePlaceRoot = { leavePlaceRoot() },
+        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() }) }
     fun openResolved(route: ResolvedRoute): AppTab {
         // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
         // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
         val hadInboxOrigin = navigator.hasInboxOrigin(route.key)
         navigator.noteDirectOpen(route.key)
         if (!hadInboxOrigin && openAssistant(route.key, true)) return AppTab.Persona
-        if (openPlace(route.key)) return AppTab.Persona
-        return route.open(stacks)
+        if (openPlace(route.key)) {
+            // A widget, a quick action or a link to the Inbox enters it: on Needs you, also when a list of it sat under
+            // other pages with another choice (#9053).
+            if (route.key == InboxRoute) inboxLandings.getValue(AppTab.Persona).enter()
+            return AppTab.Persona
+        }
+        val tab = route.open(stacks)
+        if (route.key == InboxRoute) inboxLandings.getValue(tab).enter()
+        return tab
     }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
     fun openWithCard(route: ResolvedRoute) {
@@ -512,6 +527,11 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val provisionalPages = remember(session.identity) { mutableSetOf<NavKey>() }
     val notePage = remember(provisionalPages) { { page: NavKey -> provisionalPages += page; Unit } }
     val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage, nativeChats = nativeInboxChats)
+    // A landing is for the Inbox list under the item that set it: once its stack holds no Inbox list, nothing will take
+    // it, and it must not move a list entered later; a page that moved the list beside it closing puts its choice back (#9053).
+    LaunchedEffect(inboxLandings) {
+        snapshotFlow { stacks.mapValues { (_, stack) -> stack.toList() } }.collect { held -> settleLandings(held, inboxLandings) }
+    }
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect
         val pages = InboxItemPages(currentItemPlaces, nativeChats = currentNativeInboxChats)
@@ -1047,7 +1067,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
                                 LocalAgentsTabSplit provides agentsTabSplit,
-                                persona.feature.settings.LocalExtensionPageVisible provides shown) {
+                                persona.feature.settings.LocalExtensionPageVisible provides shown, LocalInboxLanding provides inboxLandings.getValue(tab)) {
                                 val pageTransitions = rememberPageTransitions()
                                 val display: @Composable () -> Unit = {
                                     NavDisplay(backStack = stacks.getValue(tab),
@@ -1285,12 +1305,14 @@ private fun InboxLink(route: NavKey, inbox: InboxRepository, navigator: Navigato
     var attempt by remember(route) { mutableIntStateOf(0) }
     var destination by remember(route) { mutableStateOf<InboxDestination?>(null) }
     val pages = LocalInboxItemPages.current
+    val landing = LocalInboxLanding.current
     LaunchedEffect(route, inbox, attempt) {
         destination = null
         try { inbox.refresh() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Cached records and the single-item lookup still resolve what they can. */ }
-        destination = inboxDestinationWithLookup(route, snapshot.records, true, pages, inbox)
+        // Opened from outside the list: the list under it moves to where the item is (#9053).
+        destination = inboxDestinationWithLookup(route, snapshot.records, true, pages, inbox, found = { landing?.land(it) })
     }
     LaunchedEffect(destination) {
         (destination as? InboxDestination.Open)?.let {

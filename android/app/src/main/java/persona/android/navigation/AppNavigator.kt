@@ -33,6 +33,8 @@ internal class AppNavigator(
      * `assistantReveal` (`AppModel.swift:1381`, `:1393`). Returns true when it switched.
      */
     private val leavePlaceRoot: () -> Boolean = { false },
+    /** The Inbox was navigated to (a link to it in a chat or from the hub) on this tab: its list opens as on entry (#9053). */
+    private val onInboxEntered: (AppTab) -> Unit = {},
 ) : Navigator {
     /**
      * Pages [navigate] pushed onto another tab's stack, and the tab each was opened from: back from such a page returns
@@ -96,6 +98,7 @@ internal class AppNavigator(
         val visibleOrigin = shown[from]?.takeIf { it == key }?.let(openedFrom::get)
         val opened = open(key, replacingDetailIn)
         val to = selectedTab()
+        if (key == InboxRoute) onInboxEntered(to)
         val page = stacks.getValue(to).lastOrNull() ?: return
         if (to == from && page == key && visibleOrigin != null) openedFrom[page] = visibleOrigin
         // Not recorded: the tab's root, and a page that already topped the target tab's stack but is not the one asked
