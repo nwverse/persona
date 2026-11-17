@@ -422,6 +422,11 @@ struct ChatView: View {
             if style == .dev { if sideBars { sideHeader } else { devChrome } }
             #endif
         }
+        #if os(iOS)
+        // The page's top under side bars in a split is the chat's own, not its navigation bar's (`pinsSideTop`).
+        .safeAreaPadding(.top, pinsSideTop ? Theme.Space.xl : 0)
+        .ignoresSafeArea(.container, edges: pinsSideTop ? .top : [])
+        #endif
     }
 
     /// The closeout the header's card shows (#3612, `CloseoutCard`): a stopped agent's own account of its work, on its
@@ -4099,11 +4104,29 @@ struct ChatView: View {
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
 
+    /// Under side bars in a split (the open Duo on its side) the page starts `Theme.Space.xl` from the top whatever its
+    /// navigation bar holds. The bar holds nothing across the top (its actions are in the side column, its title is
+    /// removed) but, with the column folded, the system's Show Sidebar, and that row pushed the header and the chat 58 pt
+    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the system's
+    /// button lies on the title's line at the top left, as on a place. Not while typing: the bar then shows the system's
+    /// title over the content, and the header is only fog. Not in a hosting sheet, which has a bar of its own.
+    private var pinsSideTop: Bool {
+        #if os(iOS)
+        sideBars && split?.sideBars == true && host == nil && !composerTyping
+        #else
+        false
+        #endif
+    }
+
+    /// The list folded under side bars: the system's Show Sidebar at the top left brings it back (#3680), so the side
+    /// column has no second one.
+    private var systemShowsList: Bool { backShowsList && split?.sideBars == true }
+
     /// The header's actions as system toolbar items, for the side column: back on top (a custom one, so it leaves files /
     /// Git for the chat first), then the panes, the terminal and ⋯. Each has a title as well as a symbol: the column
     /// shows the symbol, the overflow menu both.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
-        if !hidesBack {
+        if !hidesBack && !systemShowsList {
             ToolbarItem(placement: .cancellationAction) {
                 // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
