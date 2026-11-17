@@ -285,6 +285,8 @@ The composer and attach panel own about 20 more one-off tokens (Telegram-derived
 
 Reduce Motion:
 
+- Android page stacks share `rememberPageTransitions()` (`PageTransitions.kt`): existing opaque trailing-edge push/pop (300/260 ms, quarter-width parallax, RTL mirrored), predictive pop with the same easing, all instant with system animations off; an upright overlaid Agents list replaces its detail instantly and only the list slides away with Glass's `layout` spring (Brief/Board keep their tweens), copying `SplitNavigation.swift:125-208`; exact UIKit navigation timing, parallax and dimming await measurement.
+
 - In a view: `accessibilityReduceMotion`. Outside a view: `Theme.Motion.reduced` (`apple/Shared/Design/Theme.swift:639`).
 - Tokens do not gate themselves. Each caller must. Loops are covered by `ContinuousMotionTests`. Page transitions, the toast and press scales are not (see the audit).
 - Web strips all durations to 1 ms but keeps busy spinners turning (`web/src/styles.css:296-306`). Apple stops loops.
