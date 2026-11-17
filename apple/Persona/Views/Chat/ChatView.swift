@@ -857,7 +857,10 @@ struct ChatView: View {
                 })
         }
         .stackSegment()
-        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
+        // Presented here, pushed in Knowledge: the ✕ belongs to the sheet (#9653).
+        .sheet(item: $openedKnowledge) { entry in
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
+        }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
         #if DEBUG
@@ -884,7 +887,7 @@ struct ChatView: View {
         .stackSegment()
         .detailPresentation(item: $linkedTodo) { r in
             DetailStack {
-                TodoDetailView(todoID: r.id).macSheetDone { linkedTodo = nil }
+                TodoDetailView(todoID: r.id).sheetDone { linkedTodo = nil }
             }
             #if os(macOS)
             .macSheet()
@@ -894,7 +897,7 @@ struct ChatView: View {
             if let s = session, let todoID = s.todo?.id,
                 TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
                 DetailStack {
-                    TodoDetailView(todoID: todoID).macSheetDone { showTodoDetail = false }
+                    TodoDetailView(todoID: todoID).sheetDone { showTodoDetail = false }
                 }
                 #if os(macOS)
                 .macSheet()
@@ -5585,6 +5588,21 @@ struct Composer: View, Equatable {
         voiceNote = VoiceEntry.start(key, model: model)
     }
 
+    /// Call Persona in the 「+」 panel (#9290): Persona's main conversation only, on the iPhone and iPad (the system's calls);
+    /// Voice Chat beside it stays the chat's own voice. Why a call could not be placed shows over the app
+    /// (`PersonaCalls.refusal`, `personaCallCover`).
+    private var callPersonaEntry: (() -> Void)? {
+        #if os(iOS)
+        guard isMainAssistantChat, VoicePlatform.current == .phone else { return nil }
+        return {
+            focused = false
+            Task { [group = key.group] in await PersonaCalls.shared.callPersona(group: group, origin: .app) }
+        }
+        #else
+        return nil
+        #endif
+    }
+
     /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
@@ -6316,6 +6334,7 @@ struct Composer: View, Equatable {
     /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
+                                                call: callPersonaEntry,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
@@ -7278,7 +7297,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
+                                NavigationStack { TodoDetailView(todoID: todo.id).sheetDone { showTodo = false } }
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)

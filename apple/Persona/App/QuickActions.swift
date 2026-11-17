@@ -89,11 +89,21 @@ enum QuickAction: String, CaseIterable {
     }
 }
 
-/// The scene's delegate only for the menu: a tap while the app runs or is in the background comes here; one that
-/// launched it comes with the scene's connection options. SwiftUI still owns the window.
+/// The scene's delegate for the menu and for a redial from the Phone app's Recents (#9290): a tap while the app runs or
+/// is in the background comes here; one that launched it comes with the scene's connection options. SwiftUI still owns
+/// the window.
 final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         if let item = connectionOptions.shortcutItem { Task { @MainActor in QuickAction.perform(item) } }
+        // Recents launched the app to call back: the call waits for the hubs (`PersonaCalls.callPersona`).
+        for activity in connectionOptions.userActivities where PersonaCalls.isCall(activity) {
+            Task { @MainActor in PersonaCalls.shared.continueActivity(activity) }
+        }
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        guard PersonaCalls.isCall(userActivity) else { return }
+        Task { @MainActor in PersonaCalls.shared.continueActivity(userActivity) }
     }
 
     func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem,

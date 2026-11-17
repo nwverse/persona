@@ -2880,6 +2880,19 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
 
+## One `import CallKit` gets the build rejected for China (2026-11-16, #9290)
+
+- App Review rejects a build offered in China when any binary in it links `CallKit.framework`. That includes a weak
+  link and an SDK whose only CallKit use is `CXCallObserver`. The app uses LiveCommunicationKit, whose system binary
+  links CallKit itself; that does not count.
+- Checked with Xcode 27.1: a bare `import CallKit`, with nothing from it used, already adds `libswiftCallKit.dylib
+  (weak)` to the binary; using `CXCallObserver` adds `CallKit.framework` as well. `import LiveCommunicationKit` and
+  `import PushKit` add neither. The likely slip is an import for one constant (`CXErrorDomainRequestTransaction`).
+  LiveCommunicationKit's errors carry CallKit's domain strings (`com.apple.CallKit.error.requesttransaction`): compare
+  them as strings.
+- A remote package or a prebuilt framework can link CallKit with no import in our code, and only the built binaries
+  show it. The source and binary guards are in `docs/operations/release.md` ("No CallKit").
+
 ## A page put back beneath a kept item learns of the item from the item's own appearance (2026-11-16, #9053)
 
 A place's kept stack (`ShellPlaces`) comes back as a `NavigationPath`, which can't be read element by element, so the
