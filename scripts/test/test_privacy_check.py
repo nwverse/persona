@@ -456,6 +456,8 @@ class OrdinaryWordTests(unittest.TestCase):
         labels = pc.profile_labels((root / "scripts/persona_config.py").read_text(), "provisioning_profiles")
         labels |= pc.profile_labels((root / "scripts/test/fixtures/deployment/persona_config.py.fixture").read_text(), "export_options")
         self.assertIn("Persona Share App Store", labels)
+        # The SiriKit extension's default, set only with app.siri_calls on (#9290): pinning it is as generic as the rest.
+        self.assertIn("Persona Call Intents App Store", labels)
         self.assertGreater(len(labels), 5)  # The public historical fixture contributes its literal labels too.
         with patch.object(pc, "public_profile_labels", return_value=frozenset(labels)):
             for label in labels:

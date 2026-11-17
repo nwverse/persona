@@ -718,7 +718,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Model                   string        `json:"model"`
 		ModelFingerprint        string        `json:"model_fingerprint"`
 		SupervisionInstructions *string       `json:"supervision_instructions"`
-		Runtime                 string        `json:"runtime"`
 		ConfigDir               string        `json:"config_dir"`
 		Prompt                  string        `json:"prompt"`
 		ResumeSessionID         string        `json:"resume_session_id"`
@@ -785,6 +784,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
 
 	}
+	// The "runtime" an older hub sends with assistant.send, assistant.warm and session.send is not read: every assistant
+	// conversation runs on Claude Code's CLI.
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
@@ -1406,7 +1407,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1466,7 +1467,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.handoff": // what a new main conversation is told about the old one
 		return n.assistantHandoff(p.SessionID)
 	case "assistant.warm":
-		return ok(n.assistantWarm(p.Cwd, p.Launcher, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), ConfigDir: p.ConfigDir, IsMain: p.IsMain, MainCompactWindow: p.MainCompact}).withSupervision(p.SupervisionInstructions)))
+		return ok(n.assistantWarm(p.Cwd, p.Launcher, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, ConfigDir: p.ConfigDir, IsMain: p.IsMain, MainCompactWindow: p.MainCompact}).withSupervision(p.SupervisionInstructions)))
 	case "assistant.memory":
 		var a memoryOp
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -1496,7 +1497,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
+					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
 					return err
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)

@@ -453,11 +453,6 @@ type Session struct {
 	FailureReason string `json:"failure_reason,omitempty"`
 	// ExternalURL opens the session where it lives outside Persona (a botmux session's Feishu topic).
 	ExternalURL string `json:"external_url,omitempty"`
-	// Runtime: an assistant conversation's runtime as it actually runs ("agentsdk"; "" is the CLI, #2455).
-	Runtime string `json:"runtime,omitempty"`
-	// RuntimeFallback: why an assistant conversation asked to run on the Agent SDK runs on the CLI instead (no
-	// Node.js 22+, no bridge package, no claude); "" when it runs as asked.
-	RuntimeFallback string `json:"runtime_fallback,omitempty"`
 	// Chat, Topic, Dispatched: a botmux session's Feishu chat, its topic's root message and the topics it dispatched
 	// (`botmux dispatch`), for the todos to follow (docs/assistant/todos.md "botmux following"); stripped by hub like SpawnFrom.
 	Chat       string   `json:"chat,omitempty"`

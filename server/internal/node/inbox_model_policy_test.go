@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,13 +50,13 @@ func TestInboxCodexStartupKeyKeepsOrigin(t *testing.T) {
 	}
 }
 
-// The built-in Claude launcher really receives Plan mode through its permission-mode control, even when its start
-// asks for bypass. Origin is persisted before later turns so a resume cannot silently return to bypass or lose the
-// manager's policy identity. (Only bypass is a startup flag; other modes use the control request.)
+// The built-in Claude CLI really receives Plan mode through its permission-mode control, even when its start asks for
+// bypass. Origin is persisted before later turns so a resume cannot silently return to bypass or lose the manager's
+// policy identity. (Only bypass is a startup flag; other modes use the control request.)
 func TestInboxClaudeStartsInPlanAndPersistsOrigin(t *testing.T) {
-	f := sdkTest(t)
-	execution := sdkExec(proto.AssistantRuntimeAgentSDK)
-	execution.Origin = originInbox
+	f := cliTest(t)
+	// No model fingerprint: filling the launcher's default execution must not discard the start's attested origin.
+	execution := modelExecution{Origin: originInbox}
 	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "Investigate", nil, proto.ModeBypass, "", execution)
 	if err != nil {
 		t.Fatal(err)
@@ -67,20 +66,23 @@ func TestInboxClaudeStartsInPlanAndPersistsOrigin(t *testing.T) {
 	if !strings.Contains(in, `"subtype":"set_permission_mode"`) || !strings.Contains(in, `"mode":"plan"`) {
 		t.Fatalf("Claude control requests did not select Plan: %s", in)
 	}
-	opts := f.start(t)
-	tools, _ := opts["tools"].([]any)
-	for _, name := range []string{"Read", "Bash", "WebSearch", "ToolSearch"} {
-		if !slices.Contains(tools, any(name)) {
-			t.Errorf("Inbox investigation lost built-in %s: %v", name, tools)
-		}
+	argv := f.file("cli-argv")
+	if !strings.Contains(argv, "--tools "+assistantBuiltinTools) {
+		t.Fatalf("Inbox investigation lost built-in file, shell, web or tool-search capabilities: %s", argv)
 	}
-	allowed, _ := opts["allowedTools"].([]any)
-	if !slices.Contains(allowed, any(assistantAllowedTools)) {
-		t.Fatalf("Plan mode would ask before inbox_suggest instead of allowing Persona's own tools: %v", allowed)
+	if !strings.Contains(argv, assistantAllowedTools) {
+		t.Fatalf("Plan mode would ask before inbox_suggest instead of allowing Persona's own tools: %s", argv)
 	}
 	st, ok := f.n.state.get(id)
 	if !ok || st.Origin != originInbox || st.AppMode != proto.ModePlan {
 		t.Fatalf("persisted session state=%+v present=%v", st, ok)
+	}
+	p := f.proc(id)
+	p.mu.Lock()
+	processOrigin, executionOrigin := p.origin, p.model.Origin
+	p.mu.Unlock()
+	if processOrigin != originInbox || executionOrigin != originInbox {
+		t.Fatalf("spawned process origin=%q execution origin=%q, want inbox", processOrigin, executionOrigin)
 	}
 	if got := f.n.assistantOrigin(id); got != originInbox {
 		t.Fatalf("live process origin=%q, want inbox", got)
