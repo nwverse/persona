@@ -190,7 +190,7 @@ private struct LarkConversationsPage: View {
             .navigationTitle("Messages [Quote Views 4da199]")
             .navigationBarTitleDisplayMode(.inline)
             // Under the Duo's side bars Lark Settings stands with the system's items at the column's top, as on the open
-            // Duo's tab, and the rail keeps the foot for the face and the system's search (#NNNN); no title there.
+            // Duo's tab, and the rail keeps the foot for the face and the system's search (#9837); no title there.
             .toolbar(shell == nil || railEdge != nil ? .visible : .hidden, for: .navigationBar)
             .toolbar(removing: shell != nil && railEdge != nil ? .title : nil)
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -391,7 +391,7 @@ private struct LarkConversationsPage: View {
         .shellTopBarScaled().modifier(ShellBarAtRest(page: 2))
     }
 
-    /// The bar as the side rail (iPhone Duo): the tab bar, the face, and under it the system's search (#NNNN: it lay over
+    /// The bar as the side rail (iPhone Duo): the tab bar, the face, and under it the system's search (#9837: it lay over
     /// Lark Settings there, which is with the page's buttons at the column's top now).
     private func sideRail(_ shell: ShellState, edge: HorizontalEdge) -> some View {
         @Bindable var model = model

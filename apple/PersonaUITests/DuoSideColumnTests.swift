@@ -1,6 +1,6 @@
 import XCTest
 
-/// iPhone Duo with the system's bars down the side (#NNNN): everything in the side column stands apart. The tab bar, the
+/// iPhone Duo with the system's bars down the side (#9837): everything in the side column stands apart. The tab bar, the
 /// page's own buttons the system puts there (Back, an Agent chat's terminal / Git / Files / ⋯, Lark Settings, a search at
 /// the foot) and the rail's face and action never lie over one another; where a page's buttons would reach the tab bar,
 /// the trailing ones are only in ⋯, which stays. Checked on an Agent's chat, Messages, a to-do and the main chat, also at

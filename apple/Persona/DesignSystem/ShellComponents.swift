@@ -123,7 +123,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         .background(alignment: .leading) {
             // The tab bar marks its chosen item itself (`tabBarSegment`).
             if let shell, !tabBar { PagerPill(shell: shell, follows: follows) }
-            // Its lens glides to a newly chosen item (#NNNN): under the items where it does not bend them…
+            // Its lens glides to a newly chosen item (#9837): under the items where it does not bend them…
             if tabBar, !StyleSpec.current.usesGlass { TabBarLens(index: ShellState.index(for: chosen), axis: axis) }
         }
         .overlay(alignment: .topLeading) {
@@ -183,7 +183,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     private func tabBarSegment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
         VStack(spacing: Theme.Space.xxs) {
             Group {
-                // The chosen Assistant shows the persona's own face (#NNNN), as the owner's reference shows its brand on
+                // The chosen Assistant shows the persona's own face (#9837), as the owner's reference shows its brand on
                 // its chosen home item.
                 if selected, value == .assistant {
                     TabBarPersonaFace()
@@ -297,7 +297,7 @@ private struct WaitingBadge: View {
     }
 }
 
-/// iPhone Duo's tab bar's lens (#NNNN, after the system's tab bar there, the owner's reference): when another item is
+/// iPhone Duo's tab bar's lens (#9837, after the system's tab bar there, the owner's reference): when another item is
 /// chosen, a lens leaves the one that was, swelling and stretching along the bar, glides to the new one with a little
 /// bounce and fades as it lands, where that item's own chosen look already is. At rest there is none: the bar looks as it
 /// did. With Reduce Motion it never moves: the items only cross-fade (`SwitchMotion`). The glide is `TabBarGlide`'s, one
@@ -338,7 +338,7 @@ private struct TabBarLens: View {
     }
 }
 
-/// The tab bar lens's glide (#NNNN), one for every iPhone Duo tab bar on screen: in the shell each page has its own bar
+/// The tab bar lens's glide (#9837), one for every iPhone Duo tab bar on screen: in the shell each page has its own bar
 /// and the moving bar stands in while the pages change, so a bar that comes in midway draws the glide where it is by
 /// then, from the same start. Only `begin` writes it, once per choice.
 @MainActor @Observable final class TabBarGlide {
@@ -390,7 +390,7 @@ private struct TabBarLens: View {
     }
 }
 
-/// The persona's face on the chosen Assistant item of iPhone Duo's tab bar (#NNNN): still, a `Size.well` circle.
+/// The persona's face on the chosen Assistant item of iPhone Duo's tab bar (#9837): still, a `Size.well` circle.
 private struct TabBarPersonaFace: View {
     @Environment(AppModel.self) private var model
 
@@ -452,7 +452,7 @@ private struct SwitchMotion: ViewModifier {
         if upright {
             let up = KeyboardState.shared.isUp
             content
-                // With Reduce Motion the chosen item cross-fades and the lens stays still (`TabBarLens`, #NNNN).
+                // With Reduce Motion the chosen item cross-fades and the lens stays still (`TabBarLens`, #9837).
                 .animation(reduceMotion ? Theme.Motion.tabFade : Theme.Motion.state, value: chosen)
                 .dynamicTypeSize(...Theme.Shell.switchTypeSize)
                 .accessibilityElement(children: .contain)

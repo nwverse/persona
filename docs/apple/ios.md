@@ -901,7 +901,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   the centring and the lower middle, the room, the choice kept), `DuoTabSwitchTests` (UI, each posture: one bar of symbols and
   names where it belongs, the count at a symbol's corner, each item's page, the keyboard, Merged and Separate at once and after
   a relaunch). Built with Xcode 26 the bar edge is never read, so the open Duo on its side gets the bar along the foot.
-- **One side column** (#NNNN, 2026-11-17, the owner: the tab bar lay over an Agent chat's Files and ⋯ on the open Duo on its
+- **One side column** (#9837, 2026-11-17, the owner: the tab bar lay over an Agent chat's Files and ⋯ on the open Duo on its
   side and on the outer display, and the system's search over Messages' Lark Settings at the outer display's foot). The
   system puts a page's own bar items down the column from its top: Back alone (a 48 pt glass), 12 pt under it the rest in
   one glass (48 pt items, 4 pt apart), the first from 174 pt under the safe area's top on the outer display (its camera is

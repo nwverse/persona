@@ -189,7 +189,7 @@ struct ChatView: View {
     @Environment(\.shell) private var shell
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
     @Environment(\.shellRailEdge) private var railEdge
-    /// iPhone Duo's side column under the tab bar: how much of it this chat's buttons have (`sideButtons`, #NNNN).
+    /// iPhone Duo's side column under the tab bar: how much of it this chat's buttons have (`sideButtons`, #9837).
     @Environment(\.sideColumn) private var sideColumn
     /// The page draws this chat's lifted message (`MessageLiftHost`).
     @Environment(\.messageLiftHost) private var liftHost
@@ -4167,7 +4167,7 @@ struct ChatView: View {
     }
 
     /// The side column's buttons between Back and ⋯, in order (back to the chat from a pane, the terminal, Git, Files),
-    /// as many of them as stand clear of the Duo's tab bar under them (#NNNN, `TabSwitchLayout.pageButtons`): the leading
+    /// as many of them as stand clear of the Duo's tab bar under them (#9837, `TabSwitchLayout.pageButtons`): the leading
     /// ones; ⋯ has every one of them (`moreMenuItems`), so what has no room is still a tap away there.
     private var sideButtons: [SessionPane] {
         var all: [SessionPane] = pane != .chat ? [.chat] : []

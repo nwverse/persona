@@ -68,7 +68,7 @@ nonisolated enum TabSwitchLayout {
         windowWidth < Theme.Shell.outerDisplayWidest ? Theme.Shell.systemBarTopOuter : Theme.Shell.systemBarTopInner
     }
 
-    /// How many of a page's buttons stand in the side column over the tab bar (#NNNN), out of `count`, besides Back (when
+    /// How many of a page's buttons stand in the side column over the tab bar (#9837), out of `count`, besides Back (when
     /// `back`) and ⋯, which always stay: the system puts them down the column from its top, Back alone and the rest in one
     /// glass (`Theme.Shell.systemBarItem`…), and that glass stays `Theme.Space.s` clear of the tab bar, `room` below the
     /// first item's top. The leading ones that fit stay, the rest are only in ⋯ (the owner's rule, 2026-11-17); the tab
@@ -83,7 +83,7 @@ nonisolated enum TabSwitchLayout {
     }
 }
 
-/// iPhone Duo's side column (#NNNN): where the tab bar stands in it, for the pages under it to keep their own buttons
+/// iPhone Duo's side column (#9837): where the tab bar stands in it, for the pages under it to keep their own buttons
 /// clear of it (`TabSwitchLayout.pageButtons`). Each rail with the tab bar reports its top while it is on screen
 /// (`ShellSideRail`); a scope gives one to the pages that rail stands over: the open Duo's tabs (`TabSwitchPlaced`), the
 /// Agents page in the shell (`ChatsView`). Changes only when the tab bar moves (a fold, a text size).
@@ -114,7 +114,7 @@ extension EnvironmentValues {
     /// The tab bar runs along the foot of the window over the tabs (the open iPhone Duo upright, the Separate layout):
     /// each tab's page keeps its room (`PhoneTabBarHidden`). Set by `TabSwitchOverlay` only.
     @Entry var tabBarAlongFoot = false
-    /// iPhone Duo's side column under a rail with the tab bar (#NNNN): `SideColumnScope`.
+    /// iPhone Duo's side column under a rail with the tab bar (#9837): `SideColumnScope`.
     @Entry var sideColumn: SideColumn?
 }
 
@@ -162,7 +162,7 @@ private struct TabSwitchPlaced: ViewModifier {
         content
             .environment(\.tabBarAlongFoot, placement == .bottom)
             .overlay { if let placement { TabSwitchStand(placement: placement) } }
-            // The tabs' pages keep their buttons in the side column clear of the tab bar standing over them (#NNNN).
+            // The tabs' pages keep their buttons in the side column clear of the tab bar standing over them (#9837).
             .modifier(SideColumnScope(own: true))
     }
 }

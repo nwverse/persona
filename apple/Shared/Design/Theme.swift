@@ -801,7 +801,7 @@ nonisolated enum Theme {
         }
         /// Something the finger dragged aside going back to its place (a message swiped to quote it): a little bounce.
         static let springBack = Animation.spring(duration: 0.3, bounce: 0.25)
-        /// iPhone Duo's tab bar (#NNNN, after the system's tab bar there): a glass lens leaves the chosen item for the new
+        /// iPhone Duo's tab bar (#9837, after the system's tab bar there): a glass lens leaves the chosen item for the new
         /// one, swelling as it goes (`lensSwellTime`, to `lensSwellScale`, `lensStretch` longer along the bar than across),
         /// glides there with a bounce (`lensGlide`, `lensGlideTime`) and shrinks and fades once it lands (`lensFadeTime`);
         /// with Reduce Motion the items only cross-fade (`tabFade`).
@@ -1101,7 +1101,7 @@ nonisolated enum Theme {
         /// the outer display's rail the face and the page's action are under it.
         static let sideTabBarFoot: CGFloat = 0.25
         /// The system's own items down that column (a page's bar items, a search at its foot), measured on iOS 27.2 on both
-        /// displays (#NNNN): each a 48 pt glass, Back alone, 12 pt over the rest in one glass, 4 pt apart in it; at every text
+        /// displays (#9837): each a 48 pt glass, Back alone, 12 pt over the rest in one glass, 4 pt apart in it; at every text
         /// size. The first one's top is 174 pt below the safe area's on the outer display (its camera is over the status
         /// bar there), 124 pt on the inner one; a search stands at the foot, its top 38 pt above the safe area's foot.
         static let systemBarItem: CGFloat = 48

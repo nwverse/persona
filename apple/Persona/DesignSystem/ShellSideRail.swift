@@ -54,7 +54,7 @@ struct ShellSideRail<Buttons: View, Switcher: View>: View {
     let edge: HorizontalEdge
     @ViewBuilder var buttons: Buttons
     @ViewBuilder var switcher: Switcher
-    /// The pages under it keep their own buttons in the column clear of the tab bar (#NNNN): its top goes there.
+    /// The pages under it keep their own buttons in the column clear of the tab bar (#9837): its top goes there.
     @Environment(\.sideColumn) private var sideColumn
     @State private var id = UUID()
 
@@ -88,7 +88,7 @@ struct ShellSideRail<Buttons: View, Switcher: View>: View {
     private static var column: String { "shell-side-rail.column" }
 }
 
-/// Room in a rail for what the system draws at the column's foot itself (a page's search, #NNNN): as tall as the rail's
+/// Room in a rail for what the system draws at the column's foot itself (a page's search, #9837): as tall as the rail's
 /// round buttons, so the tab bar over it stands where it does on every other page, and the system's own clear of the
 /// face over it.
 struct ShellRailSlot: View {

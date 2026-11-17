@@ -64,7 +64,7 @@ struct TabSwitchLayoutTests {
         #expect(TabSwitchLayout.bottomRoom(bottomBar: false, keyboardUp: false) == 0)
     }
 
-    /// A page's buttons in the side column stand clear of the tab bar (#NNNN): the leading ones that fit stay, Back and ⋯
+    /// A page's buttons in the side column stand clear of the tab bar (#9837): the leading ones that fit stay, Back and ⋯
     /// always, and without a tab bar in the column all of them. Measured on iOS 27.2: on the open Duo on its side the tab
     /// bar's top was 160 pt under the system's first item (an Agent's chat: terminal, Git and ⋯ fit, Files goes to ⋯); on
     /// the outer display's rail 141 pt under Back (only ⋯ fits beside it).
@@ -111,7 +111,7 @@ struct TabSwitchLayoutTests {
         #expect(column.room == 315 - Theme.Shell.systemBarTopOuter)
     }
 
-    /// The lens over a newly chosen item (#NNNN): it starts on the item that was chosen at full strength, swells on the
+    /// The lens over a newly chosen item (#9837): it starts on the item that was chosen at full strength, swells on the
     /// way, passes the new one with a bounce, and is gone, back to its size, on the new one once the glide ends.
     @Test func theLensGlidesFromTheOldItemToTheNew() {
         let start = TabBarGlide.frame(from: 0, to: 2, at: 0)

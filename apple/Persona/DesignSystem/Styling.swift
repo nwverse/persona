@@ -9,7 +9,7 @@ extension View {
         modifier(Surface(shape: shape, tint: tint, interactive: interactive))
     }
 
-    /// A lens gliding over a bar's items (iPhone Duo's tab bar, #NNNN): clear Liquid Glass in the glass styles, over the
+    /// A lens gliding over a bar's items (iPhone Duo's tab bar, #9837): clear Liquid Glass in the glass styles, over the
     /// items, bending them as it passes; in the others the style's soft pill, under them (`StyleSpec.usesGlass` says which).
     func lensSurface<S: Shape>(in shape: S) -> some View { modifier(LensSurface(shape: shape)) }
 
