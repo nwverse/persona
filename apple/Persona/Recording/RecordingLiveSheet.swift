@@ -179,7 +179,29 @@ extension RecordingCapture.State {
     }
 }
 
-/// Hide and Done: a quiet text control at the sheet's top trailing corner, a finger tall without a pill around it.
+/// The way out of a recording page, first in its header as on every presented page (#9653): ✕ where the page is done
+/// (the wrap-up, a photo still loading), ⌄ where the recording goes on without it (Hide, as the room's own). A round chip a
+/// finger wide, its mark in the primary ink.
+struct RecordingCornerButton: View {
+    enum Kind { case close, hide }
+    var kind: Kind
+    var identifier: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ThemedIcon(kind == .close ? Theme.Icon.close : Theme.Icon.minimizeRoom).font(Theme.Font.heading).sheetBarLabel()
+                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                .background(Theme.Fill.chip, in: .circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(kind == .close ? Text("Close") : Text("Hide"))
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// Hide and Done as words at the sheet's top trailing corner: the meeting's after page until it moves to
+/// `RecordingCornerButton` (#9653).
 struct RecordingSheetCloseButton: View {
     var title: String
     var identifier: String

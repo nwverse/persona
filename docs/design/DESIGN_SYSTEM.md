@@ -2402,7 +2402,7 @@ after mode (row **Talk about this meeting**, phase 6). Ordinary recordings and #
 wrap-up unchanged while they record. Reason: the meeting is one conversation from its start to its follow-up, so the
 page the user watches during the meeting is the page they keep writing in after it.
 
-- **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
+- **Structure, live**: a header (**Hide** first, the room's ⌄ at the top left (#9653), the title in `Theme.Font.title`, the page menu), a state line (the recording dot,
   the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
   caution `NoticeBanner` when the room can't take part, **Topics** (phase 2, below), the top card (**Highlights** in
   phase 2b, below, or else the **Live** box), the thread's section header, the thread, and the bar pinned through
@@ -2598,7 +2598,7 @@ page the user watches during the meeting is the page they keep writing in after 
   was read and no longer has it (a trimmed recording's deleted photo); the thumbnail's place while the list isn't read
   yet (offline), which is not a delete. Copy and Share end such an item with "(photo 3)", as the hub's Markdown does.
 - **Photo viewer**: the thumbnail opens the photo full screen (`.fullScreenCover`) in the app's image viewer
-  (`ImageViewer`), from this phone's copy or the hub's; a spinner with **Done** until the bytes are here, and when
+  (`ImageViewer`), from this phone's copy or the hub's; a spinner with ✕ at the top left (#9653) until the bytes are here, and when
   neither has it an `EmptyStateView` ("Image didn't load") with **Retry**.
 - **Just me**: a switch row in the bar (live only) with its caption ("Only you see it, in the main chat"). With it on the
   section header reads **Just Me** ("Only on this screen, never said aloud"), the field's placeholder "Ask privately…",
