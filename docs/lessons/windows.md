@@ -40,6 +40,11 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
   A path that is checked or joined and then sent back to its node goes through `proto.NodeAbs`, `proto.NodeClean` and `proto.NodeJoin`. They keep the node's own syntax (backslashes, an upper-case drive letter, a root of `C:\` or `\\server\share` that `..` cannot climb out of), so the node reads the result as its own path.
   Two of a node's paths compare by `proto.NodeKey`, which also ignores case for a Windows path: `C:\Code\App` and `c:\code\app` are one directory there. Keys are for comparing only; never send one to the node.
 
+## Paths the node's file tools take
+
+- **A short (8.3) name is a second name for the same entry**: NTFS usually gives a name that is not valid 8.3 a short alias as well (`C:\Users\EXAMPL~1`, `PERSON~1` for `.persona`, `GIT-CR~1` for `.git-credentials`). Windows hands them out itself: `TEMP` and `TMP` are usually `C:\Users\EXAMPL~1\AppData\Local\Temp`, so agents mention such paths. The path guard compares names, so before #9891 an alias got past it: secrets were readable, `.persona` took writes, files in the home reached through the home's alias were refused as read-only, and a save, move or copy through an alias gave the file the alias as its name.
+  The file tools resolve every client path through `absPath`, which spells out short names with `GetLongPathName` (`longPath`, `node/longpath_windows.go`) before `realPath` and the guard see them. A new file tool resolves its paths the same way, its last name included (`statDetail` once joined that name as asked). `GetLongPathName` keeps link and junction names, and it needs the `\\?\` prefix past `MAX_PATH` unless long paths are switched on. Test with a home whose own name has an alias (`EvalSymlinks` the temp folder first: it is often written with aliases), and skip where the volume makes none.
+
 ## Scheduled tasks (automatic startup)
 
 `persona-link install` registers scheduled tasks on Windows ([windows.md](../operations/windows.md), “Install and start at logon”). These findings were all tested on a physical Windows 11 machine on 2026-11-04:
