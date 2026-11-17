@@ -186,4 +186,7 @@ type Entry struct {
 	// RecordingKind is a recording's kind: meeting, note or day (#8731), so a list can mark notes and all-day
 	// recordings among meetings. Absent on other kinds, and from a hub before it.
 	RecordingKind string `json:"recording_kind,omitempty"`
+	// MeetingID is a recording's imported meeting (#8872): the id of the meetings item it overlaps, as the meetings list
+	// has it, so a Meetings list shows the two as one row. Absent on other kinds, before a match, and from a hub before it.
+	MeetingID string `json:"meeting_id,omitempty"`
 }
