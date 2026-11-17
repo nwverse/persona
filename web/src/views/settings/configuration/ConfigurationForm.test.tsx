@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // The generic configuration form (ConfigurationForm.tsx) over the shared synthetic all-types document: every control with
 // its name for assistive technology and its keys, single-step choices written at once and saved only once committed,
-// typed text saved explicitly and kept through failures and conflicts, a multiselect's checks as one pending replacement
-// (message 14), resets, read-only / disabled / unknown fields, a version it can't write, and a source replaced while its
+// typed text saved explicitly and kept through failures and conflicts, a multiselect's checks as one pending replacement,
+// resets, read-only / disabled / unknown fields, a version it can't write, and a source replaced while its
 // answer is still coming.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -35,7 +35,7 @@ interface Doc {
 const example = shared as unknown as Doc;
 const clone = (d: unknown): Doc => JSON.parse(JSON.stringify(d));
 
-/** The shared document with `sections` fixed to exactly one choice (the replacement case of message 14). */
+/** The shared document with `sections` fixed to exactly one choice. */
 function oneOfOne(): Doc {
   const doc = clone(example);
   for (const f of doc.groups.flatMap((g) => g.fields)) if (f.id === "sections") f.multiselect = { min_selected: 1, max_selected: 1, options: (f.multiselect as { options: unknown[] }).options };
@@ -269,7 +269,7 @@ describe("typed text", () => {
     expect(row("label").textContent).toContain(t("settings-configuration.saved"));
   });
 
-  it("keeps text typed while its save is on the way (message 14)", async () => {
+  it("keeps text typed while its save is on the way", async () => {
     const m = memory();
     let go = () => {};
     m.state.hold = (g) => (go = g);

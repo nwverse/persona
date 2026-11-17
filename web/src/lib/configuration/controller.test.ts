@@ -67,7 +67,7 @@ async function ready(m = manual(), doc: Doc = example) {
   return { ctl, m };
 }
 
-/** The shared document with `sections` fixed to exactly one choice (the replacement case of message 14). */
+/** The shared document with `sections` fixed to exactly one choice. */
 function oneOfOne(): Doc {
   const doc = clone(example);
   for (const f of doc.groups.flatMap((g) => g.fields)) if (f.id === "sections") f.multiselect = { min_selected: 1, max_selected: 1, options: (f.multiselect as { options: unknown[] }).options };
@@ -226,7 +226,7 @@ describe("typed text", () => {
     expect(ctl.snapshot().fields.notes).toEqual({ draft: "New words", error: { code: "storage_failed", message: "The disk is full" } });
   });
 
-  it("keeps text edited while its save is on the way, after the save succeeds (message 14)", async () => {
+  it("keeps text edited while its save is on the way, after the save succeeds", async () => {
     const { ctl, m } = await ready();
     ctl.setDraft("label", "A");
     ctl.saveDraft("label");

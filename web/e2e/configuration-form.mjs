@@ -75,7 +75,7 @@ try {
       await page.waitForSelector('[data-configuration-field="label"] >> text=Saved', { timeout: 5000 }).catch(() => fail(`${tag}: no Saved after Enter`));
       ok(`${tag}: typed text saves with Enter`);
 
-      // A multiselect's checks are local until Save (message 14).
+      // A multiselect's checks are local until Save.
       const boxes = page.locator('[data-configuration-field="sections"] [role="checkbox"]');
       await boxes.nth(1).click();
       await boxes.nth(0).click();
