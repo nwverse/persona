@@ -102,12 +102,19 @@ type channel struct {
 	eof       bool   // local ended: a close follows the last byte
 	sentClose bool
 	reset     bool // a reset at base goes out before more data
-	keyWait   bool // video: frames are dropped until a keyframe
-	active    *transport
-	home      *transport // the relay the hub opened for it
-	lostAt    time.Time  // since when no transport carries it; zero while one does
-	progress  time.Time  // when the phone last acknowledged something, or the channel last moved or started sending
-	finished  bool
+	jumpOff   uint64
+	jumpValid bool // a backlog drop made jumpOff; RFB never has one
+	// While jumpValid && !jumpConfirmed, only a phone-stated offset at or past jumpOff confirms the jump. A transport
+	// change then owes its reset again. jumpData says whether data at or past jumpOff was handed to a TCP or UDP writer;
+	// if so, the old reset may be behind the phone, so the next transport drops again instead of repeating it.
+	jumpConfirmed bool
+	jumpData      bool
+	keyWait       bool // video: frames are dropped until a keyframe
+	active        *transport
+	home          *transport // the relay the hub opened for it
+	lostAt        time.Time  // since when no transport carries it; zero while one does
+	progress      time.Time  // when the phone last acknowledged something, or the channel last moved or started sending
+	finished      bool
 
 	// Phone → node, written to local under umu in order; recv is the next offset expected (written under umu, read
 	// anywhere).
@@ -460,6 +467,11 @@ func (s *Session) readLocal(ch *channel) {
 		}
 		if err != nil {
 			ch.eof = true
+			if ch.jumpValid && !ch.jumpConfirmed && len(ch.buf) > 0 {
+				// No later picture needs decoder-only messages after EOF. In particular, do not re-base retained messages
+				// beyond a close the phone may already hold; drop the unconfirmed final buffer and finish at its end.
+				s.dropBacklogLocked(ch)
+			}
 			s.cond.Broadcast()
 			s.mu.Unlock()
 			return
@@ -556,16 +568,46 @@ func (s *Session) nextLocked(t *transport) []byte {
 			}
 			from := ch.sent - ch.base
 			to := min(from+dataChunk, uint64(len(ch.buf)))
-			out := frame(TypeData, chanOffset(id, ch.sent), ch.buf[from:to])
+			off := ch.sent
+			out := frame(TypeData, chanOffset(id, off), ch.buf[from:to])
 			ch.sent = ch.base + to
+			s.noteJumpDataLocked(ch, off)
 			return out
 		}
-		if ch.eof && !ch.sentClose {
+		if ch.eof && !ch.sentClose && (!ch.jumpValid || ch.jumpConfirmed) {
+			// The phone's reset handler does not re-check an earlier close, so close follows confirmation of a final jump.
 			ch.sentClose = true
 			return frame(TypeClose, chanOffset(id, end))
 		}
 	}
 	return nil
+}
+
+// confirmJumpLocked records the phone's own offset, never a successful write or an offset the node chose for a move.
+// A pending reset at the confirmed jump is no longer owed.
+func (s *Session) confirmJumpLocked(ch *channel, off uint64) {
+	if ch.jumpValid && !ch.jumpConfirmed && off >= ch.jumpOff {
+		ch.jumpConfirmed = true
+		ch.reset = false
+		s.cond.Broadcast() // a final close may have been waiting for this confirmation
+	}
+}
+
+// noteJumpDataLocked records handing post-jump data to a writer, whether or not that writer later delivers it.
+func (s *Session) noteJumpDataLocked(ch *channel, off uint64) {
+	if ch.jumpValid && !ch.jumpConfirmed && off >= ch.jumpOff {
+		ch.jumpData = true
+	}
+}
+
+// phoneAckedLocked applies an acknowledgement and its confirmation of a jump. ackedLocked alone is also used with
+// the node's own base during automatic fallback, which confirms nothing.
+func (s *Session) phoneAckedLocked(ch *channel, off uint64) bool {
+	if !s.ackedLocked(ch, off) {
+		return false
+	}
+	s.confirmJumpLocked(ch, off)
+	return true
 }
 
 // ackedLocked drops what the phone has through off.
@@ -615,12 +657,35 @@ func (s *Session) moveLocked(ch *channel, t *transport, off uint64) bool {
 	if !moved {
 		return true // the same route: what it has in flight still arrives
 	}
+	if ch.eof {
+		ch.sentClose = false // a close in flight on the old route is not delivery evidence; repeat it here
+	}
 	ch.sent, ch.progress = ch.base, s.now()
-	if ch.video() && len(ch.buf) > 0 && s.ageLocked(ch) > s.limits.VideoBacklog {
+	if ch.jumpValid && !ch.jumpConfirmed {
+		if ch.jumpData {
+			// The phone may have received data past the old jump, even in the middle of a message. A reset at the old
+			// offset is no longer safe: jump to the end of everything handed out and start at a new keyframe. Keep
+			// non-frame messages (format, encoding, …): a keyframe request does not make the helper repeat them.
+			s.dropFramesLocked(ch, "video moved with an unconfirmed reset")
+		} else {
+			// No post-jump data was handed out, so the phone is still at or before the jump and the same reset is safe.
+			ch.reset = true
+		}
+	} else if ch.video() && len(ch.buf) > 0 && s.ageLocked(ch) > s.limits.VideoBacklog {
 		s.dropBacklogLocked(ch)
 	}
 	s.cond.Broadcast()
 	return true
+}
+
+// movePhoneLocked is a move whose offset came from the phone (a TCP or UDP use). Automatic fallback calls moveLocked
+// directly with the node's base instead; that offset is not delivery evidence.
+func (s *Session) movePhoneLocked(ch *channel, t *transport, off uint64) bool {
+	if !s.ackedLocked(ch, off) {
+		return false
+	}
+	s.confirmJumpLocked(ch, off)
+	return s.moveLocked(ch, t, off)
 }
 
 // dropBacklogLocked drops the video channel's unacknowledged messages, tells the phone where the stream goes on, and
@@ -631,6 +696,8 @@ func (s *Session) dropBacklogLocked(ch *channel) {
 	ch.sent = ch.base
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
+	ch.sentClose = false // if EOF already sent a close, repeat it after this jump is confirmed
+	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	s.logf("screenlink: video moved with a %d-byte backlog: dropped for a keyframe", dropped)
 	go ch.upstream.inject(ch, keyframeRequest)
 }
@@ -674,7 +741,7 @@ func (s *Session) handle(t *transport, typ byte, body []byte) bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if ch := s.chans[id]; ch != nil && !ch.finished {
-			return s.ackedLocked(ch, off)
+			return s.phoneAckedLocked(ch, off)
 		}
 		return true
 	case TypePing:
@@ -702,7 +769,7 @@ func (s *Session) handle(t *transport, typ byte, body []byte) bool {
 			if ch == nil || ch.finished {
 				continue
 			}
-			if !s.moveLocked(ch, t, off) {
+			if !s.movePhoneLocked(ch, t, off) {
 				s.mu.Unlock()
 				return false
 			}
@@ -846,6 +913,9 @@ func (s *Session) lose(t *transport) {
 		if ch.active != t || ch.finished {
 			continue
 		}
+		if ch.eof {
+			ch.sentClose = false // even with no fallback yet, do not finish on a close dequeued by this dead route
+		}
 		if p := t.parent; p != nil && !p.dead && !p.pending {
 			s.moveLocked(ch, p, ch.base) // off a UDP flow: onto its own TLS route first
 		} else if alt := s.fallbackLocked(ch); alt != nil {
@@ -930,12 +1000,15 @@ func (s *Session) watch() {
 			if ch.active == nil && !ch.lostAt.IsZero() && now.Sub(ch.lostAt) >= s.limits.Grace {
 				expired = append(expired, ch)
 			}
+			// A final reset has no data tail to probe. If it stays unconfirmed, its route is stuck too: moving the
+			// channel re-arms the reset instead of leaving an empty EOF backlog waiting forever.
+			unconfirmedFinalJump := ch.eof && len(ch.buf) == 0 && ch.jumpValid && !ch.jumpConfirmed
 			// The phone has had bytes this long without acknowledging them: the route carrying them is stuck.
-			if ch.active != nil && ch.sent > ch.base && now.Sub(ch.progress) >= s.limits.StallAfter {
+			if ch.active != nil && (ch.sent > ch.base || unconfirmedFinalJump) && now.Sub(ch.progress) >= s.limits.StallAfter {
 				stuck = append(stuck, ch.active)
 			}
-			// The local end finished and the phone has everything: the channel is done.
-			if ch.eof && ch.sentClose && len(ch.buf) == 0 {
+			// The local end finished and the phone has everything, including the reset for any final jump.
+			if ch.eof && ch.sentClose && len(ch.buf) == 0 && (!ch.jumpValid || ch.jumpConfirmed) {
 				expired = append(expired, ch)
 			}
 		}

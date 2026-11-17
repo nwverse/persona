@@ -854,6 +854,17 @@ iPhone's side comes next.
   on, asks Persona Screen for a keyframe (between two of the phone's messages, never inside one) and drops frames until
   it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. When the
   transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
+  A dropped backlog's reset stays owed until an offset stated by the phone confirms the jump; dequeuing or successfully
+  writing the reset does not confirm delivery. When an unconfirmed jump changes transport, the new route sends its reset
+  before data; if post-jump data was already handed to a writer, the node drops to a fresh message boundary and keyframe
+  first, so the reset cannot land inside a message the phone may have started. While the stream is live, that safety drop
+  retains non-frame decoder messages (`format`, `encoding`, …), because the helper need not repeat them for the new
+  keyframe. Once the helper has reached EOF there is no later keyframe: an unconfirmed final drop discards the remaining
+  video buffer instead. A close does not finish a channel while its final jump is unconfirmed. The close is held, or
+  repeated if it already went out, until that confirmation, because the phone's reset handler does not re-check an earlier
+  close. A route change also owes the close again: dequeueing it on the old route did not deliver it. Since the final
+  reset has no data tail to probe, the stall limit also applies to it: the route is closed and the move owes the reset
+  again.
 - **Direct routes** (`screenlink.Direct`): while at least one session is live, the node listens on one TCP port bound
   to each of its candidate addresses (never the wildcard), and closes the listener with the last session. Candidates
   come from its own interfaces, with no Tailscale API or command: private IPv4 and unique-local IPv6 on Ethernet or
