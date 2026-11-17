@@ -418,6 +418,11 @@ A runtime that declares `caps.assistant` must:
 4. Give `context` to the model before the user's text and don't show it in the chat (a `<persona-context>` block without attributes; context quoted from the phone has attributes and is shown as usual).
 5. Set its own permissions per `mode` (plan = read-only); changes inside `memory_dir` aren't asked about outside plan mode.
 
+The assistant launcher's entry in `launchers` may also carry `assistant_for`: the name of an Agent launcher on the same computer that runs the same agent with the same
+account but can't run the assistant itself (a Paseo provider; the Grok companion's `--assistant-for grok`, `integrations/grok/README.md`). The person setting the runtime up
+declares it; nothing guesses it from names. `launchers.list` passes it on only for the launcher that runs the assistant, and the main chat's picker then points that
+launcher at this one (`unavailable[].instead`, [model-config.md](../assistant/model-config.md) "A conversation's own model"). Nothing is ever run on one in place of the other.
+
 Model and reasoning effort are up to the runtime (DSH picks them in its Web GUI); Persona's model config doesn't pick a specific model for such launchers. DSH's approach is in `docs/integrations/dsh.md` ("Assistant"),
 end to end in `integrations/dsh/e2e/assistant.mjs`.
 

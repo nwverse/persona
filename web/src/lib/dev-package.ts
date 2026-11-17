@@ -10,6 +10,25 @@ export const DEV_CATEGORIES: DevCategory[] = ["logs", "errors", "energy"];
 
 /** Event kinds that are performance numbers; any other kind is a log line. */
 const ENERGY_KINDS = new Set(["minute", "foreground", "network"]);
+/** The desktop shell's kinds (#9675): its minutes, power and thermal are numbers; processes gone and windows that hung
+ *  are errors; the rest are log lines. */
+const SHELL_ENERGY = new Set(["shell_minute", "power", "thermal"]);
+const SHELL_ERRORS = new Set(["process_gone", "window"]);
+
+/** What the desktop shell kept (`personaDesktop.readDevDiagnostics`), null in a browser or an older shell. */
+export interface ShellRecord {
+  lines: string[];
+  crashDumps: number;
+}
+
+/** The shell's record, if this page runs in a desktop shell that keeps one. */
+export async function readShell(): Promise<ShellRecord | null> {
+  try {
+    return (await window.personaDesktop?.readDevDiagnostics?.()) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export interface DevDevice {
   platform: "web" | "desktop";
@@ -67,7 +86,7 @@ export function packageName(device: DevDevice, now: Date): string {
 const kindOf = (text: string) => /"kind":"([^"]*)"/.exec(text)?.[1] ?? "";
 
 /** The package's files, by name, and what went in. */
-export async function packageFiles(store: DevStore, categories: ReadonlySet<DevCategory>, since: string | null, device: DevDevice, now: number):
+export async function packageFiles(store: DevStore, categories: ReadonlySet<DevCategory>, since: string | null, device: DevDevice, now: number, shell: ShellRecord | null = null):
   Promise<{ files: Record<string, string>; summary: DevSummary }> {
   await store.trim(now);
   const lines: DevLine[] = await store.read(0);
@@ -81,6 +100,11 @@ export async function packageFiles(store: DevStore, categories: ReadonlySet<DevC
   };
   if (categories.has("errors")) files["errors.jsonl"] = errors.map((e) => e + "\n").join("");
   if (categories.has("logs")) files["log.txt"] = logs.map((e) => e + "\n").join("");
+  const shellLines = (shell?.lines ?? []).filter((l) => {
+    const kind = kindOf(l);
+    return categories.has(SHELL_ENERGY.has(kind) ? "energy" : SHELL_ERRORS.has(kind) ? "errors" : "logs");
+  });
+  if (shell) files["desktop.jsonl"] = shellLines.map((e) => e + "\n").join("");
   const summary = { events: events.length, errors: errors.length, logLines: logs.length };
   const manifest = {
     format: "persona-diagnostics",
@@ -90,7 +114,12 @@ export async function packageFiles(store: DevStore, categories: ReadonlySet<DevC
     exported_at: new Date(now).toISOString(),
     window: { from: from !== undefined ? new Date(from).toISOString() : since, to: new Date(now).toISOString() },
     categories: ["device", ...DEV_CATEGORIES.filter((c) => categories.has(c))],
-    counts: { events: summary.events, errors: summary.errors, log_lines: summary.logLines },
+    counts: {
+      events: summary.events,
+      errors: summary.errors,
+      log_lines: summary.logLines,
+      ...(shell ? { desktop_lines: shellLines.length, ...(categories.has("errors") ? { crash_dumps: shell.crashDumps } : {}) } : {}),
+    },
   };
   const sorted = Object.fromEntries(Object.entries(manifest).sort(([a], [b]) => a.localeCompare(b)));
   files["manifest.json"] = JSON.stringify(sorted, null, 2) + "\n";
@@ -99,7 +128,7 @@ export async function packageFiles(store: DevStore, categories: ReadonlySet<DevC
 
 /** The package as a zip `File`, its files in a folder of the zip's name. */
 export async function buildPackage(store: DevStore, categories: ReadonlySet<DevCategory>, since: string | null, device: DevDevice, now = Date.now()): Promise<File> {
-  const { files } = await packageFiles(store, categories, since, device, now);
+  const { files } = await packageFiles(store, categories, since, device, now, device.platform === "desktop" ? await readShell() : null);
   const name = packageName(device, new Date(now));
   const zip = new JSZip();
   const folder = zip.folder(name.replace(/\.zip$/, ""))!;
@@ -138,5 +167,10 @@ Times are UTC (ISO 8601); \`manifest.json\` has the device's offset (\`utc_offse
 - \`errors.jsonl\`: the page's error reports (uncaught errors, unhandled rejections, what its boundaries caught, freezes of
   5 s or more), in the hub's error report format, kept here whether or not the hub takes error reports.
 - \`log.txt\`: the page's \`console.error\` and \`console.warn\` lines.
+- \`desktop.jsonl\` (the desktop app only): its main process's own lines: \`shell_minute\` (each process type's count, CPU
+  percent, idle wakeups a second and memory in MB, and whether on battery), \`power\` (suspend, resume, on battery / AC,
+  lock), \`thermal\` (macOS thermal state), \`process_gone\` (a renderer or child process gone: its type, reason and exit
+  code), \`window\` (unresponsive / responsive), \`shell\` (recording started, app and Electron versions). Crash dumps
+  stay on the computer; \`counts.crash_dumps\` in the manifest says how many were written since recording began.
 ${left.length ? `\nLeft out by the owner: ${left.join(", ")}.\n` : ""}`;
 }

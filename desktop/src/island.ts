@@ -1,17 +1,27 @@
 import { join } from "node:path";
-import { BrowserWindow, ipcMain, screen } from "electron";
+import { BrowserWindow, ipcMain, net, protocol, screen } from "electron";
 import { notificationRoute } from "./contract.cjs";
+import { ISLAND_SCHEME, ISLAND_URL, islandFile } from "./island-page.js";
 import { EMPTY_ISLAND, islandDisplay, islandRect, islandSides, islandState, islandView } from "./island-model.js";
 import type { IslandState, IslandStatus } from "./island-model.js";
 
 /** How long the pointer may be away before the open list closes: crossing the pill's edge does not close it. */
 const CLOSE_AFTER_MS = 250;
 
+/** Serves the island's page from its own scheme (island-page.ts); main.ts registers the scheme before the app is
+ *  ready and calls this once it is. */
+export function installIslandProtocol(): void {
+  protocol.handle(ISLAND_SCHEME, request => {
+    const file = islandFile(request.url, request.method);
+    return file ? net.fetch(file) : new Response("Not found", { status: 404 });
+  });
+}
+
 /**
  * The island at the MacBook notch (#7669): a frameless, always-on-top window that takes no focus, over the menu bar
- * around the notch. It draws the latest state the web sent (`setState`) from a local page (island.html), opens into a
- * list while the pointer is over it, and hands a clicked row's route to `openRoute`, the notification-click path.
- * macOS only; off until the person turns it on in Settings, and hidden while there is nothing to show.
+ * around the notch. It draws the latest state the web sent (`setState`) from its local page (island-page.ts), opens
+ * into a list while the pointer is over it, and hands a clicked row's route to `openRoute`, the notification-click
+ * path. macOS only; off until the person turns it on in Settings, and hidden while there is nothing to show.
  */
 export class NotchIsland {
   private window: BrowserWindow | undefined;
@@ -102,7 +112,7 @@ export class NotchIsland {
     screen.on("display-metrics-changed", this.placeNow);
     screen.on("display-added", this.placeNow);
     screen.on("display-removed", this.placeNow);
-    void w.loadFile(join(import.meta.dirname, "island.html"));
+    void w.loadURL(ISLAND_URL);
   }
 
   private destroy(): void {
