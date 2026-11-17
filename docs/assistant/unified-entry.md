@@ -1009,6 +1009,30 @@ is being done and where it is stuck, what the owner has to do, and evidence link
 `leader.report` kind `progress` and the latest stays on the direction (listed by `GET /api/v1/assistant/leaders`).
 It never messages the owner: the work-log card shows it.
 
+### Direction notes (#10086)
+
+A direction carries **notes** the owner writes for it: its rules, the readings that prove progress, its terms
+(`direction_notes.go`; web: Settings › Persona › Direction notes; `PUT /api/v1/assistant/directions/{id}/notes`, at most
+4,000 characters, `""` clears them; `GET /api/v1/assistant/leaders` lists `notes` and `notes_at`). They are the owner's
+content, not memory: memory stays one for every conversation (#9440), and a direction's lessons go into its notes.
+
+- **The leader** gets them in its own system prompt: they are appended, with the name and goal of the kb project the
+  direction is filed under, to its role policy (`supervision_instructions`, which the node passes as
+  `--append-system-prompt` or a Codex thread's developer instructions; template `assistant/direction_notes`). The node
+  keeps that policy with the conversation and compares it on every send, so the notes survive a restart, a resume and a
+  compaction, and changing them restarts only that leader's process on its next message: the shared `CLAUDE.md` and
+  every other conversation's prompt cache are untouched. The project's one-line status, which a summary rewrite changes,
+  goes into the leader line of the per-message context instead, so it never restarts the leader.
+- **New Agents for the direction** get them before the project background (template `todo/direction`): an Agent the
+  leader starts (`agent_start`) or supervises (a task it plans, a to-do it supervises handed to a new Agent), and an
+  Agent whose directory belongs to the direction's kb project, whoever starts it. At most two directions' notes, the
+  supervising leader's first; an ended direction's never; an Agent on a work machine gets none.
+- **Without notes nothing changes**: the leader's policy and context are byte for byte as before (a project's goal or
+  status alone is never added), and no block goes to Agents.
+- **Checks**: `server/internal/assistant/direction_notes_test.go` (the route, the leader's policy and context, new
+  Agents) and the goldens `direction_notes.*` / `todo_direction.*`; the web editor's browser check runs against the mock
+  hub with `MOCK_LEADERS=1`: `node web/e2e/direction-notes.mjs` (desktop and phone width, light and dark).
+
 ### Agent tasks (#3617)
 
 Supervision above covers the tasks the main chat or a leader hands out. An Agent started any other way (New Agent in an app, `agent_start` from another chat, a to-do the user made and linked an Agent to) had triage at most: nobody judged whether it finished, nobody received its `report_to_supervisor`, and its tab stayed open after it was done. With **Agent tasks** on, every Agent Persona starts is on a quiet to-do with a supervisor. It is made of the same pieces as the main chat's own tasks (the quiet to-do of `agent_start`, adoption as `agent_supervise` does it, the `todo_supervision` ledger, leader routing); `server/internal/assistant/agent_tasks.go`.
