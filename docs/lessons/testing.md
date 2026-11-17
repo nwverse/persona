@@ -7,6 +7,11 @@
   Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
   separately when evaluating the gain.
 
+- A fake peer recording a user line is not the send's completion (#9673). The desktop launcher's first message
+  continues in the background and still reads the shared confirmation timeout. After observing inbox receipt, wait
+  for that session's existing input lock before restoring the test's package globals; keep the drain on assertion
+  failure paths too. A fixed pause gives the race another schedule, not a happens-before relationship.
+
 - A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
   Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
   and keep duplicate or late replies from blocking the reader. Polling an already available approval response
