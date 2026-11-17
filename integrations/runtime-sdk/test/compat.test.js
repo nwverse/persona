@@ -64,6 +64,8 @@ test('compat package names use identical files and hashes and keep exact name ve
     assert.equal(packageHash(readShipped(root, PACKAGES[legacy])), packageHash(readShipped(root, PACKAGES[canonical])))
   }
   assert.equal(selfPackage(new URL('../../pi/index.js', import.meta.url).href, 'persona-pi-runtime').name, 'jarvis-pi-runtime')
+  assert.equal(wirePackageName('persona-antigravity-runtime'), 'persona-antigravity-runtime')
+  assert.equal(selfPackage(new URL('../../antigravity/companion.mjs', import.meta.url).href, 'persona-antigravity-runtime').name, 'persona-antigravity-runtime')
   const files = [{path:'pi/index.js', data:Buffer.from('safe')}]
   const pkg = {name:'jarvis-pi-runtime', hash:packageHash(files), files:files.map((f)=>({path:f.path,data:f.data.toString('base64')}))}
   assert.ok(verifyPackage(pkg, 'jarvis-pi-runtime'))

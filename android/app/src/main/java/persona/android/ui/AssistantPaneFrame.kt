@@ -21,12 +21,16 @@ internal fun AssistantPaneFrame(
     hinges: List<PaneHinge>,
     overlay: Boolean = false,
     onDismiss: () -> Unit = {},
+    drags: Boolean = false,
+    detailAtRoot: Boolean = true,
+    onDragSettle: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val split = sidebarSplit(maxWidth.value, hinges)
         JSidebarColumn(if (regular && showSidebar) sidebar else null,
             width = (if (overlay) PaneSplits.DefaultLeft else split.sidebar).dp, pageStart = split.page.dp,
-            shown = shown, overlay = overlay, onDismiss = onDismiss, content = content)
+            shown = shown, overlay = overlay, onDismiss = onDismiss, drags = drags, detailAtRoot = detailAtRoot,
+            onDragSettle = onDragSettle, content = content)
     }
 }
