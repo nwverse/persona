@@ -1940,61 +1940,102 @@ hello's `features`, `hub_name` and `mesh` are kept in the store. Lark through th
 **Request failures** (#3728): `errorText` in `lib/api.ts` explains common failures in the page's language. A 404, `not_found` or a bare `not found` says the item does not exist or this version does not support it yet, and suggests refreshing or checking whether the hub or the computer needs an update; 502 / 503 / 504 say the hub cannot answer right now, other 5xx that the service hit an error, both with retry and check-that-it-runs advice. The HTTP status and the hub's original text stay in brackets for diagnosis; the terminal list's error line stays on one line and shows the whole text on hover. Wrong credentials and other business errors show as before. Code that decides on compatibility or an error code reads the raw `ApiError`, never the explained text.
 For `node_unreachable` and `timeout` (#5031) the hub did answer; the computer did not. `errorText` goes by the code and says what to do next: offline when `delivered` is `none` (check that the computer is on, online and running Persona Link), a connection cut mid-call for any other `node_unreachable` (reconnect, check whether the last action went through), a timeout (check, then try again later). These carry no status in brackets, so offline feedback does not fold them into "can't reach the hub"; the hub's words stay on the `ApiError`.
 
+## Configuration forms
+
+A module that has settings for one resource describes them as a configuration **Document** and the web draws it with one
+generic form (#9877; `web/src/lib/configuration/`, `web/src/views/settings/configuration/ConfigurationForm.tsx`). The JSON
+is the hub's portable contract (the server's `configuration` package defines the same types), so every client can read the
+same thing.
+
+**The contract.** A Document (`schema_version` 1, an opaque `id` and `revision`, `title`, `description`) has titled
+groups of fields and `values`: one effective value per field, defaults included, plus optional per-field `notices`
+(info / warning). A field is one of `toggle`, `text` (single line or `multiline`, placeholder, lengths), `select` (options
+shown as a `list`, `dropdown` or `segmented` control), `multiselect` (checks, minimum and maximum chosen) and `number`
+(integer or not, minimum, maximum, a `step` that only nudges), each with a title, description, typed `default`,
+`read_only`, `disabled_reason` and `details` (title + description lines the module writes: scope, activation, rollback).
+An Update names the document, the revision it was made against, the `changes` it makes and the fields to `reset` (remove
+the override); missing fields stay as they are. The answer is the whole committed Document, or `{ error, code,
+field_errors }`; a `configuration_conflict` carries no replacement values. The codes are the shared contract's root codes
+(`configuration_bad_request`, `configuration_version`, `configuration_too_large`, `configuration_invalid`,
+`configuration_conflict`, `configuration_forbidden`, `configuration_not_found`, `configuration_unavailable`) and field
+codes (`type`, `option`, `duplicate`, `min_length`, `max_length`, `min_selected`, `max_selected`, `integer`, `minimum`,
+`maximum`, `range`, `unknown`, `read_only`, `unsupported`), and the client says a code it knows in the reader's language
+(a module's own localized message wins for a code it doesn't know). `contract.ts` mirrors the TypeScript union and the
+writer's checks: lengths in Unicode scalar values, numbers finite and inside the safe integer range (decimal bounds
+allowed), choices known and distinct, counts within their limits. The shared `schema/configuration/validation-cases.json`
+(26 cases, the same file the Go checks run) is a Web test input; there is no Web-only copy of it or of the all-types
+document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a value that
+isn't valid is not shown and the field offers **Use default**; a schema version it doesn't know is shown and never written.
+Nothing in a Document is a URL, a scope or an instruction.
+
+**Sources.** The form takes a `ConfigurationSource` injected by the owning module, already bound to its one resource:
+`key` (the resource's identity: another key starts the form over), `read`, `update` and, when the module can tell,
+`subscribe` (the resource may have changed elsewhere; the form reads it again). `httpConfigurationSource` reads with GET
+and writes with PATCH at an endpoint and through a transport the module supplies (its authentication and base address);
+nothing in an answer chooses another address. A local module implements the same four members itself. The generic layer
+imports no module, assistant, hub or storage.
+
+**The form.** It reuses the settings pieces (`Group`, `RowFailed`, `Switch`, `Segmented`, `ChoiceRows`, `CheckMark`, the
+field and button classes). A single-step choice (a switch, a list, dropdown or segmented selection) is written at once and
+shows **Saving…** until the source has committed; only then **Saved**. Typed text, numbers and a multiselect's checks are
+drafts until **Save** (Enter on one line; Escape puts a typed one back; **Cancel** beside any pending edit), so a fixed
+count can move from one choice to another without an invalid write in between. Drafts stay through a failed write, a
+conflict, a re-read or a change elsewhere, including what is typed or checked while its save is on the way (that newer
+edit stays unsaved). One write at a time, each against the revision shown. A conflict, or a write whose outcome is unknown
+(`configuration_unavailable`, a request that threw or timed out, or a successful answer that isn't a Document), says so
+and offers **Reload**, which keeps every draft; nothing else is written until it has read again, and a version it can't
+write blocks writing altogether. A refusal the writer names (a validation or storage failure) is retriable at once.
+Field errors appear on their fields in the client's words for codes it knows; an unknown code shows the module's own
+message. A source replaced while it is still answering is ignored, and so is a read that started before a newer Document
+arrived; a read that times out is reported, not mistaken for the form's own cancellation. The form loads with its page,
+in its own chunk. Every control is named by its field's title and described by its description.
+`web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json` for screenshots
+(`web/e2e/configuration-form.mjs`); it is never built.
+
 ## Labs
 
-Settings › Labs (#9877; `web/src/lib/labs.ts`, `web/src/views/settings/Labs.tsx`) is the one place for trial
-features and for choosing between a stable and a new implementation of the same thing. It is in the sidebar's "this
-device" group, after Shortcuts. Each entry is a card: its name and a Trial chip, what it does, the choice (a segmented
-control for an implementation choice, a switch for an on / off trial), and four lines: **Default**, **Applies to**,
-**Takes effect** and **Going back**. Entries are grouped by the part of Persona they change (today: Agents).
+Settings › Labs (#9877; `web/src/views/settings/Labs.tsx`) is the one place for trial features and for choosing between a
+stable and a new implementation of the same thing. It is a sidebar group of its own, after the hub's, without a title:
+each module says in its own document whose setting it holds. The page explains Labs and says that each item states its
+own scope (the terminal one is this browser only), then draws each module's source with the configuration form. Modules
+inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
+entry.
 
-**Scope and permissions.** Every entry is kept by this browser (`localStorage`), like the page's other per-browser
-settings. It never reaches the hub, another browser, another device or another user, and grants nothing: an entry only
-picks between code paths the page already has and may already run. The page says so under its introduction. An
-instance- or user-wide trial would need a hub-side definition and the hub's existing permission checks; the registry does
-not provide one and no entry needs it yet.
-
-**Definitions.** `LABS` lists every entry with its kind (`choiceLab`: options and a default; `booleanLab`: a default),
-its storage key, scope (`browser`), activation (`new-views`) and the issue that added it. Features read an entry only
-through `readLab` (once, where the feature starts) and the settings page through `useLab`; writes go through `writeLab`.
-No feature adds its own switch for a trial. `Labs.tsx` holds each entry's words in a table typed by the entry ids,
-so a new entry does not compile until it has them in all three languages.
-
-**Values.** The default writes nothing. An entry that had a key before Labs keeps that key and its stored values (an
-option's `raw`), so a saved choice keeps working and an older build reads the same value back. A stored value this build
-does not recognize (another version's, or hand-written) reads as the default, is left in place, and the card says so until
-a choice replaces it. `writeLab` refuses a value the entry does not offer and reports a browser that throws on the write or
-does not read it back; the card then shows an alert and the choice still in effect, never a choice that was not kept. A
-browser that will not let the page read storage shows the default with a note.
-
-**When a change takes effect.** `new-views`: what is already open keeps the value it opened with, and the next one opened
-(or the page after a reload) uses the new one. Nothing running switches implementation midway, and nothing typed is lost.
-
-**Terminal renderer** (the first entry). Single pane terminals (`views/session/terminal/feed.ts`) draw with xterm's DOM
-renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`, its own chunk, loaded only when chosen). Full view always
-uses the DOM renderer and is not affected. It is a browser setting because GPU support differs per browser and machine.
-Its key is `persona.terminal.webgl` with WebGL stored as `1`, the Terminal settings switch's from before Labs.
-- A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals as they are.
-- Terminal settings no longer has its own WebGL switch: its Renderer row says what draws this terminal (Standard, WebGL,
-  or Standard after WebGL stopped) and has a Labs button. It opens the same Labs cards in a dialog over the page (a sheet
-  on a phone; `LabsDialog`), as Edit shortcuts opens its editor, never Settings in place of the page: the chat beside the
-  terminal stays mounted, so an unsent draft keeps its text, its images (held only by the composer, released when it
-  unmounts) and an image being edited.
+**Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
+(`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
+its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
+browser (`localStorage`) because GPU support differs per browser and machine; it never reaches the hub, another browser,
+device or user. Its document has one segmented choice with details for scope, activation and rollback. No request
+leaves the page.
+- Storage: the key `persona.terminal.webgl` with WebGL as `1`, the Terminal settings switch's from before Labs, so a saved
+  choice keeps working and an older build reads the same value back. Standard writes nothing. A value this build doesn't
+  recognize reads as Standard, is left in place and is named in a notice until a choice replaces it; storage the page
+  can't read shows Standard with a notice. A write the browser throws on or doesn't read back fails with the module's
+  message, which says only that the save couldn't be confirmed (the stored value may or may not have changed). The
+  revision follows what is stored, so a choice made in another tab is a conflict for a stale page, and the page follows
+  other tabs through `subscribe`.
+- A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals, and what was
+  typed in them, as they are; the next terminal opened (or the page after a reload) uses it.
+- Terminal settings has no WebGL switch of its own: its Renderer row says what draws this terminal (Standard, WebGL, or
+  Standard after WebGL stopped) and has a Labs button. It opens the same Labs page in a dialog over the page (a sheet on a
+  phone; `LabsDialog`, loaded on first open), as Edit shortcuts opens its editor, never Settings in place of the page:
+  the chat beside the terminal stays mounted, so an unsent draft keeps its text, its images (held only by the composer,
+  released when it unmounts) and an image being edited.
 - If WebGL cannot start or its GPU context is lost, that terminal disposes the addon, xterm repaints with the DOM renderer
-  from its unchanged buffer, input keeps flowing, and Labs is set back to Standard so the next terminal does not fail the
-  same way. A toast says so; if Standard could not be saved, it says that instead. A terminal that fell back stays on
+  from its unchanged buffer, input keeps flowing, and the choice is set back to Standard so the next terminal does not fail
+  the same way. A toast says so; if Standard could not be saved, it says that instead. A terminal that fell back stays on
   Standard until it is opened again.
 
 ### Adding, graduating and removing an entry
 
 1. **Add** an entry only for a real feature with both paths in the code, where going back is safe: no irreversible data
-   migration, no restored removed implementation, no bypassed security fix. Add it to `LABS` with its issue, its words in
-   `en`, `zh-Hans` and `ja`, a search index entry, and tests for both paths and the fallback. Keep the old path the default
-   until the new one has been used for a while.
+   migration, no restored removed implementation, no bypassed security fix. The module adds a source (its document, with
+   details for scope, activation and rollback, its words in `en`, `zh-Hans` and `ja`) to `Labs.tsx`, a search index entry,
+   and tests for both paths and the fallback. Keep the old path the default until the new one has been used for a while.
 2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
    in the release notes, and keep the entry for at least one release so people can still go back.
-3. **Remove** after that release: delete the entry, its words and the old path. Stop reading its key; leave stored values
-   alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
+3. **Remove** after that release: delete the module's source, its words and the old path. Stop reading its key; leave
+   stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
 
 An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
 

@@ -47,12 +47,16 @@ import { KEYBAR_KEY, savedKeyBar } from "./terminal/keybar-pref";
 import { LinkStatus } from "./terminal/LinkStatus";
 import { ModeToggle } from "./terminal/ModeToggle";
 import { ShortcutsEditor } from "./terminal/Shortcuts";
-import { LabsDialog } from "../settings/Labs";
+import { lazyDialog } from "../LazyOverlay";
 import { Surface } from "./terminal/Surface";
 import { TerminalOptions } from "./terminal/TerminalOptions";
 import { UploadStatus } from "./terminal/UploadStatus";
 import { t } from "../../i18n";
 import { SegmentedTrack } from "../../ui/Segmented";
+
+// Labs over the page from Terminal settings › Renderer (settings/Labs.tsx, with the configuration form): loaded on first
+// open, not with this panel (src/startup-preload.ts FIRST_SCREEN_BUDGET).
+const LabsDialog = lazyDialog(() => import("../settings/Labs").then((m) => m.LabsDialog));
 
 const nothing = () => () => {};
 

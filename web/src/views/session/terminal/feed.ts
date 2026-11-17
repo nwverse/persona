@@ -65,7 +65,7 @@ import {
 } from "../../../lib/terminal-details";
 import { FIND_LIMIT, findIndex, findInLines, marksFor, stepFind, type FindMarks, type FindPos, type RowMatch } from "../../../lib/terminal-search";
 import { subscribeAppearance } from "../../../lib/terminal-appearance";
-import { readLab, writeLab, type TerminalRenderer } from "../../../lib/labs";
+import { readTerminalRenderer, writeTerminalRenderer, type TerminalRenderer } from "../../../lib/labs";
 import { toast } from "../../../ui/atoms";
 import { copyNotice, copyWith, osc52Text, transferFiles } from "../../../lib/terminal-clipboard";
 import { cjkFontStack, terminalFontReady } from "./cjk";
@@ -310,7 +310,7 @@ export class TerminalFeed {
       palette: null,
       cursorStyle: parseCursorStyle(localStorage.getItem(CURSOR_KEY)),
       cursorBlink: parseFlag(localStorage.getItem(BLINK_KEY)),
-      rendererChosen: readLab("terminal-renderer").value,
+      rendererChosen: readTerminalRenderer().value,
       renderer: "standard",
       rendererFellBack: false,
       find: null,
@@ -1259,7 +1259,7 @@ export class TerminalFeed {
     if (this.view.rendererFellBack) return;
     this.dropWebgl();
     this.patch({ renderer: "standard", rendererFellBack: true });
-    const kept = writeLab("terminal-renderer", "standard").ok;
+    const kept = writeTerminalRenderer("standard").ok;
     if (why === "webgl_lost") toast(kept ? t("session-terminal-feed.webgl_lost") : t("session-terminal-feed.webgl_lost_unsaved"));
     else toast(kept ? t("session-terminal-feed.webgl_unavailable") : t("session-terminal-feed.webgl_unavailable_unsaved"));
   }

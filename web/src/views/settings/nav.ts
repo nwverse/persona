@@ -58,12 +58,14 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
 
 /** The sidebar (desktop) and the phone's list: the categories in three groups, in this order (docs/assistant/managers.md
  *  "The current assistant"): the current assistant's settings, each page reading and writing that assistant only
- *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. */
-export type NavGroup = "assistant" | "device" | "hub";
+ *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. Then Labs
+ *  on its own, untitled: its modules each say whose setting they hold (Labs.tsx). */
+export type NavGroup = "assistant" | "device" | "hub" | "labs";
 export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
   { key: "assistant", tabs: ["models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
-  { key: "device", tabs: ["general", "notifications", "shortcuts", "labs"] },
+  { key: "device", tabs: ["general", "notifications", "shortcuts"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
+  { key: "labs", tabs: ["labs"] },
 ];
 
 /** The current assistant's group: its pages follow the pick, and an item opened in one goes back to its list when the

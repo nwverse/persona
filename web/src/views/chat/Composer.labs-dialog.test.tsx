@@ -76,40 +76,46 @@ const byText = (text: string) => [...document.querySelectorAll<HTMLButtonElement
 const dialog = () => document.querySelector<HTMLElement>('[data-labs-dialog]');
 const imageTile = () => host.querySelector(`button[aria-label="${t("ui-attachmenttray.edit", { name: "unsent.png" })}"]`);
 
+const settle = async () => {
+  for (let i = 0; i < 4; i++) await act(async () => {});
+};
+
 /** Gear › Renderer › Labs, choose WebGL, close the dialog. */
-function chooseWebglInLabs() {
+async function chooseWebglInLabs() {
   act(() => host.querySelector<HTMLButtonElement>("[data-gear]")!.click());
   expect(document.body.textContent).toContain(t("session-terminal-terminaloptions.renderer_standard"));
   act(() => byText(t("session-terminal-terminaloptions.renderer_open_labs"))!.click());
   expect(document.querySelector("[data-terminal-renderer]")).toBeNull(); // the menu closed, as for Edit shortcuts
   expect(dialog()).not.toBeNull();
   expect(location.pathname + location.search).toBe(session);
+  await settle(); // the form reads the module's document
   act(() => byText(t("settings-labs.terminal_renderer_webgl"))!.click());
+  await settle();
   expect(localStorage.getItem("persona.terminal.webgl")).toBe("1");
-  expect(dialog()!.textContent).toContain(t("settings-labs.saved"));
+  expect(dialog()!.textContent).toContain(t("settings-configuration.saved"));
   act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 }
 
-it("keeps the unsent text and the same composer through Labs, with the choice saved", () => {
+it("keeps the unsent text and the same composer through Labs, with the choice saved", async () => {
   act(() => sendDraft(key, { type: "replace", text: "Unsent words" }));
   const box = host.querySelector("textarea")!;
-  chooseWebglInLabs();
+  await chooseWebglInLabs();
   expect(host.querySelector('[data-page="settings"]')).toBeNull();
   expect(host.querySelector("textarea")).toBe(box); // never unmounted: every bit of the composer's state is as it was
   expect(box.value).toBe("Unsent words");
 });
 
-it("keeps an unsent image (not released) through Labs", () => {
+it("keeps an unsent image (not released) through Labs", async () => {
   act(() => sendDraft(key, { type: "image", image: { name: "unsent.png", mime: "image/png", data: btoa("unsent-image-bytes") } }));
   expect(imageTile()).not.toBeNull();
-  chooseWebglInLabs();
+  await chooseWebglInLabs();
   expect(revoke).not.toHaveBeenCalledWith("blob:labs/unsent-image");
   expect(imageTile()).not.toBeNull();
 });
 
-it("this terminal still says Standard after choosing WebGL: the choice is for terminals opened next", () => {
-  chooseWebglInLabs();
+it("this terminal still says Standard after choosing WebGL: the choice is for terminals opened next", async () => {
+  await chooseWebglInLabs();
   act(() => host.querySelector<HTMLButtonElement>("[data-gear]")!.click());
   expect(document.querySelector("[data-terminal-renderer]")?.getAttribute("data-terminal-renderer")).toBe("standard");
 });

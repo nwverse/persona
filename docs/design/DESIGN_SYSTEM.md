@@ -2266,21 +2266,35 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
 
-## Labs entries (web, #9877)
+## Configuration forms (web, #9877)
 
-Settings › Labs (`docs/web/web.md`, "Labs") shows each trial feature or implementation choice as one row of a settings
-`Group`, grouped under the area it changes: the name in the row's label type with an orange `Pill` ("Trial"), the
-description in the hint type, the existing `Segmented` control for a choice (or `Switch` for on / off) at the end, stacked
-under the text on a narrow screen, then a two-column definition list in `text-[11.5px]` (`ink-3` terms, `ink-2` values;
-one column on a phone) with **Default**, **Applies to**, **Takes effect** and **Going back**. A saved value the build does
-not recognize, or storage it cannot read, adds an orange note under the list; a save that failed adds a red `role="alert"`
-line and the control keeps showing the value in effect; a save that worked adds a green line in a polite live region. The
-page's sidebar icon is the existing `sparkles` glyph (a dedicated one would not fit the first screen's budget). Why a new row pattern: principle 3 asks every behavior-changing
-setting to say its default, reach and rollback, and a trial needs all four said before someone tries it; a plain `Row`
-hint would put that in one truncated line. Where a feature also has its own options menu (Terminal settings), it shows
-the current value read-only with a button that opens the same Labs cards in a `Dialog` over the page (never navigating
-away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a second switch, so there is one
-place to change it.
+A module's settings described as a configuration Document (`docs/web/web.md`, "Configuration forms") are drawn by one
+generic form, never a page of their own: the document's title as a group heading (`text-[12px]` `ink-3`) with its
+description under it, then each group as a settings `Group` (its title above, its description as the footer). A field
+is a row: the title in the row's label type, its description in the hint type, the control, a two-column definition list
+in `text-[11.5px]` (`ink-3` terms, `ink-2` values, the page's existing `grid-cols-[auto_1fr]`: **Default** first, then the
+module's details as given), then any notice (orange for a warning, `ink-3` for info), the disabled reason or "Read only",
+a polite live line (**Saving…** with a spinner, then a green **Saved**), a red `role="alert"` error and a quiet **Use
+default** button where the value differs from the default.
+- Controls, all existing: a toggle is the `Switch` at the row's end; a select is the `Segmented` control at the end
+  (`segmented`), a native select in the settings field style at the end (`dropdown`) or `ChoiceRows` under the text
+  (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
+  input or textarea, a number the input with a decimal keyboard. Text and numbers show **Cancel** / **Save** only once
+  they differ from what is saved, and a scalar count when there is a maximum; a multiselect's checks are the same kind of
+  pending edit, so a fixed count can move from A to B (two checks for the moment in between) without an invalid write.
+- Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
+  **Try again**) are one card above the groups.
+- An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a
+  control.
+Why one form: the user asked for settings that modules inject with one portable contract and shared styles, so a new
+module adds data, not a page, and the same states (pending, saved, failed, conflict, read only) look the same everywhere.
+
+**Labs** (`docs/web/web.md`, "Labs") is a sidebar group of its own without a title, with the existing `sparkles` glyph (a
+dedicated one would not fit the first screen's budget); its page is an introduction card with a note under it that each
+item states its own scope, then one configuration form per module. Where a feature also has its own options menu
+(Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
+the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
+second switch, so there is one place to change it.
 
 ## A chosen page that is not there now (#9071)
 
