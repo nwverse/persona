@@ -529,6 +529,13 @@ on-demand model panel, not the everyday Assistant home (#6887).
   place, a click anywhere on it toggles it and nothing inside it answers (no hover bar or menus), and the bar in the
   composer's place reads Cancel, "N selected" and Forward N; Esc cancels too. The row over the composer is
   `ForwardGroupBar` and the bubble's card `ForwardGroupBlock` (`views/chat/ForwardGroup.tsx`), past three "N more".
+  Web (#9469): the message menu ends in "Select messages" (「多选」) under a divider with the `check` icon, as iOS; the
+  bar reads Cancel, "N selected", the Include questions chip (a round `CheckMark`, the accent tint when on) and Forward,
+  Copy and Export image (Export image the primary button); on a phone the three are a card under that line, an icon over
+  each word, as the iPhone's long-press bar. A question a picked reply brings has a lighter tick (`bg-accent-tint`).
+  Export image is a `Dialog` with its ✕ (a bottom sheet on a phone): the preview, then the switches, then Copy image and
+  Download PNG in the footer; the picture's foot is the assistant's face and name with "(Persona)", as iOS's
+  `PersonaBrandLockup` `.mark`.
 - Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
   words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
   Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for

@@ -9,7 +9,7 @@ import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
-import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_AGENTS_ONLY_FEATURE, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
+import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
@@ -871,7 +871,7 @@ function onMessage(msg: Record<string, unknown>) {
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
-      const agentsMode = state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE);
+      const agentsMode = supportsPagedAgents(state.features);
       const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
       const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
@@ -899,10 +899,13 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
-        // at once, not in a hint's window: a reconnect may have missed any number of changes (docs/lessons/web.md, #6362)
-        if (agentsMode && usedAgentsList) void runtimeAgents.load().catch(() => {});
         void refreshAgentSessions();
         void refreshAgentPrefs();
+      }
+      // Overview and attention signals need counts even when the paged sidebar is closed. Read at once when a
+      // reconnect may have missed changes, without waiting for another hint (docs/lessons/web.md, #6362).
+      if (agentsMode && (!isResumed(msg) || !runtimeAgents.getSnapshot().loaded)) {
+        void runtimeAgents.load().catch(() => {});
       }
       directionTreeAwaitsHello(false); // after followDirections started its read: those waiting share it
       break;
@@ -924,7 +927,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
       runtimeSessions.invalidate();
-      if (state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE)) {
+      if (supportsPagedAgents(state.features)) {
         const agentsList = runtimeAgents.getSnapshot();
         if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
       }

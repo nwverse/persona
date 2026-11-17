@@ -1,6 +1,50 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Beta Updates" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta Updates"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta アップデート"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta 更新"
+          }
+        }
+      }
+    },
+    "Beta updates install prereleases from the beta channel. Turn this off to return to stable releases. An update already in progress must finish before changing channels." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta updates install prereleases from the beta channel. Turn this off to return to stable releases. An update already in progress must finish before changing channels."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta アップデートではベータチャンネルのプレリリースをインストールします。オフにすると安定版に戻ります。実行中の更新が終わるまでチャンネルは切り替えられません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta 更新会安装预发布版本。关闭后恢复正式版更新；进行中的更新结束后才能切换通道。"
+          }
+        }
+      }
+    },
     "" : {
       "shouldTranslate" : false,
       "localizations" : {
