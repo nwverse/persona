@@ -1075,8 +1075,11 @@ nonisolated enum Theme {
         static let switchHeight: CGFloat = 44
         /// The largest text size the top bars grow with (their buttons, the face, the switch: up to 1.35 ×): larger, the
         /// bar reached into the search field pulled out under it on Agents, whose room is a line of the system's that
-        /// does not grow with the text (`ShellNavigationClearance`).
-        static let topBarLargestTypeSize: DynamicTypeSize = .xxxLarge
+        /// does not grow with the text (`ShellNavigationClearance`). iOS 18's line is shorter (78 pt with the bar, #6730):
+        /// there the bars stop a size earlier.
+        static var topBarLargestTypeSize: DynamicTypeSize {
+            if #available(iOS 26.0, *) { .xxxLarge } else { .xxLarge }
+        }
         /// Room on Agents between the navigation bar and the search field for the top bar, which is taller (`AgentsHeader`):
         /// the height of the system's prompt line that made it before (`ShellNavigationClearance`), the same at every size.
         static let agentsRoom: CGFloat = 34
