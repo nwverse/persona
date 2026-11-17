@@ -51,7 +51,7 @@ Persona doesn't register those adapters. The node handles this elicitation itsel
 | Website origin, form without fields | Permission card: Allow / Deny. Doesn't invent "always allow" when the runtime didn't offer it |
 | Open a URL | Permission card includes the URL, allow or deny |
 | One enum field | Question card, with the enum values plus deny; the wait kind is `answer` |
-| Simple fields to fill in | Permission card input fields (phone can fill them; the web card can't, so missing required values never count as approval) |
+| Simple fields to fill in | Permission card input fields (the phone and the web fill them in; missing required values never count as approval) |
 | Unknown structure | Still a card; even tapping Allow returns cancellation, never pretends consent |
 
 No answer, dismissing the card, timeout, or the assistant answering through `interaction_answer` all return `cancel`. The runtime considers it unapproved. The model never sees "allowed" and cannot approve itself.

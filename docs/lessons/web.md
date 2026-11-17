@@ -1402,3 +1402,14 @@ approval (bypass permissions mode holds Persona's peer messages) read as "Not se
 owner retyped it on the computer. Keep the node's code on the entry and word the bubble from it (`entryReason`, also for
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
+
+## A card's fields the web did not draw, and the refusal that read as 502 (2026-11-17, #9828)
+
+The hub sends a permission card's `fields` (a mail account's password when the assistant adds one) to every client.
+iOS and Android drew them as a form (`requiresInput`, `hasFieldsForm`); the web drew inputs only on the password card
+(`secret_run`) and showed every other such card as a plain permission card, so its Allow went without the value. The
+manager refused it as it should ("Fill in Password first"), but the refusal was a bare localized error, and the resolve
+route's `apierr.Call` answers any error it does not recognize as 502: the owner saw "the service could not complete
+this request" and pressed Allow again, dozens of times. When a card gains something to fill in, check that every client
+draws it (`FieldsPermissionCard` on the web); and give a refusal that is the answer's fault a type the route maps to a
+4xx (`fieldMissing`, 400), since what `apierr.Call` does not know reads as the server failing.

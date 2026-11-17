@@ -509,6 +509,11 @@ func endStatus(r proto.Resolution) string {
 var errInvalidElicitation = errors.New("elicitation requires action accept, decline or cancel")
 var errInvalidEditedAnswer = errors.New("edited_text requires an editable permission card and a plain allow")
 
+// fieldMissing refuses an Allow that leaves one of the card's required fields empty ("Fill in <field> first", in the
+// request's language): the answer's fault, so the resolve route says 400, not a failed call; nothing is answered and
+// the card still waits.
+type fieldMissing struct{ *i18n.Message }
+
 // editedAnswerAllowed rejects an edit before its card or channel owner action is consumed. The node still has to
 // prove that the rewritten command has the same tool, gate, method, path and query; this checks only the answer envelope.
 func editedAnswerAllowed(ix proto.Interaction, r proto.Resolution) bool {
@@ -573,7 +578,7 @@ func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resoluti
 		for _, f := range p.ix.Fields {
 			if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
 				s.fleet.mu.Unlock()
-				return i18n.Err("hub-hub.fill_in", i18n.Args{"field": f.Label})
+				return fieldMissing{i18n.Err("hub-hub.fill_in", i18n.Args{"field": f.Label}).(*i18n.Message)}
 			}
 		}
 	}

@@ -387,6 +387,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // outbox's unseen rows in lib/seen-outbox.ts) adds 112 B in ja, measured in one environment against main 7f756aa00a (ja
 // 482,373 B to 482,485 B; en 479,275 B to 479,391 B, zh-Hans 480,079 B to 480,221 B). Main had 153 B of room; the
 // budget stays.
+// #9828: a permission card's fields form is a chunk of its own (views/chat/FieldsPermissionCard.tsx); the first screen
+// keeps only InteractionCard's check (hasFieldsForm) and the lazy entry. 35 B in ja, measured in one environment against
+// main ace6595c (ja 482,488 B to 482,523 B; en 479,394 B to 479,435 B, zh-Hans 480,224 B to 480,245 B). Main had 38 B
+// of room; the budget stays.
 export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

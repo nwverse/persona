@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -154,6 +155,54 @@ func TestResolveRoute(t *testing.T) {
 	ft.st.status["ix_old"] = "expired"
 	if w := post("ix_old", `{"dismiss":true}`); w.Code != http.StatusGone || !strings.Contains(w.Body.String(), `"status":"expired"`) {
 		t.Fatalf("expired: %d %s", w.Code, w.Body)
+	}
+}
+
+// langRecorder is a response recorder that carries the request's language, as the bus's recorder does.
+type langRecorder struct {
+	*httptest.ResponseRecorder
+	lang i18n.Lang
+}
+
+func (w langRecorder) Lang() i18n.Lang { return w.lang }
+
+// An Allow that leaves a required field empty is the answer's fault: 400 with "Fill in <field> first" in the
+// request's language, not a failed call (502), and the card still waits; the same Allow with the field filled in
+// answers it with the value.
+func TestResolveRouteRefusesAnAllowWithoutItsFields(t *testing.T) {
+	ft, ix, done := answerFleet(t)
+	ft.s.fleet.mu.Lock()
+	p := ft.s.fleet.interactions[ix.ID]
+	p.ix.Kind, p.ix.Questions = proto.IxPermission, nil
+	p.ix.Fields = []proto.Field{{Key: "password", Label: "Password", Secret: true}, {Key: "note", Label: "Note", Optional: true}}
+	ft.s.fleet.mu.Unlock()
+	h := ft.s.fleetHandler(http.NotFoundHandler())
+	post := func(body string) langRecorder {
+		w := langRecorder{httptest.NewRecorder(), i18n.En}
+		h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(body)))
+		return w
+	}
+	for _, body := range []string{`{"allow":true}`, `{"allow":true,"values":{"password":"   ","note":"x"}}`} {
+		w := post(body)
+		var out struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		if w.Code != http.StatusBadRequest || out.Error != "Fill in Password first" || out.Code != "bad_request" {
+			t.Fatalf("%s: %d %s", body, w.Code, w.Body)
+		}
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("answered without its field: %+v", got)
+	default:
+	}
+	if w := post(`{"allow":true,"values":{"password":"example-password"}}`); w.Code != http.StatusOK {
+		t.Fatalf("filled in: %d %s", w.Code, w.Body)
+	}
+	if got := <-done; got.Allow == nil || !*got.Allow || got.Values["password"] != "example-password" {
+		t.Fatalf("hook got %+v", got)
 	}
 }
 
