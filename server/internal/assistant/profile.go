@@ -619,6 +619,9 @@ func (s *Service) profileRoutes() {
 			return
 		}
 		out := s.view(r.Context(), archived == "1" || archived == "true", space)
+		if tag := strings.TrimSpace(r.URL.Query().Get("tag")); tag != "" {
+			out.Conversations = slices.DeleteFunc(out.Conversations, func(c proto.Session) bool { return !hasTag(c, tag) })
+		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
 		}

@@ -606,8 +606,10 @@ internal fun ColumnDragController.gestureModifier(
 
 /**
  * One finger, on the initial pass, so a scroll or a row swipe still sees the touch until this drag takes it.
- * The system back edge is not made to wait (`SplitColumnControl.swift:156`): when the detail can go back,
- * [columnDragTakeOver] declines and nothing is consumed.
+ * When the detail can go back, [columnDragTakeOver] declines and nothing is consumed
+ * (`SplitColumnControl.swift:156`, `:160-169`). At a root with the column hidden, [JSidebarColumn] excludes the
+ * open-zone strip from system gestures (`RootEdgeExclusion`, #9803) so that edge opens the column as on iOS
+ * (`SplitColumnControl.swift:132-137`).
  *
  * iOS measures x from the left (`:136`). This does too. A right-to-left window is not specified there.
  */

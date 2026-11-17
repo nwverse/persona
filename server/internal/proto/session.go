@@ -171,9 +171,13 @@ type Session struct {
 	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
 	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
 	// hooks run under; false while unknown (no hook yet, a node too old to say).
-	BypassAvailable bool   `json:"bypass_available,omitempty"`
-	Title           string `json:"title"`
-	Cwd             string `json:"cwd"`
+	BypassAvailable bool `json:"bypass_available,omitempty"`
+	// Tags are the user-defined labels of an assistant conversation (assistant/conversation_tags.go), set by the user
+	// or the assistant. A pointer so a row without tags adds no size to Session's size class (session_size_test.go);
+	// nil and an empty slice both mean "no tags" and are omitted on the wire.
+	Tags  *[]string `json:"tags,omitempty"`
+	Title string    `json:"title"`
+	Cwd   string    `json:"cwd"`
 	// WorkspaceCwd is the node-verified physical directory for Cwd. Consumers
 	// matching workspace bindings prefer it and fall back to Cwd on older nodes.
 	WorkspaceCwd string `json:"workspace_cwd,omitempty"`
@@ -280,16 +284,18 @@ type Session struct {
 	Channels []string `json:"channels,omitempty"`
 	// Space / slot generalize where an agent lives in its host tool: for herdr a workspace and a tab
 	// (docs/protocol/agent-states.md). Agents sharing a space are shown together as one collaborating group.
-	SpaceKind  string `json:"space_kind,omitempty"` // herdr
-	SpaceID    string `json:"space_id,omitempty"`
-	SpaceName  string `json:"space_name,omitempty"`
-	SpaceIndex int    `json:"space_index,omitempty"`
+	SpaceKind string `json:"space_kind,omitempty"` // herdr
+	SpaceID   string `json:"space_id,omitempty"`
+	SpaceName string `json:"space_name,omitempty"`
+	// SpaceIndex and SlotIndex are small host-side ordinal numbers (a workspace's and a tab's place), so int32 is wide
+	// enough; keeping the two four-byte fields in one word leaves room in Session's size class (session_size_test.go).
+	SpaceIndex int32 `json:"space_index,omitempty"`
+	SlotIndex  int32 `json:"slot_index,omitempty"`
 	// ParentSpaceID is the space this one is nested under in its host, same kind and machine (Orca: a child
 	// worktree's parent, #2073); empty for a top-level space. Clients that know it fold the child under its parent.
 	ParentSpaceID string `json:"parent_space_id,omitempty"`
 	SlotID        string `json:"slot_id,omitempty"`
 	SlotName      string `json:"slot_name,omitempty"`
-	SlotIndex     int    `json:"slot_index,omitempty"`
 	// PaneIndex is the pane's 0-based place in its slot by layout, top left first: 0 is the pane the others were split
 	// from (the group's "Initiator" when an agent runs there). Absent (nil) when the host does not say where its panes sit
 	// (older nodes, hosts without layouts, a pane missing from the layout). A pointer so that 0 is sent.
