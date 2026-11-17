@@ -219,7 +219,8 @@ struct ImageViewer: View {
 
     private var topBar: some View {
         ViewerTopBar {
-            Button { dismiss() } label: { ViewerIcon(symbol: Theme.Icon.back) }
+            // ✕, as the share card's viewer and every presented page (#9653); ‹ is for a page that was pushed.
+            Button { dismiss() } label: { ViewerIcon(symbol: Theme.Icon.close) }
                 .viewerRound()
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("viewer-close")
