@@ -387,14 +387,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // outbox's unseen rows in lib/seen-outbox.ts) adds 112 B in ja, measured in one environment against main 7f756aa00a (ja
 // 482,373 B to 482,485 B; en 479,275 B to 479,391 B, zh-Hans 480,079 B to 480,221 B). Main had 153 B of room; the
 // budget stays.
-// #9053: the Inbox section bar takes 59 B of that room in each language, measured in one environment against main
-// ae3d20467b (ja 482,386 B to 482,445 B; en 479,282 B to 479,341 B, zh-Hans 480,087 B to 480,146 B): the grouping mark
-// in the icon set, IconButton saying it opens a menu, and --needs-ink with its class. The rest stays off the first
-// screen: CountBadge, which only the Inbox page draws so far, is a module of its own (ui/CountBadge.tsx; in atoms it
-// took another 131 B against main 094253763d); of #4653's two Needs-you tokens only the text shade it draws comes along
-// (the fill took 49 B more); the bar's strip uses spacing classes the CSS already has (its own took 44 B more); and the
-// App chunk is main's to the byte: the bar keeps its own copy of the edge fade's widths and of the arrow keys' step
-// rather than importing them from views/chat, which moved that chunk by up to 131 B. The budget stays.
+// #9053: the Inbox section bar adds 9 B in each language, measured in one environment against main a2531b0b62 (ja
+// 482,485 B to 482,494 B; en 479,391 B to 479,400 B, zh-Hans 480,221 B to 480,230 B): two of atoms' hard-coded sizes
+// become the named one they equal, which pays the font ratchet for CountBadge's. Everything else is in the Inbox page's
+// chunk: CountBadge (ui/CountBadge.tsx; 131 B in atoms against main 094253763d), its Needs-you tone in the existing
+// --attention utility the sidebar's counts use until #4653 brings the blue (its text token was 29 B in the token table
+// alone, more in the CSS), the grouping button with its mark (IconButton's menu attributes and the icon set's mark took
+// 43 B), the bar's own copies of the edge fade's widths and the arrow keys' step (up to 131 B in the App chunk), and
+// spacing classes the CSS already has (a new one took 44 B). The budget stays.
 export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

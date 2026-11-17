@@ -10,9 +10,6 @@ const P: Record<string, React.ReactNode> = {
   chevron: <path d="M6 9l6 6 6-6" />,
   pin: <g><path d="M12 17v5" /><path d="M9 10.76V6h6v4.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z" /><path d="M8 2h8v4H8z" /></g>,
   filter: <path d="M3 5h18M6 12h12M10 19h4" />,
-  // how a list's rows are grouped (Lucide's list-tree), not which show: the Inbox section bar's grouping menu (#9053), as
-  // iOS keeps its capsule's grouping control apart from its filter
-  grouping: <path d="M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3" />,
   chevronRight: <path d="M9 6l6 6-6 6" />,
   chevronLeft: <path d="M15 18l-6-6 6-6" />,
   // show all the lines hidden between two hunks of a diff

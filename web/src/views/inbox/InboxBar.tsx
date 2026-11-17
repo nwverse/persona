@@ -4,12 +4,12 @@
 // the grouping in a menu at the row's end. The sections scroll sideways when they don't fit, faded at the edge with more
 // and moved by a mouse's wheel too, while All, the reset, stays in sight beside the grouping, as iOS keeps its capsule's
 // trailing control; the arrow keys, Home and End move along it and choose, as in a radio group.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEventHandler, type RefObject } from "react";
 import { t } from "../../i18n";
 import { TIERS } from "../../lib/inbox";
 import { type BarChoice, type BarEntry } from "../../lib/inbox-bar";
 import type { Grouping } from "../../lib/inbox-groups";
-import { cx, IconButton, Menu, useMenu } from "../../ui/atoms";
+import { cx, Menu, useMenu } from "../../ui/atoms";
 import { CountBadge } from "../../ui/CountBadge";
 import { nextTab } from "../../ui/roving";
 
@@ -51,6 +51,36 @@ function useBeyond(ref: RefObject<HTMLElement | null>, key: string): { left: num
     return () => ro.disconnect();
   }, [ref, measure]);
   return { ...beyond, measure };
+}
+
+// How a list's rows are grouped (Lucide's list-tree), not which show: apart from the filter mark, as iOS keeps its
+// capsule's grouping control apart from its filter (DESIGN_SYSTEM 3.4 "List controls").
+const GROUPING_MARK = "M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3";
+
+/** The grouping menu's button: IconButton's look and size, the menu said to assistive technology, drawn here as the
+ *  Agents list draws its own list menu button (Sidebar's ListMenuButton). Not IconButton with a mark in the icon set:
+ *  both are on every first screen (src/startup-preload.ts FIRST_SCREEN_BUDGET), and only this page needs them. */
+function GroupingButton({ open, onClick }: { open: boolean; onClick: MouseEventHandler<HTMLButtonElement> }) {
+  const label = t("inbox-inboxlist.grouping");
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      onClick={onClick}
+      className={cx(
+        "touch-hit flex shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.94]",
+        open ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
+      )}
+      style={{ width: 24, height: 24 }}
+    >
+      <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d={GROUPING_MARK} />
+      </svg>
+    </button>
+  );
 }
 
 /** `grouping`: the list's grouping, chosen in the menu at the row's end; `groupable`: false where the choice is not grouped
@@ -132,9 +162,10 @@ export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGroup
         </div>
         {all && pill(all)}
       </div>
-      <div inert={!groupable} className={cx("flex shrink-0 items-center gap-0.5", !groupable && "invisible")} data-bar-grouping>
+      {/* pulled 4 px into the list's side padding: the button's mark, not its box, ends where the search field does */}
+      <div inert={!groupable} className={cx("-mr-1 flex shrink-0 items-center gap-0.5", !groupable && "invisible")} data-bar-grouping>
         <span aria-hidden className="h-4 w-px shrink-0 bg-line-strong" />
-        <IconButton icon="grouping" label={t("inbox-inboxlist.grouping")} onClick={menu.open} active={Boolean(menu.anchor)} menu size={24} iconSize={13} />
+        <GroupingButton open={Boolean(menu.anchor)} onClick={menu.open} />
       </div>
       {menu.anchor && groupable && (
         <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={180} header={t("inbox-inboxlist.grouping")}

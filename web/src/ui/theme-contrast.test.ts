@@ -11,7 +11,7 @@ const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 // The minutes' summary card's own tokens load with the Knowledge page (#6563).
 const minutesCss = readFileSync(new URL("../views/knowledge/minutes-overview.css", import.meta.url), "utf8");
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
-const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "needs-ink", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
+const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
 
 // A color laid over another (#rrggbbaa over #rrggbb), and `color-mix(in srgb, a (1 - p), b p)`, as the browser paints them.
 const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -131,9 +131,6 @@ describe("default palette contrast", () => {
       expect(short).toEqual([]);
       // Unadjusted, the built-in theme colors fall short on the dark AI tint: the rule above is what keeps them.
       if (scheme === "dark") expect(contrast(accentTokens(PRESET_COLORS.blue.accent).dark["--accent-ink"], ai)).toBeLessThan(4.5);
-    });
-    it(`${scheme}: Needs you's text is the shade every client uses (spec/tokens/color.status.json)`, () => {
-      expect(t["needs-ink"]).toBe(scheme === "light" ? "#0064c8" : "#409cff");
     });
     it(`${scheme}: inline code's ink (--ink and --ink-2 mixed, #9477) reads on every background, between the two`, () => {
       expect(css).toContain("color: color-mix(in srgb, var(--ink) 55%, var(--ink-2))");

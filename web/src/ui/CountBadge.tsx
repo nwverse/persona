@@ -5,7 +5,9 @@ import { cx } from "./atoms";
 
 export type CountTone = "needs" | "neutral" | "accent";
 const COUNT_TONE: Record<CountTone, string> = {
-  needs: "bg-field text-needs-ink",
+  // the web's Needs-you counts as they are drawn today (the sidebar's, SidebarParts BADGE_CLASS.attention); #4653 turns
+  // every one of them to the Needs-you blue of DECISIONS 11-11 at once, this one with them
+  needs: "bg-field text-attention",
   neutral: "bg-field text-ink-2",
   accent: "bg-accent-ink text-surface",
 };

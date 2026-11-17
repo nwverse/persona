@@ -8,7 +8,7 @@ describe("count badge", () => {
     const big = renderToStaticMarkup(<CountBadge count={120} />);
     expect(big).toContain(">99+</span>");
     expect(big).toContain('<span class="sr-only">120</span>');
-    expect(renderToStaticMarkup(<CountBadge count={3} />)).toMatch(/data-count-badge="needs"[^>]*class="[^"]*bg-field text-needs-ink"[^>]*>3<\/span>$/);
+    expect(renderToStaticMarkup(<CountBadge count={3} />)).toMatch(/data-count-badge="needs"[^>]*class="[^"]*bg-field text-attention"[^>]*>3<\/span>$/);
   });
 
   it("takes a passive or accent tone and the dense size", () => {

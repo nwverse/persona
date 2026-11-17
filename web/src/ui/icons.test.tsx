@@ -21,12 +21,6 @@ describe("device icons", () => {
     expect(new Set(glyphs).size).toBe(glyphs.length);
   });
 
-  it("draws a list's grouping control apart from its filter (DESIGN_SYSTEM 3.4 \"List controls\", #9053)", () => {
-    const glyph = (name: string) => renderToStaticMarkup(<Icon name={name} />);
-    expect(glyph("grouping")).toMatch(/<path\b/);
-    expect(glyph("grouping")).not.toBe(glyph("filter"));
-  });
-
   it.each(["phone", "watch", "terminal", "appWindow"])("keeps %s in the shared icon design system", (name) => {
     const html = renderToStaticMarkup(<Icon name={name} className="text-ink-3" />);
     expect(html).toContain('viewBox="0 0 24 24"');

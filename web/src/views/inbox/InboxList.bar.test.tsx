@@ -31,6 +31,8 @@ import { barFade } from "./InboxBar";
 import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { resetMailForTests } from "../../lib/mail";
 import { edgeMask } from "../chat/edge-fade";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Icon } from "../../ui/icons";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -240,6 +242,10 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(grouping().getAttribute("aria-haspopup")).toBe("menu");
     expect(grouping().getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector('[role="radiogroup"][aria-label="分组方式"]')).toBeNull(); // no row of its own
+    // the grouping's own mark, not the filters' (DESIGN_SYSTEM 3.4 "List controls")
+    const filterMark = renderToStaticMarkup(<Icon name="filter" />).match(/ d="([^"]+)"/)?.[1];
+    expect(grouping().querySelector("path")?.getAttribute("d")).toMatch(/^M21 12h-8/);
+    expect(grouping().querySelector("path")?.getAttribute("d")).not.toBe(filterMark);
     act(() => grouping().click());
     expect(grouping().getAttribute("aria-expanded")).toBe("true");
     act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));

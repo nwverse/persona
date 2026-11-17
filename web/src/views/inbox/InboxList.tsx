@@ -461,9 +461,9 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-    {/* the section bar stays in sight over the list's scroller, with the counts of the choices not shown; its trailing
-        grouping button's mark, not its box, lines up with the search field's end */}
-    <div className="shrink-0 px-3 pt-3 sm:pl-4">
+    {/* the section bar stays in sight over the list's scroller, with the counts of the choices not shown, in the list's
+        own side padding (its trailing grouping button's mark, not its box, lines up with the search field's end) */}
+    <div className="shrink-0 px-3 pt-3 sm:px-4">
       <div className="mx-auto max-w-[760px]">
         <InboxBar entries={sectionBar.bar} chosen={choice} onPick={pickChoice} grouping={grouping} groupable={choice !== "done" && choice !== "working"} onGrouping={(g) => setGrouping(g === "source" ? "" : g)} />
       </div>

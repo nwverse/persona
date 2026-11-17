@@ -116,7 +116,6 @@ export function IconButton({
   className = "",
   disabled,
   iconSize = 15,
-  menu,
 }: {
   icon: IconName;
   label: string;
@@ -126,16 +125,12 @@ export function IconButton({
   className?: string;
   disabled?: boolean;
   iconSize?: number;
-  /** It opens a menu, open while `active`: said so to assistive technology. */
-  menu?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
-      aria-haspopup={menu ? "menu" : undefined}
-      aria-expanded={menu ? Boolean(active) : undefined}
       disabled={disabled}
       onClick={onClick}
       className={cx(

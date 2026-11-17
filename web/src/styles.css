@@ -83,10 +83,6 @@
   --red: #bd3038;
   --red-tint: #f7f8f9;
   --attention: #8f5c00;
-  /* Needs You (DECISIONS 11-11, #4538): the text shade of the system blue every client uses for "your turn", keeping
-     4.5:1 on every background token; the Needs-you CountBadge draws its digits with it. The blue's fill (#007aff, dark
-     #0a84ff) comes with what fills with it (#4653's dots and badges): every token here is on the first screen. */
-  --needs-ink: #0064c8;
   --danger-fill: #bd3038;
   /* The AI role (iOS Theme.ai): what the AI runs on its own, such as ultracode's workflow icon (#3428) and a
      workflow run (#3434). */
@@ -150,7 +146,6 @@
   --red: #ff9499;
   --red-tint: #1f2022;
   --attention: #f1b969;
-  --needs-ink: #409cff;
   --danger-fill: #bd3038;
   --ai: #9c94ff;
   --ai-tint: #9c94ff24;
@@ -234,7 +229,6 @@
   --color-red-tint: var(--red-tint);
   --color-danger-wash: var(--danger-wash);
   --color-attention: var(--attention);
-  --color-needs-ink: var(--needs-ink);
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
   --color-ai-tint: var(--ai-tint);
