@@ -726,9 +726,16 @@ extension AppModel {
 /// the status bar stands at the side: a fog only as wide as the page stopped beside it, a hard edge (#283).
 private extension View {
     /// What a screenshot shows of the bar (#9508): the assistant's avatar and name with "(Persona)" in its row of
-    /// buttons, over the page's color down to where the fog starts to fade (the fog under both carries on below).
+    /// buttons, down to where the fog starts to fade (the fog under both carries on below). Under the bar the page's
+    /// color with the fog's own over it, so at rest the bar looks as it did; under the banner the page's color alone.
     func barScreenshotBanner() -> some View {
         screenshotBanner(solid: AssistantTopBar.fogSolid, fade: Theme.Space.m) {
+            ZStack {
+                Theme.pageBackground
+                Rectangle().fill(.regularMaterial)
+                Theme.pageBackground.opacity(0.82)
+            }
+        } bannerBackdrop: {
             Theme.pageBackground
         } banner: {
             ScreenshotBannerContent(row: (AssistantTopBar.topInset, Theme.Size.tapTarget))

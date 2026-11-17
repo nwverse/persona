@@ -8029,30 +8029,10 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     /// Settings › Appearance & Display › Persona Banner in Screenshots (#9508).
     @StoredValue(ScreenshotBannerPrefs.enabledKey) private var screenshotBanner = ScreenshotBannerPrefs.enabledByDefault
 
-    /// The open header and its slim bar, folded as far as the chat has scrolled.
-    @ViewBuilder private var header: some View {
-        #if DEBUG || PERF_SIGNPOST
-        let _ = PerfTrace.body("ChromeHeader")
-        #endif
-        let maxC = chrome.maxCollapse
-        let c = min(max(chrome.collapse, 0), maxC)
-        let p = maxC > 0 ? c / maxC : 0 // 0 open … 1 folded
-        ZStack(alignment: .top) {
-            ChatRegion(name: "ChromeFull.body", content: full)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome.height = $0 }
-                .offset(y: -c)
-                .opacity(Double(1 - min(1, p * 1.5)))
-                .allowsHitTesting(p < 0.5)
-                .modifier(GoneWhen(gone: p * 1.5 >= 1, height: chrome.height))
-            // Not there at all until it starts to show (it is clear below half way).
-            if p > 0.5 {
-                ChatRegion(name: "ChromeCompact.body", content: compact)
-                    .opacity(Double(max(0, (p - 0.5) * 2)))
-            }
-        }
-        .frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
-        .clipped()
+    /// The open header and its slim bar: its own view, so the fold is read where it is drawn (inside the bar's own
+    /// hosting controller with the screenshot banner on, #9508), not by this one at every step of a fold.
+    private var header: some View {
+        ChromeHeaderStack(chrome: chrome, full: full, compact: compact)
     }
 
     var body: some View {
@@ -8083,6 +8063,38 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
         header
             .background(.bar, ignoresSafeAreaEdges: .top)
             .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
+    }
+}
+
+/// The open header and its slim bar, folded as far as the chat has scrolled (`ChromeHeader`).
+private struct ChromeHeaderStack<Full: View, Compact: View>: View {
+    var chrome: ChatChrome
+    @ViewBuilder var full: () -> Full
+    @ViewBuilder var compact: () -> Compact
+
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("ChromeHeader")
+        #endif
+        let maxC = chrome.maxCollapse
+        let c = min(max(chrome.collapse, 0), maxC)
+        let p = maxC > 0 ? c / maxC : 0 // 0 open … 1 folded
+        ZStack(alignment: .top) {
+            ChatRegion(name: "ChromeFull.body", content: full)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome.height = $0 }
+                .offset(y: -c)
+                .opacity(Double(1 - min(1, p * 1.5)))
+                .allowsHitTesting(p < 0.5)
+                .modifier(GoneWhen(gone: p * 1.5 >= 1, height: chrome.height))
+            // Not there at all until it starts to show (it is clear below half way).
+            if p > 0.5 {
+                ChatRegion(name: "ChromeCompact.body", content: compact)
+                    .opacity(Double(max(0, (p - 0.5) * 2)))
+            }
+        }
+        .frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
+        .clipped()
     }
 }
 
