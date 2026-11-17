@@ -27,7 +27,7 @@ export function httpConfigurationSource({ endpoint, transport, key = endpoint, s
 }): ConfigurationSource {
   const send = async (request: ConfigurationRequest) => {
     const res = await transport(endpoint, request);
-    if (res.status < 200 || res.status >= 300) throw ConfigurationError.fromBody(res.body, res.status === 409 ? "conflict" : "failed");
+    if (res.status < 200 || res.status >= 300) throw ConfigurationError.fromBody(res.body, res.status);
     return res.body;
   };
   return {

@@ -2,8 +2,10 @@
 // "Configuration forms"): one Document from an injected source, drawn with the settings pieces every page uses. It knows
 // no module: titles, descriptions, details and notices are the source's words, shown as given.
 //
-// A choice (switch, selection, checks) is written at once and shows as pending until the source has committed it; typed
-// text and numbers are drafts until Save (Enter on one line), and stay through any failure. One write at a time.
+// A single-step choice (switch, selection) is written at once and shows as pending until the source has committed it;
+// typed text and numbers are drafts until Save (Enter on one line), and a multiselect's checks are a pending selection
+// with Save and Cancel, so a fixed count can move from one value to another without an invalid write in between. Drafts
+// stay through any failure or conflict. One write at a time, and a conflict or an uncertain write needs Reload first.
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { formatList, t } from "../../../i18n";
 import { ConfigurationController, draftValue, type FieldState, type FormState, type Problem } from "../../../lib/configuration/controller";
@@ -14,10 +16,11 @@ import { inputClass, Segmented, textareaClass } from "../../assistant/parts";
 import { ChoiceRows } from "../ProviderFields";
 import { Group, RowFailed, settingsInputClass, Switch } from "../SettingsParts";
 
-/** What went wrong, in this client's words for a code it knows, else the source's message, else a generic line. */
+/** What went wrong, in this client's words for a code it knows, else the source's own (localized) message, else a
+ *  generic line. */
 export function problemText(p: Problem): string {
-  if (p.message) return p.message;
-  return (ERROR_CODES as readonly string[]).includes(p.code) ? t(`settings-configuration.error_${p.code}`) : t("settings-configuration.error_failed");
+  if ((ERROR_CODES as readonly string[]).includes(p.code)) return t(`settings-configuration.error_${p.code}`);
+  return p.message || t("settings-configuration.error_failed");
 }
 
 /** The form for `source`. A source with another `key` is another resource: the form starts over for it. */
@@ -63,9 +66,9 @@ function Form({ ctl }: { ctl: ConfigurationController }) {
         {doc.description && <p className="mt-0.5 text-[11.5px] leading-relaxed text-ink-3">{doc.description}</p>}
       </div>
       {!s.writable && <Banner tone="caution">{t("settings-configuration.unsupported_version")}</Banner>}
-      {s.conflict && (
+      {s.blocked && (
         <Banner tone="alert" action={<Button size="sm" icon="retry" onClick={() => ctl.reload()}>{t("settings-configuration.reload")}</Button>}>
-          {t("settings-configuration.error_conflict")}
+          {problemText(s.blocked)}
         </Banner>
       )}
       {s.readError && (
@@ -122,11 +125,14 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
   const known = field.kind === "unsupported" ? null : field;
   const value = known ? fieldValue(doc, known) : undefined;
   const can = known ? ctl.canWrite(field.id) : false;
-  // typing stays possible while another field is being written (a draft is local); only Save waits
+  // typing and checking stay possible while another field is being written (a draft is local); only Save waits
   const editable = !!known && s.writable && !known.read_only && !known.disabled_reason;
-  const shown = fs.pending !== undefined ? fs.pending : value;
+  // a multiselect's unsaved checks are what it shows; its pending write once committed
+  const checked = known?.kind === "multiselect" && fs.selection !== undefined ? (fs.selection as FieldValue) : undefined;
+  const shown = fs.pending !== undefined ? fs.pending : checked !== undefined ? checked : value;
   const inline = known && (known.kind === "toggle" || (known.kind === "select" && (known.select.presentation === "segmented" || known.select.presentation === "dropdown")));
-  const resettable = !!known && s.writable && !known.read_only && !known.disabled_reason && (value === undefined || !sameValue(value, known.default));
+  const selectionDirty = !!known && known.kind === "multiselect" && fs.selection !== undefined && !sameValue(fs.selection, value);
+  const resettable = !!known && s.writable && !known.read_only && !known.disabled_reason && !selectionDirty && (value === undefined || !sameValue(value, known.default));
 
   return (
     <div data-settings-row={`configuration-${doc.id}-${field.id}`} data-configuration-field={field.id} data-kind={field.kind} className="px-4 py-3">
@@ -137,7 +143,7 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
         </div>
         {inline && shown !== undefined && <div className="shrink-0"><InlineControl ctl={ctl} field={known!} shown={shown} can={can} titleId={titleId} descId={field.description ? descId : undefined} /></div>}
       </div>
-      {known && !inline && shown !== undefined && <div className="mt-2.5"><BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={field.description ? descId : undefined} /></div>}
+      {known && !inline && shown !== undefined && <div className="mt-2.5"><BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} selectionDirty={selectionDirty} titleId={titleId} descId={field.description ? descId : undefined} /></div>}
       {known && (
         <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11.5px] leading-snug">
           <Detail term={t("settings-configuration.default")}>{valueText(known, known.default)}</Detail>
@@ -210,7 +216,7 @@ function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps
 }
 
 /** Controls under the title: a list of choices, a list of checks, a text or number field. */
-function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId }: ControlProps & { fs: FieldState; editable: boolean }) {
+function BlockControl({ ctl, field, shown, fs, can, editable, selectionDirty, titleId, descId }: ControlProps & { fs: FieldState; editable: boolean; selectionDirty: boolean }) {
   if (field.kind === "select") {
     const options = field.select.options;
     return (
@@ -219,33 +225,45 @@ function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId }:
       </fieldset>
     );
   }
-  if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={shown as string[]} can={can} titleId={titleId} descId={descId} />;
+  if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={shown as string[]} dirty={selectionDirty} can={can} editable={editable} titleId={titleId} descId={descId} />;
   if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={descId} />;
   return null;
 }
 
-function Checks({ ctl, field, chosen, can, titleId, descId }: { ctl: ConfigurationController; field: Extract<KnownField, { kind: "multiselect" }>; chosen: string[]; can: boolean; titleId: string; descId?: string }) {
+function Checks({ ctl, field, chosen, dirty, can, editable, titleId, descId }: { ctl: ConfigurationController; field: Extract<KnownField, { kind: "multiselect" }>; chosen: string[]; dirty: boolean; can: boolean; editable: boolean; titleId: string; descId?: string }) {
   const options = field.multiselect.options;
+  // Checking is local until Save: a one-of-one choice moves A → B by unchecking A and checking B, and only the result is
+  // written (an invalid one is said before anything is sent).
   const flip = (v: string) => {
     const on = chosen.includes(v);
     // in the options' order, whatever order they were picked in
-    ctl.choose(field.id, options.map((o) => o.value).filter((x) => (x === v ? !on : chosen.includes(x))));
+    ctl.setSelection(field.id, options.map((o) => o.value).filter((x) => (x === v ? !on : chosen.includes(x))));
   };
   return (
-    <div role="group" aria-labelledby={titleId} aria-describedby={descId} className="divide-y divide-line overflow-hidden rounded-card bg-inset shadow-hairline">
-      {options.map((o) => {
-        const on = chosen.includes(o.value);
-        return (
-          <button key={o.value} type="button" role="checkbox" aria-checked={on} disabled={!can} onClick={() => flip(o.value)}
-            className="touch-hit flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
-            <CheckMark on={on} className="mt-0.5" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12.5px] font-medium text-ink">{o.title}</span>
-              {o.description && <span className="block text-[11.5px] text-ink-3">{o.description}</span>}
-            </span>
-          </button>
-        );
-      })}
+    <div>
+      <div role="group" aria-labelledby={titleId} aria-describedby={descId} className="divide-y divide-line overflow-hidden rounded-card bg-inset shadow-hairline">
+        {options.map((o) => {
+          const on = chosen.includes(o.value);
+          return (
+            <button key={o.value} type="button" role="checkbox" aria-checked={on} disabled={!editable} onClick={() => flip(o.value)}
+              className="touch-hit flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
+              <CheckMark on={on} className="mt-0.5" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-medium text-ink">{o.title}</span>
+                {o.description && <span className="block text-[11.5px] text-ink-3">{o.description}</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {dirty && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            <Button size="sm" tone="quiet" onClick={() => ctl.discard(field.id)}>{t("settings-configuration.cancel")}</Button>
+            <Button size="sm" tone="primary" disabled={!can} onClick={() => ctl.saveDraft(field.id)}>{t("settings-configuration.save")}</Button>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

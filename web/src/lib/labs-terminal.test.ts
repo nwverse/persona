@@ -76,19 +76,24 @@ describe("updates", () => {
   it("refuses a stale revision (another tab changed it) and writes nothing", async () => {
     const seen = await read();
     localStorage.setItem(KEY, "1"); // another tab
-    await expect(upd(seen, { changes: { renderer: "standard" } })).rejects.toMatchObject({ code: "conflict" });
+    await expect(upd(seen, { changes: { renderer: "standard" } })).rejects.toMatchObject({ code: "configuration_conflict" });
     expect(localStorage.getItem(KEY)).toBe("1");
   });
 
   it.each([
-    ["another document", { id: "other" }, "not_found"],
-    ["another version", { schema_version: 2 }, "unsupported_version"],
-    ["an unknown field", { changes: { colour: "red" } }, "invalid_update"],
-    ["a value it doesn't offer", { changes: { renderer: "canvas" } }, "invalid_update"],
-    ["a change and a reset of the same field", { changes: { renderer: "webgl" }, reset: ["renderer"] }, "invalid_update"],
-  ])("refuses %s", async (_, more, code) => {
+    ["another document", { id: "other" }, "configuration_conflict", []],
+    ["another version", { schema_version: 2 }, "configuration_version", []],
+    ["an empty update", { changes: {} }, "configuration_invalid", []],
+    ["an unknown field", { changes: { colour: "red" } }, "configuration_invalid", [{ id: "colour", code: "unknown" }]],
+    ["a value it doesn't offer", { changes: { renderer: "canvas" } }, "configuration_invalid", [{ id: "renderer", code: "option" }]],
+    ["a change and a reset of the same field", { changes: { renderer: "webgl" }, reset: ["renderer"] }, "configuration_invalid", [{ id: "renderer", code: "duplicate" }]],
+    ["the same reset twice", { reset: ["renderer", "renderer"] }, "configuration_invalid", [{ id: "renderer", code: "duplicate" }]],
+  ])("refuses %s", async (_, more, code, fieldErrors) => {
     const doc = await read();
-    await expect(source.update({ schema_version: 1, id: doc.id, revision: doc.revision, ...more } as never)).rejects.toMatchObject({ code });
+    const err = (await source.update({ schema_version: 1, id: doc.id, revision: doc.revision, ...more } as never).catch((e) => e)) as ConfigurationError;
+    expect(err).toBeInstanceOf(ConfigurationError);
+    expect(err).toMatchObject({ code });
+    expect(err.fieldErrors.map(({ id, code: c }: { id: string; code: string }) => ({ id, code: c }))).toEqual(fieldErrors);
     expect(localStorage.getItem(KEY)).toBeNull();
   });
 

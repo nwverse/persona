@@ -1,23 +1,49 @@
 // @vitest-environment jsdom
-// The generic configuration form (ConfigurationForm.tsx) over the synthetic all-types document: every control with its
-// name for assistive technology and its keys, choices written at once and saved only once committed, typed text saved
-// explicitly and kept through failures and conflicts, resets, read-only / disabled / unknown fields, a version it can't
-// write, and a source replaced while its answer is still coming.
+// The generic configuration form (ConfigurationForm.tsx) over the shared synthetic all-types document: every control with
+// its name for assistive technology and its keys, single-step choices written at once and saved only once committed,
+// typed text saved explicitly and kept through failures and conflicts, a multiselect's checks as one pending replacement
+// (message 14), resets, read-only / disabled / unknown fields, a version it can't write, and a source replaced while its
+// answer is still coming.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { formatList, t } from "../../../i18n";
-import example from "../../../lib/configuration/fixtures/all-types.json";
+import shared from "../../../../../schema/configuration/all-types.json";
 import { ConfigurationError, type ConfigurationSource, type ConfigurationUpdate } from "../../../lib/configuration/contract";
 import { ConfigurationForm } from "./ConfigurationForm";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Doc = typeof example;
+interface Field {
+  id: string;
+  kind: string;
+  default: unknown;
+  read_only?: boolean;
+  disabled_reason?: string;
+  details?: { title: string; description: string }[];
+  [member: string]: unknown;
+}
+interface Doc {
+  schema_version: number;
+  id: string;
+  revision: string;
+  title: string;
+  groups: { id: string; title: string; fields: Field[] }[];
+  values: Record<string, unknown>;
+  notices?: Record<string, unknown>;
+}
+const example = shared as unknown as Doc;
 const clone = (d: unknown): Doc => JSON.parse(JSON.stringify(d));
 
+/** The shared document with `sections` fixed to exactly one choice (the replacement case of message 14). */
+function oneOfOne(): Doc {
+  const doc = clone(example);
+  for (const f of doc.groups.flatMap((g) => g.fields)) if (f.id === "sections") f.multiselect = { min_selected: 1, max_selected: 1, options: (f.multiselect as { options: unknown[] }).options };
+  return doc;
+}
+
 /** An in-memory source: commits like a writer, or answers with `fail` once. */
-function memory(start: unknown = example, key = "example") {
+function memory(start: unknown = example, key = "example-preferences") {
   let doc = clone(start);
   const updates: ConfigurationUpdate[] = [];
   const state = { fail: null as unknown, hold: null as null | ((go: () => void) => void) };
@@ -32,9 +58,9 @@ function memory(start: unknown = example, key = "example") {
         state.fail = null;
         throw f;
       }
-      if (u.revision !== doc.revision) throw new ConfigurationError("conflict");
+      if (u.revision !== doc.revision) throw new ConfigurationError("configuration_conflict");
       const next = clone(doc);
-      const fields = (next.groups as { fields: { id: string; default: unknown }[] }[]).flatMap((g) => g.fields);
+      const fields = next.groups.flatMap((g) => g.fields);
       Object.assign(next.values, u.changes ?? {});
       for (const id of u.reset ?? []) (next.values as Record<string, unknown>)[id] = fields.find((f) => f.id === id)!.default;
       next.revision = `${doc.revision}+`;
@@ -78,65 +104,74 @@ function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
   });
 }
 const key = (el: Element, k: string) => act(() => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+const checks = (id: string) => [...row(id).querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
 
 describe("drawing every kind", () => {
   it("shows the document's title, groups, fields, descriptions, notices and details as given", async () => {
-    const m = memory();
-    await show(m.source);
-    expect(host.querySelector("h2")?.textContent).toBe("Example settings");
-    expect(host.textContent).toContain("Basics");
-    expect(host.textContent).toContain("Switches and text.");
-    expect(row("mode").textContent).toContain("Manual mode asks before each run.");
-    const dl = row("limit").querySelector("dl")!;
-    expect([...dl.querySelectorAll("dt")].map((d) => d.textContent)).toEqual([t("settings-configuration.default"), "Takes effect"]);
-    expect([...dl.querySelectorAll("dd")].map((d) => d.textContent)).toEqual(["10", "From the next run."]);
-    expect(row("days").querySelector("dd")?.textContent).toBe(formatList(["Monday", "Wednesday"]));
+    await show(memory().source);
+    expect(host.querySelector("h2")?.textContent).toBe("Preview preferences");
+    expect(host.textContent).toContain("Appearance");
+    expect(host.textContent).toContain("Use less space between rows.");
+    expect(row("notes").textContent).toContain("Notes are optional.");
+    const dl = row("managed").querySelector("dl")!;
+    expect([...dl.querySelectorAll("dt")].map((d) => d.textContent)).toEqual([t("settings-configuration.default"), "Applies to", "Takes effect"]);
+    expect([...dl.querySelectorAll("dd")].map((d) => d.textContent)).toEqual([t("settings-configuration.on"), "This preview only.", "When a new preview opens."]);
+    expect(row("sections").querySelector("dd")?.textContent).toBe(formatList(["Summary"]));
   });
 
   it("names every control by its field's title", async () => {
     await show(memory().source);
-    expect(row("enabled").querySelector('[role="switch"]')?.getAttribute("aria-label")).toBe("Enable the example");
-    expect(labelled(row("nickname").querySelector("input")!)).toBe("Nickname");
-    expect(labelled(row("note").querySelector("textarea")!)).toBe("Note");
-    expect(row("mode").querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Mode");
-    expect(row("size").querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Size");
-    expect(labelled(row("region").querySelector("select")!)).toBe("Region");
-    expect(labelled(row("days").querySelector('[role="group"]')!)).toBe("Days");
-    expect(labelled(row("limit").querySelector("input")!)).toBe("Daily limit");
+    expect(row("compact").querySelector('[role="switch"]')?.getAttribute("aria-label")).toBe("Compact layout");
+    expect(labelled(row("label").querySelector("input")!)).toBe("Display label");
+    expect(labelled(row("notes").querySelector("textarea")!)).toBe("Notes");
+    expect(row("layout").querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Layout");
+    expect(row("motion").querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Motion");
+    expect(labelled(row("accent").querySelector("select")!)).toBe("Accent");
+    expect(labelled(row("sections").querySelector('[role="group"]')!)).toBe("Visible sections");
+    expect(labelled(row("interval").querySelector("input")!)).toBe("Refresh interval");
   });
 
-  it("shows read-only, disabled and unknown fields without a way to change them", async () => {
+  it("shows read-only and disabled fields without a way to change them", async () => {
     await show(memory().source);
-    expect((row("locked").querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
-    expect(row("locked").textContent).toContain(t("settings-configuration.read_only"));
-    expect((row("paused").querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
-    expect(row("paused").textContent).toContain("Available once the example is set up.");
+    expect((row("managed").querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(row("managed").textContent).toContain("This preference is managed elsewhere.");
+    const plain = clone(example);
+    plain.groups[0].fields.push({ id: "fixed", kind: "toggle", title: "Fixed", default: true, read_only: true });
+    plain.values.fixed = true;
+    await show(memory(plain, "plain").source);
+    expect((row("fixed").querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(row("fixed").textContent).toContain(t("settings-configuration.read_only"));
+  });
+
+  it("keeps an unknown kind with its words and no control", async () => {
+    const doc = clone(example);
+    doc.groups[0].fields.push({ id: "future", kind: "slider", title: "From a newer version", description: "A newer Persona draws this.", default: 3 });
+    doc.values.future = 3;
+    await show(memory(doc).source);
+    expect(row("future").textContent).toContain("From a newer version");
     expect(row("future").textContent).toContain(t("settings-configuration.unsupported_kind"));
     expect(row("future").querySelector("button, input, select, textarea")).toBeNull();
   });
 });
 
-describe("choices", () => {
-  it("a switch, a list, a segmented choice, a dropdown and checks each write that field only", async () => {
+describe("single-step choices", () => {
+  it("a switch, a list, a segmented choice and a dropdown each write that field only", async () => {
     const m = memory();
     await show(m.source);
-    act(() => (row("enabled").querySelector('[role="switch"]') as HTMLButtonElement).click());
+    act(() => (row("compact").querySelector('[role="switch"]') as HTMLButtonElement).click());
     await settle();
-    act(() => buttonIn(row("size"), "Large").click());
+    act(() => row("layout").querySelector<HTMLButtonElement>('[data-choice="1"]')!.click());
     await settle();
-    act(() => [...row("mode").querySelectorAll<HTMLButtonElement>('[role="radio"]')][0].click());
+    act(() => [...row("motion").querySelectorAll<HTMLButtonElement>('[role="radio"]')][1].click());
     await settle();
-    const select = row("region").querySelector("select")!;
+    const select = row("accent").querySelector("select")!;
     act(() => {
-      select.value = "ap";
+      select.value = "green";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await settle();
-    act(() => [...row("days").querySelectorAll<HTMLButtonElement>('[role="checkbox"]')][2].click());
-    await settle();
-    expect(m.updates.map((u) => u.changes)).toEqual([{ enabled: false }, { size: "l" }, { mode: "auto" }, { region: "ap" }, { days: ["mon", "wed", "fri"] }]);
-    expect(m.updates.map((u) => u.revision)).toEqual(["r1", "r1+", "r1++", "r1+++", "r1++++"]);
-    expect(row("days").textContent).toContain(t("settings-configuration.saved"));
+    expect(m.updates.map((u) => u.changes)).toEqual([{ compact: true }, { layout: "dense" }, { motion: "reduced" }, { accent: "green" }]);
+    expect(m.updates.map((u) => u.revision)).toEqual(["revision-1", "revision-1+", "revision-1++", "revision-1+++"]);
   });
 
   it("shows Saving… (not Saved) while the source hasn't answered", async () => {
@@ -144,32 +179,75 @@ describe("choices", () => {
     let go = () => {};
     m.state.hold = (g) => (go = g);
     await show(m.source);
-    act(() => buttonIn(row("size"), "Small").click());
+    act(() => row("layout").querySelector<HTMLButtonElement>('[data-choice="1"]')!.click());
     await settle();
-    expect(row("size").textContent).toContain(t("settings-configuration.saving"));
-    expect(row("size").textContent).not.toContain(t("settings-configuration.saved"));
+    expect(row("layout").textContent).toContain(t("settings-configuration.saving"));
+    expect(row("layout").textContent).not.toContain(t("settings-configuration.saved"));
     m.state.hold = null;
     go();
     await settle();
-    expect(row("size").textContent).toContain(t("settings-configuration.saved"));
+    expect(row("layout").textContent).toContain(t("settings-configuration.saved"));
   });
 
   it("arrow keys move a list's choice", async () => {
     const m = memory();
     await show(m.source);
-    const group = row("mode").querySelector('[role="radiogroup"]')!;
-    key(group, "ArrowDown"); // from Manual (the second) around to Automatic
+    const group = row("layout").querySelector('[role="radiogroup"]')!;
+    key(group, "ArrowDown"); // from Comfortable to Dense
     await settle();
-    expect(m.updates.at(-1)?.changes).toEqual({ mode: "auto" });
+    expect(m.updates.at(-1)?.changes).toEqual({ layout: "dense" });
+  });
+});
+
+describe("a multiselect's pending replacement", () => {
+  it("lets checks change locally and Save sends the final list (a fixed count moves A → B)", async () => {
+    const m = memory(oneOfOne());
+    await show(m.source);
+    expect(checks("sections")[0].getAttribute("aria-checked")).toBe("true");
+    act(() => checks("sections")[1].click()); // Activity on: two checked for a moment
+    expect(m.updates).toHaveLength(0);
+    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("true");
+    act(() => checks("sections")[0].click()); // Summary off
+    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("true");
+    expect(buttonIn(row("sections"), t("settings-configuration.save"))).toBeDefined();
+    act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ sections: ["activity"] });
+    expect(checks("sections")[0].getAttribute("aria-checked")).toBe("false");
+    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("true");
+    expect(row("sections").textContent).toContain(t("settings-configuration.saved"));
   });
 
-  it("refuses unchecking the last check (at least one) without asking the source", async () => {
-    const m = memory({ ...clone(example), values: { ...example.values, days: ["mon"] } });
+  it("Save says a count is wrong before sending anything, and Cancel puts the checks back", async () => {
+    const m = memory(oneOfOne());
     await show(m.source);
-    act(() => [...row("days").querySelectorAll<HTMLButtonElement>('[role="checkbox"]')][0].click());
+    act(() => checks("sections")[0].click()); // uncheck the only choice
+    act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
     await settle();
     expect(m.updates).toHaveLength(0);
-    expect(row("days").querySelector('[role="alert"]')?.textContent).toBe(t("settings-configuration.error_too_few_selected"));
+    expect(row("sections").querySelector('[role="alert"]')?.textContent).toBe(t("settings-configuration.error_min_selected"));
+    act(() => buttonIn(row("sections"), t("settings-configuration.cancel")).click());
+    expect(checks("sections")[0].getAttribute("aria-checked")).toBe("true");
+    expect(row("sections").querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps checks changed while their save is on the way", async () => {
+    const m = memory();
+    let go = () => {};
+    m.state.hold = (g) => (go = g);
+    await show(m.source);
+    act(() => checks("sections")[1].click()); // summary + activity
+    act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
+    await settle(); // the write is held
+    act(() => checks("sections")[2].click()); // summary + activity + files (over the max, local only)
+    act(() => checks("sections")[1].click()); // summary + files
+    m.state.hold = null;
+    act(() => go());
+    await settle();
+    expect(checks("sections")[0].getAttribute("aria-checked")).toBe("true");
+    expect(checks("sections")[1].getAttribute("aria-checked")).toBe("false");
+    expect(checks("sections")[2].getAttribute("aria-checked")).toBe("true");
+    expect(buttonIn(row("sections"), t("settings-configuration.save"))).toBeDefined();
   });
 });
 
@@ -177,77 +255,105 @@ describe("typed text", () => {
   it("Save appears once it differs; Enter saves a single line; Escape puts it back", async () => {
     const m = memory();
     await show(m.source);
-    const input = row("nickname").querySelector("input")!;
-    expect(buttonIn(row("nickname"), t("settings-configuration.save"))).toBeUndefined();
+    const input = row("label").querySelector("input")!;
+    expect(buttonIn(row("label"), t("settings-configuration.save"))).toBeUndefined();
     type(input, "Sam");
-    expect(buttonIn(row("nickname"), t("settings-configuration.save"))).toBeDefined();
+    expect(buttonIn(row("label"), t("settings-configuration.save"))).toBeDefined();
     key(input, "Escape");
-    expect(input.value).toBe("");
+    expect(input.value).toBe("Preview");
     type(input, "Sam 👋");
-    expect(row("nickname").textContent).toContain(t("settings-configuration.count", { n: 5, max: 20 }));
+    expect(row("label").textContent).toContain(t("settings-configuration.count", { n: 5, max: 20 }));
     key(input, "Enter");
     await settle();
-    expect(m.updates.at(-1)?.changes).toEqual({ nickname: "Sam 👋" });
-    expect(row("nickname").textContent).toContain(t("settings-configuration.saved"));
+    expect(m.updates.at(-1)?.changes).toEqual({ label: "Sam 👋" });
+    expect(row("label").textContent).toContain(t("settings-configuration.saved"));
+  });
+
+  it("keeps text typed while its save is on the way (message 14)", async () => {
+    const m = memory();
+    let go = () => {};
+    m.state.hold = (g) => (go = g);
+    await show(m.source);
+    const input = row("label").querySelector("input")!;
+    type(input, "A");
+    key(input, "Enter");
+    await settle(); // the write is held
+    type(input, "AB"); // typed while the promise is pending
+    expect(input.value).toBe("AB");
+    m.state.hold = null;
+    act(() => go());
+    await settle();
+    expect(input.value).toBe("AB"); // the newer text stays, not saved
+    expect(row("label").textContent).not.toContain(t("settings-configuration.saved"));
+    expect(buttonIn(row("label"), t("settings-configuration.save"))).toBeDefined();
   });
 
   it("keeps the typed text, and says why, when saving fails", async () => {
     const m = memory();
     await show(m.source);
-    const area = row("note").querySelector("textarea")!;
+    const area = row("notes").querySelector("textarea")!;
     type(area, "Line one\nline two");
     m.state.fail = new ConfigurationError("storage_failed", "The disk is full");
-    act(() => buttonIn(row("note"), t("settings-configuration.save")).click());
+    act(() => buttonIn(row("notes"), t("settings-configuration.save")).click());
     await settle();
     expect(area.value).toBe("Line one\nline two");
-    expect(row("note").querySelector('[role="alert"]')?.textContent).toBe("The disk is full");
+    expect(row("notes").querySelector('[role="alert"]')?.textContent).toBe("The disk is full");
   });
 
   it("a conflict keeps the text and offers Reload, which keeps it too", async () => {
     const m = memory();
     await show(m.source);
-    m.set({ ...clone(example), revision: "elsewhere", values: { ...example.values, nickname: "Theirs" } });
-    const input = row("nickname").querySelector("input")!;
+    m.set({ ...clone(example), revision: "elsewhere", values: { ...example.values, label: "Theirs" } });
+    const input = row("label").querySelector("input")!;
     type(input, "Mine");
     key(input, "Enter");
     await settle();
     const alert = host.querySelector('[role="alert"]')!;
-    expect(alert.textContent).toBe(t("settings-configuration.error_conflict"));
+    expect(alert.textContent).toBe(t("settings-configuration.error_configuration_conflict"));
     act(() => buttonIn(host, t("settings-configuration.reload")).click());
     await settle();
-    expect(host.textContent).not.toContain(t("settings-configuration.error_conflict"));
-    expect(row("nickname").querySelector("input")!.value).toBe("Mine");
-    act(() => buttonIn(row("nickname"), t("settings-configuration.cancel")).click());
-    expect(row("nickname").querySelector("input")!.value).toBe("Theirs");
+    expect(host.textContent).not.toContain(t("settings-configuration.error_configuration_conflict"));
+    expect(row("label").querySelector("input")!.value).toBe("Mine");
+    act(() => buttonIn(row("label"), t("settings-configuration.cancel")).click());
+    expect(row("label").querySelector("input")!.value).toBe("Theirs");
   });
 
   it("a number: arrows step it, and a value out of range is said before sending", async () => {
     const m = memory();
     await show(m.source);
-    const input = row("limit").querySelector("input")!;
+    const input = row("interval").querySelector("input")!;
     key(input, "ArrowUp");
-    expect(input.value).toBe("30");
+    expect(input.value).toBe("35");
     type(input, "500");
     key(input, "Enter");
     expect(m.updates).toHaveLength(0);
-    expect(row("limit").querySelector('[role="alert"]')?.textContent).toBe(t("settings-configuration.error_out_of_range"));
+    expect(row("interval").querySelector('[role="alert"]')?.textContent).toBe(t("settings-configuration.error_maximum"));
     type(input, "40");
     key(input, "Enter");
     await settle();
-    expect(m.updates.at(-1)?.changes).toEqual({ limit: 40 });
+    expect(m.updates.at(-1)?.changes).toEqual({ interval: 40 });
   });
 });
 
 describe("resetting", () => {
   it("offers Use default only where the value differs, and sends reset", async () => {
-    const m = memory();
+    const m = memory({ ...clone(example), values: { ...example.values, interval: 40 } });
     await show(m.source);
-    expect(buttonIn(row("size"), t("settings-configuration.reset"))).toBeUndefined();
-    expect(buttonIn(row("locked"), t("settings-configuration.reset"))).toBeUndefined();
-    act(() => buttonIn(row("limit"), t("settings-configuration.reset")).click());
+    expect(buttonIn(row("layout"), t("settings-configuration.reset"))).toBeUndefined();
+    expect(buttonIn(row("managed"), t("settings-configuration.reset"))).toBeUndefined();
+    act(() => buttonIn(row("interval"), t("settings-configuration.reset")).click());
     await settle();
-    expect(m.updates.at(-1)).toMatchObject({ reset: ["limit"] });
-    expect(row("limit").querySelector("input")!.value).toBe("10");
+    expect(m.updates.at(-1)).toMatchObject({ reset: ["interval"] });
+    expect(row("interval").querySelector("input")!.value).toBe("30");
+  });
+
+  it("is not offered while a multiselect has unsaved checks", async () => {
+    const m = memory({ ...clone(example), values: { ...example.values, sections: ["summary", "activity"] } });
+    await show(m.source);
+    expect(buttonIn(row("sections"), t("settings-configuration.reset"))).toBeDefined();
+    act(() => checks("sections")[2].click()); // summary + activity + files: a pending (over-max) check
+    expect(buttonIn(row("sections"), t("settings-configuration.reset"))).toBeUndefined();
+    expect(m.updates).toHaveLength(0);
   });
 });
 
@@ -255,19 +361,19 @@ describe("what can't be read or written", () => {
   it("a version it doesn't know is shown with every control off", async () => {
     await show(memory({ ...clone(example), schema_version: 2 }).source);
     expect(host.textContent).toContain(t("settings-configuration.unsupported_version"));
-    expect((row("enabled").querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
-    expect(row("nickname").querySelector("input")!.disabled).toBe(true);
+    expect((row("compact").querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(row("label").querySelector("input")!.disabled).toBe(true);
   });
 
   it("a read that fails says why and has Try again", async () => {
     let fail = true;
-    const source: ConfigurationSource = { key: "x", read: async () => { if (fail) throw new ConfigurationError("not_found"); return clone(example); }, update: async () => clone(example) };
+    const source: ConfigurationSource = { key: "x", read: async () => { if (fail) throw new ConfigurationError("configuration_not_found"); return clone(example); }, update: async () => clone(example) };
     await show(source);
-    expect(host.textContent).toContain(t("settings-configuration.error_not_found"));
+    expect(host.textContent).toContain(t("settings-configuration.error_configuration_not_found"));
     fail = false;
     act(() => buttonIn(host, t("settings-configuration.retry")).click());
     await settle();
-    expect(host.querySelector("h2")?.textContent).toBe("Example settings");
+    expect(host.querySelector("h2")?.textContent).toBe("Preview preferences");
   });
 });
 

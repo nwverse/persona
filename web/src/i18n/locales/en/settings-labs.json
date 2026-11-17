@@ -10,6 +10,7 @@
   "save_failed": "Couldn't save this in this browser, so nothing changed. Check that the browser lets sites store data, then try again.",
   "invalid": "A saved choice from another version of Persona isn't recognized, so the default is used. Choosing an option replaces it.",
   "unreadable": "This browser isn't letting Persona read its saved settings, so the default is used and a change may not be saved.",
+  "terminal_group": "Terminal",
   "terminal_renderer": "Terminal renderer",
   "terminal_renderer_hint": "How terminals in Single pane view are drawn. WebGL uses the graphics card, which can be smoother with lots of output or small text, but doesn't work in every browser. Full view isn't affected.",
   "terminal_renderer_standard": "Standard",

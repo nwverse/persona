@@ -3,7 +3,7 @@
 // leaves the page. The same rules as any source: an update names this Document and the revision it was made against,
 // is checked here, and is answered with the Document as committed.
 import { t } from "../i18n";
-import { CONFIGURATION_VERSION, ConfigurationError, parseField, type ConfigurationDocument, type ConfigurationSource, type ConfigurationUpdate, type KnownField } from "./configuration/contract";
+import { checkUpdate, CONFIGURATION_VERSION, ConfigurationError, type ConfigurationDocument, type ConfigurationSource, type ConfigurationUpdate } from "./configuration/contract";
 import { readTerminalRenderer, subscribeTerminalRenderer, writeTerminalRenderer, type TerminalRenderer } from "./labs";
 
 export const TERMINAL_LABS_ID = "terminal";
@@ -25,7 +25,7 @@ function document(): ConfigurationDocument {
     groups: [
       {
         id: "terminal",
-        title: "", // the one field says it; a group title would repeat it
+        title: t("settings-labs.terminal_group"),
         fields: [
           {
             id: FIELD,
@@ -55,21 +55,11 @@ function document(): ConfigurationDocument {
 }
 
 function update(u: ConfigurationUpdate): ConfigurationDocument {
-  if (u.schema_version !== CONFIGURATION_VERSION) throw new ConfigurationError("unsupported_version");
-  if (u.id !== TERMINAL_LABS_ID) throw new ConfigurationError("not_found");
-  const current = document();
-  if (u.revision !== current.revision) throw new ConfigurationError("conflict");
-  const changes = Object.entries(u.changes ?? {});
-  const reset = u.reset ?? [];
-  const field = parseField(current.groups[0].fields[0]) as KnownField;
-  for (const id of [...changes.map(([id]) => id), ...reset]) if (id !== FIELD) throw new ConfigurationError("invalid_update", "", [{ id, code: "unknown_field" }]);
-  if (reset.includes(FIELD) && changes.length) throw new ConfigurationError("invalid_update");
-  let next: TerminalRenderer | null = reset.includes(FIELD) ? "standard" : null;
-  for (const [, value] of changes) {
-    if (field.kind !== "select" || !field.select.options.some((o) => o.value === value)) throw new ConfigurationError("invalid_update", "", [{ id: FIELD, code: "invalid_choice" }]);
-    next = value as TerminalRenderer;
-  }
-  if (next !== null && !writeTerminalRenderer(next).ok) throw new ConfigurationError("storage_failed", t("settings-labs.save_failed"));
+  // the writer's rules (schema/configuration/README.md "Change and reset"), against what is stored now
+  const refused = checkUpdate(document(), u);
+  if (refused) throw refused;
+  const next = u.reset?.includes(FIELD) ? "standard" : (u.changes?.[FIELD] as TerminalRenderer);
+  if (!writeTerminalRenderer(next).ok) throw new ConfigurationError("storage_failed", t("settings-labs.save_failed"));
   return document();
 }
 

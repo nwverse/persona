@@ -2280,9 +2280,10 @@ default** button where the value differs from the default.
   (`segmented`), a native select in the settings field style at the end (`dropdown`) or `ChoiceRows` under the text
   (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
   input or textarea, a number the input with a decimal keyboard. Text and numbers show **Cancel** / **Save** only once
-  they differ from what is saved, and a scalar count when there is a maximum.
-- Whole-form lines (a version it can't write, a conflict with **Reload**, a refresh that failed with **Try again**) are
-  one card above the groups.
+  they differ from what is saved, and a scalar count when there is a maximum; a multiselect's checks are the same kind of
+  pending edit, so a fixed count can move from A to B (two checks for the moment in between) without an invalid write.
+- Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
+  **Try again**) are one card above the groups.
 - An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a
   control.
 Why one form: the user asked for settings that modules inject with one portable contract and shared styles, so a new

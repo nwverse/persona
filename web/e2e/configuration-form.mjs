@@ -1,6 +1,6 @@
 // Screenshots and a quick check of the generic configuration form (#9877, docs/web/web.md "Configuration forms"): the
-// fixture-only page (e2e/configuration-form.html: the real form over the synthetic all-types document) and the real
-// Settings › Labs, each wide (1280) and phone width (390), light and dark, and at the large text size.
+// fixture-only page (e2e/configuration-form.html: the real form over the shared schema/configuration/all-types.json) and
+// the real Settings › Labs, each wide (1280) and phone width (390), light and dark, and at the large text size.
 //
 // Needs the Vite dev server (and, for Labs, any hub the page can sign in to, such as the mock), and Chrome or any
 // Chromium through --executable:
@@ -65,23 +65,46 @@ try {
     await page.waitForTimeout(500);
     if (await sideways(page)) fail(`${tag}: the fixture form scrolls sideways`);
     const kinds = await page.$$eval("[data-configuration-field]", (els) => els.map((e) => e.getAttribute("data-kind")));
-    if (new Set(kinds).size !== 6) fail(`${tag}: kinds drawn ${kinds}`);
+    if (new Set(kinds).size !== 5) fail(`${tag}: kinds drawn ${kinds}`);
     await page.screenshot({ path: join(shots, `form-${tag}.png`), fullPage: true });
     ok(`${tag}: the fixture form draws every kind (${[...new Set(kinds)].join(", ")})`);
 
     if (theme === "light" && !size) {
-      await page.locator('[data-configuration-field="nickname"] input').fill("Sam 👋");
-      await page.locator('[data-configuration-field="nickname"] input').press("Enter");
-      await page.waitForSelector('[data-configuration-field="nickname"] >> text=Saved', { timeout: 5000 }).catch(() => fail(`${tag}: no Saved after Enter`));
+      await page.locator('[data-configuration-field="label"] input').fill("Sam 👋");
+      await page.locator('[data-configuration-field="label"] input').press("Enter");
+      await page.waitForSelector('[data-configuration-field="label"] >> text=Saved', { timeout: 5000 }).catch(() => fail(`${tag}: no Saved after Enter`));
       ok(`${tag}: typed text saves with Enter`);
-      await page.goto(`${base}/e2e/configuration-form.html?fail=storage_failed`);
+
+      // A multiselect's checks are local until Save (message 14).
+      const boxes = page.locator('[data-configuration-field="sections"] [role="checkbox"]');
+      await boxes.nth(1).click();
+      await boxes.nth(0).click();
+      await page.locator('[data-configuration-field="sections"]').screenshot({ path: join(shots, `form-${tag}-checks-pending.png`) });
+      await page.locator('[data-configuration-field="sections"] button', { hasText: "Save" }).click();
+      await page.waitForSelector('[data-configuration-field="sections"] >> text=Saved', { timeout: 5000 }).catch(() => fail(`${tag}: no Saved after checking`));
+      const checked = await boxes.evaluateAll((els) => els.map((e) => e.getAttribute("aria-checked")));
+      if (checked.join(",") !== "false,true,false") fail(`${tag}: checks after Save ${checked}`);
+      ok(`${tag}: a multiselect's checks save together`);
+
+      await page.goto(`${base}/e2e/configuration-form.html?fail=configuration_unavailable`);
       await page.waitForSelector("[data-configuration-field]");
-      await page.locator('[data-configuration-field="note"] textarea').fill("Kept after a failure");
-      await page.locator('[data-configuration-field="note"] button', { hasText: "Save" }).click();
-      await page.waitForSelector('[data-configuration-field="note"] [role="alert"]', { timeout: 5000 });
-      if ((await page.locator('[data-configuration-field="note"] textarea').inputValue()) !== "Kept after a failure") fail(`${tag}: the draft was lost`);
-      await page.locator('[data-configuration-field="note"]').screenshot({ path: join(shots, `form-${tag}-save-failed.png`) });
-      ok(`${tag}: a failed save keeps the typed text and says why`);
+      await page.locator('[data-configuration-field="notes"] textarea').fill("Kept after an uncertain write");
+      await page.locator('[data-configuration-field="notes"] button', { hasText: "Save" }).click();
+      await page.waitForSelector('[role="alert"]', { timeout: 5000 });
+      if ((await page.locator('[data-configuration-field="notes"] textarea').inputValue()) !== "Kept after an uncertain write") fail(`${tag}: the draft was lost`);
+      await page.screenshot({ path: join(shots, `form-${tag}-unavailable.png`) });
+      ok(`${tag}: an uncertain write keeps the typed text and asks for Reload`);
+
+      await page.goto(`${base}/e2e/configuration-form.html?fail=configuration_conflict`);
+      await page.waitForSelector("[data-configuration-field]");
+      await page.locator('[data-configuration-field="label"] input').fill("Mine");
+      await page.locator('[data-configuration-field="label"] input').press("Enter");
+      await page.waitForSelector('[role="alert"]', { timeout: 5000 });
+      await page.getByRole("button", { name: "Reload" }).click();
+      await page.waitForTimeout(300);
+      if ((await page.locator('[data-configuration-field="label"] input').inputValue()) !== "Mine") fail(`${tag}: Reload dropped the draft`);
+      ok(`${tag}: a conflict offers Reload and keeps the draft`);
+
       await page.goto(`${base}/e2e/configuration-form.html?version=2`);
       await page.waitForSelector("[data-configuration-field]");
       await page.waitForTimeout(300);

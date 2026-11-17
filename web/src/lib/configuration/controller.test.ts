@@ -1,17 +1,35 @@
 // A configuration form's state over an injected source (controller.ts) and the HTTP source (http.ts): nothing saved
-// before the source commits, drafts that survive failures and conflicts, late answers from a replaced source or an
-// older read ignored, partial updates and resets, field errors, versions it can't write, and changes made elsewhere.
+// before the source commits, drafts that survive failures and conflicts, typed-while-saving text kept on either answer,
+// a multiselect's checks as one pending replacement, late answers from a replaced source or an older read ignored,
+// partial updates and resets, field errors, versions it can't write, and changes made elsewhere. The document is the
+// shared synthetic one (schema/configuration/all-types.json).
 import { describe, expect, it, vi } from "vitest";
-import example from "./fixtures/all-types.json";
+import shared from "../../../../schema/configuration/all-types.json";
 import { ConfigurationController } from "./controller";
 import { ConfigurationError, type ConfigurationSource, type ConfigurationUpdate } from "./contract";
 import { httpConfigurationSource, type ConfigurationRequest } from "./http";
 
-type Doc = typeof example;
+interface Field {
+  id: string;
+  kind: string;
+  default: unknown;
+  read_only?: boolean;
+  [member: string]: unknown;
+}
+interface Doc {
+  schema_version: number;
+  id: string;
+  revision: string;
+  title: string;
+  groups: { id: string; title: string; fields: Field[] }[];
+  values: Record<string, unknown>;
+  notices?: Record<string, unknown>;
+}
+const example = shared as unknown as Doc;
 const clone = (d: Doc): Doc => JSON.parse(JSON.stringify(d));
 
 /** A source whose answers the test releases one by one. */
-function manual(key = "example") {
+function manual(key = "example-preferences") {
   const reads: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
   const updates: { body: ConfigurationUpdate; resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
   let changed: (() => void) | null = null;
@@ -34,19 +52,26 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 /** Commits what an update asks on `doc` (the way a writer would), as a new revision. */
 function commit(doc: Doc, u: ConfigurationUpdate): Doc {
   const next = clone(doc);
-  const fields = (next.groups as { fields: { id: string; default: unknown }[] }[]).flatMap((g) => g.fields);
+  const fields = next.groups.flatMap((g) => g.fields);
   Object.assign(next.values, u.changes ?? {});
   for (const id of u.reset ?? []) (next.values as Record<string, unknown>)[id] = fields.find((f) => f.id === id)!.default;
   next.revision = `${doc.revision}+`;
   return next;
 }
 
-async function ready(m = manual(), doc: unknown = example) {
+async function ready(m = manual(), doc: Doc = example) {
   const ctl = new ConfigurationController(m.source);
   ctl.start();
   m.reads[0].resolve(doc);
   await flush();
   return { ctl, m };
+}
+
+/** The shared document with `sections` fixed to exactly one choice (the replacement case of message 14). */
+function oneOfOne(): Doc {
+  const doc = clone(example);
+  for (const f of doc.groups.flatMap((g) => g.fields)) if (f.id === "sections") f.multiselect = { min_selected: 1, max_selected: 1, options: (f.multiselect as { options: unknown[] }).options };
+  return doc;
 }
 
 describe("reading", () => {
@@ -58,16 +83,16 @@ describe("reading", () => {
     m.reads[0].resolve(example);
     await flush();
     expect(ctl.snapshot()).toMatchObject({ phase: "ready", writable: true, readError: null });
-    expect(ctl.snapshot().doc?.revision).toBe("r1");
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
   });
 
   it("says why it couldn't read, and reads again on Retry", async () => {
     const m = manual();
     const ctl = new ConfigurationController(m.source);
     ctl.start();
-    m.reads[0].reject(new ConfigurationError("forbidden", "Not yours"));
+    m.reads[0].reject(new ConfigurationError("configuration_forbidden", "Not yours"));
     await flush();
-    expect(ctl.snapshot()).toMatchObject({ phase: "failed", readError: { code: "forbidden", message: "Not yours" } });
+    expect(ctl.snapshot()).toMatchObject({ phase: "failed", readError: { code: "configuration_forbidden", message: "Not yours" } });
     ctl.reload();
     expect(ctl.snapshot().phase).toBe("loading");
     m.reads[1].resolve(example);
@@ -76,7 +101,7 @@ describe("reading", () => {
   });
 
   it("refuses something that isn't a document", async () => {
-    const { ctl } = await ready(manual(), { hello: 1 });
+    const { ctl } = await ready(manual(), { hello: 1 } as unknown as Doc);
     expect(ctl.snapshot()).toMatchObject({ phase: "failed", readError: { code: "invalid_document" } });
   });
 
@@ -98,12 +123,11 @@ describe("reading", () => {
     const { ctl, m } = await ready();
     m.change(); // read #2
     ctl.reload(); // read #3
-    const newer = { ...clone(example), revision: "r3" };
-    m.reads[2].resolve(newer);
+    m.reads[2].resolve({ ...clone(example), revision: "revision-3" });
     await flush();
-    m.reads[1].resolve({ ...clone(example), revision: "r2-old" });
+    m.reads[1].resolve({ ...clone(example), revision: "revision-2-old" });
     await flush();
-    expect(ctl.snapshot().doc?.revision).toBe("r3");
+    expect(ctl.snapshot().doc?.revision).toBe("revision-3");
   });
 
   it("keeps the document and says so when reading again fails", async () => {
@@ -112,67 +136,66 @@ describe("reading", () => {
     m.reads[1].reject(new Error("offline"));
     await flush();
     expect(ctl.snapshot()).toMatchObject({ phase: "ready", readError: { code: "failed" } });
-    expect(ctl.snapshot().doc?.revision).toBe("r1");
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
   });
 });
 
 describe("writing a choice", () => {
   it("sends only that field against the revision, shows it pending, and saved only once committed", async () => {
     const { ctl, m } = await ready();
-    ctl.choose("size", "l");
-    expect(m.updates[0].body).toEqual({ schema_version: 1, id: "example", revision: "r1", changes: { size: "l" } });
-    expect(ctl.snapshot().busy).toBe("size");
-    expect(ctl.snapshot().fields.size).toEqual({ pending: "l" });
-    expect(ctl.snapshot().doc?.values.size).toBe("m"); // nothing changed before the source said so
+    ctl.choose("layout", "dense");
+    expect(m.updates[0].body).toEqual({ schema_version: 1, id: "example-preferences", revision: "revision-1", changes: { layout: "dense" } });
+    expect(ctl.snapshot().busy).toBe("layout");
+    expect(ctl.snapshot().fields.layout).toEqual({ pending: "dense" });
+    expect(ctl.snapshot().doc?.values.layout).toBe("comfortable"); // nothing changed before the source said so
     m.updates[0].resolve(commit(example, m.updates[0].body));
     await flush();
     expect(ctl.snapshot().busy).toBeNull();
-    expect(ctl.snapshot().fields.size).toEqual({ saved: true });
-    expect(ctl.snapshot().doc?.values.size).toBe("l");
-    expect(ctl.snapshot().doc?.revision).toBe("r1+");
+    expect(ctl.snapshot().fields.layout).toEqual({ saved: true });
+    expect(ctl.snapshot().doc?.values.layout).toBe("dense");
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1+");
   });
 
   it("puts back what the document says when the write fails, and says why", async () => {
     const { ctl, m } = await ready();
-    ctl.choose("enabled", false);
+    ctl.choose("compact", true);
     m.updates[0].reject(new ConfigurationError("storage_failed", "Couldn't keep it"));
     await flush();
-    expect(ctl.snapshot().fields.enabled).toEqual({ error: { code: "storage_failed", message: "Couldn't keep it" } });
-    expect(ctl.snapshot().doc?.values.enabled).toBe(true);
+    expect(ctl.snapshot().fields.compact).toEqual({ error: { code: "storage_failed", message: "Couldn't keep it" } });
+    expect(ctl.snapshot().doc?.values.compact).toBe(false);
   });
 
   it("writes one thing at a time", async () => {
     const { ctl, m } = await ready();
-    ctl.choose("size", "s");
-    ctl.choose("region", "us");
+    ctl.choose("layout", "dense");
+    ctl.choose("accent", "green");
     expect(m.updates).toHaveLength(1);
-    expect(ctl.canWrite("region")).toBe(false);
+    expect(ctl.canWrite("accent")).toBe(false);
   });
 
-  it("checks a choice before sending it (duplicates, unknown choices, counts)", async () => {
+  it("checks a choice before sending it (unknown choices, counts)", async () => {
     const { ctl, m } = await ready();
-    ctl.choose("days", ["mon", "mon"]);
-    expect(ctl.snapshot().fields.days.error).toEqual({ code: "duplicate" });
-    ctl.choose("days", []);
-    expect(ctl.snapshot().fields.days.error).toEqual({ code: "too_few_selected" });
-    ctl.choose("size", "xl");
-    expect(ctl.snapshot().fields.size.error).toEqual({ code: "invalid_choice" });
+    ctl.choose("sections", ["summary", "summary"]);
+    expect(ctl.snapshot().fields.sections.error).toEqual({ code: "duplicate" });
+    ctl.choose("sections", []);
+    expect(ctl.snapshot().fields.sections.error).toEqual({ code: "min_selected" });
+    ctl.choose("layout", "future");
+    expect(ctl.snapshot().fields.layout.error).toEqual({ code: "option" });
     expect(m.updates).toHaveLength(0);
   });
 
-  it("never writes a read-only, disabled or unsupported field", async () => {
+  it("never writes a read-only or disabled field", async () => {
     const { ctl, m } = await ready();
-    ctl.choose("locked", false);
-    ctl.choose("paused", true);
-    ctl.choose("future", "#000000");
+    ctl.choose("managed", false);
     expect(m.updates).toHaveLength(0);
+    expect(ctl.editable("managed")).toBe(false);
   });
 
   it("never writes a document of a version it doesn't know", async () => {
     const { ctl, m } = await ready(manual(), { ...clone(example), schema_version: 2 });
     expect(ctl.snapshot().writable).toBe(false);
-    ctl.choose("size", "s");
-    ctl.reset("size");
+    ctl.choose("layout", "dense");
+    ctl.reset("layout");
     expect(m.updates).toHaveLength(0);
   });
 });
@@ -180,105 +203,202 @@ describe("writing a choice", () => {
 describe("typed text", () => {
   it("is a draft until saved, checked first, and gone once committed", async () => {
     const { ctl, m } = await ready();
-    ctl.setDraft("nickname", "x".repeat(21));
-    ctl.saveDraft("nickname");
-    expect(ctl.snapshot().fields.nickname.error).toEqual({ code: "too_long" });
+    ctl.setDraft("label", "x".repeat(21));
+    ctl.saveDraft("label");
+    expect(ctl.snapshot().fields.label.error).toEqual({ code: "max_length" });
     expect(m.updates).toHaveLength(0);
-    ctl.setDraft("nickname", "Sam 👋");
-    expect(ctl.snapshot().fields.nickname).toEqual({ draft: "Sam 👋" });
-    ctl.saveDraft("nickname");
-    expect(m.updates[0].body.changes).toEqual({ nickname: "Sam 👋" });
+    ctl.setDraft("label", "Sam 👋");
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Sam 👋" });
+    ctl.saveDraft("label");
+    expect(m.updates[0].body.changes).toEqual({ label: "Sam 👋" });
     m.updates[0].resolve(commit(example, m.updates[0].body));
     await flush();
-    expect(ctl.snapshot().fields.nickname).toEqual({ saved: true });
-    expect(ctl.snapshot().doc?.values.nickname).toBe("Sam 👋");
+    expect(ctl.snapshot().fields.label).toEqual({ saved: true });
+    expect(ctl.snapshot().doc?.values.label).toBe("Sam 👋");
   });
 
   it("keeps the draft through a failed save", async () => {
     const { ctl, m } = await ready();
-    ctl.setDraft("note", "New words");
-    ctl.saveDraft("note");
+    ctl.setDraft("notes", "New words");
+    ctl.saveDraft("notes");
     m.updates[0].reject(new Error("network"));
     await flush();
-    expect(ctl.snapshot().fields.note).toEqual({ draft: "New words", error: { code: "failed" } });
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "New words", error: { code: "failed" } });
+  });
+
+  it("keeps text edited while its save is on the way, after the save succeeds (message 14)", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("label", "A");
+    ctl.saveDraft("label");
+    expect(m.updates[0].body.changes).toEqual({ label: "A" });
+    ctl.setDraft("label", "AB"); // typed while the promise is pending
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "AB" });
+    m.updates[0].resolve(commit(example, m.updates[0].body));
+    await flush();
+    expect(ctl.snapshot().doc?.values.label).toBe("A"); // what was sent is committed
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "AB" }); // the newer text stays, not saved
+  });
+
+  it("keeps text edited while its save is on the way, after the save fails", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("notes", "A");
+    ctl.saveDraft("notes");
+    ctl.setDraft("notes", "AB");
+    m.updates[0].reject(new ConfigurationError("storage_failed", "Couldn't keep it"));
+    await flush();
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "AB", error: { code: "storage_failed", message: "Couldn't keep it" } });
   });
 
   it("keeps the draft through a conflict, reads again only when asked, and still has it after", async () => {
     const { ctl, m } = await ready();
-    ctl.setDraft("note", "Mine");
-    ctl.saveDraft("note");
-    m.updates[0].reject(new ConfigurationError("conflict"));
+    ctl.setDraft("notes", "Mine");
+    ctl.saveDraft("notes");
+    m.updates[0].reject(new ConfigurationError("configuration_conflict"));
     await flush();
-    expect(ctl.snapshot().conflict).toBe(true);
+    expect(ctl.snapshot().blocked).toEqual({ code: "configuration_conflict" });
     expect(m.reads).toHaveLength(1); // nothing re-read on its own
-    expect(ctl.snapshot().fields.note).toEqual({ draft: "Mine" });
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "Mine" });
+    expect(ctl.canWrite("label")).toBe(false); // no writing until Reload
+    ctl.setDraft("label", "Also mine");
+    ctl.saveDraft("label");
+    expect(m.updates).toHaveLength(1);
     ctl.reload();
-    m.reads[1].resolve({ ...clone(example), revision: "r2", values: { ...example.values, note: "Theirs" } });
+    m.reads[1].resolve({ ...clone(example), revision: "revision-2", values: { ...example.values, notes: "Theirs" } });
     await flush();
-    expect(ctl.snapshot().conflict).toBe(false);
-    expect(ctl.snapshot().doc?.values.note).toBe("Theirs");
-    expect(ctl.snapshot().fields.note).toEqual({ draft: "Mine" });
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().doc?.values.notes).toBe("Theirs");
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "Mine" });
+  });
+
+  it("an uncertain write (unavailable) needs an explicit reload too, keeping the draft", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("notes", "Mine");
+    ctl.saveDraft("notes");
+    m.updates[0].reject(new ConfigurationError("configuration_unavailable"));
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "configuration_unavailable" });
+    expect(m.reads).toHaveLength(1);
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "Mine" });
+    ctl.reload();
+    m.reads[1].resolve(commit(example, { schema_version: 1, id: example.id, revision: example.revision, changes: { notes: "Mine" } }));
+    await flush();
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().doc?.values.notes).toBe("Mine"); // the lost write had landed
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "Mine" });
+  });
+
+  it("an unknown version blocks writing altogether, keeping the draft", async () => {
+    const { ctl, m } = await ready();
+    ctl.setDraft("notes", "Mine");
+    ctl.saveDraft("notes");
+    m.updates[0].reject(new ConfigurationError("configuration_version"));
+    await flush();
+    expect(ctl.snapshot()).toMatchObject({ writable: false, formError: { code: "configuration_version" }, busy: null });
+    expect(ctl.snapshot().fields.notes).toEqual({ draft: "Mine" });
+    expect(ctl.canWrite("label")).toBe(false);
   });
 
   it("keeps a draft when the resource changes elsewhere", async () => {
     const { ctl, m } = await ready();
-    ctl.setDraft("nickname", "Typing");
+    ctl.setDraft("label", "Typing");
     m.change();
-    m.reads[1].resolve({ ...clone(example), revision: "r2" });
+    m.reads[1].resolve({ ...clone(example), revision: "revision-2" });
     await flush();
-    expect(ctl.snapshot().doc?.revision).toBe("r2");
-    expect(ctl.snapshot().fields.nickname).toEqual({ draft: "Typing" });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-2");
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "Typing" });
   });
 
   it("puts field errors on the fields they name", async () => {
     const { ctl, m } = await ready();
-    ctl.setDraft("nickname", "taken");
-    ctl.saveDraft("nickname");
-    m.updates[0].reject(new ConfigurationError("invalid_update", "", [{ id: "nickname", code: "taken", message: "Someone has that name" }]));
+    ctl.setDraft("label", "taken");
+    ctl.saveDraft("label");
+    m.updates[0].reject(new ConfigurationError("configuration_invalid", "", [{ id: "label", code: "taken", message: "Someone has that name" }]));
     await flush();
-    expect(ctl.snapshot().fields.nickname).toEqual({ draft: "taken", error: { code: "taken", message: "Someone has that name" } });
+    expect(ctl.snapshot().fields.label).toEqual({ draft: "taken", error: { code: "taken", message: "Someone has that name" } });
   });
 
   it("numbers: parsed and checked as the field says; anything else stays a draft with why", async () => {
     const { ctl, m } = await ready();
-    ctl.setDraft("limit", "2.5");
-    ctl.saveDraft("limit");
-    expect(ctl.snapshot().fields.limit.error).toEqual({ code: "not_integer" });
-    ctl.setDraft("limit", "abc");
-    ctl.saveDraft("limit");
-    expect(ctl.snapshot().fields.limit.error).toEqual({ code: "out_of_range" });
-    ctl.setDraft("limit", "");
-    ctl.saveDraft("limit");
-    expect(ctl.snapshot().fields.limit.error).toEqual({ code: "invalid_type" });
-    ctl.setDraft("ratio", "1.75");
-    ctl.saveDraft("ratio");
-    expect(m.updates[0].body.changes).toEqual({ ratio: 1.75 });
+    ctl.setDraft("interval", "2.5");
+    ctl.saveDraft("interval");
+    expect(ctl.snapshot().fields.interval.error).toEqual({ code: "integer" });
+    ctl.setDraft("interval", "abc");
+    ctl.saveDraft("interval");
+    expect(ctl.snapshot().fields.interval.error).toEqual({ code: "type" });
+    ctl.setDraft("interval", "");
+    ctl.saveDraft("interval");
+    expect(ctl.snapshot().fields.interval.error).toEqual({ code: "type" });
+    ctl.setDraft("interval", "40");
+    ctl.saveDraft("interval");
+    expect(m.updates[0].body.changes).toEqual({ interval: 40 });
   });
 
   it("Discard drops the draft", async () => {
     const { ctl } = await ready();
-    ctl.setDraft("nickname", "Oops");
-    ctl.discard("nickname");
-    expect(ctl.snapshot().fields.nickname).toBeUndefined();
+    ctl.setDraft("label", "Oops");
+    ctl.discard("label");
+    expect(ctl.snapshot().fields.label).toBeUndefined();
+  });
+});
+
+describe("a multiselect's pending selection", () => {
+  it("changes locally one check at a time and sends the final list on Save", async () => {
+    const { ctl, m } = await ready(manual(), oneOfOne());
+    ctl.setSelection("sections", ["summary", "activity"]); // an invalid intermediate: one is checked before the other goes
+    ctl.setSelection("sections", ["files"]);
+    expect(m.updates).toHaveLength(0);
+    expect(ctl.snapshot().fields.sections).toEqual({ selection: ["files"] });
+    ctl.saveDraft("sections");
+    expect(m.updates[0].body.changes).toEqual({ sections: ["files"] });
+    m.updates[0].resolve(commit(oneOfOne(), m.updates[0].body));
+    await flush();
+    expect(ctl.snapshot().doc?.values.sections).toEqual(["files"]);
+    expect(ctl.snapshot().fields.sections).toEqual({ saved: true });
+  });
+
+  it("checks the count on Save, sends nothing when it doesn't fit, and keeps the checks", async () => {
+    const { ctl, m } = await ready(manual(), oneOfOne());
+    ctl.setSelection("sections", []);
+    ctl.saveDraft("sections");
+    expect(m.updates).toHaveLength(0);
+    expect(ctl.snapshot().fields.sections).toEqual({ selection: [], error: { code: "min_selected" } });
+  });
+
+  it("Discard drops the checks, back to what is saved", async () => {
+    const { ctl } = await ready();
+    ctl.setSelection("sections", ["activity"]);
+    ctl.discard("sections");
+    expect(ctl.snapshot().fields.sections).toBeUndefined();
+  });
+
+  it("keeps a selection changed while its save is on the way, after it succeeds", async () => {
+    const { ctl, m } = await ready();
+    ctl.setSelection("sections", ["summary", "activity"]);
+    ctl.saveDraft("sections");
+    ctl.setSelection("sections", ["summary", "files"]); // changed while pending
+    m.updates[0].resolve(commit(example, m.updates[0].body));
+    await flush();
+    expect(ctl.snapshot().doc?.values.sections).toEqual(["summary", "activity"]);
+    expect(ctl.snapshot().fields.sections).toEqual({ selection: ["summary", "files"] });
   });
 });
 
 describe("resetting", () => {
   it("sends reset for that field only", async () => {
     const { ctl, m } = await ready();
-    ctl.reset("limit");
-    expect(m.updates[0].body).toEqual({ schema_version: 1, id: "example", revision: "r1", reset: ["limit"] });
+    ctl.reset("interval");
+    expect(m.updates[0].body).toEqual({ schema_version: 1, id: "example-preferences", revision: "revision-1", reset: ["interval"] });
     m.updates[0].resolve(commit(example, m.updates[0].body));
     await flush();
-    expect(ctl.snapshot().doc?.values.limit).toBe(10);
-    expect(ctl.snapshot().doc?.values.mode).toBe("manual"); // the rest untouched
+    expect(ctl.snapshot().doc?.values.interval).toBe(30);
+    expect(ctl.snapshot().doc?.values.layout).toBe("comfortable"); // the rest untouched
   });
 });
 
 describe("a change made elsewhere during a write", () => {
   it("reads again once the write is done", async () => {
     const { ctl, m } = await ready();
-    ctl.choose("size", "l");
+    ctl.choose("layout", "dense");
     m.change();
     expect(m.reads).toHaveLength(1);
     m.updates[0].resolve(commit(example, m.updates[0].body));
@@ -305,19 +425,21 @@ describe("the HTTP source", () => {
     const { source, calls } = http((r) => ({ status: 200, body: r.method === "GET" ? example : commit(example, JSON.parse(r.body!)) }));
     expect(source.key).toBe("/api/v1/example/settings");
     await expect(source.read()).resolves.toEqual(example);
-    const update = { schema_version: 1, id: "example", revision: "r1", changes: { size: "l" } };
+    const update = { schema_version: 1, id: "example-preferences", revision: "revision-1", changes: { layout: "dense" } };
     const doc = (await source.update(update)) as Doc;
-    expect(doc.values.size).toBe("l");
+    expect(doc.values.layout).toBe("dense");
     expect(calls.map(([e, r]) => [e, r.method, r.body ? JSON.parse(r.body) : undefined])).toEqual([
       ["/api/v1/example/settings", "GET", undefined],
       ["/api/v1/example/settings", "PATCH", update],
     ]);
   });
 
-  it("turns an error answer into a ConfigurationError (409 is a conflict even without a code)", async () => {
-    const { source } = http((r) => (r.method === "GET" ? { status: 403, body: { error: "No", code: "forbidden" } } : { status: 409, body: undefined }));
-    await expect(source.read()).rejects.toMatchObject({ code: "forbidden", message: "No" });
-    await expect(source.update({ schema_version: 1, id: "example", revision: "r1" })).rejects.toMatchObject({ code: "conflict" });
+  it("turns an error answer into a ConfigurationError (409 is a conflict, 503 unavailable, even without a code)", async () => {
+    const { source } = http((r) => (r.method === "GET" ? { status: 403, body: { error: "No", code: "configuration_forbidden" } } : { status: 409, body: undefined }));
+    await expect(source.read()).rejects.toMatchObject({ code: "configuration_forbidden", message: "No" });
+    await expect(source.update({ schema_version: 1, id: "example-preferences", revision: "revision-1" })).rejects.toMatchObject({ code: "configuration_conflict" });
+    const unavailable = http(() => ({ status: 503, body: undefined })).source;
+    await expect(unavailable.update({ schema_version: 1, id: "example-preferences", revision: "revision-1" })).rejects.toMatchObject({ code: "configuration_unavailable" });
   });
 
   it("a form over it treats an answer for another resource as invalid", async () => {
@@ -325,9 +447,9 @@ describe("the HTTP source", () => {
     const ctl = new ConfigurationController(source);
     ctl.start();
     await flush();
-    ctl.choose("size", "l");
+    ctl.choose("layout", "dense");
     await flush();
-    expect(ctl.snapshot().fields.size.error).toEqual({ code: "invalid_document" });
-    expect(ctl.snapshot().doc?.id).toBe("example");
+    expect(ctl.snapshot().fields.layout.error).toEqual({ code: "invalid_document" });
+    expect(ctl.snapshot().doc?.id).toBe("example-preferences");
   });
 });

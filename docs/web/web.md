@@ -1955,11 +1955,18 @@ shown as a `list`, `dropdown` or `segmented` control), `multiselect` (checks, mi
 `read_only`, `disabled_reason` and `details` (title + description lines the module writes: scope, activation, rollback).
 An Update names the document, the revision it was made against, the `changes` it makes and the fields to `reset` (remove
 the override); missing fields stay as they are. The answer is the whole committed Document, or `{ error, code,
-field_errors }`; a `conflict` carries no replacement values. `contract.ts` mirrors the TypeScript union and the writer's
-checks: lengths in Unicode scalar values, numbers finite and inside the safe integer range (decimal bounds allowed),
-choices known and distinct, counts within their limits. A kind it doesn't know, or a definition that isn't valid, is shown
-read-only with a line saying so; a value that isn't valid is not shown and the field offers **Use default**; a schema
-version it doesn't know is shown and never written. Nothing in a Document is a URL, a scope or an instruction.
+field_errors }`; a `configuration_conflict` carries no replacement values. The codes are the shared contract's root codes
+(`configuration_bad_request`, `configuration_version`, `configuration_too_large`, `configuration_invalid`,
+`configuration_conflict`, `configuration_forbidden`, `configuration_not_found`, `configuration_unavailable`) and field
+codes (`type`, `option`, `duplicate`, `min_length`, `max_length`, `min_selected`, `max_selected`, `integer`, `minimum`,
+`maximum`, `range`, `unknown`, `read_only`, `unsupported`), and the client says a code it knows in the reader's language
+(a module's own localized message wins for a code it doesn't know). `contract.ts` mirrors the TypeScript union and the
+writer's checks: lengths in Unicode scalar values, numbers finite and inside the safe integer range (decimal bounds
+allowed), choices known and distinct, counts within their limits. The shared `schema/configuration/validation-cases.json`
+(26 cases, the same file the Go checks run) is a Web test input; there is no Web-only copy of it or of the all-types
+document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a value that
+isn't valid is not shown and the field offers **Use default**; a schema version it doesn't know is shown and never written.
+Nothing in a Document is a URL, a scope or an instruction.
 
 **Sources.** The form takes a `ConfigurationSource` injected by the owning module, already bound to its one resource:
 `key` (the resource's identity: another key starts the form over), `read`, `update` and, when the module can tell,
@@ -1969,14 +1976,19 @@ nothing in an answer chooses another address. A local module implements the same
 imports no module, assistant, hub or storage.
 
 **The form.** It reuses the settings pieces (`Group`, `RowFailed`, `Switch`, `Segmented`, `ChoiceRows`, `CheckMark`, the
-field and button classes). A choice (switch, selection, checks) is written at once and shows **Saving…** until the source
-has committed; only then **Saved**. Typed text and numbers are drafts until **Save** (Enter on one line; Escape puts
-them back) and stay through a failed write, a conflict, a re-read or a change elsewhere. One write at a time, each against
-the revision shown. A conflict says so and offers **Reload**, which keeps every draft. Field errors appear on their fields
-in the client's words for codes it knows, else the module's message. A source replaced while it is still answering is
-ignored, and so is a read that started before a newer Document arrived. The form loads with its page, in its own chunk.
-Every control is named by its field's title and described by its description. `web/e2e/configuration-form.html` shows the
-form over the synthetic `fixtures/all-types.json` for screenshots (`web/e2e/configuration-form.mjs`); it is never built.
+field and button classes). A single-step choice (a switch, a list, dropdown or segmented selection) is written at once and
+shows **Saving…** until the source has committed; only then **Saved**. Typed text, numbers and a multiselect's checks are
+drafts until **Save** (Enter on one line; Escape puts a typed one back; **Cancel** beside any pending edit), so a fixed
+count can move from one choice to another without an invalid write in between. Drafts stay through a failed write, a
+conflict, a re-read or a change elsewhere, including what is typed or checked while its save is on the way (that newer
+edit stays unsaved). One write at a time, each against the revision shown. A conflict, or a write whose outcome is unknown
+(`configuration_unavailable`), says so and offers **Reload**, which keeps every draft; nothing else is written until it
+has read again, and a version it can't write blocks writing altogether. Field errors appear on their fields in the
+client's words for codes it knows, else the module's message. A source replaced while it is still answering is ignored,
+and so is a read that started before a newer Document arrived. The form loads with its page, in its own chunk. Every
+control is named by its field's title and described by its description. `web/e2e/configuration-form.html` shows the form
+over the shared `schema/configuration/all-types.json` for screenshots (`web/e2e/configuration-form.mjs`); it is never
+built.
 
 ## Labs
 
