@@ -202143,19 +202143,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "meetings recording attendance transcription minutes glossary wi-fi hub"
+            "value" : "meetings recording attendance transcription minutes glossary wi-fi hub reminder calendar"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会议 录音 参会 转写 纪要 词表 Wi-Fi hub"
+            "value" : "会议 录音 参会 转写 纪要 词表 Wi-Fi hub 提醒 日历"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会議 録音 参加 文字起こし 議事録 用語集 Wi-Fi ハブ"
+            "value" : "会議 録音 参加 文字起こし 議事録 用語集 Wi-Fi ハブ リマインダー カレンダー"
           }
         }
       }
