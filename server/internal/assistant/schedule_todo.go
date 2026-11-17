@@ -17,7 +17,7 @@ import (
 // ScheduleTodoAssessment describes observable evidence, not acceptance of the work.
 type ScheduleTodoAssessment struct {
 	TodoID     string `json:"todo_id"`
-	State      string `json:"state"` // pending, progress, no_progress, unknown, inactive, not_run, superseded
+	State      string `json:"state"` // pending, progress, no_progress, unknown, error, inactive, not_run, superseded
 	NoProgress int    `json:"no_progress,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 }
@@ -27,6 +27,21 @@ type scheduleTodoSnapshot struct {
 	Criteria map[string]string `json:"criteria,omitempty"`
 	Report   string            `json:"report,omitempty"`
 	Unknown  bool              `json:"unknown,omitempty"`
+}
+
+func (v scheduleTodoSnapshot) validate() error {
+	// Check decoded strings: literal backslash-u0000 text is valid JSONB.
+	for _, entries := range []map[string]string{v.Answers, v.Criteria} {
+		for key, value := range entries {
+			if strings.ContainsRune(key, 0) || strings.ContainsRune(value, 0) {
+				return errors.New("progress snapshot contains NUL")
+			}
+		}
+	}
+	if strings.ContainsRune(v.Report, 0) {
+		return errors.New("progress snapshot contains NUL")
+	}
+	return nil
 }
 
 // Kept with the schedule, not just the capped, shared run history.
@@ -129,7 +144,8 @@ func (s *Service) scheduledTodoSnapshot(ctx context.Context, task Task, run Sche
 		}
 		_, answer := turnExchange(items)
 		if answer != "" && !apiErrorText(answer) {
-			out.Answers[a.MachineID+"\x00"+a.SessionID] = evidenceHash(answer)
+			// Hash the pair, not a NUL-delimited string that JSONB cannot store.
+			out.Answers[evidenceHash([2]string{a.MachineID, a.SessionID})] = evidenceHash(answer)
 		}
 	}
 	return out, true
@@ -178,7 +194,7 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 			_, reason = turnExchange(items)
 		}
 	}
-	reason = clip(oneLine(reason), 500)
+	reason = clip(oneLine(strings.ReplaceAll(reason, "\x00", "")), 500)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return
@@ -195,7 +211,7 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 		result := old.Assessment
 		sc.runs[j].TodoProgress = &result
 	}
-	if sc.runs[j].TodoProgress == nil || sc.runs[j].TodoProgress.State == "pending" {
+	if sc.runs[j].TodoProgress == nil || sc.runs[j].TodoProgress.State == "pending" || sc.runs[j].TodoProgress.State == "error" {
 		result := ScheduleTodoAssessment{TodoID: task.TodoID, State: "no_progress", Reason: reason}
 		progress := scheduleTodoProgress{Run: run.ID, At: run.At, Snapshot: after}
 		before := task.todoBefore
@@ -246,9 +262,12 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 		if result.State != "superseded" {
 			tasks[i].TodoProgress = &progress
 		}
-		if err = s.saveLocked(sc, tasks); err != nil {
+		if err = progress.Snapshot.validate(); err == nil {
+			err = s.saveLocked(sc, tasks)
+		}
+		if err != nil {
 			sc.mu.Unlock()
-			s.logf("task %s: save to-do progress: %v", task.ID, err)
+			s.scheduledTodoSaveFailed(ctx, task, run, err)
 			return
 		}
 		sc.runs[j].TodoProgress = &result
@@ -260,14 +279,37 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 	cur = sc.tasks[i]
 	sc.mu.Unlock()
 	if err != nil {
-		s.logf("task %s: save run's to-do progress: %v", task.ID, err)
-		return
+		s.scheduledTodoSaveFailed(ctx, task, run, err)
+		// The task's assessment is durable even if its history write failed.
 	}
 	s.broadcastSchedule()
 	if result.State != "no_progress" || !cur.Enabled || cur.TodoProgress == nil || cur.TodoProgress.Run != run.ID {
 		return
 	}
 	s.escalateScheduledTodo(ctx, cur, run, result)
+}
+
+func (s *Service) scheduledTodoSaveFailed(ctx context.Context, task Task, run ScheduleRun, cause error) {
+	s.logf("task %s run %s: save to-do progress: %v", task.ID, run.ID, cause)
+	detail := i18n.T(s.lang(ctx), "assistant-schedule.todo_save_failed", i18n.Args{
+		"name": task.labelIn(s.lang(ctx)), "error": strings.ReplaceAll(cause.Error(), "\x00", ""),
+	})
+	if sc, err := s.lockedSchedule(ctx); err == nil {
+		if j := slices.IndexFunc(sc.runs, func(r ScheduleRun) bool { return r.ID == run.ID }); j >= 0 {
+			sc.runs[j].TodoProgress = &ScheduleTodoAssessment{TodoID: task.TodoID, State: "error", Reason: detail}
+			if st := s.store(); st != nil {
+				if err := st.PutSetting(ctx, runsKey, sc.runs); err != nil {
+					s.logf("task %s run %s: save progress error: %v", task.ID, run.ID, err)
+				}
+			}
+		}
+		sc.mu.Unlock()
+	}
+	s.broadcastSchedule()
+	// A failed assessment must reach supervision without claiming durable no-progress evidence.
+	s.signal(superviseSignal{Todo: task.TodoID, Kind: sigReport, Report: upReportBlocked,
+		Key: run.ID + ":progress_error", At: run.At, Machine: run.MachineID, Session: run.SessionID,
+		Detail: detail + "\n" + run.ID})
 }
 
 func (s *Service) escalateScheduledTodo(ctx context.Context, task Task, run ScheduleRun, result ScheduleTodoAssessment) {

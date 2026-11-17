@@ -266,7 +266,7 @@ func TestScheduledTodoInactiveAndExistingDecisionGuards(t *testing.T) {
 	}
 }
 
-func TestScheduledTodoPersistenceFailureDoesNotNotifyOrDoubleCount(t *testing.T) {
+func TestScheduledTodoPersistenceFailureIsVisibleWithoutDoubleCount(t *testing.T) {
 	for _, key := range []string{tasksKey, runsKey} {
 		t.Run(key, func(t *testing.T) {
 			store := &scheduleWriteStore{Store: &memStore{}}
@@ -282,12 +282,36 @@ func TestScheduledTodoPersistenceFailureDoesNotNotifyOrDoubleCount(t *testing.T)
 				TodoProgress: &ScheduleTodoAssessment{TodoID: todo.ID, State: "pending"}}
 			run.ID = s.recordRun(run)
 			store.failWrites(key)
+			logs := &logBuffer{}
+			s.logf = logs.logf
 			s.finishScheduledTodo(t.Context(), task, run)
 			s.supervise.mu.Lock()
 			signals := len(s.supervise.pending)
+			blocked := false
+			for _, signal := range s.supervise.pending {
+				blocked = blocked || signal.Todo == todo.ID && signal.Report == upReportBlocked &&
+					strings.Contains(signal.Detail, run.ID)
+			}
 			s.supervise.mu.Unlock()
-			if signals != 0 {
-				t.Fatal("notification preceded durable assessment")
+			if signals == 0 || !blocked || !strings.Contains(logs.String(), "save to-do progress") {
+				t.Fatal("a failed assessment disappeared without a log and blocked supervisor signal")
+			}
+			_, failedRuns := scheduleState(s)
+			if failedRuns[0].TodoProgress.State != "error" || failedRuns[0].TodoProgress.Reason == "" {
+				t.Fatal("the failed assessment was still shown as pending")
+			}
+			if key == tasksKey {
+				cur, _ := taskByID(s, task.ID)
+				if cur.TodoProgress != nil {
+					t.Fatal("a failed snapshot write published undurable no-progress evidence")
+				}
+				var persisted []ScheduleRun
+				if _, err := store.Setting(t.Context(), runsKey, &persisted); err != nil {
+					t.Fatal(err)
+				}
+				if len(persisted) != 1 || persisted[0].TodoProgress.State != "error" {
+					t.Fatal("the visible assessment error was not saved in run history")
+				}
 			}
 			store.failWrites("")
 			s.finishScheduledTodo(t.Context(), task, run)
@@ -326,6 +350,33 @@ func TestScheduledTodoPartialWriteReplayAfterRestart(t *testing.T) {
 	cur, _ := other.todoNow(todo.ID)
 	if cur.Supervision.State == reviewNeedsUser {
 		t.Fatal("one physical run became two no-progress runs after restart")
+	}
+}
+
+func TestScheduledTodoHistoryFailureDoesNotSwallowEscalation(t *testing.T) {
+	store := &scheduleWriteStore{Store: &memStore{}}
+	s, _ := newQuietServiceOn(t, store)
+	s.superviseTimes.gather = time.Hour
+	todo := Todo{ID: "history-failure", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1"}}
+	putTodo(s, todo)
+	task := todoProgressTask(todo.ID)
+	setTasks(s, task)
+	assessTodoRun(t, s, task.ID, nil)
+	run, result := assessTodoRun(t, s, task.ID, func() { store.failWrites(runsKey) })
+	current, _ := taskByID(s, task.ID)
+	cur, _ := s.todoNow(todo.ID)
+	if result.State != "error" || current.TodoProgress.NoProgress != 2 || !current.TodoProgress.Escalated ||
+		cur.Supervision.State != reviewNeedsUser || len(cur.Supervision.Reviews) != 1 {
+		t.Fatalf("a failed history write swallowed escalation from durable evidence: assessment=%+v progress=%+v supervision=%+v",
+			result, current.TodoProgress, cur.Supervision)
+	}
+	store.failWrites("")
+	s.finishScheduledTodo(t.Context(), current, run)
+	cur, _ = s.todoNow(todo.ID)
+	_, runs := scheduleState(s)
+	last := runs[len(runs)-1].TodoProgress
+	if len(cur.Supervision.Reviews) != 1 || last.State != "no_progress" || last.NoProgress != 2 {
+		t.Fatalf("recovering history duplicated the decision or count: %+v %+v", last, cur.Supervision)
 	}
 }
 

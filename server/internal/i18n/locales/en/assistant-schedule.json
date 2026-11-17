@@ -51,6 +51,7 @@
   "todo_stalled": "{name}: {count} recurring checks without observable progress. Last run: {reason}",
   "todo_decide": "No progress: {reason} Change approach or keep waiting?",
   "todo_unknown": "Progress could not be assessed because the baseline or Agent evidence was unreadable. Run summary: {reason}",
+  "todo_save_failed": "Could not save progress for {name}. Its no-progress count and escalation may be incomplete. Error: {error}",
   "todo_change": "Change approach",
   "todo_wait": "Keep waiting",
   "todo_wait_cost": "Another scheduled window may pass without advancing the task.",

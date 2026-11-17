@@ -51,6 +51,7 @@
   "todo_stalled": "{name}：定期確認で{count}回連続、進捗を確認できませんでした。前回の実行：{reason}",
   "todo_decide": "進捗がない理由：{reason} 方法を変えますか、それとも待ちますか？",
   "todo_unknown": "基準またはAgentの証拠を読み取れず、進捗を判定できませんでした。実行の要約：{reason}",
+  "todo_save_failed": "「{name}」の進捗を保存できませんでした。進捗なしの回数やエスカレーションが不完全な可能性があります。エラー：{error}",
   "todo_change": "方法を変える",
   "todo_wait": "引き続き待つ",
   "todo_wait_cost": "次の実行時間になってもタスクが進まない可能性があります。",
