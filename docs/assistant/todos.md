@@ -1093,6 +1093,11 @@ restrictions and local branch format. No directory is created, no repository is
 queried or fetched, and no Engine is opened. `.persona` and `.git` task path
 segments and private state directories are unavailable; `{persona-home}` has no
 registered public workspace subtree in this version and is unsupported.
+Windows device and extended namespaces (`//?/`, `//./` and `/??/`, including
+extended UNC paths) are rejected rather than stripped: they can name the same
+private directory with a different lexical volume. A Windows Node with a
+namespace-form home or state directory returns `context_invalid`; ordinary
+drive and UNC paths retain their native case and separator semantics.
 
 The sole resolver and wire contract are in
 `server/internal/workspacenaming/naming.go`, with an exact shared vector in
@@ -1125,5 +1130,8 @@ Both entry points load the shared editor through `lazyPage` when rendered, keepi
 its module out of the first screen's page-preload dependencies. The connection
 context hook lives with the repository request helpers, so naming does not load
 the repository editor just to scope its requests.
+Assistant settings wraps the naming subtree in its own `PageBoundary`, retaining
+the existing one-time chunk reload and recoverable error. A persistent import
+failure leaves the other settings mounted and editable.
 Edits and computer or assistant changes invalidate pending preview responses.
 These controls never select a creation mode or start an Agent.

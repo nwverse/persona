@@ -382,9 +382,11 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
           </select>
         </Row>
-        {info?.manager === manager && info.task_workspace_preference === "prefer-new" && <Suspense fallback={<Loading />}>
-          <WorkspaceNaming manager={manager} owner={owner} />
-        </Suspense>}
+        {info?.manager === manager && info.task_workspace_preference === "prefer-new" && <PageBoundary page="workspace-naming">
+          <Suspense fallback={<Loading />}>
+            <WorkspaceNaming manager={manager} owner={owner} />
+          </Suspense>
+        </PageBoundary>}
         <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 

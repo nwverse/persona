@@ -145,3 +145,13 @@ func TestWorkspaceNamingContextUsesTargetPlatform(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectNamespaceBaseTemplatesOnAnyHost(t *testing.T) {
+	// Settings may be saved on a different OS from the target Node. They must
+	// reject namespace syntax there too, before target-specific resolution.
+	for _, base := range []string{"//?/C:/private-state/work", "//?/UNC/files.example.com/share/work", "//?/unc/files.example.com/share/work", "//./C:/work", "/??/C:/work"} {
+		if err := Validate(Rules{BaseDirectory: base}); err == nil {
+			t.Fatalf("accepted namespace base %q", base)
+		}
+	}
+}

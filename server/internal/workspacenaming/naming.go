@@ -211,12 +211,23 @@ func safeRelative(path string) bool {
 	return true
 }
 func safeBase(path string) bool {
+	if windowsNamespace(path) {
+		return false
+	}
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
 		if part == ".." || part == "." {
 			return false
 		}
 	}
 	return !strings.ContainsFunc(path, unicode.IsControl)
+}
+
+// Device/extended namespaces can name an ordinary directory with a different
+// filepath volume. Reject them instead of comparing inequivalent spellings or
+// changing their special Windows semantics by stripping the prefix.
+func windowsNamespace(path string) bool {
+	path = strings.ReplaceAll(path, `\`, "/")
+	return strings.HasPrefix(path, "//?/") || strings.HasPrefix(path, "//./") || strings.HasPrefix(path, "/??/")
 }
 func fragment(s string, limit int) string {
 	var out strings.Builder
@@ -330,7 +341,8 @@ func Resolve(s Source, n NodeContext) Preview {
 		slug = "task"
 	}
 	values := map[string]string{"task-id": s.TodoID, "task-slug": slug, "yyyy": date.Format("2006"), "mmdd": date.Format("0102")}
-	if !filepath.IsAbs(n.Home) || n.PathFlavor != "" && n.PathFlavor != runtimeFlavor() {
+	if !filepath.IsAbs(n.Home) || n.PathFlavor != "" && n.PathFlavor != runtimeFlavor() ||
+		runtimeFlavor() == "windows" && (windowsNamespace(n.Home) || windowsNamespace(n.PersonaHome)) {
 		p.add("context_invalid", "machine_id", "", "error")
 		return p
 	}

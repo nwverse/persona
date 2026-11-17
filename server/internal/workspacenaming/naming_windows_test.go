@@ -99,3 +99,35 @@ func TestWindowsWorkspaceNamingPathBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// Namespace paths have different volume names even when they name the same
+// directory. They must not bypass the private-state check in either direction.
+func TestWindowsWorkspaceNamingNamespaces(t *testing.T) {
+	for _, layout := range []repository.Layout{repository.LayoutRoot, repository.LayoutContainer} {
+		for _, tc := range []struct{ name, home, state, base string }{
+			{"extended drive base", "C:/Users/example", `C:\Users\example\.persona`, "//?/C:/Users/example/.persona/work"},
+			{"extended drive custom state", "C:/Users/example", "C:/private-state", "//?/c:/PRIVATE-STATE/work"},
+			{"extended UNC base", "C:/Users/example", `\\files.example.com\share\state`, "//?/UNC/FILES.example.com/share/STATE/work"},
+			{"device drive base", "C:/Users/example", "C:/private-state", "//./C:/private-state/work"},
+			{"NT drive base", "C:/Users/example", "C:/private-state", "/??/C:/private-state/work"},
+			{"namespace outside state", "C:/Users/example", "C:/private-state", "//?/D:/work"},
+			{"native namespace template", "C:/Users/example", "C:/private-state", `\\?\C:\private-state\work`},
+			{"mixed namespace template", "C:/Users/example", "C:/private-state", `/\?\C:/private-state/work`},
+			{"extended drive home", `\\?\C:\Users\example`, "C:/private-state", "{home}/workspace"},
+			{"extended UNC home", "//?/unc/files.example.com/share", "C:/private-state", "~/workspace"},
+			{"extended drive state", "C:/Users/example", `\\?\C:\private-state`, "C:/PRIVATE-STATE/work"},
+			{"extended UNC state", "C:/Users/example", `\\?\UNC\files.example.com\share\state`, "//FILES.example.com/share/STATE/work"},
+			{"device state", "C:/Users/example", "//./C:/private-state", "C:/private-state/work"},
+			{"NT state", "C:/Users/example", `\??\C:\private-state`, "C:/private-state/work"},
+		} {
+			t.Run(string(layout)+"/"+tc.name, func(t *testing.T) {
+				s := windowsNamingSource()
+				s.Layout, s.Rules.BaseDirectory = layout, tc.base
+				p := Resolve(s, NodeContext{Home: tc.home, PersonaHome: tc.state, PathFlavor: "windows"})
+				if p.Status != "invalid" || p.Plan != nil || len(p.Diagnostics) != 1 {
+					t.Fatalf("namespace path returned a plan: %+v", p)
+				}
+			})
+		}
+	}
+}
