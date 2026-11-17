@@ -134,6 +134,10 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
 
+## A bar button's color goes on its label, not on the button (2026-11-17, #9653)
+
+In an iOS 26 toolbar, `.foregroundStyle(Color.primary)` on a `ToolbarItem`'s `Button` is ignored: the bar draws the button's label in the app's tint. Settings' ✕ carried that modifier from 11-01 and still showed in the orange accent. Style the label inside the button (`Text(…).sheetBarLabel()`, `ThemedIcon(…).sheetBarLabel()`, as `SheetClose` does). The system's own close button (`Button(role: .close)` with no label) is no way out of this: it draws its ✕ in the tint too (blue on the extension Update sheet, 11-17). Check a bar's colors in a screenshot, dark included, not in the code.
+
 ## A UI test cannot see a label that is cut (#9121)
 
 The Agents capsule drew a filter that was neither chosen nor in the strip's middle as its first two characters and an ellipsis (「工作…」), while VoiceOver and `XCUIElement.label` read the whole name: the button carries its own accessibility label, so the drawn text is not in the accessibility tree and a UI test that asserts labels passes whatever is painted. A width check does not catch it either, since three Chinese or Japanese characters and two characters with an ellipsis take the same room. Guard what is drawn by its pixels: `FilterCapsuleTests` renders a chip and the bare name with `ImageRenderer`, crops both to the ink and compares them, after checking that the comparison tells 「工作中」 from 「工作…」. Screenshots in every shipped language are the other evidence.
@@ -605,6 +609,16 @@ page and the newest message stays over the composer. A fade drawn by the footer 
 - Give a sideways scroll view inside a column `.clipped()` (before its background) when nothing in it should reach past
   its frame. `CodeBlockOverflowUITests` checks the strip beside a code block for drawn text; run it on the Duo simulator,
   folded or open on its side (Device Hub folds it; `simctl io … screenshot --display=1` captures the outer display).
+
+## The system's Show Sidebar takes a row of the page's bar under side bars (2026-11-17)
+
+- On the open iPhone Duo on its side a page's navigation bar puts its items in the side column, but a split's Show
+  Sidebar (shown while the column is folded) stays at the top left, in a row of its own: the bar grew from 24 to 82 pt
+  and the page's top safe area with it. A place has its title in that row and saw nothing; an Agent's chat draws its own
+  header under the bar (its system title removed), so the header and the chat dropped 58 pt as the column folded.
+- A page that draws its own top under side bars must not take it from the bar's height: the chat sets its own
+  (`ChatView.pinsSideTop`, the empty bar's 24 pt), and the system's button lies on the title's line. Check a page under
+  side bars with the column out *and* folded: `SidebarRootsUITests.testFoldingTheSidebarKeepsTheChatsTop`.
 
 ## A split's detail stack shares its modifiers only with its root page (#3680)
 

@@ -380,6 +380,12 @@ struct MeetingPageBar: View {
             }
             MeetingRoomButton(title: String(localized: "End [Meeting Room]"), symbol: Theme.Icon.interrupt, ends: true) { confirmingStop = true }
                 .accessibilityIdentifier("recording-stop")
+                // End on the Lock Screen or in the Dynamic Island (#8731 V4) asks here, never ends the meeting at once.
+                .onChange(of: RecordingLivePresenter.shared.endAsking, initial: true) { _, asked in
+                    guard asked == entry.id.uuidString.lowercased() else { return }
+                    RecordingLivePresenter.shared.endAsked()
+                    confirmingStop = true
+                }
                 // On the button, so the question points at End.
                 .confirmationDialog("End the Meeting?", isPresented: $confirmingStop, titleVisibility: .visible) {
                     Button("End and Write the Minutes", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
