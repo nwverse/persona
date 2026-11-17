@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// Settings › Labs (#9877): the terminal renderer's card says its default, scope, when it takes effect and how to go back;
-// a choice is kept in this browser (Standard as no key), the old WebGL switch shows as WebGL, a value from another version
-// is named and left until a choice replaces it, and a browser that doesn't keep the choice says so with nothing changed.
+// Settings › Labs (#9877) through the generic configuration form: the terminal renderer module's choice kept in this
+// browser (Standard as no key), the old WebGL switch shown as WebGL, a value from another version named and left until a
+// choice replaces it, a browser that doesn't keep the choice saying so with nothing changed, and another tab's change.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,27 +28,35 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const card = () => host.querySelector<HTMLElement>('[data-lab="terminal-renderer"]')!;
-const radios = () => [...card().querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+const settle = async () => {
+  for (let i = 0; i < 4; i++) await act(async () => {});
+};
+const field = () => host.querySelector<HTMLElement>('[data-configuration-field="renderer"]')!;
+const radios = () => [...field().querySelectorAll<HTMLButtonElement>('[role="radio"]')];
 const chosen = () => radios().find((r) => r.getAttribute("aria-checked") === "true")?.textContent;
-const render = () => act(() => root.render(<LabsSettings />));
+const render = async () => {
+  act(() => root.render(<LabsSettings />));
+  await settle();
+};
+const click = async (el: HTMLElement) => {
+  act(() => el.click());
+  await settle();
+};
 
 describe("Settings › Labs", () => {
-  it("explains Labs and its browser-only scope, and lists the terminal renderer under Agents", () => {
-    render();
+  it("explains Labs and its browser-only scope, and shows the terminal renderer under Agents", async () => {
+    await render();
     expect(host.textContent).toContain(t("settings-labs.intro"));
     expect(host.textContent).toContain(t("settings-labs.scope_note"));
-    expect(host.querySelector('[data-settings-group="labs-agents"]')?.textContent).toContain(t("settings-labs.area_agents"));
-    expect(card().textContent).toContain(t("settings-labs.terminal_renderer"));
-    expect(card().textContent).toContain(t("settings-labs.trial"));
+    expect(host.querySelector('[data-configuration="terminal"] h2')?.textContent).toBe(t("settings-labs.area_agents"));
+    expect(field().textContent).toContain(t("settings-labs.terminal_renderer"));
+    expect(field().textContent).toContain(t("settings-labs.terminal_renderer_hint"));
   });
 
-  it("says the default, who it affects, when it takes effect and how to go back", () => {
-    render();
-    const terms = [...card().querySelectorAll("dt")].map((d) => d.textContent);
-    const values = [...card().querySelectorAll("dd")].map((d) => d.textContent);
-    expect(terms).toEqual([t("settings-labs.default"), t("settings-labs.scope"), t("settings-labs.activation"), t("settings-labs.rollback")]);
-    expect(values).toEqual([
+  it("shows the module's default, scope, activation and rollback as the form's details", async () => {
+    await render();
+    expect([...field().querySelectorAll("dt")].map((d) => d.textContent)).toEqual([t("settings-configuration.default"), t("settings-labs.scope"), t("settings-labs.activation"), t("settings-labs.rollback")]);
+    expect([...field().querySelectorAll("dd")].map((d) => d.textContent)).toEqual([
       t("settings-labs.terminal_renderer_standard"),
       t("settings-labs.scope_browser"),
       t("settings-labs.terminal_renderer_activation"),
@@ -56,59 +64,68 @@ describe("Settings › Labs", () => {
     ]);
   });
 
-  it("offers Standard and WebGL as one named choice, Standard chosen with nothing saved", () => {
-    render();
-    expect(card().querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe(t("settings-labs.terminal_renderer"));
+  it("offers Standard and WebGL as one named choice, Standard chosen with nothing saved", async () => {
+    await render();
+    expect(field().querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe(t("settings-labs.terminal_renderer"));
     expect(radios().map((r) => r.textContent)).toEqual([t("settings-labs.terminal_renderer_standard"), t("settings-labs.terminal_renderer_webgl")]);
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
   });
 
-  it("keeps WebGL as the old switch's value, says it is saved, and Standard removes it again", () => {
-    render();
-    act(() => radios()[1].click());
+  it("keeps WebGL as the old switch's value, says it is saved, and Use default removes it again", async () => {
+    await render();
+    await click(radios()[1]);
     expect(localStorage.getItem(KEY)).toBe("1");
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_webgl"));
-    expect(card().textContent).toContain(t("settings-labs.saved"));
-    act(() => radios()[0].click());
+    expect(field().textContent).toContain(t("settings-configuration.saved"));
+    const reset = [...field().querySelectorAll("button")].find((b) => b.textContent === t("settings-configuration.reset"))!;
+    await click(reset);
     expect(localStorage.getItem(KEY)).toBeNull();
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
   });
 
-  it("shows WebGL for the WebGL switch saved before Labs", () => {
+  it("shows WebGL for the WebGL switch saved before Labs", async () => {
     localStorage.setItem(KEY, "1");
-    render();
+    await render();
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_webgl"));
-    expect(card().textContent).not.toContain(t("settings-labs.invalid"));
+    expect(field().textContent).not.toContain(t("settings-labs.invalid"));
   });
 
-  it("names a saved value it doesn't recognize, leaves it, and replaces it once a choice is made", () => {
+  it("names a saved value it doesn't recognize, leaves it, and replaces it once a choice is made", async () => {
     localStorage.setItem(KEY, "webgl2");
-    render();
+    await render();
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
-    expect(card().textContent).toContain(t("settings-labs.invalid"));
+    expect(field().textContent).toContain(t("settings-labs.invalid"));
     expect(localStorage.getItem(KEY)).toBe("webgl2");
-    act(() => radios()[0].click()); // Standard, already shown, still replaces it
-    expect(localStorage.getItem(KEY)).toBeNull();
-    expect(card().textContent).not.toContain(t("settings-labs.invalid"));
+    await click(radios()[1]);
+    expect(localStorage.getItem(KEY)).toBe("1");
+    expect(field().textContent).not.toContain(t("settings-labs.invalid"));
   });
 
-  it("says when the browser won't keep the choice, and shows what is still in effect", () => {
+  it("says when the browser won't keep the choice, and shows what is still in effect", async () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("full", "QuotaExceededError");
     });
-    render();
-    act(() => radios()[1].click());
-    expect(card().querySelector('[role="alert"]')?.textContent).toBe(t("settings-labs.save_failed"));
+    await render();
+    await click(radios()[1]);
+    expect(field().querySelector('[role="alert"]')?.textContent).toBe(t("settings-labs.save_failed"));
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
-    expect(card().textContent).not.toContain(t("settings-labs.saved"));
+    expect(field().textContent).not.toContain(t("settings-configuration.saved"));
   });
 
-  it("says when the browser won't let it read what is saved", () => {
+  it("says when the browser won't let it read what is saved", async () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new DOMException("denied", "SecurityError");
     });
-    render();
-    expect(card().textContent).toContain(t("settings-labs.unreadable"));
+    await render();
+    expect(field().textContent).toContain(t("settings-labs.unreadable"));
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
+  });
+
+  it("follows a choice made in another tab", async () => {
+    await render();
+    localStorage.setItem(KEY, "1");
+    act(() => void window.dispatchEvent(new StorageEvent("storage", { key: KEY })));
+    await settle();
+    expect(chosen()).toBe(t("settings-labs.terminal_renderer_webgl"));
   });
 });

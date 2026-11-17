@@ -127,7 +127,7 @@ const toasts = vi.hoisted(() => [] as string[]);
 vi.mock("../../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../../ui/atoms")>()), toast: (text: string) => toasts.push(text) }));
 
 import { TerminalFeed } from "./feed";
-import { readLab, writeLab } from "../../../lib/labs";
+import { readTerminalRenderer, writeTerminalRenderer } from "../../../lib/labs";
 import { t } from "../../../i18n";
 
 const KEY = "persona.terminal.webgl";
@@ -194,7 +194,7 @@ describe("the terminal renderer chosen in Labs", () => {
     const first = await open("s1");
     emit("terminal_control", { machine_id: "m1", session_id: "s1", state: "active" });
     typed.onData!("echo hi");
-    expect(writeLab("terminal-renderer", "webgl").ok).toBe(true);
+    expect(writeTerminalRenderer("webgl").ok).toBe(true);
     await settle();
     expect(first.snapshot()).toMatchObject({ rendererChosen: "standard", renderer: "standard" });
     expect(gl.made).toHaveLength(0);
@@ -205,7 +205,7 @@ describe("the terminal renderer chosen in Labs", () => {
     expect(second.snapshot()).toMatchObject({ rendererChosen: "webgl", renderer: "webgl" });
     expect(gl.made).toHaveLength(1);
 
-    expect(writeLab("terminal-renderer", "standard").ok).toBe(true);
+    expect(writeTerminalRenderer("standard").ok).toBe(true);
     await settle();
     expect(second.snapshot().renderer).toBe("webgl"); // still WebGL until it is opened again
     expect(gl.made[0].disposed).toBe(false);
@@ -219,7 +219,7 @@ describe("the terminal renderer chosen in Labs", () => {
     expect(gl.made[0].disposed).toBe(true);
     expect(typed.refreshed).toEqual([[0, 29]]); // the whole fitted grid (30 rows) repaints
     expect(feed.snapshot()).toMatchObject({ rendererChosen: "webgl", renderer: "standard", rendererFellBack: true });
-    expect(readLab("terminal-renderer")).toEqual({ value: "standard", source: "default" });
+    expect(readTerminalRenderer()).toEqual({ value: "standard", source: "default", raw: null });
     expect(toasts).toEqual([t("session-terminal-feed.webgl_lost")]);
     typed.onData!("still typing");
     expect(inputs().map((m) => m.text)).toEqual(["still typing"]);
@@ -256,7 +256,7 @@ describe("the terminal renderer chosen in Labs", () => {
     localStorage.setItem(KEY, "1");
     const feed = await open();
     gl.made[0].lose();
-    writeLab("terminal-renderer", "webgl");
+    writeTerminalRenderer("webgl");
     await settle();
     expect(feed.snapshot()).toMatchObject({ renderer: "standard", rendererFellBack: true });
     expect(gl.made).toHaveLength(1);
