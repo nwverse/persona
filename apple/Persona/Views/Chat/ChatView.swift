@@ -189,6 +189,8 @@ struct ChatView: View {
     @Environment(\.shell) private var shell
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
     @Environment(\.shellRailEdge) private var railEdge
+    /// iPhone Duo's side column under the tab bar: how much of it this chat's buttons have (`sideButtons`, #9837).
+    @Environment(\.sideColumn) private var sideColumn
     /// The page draws this chat's lifted message (`MessageLiftHost`).
     @Environment(\.messageLiftHost) private var liftHost
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
@@ -887,7 +889,7 @@ struct ChatView: View {
         .stackSegment()
         .detailPresentation(item: $linkedTodo) { r in
             DetailStack {
-                TodoDetailView(todoID: r.id).macSheetDone { linkedTodo = nil }
+                TodoDetailView(todoID: r.id).sheetDone { linkedTodo = nil }
             }
             #if os(macOS)
             .macSheet()
@@ -897,7 +899,7 @@ struct ChatView: View {
             if let s = session, let todoID = s.todo?.id,
                 TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
                 DetailStack {
-                    TodoDetailView(todoID: todoID).macSheetDone { showTodoDetail = false }
+                    TodoDetailView(todoID: todoID).sheetDone { showTodoDetail = false }
                 }
                 #if os(macOS)
                 .macSheet()
@@ -4148,19 +4150,31 @@ struct ChatView: View {
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if pane != .chat {
-                Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Chat", systemImage: SessionPane.chat.symbol) }
-            }
-            if session?.canTerminal == true {
-                Button { Haptics.tap(); openTerminal() } label: { Label("Terminal", systemImage: SessionPane.terminal.symbol).lineLimit(1) }
-            }
-            ForEach(panes.filter { ($0 == .git || $0 == .files) && $0 != pane }) { p in
-                Button { Haptics.tap(); withAnimation(Theme.Motion.standard) { pane = p } } label: {
-                    Label(paneBadges[p].map { String(localized: "\(p.title) (\($0))") } ?? p.title, systemImage: p.symbol)
+            ForEach(sideButtons) { p in
+                switch p {
+                case .chat:
+                    Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Chat", systemImage: SessionPane.chat.symbol) }
+                case .terminal:
+                    Button { Haptics.tap(); openTerminal() } label: { Label("Terminal", systemImage: SessionPane.terminal.symbol).lineLimit(1) }
+                default:
+                    Button { Haptics.tap(); withAnimation(Theme.Motion.standard) { pane = p } } label: {
+                        Label(paneBadges[p].map { String(localized: "\(p.title) (\($0))") } ?? p.title, systemImage: p.symbol)
+                    }
                 }
             }
             Menu { moreMenuItems } label: { Label("More", systemImage: Theme.Icon.more) }
         }
+    }
+
+    /// The side column's buttons between Back and ⋯, in order (back to the chat from a pane, the terminal, Git, Files),
+    /// as many of them as stand clear of the Duo's tab bar under them (#9837, `TabSwitchLayout.pageButtons`): the leading
+    /// ones; ⋯ has every one of them (`moreMenuItems`), so what has no room is still a tap away there.
+    private var sideButtons: [SessionPane] {
+        var all: [SessionPane] = pane != .chat ? [.chat] : []
+        if session?.canTerminal == true { all.append(.terminal) }
+        all += panes.filter { ($0 == .git || $0 == .files) && $0 != pane }
+        let back = !hidesBack && !systemShowsList
+        return Array(all.prefix(TabSwitchLayout.pageButtons(all.count, back: back, room: sideColumn?.room)))
     }
 
     /// The header's other half while its buttons are in the side column: the title (a tap shows the session's info),
@@ -7297,7 +7311,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
+                                NavigationStack { TodoDetailView(todoID: todo.id).sheetDone { showTodo = false } }
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)
