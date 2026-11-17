@@ -561,37 +561,41 @@ private fun GlassHomeSwitcher(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
     Box(modifier) {
-        Row(Modifier.testTag("home-switcher").floatingSurface(CircleShape).padding(surfacePadding)) {
-            items.forEach { item ->
-                val chosen = item.key == selected
-                val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
-                    fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
-                val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
-                val available = with(density) { textWidth.toPx() }
-                val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                val baseFittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
-                val fittedSize = if (narrowText) {
-                    var candidate = baseFittedSize
-                    var result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+        // One pill for the whole switch. iOS `ShellSwitch` / `SwitchMotion` (`ShellComponents.swift`):
+        // a tap glides it on `Theme.Motion.state`. There is no shell strip here, so it does not follow a finger.
+        GlassSlidingPill(
+            selected = items.indexOfFirst { it.key == selected }.coerceAtLeast(0),
+            count = items.size,
+            color = if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight,
+            modifier = Modifier.testTag("home-switcher").floatingSurface(CircleShape).padding(surfacePadding),
+        ) { index ->
+            val item = items[index]
+            val chosen = item.key == selected
+            val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
+                fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
+            val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
+            val available = with(density) { textWidth.toPx() }
+            val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+            val baseFittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+            val fittedSize = if (narrowText) {
+                var candidate = baseFittedSize
+                var result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
+                while (result.isLineEllipsized(0) && candidate.value > Tokens.Type.Label.size.value) {
+                    candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
+                    result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
-                    while (result.isLineEllipsized(0) && candidate.value > Tokens.Type.Label.size.value) {
-                        candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
-                        result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
-                    }
-                    candidate
-                } else baseFittedSize
-                Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
-                    .clip(CircleShape).background(if (chosen) {
-                        if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
-                    } else Color.Transparent)
-                    .clickable(role = Role.Tab) { onClick(item) }
-                    .semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
-                    Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
-                        color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                candidate
+            } else baseFittedSize
+            Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
+                .clip(CircleShape)
+                .clickable(role = Role.Tab) { onClick(item) }
+                .semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
+                Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
+                    color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         val waiting = items.lastOrNull()?.badge ?: 0

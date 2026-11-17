@@ -435,8 +435,9 @@ fun JRadio(selected: Boolean, onClick: (() -> Unit)?, modifier: Modifier = Modif
 data class JSegment(val label: String, val count: Int? = null, val status: Status? = null)
 
 /**
- * A small set of mutually exclusive filters: a sliding pill in glass, underlined text tabs in brief, a ruled
- * strip of cells on the board. [compact] reduces spacing only; text keeps the ambient font scale.
+ * A small set of mutually exclusive filters. On Glass one pill slides to the chosen segment
+ * (`GlassSlidingPill`, `Theme.Motion.state`); Brief keeps underlined text tabs and Board a ruled
+ * strip of cells. [compact] reduces spacing only; text keeps the ambient font scale.
  */
 @Composable
 fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
@@ -444,20 +445,23 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
     val type = PersonaTheme.type
     fun text(segment: JSegment) = segment.label + (segment.count?.let { " $it" } ?: "")
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(
-            modifier.clipDrawing(CircleShape).background(palette.surface)
+        // One pill, not a background on each segment. iOS: the system's sliding thumb (`Picker` `.segmented`).
+        AppStyle.Glass -> GlassSlidingPill(
+            selected = selected.coerceIn(0, options.lastIndex.coerceAtLeast(0)),
+            count = options.size,
+            color = palette.action,
+            modifier = modifier.clipDrawing(CircleShape).background(palette.surface)
                 .border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), CircleShape)
                 .padding(if (compact) Tokens.Space.xxs else 4.dp.dense),
-        ) {
-            options.forEachIndexed { index, segment ->
-                val on = index == selected
-                Box(
-                    Modifier.clip(CircleShape).background(if (on) palette.action else Color.Transparent)
-                        .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }
-                        .padding(horizontal = if (compact) Tokens.Space.s else 16.dp.dense, vertical = 9.dp.dense),
-                    contentAlignment = Alignment.Center,
-                ) { Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
-            }
+        ) { index ->
+            val segment = options[index]
+            val on = index == selected
+            Box(
+                Modifier.clip(CircleShape)
+                    .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }
+                    .padding(horizontal = if (compact) Tokens.Space.s else 16.dp.dense, vertical = 9.dp.dense),
+                contentAlignment = Alignment.Center,
+            ) { Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
         }
         AppStyle.Brief -> Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (compact) Tokens.Space.s else 22.dp.dense)) {
             options.forEachIndexed { index, segment ->
