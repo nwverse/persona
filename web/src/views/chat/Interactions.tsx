@@ -541,19 +541,22 @@ function PlanCard({ ix }: { ix: Interaction }) {
   );
 }
 
+const ApprovalQuestion = lazyPage(() => import("./ApprovalQuestion").then((m) => m.ApprovalQuestion));
+
 function PermissionCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState(false);
+  const [questionOpen, setQuestionOpen] = useState(false);
   const editable = usePermissionText(ix);
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);
     await resolve(ix, body);
     setBusy(false);
   };
-  // Enter allows (the Allow button). Deny is never a key away: it stays an explicit press of its button — or Enter
-  // while that button is focused, which is the button's own activation, not the card's main action
+  // Enter allows (the Allow button), except while the independent question
+  // editor is open. Deny is never a key away.
   const keys = useCardKeys({
     enter: () => {
-      if (busy || editable.composing || !editable.canAllow) return false;
+      if (busy || questionOpen || editable.composing || !editable.canAllow) return false;
       void go(editable.allow());
     },
   });
@@ -568,9 +571,16 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       busy={busy}
       footer={
         <>
-          <Button tone="quiet" disabled={busy} onClick={() => go(editable.deny())}>
-            {t("chat-interactions.deny")}
-          </Button>
+          <span className="flex min-w-0 gap-1.5">
+            {ix.can_clarify && (
+              <Button tone="quiet" disabled={busy} aria-expanded={questionOpen} onClick={() => setQuestionOpen((v) => !v)}>
+                {t("chat-interactions.have_question")}
+              </Button>
+            )}
+            <Button tone="quiet" disabled={busy} onClick={() => go(editable.deny())}>
+              {t("chat-interactions.deny")}
+            </Button>
+          </span>
           <span className="flex gap-1.5">
             {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
             {offersAlways(ix) && !editable.changed && (
@@ -580,7 +590,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
             )}
             <Button tone="primary" busy={busy} disabled={!editable.canAllow} onClick={() => go(editable.allow())}>
               {t("chat-interactions.allow")}
-              {keys.focused && <Kbd>Enter</Kbd>}
+              {keys.focused && !questionOpen && <Kbd>Enter</Kbd>}
             </Button>
           </span>
         </>
@@ -588,6 +598,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
     >
       <PermissionBody ix={ix} />
       {editable.editor}
+      {questionOpen && <Suspense fallback={null}><ApprovalQuestion ix={ix} busy={busy} onClose={() => setQuestionOpen(false)} /></Suspense>}
       {alwaysScope(ix) && <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
     </Card>
   );
