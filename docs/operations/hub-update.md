@@ -115,9 +115,9 @@ can still overlap the restart. This path does not guarantee interruption-free se
 Link/connector node updates retain their own idle and commit checks; direct SSH deployment instead
 replaces the program and restarts the node, so it can interrupt work. See [node-update.md](node-update.md).
 
-The compile gate runs `npm ci` and `npm run build:development` for Web, builds the Agent SDK bridge as a
-runtime asset, generates runtime packages, then runs tagged `go build` for `personad` on the
-Hub's platform and each registered computer's last-reported OS/architecture, deduplicated, plus
+The compile gate runs `npm ci` and `npm run build:development` for Web, generates runtime packages,
+then runs tagged `go build` for `personad` on the Hub's platform and each registered computer's
+last-reported OS/architecture, deduplicated, plus
 `persona-hub`/`persona-manager` on the Hub's platform. Web assets
 are embedded and precompressed. No full tests, vet, mobile builds, release publication or hosted
 CI are required. The development command retains TypeScript, Vite, WebAssembly, localization
