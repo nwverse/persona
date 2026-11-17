@@ -27041,48 +27041,48 @@
         }
       }
     },
-    "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service." : {
+    "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service."
+            "value" : "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音频保留在这台 iPhone 上，只有按住“说话”时例外：那时说的内容会发送到语音服务。"
+            "value" : "音频保留在这台 iPhone 上，只有“说话”打开时例外：那时说的内容会发送到语音服务。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。"
+            "value" : "音声はこの iPhone に残ります。ただし「話す」がオンの間は例外で、そのときに話された内容は音声サービスに送られます。"
           }
         }
       }
     },
-    "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for %lld days." : {
+    "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for %lld days." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for %1$lld days."
+            "value" : "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for %1$lld days."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音频保留在这台 iPhone 上，只有按住“说话”时例外：那时说的内容会发送到语音服务。文字会同步到知识库，并保留 %1$lld 天。"
+            "value" : "音频保留在这台 iPhone 上，只有“说话”打开时例外：那时说的内容会发送到语音服务。文字会同步到知识库，并保留 %1$lld 天。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。テキストはナレッジに同期されて %1$lld 日間保存されます。"
+            "value" : "音声はこの iPhone に残ります。ただし「話す」がオンの間は例外で、そのときに話された内容は音声サービスに送られます。テキストはナレッジに同期されて %1$lld 日間保存されます。"
           }
         }
       }
@@ -151743,25 +151743,25 @@
         }
       }
     },
-    "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while you hold Talk: what is said then goes to the voice service. If you set meetings to be transcribed on the hub, the meeting's audio, Talk included, goes through your hub to its speech service, and the hub deletes it once the minutes are written. The transcript goes to Knowledge." : {
+    "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while Talk is on: what is said then goes to the voice service. If you set meetings to be transcribed on the hub, the meeting's audio, Talk included, goes through your hub to its speech service, and the hub deletes it once the minutes are written. The transcript goes to Knowledge." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while you hold Talk: what is said then goes to the voice service. If you set meetings to be transcribed on the hub, the meeting's audio, Talk included, goes through your hub to its speech service, and the hub deletes it once the minutes are written. The transcript goes to Knowledge."
+            "value" : "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this device, except while Talk is on: what is said then goes to the voice service. If you set meetings to be transcribed on the hub, the meeting's audio, Talk included, goes through your hub to its speech service, and the hub deletes it once the minutes are written. The transcript goes to Knowledge."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频保留在这台设备上，只有按住“说话”时例外：那时说的内容会发送到语音服务。如果你设置了在 hub 上转写会议，会议的音频（包括“说话”）会经你的 hub 发送到它的语音服务，会议纪要写好后 hub 就删除这段音频。转写文字进入知识库。"
+            "value" : "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频保留在这台设备上，只有“说话”打开时例外：那时说的内容会发送到语音服务。如果你设置了在 hub 上转写会议，会议的音频（包括“说话”）会经你的 hub 发送到它的语音服务，会议纪要写好后 hub 就删除这段音频。转写文字进入知识库。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこのデバイスに残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。会議をハブで文字起こしする設定にした場合は、会議の音声（「話す」を含む）がハブ経由でその音声サービスに送られ、議事録ができるとハブが削除します。文字起こしはナレッジに入ります。"
+            "value" : "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこのデバイスに残ります。ただし「話す」がオンの間は例外で、そのときに話された内容は音声サービスに送られます。会議をハブで文字起こしする設定にした場合は、会議の音声（「話す」を含む）がハブ経由でその音声サービスに送られ、議事録ができるとハブが削除します。文字起こしはナレッジに入ります。"
           }
         }
       }
@@ -176444,25 +176444,25 @@
       },
       "extractionState" : "manual"
     },
-    "To talk to Persona in this meeting, hold Talk on the meeting’s page while it records." : {
+    "To talk to Persona in this meeting, tap Talk on the meeting’s page while it records." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "To talk to Persona in this meeting, hold Talk on the meeting’s page while it records."
+            "value" : "To talk to Persona in this meeting, tap Talk on the meeting’s page while it records."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "想在这场会议里和 Persona 说话，请在录音时到会议页面按住“说话”。"
+            "value" : "想在这场会议里和 Persona 说话，请在录音时到会议页面轻点“说话”。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "この会議で Persona と話すには、録音中に会議のページで「話す」を押し続けてください。"
+            "value" : "この会議で Persona と話すには、録音中に会議のページで「話す」をタップしてください。"
           }
         }
       }
