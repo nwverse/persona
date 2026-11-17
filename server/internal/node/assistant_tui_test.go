@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -290,5 +292,110 @@ func TestTUIUserContentTakesStringAndBlocks(t *testing.T) {
 		if _, ok := tuiUserContent([]byte(line)); ok {
 			t.Fatalf("%s taken as a user message", line)
 		}
+	}
+}
+
+// A message the bridge cannot type (here: an image that is no base64) fails its turn with why, and the messages already
+// waiting behind it fail with it rather than reach Claude Code out of order. One that cannot be typed while a turn
+// runs fails that turn as it ends.
+func TestUndeliveredMessagesFailTheirTurn(t *testing.T) {
+	var out, errb bytes.Buffer
+	b := &tuiBridge{out: &tuiOut{w: &out}, stderr: &errb, dir: t.TempDir(), tr: newTUITranslator()}
+	var typedMu sync.Mutex
+	var typed []string
+	typedCount := func() int { typedMu.Lock(); defer typedMu.Unlock(); return len(typed) }
+	b.typeText = func(_ context.Context, text string) error {
+		typedMu.Lock()
+		defer typedMu.Unlock()
+		typed = append(typed, text)
+		return errors.New("the input box did not take a message")
+	}
+	inputs := make(chan []byte, 4)
+	inputs <- []byte(`{"type":"user","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"%%%"}}]}}`)
+	inputs <- []byte(`{"type":"user","message":{"content":"after it"}}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { b.submitLoop(ctx, inputs); close(done) }()
+	waitFor := func(what string) string {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			b.mu.Lock()
+			s := out.String()
+			b.mu.Unlock()
+			if strings.Contains(s, what) {
+				return s
+			}
+		}
+		t.Fatalf("no %q in:\n%s", what, out.String())
+		return ""
+	}
+	got := waitFor(`"type":"result"`)
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"subtype":"init"`) || !strings.Contains(lines[1], `"is_error":true`) ||
+		!strings.Contains(lines[1], "last 2 messages") || !strings.Contains(lines[1], "image") {
+		t.Fatalf("output:\n%s", got)
+	}
+	if typedCount() != 0 {
+		t.Fatalf("a message behind the undelivered one was typed: %q", typed)
+	}
+
+	// during a turn: no result until the turn ends, then the turn's result is the failure
+	b.mu.Lock()
+	out.Reset()
+	for _, ev := range b.tr.row([]byte(`{"type":"user","message":{"content":"first"}}`)) {
+		b.out.emit(ev)
+	}
+	b.mu.Unlock()
+	inputs <- []byte(`{"type":"user","message":{"content":"meanwhile"}}`)
+	for deadline := time.Now().Add(5 * time.Second); typedCount() == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	time.Sleep(50 * time.Millisecond)
+	b.mu.Lock()
+	if strings.Contains(out.String(), `"type":"result"`) {
+		b.mu.Unlock()
+		t.Fatalf("the running turn ended at an undelivered message:\n%s", out.String())
+	}
+	for _, ev := range b.tr.row([]byte(`{"type":"system","subtype":"turn_duration"}`)) {
+		b.out.emit(ev)
+	}
+	b.mu.Unlock()
+	got = waitFor(`"type":"result"`)
+	if !strings.Contains(got, `"is_error":true`) || !strings.Contains(got, "did not get your message (the input box did not take a message)") {
+		t.Fatalf("output:\n%s", got)
+	}
+	cancel()
+	<-done
+}
+
+// A control request that comes while interactive Claude Code starts is answered there and never reaches the print-mode
+// command the bridge falls back to; the messages that came meanwhile do.
+func TestFallbackForwardsOnlyMessages(t *testing.T) {
+	dir := t.TempDir()
+	printer := filepath.Join(dir, "print")
+	if err := os.WriteFile(printer, []byte("#!/bin/sh\nwhile IFS= read -r l; do printf 'got %s\\n' \"$l\"; done\nexit 7\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// a tmux that starts and then fails every command a second later: the start fails after the lines below came in
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\n/bin/sleep 1\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	spec, _ := json.Marshal(tuiSpec{Session: "s1", Cwd: dir, TUI: []string{"claude"}, Print: []string{printer}})
+	control := `{"type":"control_request","request_id":"r1","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}`
+	message := `{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}`
+	r, w := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(w, string(spec)+"\n"+control+"\n"+message+"\n")
+		time.Sleep(4 * time.Second)
+		_ = w.Close()
+	}()
+	var out, errb bytes.Buffer
+	if status := AssistantTUI(nil, r, &out, &errb); status != 7 {
+		t.Fatalf("status %d, stderr %s", status, errb.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[0], `"request_id":"r1"`) || !strings.Contains(lines[1], tuiFallbackSubtype) ||
+		lines[2] != "got "+message {
+		t.Fatalf("output:\n%s", out.String())
 	}
 }

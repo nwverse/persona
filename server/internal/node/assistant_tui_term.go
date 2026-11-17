@@ -58,6 +58,8 @@ type tuiBridge struct {
 	rowAt     time.Time // when the transcript last grew
 	tasks     string    // the background tasks last reported, as a key
 	tasksSent bool      // a list went out at all
+
+	typeText func(context.Context, string) error // types a message in place of submit (tests)
 }
 
 // tmuxRun runs a tmux command against the private server.

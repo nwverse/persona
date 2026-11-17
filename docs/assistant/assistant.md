@@ -562,6 +562,11 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
   error; permission mode and effort are start flags, so changing one resumes the conversation in a new process (as
   `bypassPermissions` always has; a busy one finishes its turn first). Guests, meeting rooms, supervision rounds (`--resume-session-at`
   is print-only), plan mode, warm spares (none is warmed while the switch is on) and Codex keep running as before.
+- **A message that cannot be typed is never dropped quietly**: when the bridge cannot type a message (an image that does not
+  decode, an input box that takes nothing for 10 minutes), its turn fails with the reason, as a send claude -p could not deliver
+  does, and the messages already waiting behind it fail with it instead of reaching Claude Code out of order. Sent while a turn
+  runs, it fails that turn as it ends. A control request that comes during the start is answered by the bridge and never reaches
+  the print-mode fallback; only messages do.
 - **Visible fallback**: when the interactive start fails (no tmux, Claude Code exiting, a start-up screen Persona does not
   answer, no input box within 2 minutes, a Claude Code that keeps no transcript because it was started from inside another Claude
   Code session), the bridge prints `{"type":"system","subtype":"persona_tui_fallback","reason":…}` and runs
@@ -576,7 +581,8 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
   `persona_settings` tool changes it from any client.
 - Tests: `TestTUITranslatorReadsATranscriptAsStreamJSON`, `TestTUIArgsDropPrintFlagsAndCarryTheStartModes`,
   `TestTUIProcessRestartsForModeAndEffort`, `TestInteractiveStartGoesThroughTheBridgeAndItsFallbackIsVisible`,
-  `TestPrintModeStartNeverRunsTheBridge`, `TestBridgeFallsBackToPrintModeVisibly` (`node/assistant_tui_test.go`),
+  `TestPrintModeStartNeverRunsTheBridge`, `TestBridgeFallsBackToPrintModeVisibly`, `TestUndeliveredMessagesFailTheirTurn`,
+  `TestFallbackForwardsOnlyMessages` (`node/assistant_tui_test.go`),
   `TestSendParamsClaudeInteractive`, `TestClaudeInteractiveSetting` (`assistant/claude_interactive_test.go`).
 
 ## Next-message suggestions (#4644)

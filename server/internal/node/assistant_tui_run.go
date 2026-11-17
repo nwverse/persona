@@ -140,7 +140,9 @@ func tuiUserContent(l []byte) ([]map[string]any, bool) {
 	return nil, false
 }
 
-// submitLoop types the messages into Claude Code one at a time, in order.
+// submitLoop types the messages into Claude Code one at a time, in order. A message it cannot type fails its turn
+// (undelivered), and so do the ones already waiting behind it: typed after it, they would be answered as if it had
+// been said.
 func (b *tuiBridge) submitLoop(ctx context.Context, inputs <-chan []byte) {
 	n := 0
 	for {
@@ -156,12 +158,49 @@ func (b *tuiBridge) submitLoop(ctx context.Context, inputs <-chan []byte) {
 			n++
 			text, err := tuiMessageText(content, b.dir, n)
 			if err == nil {
-				err = b.submit(ctx, text)
+				err = b.typeIn(ctx, text)
 			}
-			if err != nil {
-				fmt.Fprintf(b.stderr, "assistant-tui: message not submitted: %v\n", err)
+			if err != nil && ctx.Err() == nil {
+				b.undelivered(err, 1+dropWaiting(inputs))
 			}
 		}
+	}
+}
+
+// dropWaiting empties inputs of the messages already waiting and counts them.
+func dropWaiting(inputs <-chan []byte) int {
+	count := 0
+	for {
+		select {
+		case l := <-inputs:
+			if _, ok := tuiUserContent(l); ok {
+				count++
+			}
+		default:
+			return count
+		}
+	}
+}
+
+// typeIn types a message's text into Claude Code (submit; typeText in tests).
+func (b *tuiBridge) typeIn(ctx context.Context, text string) error {
+	if b.typeText != nil {
+		return b.typeText(ctx, text)
+	}
+	return b.submit(ctx, text)
+}
+
+// undelivered tells the node that count messages never reached Claude Code, and why.
+func (b *tuiBridge) undelivered(err error, count int) {
+	fmt.Fprintf(b.stderr, "assistant-tui: %d message(s) not submitted: %v\n", count, err)
+	note := "Interactive Claude Code did not get your message (" + err.Error() + "). Send it again."
+	if count > 1 {
+		note = fmt.Sprintf("Interactive Claude Code did not get your last %d messages (%v). Send them again.", count, err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, ev := range b.tr.undeliverable(note) {
+		b.out.emit(ev)
 	}
 }
 

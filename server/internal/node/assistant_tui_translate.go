@@ -19,6 +19,9 @@ type tuiTranslator struct {
 	messages map[string]bool // assistant message ids whose message_start went out
 	lastText string          // the turn's last assistant text
 	apiError bool            // that text is an API error notice (isApiErrorMessage)
+	// undelivered says a message sent during the running turn was never typed into Claude Code: the turn ends failed
+	// with it, so the message is not lost without a word (undeliverable).
+	undelivered string
 }
 
 // tuiRow is what the translator reads of a transcript line.
@@ -141,6 +144,9 @@ func (t *tuiTranslator) end(text string, failed bool) []map[string]any {
 		return nil
 	}
 	t.busy = false
+	if t.undelivered != "" {
+		text, failed, t.undelivered = t.undelivered, true, ""
+	}
 	subtype := "success"
 	if failed {
 		subtype = "error_during_execution"
@@ -150,3 +156,14 @@ func (t *tuiTranslator) end(text string, failed bool) []map[string]any {
 
 // idle ends a turn the screen shows over without a line saying so (a local command such as /compact writes none).
 func (t *tuiTranslator) idle() []map[string]any { return t.end(t.lastText, t.apiError) }
+
+// undeliverable reports messages the bridge could not type into Claude Code (why: note) as a failed turn, the way
+// claude -p reports a message it could not send to the model: at once when no turn runs, or as the end of the running
+// turn they were sent into.
+func (t *tuiTranslator) undeliverable(note string) []map[string]any {
+	if t.busy {
+		t.undelivered = note
+		return nil
+	}
+	return append(t.start(), t.end(note, true)...)
+}
