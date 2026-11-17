@@ -436,3 +436,21 @@ open, **Done** in an opened item's header leaves the list where it was (it used 
 opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
 end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
 four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
+
+## Long tasks in a long conversation (#9795)
+
+```sh
+node web/e2e/chat-long-tasks.mjs <web origin> <artifact-directory> [--items <n>] [--secs <s>] [--chromium <executable>]
+```
+
+Opens the real app in a fresh headless browser with every hub request and the socket answered in the browser by invented
+data, and every other origin refused, so it can be pointed at any server of the web bundle (Vite, `vite preview`, or a
+hub serving its build) without reaching a hub. The text is shaped like real chats: branch and repository names without
+an extension, quotes and tables. Two scenarios: an Agent chat of `--items` items (2,000 by default) opening, watched for
+10 seconds after its newest message is on the page; then the main conversation (240 items and a question) while a reply
+naming 80 branches streams for `--secs` seconds (30 by default), a delta about every 80 ms and a tool call every
+second. A trivial script is run in the page again and again; one not answered within 5 seconds counts as stuck.
+`results.json` has, per scenario, when the newest message was drawn, the longest task and those over 1 second, the
+slowest answer and the stuck ones; a screenshot of each is taken when the page can still draw. It fails on any task over
+1 second, a stuck answer, a page error, a request leaving the origin, or a conversation not drawn within 30 seconds;
+the last line is the verdict, and a watchdog ends a run that overruns with a timeout verdict.
