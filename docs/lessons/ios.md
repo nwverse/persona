@@ -606,6 +606,16 @@ page and the newest message stays over the composer. A fade drawn by the footer 
   its frame. `CodeBlockOverflowUITests` checks the strip beside a code block for drawn text; run it on the Duo simulator,
   folded or open on its side (Device Hub folds it; `simctl io … screenshot --display=1` captures the outer display).
 
+## The system's Show Sidebar takes a row of the page's bar under side bars (2026-11-17)
+
+- On the open iPhone Duo on its side a page's navigation bar puts its items in the side column, but a split's Show
+  Sidebar (shown while the column is folded) stays at the top left, in a row of its own: the bar grew from 24 to 82 pt
+  and the page's top safe area with it. A place has its title in that row and saw nothing; an Agent's chat draws its own
+  header under the bar (its system title removed), so the header and the chat dropped 58 pt as the column folded.
+- A page that draws its own top under side bars must not take it from the bar's height: the chat sets its own
+  (`ChatView.pinsSideTop`, the empty bar's 24 pt), and the system's button lies on the title's line. Check a page under
+  side bars with the column out *and* folded: `SidebarRootsUITests.testFoldingTheSidebarKeepsTheChatsTop`.
+
 ## A split's detail stack shares its modifiers only with its root page (#3680)
 
 - In a `NavigationSplitView`, the detail column's `NavigationStack` becomes the column's own navigation controller: a page opened on it covers the whole column. A `.safeAreaInset` on that stack, or a row in a `VStack` above it, shows only over the stack's root page and goes as soon as a page is opened (the Assistant | Agents switch over Agents' empty page vanished over every opened agent, with no way back to Assistant). Put what every page of the column needs on the pages themselves: the root page, each destination (`SplitDetailPage`), and pages pushed with `navigationDestination(item:)` / `(isPresented:)` (`detailPresentation`, a space's New Session).
@@ -2923,3 +2933,12 @@ the root in front (no move, or a pop to it) bumps the counter there. Reviewers c
   window after the new one came in, handed the pin the outgoing scroll view. The probe now takes the list only on its way in.
 - XCUITest's frame of a text in a misplaced list can be thousands of points off the screen while the probe says the line
   is drawn: check the probe's numbers, not only frames.
+
+## What a screenshot leaves out, and what a simulator check sees (2026-11-17, #9508)
+
+The screenshot banner hides the chats' bars from captures with a secure text field's drawing view (docs/apple/ios.md "Screenshot banner"). Checking it, and living with it:
+
+- `simctl io … screenshot`, `recordVideo` and Simulator's Save Screen read the display's frame buffer: they always show what is on screen, the bar, so they prove nothing about captures. `XCUIScreen.main.screenshot()` is the system's own capture, taken outside the app: there the bar is gone and the banner shows. Xcode 27.1 here ships no Simulator.app, so its Device › Trigger Screenshot was not available; SimulatorKit's HID button events and an accessibility-server screenshot request did nothing.
+- In-app pictures differ: `drawHierarchy` and `snapshotView` leave the layer out like a screenshot, `layer.render(in:)` draws it. Anything that photographs the window to animate (the iPad's sidebar drag, `SplitColumnControl`) or to report (DEBUG `RuntimeCLI`) must turn the layer off first (`ScreenshotBanner.beginReveal()`), or it shows the banner on screen; and take that picture with `afterScreenUpdates: true`: a picture of the frame already drawn still left the bar out right after turning it off (`ScreenshotBannerTests`).
+- The view comes out of a `UITextField` with `isSecureTextEntry` (its first subview; iOS 17 renamed its class, so never match the name). Keep the field: setting `isSecureTextEntry` back and forth turns the view's exclusion off and on, measured in place.
+- A view in a second hosting controller inside it takes every touch in its frame: overriding `hitTest` to pass the hosting view's own hits through also dropped the bar's SwiftUI buttons (they hit-test as the hosting view). `accessibilityHidden` on the banner's SwiftUI view left its text in the tree; `accessibilityElementsHidden` on its hosting view removes it.

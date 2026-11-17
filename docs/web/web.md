@@ -1901,6 +1901,12 @@ hello's `features`, `hub_name` and `mesh` are kept in the store. Lark through th
 **Request failures** (#3728): `errorText` in `lib/api.ts` explains common failures in the page's language. A 404, `not_found` or a bare `not found` says the item does not exist or this version does not support it yet, and suggests refreshing or checking whether the hub or the computer needs an update; 502 / 503 / 504 say the hub cannot answer right now, other 5xx that the service hit an error, both with retry and check-that-it-runs advice. The HTTP status and the hub's original text stay in brackets for diagnosis; the terminal list's error line stays on one line and shows the whole text on hover. Wrong credentials and other business errors show as before. Code that decides on compatibility or an error code reads the raw `ApiError`, never the explained text.
 For `node_unreachable` and `timeout` (#5031) the hub did answer; the computer did not. `errorText` goes by the code and says what to do next: offline when `delivered` is `none` (check that the computer is on, online and running Persona Link), a connection cut mid-call for any other `node_unreachable` (reconnect, check whether the last action went through), a timeout (check, then try again later). These carry no status in brackets, so offline feedback does not fold them into "can't reach the hub"; the hub's words stay on the `ApiError`.
 
+## Developing Persona (#9617)
+
+Settings › About Persona's switch that records this browser's requests, socket frames, pages, errors and console lines
+and exports them as one zip, sent to an Agent's chat or downloaded: [developing-persona.md](../operations/developing-persona.md).
+It costs the first screen nothing (its chunks load only while it is on).
+
 ## Error reports (#5533)
 
 The page reports its own errors to `POST /api/v1/error-reports` (`lib/error-reports.ts`, wired up in `lib/error-reports-start.ts`; format and rules in [protocol.md](../protocol/protocol.md) "Error reports"). No UI, no strings.

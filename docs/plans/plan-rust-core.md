@@ -534,8 +534,10 @@ Phase 3 lands in several PRs.
   - iOS and Android remain native by default. Android has an opt-in DEBUG-only sort shadow (#8954 / PR #9067); iOS's
     adapter and DEBUG shadow remain separate, unmerged work in #9058. `recents` and the standalone state projections
     have cargo evidence, and state also has ArkTS host replay; all 21 recents fixture cases now have ArkTS host replay
-    (#9584) with complete expected objects and generated declaration drift checks, but no real NAPI invocation. Neither
-    domain has a production migration or separate C/SwiftPM replay.
+    (#9584) with complete expected objects and generated declaration drift checks, but no real NAPI invocation. The
+    independently compiled Linux C11 client also replays all 21 recents complete objects through
+    `persona_core_project_recents` (#9654), including wrong expectations, malformed operations and invalid UTF-8.
+    Neither domain has a production migration or separate SwiftPM replay.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
   - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build`.

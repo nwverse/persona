@@ -24,9 +24,9 @@ import PersonaWire
         var s = try session()
         s.repoRoot = "/work/example"
         let row = AgentActionFacts(session: s, review: true, preview: true, screen: true, todoHub: true,
-                                   sideCount: 2, terminalResume: .available, phone: true)
+                                   sideCount: 2, terminalResume: .available, phone: true, git: try gitStatus(files: 3))
         let detail = AgentActionFacts(session: s, review: true, preview: true, screen: true, todoHub: true,
-                                      sideCount: 2, terminalResume: .available, phone: true)
+                                      sideCount: 2, terminalResume: .available, phone: true, git: try gitStatus(files: 3))
         #expect(row.items == detail.items)
         let ids: [AgentActionItem.ID] = [
             .git, .files, .review, .preview, .subagents, .sideSessions, .space,
@@ -48,7 +48,7 @@ import PersonaWire
         s.loop = nil
         s.todo = nil
         s.subagents = nil
-        let facts = AgentActionFacts(session: s, panes: AgentMenuFacts.panes(s), phone: true)
+        let facts = AgentActionFacts(session: s, panes: AgentMenuFacts.panes(s, git: nil), phone: true)
         #expect(facts.items.map(\.id) == [
             .files, .space, .interrupt, .markSeen, .takeover, .continueInNewSession,
             .pin, .mute, .handToPersona, .copyDirectory,
@@ -94,8 +94,43 @@ import PersonaWire
 
     @Test func gitUsesTheSessionsRepositoryWithoutAnotherFetch() throws {
         var s = try session()
-        #expect(!AgentMenuFacts.panes(s).contains(.git))
+        #expect(!AgentMenuFacts.panes(s, git: nil).contains(.git))
         s.repoRoot = "/work/example"
-        #expect(AgentMenuFacts.panes(s).contains(.git))
+        #expect(!AgentMenuFacts.panes(s, git: nil).contains(.git), "a repoRoot is not a loaded repository status")
+        let git = try gitStatus(files: 0)
+        #expect(AgentMenuFacts.panes(s, git: git).contains(.git))
+    }
+
+    @Test func productionEntryPointsAgreeWhileGitIsLoadingAndAfterChangesArrive() throws {
+        var s = try session()
+        s.repoRoot = "/work/example"
+        let model = AppModel.shared
+        let routing = AgentMenuRouting.shared
+        routing.store.clear(.init(session: s.key, cwd: s.cwd))
+        defer { routing.store.clear(.init(session: s.key, cwd: s.cwd)) }
+
+        // These are the real row/detail input paths: no repository request and no manually cloned facts.
+        func rowFacts() -> AgentActionFacts { AgentActionFacts(session: s, model: model) }
+        func detailFacts() -> AgentActionFacts {
+            AgentActionFacts(session: s, model: model)
+        }
+        let unloaded = try #require(detailFacts())
+        #expect(rowFacts().items.map(\.id) == unloaded.items.map(\.id))
+        #expect(!unloaded.items.contains { $0.id == .git })
+
+        let changed = try gitStatus(files: 3)
+        routing.store.set(changed, for: .init(session: s.key, cwd: s.cwd))
+        let loaded = try #require(detailFacts())
+        #expect(rowFacts().items.map(\.id) == loaded.items.map(\.id))
+        #expect(rowFacts().panes == loaded.panes)
+        #expect(rowFacts().paneBadges[.git] == loaded.paneBadges[.git])
+        #expect(rowFacts().paneBadges[.git] == "3")
+        #expect(loaded.paneBadges[.git] == "3", "both menu labels are Git (3), not one plain Git")
+    }
+
+    private func gitStatus(files: Int) throws -> GitStatus {
+        let rows = (0..<files).map { #"{"path":"file\#($0).swift","index":"M","worktree":"M","added":1,"deleted":0}"# }
+        let json = #"{"is_repo":true,"ahead":0,"behind":0,"files":[\#(rows.joined(separator: ","))],"stashes":0,"commits":[]}"#
+        return try JSON.decoder.decode(GitStatus.self, from: Data(json.utf8))
     }
 }

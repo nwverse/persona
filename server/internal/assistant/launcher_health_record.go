@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -18,13 +19,74 @@ import (
 
 var usageLimitModel = lazyre.New(`(?i)\b(opus|sonnet|haiku) limit\b`)
 
-// A default model's success cannot clear another model family's subscription limit.
-func usageLimitProbeMatches(text, model string) bool {
-	limit := usageLimitModel.FindStringSubmatch(text)
-	return limit == nil || slices.Contains(strings.FieldsFunc(strings.ToLower(model), func(r rune) bool {
-		return r < 'a' || r > 'z'
-	}), strings.ToLower(limit[1]))
+// limitFamilies are the model families whose own usage limit text names ("You've hit your Opus limit").
+func limitFamilies(text string) []string {
+	var out []string
+	for _, m := range usageLimitModel.FindAllStringSubmatch(text, -1) {
+		if f := strings.ToLower(m[1]); !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
+
+// limitFamiliesLeft are the families of a usage limit that an answer from model does not show over: a default
+// model's answer says nothing of another family's quota.
+func limitFamiliesLeft(families []string, model string) []string {
+	words := strings.FieldsFunc(strings.ToLower(model), func(r rune) bool { return r < 'a' || r > 'z' })
+	return slices.DeleteFunc(slices.Clone(families), func(f string) bool { return slices.Contains(words, f) })
+}
+
+// foldLimit merges a usage limit on families (none: the limit names no family), resetting at reset when known, into
+// dst's limit, never taking anything away: a family named adds to dst's and its reset only gets later; a family's
+// unknown reset stays unknown, whatever another family's is; a limit naming no family makes the known resets no
+// earlier. It says whether dst changed.
+func foldLimit(dst *LauncherHealth, families []string, reset *time.Time) (changed bool) {
+	had, hadResets := dst.limitModels(), dst.limitResets()
+	have, resets, agg := slices.Clone(had), maps.Clone(hadResets), dst.ResetsAt
+	switch {
+	case len(families) == 0 && len(have) == 0:
+		agg = laterReset(agg, reset)
+	case len(families) == 0:
+		for f, t := range resets {
+			resets[f] = *laterReset(&t, reset)
+		}
+	default:
+		if len(have) == 0 && reset != nil {
+			reset = laterReset(reset, dst.ResetsAt) // the limit that named no family holds until its own reset too
+		}
+		for _, f := range families {
+			if !slices.Contains(have, f) {
+				have = append(have, f)
+			}
+			if t, ok := resets[f]; ok && !t.After(time.Now()) {
+				delete(resets, f) // its reset came and went: this limit is a new one
+			}
+			if t, ok := resets[f]; reset != nil && (!ok || reset.After(t)) {
+				resets[f] = *reset
+			}
+		}
+	}
+	if len(have) > 0 {
+		agg = familiesReset(have, resets)
+	}
+	if len(resets) == 0 {
+		resets = nil
+	}
+	// Compared as read (limitModels, limitResets), so a record of an older format that learns nothing is unchanged.
+	changed = !slices.Equal(have, had) || !maps.EqualFunc(resets, hadResets, time.Time.Equal) || !sameReset(agg, dst.ResetsAt)
+	dst.LimitModels, dst.LimitResets, dst.ResetsAt = have, resets, agg
+	return changed
+}
+
+func laterReset(a, b *time.Time) *time.Time {
+	if a == nil || b != nil && b.After(*a) {
+		return b
+	}
+	return a
+}
+
+func sameReset(a, b *time.Time) bool { return a == b || a != nil && b != nil && a.Equal(*b) }
 
 // healthResult is one check's or start's outcome.
 type healthResult struct {
@@ -37,8 +99,9 @@ type healthResult struct {
 	// resetsAt: a usage limit's reset as the outcome's source knew it (an agent's own record of the limit); nil: read
 	// off err's words when they name a time zone.
 	resetsAt *time.Time
-	// observedAt is the record checked before a probe; a newer record makes that probe's result obsolete.
-	observedAt *time.Time
+	// observed is the record as read before a probe (nil: not a probe's result); a later version of it (another check
+	// time or rev) makes that probe's result obsolete.
+	observed *LauncherHealth
 }
 
 // Where a result comes from (LauncherHealth.Source).
@@ -56,42 +119,73 @@ const terminalBlockedReason = "not available in this computer's terminal: its sh
 	"the terminal's shell reads it, or add it to Persona as a model provider; a start with it that works clears this"
 
 // recordHealth keeps r as launcher's latest on machine; the apps are told when its state changes.
+//
+// A usage limit in force changes only by the design table in docs/server/launcher-health.md ("Usage-limit record
+// rules", #9386): a failure folds into it (foldLimit), a pass clears its answering model's families, an older result
+// only folds, any other failure leaves it, and every change advances the record's rev.
 func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r healthResult) LauncherHealth {
 	b := &s.health
 	b.mu.Lock()
 	s.healthLoadLocked(ctx)
 	key := healthKey(machine, launcher)
 	rec := b.recs[key]
-	if r.observedAt != nil && (rec == nil && !r.observedAt.IsZero() || rec != nil && !rec.CheckedAt.Equal(*r.observedAt)) {
+	limited := rec != nil && rec.Kind == errKindUsageLimit && rec.unusable()
+	kind := ""
+	if !r.ok {
+		if kind = r.kind; kind == "" {
+			kind = classifyLauncherError(r.err)
+		}
+	}
+	keep := func(changed bool) LauncherHealth {
 		var out LauncherHealth
 		if rec != nil {
 			out = *rec
 		}
+		if changed {
+			b.rev++
+			rec.rev, out.rev = b.rev, b.rev
+			s.healthSaveLocked(ctx)
+		}
 		b.mu.Unlock()
 		return out
+	}
+	now := time.Now().UTC()
+	if o := r.observed; o != nil && (rec == nil && !o.CheckedAt.IsZero() || rec != nil && (!rec.CheckedAt.Equal(o.CheckedAt) || rec.rev != o.rev)) {
+		return keep(limited && kind == errKindUsageLimit && foldLimit(rec, limitFamilies(r.err), limitResetOf(r, now)))
+	}
+	if limited && !r.ok && kind != errKindUsageLimit {
+		return keep(false)
+	}
+	if r.ok && limited {
+		if have := rec.limitModels(); len(limitFamiliesLeft(have, r.model)) > 0 {
+			left, resets := limitFamiliesLeft(have, r.model), rec.limitResets()
+			shrunk := len(left) < len(have)
+			if shrunk {
+				maps.DeleteFunc(resets, func(f string, _ time.Time) bool { return !slices.Contains(left, f) })
+				if len(resets) == 0 {
+					resets = nil
+				}
+				rec.LimitModels, rec.LimitResets, rec.ResetsAt = left, resets, familiesReset(left, resets)
+				rec.CheckedAt, rec.Source = now, r.source
+			}
+			return keep(shrunk)
+		}
 	}
 	if rec == nil {
 		rec = &LauncherHealth{Machine: machine, Launcher: launcher}
 		b.recs[key] = rec
 	}
-	before := rec.State
-	if r.ok && rec.Kind == errKindUsageLimit && rec.unusable() && !usageLimitProbeMatches(rec.Error, r.model) {
-		out := *rec
-		b.mu.Unlock()
-		return out
-	}
+	before, old := rec.State, *rec
 	if r.source != healthSourceStart && rec.Kind == errKindNotInTerminal && rec.unusable() {
 		// The check runs in the login shell, where the launcher works; the terminal is what cannot run it. Only a
 		// start says otherwise (#1642): a session already running says nothing of a new terminal tab.
-		out := *rec
-		b.mu.Unlock()
-		return out
+		return keep(false)
 	}
-	rec.CheckedAt, rec.Source, rec.Millis = time.Now().UTC(), r.source, r.millis
+	rec.CheckedAt, rec.Source, rec.Millis = now, r.source, r.millis
 	if r.agent != "" {
 		rec.Agent = r.agent
 	}
-	rec.ResetsAt = nil
+	rec.ResetsAt, rec.LimitModels, rec.LimitResets = nil, nil, nil
 	if r.ok {
 		rec.State, rec.Kind, rec.Error, rec.Fails, rec.Repairs, rec.BlockedReason = healthOK, "", "", 0, 0, ""
 		rec.MissingFails = 0
@@ -104,21 +198,26 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 			rec.MissingFails = 0
 		}
 		rec.Error = clip(oneLine(r.err), 400)
-		rec.Kind = r.kind
-		if rec.Kind == "" {
-			rec.Kind = classifyLauncherError(r.err)
-		}
+		rec.Kind = kind
 		switch {
 		case rec.Kind == errKindNotInTerminal:
 			rec.State, rec.BlockedReason = healthBlocked, terminalBlockedReason // no repair round (repairMachine takes failing ones)
 		case rec.Kind == errKindUsageLimit:
 			// The request got through to the subscription, whose limit is used up: nothing is broken, so no repair
 			// is due (repairNow) and a block for an earlier error no longer stands. The reset clears it.
-			rec.State, rec.BlockedReason, rec.ResetsAt = healthFailing, "", limitResetOf(r, rec.CheckedAt)
+			rec.State, rec.BlockedReason = healthFailing, ""
+			merged := LauncherHealth{}
+			if limited {
+				merged = old
+			}
+			foldLimit(&merged, limitFamilies(r.err), limitResetOf(r, now))
+			rec.LimitModels, rec.LimitResets, rec.ResetsAt = merged.LimitModels, merged.LimitResets, merged.ResetsAt
 		case rec.State == "" || rec.State == healthOK:
 			rec.State = healthFailing
 		}
 	}
+	b.rev++
+	rec.rev = b.rev
 	out := *rec
 	s.healthSaveLocked(ctx)
 	b.mu.Unlock()
@@ -227,11 +326,11 @@ func (s *Service) recordStartSuccess(ctx context.Context, machine, launcher stri
 // as a passing check would (#1838); recordHealth keeps a not_in_terminal record, which only a start clears. Without a
 // failing record nothing is kept (a launcher the checks do not cover gets no entry), and a failed Test is not recorded:
 // the checks and the starts judge failures, and testing a launcher still being set up must not move starts off it.
-func (s *Service) recordTestPassed(ctx context.Context, machine, launcher string, res proto.LauncherCheck, observedAt time.Time) {
+func (s *Service) recordTestPassed(ctx context.Context, machine, launcher string, res proto.LauncherCheck, observed LauncherHealth) {
 	if r, ok := s.launcherHealth(ctx, machine, launcher); !ok || r.State == healthOK {
 		return
 	}
-	s.recordHealth(ctx, machine, launcher, healthResult{ok: true, agent: res.Agent, model: res.Model, millis: res.Millis, source: healthSourceCheck, observedAt: &observedAt})
+	s.recordHealth(ctx, machine, launcher, healthResult{ok: true, agent: res.Agent, model: res.Model, millis: res.Millis, source: healthSourceCheck, observed: &observed})
 }
 
 // launcherSetupChanged: a save of a managed launcher changed what decides whether its requests get through (its key,
@@ -316,10 +415,11 @@ func (s *Service) launcherLimitTurnSettled(ctx context.Context, machine, sid str
 	if now := time.Now(); !ok || !reset.After(now) || reset.Sub(now) > healthLimitMax {
 		return
 	}
-	if r, found := s.launcherHealth(ctx, machine, sess.Launcher); found {
-		if at, limited := r.limitReset(); limited && !at.Before(reset) {
-			return // known already (each turn a background task wakes meets it again)
-		}
+	// Nothing new for the limit in force (foldLimit changes nothing on the families the turn names): each turn a
+	// background task wakes meets it again, and refreshing the evidence would hold off the next probe.
+	if r, found := s.launcherHealth(ctx, machine, sess.Launcher); found && r.Kind == errKindUsageLimit && r.unusable() &&
+		!foldLimit(&r, limitFamilies(lim.TurnError), &reset) {
+		return
 	}
 	s.recordHealth(ctx, machine, sess.Launcher, healthResult{err: lim.TurnError, source: healthSourceSession, kind: errKindUsageLimit, resetsAt: &reset})
 }
