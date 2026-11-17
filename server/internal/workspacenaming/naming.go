@@ -204,7 +204,7 @@ func safeRelative(path string) bool {
 		return false
 	}
 	for _, part := range strings.Split(path, "/") {
-		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".persona") || strings.EqualFold(part, ".git") || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") {
+		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".persona") || strings.EqualFold(part, ".git") || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") || repository.IsWindowsReservedName(part) {
 			return false
 		}
 	}

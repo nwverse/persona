@@ -1098,6 +1098,14 @@ extended UNC paths) are rejected rather than stripped: they can name the same
 private directory with a different lexical volume. A Windows Node with a
 namespace-form home or state directory returns `context_invalid`; ordinary
 drive and UNC paths retain their native case and separator semantics.
+Task-directory components follow portable rules both when saving a template and
+after expanding it on the Node. Windows device names (`CON`, `PRN`, `AUX`, `NUL`,
+`COM1`–`COM9`, `LPT1`–`LPT9`, and their superscript-digit forms) are rejected in
+every component, regardless of case or extension. The shared repository helper
+checks only reserved names: task paths still allow Unicode, internal spaces and
+components longer than a repository alias. Ordinary near-matches such as
+`COM10` and `NUL-backup` remain valid. This is lexical validation, not proof that
+the target filesystem can create the path.
 
 The sole resolver and wire contract are in
 `server/internal/workspacenaming/naming.go`, with an exact shared vector in

@@ -131,3 +131,37 @@ func TestWindowsWorkspaceNamingNamespaces(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsWorkspaceNamingReservedTaskPaths(t *testing.T) {
+	for _, layout := range []repository.Layout{repository.LayoutRoot, repository.LayoutContainer} {
+		for _, path := range reservedTaskDirectories() {
+			t.Run(string(layout)+"/"+path, func(t *testing.T) {
+				s := windowsNamingSource()
+				s.Layout, s.Rules.TaskDirectoryTemplate = layout, path
+				p := Resolve(s, NodeContext{Home: `C:\Users\example`, PathFlavor: "windows"})
+				if p.Status != "invalid" || p.Plan != nil || len(p.Diagnostics) != 1 || p.Diagnostics[0].Code != "path_invalid" || p.Diagnostics[0].Field != "task_directory_template" {
+					t.Fatalf("reserved task directory produced a Windows plan: %+v", p)
+				}
+			})
+		}
+		for _, title := range []string{"NUL", "CON", "COM1", "LPT9"} {
+			s := windowsNamingSource()
+			s.Layout, s.Title = layout, title
+			s.Rules.TaskDirectoryTemplate = "{task-id}/{task-slug}/work"
+			if err := Validate(s.Rules); err != nil {
+				t.Fatal(err)
+			}
+			if p := Resolve(s, NodeContext{Home: `C:\Users\example`, PathFlavor: "windows"}); p.Status != "invalid" || p.Plan != nil || len(p.Diagnostics) != 1 || p.Diagnostics[0].Code != "path_invalid" {
+				t.Errorf("reserved title produced a Windows plan: %q: %+v", title, p)
+			}
+		}
+		for _, path := range portableTaskDirectories() {
+			s := windowsNamingSource()
+			s.Layout, s.Rules.TaskDirectoryTemplate = layout, path
+			p := Resolve(s, NodeContext{Home: `C:\Users\example`, PathFlavor: "windows"})
+			if p.Status != "complete" || p.Plan == nil {
+				t.Errorf("ordinary Windows path rejected: %q: %+v", path, p)
+			}
+		}
+	}
+}
