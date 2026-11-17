@@ -718,7 +718,7 @@ iPhone and iPad.
 ### 4.4 Key frames
 
 Each variant marks eight key frames (★) in the gallery; V1 also marks two of their states, `iphone/kyoto~answered` and
-`iphone/kyoto-quicknote-keyboard~reply`. Screenshots of every ★ frame, light and dark, are attached to the PR, not
+`iphone/kyoto-quicknote-keyboard~reply`, and V2 one, `iphone/kyoto~rounds` (its rounds, one scroll below). Screenshots of every ★ frame, light and dark, are attached to the PR, not
 committed (`docs/operations/collaboration.md` ("Screenshots in PRs")); `tools/shoot-all.sh` writes them outside the
 checkout.
 
