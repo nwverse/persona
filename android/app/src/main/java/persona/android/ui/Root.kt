@@ -847,7 +847,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           AssistantStackNavigationProbe(stackEvidence.route, stackEvidence.selectedKey)
-          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar", null) }) {
+          // Phone drawer only, and only on the Assistant root. A pushed page keeps the drag (`DrawerPan.pushed`,
+          // AssistantSidebar.swift:505-509). A regular window shows the column instead of this drawer.
+          JShellDrawer(
+              sidebar.opened.value,
+              onDismiss = { sidebar.opened.value = false },
+              dragEnabled = !regular && selected == AppTab.Persona && assistantStack.size <= 1,
+              onOpen = { sidebar.opened.value = true },
+              drawer = { sharedSidebar("shared-sidebar", null) },
+          ) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
             // One background for the window. Pages paint the same light at the same place (PageBackdrop), so in wide
             // windows the rail, the panes and the room between them read as one surface; cards are what separate them.
