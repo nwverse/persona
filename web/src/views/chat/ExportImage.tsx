@@ -240,9 +240,10 @@ export default function ExportImage({ request, pick, onClose }: { request: Expor
   );
 }
 
-/** What html-to-image draws: not a button (a code block's copy, a card's controls are drawn as they look elsewhere). */
+/** What html-to-image draws: not a code block's Copy (ReplyBlocks CodeBar, its language stays) nor a diagram's tools
+ *  (Mermaid, always shown on a touch screen); a card's controls are drawn as they look elsewhere. */
 function keep(node: HTMLElement): boolean {
-  return !(node instanceof HTMLButtonElement && node.closest("pre, [data-code-header]"));
+  return !(node instanceof HTMLButtonElement && node.closest("pre, [data-code-bar], [data-mermaid]"));
 }
 
 /** Until what loads later has: fonts, pictures, diagrams (at most 6 s), then two frames. */
