@@ -209,7 +209,7 @@ fun WorkGroup(
     terminalLabel: String = "",
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    // Content under the header fades over the space it takes (iOS ToolGroupView ForEach.unfolding, ToolViews.swift:341,
+    // Content under the header fades over the space it takes (iOS ToolGroupView ForEach.unfolding, ToolViews.swift:342,
     // via toggleInPlace, ChatPin.swift:707-726). Folding removes it at once. Sibling chat-list steps are not this slot.
     val edge = rememberOpenEdge()
     val revealing = edge.revealing(expanded)

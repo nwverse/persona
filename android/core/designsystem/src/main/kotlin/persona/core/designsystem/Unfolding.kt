@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.IntSize
  *
  * A composable [Modifier], not a wrapper: the opened block already has a place in the tree, and a `graphicsLayer`
  * alpha does not change the size it measures. The row is its full height on the first frame and only fades in
- * (`Theme.Motion.reveal`, easeOut 0.28 s, `Theme.swift:751`; [Tokens.Motion.Reveal]). What closes leaves the
+ * (`Theme.Motion.reveal`, easeOut 0.28 s, `Theme.swift:754`; [Tokens.Motion.Reveal]). What closes leaves the
  * composition at once, its space with it (`toggleInPlace` sets `disablesAnimations`, `ChatPin.swift:686-688`, #3005).
  * Several iOS sites also write `.transition(.opacity.combined(with: .move(edge: .top)))` on that block. The insertion
  * runs inside that disabled transaction, so this modifier does not slide. [rememberOpenEdge] is true only on the
@@ -28,12 +28,12 @@ import androidx.compose.ui.unit.IntSize
  * that was already open, or that a lazy list composed again, does not fade again. Reduced motion draws it at once
  * (`ChatPin.swift:721-722`). iPhone and regular width (iPad, iPhone Duo) use the same modifier; no size class skips it.
  *
- * [Modifier.concealing] copies `Theme.Motion.conceal` (`Theme.swift:752`, [Tokens.Motion.Conceal]). iOS uses it for a
+ * [Modifier.concealing] copies `Theme.Motion.conceal` (`Theme.swift:755`, [Tokens.Motion.Conceal]). iOS uses it for a
  * menu (`MessageMenu.swift:97`, `:117`) and an inbox event (`InboxEventViews.swift:843`), not for a chat close, and no
- * chat calls it. [expandSpec] / [Modifier.expanding] copies `Theme.Motion.expand` (`Theme.swift:736`,
+ * chat calls it. [expandSpec] / [Modifier.expanding] copies `Theme.Motion.expand` (`Theme.swift:739`,
  * `Animation.smooth(duration: 0.4)`, no bounce, [Tokens.Motion.Expand]). Glass maps that spring the same way it maps
  * `Theme.Motion.layout` (also `Animation.smooth`); Brief and Board keep a tween. iOS calls it for the Lark pinned
- * shelf (`LarkPinnedShelf.swift:22`, `LarkConversationsView.swift:186`). Android has no such shelf, so nothing calls
+ * shelf (`LarkPinnedShelf.swift:22`, `LarkConversationsView.swift:185`). Android has no such shelf, so nothing calls
  * [expanding]. A zero duration is a tween, never a spring. Reduced motion makes all three instant.
  */
 @Stable
