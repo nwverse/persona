@@ -509,6 +509,7 @@ func (s *Session) dropFramesLocked(ch *channel, reason string) {
 		s.dropBacklogLocked(ch)
 		return
 	}
+	// The stream has not ended here, so no close has gone out that this jump would have to owe again.
 	var keep [][]byte
 	end := ch.base + uint64(len(ch.buf))
 	for i, mk := range ch.marks {
@@ -529,8 +530,7 @@ func (s *Session) dropFramesLocked(ch *channel, reason string) {
 	ch.sent = end
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
-	ch.resetOut = false  // this is a new jump; its reset has not been handed out yet
-	ch.sentClose = false // a new jump invalidates an earlier close, so sentClose implies no unconfirmed jump
+	ch.resetOut = false // this is a new jump; its reset has not been handed out yet
 	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	now := s.now()
 	for _, m := range keep {
