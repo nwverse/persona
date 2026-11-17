@@ -24,6 +24,7 @@ var paneClosers = map[string]string{
 	"closeNewTab":     "a start whose command never ran",
 	"failedTerminal":  "a Herdr App terminal whose launch failed",
 	"closeFinished":   "panes.close_finished: the user's Close finished terminals (stopped.go)",
+	"closeStalledTab": "the user's retry of a stalled Orca start: its kept tab, with no agent in it, whose one launch is used (#9534)",
 }
 
 func TestOnlyUserActionsClosePanes(t *testing.T) {
