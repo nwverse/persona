@@ -241,6 +241,28 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
     .unwrap_or_default()
 }
 
+/// Projects a session_state or hub_state fixture through the same pure host adapter as ArkTS. Debug/test only: no
+/// Release Android export, production adapter or persisted client state.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectState<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::state::FixtureInput = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::state::project_fixture(&input).ok()?;
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
 /// Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTurns<'a>(

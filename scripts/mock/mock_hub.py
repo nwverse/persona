@@ -9178,6 +9178,91 @@ def retry_task(h, tid):
     h.send_json({"todo": format_todo(t)})
 
 
+
+# MOCK_REQUEST_GRAPH=1 (with MOCK_TASKS=1, web/src/views/TodoRequestGraph.tsx): requests for the To-dos page's "By request"
+# grouping: pieces of a request carry the to-do fields `part_of` (the request's to-do) and `after` (what they wait for).
+# The search page is a request of six pieces in a diamond: the API fields done, the back end working on Codex (with a
+# helper Agent beside it), the front end asking a decision, the end-to-end tests waiting for both, the docs waiting for
+# the tests, and the tracking that could start but nobody took. A plan nobody started yet (push on iOS and Android, three
+# tasks) and a finished request (the login crash, two pieces) come with it. The back end grows an Agent tree: its Codex
+# leader handed out two workers (one done), and the helper beside it runs subagents (one ended, one nested in another).
+# A request of one piece the owner only answered "提吧" to is headed by its task's title, the words quoted. Off by default.
+if MOCK_TASKS and os.environ.get("MOCK_REQUEST_GRAPH") == "1":
+    _g_sid = lambda k: "9a7bc0de-0000-4000-8000-%012d" % k
+    _g_cwd = "/Users/me/code/shop"
+
+    def _g_agent(k, title, state, last, kind="claude", minutes=1, **kw):
+        SESSIONS.append(sess("macbook", _g_sid(k), title, _g_cwd, "working" if state == "working" else "idle", state, "shop", 3,
+                             "graph", 40 + k, minutes, last, agent=kind, **kw))
+        return {"machine_id": "macbook", "session_id": _g_sid(k), "linked_at": ago(minutes=minutes + 5), "released_at": None,
+                "title": title, "cwd": _g_cwd, "agent": kind, "start_error": "", "source": "manual", "via": ""}
+
+    def _g_todo(tid, title, part_of="", after=(), agents=(), minutes=60, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes),
+             "updated_at": ago(minutes=max(1, minutes // 10)), "origin": ASK1, "spaces": [], "agents": list(agents)}
+        if part_of:
+            t["part_of"] = part_of
+        if after:
+            t["after"] = list(after)
+        t.update(kw)
+        return t
+
+    _g_said = {"text": "把搜索页做完上线：先定接口字段，前后端并行做，联调完补端到端测试，最后写使用文档；顺手把搜索词埋点加上。",
+               "at": ago(minutes=95), "conversation": ASK1}
+    TODOS_INIT += [
+        _g_todo("todo_graph_search", "搜索页上线", minutes=95, brief={"id": "brief_graph_search", "created_at": ago(minutes=95),
+                "started_by": "owner", "goal": "搜索页上线", "done_when": [], "request": _g_said}),
+        _g_todo("todo_graph_fields", "定搜索接口的字段", "todo_graph_search", minutes=90, done_at=ago(minutes=62),
+                agents=[dict(_g_agent(1, "定搜索接口的字段", "idle", "字段定好了，写在 docs/search-api.md。", minutes=62), released_at=ago(minutes=60))]),
+        _g_todo("todo_graph_backend", "后端：实现 /search 接口和分页", "todo_graph_search", after=("todo_graph_fields",), minutes=60,
+                agents=[_g_agent(2, "后端：实现 /search 接口", "working", "在写分页游标。", kind="codex", state_since=ago(minutes=23), effort="high"),
+                        _g_agent(3, "查现有的索引", "working", "在看 orders 表上的索引。", state_since=ago(minutes=6), subagents=[
+                            {"id": "ga1", "session_id": _g_sid(3) + "@ga1", "type": "Explore", "description": "列出 orders 表现有的索引", "running": False,
+                             "started_at": ago(minutes=6), "last_text": "共 4 个索引，没有覆盖 name 字段。"},
+                            {"id": "ga2", "session_id": _g_sid(3) + "@ga2", "type": "Explore", "description": "找搜索会用到的慢查询", "running": True,
+                             "started_at": ago(minutes=4), "last_tool": {"name": "Grep", "summary": "grep -rn \"LIKE '%\" server/"}},
+                            {"id": "ga3", "session_id": _g_sid(3) + "@ga3", "type": "general-purpose", "description": "对比两种分页方案", "running": True,
+                             "started_at": ago(minutes=2), "parent_id": "ga2", "last_tool": {"name": "Read", "summary": "docs/pagination.md"}}])]),
+        # the back end's workers: its Codex leader handed them out (origin), one still going, one done
+        _g_todo("todo_graph_backend_test", "后端：游标分页的单元测试", "", minutes=20, origin="macbook/" + _g_sid(2),
+                agents=[_g_agent(5, "后端：游标分页的单元测试", "working", "在补翻到最后一页的用例。", state_since=ago(minutes=12))]),
+        _g_todo("todo_graph_backend_index", "后端：给 orders 表加搜索索引", "", minutes=40, origin="macbook/" + _g_sid(2), done_at=ago(minutes=15),
+                agents=[dict(_g_agent(6, "后端：给 orders 表加搜索索引", "idle", "索引加好了，迁移在 0042。", minutes=15), released_at=ago(minutes=15))]),
+        # the owner only answered "提吧": the task's title heads it, the words are quoted on the card
+        _g_todo("todo_graph_tiba", "按要求视图：根卡片改用任务标题，原话放在下面", "", minutes=8,
+                brief={"id": "brief_graph_tiba", "created_at": ago(minutes=8), "started_by": "owner", "goal": "根卡片用任务标题",
+                       "done_when": [], "request": {"text": "提吧", "at": ago(minutes=8), "conversation": ASK1}},
+                agents=[_g_agent(7, "按要求视图：根卡片改用任务标题", "working", "在改 request-graph.ts。", state_since=ago(minutes=5))]),
+        _g_todo("todo_graph_frontend", "前端：搜索结果页和空状态", "todo_graph_search", after=("todo_graph_fields",), minutes=60,
+                agents=[_g_agent(4, "前端：搜索结果页", "needs_you", "结果为空时显示推荐商品还是只显示空白？",
+                                 asks="结果为空时显示推荐商品还是只显示空白？", state_since=ago(minutes=9))]),
+        _g_todo("todo_graph_e2e", "联调并补端到端测试", "todo_graph_search", after=("todo_graph_backend", "todo_graph_frontend",), minutes=59),
+        _g_todo("todo_graph_docs", "写搜索页的使用文档", "todo_graph_search", after=("todo_graph_e2e",), minutes=59),
+        _g_todo("todo_graph_track", "埋点：记录搜索词和点击位置", "todo_graph_search", after=("todo_graph_fields",), minutes=58),
+        # finished: the login crash, two pieces
+        _g_todo("todo_graph_login", "修复登录页闪退", minutes=60 * 5, done_at=ago(minutes=60 * 3)),
+        _g_todo("todo_graph_login_fix", "定位闪退并修复", "todo_graph_login", minutes=60 * 5, done_at=ago(minutes=60 * 3 + 20)),
+        _g_todo("todo_graph_login_test", "补登录页的回归测试", "todo_graph_login", after=("todo_graph_login_fix",), minutes=60 * 5,
+                done_at=ago(minutes=60 * 3 + 5)),
+    ]
+    TODOS = copy.deepcopy(TODOS_INIT)
+    TODO_ASKS["todo_graph_frontend"] = {"outcome": "decide", "verdict": "需要你拍板：结果为空时怎么显示",
+                                        "question": "结果为空时显示推荐商品还是只显示空白？", "recommend": "显示推荐商品",
+                                        "options": [{"label": "显示推荐商品"}, {"label": "只显示空白"}]}
+    _g_task = lambda title, **kw: dict({"title": title, "prompt": title, "machine": "macbook", "cwd": "/Users/me/code/app",
+                                        "launcher": "", "model": "", "permission": "acceptEdits", "readonly": False}, **kw)
+    _g_push = {"text": "这周把 iOS 和安卓的推送都接上，先把服务端的推送通道搭好。", "at": ago(minutes=4), "conversation": ASK1}
+    TASK_PLANS["plan_graph_push"] = {"id": "plan_graph_push", "conversation": ASK1, "state": "open", "created_at": ago(minutes=4),
+                                     "updated_at": ago(minutes=4), "tasks": [
+        _g_task("服务端：推送通道和设备令牌表", launcher="codex", model="gpt-5.5", effort="high",
+                brief={"id": "brief_graph_push", "created_at": ago(minutes=4), "started_by": "owner", "goal": "推送通道",
+                       "done_when": [], "request": _g_push}),
+        _g_task("iOS：接 APNs 并处理点开通知", model="opus"),
+        _g_task("安卓：接 FCM 并处理点开通知", model="opus")]}
+    TASK_FEED.setdefault(ASK1, []).append({"id": "feed_graph_push", "conversation": ASK1, "at": ago(minutes=4), "kind": "plan",
+                                           "ref": "plan_graph_push", "body": {}})
+
+
 def tasks_area(h, method, p, raw):
     """The unified entry's endpoints (MOCK_TASKS=1): the feed, starting / dismissing a plan, routing to a task."""
     if not MOCK_TASKS:
@@ -21434,7 +21519,7 @@ def net_control(path, q):
 # half of them in a new order): the working agents' last line alternates between one line and two (the row's height),
 # and one of them finishes and starts again every three rounds (its space changes rank). ScrollUnderPushTests.
 # MOCK_CHURN=1 also puts a screenshot (a tool result image) in the middle of the first conversation's work.
-# MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
+# MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned|beta: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
 # the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
@@ -21451,7 +21536,10 @@ def hub_update_state():
         HUB_UPDATE.update({"version": "v0.3.0-12-gabc1234-202611021500", "build": 202611021500, "channel": "release",
                            "can_update": True, "latest": latest, "state": "available", "busy": [], "auto": False,
                            "auto_notice": False, "last_check": ago(minutes=20), "confirmed": True})
-        if HUB_UPDATE_MODE == "waiting":
+        if HUB_UPDATE_MODE == "beta":
+            HUB_UPDATE.update(source="beta", version="0.6.2", latest={"version": "0.7.0-beta.1", "build": 202611171300,
+                                                                     "newer": True, "bad": False})
+        elif HUB_UPDATE_MODE == "waiting":
             HUB_UPDATE.update(state="waiting_idle", auto=True, busy=[
                 {"machine_id": "macbook", "machine": "MacBook", "session_id": "a1f3c2d4-0000-4000-8000-000000000001", "title": "给天气 App 加主屏幕小组件"},
                 {"machine_id": "server", "machine": "构建服务器", "session_id": "b2", "title": "整理发布脚本"}])
@@ -27144,6 +27232,9 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/hub/update") and HUB_UPDATE_MODE:
             s, body = hub_update_state(), json.loads(self.last_body or b"{}")
             if p == "/api/v1/hub/update/settings" and self.command == "PUT":
+                if "source" in body:
+                    s["source"] = body["source"]
+                    s["latest"] = None
                 if "auto" in body: s.update(auto=bool(body["auto"]), auto_notice=False)
                 if body.get("auto_notice_seen"): s["auto_notice"] = False
             elif p == "/api/v1/hub/update" and self.command == "POST":

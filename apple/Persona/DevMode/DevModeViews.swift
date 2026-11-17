@@ -13,7 +13,8 @@ struct DevModeSection: View {
 
     var body: some View {
         Section {
-            Toggle(isOn: Binding(get: { dev.isOn }, set: switched)) {
+            // A closure, not `set: switched`: Xcode 26.0's IRGen overflows on that isolated method value (docs/lessons/ios.md).
+            Toggle(isOn: Binding(get: { dev.isOn }, set: { switched($0) })) {
                 Text("Developing Persona").lineLimit(1)
             }
             .accessibilityIdentifier("dev-mode-switch")
