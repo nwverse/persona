@@ -203,6 +203,19 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
+## iOS production DEBUG continuity shadow (#8970)
+
+The iOS `ChatStore` remains the authoritative production implementation behind its continuity adapter. DEBUG mirrors
+its immutable inputs into the real C core on a private serial queue, applies each drained patch and compares decoded
+items and continuity state. The mirror covers the native cached snapshot, prefetch and reload-retention semantics,
+older pages and independently opened folds. Core effects never reach transport. A patch is a delta, not a snapshot;
+scheduling-only inputs must not clear its state by draining without applying it.
+
+Diagnostics contain only the domain, rule and input shape (kind, counts and presence flags). They never contain item
+JSON, message text, identifiers, history or sequence values. DEBUG uses the mirror by default, with
+`-showContinuityShadow NO` to turn it off and `YES` to opt in for performance A/B; Release has neither the mirror nor
+the switch. Optimized simulator evidence is labelled as such and is not a physical-device acceptance.
+
 ## iOS Agents-list adapter and sort shadow (#9058)
 
 `AgentSortProjectionAdapter` returns the existing Swift `AgentListProjection`; there is no Rust production-selection
@@ -478,7 +491,9 @@ and an older page into history, and refusal, other-frame and dispatch-cost tests
 binding (`TransportBindingFixtureTest` in `:core:rustcore`) and through ArkTS and the transport decoder on the host
 (`harmony/tests/core-host/transport.test.mjs`); both are host evidence, not device runs.
 
-The patch also carries `verified` (the chat's items are known complete, the rule Android used to derive per
+  - A no-op batch without a span merges rather than clearing existing items; pending patches commit their complete
+    state and ops together on drain (#8970, with a new 39th case / 95th step in the shared corpus).
+  - The patch also carries `verified` (the chat's items are known complete, the rule Android used to derive per
 client), and `acked` (a host's acknowledgement watermark, so an applied no-op is visible). `Action::HubChanged`
 settles as if a gap were found, iOS's `settle(.fill)`. Folds are keyed by id and independent: different folds open
 and complete in either order, with `fold_id` on the range request, event and payload; a caller that sends no id keeps
