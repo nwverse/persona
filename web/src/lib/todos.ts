@@ -69,6 +69,8 @@ export interface Todo {
   /** The assistant conversation that opened it as a task, and the plan (docs/assistant/unified-entry.md); unset for a todo made by hand. */
   origin?: string;
   plan_id?: string;
+  /** The Inbox item this task was explicitly dispatched for. */
+  inbox_item?: string;
   /** "concern" records a question the owner wants answered (docs/assistant/todos.md "Concerns"); unset for other to-dos and older hubs. */
   kind?: string;
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */

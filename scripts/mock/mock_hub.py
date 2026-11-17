@@ -31174,6 +31174,73 @@ if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
     for _name in ("claude-aster", "claude-max", "claude-desktop"):
         LAUNCHER_MODELS[_name] = dict(LAUNCHER_MODELS["claude"])
 
+# MOCK_MODEL_FAMILIES=1: realistic long model lists from several model families (Claude, GPT, Gemini, GLM, DeepSeek) across
+# claude-max, codex, a mixed-vendor gateway, work-claude and Antigravity, to screenshot the web model panel with.
+if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_FAMILIES") == "1":
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "claude-max", "model": "opus", "agent": "claude", "source": "persona"},
+        {"name": "codex", "model": "gpt-6.1-sol", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+        {"name": "aster", "display_name": "本机网关 aster", "model": "opus", "agent": "claude", "source": "persona"},
+        {"name": "work-claude", "model": "sonnet", "agent": "claude", "source": "persona"},
+        {"name": "agy", "model": "默认", "agent": "agy", "agent_type": "agy", "source": "persona"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "claude-max"
+    _GW_EFFORTS = ["low", "medium", "high"]
+    _CODEX_EFFORTS = ["low", "medium", "high", "xhigh"]
+
+    def _claude_row(mid, name, desc, resolved=None, default=False, efforts=_CLAUDE_EFFORTS):
+        row = {"id": mid, "name": name, "description": desc}
+        if resolved: row["resolved"] = resolved
+        if default: row["default"] = True
+        if efforts: row["efforts"] = efforts
+        return row
+
+    _opus_desc, _fable_desc, _sonnet_desc = "Best for everyday, complex tasks", "Most capable for your hardest and longest-running tasks", "Efficient for routine tasks"
+    LAUNCHER_MODELS["claude-max"] = {"agent": "claude", "models": [
+        _claude_row("default", "Default (recommended)", "Opus 5.5 · Best for everyday, complex tasks", "claude-opus-5-5", True),
+        _claude_row("opus", "Opus 5.5", "For complex work and everyday tasks", "claude-opus-5-5"),
+        _claude_row("fable", "Fable 5.2", "For your toughest challenges", "claude-fable-5-2"),
+        _claude_row("sonnet", "Sonnet 5.5", "Most efficient for simpler tasks", "claude-sonnet-5-5"),
+        _claude_row("haiku", "Haiku 5.5", "Fastest for quick answers", "claude-haiku-5-5", efforts=None),
+        _claude_row("claude-fable-5-1", "Fable 5.1", _fable_desc),
+        _claude_row("claude-haiku-4-5-20251001", "Haiku 4.5", "Fastest for quick answers", efforts=None),
+        _claude_row("claude-sonnet-5", "Sonnet 5", _sonnet_desc),
+        _claude_row("claude-opus-5", "Opus 5", _opus_desc),
+        _claude_row("claude-fable-5", "Fable 5", _fable_desc),
+        _claude_row("claude-opus-4-8", "Opus 4.8", _opus_desc),
+        _claude_row("claude-opus-4-7", "Opus 4.7", _opus_desc),
+        _claude_row("claude-opus-4-6", "Opus 4.6", _opus_desc),
+        _claude_row("claude-sonnet-4-6", "Sonnet 4.6", _sonnet_desc),
+    ]}
+    _codex_rows = [("gpt-6.1-sol", "gpt-6.1-sol", "Latest frontier model for coding"),
+                   ("gpt-6-astra", "gpt-6-astra", "Strongest reasoning for long agentic work"),
+                   ("gpt-6.1-terra", "GPT-6.1 Terra", "Balanced for everyday coding"),
+                   ("gpt-6-sol", "gpt-6-sol", "Frontier model for coding"),
+                   ("gpt-6-luna", "gpt-6-luna", "Fast and light for quick edits"),
+                   ("gpt-5.6-sol", "gpt-5.6-sol", "Previous frontier model for coding"),
+                   ("gpt-5.6-terra", "gpt-5.6-terra", "Previous balanced model"),
+                   ("gpt-5.6-luna", "gpt-5.6-luna", "Previous fast and light model")]
+    LAUNCHER_MODELS["codex"] = {"agent": "codex", "models": [
+        dict({"id": i, "name": n, "description": d, "efforts": _CODEX_EFFORTS, "default_effort": "medium"}, **({"default": True} if i == "gpt-6.1-sol" else {}))
+        for i, n, d in _codex_rows]}
+    LAUNCHER_MODELS["aster"] = {"agent": "claude", "models": [
+        _claude_row("default", "Default (recommended)", "Use the default model (currently claude-opus-5-5)", "claude-opus-5-5", True, _GW_EFFORTS),
+        _claude_row("opus", "Opus 5.5", "Opus 5.5 · Best for everyday, complex tasks", "claude-opus-5-5", efforts=_GW_EFFORTS),
+        _claude_row("sonnet", "Sonnet 5.5", "Sonnet 5.5 · Fast and capable", "claude-sonnet-5-5", efforts=_GW_EFFORTS),
+    ] + [_claude_row(i, i, "From gateway", efforts=None if i.startswith(("gemini", "glm", "deepseek")) else _GW_EFFORTS)
+         for i in ("gemini-3.8-pro", "gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.5-pro", "gemini-3.5-flash",
+                   "gemini-3-pro-preview", "gemini-2.5-flash", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "claude-opus-4-8",
+                   "glm-5.3", "deepseek-v4")]}
+    LAUNCHER_MODELS["work-claude"] = {"agent": "claude", "models": [
+        _claude_row("default", "Default (recommended)", "Use the default model (currently claude-sonnet-5-5)", "claude-sonnet-5-5", True),
+        _claude_row("sonnet", "Sonnet 5.5", "Sonnet 5.5 · Fast and capable", "claude-sonnet-5-5"),
+        _claude_row("haiku", "Haiku 5.5", "Haiku 5.5 · Fastest for quick answers", "claude-haiku-5-5", efforts=None),
+        _claude_row("claude-sonnet-5", "Sonnet 5", _sonnet_desc),
+        _claude_row("claude-sonnet-4-6", "Sonnet 4.6", _sonnet_desc),
+        _claude_row("gemini-3.8-flash", "gemini-3.8-flash", "From gateway", efforts=None),
+    ]}
+    LAUNCHER_MODELS["agy"] = {"agent": "agy", "models": [{"id": "默认", "name": "默认", "default": True}]}
+
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
@@ -31263,6 +31330,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
+MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

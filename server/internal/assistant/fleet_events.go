@@ -170,7 +170,15 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		if p.LeaderOnly {
 			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
 		}
-		return s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision), true, nil
+		out := s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision)
+		// Only an assistant conversation defers tools: a guest, by the node's word or by the manager's own record
+		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go). An unchanged or failed answer
+		// carries no list to mark.
+		if tools, ok := out["tools"].([]proto.Tool); ok {
+			deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
+			out["tools"] = s.withToolLoading(ctx, tools, deferring)
+		}
+		return out, true, nil
 	case "mcp.call":
 		var p struct {
 			Name        string          `json:"name"`

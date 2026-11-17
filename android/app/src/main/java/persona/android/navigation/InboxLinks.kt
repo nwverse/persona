@@ -1,10 +1,13 @@
 package persona.android.navigation
 
 import androidx.navigation3.runtime.NavKey
+import persona.core.navigation.AppTab
 import persona.core.navigation.InboxItemRoute
+import persona.core.navigation.InboxRoute
 import persona.core.navigation.LarkChatRoute
 import persona.feature.inbox.InboxItemLookupResult
 import persona.feature.inbox.InboxItemPages
+import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.InboxRecord
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LarkRoute
@@ -26,19 +29,24 @@ internal fun inboxDestination(key: NavKey, records: List<InboxRecord>, loaded: B
     else -> null
 }
 
-/** A listed item first, then a single read for a historical or not-yet-listed one. A direct chat link never needs that read. */
+/**
+ * A listed item first, then a single read for a historical or not-yet-listed one. A direct chat link never needs that read.
+ * [found] hears the item it opens, when there is one, so the Inbox list can move to where it is (#9053).
+ */
 internal suspend fun inboxDestinationWithLookup(
     key: NavKey,
     records: List<InboxRecord>,
     loaded: Boolean,
     pages: InboxItemPages,
     repository: InboxRepository,
+    found: (InboxRecord) -> Unit = {},
 ): InboxDestination? {
     if (key !is InboxItemRoute) return inboxDestination(key, records, loaded, pages)
-    records.firstOrNull { it.item.id == key.itemId }?.let { return InboxDestination.Open(inboxRowPage(it, pages)) }
+        ?.also { if (it is InboxDestination.Open && key is LarkChatRoute) records.firstOrNull { r -> r.feedId == key.chatId }?.let(found) }
+    records.firstOrNull { it.item.id == key.itemId }?.let { found(it); return InboxDestination.Open(inboxRowPage(it, pages)) }
     if (!loaded) return null
     return when (val result = readInboxItem(repository, key.itemId)) {
-        is InboxItemLookupResult.Found -> InboxDestination.Open(inboxRowPage(result.record, pages))
+        is InboxItemLookupResult.Found -> InboxDestination.Open(inboxRowPage(result.record, pages)).also { found(result.record) }
         InboxItemLookupResult.Missing -> InboxDestination.Missing
         is InboxItemLookupResult.Failed -> InboxDestination.Failed
     }
@@ -48,4 +56,14 @@ internal sealed interface InboxDestination {
     data class Open(val key: NavKey) : InboxDestination
     data object Missing : InboxDestination
     data object Failed : InboxDestination
+}
+
+/**
+ * Keeps each stack's landing in step with what the stack holds (#9053). A stack that no longer holds an Inbox list drops
+ * its landing: the list under the item that set it was closed without showing (the drawer, a tab's root, a link that
+ * went home), so nothing will take it, and a list entered later must open on Needs you, not where that item was. A
+ * stack that still holds it puts back the choice of a list moved beside a page that has now closed.
+ */
+internal fun settleLandings(stacks: Map<AppTab, List<NavKey>>, landings: Map<AppTab, InboxLanding>) {
+    stacks.forEach { (tab, stack) -> landings[tab]?.let { if (InboxRoute in stack) it.closed(stack) else it.clear() } }
 }
