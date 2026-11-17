@@ -33,6 +33,19 @@ data class AgentListSettings(
     val now: java.time.Instant = java.time.Instant.now(),
     /** Read-only source catalog for the repository tree; no preference is changed by a source pin. */
     val workspaces: List<persona.core.contracts.api.AgentWorkspace> = emptyList(),
+    /** Which tap produced this list. A page built before the tap carries an older one (#9600). */
+    val tapEpoch: Int = 0,
+    /**
+     * Grouping chosen by a tap before the phone has finished saving it (`AgentsMenus.swift:405`).
+     * Null: use the saved grouping. Cleared once the save lands, or set back when the save fails
+     * (`PinsStore.swift:131`, `:139`, `:163`).
+     */
+    val pendingGrouping: AgentGrouping? = null,
+    /**
+     * Tabs folded by a tap before the phone has finished saving them (`ChatsView.swift:2080`).
+     * Null: use the saved set.
+     */
+    val pendingFoldedTabs: Set<String>? = null,
 ) {
     private val nativePinnedWorkspaces by lazy {
         workspaces.filter { it.source == "paseo" && it.nativePinTime != null }
