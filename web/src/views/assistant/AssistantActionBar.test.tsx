@@ -173,7 +173,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_changes_requested"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_checks_pending"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_conflicts"));
-    expect(row.querySelector("a")?.classList).toContain("truncate");
+    expect(row.querySelector("a")?.classList).toContain("break-all");
     act(() => row.querySelector<HTMLButtonElement>("[data-pr-task-link]")!.click());
     expect(getPanel()).toEqual({ kind: "task", todo: "tray-task" });
   });
@@ -409,6 +409,34 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector('[data-parked-task-row="tray-parked"] .text-green')).toBeNull();
   });
 
+  it("shows the recorded wait contact in the parked tray", async () => {
+    const evidence = { kind: "person_reply" as const, target: "Schedule owner", wake: "The owner replies in the thread",
+      recorded_by: "recording-conversation",
+      contact: { sender: "Example sender", channel: "Email", url: "https://example.test/messages/7",
+        sent_at: "2026-11-10T08:00:00Z", request: "Please confirm the schedule", status: "sent" } };
+    moreTodos = [{
+      ...todo, id: "tray-wait-evidence", title: "Example schedule wait", pr_url: undefined, plan_id: undefined, agents: [],
+      supervision: { supervisor: conversation, state: "parked", parked: {
+        reason: "Waiting for the schedule owner", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1, evidence,
+      }, reviews: [{ at: "2026-11-10T09:00:00Z", verdict: "parked", parks: 1, evidence }] },
+    }];
+    const older = moreTodos[0];
+    const newerEvidence = { ...evidence, contact: { ...evidence.contact, sent_at: "2026-11-10T08:30:00Z" } };
+    moreTodos = [{ ...older, id: "tray-wait-newer", title: "Newer example wait", updated_at: "2026-11-10T08:40:00Z",
+      supervision: { ...older.supervision!, parked: { ...older.supervision!.parked!, evidence: newerEvidence },
+        reviews: [{ at: "2026-11-10T08:40:00Z", verdict: "parked", parks: 1, evidence: newerEvidence }] } }, older];
+    await act(async () => { await refreshTodos(); });
+    await act(async () => entry("parked").click());
+    expect([...host.querySelectorAll("[data-parked-task-row]")].map((row) => row.getAttribute("data-parked-task-row")))
+      .toEqual(["tray-wait-evidence", "tray-wait-newer"]);
+    const info = host.querySelector('[data-task-wait-info="tray-wait-evidence"]');
+    expect(info?.querySelector("[data-wait-target]")?.textContent).toContain("Schedule owner");
+    expect(info?.querySelector("[data-wait-contact]")?.textContent).toContain("Example sender");
+    expect(info?.querySelector("[data-wait-contact]")?.getAttribute("href")).toBe(evidence.contact.url);
+    expect(info?.querySelector("[data-wait-age]")?.textContent).not.toContain(t("task-wait.age_unknown"));
+    expect(info?.textContent).not.toContain("recording-conversation");
+  });
+
   it("says only the Agent's own state in the status column, with the to-do's state as its own chip (#6492)", async () => {
     moreTodos = [{
       ...todo, id: "tray-rework-stopped", title: "Needs rework, Agent gone", pr_url: undefined, plan_id: undefined,
@@ -473,7 +501,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entry("running").textContent).toBe(label.running);
     expect(entry("needs").textContent).toBe(label.needs);
     expect(host.textContent).toContain(t("assistant-tasks.tray_empty_progress"));
-    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${t("assistant-tasks.tray_just_finished")}1`);
+    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${stateName("just_finished")}1`);
     const finished = host.querySelector("[data-task-slot]")!;
     expect(finished.getAttribute("data-counts-open")).toBe("false");
     expect(finished.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("done");

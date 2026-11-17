@@ -15,7 +15,7 @@ import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflo
 import { machineWithHub } from "../../lib/mesh";
 import { useLayout } from "../../lib/layout";
 import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
-import { attachLive, flipPin } from "../../lib/agent-actions";
+import { flipPin } from "../../lib/agent-actions";
 import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
@@ -93,6 +93,7 @@ import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
+import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
 import { useFoldSearch } from "./useFoldSearch";
@@ -108,7 +109,7 @@ import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions"
 import { QueueStrip } from "./QueueStrip";
 import type { LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
-import { forwardDraftOf, jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
@@ -370,6 +371,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => ownCard(d.ix)));
   // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript)
   const tr = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
+  const transcriptOwner = useRef<object>({});
+  useEffect(() => {
+    if (!embedded) publishTranscript(transcriptOwner.current, mid, sid, tr);
+  }, [embedded, mid, sid, tr]);
+  useEffect(() => {
+    if (embedded) return;
+    return () => unpublishTranscript(transcriptOwner.current, mid, sid);
+  }, [embedded, mid, sid]);
   // a conversation that moved between Claude Code and Codex (#5054): its earlier sessions read above the live one, as
   // one conversation; without engine_history this is the transcript as it is
   const earlier = useEarlierStretches(mid, sid, assistant ? undefined : session?.engine_history, tr);
@@ -613,7 +622,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       draftKey,
       title,
       canCompose,
-      forward: (p: ForwardPick) => openForward({ drafts: [forwardDraftOf(forwardFrom(), p)], select: { first: p, start: setPicker } }),
+      // `now`: the message menu's Select messages (#9469), Forward to's chunk starts picking with it, showing nothing
+      forward: (p: ForwardPick, now?: boolean) => openForward({ from: { chat: forwardFrom(), picks: [p] }, select: { first: p, start: setPicker }, now }),
       pick: picker,
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
@@ -1881,6 +1891,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   // the header's Team button (#5180): on a lead with workers, at every width (a phone has no other way to the panel); its dot
   // says a worker needs you while the panel is shut
+  const showConversationTasks = Boolean((assistant || inPage) && !embedded && !chrome && session?.space !== "health");
+  const conversationTasksOpen = panel?.kind === "conversation-tasks" && panel.mid === mid && panel.sid === sid;
+  const chatHeaderActions = useMemo(() => showConversationTasks ? <>
+    <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={conversationTasksOpen}
+      onClick={() => togglePanel({ kind: "conversation-tasks", mid, sid, manager: skillManager })} />
+    {headerActions}
+  </> : headerActions, [showConversationTasks, conversationTasksOpen, mid, sid, skillManager, headerActions]);
   const teamCount = leads ? workerCount(session) : 0;
   const teamNeeds = workers.some((w) => stateOf(w) === "needs_you");
   const toggleTeam = useCallback(() => {
@@ -1936,7 +1953,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         onTerminal={openTerminal}
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         termDot={terminalWaits(session, interactions, outbox)}
-        actions={headerActions}
+        actions={chatHeaderActions}
         team={team}
         sides={sideControl}
         panel={chrome}
@@ -2467,7 +2484,8 @@ export const Header = memo(function Header({
   const [linkTodoOpen, setLinkTodoOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
-  const attach = () => session && attachLive(session);
+  // Live link loads with the click (lib/attach-live.ts), off the first screen
+  const attach = () => session && import("../../lib/attach-live").then((m) => m.attachLive(session));
   // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
   // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
   const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));

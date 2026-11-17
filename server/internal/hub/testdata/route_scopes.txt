@@ -196,6 +196,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/fleet
 -                    GET /api/v1/health
 -                    GET /api/v1/hub/update
+-                    GET /api/v1/hub/update/backups
 -                    GET /api/v1/hub/update/history
 -                    GET /api/v1/imessage
 -                    GET /api/v1/imessage/chats
@@ -458,6 +459,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/extensions/{id}/-/upgrade
 -                    POST /api/v1/extensions/{id}/-/widget/{ui}
 -                    POST /api/v1/hub/update
+-                    POST /api/v1/hub/update/backups/{id}/apply
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
@@ -556,6 +558,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/push/web/{device}/test
 -                    POST /api/v1/recordings/{id}/ask
 -                    POST /api/v1/recordings/{id}/followup
+-                    POST /api/v1/recordings/{id}/handoff
 -                    POST /api/v1/recordings/{id}/just-me
 -                    POST /api/v1/recordings/{id}/live
 -                    POST /api/v1/recordings/{id}/minutes
@@ -625,6 +628,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
 -                    PUT /api/v1/assistant/conversations/{id}/model
+-                    PUT /api/v1/assistant/conversations/{id}/tags
 -                    PUT /api/v1/assistant/directions/{id}/name
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/feishu/companions

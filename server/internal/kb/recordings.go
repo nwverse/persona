@@ -183,11 +183,16 @@ type Recording struct {
 	Attendance       string      `json:"attendance,omitempty"`
 	AttendingSession *SessionRef `json:"attending_session,omitempty"`
 	// Meeting is the overlapping calendar item, matched once per revision (MatchedRev); Items links it ("events/<id>").
-	Meeting      *MeetingRef `json:"meeting,omitempty"`
-	Items        []string    `json:"items,omitempty"`
-	MatchedRev   int64       `json:"matched_rev,omitempty"`
-	MinutesState string      `json:"minutes_state,omitempty"`
-	MinutesAsked bool        `json:"minutes_asked,omitempty"` // the user asked for minutes: a meeting whatever its kind
+	Meeting *MeetingRef `json:"meeting,omitempty"`
+	// ImportedMeeting is the overlapping meeting imported from a connected app (a meetings item), by the same rule
+	// among meetings only (#8872): Meeting's event wins for the minutes, while the lists show this recording and that
+	// meeting as one row. Matched with Meeting, and looked for again until minutesImportWait after the end, as an
+	// imported meeting comes after the call. Items links it too.
+	ImportedMeeting *MeetingRef `json:"imported_meeting,omitempty"`
+	Items           []string    `json:"items,omitempty"`
+	MatchedRev      int64       `json:"matched_rev,omitempty"`
+	MinutesState    string      `json:"minutes_state,omitempty"`
+	MinutesAsked    bool        `json:"minutes_asked,omitempty"` // the user asked for minutes: a meeting whatever its kind
 	// MinutesRev is the revision minutes.json was made from (0: none, or asked to be made again); MinutesVersion counts
 	// the minutes written; MinutesFails the unusable answers for MinutesFailRev (failed after minutesTries), and
 	// MinutesTimeouts its tries that ran out of time, the next not before MinutesRetryAt (minutes_timeout.go).
@@ -658,6 +663,16 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if r.EndedAt != nil {
 		t := r.EndedAt.UTC()
 		r.EndedAt = &t
+	}
+	// An ended hub-mode meeting is as long as the audio the hub holds when the upload says less (#9587): a phone killed
+	// mid-segment loses the segment it was writing and ends the recording before it, while the hub got that audio.
+	if r.EndedAt != nil && r.HubTranscribed() {
+		if held := e.audioHeldEnd(id); held > r.Duration {
+			r.Duration = held
+			if end := r.StartedAt.Add(time.Duration(held * float64(time.Second))); end.After(*r.EndedAt) {
+				r.EndedAt = &end
+			}
+		}
 	}
 	if r.Renamed != "" && u.Title != r.Title { // the phone renamed it since the web did: the newer name wins (#8877)
 		r.Renamed, r.RenamedAt = "", nil

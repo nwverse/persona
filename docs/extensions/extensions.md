@@ -253,10 +253,13 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 | Type | Allowed keywords | Form |
 | --- | --- | --- |
 | `string` | `title`, `description`, `default`, `enum` (with labels: `oneOf: [{"const", "title"}]`), `format` (`uri` / `email` / `hostname` / `machine` / `launcher`), `x-os` (only with `machine`: a list of `darwin` / `linux` / `windows`), `pattern`, `minLength`, `maxLength` | Text field; with `enum`, a picker; with `format: machine` or `launcher`, a picker of the hub's machines or launchers (below) |
-| `integer`, `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field; the iOS and Android apps add a stepper to an `integer`, held to `minimum` / `maximum` |
+| `integer` | Descriptive keywords, `enum`, `minimum`, `maximum`, `x-step` (a positive JSON integer from 1 to 9007199254740991, only for `integer`) | Number field; the iOS and Android apps add a stepper, held to `minimum` / `maximum`. `x-step` sets how much each tap adds or subtracts (1 when absent); it does not restrict typed or saved values |
+| `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field |
 | `boolean` | Descriptive keywords | Toggle; with `x-confirm` (one sentence), turning it on first asks that sentence in the same dialog as a machine's toggle (below), titled with the field's title; Cancel leaves it off, Turn On sets it for Save; turning off doesn't ask |
 | `array` | `items` must be `string` (may have `enum`), `minItems`, `maxItems`, `uniqueItems` | Editable list; with `enum` in `items`, multi-select; with `format: machine` in `items`, one toggle per machine (below) |
 | `object` | Top level only, containing only the scalars and arrays above; may have its own `required` | A group |
+
+**Integer steppers (`x-step`)**: the hub returns the hint as `step` in `form.fields`. It is not `multipleOf`: with `x-step: 250`, a value of 2100 can still be typed and saved, and the next tap moves it to 2350 or 1850, within `minimum` / `maximum`. A field with `enum` is drawn as a picker, so `x-step` does nothing there. Older apps ignore `step` and use 1. Only a hub with `x-step` installs a manifest that uses it: declare a matching `engines.persona`.
 
 **Machines (`format: machine`)**: the value is the id of a machine on this hub.
 - A list of these values (`{"type": "array", "items": {"type": "string", "format": "machine", "x-os": ["darwin"]}}`) is drawn on the App's and web's settings page as **one toggle per machine**: machine name, online or not, plus Cua status for computer-control extensions (those contributing `computer`). `x-os` lists only machines on those systems.
@@ -1723,7 +1726,7 @@ The `-` endpoints below exist only when `features` in `/health` and hello includ
 | Endpoint | Who can call | Notes |
 | --- | --- | --- |
 | `GET /api/v1/extensions` | Any device | `{"extensions": [ExtensionView], "can_install"}`. `ExtensionView`: the old `id`, `name`, `kind` (the first extension point; voice extensions are still `voice`, connectors are `connectors`), `status`, `error`, plus `version`, `source`, `enabled`, `description`, `contributes` (extension point → id), `needs_setup` (what is still missing, human-readable), `warnings` |
-| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets`. `data_dir` is the extension's data directory on the manager's machine (the one its program is given there; an attached package keeps it, none for one installed from `remote:`, one from hub.json or manager.json, or one with no program on the manager), returned to the master token over loopback and the admin UI only, never to a device |
+| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, step, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets`. `data_dir` is the extension's data directory on the manager's machine (the one its program is given there; an attached package keeps it, none for one installed from `remote:`, one from hub.json or manager.json, or one with no program on the manager), returned to the master token over loopback and the admin UI only, never to a device |
 | `PUT /api/v1/extensions/{id}/-/enabled` `{enabled}` | Full-access devices | Returns the details; enabling an extension that uses the Inbox and has no fallback while **Message triage** cannot be called returns 409 `needs_triage_model` ("General Inbox rules" above); the same for install and upgrade |
 | `PUT /api/v1/extensions/{id}/-/config` `{config}` | Full-access devices | Replaces the whole thing; not matching the schema returns 400 `{code: "invalid_config", field, message}` |
 | `PUT /api/v1/extensions/{id}/-/secrets/{name}` `{value}`, `DELETE …` | Full-access devices | At most 16 KB; the value is never echoed and never goes into logs or the audit log |
@@ -1807,7 +1810,7 @@ An extension contributes `assistant`:
     put into `base_env`; the variables used by `secret` and `auth` are not given, and the rest of `env` is given as usual. The command wrapper (`~/.persona/assistant-bin/<command>`, running the script in the skill directory) requests `$<base_env><path>` as usual;
     the proxy appends the path to the real API address, adds the credential per `auth`, forwards only the headers scripts commonly use (`Accept`, `Content-Type`, those in `headers`…; the request's own `Authorization` and `Cookie` are removed), and replaces `Origin` with the API's own.
     The proxy checks every actual request against the same `rules`, whether sent by the command, curl or a script: `allow` passes, `deny` rejects; `confirm` passes only the single call the gate just had confirmed on the phone (or covered by **Always Allow in Session**),
-    with the same method and path and the confirmed body (JSON-equivalent; the body is not compared when it contains `$`, when `@file` was cut off, or when uploading files), used once within 10 minutes; everything else gets a 403 with the reason (JSON), and the model adjusts accordingly.
+    with the same method and path and the confirmed body (JSON-equivalent, so a confirmed JSON `null` takes only `null`; the body is not compared when it contains `$`, when `@file` was cut off, or when uploading files), used once within 10 minutes; everything else gets a 403 with the reason (JSON), and the model adjusts accordingly.
     A write the proxy forwarded and the API answered with a 2xx is also told to the manager (`lark.sent`), which keeps it in the sent-as-user ledger with how the gate let it through (`docs/extensions/connectors.md` "Sent as the user").
     So commands the gate cannot parse (loops, scripts, `$(…)`) are denied outright if they contain a write, with a hint to send it as a separate command. A resident node's proxy is process-wide: chats that survive a hub reconnect keep using the original address, and calls allowed on the new connection still pass.
     Once the extension is disabled, both the command and the credentials are gone. Gates with no `auth` that do not meet the default condition (several secrets, no `base_env`) still put credentials into the assistant's environment, as do gates provided by older hubs (before #1317).
@@ -1987,9 +1990,9 @@ the hub first checks against the schema (`wire.Validate`, `sdk/go/wire`), then c
 
 | Item `type` | Fields | Drawn as |
 | --- | --- | --- |
-| `text` | `text`, `style?` (`body` / `secondary` / `caption` / `code`) | A paragraph of text |
+| `text` | `text`, `style?` (`body` / `secondary` / `caption` / `code` / `title` / `headline`) | A paragraph of text |
 | `metric` | `label`, `value`, `detail?`, `tone?` | A number with a description |
-| `progress` | `label`, `ratio` (0…1), `detail?`, `tone?` | Progress bar |
+| `progress` | `label`, `ratio` (0…1), `detail?`, `tone?`, `style?` (`bar` / `ring`, omitted means `bar`) | Progress bar; `ring` draws a ring in Apple Home Screen widgets (small, medium, large); other surfaces draw a bar |
 | `row` | `title`, `subtitle?`, `value?`, `badge?: {text, tone?}`, `action?` | A list row; tappable with `action` |
 | `button` | `title`, `action`, `role?` (`normal` / `destructive`) | Button (text never wraps) |
 | `link` | `title`, `url` (https only) | A link opened inside the app |
@@ -2222,6 +2225,8 @@ If you do not want to see an extension's entries and cards: disable the extensio
 ### Compatibility
 
 **UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 9).
+
+`progress.style` is an unversioned drawing hint: an app that does not recognize it keeps drawing a bar, so it needs no UI version bump or downgrade. Native stream does not accept this field.
 
 - **Older app, new slot**: the app only queries the slots it knows by `placement`; it does not see new slots and does not error. `nav_page` also appears in the extension details' `ui`, so older apps (web) can still open it under **Settings › Extensions** › this extension;
   important content can therefore just go in `nav_page`, without a `plugin_page`.
@@ -2744,9 +2749,9 @@ The returned View is checked as usual (`Fit`), then `FitWidget` trims it to what
 
 | family | Allowed content |
 | --- | --- |
-| `small` / `medium` / `large` | `metric`, `stat_grid` (at most 2 stats for `small`, 4 otherwise), `progress`, `chart`, `text` (at most 3 lines, 200 characters), `row` (at most 4, not tappable); at most 2 sections, 4 items for `small`, 6 for `medium`, 12 for `large`. `markdown` becomes text, `empty` / `loading` one line of secondary text; `button`, `link`, `field`, `segmented`, `table`, `divider`, `search`, `filter`, `more`, actions, avatars and thumbnails are removed; `refresh_after` unused |
-| `accessory_circular` | First `metric`, `progress` or `text` (1 text line); progress is a circular capacity ring with its label in the center (percentage when the label is empty). The center text is capped at the interface's largest non-accessibility text size and shrinks as needed to fit the ring |
-| `accessory_rectangular` | First `metric`, `progress` or `text` (at most 3 text lines); progress uses the default progress view |
+| `small` / `medium` / `large` | `metric`, `stat_grid` (at most 2 stats for `small`, 4 otherwise), `progress` (a ring for `style: "ring"` in Apple Home Screen widgets, otherwise a bar), `chart`, `text` (at most 3 lines, 200 characters), `row` (at most 4, not tappable); at most 2 sections, 4 items for `small`, 6 for `medium`, 12 for `large`. `markdown` becomes text, `empty` / `loading` one line of secondary text; `button`, `link`, `field`, `segmented`, `table`, `divider`, `search`, `filter`, `more`, actions, avatars and thumbnails are removed; `refresh_after` unused |
+| `accessory_circular` | First `metric`, `progress` or `text` (1 text line); progress uses the system gauge regardless of `style`, a circular capacity ring with its label in the center (percentage when the label is empty). The center text is capped at the interface's largest non-accessibility text size and shrinks as needed to fit the ring |
+| `accessory_rectangular` | First `metric`, `progress` or `text` (at most 3 text lines); progress draws a bar regardless of `style` |
 | `accessory_inline` | First `metric` or one line of `text` (no progress) |
 
 Returns 502 if nothing drawable remains. Prefer drawing directly for `size`: a `metric` plus `stat_grid` for small, add a compact `chart` for medium, one `progress` or sentence for watch faces.
