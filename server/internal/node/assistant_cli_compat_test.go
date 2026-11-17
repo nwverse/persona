@@ -96,9 +96,9 @@ func TestAssistantIgnoresARuntimeFromAnOlderHub(t *testing.T) {
 }
 
 // A conversation an older node ran on the Agent SDK: the hub's state for it has the launcher and the profile that node
-// chose (the hub kept no runtime; a "runtime" key, as an older node held it, is ignored), and its transcript the SDK's
-// entrypoint. It continues on the CLI: claude resumes the same conversation id in the profile its state recorded,
-// whether the hub still names that runtime or names none; the state the node writes back has no runtime.
+// chose (never a runtime), and its transcript was started by the SDK. It continues on the CLI: claude itself resumes
+// the same conversation id in the profile its state recorded, whether an older hub still names the SDK runtime or a
+// current one names none; the state the node writes back has no runtime.
 func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.T) {
 	for _, hub := range []string{"older hub", "current hub"} {
 		t.Run(hub, func(t *testing.T) {
@@ -108,9 +108,9 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 			cwd := filepath.Join(n.dir, "assistant")
 			profile := filepath.Join(n.dir, "profiles", "claude")
 			writeRunTranscript(t, profile, cwd, id, "sdk-ts")
-			// state.load's answer for the conversation, with the key an older node held.
+			// state.load's answer for the conversation, as the hub keeps it.
 			load := []byte(`{"sessions":{"` + id + `":{"launcher":"claude","cwd":` + jsonString(t, cwd) + `,` +
-				`"model_fingerprint":"fp-main","runtime":"agentsdk","config_dir":` + jsonString(t, profile) + `,` +
+				`"model_fingerprint":"fp-main","config_dir":` + jsonString(t, profile) + `,` +
 				`"is_main":true,"started_at":"2026-11-01T00:00:00Z"}}}`)
 			var res struct {
 				Sessions map[string]sessionState `json:"sessions"`
