@@ -59,7 +59,9 @@ class PerfTestCase: XCTestCase {
             Self.pairedHubs.insert(hub)
         }
         app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-showFrameProbe", "YES", "-showContinuityShadow", shadow ? "YES" : "NO"] + args
+        let diagnostic = (ProcessInfo.processInfo.environment["PERSONA_PERF_EXTRA_ARGS"] ?? "")
+            .split(whereSeparator: \.isWhitespace).map(String.init)
+        app.launchArguments = ["-pairURL", pair, "-showFrameProbe", "YES", "-showContinuityShadow", shadow ? "YES" : "NO"] + diagnostic + args
         app.launchPinned()
         allowNotifications()
         acceptIconAlert()
