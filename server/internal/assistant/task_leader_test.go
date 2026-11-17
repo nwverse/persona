@@ -1961,14 +1961,18 @@ func TestLeaderRetryDeliveredIsNotRedeliveredAfterRestart(t *testing.T) {
 	}
 	s.supervise.mu.Unlock()
 	restarted, hub := restartedOn(t, database)
+	// The fixture's store keeps no todo rows: the restarted manager gets the same ones, under its lock (its own
+	// goroutines already read them).
 	s.todos.mu.RLock()
-	restarted.todos.todos = make(map[string]*Todo, len(s.todos.todos))
+	rows := make(map[string]*Todo, len(s.todos.todos))
 	for id, row := range s.todos.todos {
 		cloned := copyTodoLocked(row)
-		restarted.todos.todos[id] = &cloned
+		rows[id] = &cloned
 	}
-	restarted.todos.loaded = true
 	s.todos.mu.RUnlock()
+	restarted.todos.mu.Lock()
+	restarted.todos.todos, restarted.todos.loaded = rows, true
+	restarted.todos.mu.Unlock()
 	hub.setSessions("box",
 		proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle, UpdatedAt: time.Now()},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone, State: proto.StateUnread, LastText: "做完了，PR https://github.com/o/r/pull/7 已合并", UpdatedAt: time.Now()})
@@ -1977,7 +1981,6 @@ func TestLeaderRetryDeliveredIsNotRedeliveredAfterRestart(t *testing.T) {
 	for range 3 {
 		restarted.sendDigest(ctx)
 	}
-	time.Sleep(300 * time.Millisecond)
 	for _, m := range deliveredTo(hub, "s1") {
 		if strings.Contains(m, w.ID) {
 			t.Fatalf("the review the leader took on a retry was delivered again after a restart:\n%s", m)
