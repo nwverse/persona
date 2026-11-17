@@ -1577,12 +1577,13 @@ func TestLeaderSupervisionStatesNoClass(t *testing.T) {
 
 // A retry that gets an unconfirmed supervision message to the leader records it as a digest would: its turn is told
 // then, so a manager restarted afterwards does not deliver it again (#9607).
-func TestLeaderRetryDeliveredMarksTheTurnTold(t *testing.T) {
+func TestLeaderRetryDeliveredMarksTheTurnToldAndDeduplicatesSignals(t *testing.T) {
 	s, f := newQuietService(t)
 	s.leaderResume = 50 * time.Millisecond
 	ctx := context.Background()
 	startTaskLeader(t, s, f)
 	w := planWorker(t, s, f, nil)
+	blocked := planWorker(t, s, f, nil)
 	if _, _, err := s.updateSupervision(ctx, w.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
 		t.Fatal(err)
 	}
@@ -1591,6 +1592,9 @@ func TestLeaderRetryDeliveredMarksTheTurnTold(t *testing.T) {
 	s.supervise.mu.Unlock()
 	g := superviseSignal{Todo: w.ID, Kind: sigReview, Key: reviewKey(todoNow(s, w.ID).Supervision), Machine: "box",
 		Session: w.Agents[0].SessionID, Detail: "done", At: time.Now()}
+	// The blocked report renders before the review, which is first in the input.
+	signals := []superviseSignal{g, {Todo: blocked.ID, Kind: sigReport, Report: upReportBlocked, Machine: "box",
+		Session: blocked.Agents[0].SessionID, Detail: "waiting for access", At: g.At}}
 	b := &s.tasks.turns
 	b.mu.Lock()
 	if !s.turnsLocked(ctx) {
@@ -1608,7 +1612,7 @@ func TestLeaderRetryDeliveredMarksTheTurnTold(t *testing.T) {
 	f.failSend = &rpc.Error{Code: "peer_unconfirmed", Message: "not taken", Data: json.RawMessage(`{"delivered":"unknown"}`)}
 	f.mu.Unlock()
 	s.supervise.dedupMu.Lock()
-	first := s.deliverToLeaderAgent(ctx, lead, []superviseSignal{g}, "", time.Now(), time.Time{})
+	first := s.deliverToLeaderAgent(ctx, lead, signals, "", time.Now(), time.Time{})
 	s.supervise.dedupMu.Unlock()
 	b.mu.Lock()
 	toldBefore := b.doc.Turns[w.ID].Signal.Told != nil
@@ -1625,6 +1629,25 @@ func TestLeaderRetryDeliveredMarksTheTurnTold(t *testing.T) {
 		defer b.mu.Unlock()
 		return b.doc.Turns[w.ID].Signal.Told != nil
 	})
+
+	var entries []prompts.SuperviseEntry
+	for _, signal := range signals {
+		entry, ok := s.digestEntry(ctx, signal, "")
+		if !ok {
+			t.Fatalf("signal %s has no digest entry", signal.Kind)
+		}
+		entries = append(entries, entry)
+	}
+	s.supervise.dedupMu.Lock()
+	defer s.supervise.dedupMu.Unlock()
+	remaining, _, rollback, err := s.reserveSupervision(ctx, entries, signals, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollback()
+	if len(remaining) != 0 {
+		t.Errorf("the retry left %d of %d delivered signals eligible for redelivery", len(remaining), len(signals))
+	}
 }
 
 // A flexible task leader started again on another computer: the worker's fallback by the leader task's link reaches its

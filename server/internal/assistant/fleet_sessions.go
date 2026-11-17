@@ -115,6 +115,8 @@ type turnPrev struct {
 	Rev        int64
 	LastText   string
 	UpdatedAt  time.Time
+	// Launcher is what the session runs on: the admission gate's launcher groups count by it (admission.go).
+	Launcher string
 }
 
 // fleetPrevious is the machine's list setSessions saw last, by session id (the turns' starts and ends are against
@@ -132,7 +134,7 @@ func (s *Service) fleetKeepPrevious(machine string, list []proto.Session) {
 	for i := range list { // by index: a range value copies every (large) session it passes
 		sess := &list[i]
 		next[sess.SessionID] = turnPrev{Status: sess.Status, WokeByTask: sess.WokeByTask, Rev: sess.Rev,
-			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt}
+			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt, Launcher: sess.Launcher}
 	}
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()

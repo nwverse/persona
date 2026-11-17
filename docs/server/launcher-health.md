@@ -246,6 +246,30 @@ direction cap refuses either policy, since moving machines does not free a direc
 fails for good (an `agent_start` tool call has no todo, so its claim ends with the call), covering both the RPC race and the 10-second metrics/ledger gap. Other
 `session.start` callers (dispatch, self-heal, successor Agents, Feishu cards) are intentionally not wired in this first cut.
 
+A plan task the gate refuses is not failed: it waits in the admission queue (`server/internal/assistant/task_queue.go`), its card reads waiting
+with the reason, and the hub retries it every 90 seconds. The queue record is stored in the plan, so a hub restart resumes the wait. After 10
+refusals or 30 minutes the start fails with the last reason; a refused `agent_start` tool call is answered at once, since a tool call cannot wait.
+
+**Launcher groups** (#9674) cap tasks across launchers that draw on one shared resource, such as one subscription account pool behind several
+Claude Code compatible launchers, while other launchers stay free. Off by default: without `launcher_groups` no launcher line applies. Each
+group names its launchers exactly (an agent kind cannot tell a pooled launcher from a compatible one that is not) and one cap; a launcher
+belongs to at most one group:
+
+```json
+{"launcher_groups": [{"name": "shared-pool", "launchers": ["launcher-a", "launcher-b"], "cap": 4}]}
+```
+
+- **What counts**: open tasks of any direction, on every computer, whose linked execution Agent is working a turn on one of the group's
+  launchers (the session's launcher in the fleet's latest snapshot), plus starts admitted and not linked yet. A task counts once however many
+  agents it links, and a parked task, one waiting for the owner or one held short of live is left out, as for the direction cap. Tasks on
+  other launchers, the assistant's own conversations and Agents started directly with `agent_start` are not counted.
+- **When full**: a plan task on a group launcher waits in the admission queue with "Launcher group … already has N tasks running, at its limit
+  of M", with no attempt or time limit, and starts on a later retry once a task of the group stops working. The group is checked before the
+  machine lines, so a flexible task is not moved and no other computer is recommended. If another line refuses it later, that line's 10
+  attempts and 30 minutes count from then. `agent_start` on a group launcher is refused at once with the same reason.
+- **Change it** like the other lines: `persona_settings` reads and sets `assistant.admission` with the phone approval card; the next start
+  uses the new groups.
+
 ## Not done
 
 - An Agent that starts but fails on its first turn (the gateway rejecting the model name; `session.start` succeeded) is not recorded from the session; periodic checks find it. Only a usage limit with a known reset is recorded from the session.
