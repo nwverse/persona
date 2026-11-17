@@ -43,6 +43,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// What tells dictation the language spoken besides the draft (`DictationLanguage`): the owner's recent messages in
     /// this chat, read only when the mic starts.
     var dictationHints: () -> [String] = { [] }
+    /// The visible new-assistant starter takes this control request before entering the mic's own start path below.
+    var dictationRequest: DictationRequest? = nil
+    var takeDictation: ((DictationRequest) -> Bool)? = nil
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
@@ -298,10 +301,13 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         }
         #endif
         .onDisappear {
-            dictation.stop() // a start still asking for permission too (#3407)
             #if os(iOS)
-            dictationBar.reset()
+            #if DEBUG
+            if dictationBar.on { ShellTrace.shared.note("dictation composer disappeared") }
             #endif
+            dictationBar.reset(dictation, text: $text)
+            #endif
+            dictation.stop() // a start still asking for permission too (#3407)
         }
         #if os(iOS)
         .task { dictationBar.warm() }
@@ -312,6 +318,17 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             }
             try? await Task.sleep(for: Theme.DictationBar.treeAfter)
             if !Task.isCancelled, barOn { rowOutOfTree = true }
+        }
+        .tabActiveTask(id: dictationRequest) {
+            #if DEBUG
+            ShellTrace.shared.note("dictation starter task request=\(dictationRequest != nil)")
+            #endif
+            guard let request = dictationRequest, takeDictation?(request) == true else { return }
+            guard !dictation.isListening else { return }
+            startDictationBar(focusOnFailure: true)
+            #if DEBUG
+            ShellTrace.shared.note("dictation bar start requested")
+            #endif
         }
         .onChange(of: dictation.isListening) { _, on in
             if !on { dictationBar.listeningEnded(dictation, text: $text, reduceMotion: reduceMotion) }
@@ -381,6 +398,12 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// The mic tapped: the bar, with the keyboard down (what it was composing goes into the draft first). A hold
     /// locked on keeps dictating into the draft; a tap then ends it, as before.
     private func startDictationBar() {
+        startDictationBar(focusOnFailure: false)
+    }
+
+    /// The control enters here too, after its one-shot request was taken. Only that automatic start restores focus
+    /// when the existing permission / availability path fails; an ordinary mic tap behaves exactly as it did.
+    private func startDictationBar(focusOnFailure: Bool) {
         if dictation.isListening {
             dictation.stop()
             return
@@ -389,7 +412,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             TypedText.commitFocused(into: $text)
             focused.wrappedValue = false
         }
-        dictationBar.start(dictation, hints: [text] + dictationHints(), reduceMotion: reduceMotion)
+        dictationBar.start(dictation, hints: [text] + dictationHints(), reduceMotion: reduceMotion,
+                           onFailure: focusOnFailure ? { focused.wrappedValue = true } : nil)
     }
 
     /// ↑ on the bar, once the words are in the draft: sent as the card's send would, unless there is nothing to send
