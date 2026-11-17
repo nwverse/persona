@@ -21,6 +21,7 @@ struct AppearanceSection: View {
     #if os(iOS)
     @StoredValue(ReturnSends.enabledKey) private var returnSends = false
     #endif
+    @StoredValue(ScreenshotBannerPrefs.enabledKey) private var screenshotBanner = ScreenshotBannerPrefs.enabledByDefault
 
     var body: some View {
         Section {
@@ -86,6 +87,14 @@ struct AppearanceSection: View {
                                   detail: String(localized: "Send with Return; Shift-Return starts a new line"),
                                   symbol: Theme.Icon.enter, tint: Theme.Hue.blue,
                                   accessibilityID: "settings-return-sends", isOn: $returnSends)
+                // A chat's screenshots show the assistant's banner where the top bar is (#9508); not offered where the
+                // system has no layer to keep the bar out of a screenshot.
+                if ScreenshotBanner.isAvailable {
+                    SettingsSwitchRow(title: String(localized: "Persona Banner in Screenshots"),
+                                      detail: String(localized: "Screenshots and screen recordings of chats show your assistant's picture and name at the top"),
+                                      symbol: Theme.Icon.screenshotBanner, tint: Theme.persona,
+                                      accessibilityID: "settings-screenshot-banner", isOn: $screenshotBanner)
+                }
                 #endif
             }
             .bareListRow()

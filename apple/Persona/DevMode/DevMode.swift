@@ -108,6 +108,11 @@ final class DevMode {
     /// The newest screen opened on the tab in front, else the tab.
     var current: String { screens.last { $0.tab == tab }?.name ?? tab }
 
+    /// The note Send to Agent puts in the chat's box with the package (the owner can change it before sending).
+    static func note(since: String) -> String {
+        String(localized: "Here are the Persona diagnostics from my device (since \(since)). Please find out what is using the battery and what is failing.")
+    }
+
     static func name(_ tab: AppTab) -> String {
         switch tab {
         case .assistant: "assistant"
