@@ -116,9 +116,6 @@ func TestExternalPRParkIgnoresNonObjectSources(t *testing.T) {
 			forge := &externalPRForge{terminal: "merged"}
 			s.deploy.forge = forge
 			s.sweepPRStatuses(context.Background(), time.Now())
-			if len(forge.calls) != 1 {
-				t.Fatal("the source read did not run, so the in-flight fence was not exercised")
-			}
 			if todoNow(s, task.ID).Supervision.State != reviewParked || len(forge.calls) != 0 || pendingReviewSignal(s, task.ID) {
 				t.Fatal("a different external object was treated as a GitHub PR")
 			}
@@ -158,6 +155,9 @@ func TestExternalPRParkRechecksCapturedWait(t *testing.T) {
 			}}
 			s.deploy.forge = forge
 			s.sweepPRStatuses(context.Background(), time.Now())
+			if len(forge.calls) != 1 {
+				t.Fatal("the source read did not run, so the in-flight fence was not exercised")
+			}
 			if todoNow(s, task.ID).Supervision.State == reviewPending || pendingReviewSignal(s, task.ID) {
 				t.Fatal("an in-flight response woke a replaced or closed wait")
 			}
