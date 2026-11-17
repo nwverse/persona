@@ -422,7 +422,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   Machine telemetry pushes keep the sidebar's grouping inputs unchanged (#3059, `lib/sidebar-machines.ts`): load, memory and a refreshed last-seen timestamp do not rebuild the To-do tree. Computer names, hub labels, online status and first-connection state still update the rows; engine notices also use the latest computer name. The filter/grouping bars, account row and closed dialogs skip unchanged parent pushes. Usage meters and notices retain their own live subscriptions.
   **Paging hubs** (#6362, #6662): one grouping bar, **To-do / Machine / Repo / Project / Status** (待办 / 机器 / 仓库 / 项目 / 状态; the complete list's `GroupingBar` in both views, its title "Agents" too), whether the list below is paged or complete, so a pin or an unpin changes nothing above the list. The bounded, virtualized list draws every grouping but **By repo**, whose worktree level needs every session, and **By to-do** only on a hub with `sessions_todo` (`docs/protocol/protocol.md` "Sessions by to-do"); any session or workspace pin, or several assistants, select the complete list, as do By repo and, on an older hub, By to-do. Paging the sidebar also requires `sessions_agents_only` (#4676), so its pages, changes, counts and catalog exclude assistant and health-space conversations. On older hubs the complete Agents list applies the same sidebar filter. Outside the sidebar the Machines page, a computer's page and a space's page read the complete list too, to count and list a computer's Agents, which such a hub pushes none of (web audit item 3); with several assistants Overview does, for the current assistant's Agents. That list's first read is the heavy one (`summary=0`, 200 rows a page; the 8,356-row test fixture is about 7.6 MB), later reads ask only for what changed, and readers share one copy, released a second after the last leaves. A lighter per-computer count from the hub would spare those pages the first read; Overview with one assistant reads none and leaves a computer's count out while the paged list has more pages. The default is By to-do; a "By pinned" choice saved before #6662 reads as By to-do, an absent or unknown one too. The chips under the bar are the complete list's quick filters on both too (All / Needs you / Unread / Working / Waiting in the background / Lark group / Terminal and the botmux switch, one `persona.agentFilter`): the paged list selects them with `state`, `waiting`, `pane_source` and `exclude_pane_source` (`sessions_quick_filters`, `docs/protocol/protocol.md` "Quick filters") and counts them from one read of the list without the chip; a hub without that feature keeps its state chips (… / Seen / Not running).
   The grouping shortcut switches a mounted list at once; pin updates are reactive, and removing the last pin returns to paging under the same bar and grouping. Before #6662 the paged list had its own "Recently updated / Computer / Project / Space / Repo" control, and any saved grouping or pin swapped the whole block for the complete list's, By to-do included (the owner's report: unpinning the last conversation turned the to-dos into another set of tabs).
-  A hidden tab still gets every `sessions_list` hint; the paged list's reads on them (each open section's rows, the groups' counts or catalog, a filtered list and its counts) wait while it is hidden, and one read each follows when it is shown again (`onShownHint`, `lib/shown-hints.ts`, #7167), as the open chat's row (`lib/runtime-session.ts`) already did. A shown tab follows every hint as before. The root list (`runtimeSessions`) still reads on each hint while hidden, because the tab title's "Needs you" count, the badges and the notifications (`lib/attention-signals.ts`) come from it.
+  A hidden tab still gets every `sessions_list` hint; the paged list's reads on them (each open section's rows, the groups' counts or catalog, a filtered list and its counts) wait while it is hidden, and one read each follows when it is shown again (`onShownHint`, `lib/shown-hints.ts`, #7167), as the open chat's row (`lib/runtime-session.ts`) already did. A shown tab follows every hint as before. The root lists still follow hints while hidden. On a hub with `sessions_agents_only`, Overview, the sidebar summary and the tab and Dock badges use the same scoped counts as the paged Agents list (`runtimeAgents`), even if the sidebar list is closed. Until scoped counts arrive they count the available Agent rows. Older hubs without the scoped feature keep their existing count source.
   The fallback keeps a complete copy of the collection, so pinned and grouped rows beyond the first page are included (`lib/complete-sessions.ts`, #3759): its first read takes complete pages (`GET /sessions?summary=0&limit=200`, following `next_cursor`), and each later read only `since` its revision (changed and removed rows). Complete pages are read again only after `409 revision_expired` (a hub restart), when the copy was released, or from a hub that answers the paging query with its whole legacy list. Before #3759 every hint read the whole list again (about 17 times a minute, hundreds of KB each). It refreshes on session invalidation/reconnect events, except a `sessions_list` hint whose `revision` the copy already holds,
   keeps the last complete result while loading and retries failed reads after five seconds. Consumers share a credential-scoped snapshot, request and cooldown; a one-second grace after the last unmount permits sidebar/Agents-page handoff, then releases everything. Reset or credential changes invalidate immediately. Other views keep their bounded transport.
   Normal invalidations coalesce into one trailing read no sooner than three seconds after the previous request finishes; new hints do not postpone that deadline. Initial reads and reconnects bypass the throttle, and quiet failure retries retain their five-second delay. A delta that changes nothing leaves the published snapshot as it is.
@@ -789,6 +789,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   launcher and thinking effort are sent only if changed this time (so values stored by unified model config are not overwritten, `docs/assistant/model-config.md`), and when the hub has unified model config there is a link to it.
 - **Inbox** (`/inbox`, `/inbox/<item>`, `src/views/inbox/`, `src/lib/inbox.ts`, `docs/assistant/inbox.md`; the list, its store and what the sidebar and the chat read are in `lib/inbox.ts`, on every first screen; what only the page uses (the words for mutes, rules, bulk actions and unread sources, the **Hand to AI** message, Feishu message parts and sends) is in `lib/inbox-page.ts` with its strings in the `lib-inbox-page` namespace, both loaded with the page, #8806): Lark, mail, cloud docs, Moments and connectors (GitHub, Telegram, Messages, extensions) in one list,
   in four sections: needs you / FYI (mark all seen) / folded (clear all) / done (collapsed, can be moved back), grouped by source or time with Select and Mark as Done (`docs/assistant/inbox.md` "Grouping and selection"); filters: all / Lark / each mail account / each connector with items | @me / DMs / groups / mail / Agent; search titles, senders, content, summaries and where the matter happens.
+  - **Done's Jump to** (#9282): its label is followed by the existing down `chevron` glyph (10 px, stroke 2.4), so the menu affordance is visible. It opens the same groups and counts; selecting a group keeps the existing unfolding, paging and scrolling behavior.
   - **Filtered empty list, loading and failed reads** (web usability audit items 15 and 84): when chips, a folder or the search leave nothing open, the list says so in a neutral empty state (the filter mark and "Nothing open matches these filters", or the search mark and "No matches") with **Clear filters** / **Clear search**, which clears the chips, folder and search; the green check and "All caught up" are only for an unfiltered list with nothing open, since the chips are kept on this device and a list left filtered opens filtered. **Clean up all** then names the filters without a count ("Lark · Mail") instead of "Nothing to do", and while the list loads or after a failed read it shows no scope at all. A failed read over waiting agents keeps its red line with its own **Retry** beside it (`InboxList.filtered-empty.test.tsx`).
   - **Keyboard** (audit items 71 and 74): **Select** and **Done** are one button that changes its label, so the focus stays on it; when selecting ends elsewhere (Esc on a row's tick, Mark as Done in the bar) the focus comes back to Select. On a narrow page, where the opened item takes the list's place, opening a row by keyboard moves the focus to the item's title (a heading that takes the focus, with the accent ring; the item's pane while it loads), Esc goes back to the list as ‹ does (not over a dialog or menu, nor in a text field, and not on a wide page where the list is beside the item), and ‹, Esc or the browser's Back puts the focus back on the row it was opened from. When that row has moved (**Done** in the item's header files it under Done), the focus goes to the row now in its place and the list stays where it was. A wide page, with the list beside the item, keeps the focus where it is both ways (`Inbox.keyboard.test.tsx`; the shared rule is `docs/design/DESIGN_SYSTEM.md` "3.5 Navigation"). **Clear filters** / **Clear search** hand the focus to the **All** chip, since the button goes with the empty state.
   - **Long lists** (audit item 34): a run of rows (a group's, or a section's without groups) mounts its first 20 rows at once and 20 more each time the page is idle until all are there (`Rows` in `InboxList.tsx`), so 300 notices no longer build some 7,000 elements before the Inbox shows. The opened item's row is there from the start and stays once it is, so the focus can come back to it. A returned view that puts its scroll position back (the browser's Back into the Inbox from another page, or to another item's entry) still mounts every row at once, as before, since the rows above the saved position must be there to restore it. `ui/use-clamped.ts` measures a clamped text when it mounts, when its fold, box or words change, not after every render; a caller whose text is a plain string passes it, so new words are measured before the page paints (the others are told by a `MutationObserver`). `e2e/inbox-keyboard-long-list.mjs` checks these in a browser.
@@ -1298,36 +1299,71 @@ the card over the first message. Persona with no main conversation yet: the new 
 to the original chat. In a sent bubble the block is a card at the top (`views/chat/ForwardCard.tsx`): the forward arrow,
 "Forwarded from Claude · chat", the computer and time, four lines; a click opens the original chat and brings the
 message into view, or shows the whole text when this page does not have that chat. A reader that does not know `forward`
-folds it like other contexts. There is no Share as Image on the web, so the dialog has no such row.
+folds it like other contexts. There is no Share as Image of one message on the web, so the dialog has no such row
+(picked messages have Export image, below).
 
-**Several at once** (#3838, as iOS; [the protocol](../protocol/protocol.md), "Forwarded messages"): opened for one
-message, Forward to's first row is **Select messages…**. It closes the dialog and hands the chat its picks
-(`lib/message-pick.ts`), the message Forward to was opened for already picked; `ChatView` holds them while it picks.
-Each message with a Forward then has a checkbox over it with a tick before it (`views/chat/Picking.tsx` `PickRow`), and a
-click anywhere on a message picks or unpicks it (its contents are inert; its menus and bars are off). A bar takes the
-composer's place (`PickBar`): **Cancel**, "2 selected" and **Forward 2**, off with none picked; Cancel or Escape
-leaves the chat as it was, the draft kept. At most 30: one more says "Up to 30 messages at a time". None of this is on
-the first screen: `Picking.tsx` comes with Forward to, which hands it to the chat (`views/chat/picking-parts.ts`) as it
-starts picking; not picking, a message is drawn as it always was. **Forward N** opens Forward to with them in the chat's
-order (not the order they were picked) as one card and no Select messages… row; picking a target puts one forward per
-message over its box, each cut at its share (`forwardLimit`: the smaller of 20,000 and 60,000 / N characters), and the
-photos of all of them up to the composer's limit. Forwards of one chat next to each other are one bar over the box
-(`ForwardGroupBar`: "2 forwarded messages · chat", a line each, the first three and "N more", the route, one × for all)
-and one card in the bubble (`ForwardGroupBlock`: a line each over two lines, each opening its original; past three,
-"N more"); another chat's forward or any other block starts a new one (`forwardRuns`). Both are a chunk of their own
+**Several at once** (#3838, #9469, as iOS; [the protocol](../protocol/protocol.md), "Forwarded messages"): the message
+menu's last row, **Select messages** (under a divider, with the check icon, as Telegram's menu ends in Select), or Forward
+to's first row, **Select messages…**, opened for one message, hands the chat its picks (`lib/message-pick.ts`) with that
+message already picked; `ChatView` holds them while it picks. The menu's row goes through Forward to's chunk without
+showing it (`ForwardBatch.now`), so the first screen carries only the row. Each message with a Forward then has a
+checkbox over it with a tick before it (`views/chat/Picking.tsx` `PickRow`), and a click anywhere on a message picks or
+unpicks it (its contents are inert; its menus and bars are off). A bar takes the composer's place (`PickBar`):
+**Cancel**, "2 selected", **Include questions** when it means something, then **Forward**, **Copy** and **Export image**,
+off with none picked; on a phone the actions are a row of their own, an icon over each word, as the iPhone draws them.
+Cancel or Escape leaves the chat as it was, the draft kept. At most 30 go, the questions brought counted: one more says
+"Up to 30 messages at a time". None of this is on the first screen: `Picking.tsx` comes with Forward to, which hands it
+to the chat (`views/chat/picking-parts.ts`) as it starts picking, and the picked message as a forward is
+`lib/forward-draft.ts`, which only the chunks that forward, copy or export load; not picking, a message is drawn as it
+always was. **Forward** opens Forward to with what goes in the chat's order (not the order they were picked) as one
+card and no Select messages… row; picking a target puts one forward per message over its box, each cut at its share
+(`forwardLimit`: the smaller of 20,000 and 60,000 / N characters), and the photos of all of them up to the composer's
+limit. Forwards of one chat next to each other are one bar over the box (`ForwardGroupBar`: "2 forwarded messages ·
+chat", a line each, the first three and "N more", the route, one × for all) and one card in the bubble
+(`ForwardGroupBlock`: a line each over two lines, each opening its original; past three, "N more"); another chat's
+forward or any other block starts a new one (`forwardRuns`). Both are a chunk of their own
 (`views/chat/ForwardGroup.tsx`): the bar comes after Forward to, which loads it, and until the card is in, the bubble
 says "2 forwarded messages" in a line of plain words. With no note: "Please look at the forwarded messages above.".
 
+**Include questions** (#9469, iOS `PickQuestions`; `lib/pick-export.ts` `pickQuestions`): a reply's questions are its
+turn's messages from your side (a turn that got no reply hands its questions on to the next reply), never a `/loop`
+tick, an injected line or another source's message. While a picked reply's question is not picked, the bar offers
+Include questions as a chip (`role="switch"`); on, Forward, Copy and Export image take those questions too, and their
+ticks are lighter (`bg-accent-tint`, "goes with its answer" to a screen reader). On by default; the last choice is kept
+in this browser (`persona.pickIncludeQuestions`, read when picking starts). Turning it on is refused when what goes would
+pass 30.
+
+**Copy** (#9469, `copiedText`): what goes as plain text, each whole (an item the chat holds cut is read with
+`GET …/items/{id}/full`, as a forward reads it) and cut at a forward's 20,000 characters, "Me:" or the author's name
+over it, a blank line between; picking ends once it is copied.
+
+**Export image** (#9469, `views/chat/ExportImage.tsx`): a dialog (a bottom sheet on a phone, its ✕ kept) with a preview
+of the picture, **Include questions** when it means something, **Title and date**, and **Copy image** (one page only,
+`ClipboardItem`) and **Download PNG** or **Download N** (`Persona-1.png`…). What goes is drawn off screen as the chat
+draws it, 390 px wide at the screen's 2× or 3×, light or dark as the page is, the text at the reading size: on top the
+chat's title, the day (or days) and who answers, never the computer or project; then your bubbles with your photos, and
+each reply under its author with the chat's own Markdown (formulas, diagrams, cards as the chat draws them; a code
+block's Copy and a diagram's tools left out); pictures laid out as a reply's (`ReplyImages`, #9474), all of them (no
+"+N"); at the foot of each page Persona's mark (the assistant's face, its name and "(Persona)") and "2/3" when there are
+several. Pages break between messages and cut one taller than a page, at most 16,000 px and 64 MB to decode each
+(`pagePlan`, `pageHeight`, as iOS `ExportPages`). The dialog is a chunk of its own, loaded on the first press of Export
+image, and the library that draws the page into a PNG, `html-to-image` (MIT), is imported only by it, so it loads only
+when Export image is pressed and is never on the first screen. Every web picture in it comes through the hub's
+remote-image route (`remoteImageURL`, `GET /api/v1/remote-image`); a hub without the route gets a tile naming the
+site, and a picture inside a line of text keeps the tap-to-load gate: nothing is read from another site.
+
 `src/lib/forward.test.ts` writes and reads every case of `spec/fixtures/forward` byte for byte, and
 `src/lib/forward-several.test.ts` those of `several.json` (the budget, the blocks and note, the cards they make);
-`src/views/chat/MessagePick.test.tsx` checks picking and its bar, `ForwardCard.group.test.tsx` and
+`src/views/chat/MessagePick.test.tsx` checks picking and its bar, the message menu's Select messages and Include
+questions, `src/lib/pick-export.test.ts` the questions, the 30, Copy's text and the pages, `ForwardCard.group.test.tsx` and
 `ForwardCard.pending.test.tsx` the group's bar and card. Browser check (wide and phone width, light and dark;
 `--shots` saves the menu, the dialog, the composer and the sent bubble, and the steps of several at once):
 `MOCK_ECHO_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py`, `npx vite` against it, then
 `node web/e2e/forward-message.mjs <web URL> --hub <mock hub URL> [--shots <dir>] [--channel msedge | --executable <chromium>]`.
 It forwards a reply to another computer's Agent (searching "Astro") and to Persona, checks the route line, the block and
 note the hub got (`GET /mock/sent_to`), the card in the sent bubble and that it opens the original, and New agent's card;
-then several at once: Select messages…, Cancel, none picked, your message and the reply forwarded together to the blog's
+then several at once: Select messages…, Cancel, the message menu's Select messages, none picked, your message and the
+reply forwarded together to the blog's
 Agent, the two blocks in the chat's order before the note, and the one card in the sent bubble.
 
 ### Saved prompts (#7329)
@@ -2041,6 +2077,20 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   are listed, then **Show all N models** (显示全部 N 个; N 件をすべて表示), which opens that provider's view. A row whose name
   is cut short shows the whole model ID as its second line (monospace, wrapping, two lines at most); on a touch screen,
   which has no tooltips, every row whose name is not its ID shows the ID there instead of the provider's name.
+- **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
+  runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
+  order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
+  thinking levels and release channels such as `-medium` or `-preview` are not tiers). The family is read from the
+  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
+  (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
+  families. Vendors come in the order the list first names them, other families by first mention. Within a family the
+  newest version leads (every row of it, a 1M-context one too) and says **Latest** (最新; 最新) when older ones exist; the
+  older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
+  opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
+  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
+  has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
+  per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
+  buried the newest of each family (the user's ask, 2026-11-17).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
@@ -2134,7 +2184,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   and a lazy-loaded status strip above the composer names the actual and configured launchers and opens the existing
   **New main chat…** dialog (#4662). The Main chat settings editor shows the same explanation from its provider draft.
   A same-kind default, an unloaded launcher list, an unknown default or a conversation pick shows no strip.
-- **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
+- **Tests**: `lib/model-families.test.ts` (families from IDs, order, folding, what never folds, the newest under a
+  search), `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
   send refusals are the switch's), `lib/assistant-panel.test.ts` (a Persona chat's setup and where it comes from, its pill,
@@ -2147,7 +2198,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   (the footer and context row), `ChatView.awaiting.test.tsx` (a refused switch keeps the words in the box), `ChatView.chrome-renders.test.tsx` (the
   pill on both composers),
   `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the mock's `MOCK_MODEL_PANEL_USAGE=1`
-  scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
+  scenario supplies synthetic weekly windows without reading a real account; `MOCK_MODEL_PICK=1 MOCK_MODEL_FAMILIES=1` gives a Persona chat long lists of several families (a Claude account with
+  every pinned version, Codex's GPT lines, a gateway mixing Claude, GPT, Gemini and others); `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
   the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own;
   its `gpt-5.5-codex` catalog row advertises Fast for the new-chat checks, while `gpt-5.5` is the negative control; a

@@ -274,7 +274,11 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 	}
 	if s, ok := m.session(sid); ok && (m.isAssistant(s) || isText && strings.TrimSpace(text) != "") {
 		// The manager also observes owner messages to Agents before delivery, so a task's decision default can pause.
-		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).UserSpoke(r.Context(), assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid})
+		spoke := assistantwire.UserSpokeParams{SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid}}
+		if !m.isAssistant(s) && isText && personSent(r.Context()) {
+			spoke.Text = text
+		}
+		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).userSpoke(r.Context(), spoke)
 	}
 	s, known := m.session(sid)
 	picked := "" // a model picked in the chat's chip that the message runs on (#1644)
