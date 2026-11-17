@@ -1,13 +1,16 @@
 import XCTest
 
 /// Handing a meeting to an Agent after it (#8852, docs/assistant/meeting-minutes.md "Handing a meeting to an Agent
-/// (#8852)") against the mock hub (`-showMeetingSample after-minutes`, its Agents on the MacBook): the page's ⋯ offers
+/// (#8852)") against the mock hub (`-showMeetingSample after-minutes`, minutes ready, its own Agents): the page's ⋯ offers
 /// Hand to Agent…, the sheet picks the latest Agent; a try the hub keeps as failed (`/mock/meeting_handoff` fail) says why
 /// in the sheet and, closed, on the page's row with Retry; Retry opens the sheet on the same Agent, and once it went the
 /// row says where with Open. zh-Hans. PERSONA_SHOTS=<dir> saves handoff-<appearance>-<name>.png.
 final class MeetingHandoffUITests: XCTestCase {
     @MainActor func testHandToAgentFailThenRetry() throws {
         let hub = try mockHub()
+        // A fresh start with minutes written once the meeting is complete: the hub has something to hand.
+        try post(hub, "/mock/recording_minutes", ["mode": "ready"])
+        addTeardownBlock { [self] in try? post(hub, "/mock/recording_minutes", ["mode": "pending"]) }
         try post(hub, "/mock/meeting_handoff", ["fail": "send_failed"])
         addTeardownBlock { [self] in try? post(hub, "/mock/meeting_handoff", ["fail": ""]) }
         let app = XCUIApplication()

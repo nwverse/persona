@@ -196,8 +196,9 @@ struct MeetingHandoffSheet: View {
                                 StatusDot(state: s.state, size: Theme.Size.dotL)
                                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                     Text(s.displayTitle).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                                    // Color.secondary, not .secondary: inside the row's Button the latter is the tint's.
                                     Text("\(model.machine(s.machineRef)?.title ?? s.machineID) · \(s.folderName)")
-                                        .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                                        .font(Theme.Font.caption).foregroundStyle(Color.secondary).lineLimit(1)
                                 }
                                 Spacer()
                                 if picked == s.key { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent) }
@@ -222,40 +223,41 @@ struct MeetingHandoffSheet: View {
                 } footer: {
                     Text("It gets this meeting's minutes: the summary, decisions, to-dos and open questions.")
                 }
-                if let problem {
-                    Section {
-                        Label(problem, systemImage: Theme.Icon.errorFilled)
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(Theme.danger)
-                            .accessibilityIdentifier("meeting-handoff-problem")
-                    }
-                }
             }
             .themedPage()
             .navigationTitle("Hand to Agent")
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { dismiss() }
             .safeAreaInset(edge: .bottom) {
-                Button { Task { await send() } } label: {
-                    HStack(spacing: Theme.Space.s) {
-                        if sending { ProgressView().tint(.white) }
-                        ThemedIcon(Theme.Icon.handToAI)
-                        Text("Hand to Agent")
+                VStack(spacing: Theme.Space.s) {
+                    // Why a try didn't go, over the button: in view however far the form is scrolled.
+                    if let problem {
+                        Label(problem, systemImage: Theme.Icon.errorFilled)
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.danger)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("meeting-handoff-problem")
                     }
-                    .font(Theme.Font.heading)
-                    .lineLimit(1)
-                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                    Button { Task { await send() } } label: {
+                        HStack(spacing: Theme.Space.s) {
+                            if sending { ProgressView().tint(.white) }
+                            ThemedIcon(Theme.Icon.handToAI)
+                            Text("Hand to Agent")
+                        }
+                        .font(Theme.Font.heading)
+                        .lineLimit(1)
+                        .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                    }
+                    .themedButton(prominent: true)
+                    .controlSize(.large)
+                    .disabled(sending || picked == nil)
+                    .accessibilityIdentifier("meeting-handoff-send")
                 }
-                .themedButton(prominent: true)
-                .controlSize(.large)
-                .disabled(sending || picked == nil)
                 .padding(.horizontal, Theme.Space.page)
                 .padding(.vertical, Theme.Space.s)
                 .background(Theme.pageBackground)
-                .accessibilityIdentifier("meeting-handoff-send")
             }
         }
-        .presentationDetents([.medium, .large])
         .onAppear {
             guard agents.isEmpty else { return }
             agents = Array(MeetingHandoff.agents(model).prefix(8))
