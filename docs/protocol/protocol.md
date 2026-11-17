@@ -2352,7 +2352,7 @@ and the card stays (except for `prompt_changed`). Details in `docs/integrations/
 ### Permission cards that need filling in
 
 A `permission` interaction can carry `fields: [{key,label,placeholder?,secret?,optional?}]`; the App fills in passwords with a secure input field and on approval sends
-`{"allow":true,"values":{"password":"…"}}`. If a required field is missing, the hub rejects this approval and keeps the card; secret fields in the interaction history are recorded only as `<redacted>`,
+`{"allow":true,"values":{"password":"…"}}`. If a required field is missing, the hub rejects this approval with 400 `bad_request` ("Fill in <field> first" in the request's language) and keeps the card; secret fields in the interaction history are recorded only as `<redacted>`,
 and the raw values only go to the waiting tool. The notification category for these cards is `INTERACTION_INPUT` (no quick allow button), and the list, the watch and Siri don't approve them directly.
 Values for keys the card does not declare are dropped when it is answered. Everyone else told of the answer gets the redacted copy: the `interaction.resolved` / `interaction.ended`
 events (the channels, the task feeds), and a second answer's `{"already":true,"resolution":…}`. Such an answer is never held for redelivery, and the hub's operation receipt for `resolve`

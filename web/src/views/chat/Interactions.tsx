@@ -593,6 +593,16 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   );
 }
 
+/** A permission card that declares fields (a password the tool needs, the hub's `fields`), other than the password
+ *  and hand-off cards, which have their own. */
+function hasFieldsForm(ix: Pick<Interaction, "kind" | "tool_name" | "fields">): boolean {
+  return ix.kind === "permission" && !!ix.fields?.length && !isSecretRun(ix) && !isSecretHandoff(ix);
+}
+
+// A chunk of its own, loaded with the first such card (they are rare): the first screen keeps only this entry
+// (startup-preload.ts FIRST_SCREEN_BUDGET).
+const FieldsPermissionCard = lazyPage(() => import("./FieldsPermissionCard").then((m) => m.FieldsPermissionCard));
+
 /** A terminal dialog's words under its question (#6638): at most six lines in view, the rest a scroll inside them. */
 const DETAIL_FOLD = "mb-2 max-h-[6lh] text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2";
 
@@ -615,7 +625,7 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
   return ix.folded_under && ix.folded_as === "worker" ? t("lib-elicitation.from_worker", { agent }) : t("lib-elicitation.from_subagent", { agent });
 }
 
-function PermissionBody({ ix }: { ix: Interaction }) {
+export function PermissionBody({ ix }: { ix: Interaction }) {
   const input = ix.tool_input ?? {};
   const hasInput = Object.keys(input).length > 0;
   const detail = permissionDetail(ix.tool_name, input);
@@ -1424,6 +1434,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
+    : hasFieldsForm(ix) ? <Suspense fallback={null}><FieldsPermissionCard key={ix.id} ix={ix} /></Suspense>
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);

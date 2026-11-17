@@ -822,6 +822,15 @@ export interface SessionChildren {
   sides_unread?: number;
 }
 
+/** One input of a permission card (the hub's proto.Field): a secret one is a masked field, an optional one may stay empty. */
+export interface InteractionField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  secret?: boolean;
+  optional?: boolean;
+}
+
 export interface Interaction {
   id: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
@@ -875,7 +884,7 @@ export interface Interaction {
   folded_side?: string;
   elicitation?: Elicitation;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
-  fields?: { key: string; label: string; secret?: boolean }[];
+  fields?: InteractionField[];
   /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
    *  answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again without it. */
   delegating?: boolean;
