@@ -3713,6 +3713,15 @@ KB = {
     "events": [],
 }
 KB_TAGS = {"projects": ["iOS", "前端", "个人"]}
+# A meeting both imported and recorded (#8872, docs/assistant/meeting-minutes.md): MOCK_IMPORTED_MEETING=1 lists a Lark
+# meeting named as the made-up weekly meeting (产品周会, -showMeetingSample) among the imported meetings, and a meeting
+# recording of that name names it as the hub's match does: meeting_id on its list item, imported_meeting and the link
+# resolved for it (its notes' URL, its connector) in its detail.
+IMPORTED_MEETING = os.environ.get("MOCK_IMPORTED_MEETING") == "1"
+IMPORTED_MEETING_ITEM = {"kind": "meetings", "id": "m_weekly", "name": "产品周会", "one_line": "定了 11 月 28 日发布，导出保留 4 MB 上限。",
+                         "importance": "P1", "relevance": 70, "updated": ago(days=2), "extra": "https://meetings.example.com/m_weekly",
+                         "source": "lark"}
+if IMPORTED_MEETING: KB["meetings"].append(IMPORTED_MEETING_ITEM)
 KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
 KB_TRASH = {}  # deleted projects by trash id (DELETE /api/v1/kb/projects/{id}, POST /api/v1/kb-trash/{id}/restore)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
@@ -7488,13 +7497,17 @@ def recordings_route_locked(h, method, p):
     entry = {"kind": "recordings", "id": rid, "name": name or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
              "recording_kind": kind}  # #8870
-    kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                        "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo")),
                        **({"name": name, "name_source": name_source} if name else {}),
                        **({"ai_title": name, "ai_title_from": "summary" if body.get("complete") else "live"} if name_source == "model" else {})},
               "summary": text, "segments": body.get("segments", [])}
+    if IMPORTED_MEETING and kind == "meeting" and name == IMPORTED_MEETING_ITEM["name"]:
+        entry["meeting_id"] = IMPORTED_MEETING_ITEM["id"]
+        detail["meta"]["imported_meeting"] = {k: IMPORTED_MEETING_ITEM[k] for k in ("kind", "id", "name")}
+        detail["links"] = [dict(IMPORTED_MEETING_ITEM)]
+    kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
     if kind == "meeting" and not silent:

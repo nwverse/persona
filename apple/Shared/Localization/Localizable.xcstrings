@@ -83762,6 +83762,28 @@
       },
       "extractionState" : "manual"
     },
+    "Lark Meeting Notes [Imported Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lark Meeting Notes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lark の議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "飞书会议纪要"
+          }
+        }
+      }
+    },
     "Lark Messages" : {
       "localizations" : {
         "en" : {
@@ -116775,6 +116797,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Original Meeting Notes [Imported Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original Meeting Notes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の議事録"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原会议纪要"
+          }
+        }
+      }
     },
     "Original [Image Editor 9a4f22]" : {
       "extractionState" : "manual",

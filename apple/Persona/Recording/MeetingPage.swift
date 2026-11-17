@@ -26,6 +26,7 @@ struct MeetingPage: View {
     var talks = false
 
     @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var capture = RecordingCapture.shared
@@ -63,6 +64,8 @@ struct MeetingPage: View {
     /// (worked out when the minutes change, P4) and the transcript's rows.
     @State private var afterPart: MeetingAfterPart?
     @State private var mapFull = false
+    /// The imported meeting's notes open in this app (#8872, CLAUDE.md「Links open inside the app」).
+    @State private var link: LinkTarget?
     @State private var minutesCards: RecordingMinutesCards.Summary?
     @State private var transcriptItems: [RecordingTimeline.Item] = []
     /// The composer's field has the keyboard: the top of the page steps aside as the bar's controls do, so the thread
@@ -567,6 +570,9 @@ struct MeetingPage: View {
         }
         .toolbar(.visible, for: .navigationBar)
         .fullScreenCover(isPresented: $mapFull) { mapPage(entry) }
+        .sheet(item: $link) { t in
+            if let key = model.assistantMain ?? model.assistantCurrent { LinkSheet(target: t, key: key) }
+        }
         // Typing goes to the conversation: it is where the answer comes.
         .onChange(of: writing) { _, now in if now { afterPart = .conversation } }
         .onChange(of: minutes.ready, initial: true) { _, ready in cardsFollow(ready, entry: entry) }
@@ -606,6 +612,13 @@ struct MeetingPage: View {
                     .accessibilityIdentifier("meeting-capture-error")
             }
             MeetingAfterHeader(entry: entry)
+            // A meeting imported from a connected app too (#8872): its own notes there, one tap away.
+            if let imported = minutes.imported {
+                KBImportedNotesButton(imported: imported) { url in
+                    if model.assistantMain ?? model.assistantCurrent != nil { link = LinkTarget(url: url) } else { openURL(url) }
+                }
+                .font(Theme.Font.secondaryMedium)
+            }
             if minutes.ready != nil || minutesShown {
                 MeetingSummaryCard(summary: minutes.ready.flatMap(MeetingAfterSummary.make)) { minutesLine }
             }
