@@ -12,7 +12,7 @@ import { navigate } from "../../lib/router";
 import { BYPASS_MODE } from "../../lib/session-actions";
 import { useStore } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
-import { Button, Dialog, toast } from "../../ui/atoms";
+import { Button, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { handOffAgents, Target } from "../inbox/HandOffTargets";
@@ -92,7 +92,8 @@ export function RecordingHandoffDialog({
   /** A failed hand-off tried again. */
   again?: MeetingHandoff | null;
   onClose: () => void;
-  /** The hub kept the try (sent, or failed and why): the page shows it at once and reads the detail again. */
+  /** The hub kept the try (sent, or failed and why): the page shows it at once (its row, the only word of it) and reads
+   *  the detail again. */
   onDone: (h: MeetingHandoff) => void;
 }) {
   const sessions = useStore((s) => s.sessions);
@@ -125,7 +126,7 @@ export function RecordingHandoffDialog({
         setBusy(false);
         return;
       }
-      toast(t("knowledge-handoff.sent", { name: title }), "ok");
+      // No toast: the page's row says where it went, with Open.
       onClose();
     } catch (e) {
       setError(callError(e));

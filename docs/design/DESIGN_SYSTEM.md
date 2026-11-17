@@ -2748,7 +2748,8 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   the Agent (the latest picked), an optional line, **Include the transcript** off by default, and one line on what the
   Agent gets. The latest hand-off is one row at the top of the page (`MeetingHandoffRow`, `RecordingHandoffRow`): where
   it went with **Open**, or why not with **Retry**, which opens the sheet again on that Agent (principles 3 and 7: the
-  try shows at once, and a failure can be tried again).
+  try shows at once, and a failure can be tried again). No toast besides: the row says it, and on the iPhone a toast
+  covered the meeting's title.
 - **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
   section, the current one checked), so it can change after the start (principle 3): the meeting page's menu, and in the live view a page menu beside **Hide** (the ellipsis, named
   "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into

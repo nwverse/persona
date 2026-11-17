@@ -122,7 +122,7 @@ describe("handing a meeting to an Agent on the web (#8852)", () => {
     const kept = handoff({ session_id: "board", title: "Data board", transcript: true });
     await reply({ handoff: kept });
     expect(done).toHaveBeenCalledWith(kept);
-    expect(toast).toHaveBeenCalledWith('Handed to "Data board"', "ok");
+    expect(toast).not.toHaveBeenCalled(); // the page's row says it, not a toast as well
     expect(closed).toHaveBeenCalledTimes(1);
   });
 

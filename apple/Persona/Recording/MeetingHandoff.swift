@@ -286,7 +286,7 @@ struct MeetingHandoffSheet: View {
                 return
             }
             Haptics.success()
-            AppModel.shared.toast = Toast(String(localized: "Handed to “\(kept.name)”"), style: .success)
+            // No toast: the page's row says where it went, with Open (a toast covered the meeting's title).
             dismiss()
         } catch {
             problem = MeetingHandoff.callError(error)

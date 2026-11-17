@@ -7,7 +7,6 @@
   "transcript": "Include the transcript",
   "gets": "It gets this meeting's minutes: the summary, decisions, to-dos and open questions.",
   "send": "Send",
-  "sent": "Handed to \"{name}\"",
   "running": "The meeting is still going. Hand it over once it ends.",
   "no_material": "This meeting has nothing to hand over yet: no minutes or transcript.",
   "problem_not_agent": "That's a Persona chat, not an Agent.",
