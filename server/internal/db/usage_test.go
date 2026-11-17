@@ -255,11 +255,11 @@ func TestUsageBackfill(t *testing.T) {
 func TestUsageByAgent(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	now := time.Now().Truncate(time.Hour)
-	old := now.Add(-8 * 24 * time.Hour)
+	old := now.Add(-9 * 24 * time.Hour) // hours no other test here uses
 	b := func(at time.Time, agent string, out int64) proto.UsageBucket {
 		return proto.UsageBucket{Minute: at.Unix(), Model: "m", Launcher: "l", Agent: agent, CacheRead: 10, Output: out, Requests: 1}
 	}
-	if err := d.PutUsage(ctx, "m1", []proto.UsageBucket{b(old.Add(5*time.Minute), "claude", 1), b(old.Add(5*time.Minute), "codex", 2),
+	if err := d.PutUsage(ctx, "agents", []proto.UsageBucket{b(old.Add(5*time.Minute), "claude", 1), b(old.Add(5*time.Minute), "codex", 2),
 		b(old.Add(6*time.Minute), "claude", 4), b(old.Add(5*time.Minute), "", 8)}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +269,7 @@ func TestUsageByAgent(t *testing.T) {
 	if _, err := d.RollupUsageHours(ctx, now.Add(-7*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	// UsageSpans sums every machine: the other tests' rows are elsewhere in time.
 	bounds := []time.Time{old, old.Add(time.Hour)}
 	spans, err := d.UsageSpans(ctx, bounds, UsageByAgent)
 	if err != nil {
@@ -283,11 +284,11 @@ func TestUsageByAgent(t *testing.T) {
 	// and once pi's hour is there it is not stored again.
 	h1, h2 := old, old.Add(time.Hour)
 	sent := []proto.UsageBucket{b(h1, "pi", 16), b(h1, "claude", 32), b(h2, "claude", 64)}
-	stored, err := d.PutUsageBackfill(ctx, "m1", []string{"claude", "codex", "pi"}, sent, h2, false)
+	stored, err := d.PutUsageBackfill(ctx, "agents", []string{"claude", "codex", "pi"}, sent, h2, false)
 	if err != nil || stored != 2 { // pi's h1 and Claude Code's h2
 		t.Fatalf("stored %d, %v", stored, err)
 	}
-	if stored, err = d.PutUsageBackfill(ctx, "m1", []string{"pi"}, sent[:1], h1, true); err != nil || stored != 0 {
+	if stored, err = d.PutUsageBackfill(ctx, "agents", []string{"pi"}, sent[:1], h1, true); err != nil || stored != 0 {
 		t.Fatalf("again: stored %d, %v", stored, err)
 	}
 	spans, err = d.UsageSpans(ctx, []time.Time{h1, h2, h2.Add(time.Hour)}, UsageByAgent)
@@ -298,11 +299,11 @@ func TestUsageByAgent(t *testing.T) {
 	if len(spans) != 5 || spans[3].Agent != "pi" || spans[3].Output != 16 || spans[4].Span != 1 || spans[4].Agent != "claude" || spans[4].Output != 64 {
 		t.Fatalf("after the backfill = %+v", spans)
 	}
-	legacy, err := d.UsageBackfill(ctx, "m1", "codex")
+	legacy, err := d.UsageBackfill(ctx, "agents", "codex")
 	if err != nil || legacy.Hours != 1 || !legacy.Through.Equal(h2) || !legacy.Done.IsZero() {
 		t.Fatalf("legacy record = %+v, %v", legacy, err)
 	}
-	pi, err := d.UsageBackfill(ctx, "m1", "pi")
+	pi, err := d.UsageBackfill(ctx, "agents", "pi")
 	if err != nil || pi.Hours != 1 || !pi.Through.Equal(h2) || pi.Done.IsZero() {
 		t.Fatalf("pi's record = %+v, %v", pi, err)
 	}
