@@ -404,6 +404,8 @@ final class AppModel {
     /// page drawn in that flush read the old conversation, watched it again and never heard of the new one, so New Chat
     /// left the conversation on screen (and #1749's switch did not redraw the page). Stored first, a page drawn while
     /// observers are told reads the new value. Otherwise as `@Observable`'s own setter: an equal value tells no one.
+    /// Dictate to Persona left this for the new assistant conversation's visible starter; it is never persisted.
+    var dictationRequest: DictationRequest?
     @ObservationIgnored private var currentStore: SessionKey?
     var assistantCurrent: SessionKey? {
         get {
@@ -413,6 +415,12 @@ final class AppModel {
         set {
             let old = currentStore
             currentStore = newValue
+            if newValue != old, newValue != nil {
+                #if DEBUG
+                if dictationRequest != nil { ShellTrace.shared.note("dictation request cleared by a conversation") }
+                #endif
+                dictationRequest = nil
+            }
             if newValue != old { withMutation(keyPath: \.assistantCurrent) {} }
             UserDefaults.standard.set(newValue?.path ?? "", forKey: "assistant.current")
             #if DEBUG
@@ -423,7 +431,30 @@ final class AppModel {
             #endif
         }
     }
+    /// Only the main assistant's new-conversation starter may take this exact request. Health leaves it for that page;
+    /// an existing conversation cancels it, and taking it before starting dictation makes failure one-shot too.
+    func takeDictationRequest(_ request: DictationRequest, uploadDest: String?) -> Bool {
+        #if DEBUG
+        ShellTrace.shared.note("dictation take match=\(dictationRequest == request) current=\(assistantCurrent != nil) health=\(uploadDest != nil)")
+        #endif
+        guard dictationRequest == request, uploadDest == nil else { return false }
+        guard assistantCurrent == nil else {
+            dictationRequest = nil
+            return false
+        }
+        dictationRequest = nil
+        return true
+    }
+
     var debugShowNewChat = false
+    /// Explicit New Chat navigation, including Dictate: older refreshes and first-message completions must not replace it.
+    @ObservationIgnored private(set) var assistantNewChat = 0
+    func noteNewAssistantChat() { assistantNewChat += 1 }
+    /// An async hub/manager refresh's fallback, only if no newer New Chat happened while it was away.
+    func selectAssistantMain(after generation: Int) {
+        guard generation == assistantNewChat, assistantCurrent == nil else { return }
+        assistantCurrent = assistantMain
+    }
     /// Bumped whenever another page hands the user to a Persona conversation (`askPersona`): the Persona tab goes back
     /// to its conversation even when it is the one already shown (a pushed Knowledge page would otherwise stay on top).
     var assistantReveal = 0
@@ -4192,10 +4223,11 @@ final class AppModel {
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
         personas.switchHub(api)
+        let newChat = assistantNewChat
         Task {
             await refreshAssistant()
             await personas.refresh(api)
-            if assistantCurrent == nil { assistantCurrent = assistantMain }
+            selectAssistantMain(after: newChat)
         }
         applyPersonaPalette()
     }
@@ -4224,10 +4256,11 @@ final class AppModel {
             if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
         }
+        let newChat = assistantNewChat
         Task {
             await refreshAssistant()
             readinessChanged()
-            if assistantCurrent == nil { assistantCurrent = assistantMain }
+            selectAssistantMain(after: newChat)
         }
     }
 
@@ -4790,6 +4823,7 @@ nonisolated struct TabBadges: Equatable, Sendable {
 /// Who shows the app's tabs, told of each new one as it is set (`AppModel.tabRouter`): the iPhone's shell.
 @MainActor protocol TabRouter: AnyObject {
     func route(_ tab: AppTab, in model: AppModel)
+    func show(_ page: ShellPage)
 }
 
 /// The Persona conversations of one group, newest first: open and archived (`AppModel.assistantConversations`), and

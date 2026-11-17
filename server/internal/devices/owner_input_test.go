@@ -1,11 +1,15 @@
 package devices
 
 import (
+	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Only the hub's human-input submission from a device marks a message as the owner's own; a caller's own owner_input
@@ -85,5 +89,71 @@ func TestOwnerInputParamsDropsEveryCase(t *testing.T) {
 				t.Errorf("%s with %s: %s", name, key, out)
 			}
 		}
+	}
+}
+
+func TestOwnerInputOnControlCalls(t *testing.T) {
+	d := newTestDevices(t)
+	n := &testNode{info: &proto.NodeInfo{Version: "test", Protocol: nodeproto.Version, Capabilities: nodeproto.Announced}}
+	connectedMachine(t, d, "box", n)
+	old := &testNode{}
+	connectedMachine(t, d, "old", old)
+	ctx := context.Background()
+	params := json.RawMessage(`{"session_id":"s","OWNER_INPUT":true,"owner_input":true}`)
+	stop := devicewire.NodeCall{MachineID: "box", Method: "session.interrupt", Params: params}
+	if _, err := d.Call(ctx, stop); err != nil {
+		t.Fatal(err)
+	}
+	stop.Caller = &devicewire.Caller{Kind: "device"}
+	stop.Submission = &devicewire.Submission{ID: "submission", Kind: "human_input"}
+	if _, err := d.Call(ctx, stop); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"session.send", "session.interrupt", "codex.answer"} {
+		if _, err := d.CallNode(ctx, "box", method, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.CallNode(devicewire.WithOwnerAnswer(ctx), "box", "codex.answer", params); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{nodeproto.OwnerInterrupt, nodeproto.OwnerCardAnswer} {
+		if _, err := d.Call(ctx, devicewire.NodeCall{MachineID: "box", Method: method, Params: params}); err != errReservedOwnerControl {
+			t.Errorf("forwarded reserved RPC %s: %v", method, err)
+		}
+		if _, err := d.CallNode(ctx, "box", method, params); err != errReservedOwnerControl {
+			t.Errorf("direct reserved RPC %s: %v", method, err)
+		}
+	}
+	stop.MachineID = "old"
+	if _, err := d.Call(ctx, stop); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CallNode(devicewire.WithOwnerAnswer(ctx), "old", "codex.answer", params); err != nil {
+		t.Fatal(err)
+	}
+	if len(old.seen("session.interrupt")) != 1 || len(old.seen("codex.answer")) != 1 ||
+		len(old.seen(nodeproto.OwnerInterrupt)) != 0 || len(old.seen(nodeproto.OwnerCardAnswer)) != 0 {
+		t.Error("older node did not receive legacy methods")
+	}
+	var got []string
+	n.mu.Lock()
+	for _, call := range n.calls {
+		if strings.HasPrefix(call, "session.send ") || strings.HasPrefix(call, "session.interrupt ") || strings.HasPrefix(call, "codex.answer ") ||
+			strings.HasPrefix(call, nodeproto.OwnerInterrupt+" ") || strings.HasPrefix(call, nodeproto.OwnerCardAnswer+" ") {
+			got = append(got, call)
+		}
+	}
+	n.mu.Unlock()
+	want := []string{
+		`session.interrupt {"session_id":"s"}`,
+		`session.owner_interrupt {"session_id":"s"}`,
+		`session.send {"session_id":"s"}`,
+		`session.interrupt {"session_id":"s"}`,
+		`codex.answer {"session_id":"s"}`,
+		`codex.owner_answer {"session_id":"s"}`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("node received %q, want %q", got, want)
 	}
 }
