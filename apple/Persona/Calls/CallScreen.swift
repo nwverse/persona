@@ -152,11 +152,21 @@ private struct CallScreenMiddle: View {
                 }
                 VStack(spacing: Theme.Space.l) {
                     VStack(spacing: Theme.Space.s) {
-                        // The assistant's name, as the system's call UI and Recents show it (`PersonaCall.name`).
-                        Text(verbatim: call.name)
+                        // Who the call is with (`PersonaCall.title`): the assistant's name for the main conversation, as
+                        // the system's call UI and Recents show it; another conversation's title, and whose it is under it
+                        // (#9887 one button).
+                        Text(verbatim: call.title)
                             .font(Theme.Font.display)
                             .lineLimit(1)
                             .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("call-title")
+                        if let detail = call.conversation?.detail {
+                            Text(verbatim: detail)
+                                .font(Theme.Font.secondary)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .accessibilityIdentifier("call-detail")
+                        }
                         CallStateLine(line: state.line)
                     }
                     CallCaptionLine(call: call)
@@ -189,7 +199,7 @@ private struct CallScreenAvatar: View {
         #else
         let sample = 0.0
         #endif
-        CallAvatar(look: CallAvatarLook.make(phase), assistant: call.assistant, level: { [levels = voice?.levels, speaking = phase == .speaking] in
+        CallAvatar(look: CallAvatarLook.make(phase), assistant: call.assistant, agent: call.conversation?.agent, level: { [levels = voice?.levels, speaking = phase == .speaking] in
             guard let levels else { return sample }
             return Double(speaking ? levels.output : levels.input)
         }, size: size, interrupt: phase == .speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
@@ -363,10 +373,16 @@ struct CallReturnPill: View {
             open()
         } label: {
             HStack(spacing: Theme.Space.s) {
-                // The assistant's face, still: the call screen's look, small (the call's own, never one chosen since).
-                CallAssistantFace(assistant: call.assistant, size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
+                // The assistant's face, still: the call screen's look, small (the call's own, never one chosen since); an
+                // Agent session's mark for a call to it (#9887 one button).
+                let side = Theme.Size.callBarAvatar * Theme.sizeScale(typeSize)
+                if let agent = call.conversation?.agent {
+                    CallAgentFace(agent: agent, size: side)
+                } else {
+                    CallAssistantFace(assistant: call.assistant, size: side)
+                }
                 HStack(spacing: Theme.Space.xs) {
-                    Text(verbatim: call.name)
+                    Text(verbatim: call.title)
                     Text(verbatim: "·") // i18n-ignore: a separator
                         .accessibilityHidden(true)
                     CallBarLine(line: state.line)

@@ -148,7 +148,7 @@ struct CallSourceTests {
     @Test func nothingInTheAppEndsALiveCallByItself() throws {
         let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
         let start = try #require(Self.body(entry, "private static func prepare("))
-        let own = try #require(start.range(of: "if calls.isOwnerCallConversation(key) {"))
+        let own = try #require(start.range(of: "case .showCall:"))
         let ask = try #require(start.range(of: "return .said(.endCallFirst(name, key: key))"))
         let begin = try #require(start.range(of: "VoiceCalls.shared.start("))
         #expect(own.lowerBound < ask.lowerBound && ask.lowerBound < begin.lowerBound)
@@ -157,7 +157,13 @@ struct CallSourceTests {
         let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
         #expect(strip.contains("refusal = .endCallFirst(name, key: call.key, again: true)"))
         let alert = try #require(Self.body(entry, "func voiceUnavailableAlert("))
-        #expect(alert.contains("Button(\"End Call and Start\", role: .destructive)") && alert.contains("Button(\"Cancel\", role: .cancel) {}"))
+        #expect(alert.contains("Button(proceed.label, role: .destructive)") && alert.contains("Button(\"Cancel\", role: .cancel) {}"))
+        // The phone icon on the iPhone (#9887 one button): its own call's conversation shows the call screen, another asks
+        // End and Call first, before anything is placed.
+        let call = try #require(start.range(of: "return .said(.callElsewhereFirst(name, key: key, target: callTitle(key, model: model)))"))
+        let placed = try #require(start.range(of: "await calls.callConversation(key, endingCall: endingCall)"))
+        #expect(call.lowerBound < placed.lowerBound && placed.lowerBound < ask.lowerBound)
+        #expect(start.contains("ownCall: calls.isOwnerCallConversation(key)"))
 
         let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift")
         for name in ["static func start()", "static func resume()"] {
@@ -193,7 +199,7 @@ struct CallSourceTests {
     /// The system call carries the assistant's name (#9290 follow-up): no literal handle left on the call's path.
     @Test func theSystemCallCarriesTheAssistantsName() throws {
         let system = try Self.lines("Persona/Calls/CallSystem.swift").joined(separator: "\n")
-        #expect(system.contains("case .generic: CallHandle(kind: .generic, value: name, displayName: name)"))
+        #expect(system.contains("case .generic: return CallHandle(kind: .generic, value: name, displayName: shown)"))
         #expect(system.contains("members: [Handle(type: .generic, value: name, displayName: title)]"))
         #expect(system.contains("iconTemplateImageData: icon") && system.contains("let icon = CallIcon.ready"))
         for path in ["Persona/Calls/CallSystem.swift", "Persona/Calls/CallScreen.swift", "Persona/Calls/OwnerCall.swift", "Persona/Calls/PersonaCalls.swift"] {
@@ -207,7 +213,8 @@ struct CallSourceTests {
     @Test func voiceChatIsRefusedDuringAnUrgentCall() throws {
         let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
         let start = try #require(Self.body(entry, "private static func prepare("))
-        #expect(start.contains("let calls = PersonaCalls.shared") && start.contains("if calls.urgentInProgress { return .said(PersonaCalls.urgentNote) }"))
+        #expect(start.contains("let calls = PersonaCalls.shared") && start.contains("switch choose(urgent: calls.urgentInProgress,")
+                && start.contains("case .urgentCall:\n            return .said(PersonaCalls.urgentNote)"))
         let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
         #expect(strip.contains("refusal = await VoiceCalls.shared.resume(") && strip.contains(".voiceUnavailableAlert($refusal"))
         let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift").joined(separator: "\n")

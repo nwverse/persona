@@ -822,10 +822,14 @@ struct ChatView: View {
         #endif
         // A different chat shown in place: its own cards decide whether another conversation needs you (#4348).
         .onChange(of: key) { _, _ in offeredNext = nil }
-        // Leaving the conversation ends the phone's voice call bound to it (docs/assistant/voice.md 6.5): another agent shown in
-        // place, the page gone, or hidden in the shell (`onTabVisibility`).
-        .onChange(of: key) { old, _ in VoiceCalls.shared.leave(old) }
-        .onTabVisibility(appear: {}, disappear: { [key] in VoiceCalls.shared.leave(key) })
+        // Leaving the conversation (another agent shown in place, the page gone, or hidden in the shell: `onTabVisibility`)
+        // leaves the phone's voice chat bound to it with the bar back to it at the top, and coming back takes the bar away
+        // (docs/assistant/voice.md 6.5; #9887 one button: it no longer ends there).
+        .onChange(of: key) { old, new in
+            VoiceCalls.shared.leave(old)
+            VoiceCalls.shared.returned(new)
+        }
+        .onTabVisibility(appear: { [key] in VoiceCalls.shared.returned(key) }, disappear: { [key] in VoiceCalls.shared.leave(key) })
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
         let activityMiddle = AnyView(activityTop)
@@ -5590,34 +5594,22 @@ struct Composer: View, Equatable {
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
     private var voiceCall: VoiceConversation? { VoiceCalls.shared.call(on: key) }
 
-    /// The composer's voice button (docs/assistant/voice.md 6.1): only where a call can start; the 「+」 menu's item stays and says why
-    /// not.
+    /// The composer's phone icon (docs/assistant/voice.md 6.1; #9887 one button: the one voice entry): only where a call
+    /// can start. On the iPhone it calls this conversation through the system; elsewhere it is the voice chat in the app
+    /// (`VoiceEntry.start`). Why a call could not be placed shows over the app (`PersonaCalls.refusal`).
     private var voiceEntry: (() -> Void)? {
         guard VoiceSupport.shared.availability(for: model.session(key), group: key.group).isAvailable else { return nil }
         return { startVoice() }
     }
 
-    private func startVoice() {
+    /// `inApp`: the voice chat in the app whatever the device (DEBUG `-openVoice`).
+    private func startVoice(inApp: Bool = false) {
         focused = false
-        voiceNote = VoiceEntry.start(key, model: model) { voiceNote = $0 }
+        voiceNote = VoiceEntry.start(key, model: model, inApp: inApp) { voiceNote = $0 }
     }
 
-    /// Call Persona in the 「+」 panel (#9290): Persona's main conversation only, on the iPhone and iPad (the system's calls);
-    /// Voice Chat beside it stays the chat's own voice. Why a call could not be placed shows over the app
-    /// (`PersonaCalls.refusal`, `personaCallCover`).
-    private var callPersonaEntry: (() -> Void)? {
-        #if os(iOS)
-        guard isMainAssistantChat, VoicePlatform.current == .phone else { return nil }
-        return {
-            focused = false
-            Task { [group = key.group] in await PersonaCalls.shared.callPersona(group: group, origin: .app) }
-        }
-        #else
-        return nil
-        #endif
-    }
-
-    /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
+    /// Voice Chat in the 「+」 menu of the composers with no phone icon (Apple Vision Pro's: the Mac has no call audio yet,
+    /// docs/assistant/voice.md 6.9). The iPhone's and the iPad's + have none: the phone icon is their one voice entry.
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
             Button { startVoice() } label: { Label("Voice Chat", systemImage: Theme.Icon.voiceChannel) }
@@ -6143,7 +6135,7 @@ struct Composer: View, Equatable {
             await declarations.refreshWhileActive(api: model.api(key.group))
         }
         // Voice (docs/assistant/voice.md 6.1): asks the hub about it, says why there is none, and the DEBUG switches (6.8).
-        .modifier(ComposerVoice(key: key, note: $voiceNote, active: phase == .active, offered: { voiceEntry != nil }, start: { startVoice() }))
+        .modifier(ComposerVoice(key: key, note: $voiceNote, active: phase == .active, offered: { voiceEntry != nil }, start: { startVoice(inApp: true) }))
         #if DEBUG
         .task { // `-showSampleQuotes YES`: a page's text and another session quoted over the box (#986, screenshots)
             guard UserDefaults.standard.bool(forKey: "showSampleQuotes") else { return }
@@ -6344,12 +6336,10 @@ struct Composer: View, Equatable {
 
     /// What + offers besides photos and files (#3225), one list for three places: the panel's More tab, the iPhone's touch
     /// and hold on +, and the iPad's + menu under Photos and Files. The most used first (the menu puts it nearest the
-    /// finger): calls, the camera and (Persona's main conversation) Meeting Recording, Mention, an Agent's Quick Commands,
-    /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
+    /// finger): the camera and (Persona's main conversation) Meeting Recording, Mention, an Agent's Quick Commands, then
+    /// extension prompts. No voice or call rows (#9887 one button): the composer's phone icon is the one voice entry. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
-        var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
-                                                call: callPersonaEntry,
-                                                camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+        var sections = AttachMoreSection.common(camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
                                                 // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.

@@ -7,8 +7,10 @@ import Foundation
 
 /// Who the call is with and what it is about.
 nonisolated enum CallKind: Equatable, Hashable, Sendable {
-    /// The owner calls Persona: the main conversation of the group's hub (empty: the hub selected when it started).
-    case owner(group: String)
+    /// The owner calls a conversation (#9887 one button): `key`, the conversation the phone icon was in (the main
+    /// conversation, another assistant conversation, an Agent session), or nil for the main conversation of the group's
+    /// hub, found as the call is placed (Recents, Siri, CarPlay; empty group: the hub selected when it started).
+    case owner(group: String, key: SessionKey? = nil)
     /// Persona's urgent call (`UrgentCallCenter`), by the manager's call id.
     case urgent(callID: String)
 

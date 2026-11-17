@@ -2,6 +2,37 @@
 import SwiftUI
 import UIKit
 
+/// The conversation a call talks in when it is not the main one (#9887 one button), as its pages show it, taken when the
+/// call is made: its title (what the call screen, the bar and the question elsewhere name), a line saying whose it is
+/// (the assistant's name for another assistant conversation; the agent and its machine for an Agent session), and an
+/// Agent session's mark (its runtime's, `AgentKind`). The main conversation has none: the assistant's look and name
+/// stand for it.
+nonisolated struct CallConversation: Equatable, Sendable {
+    var title: String
+    var detail: String?
+    /// An Agent session's mark; nil: an assistant conversation, which wears the assistant's look.
+    var agent: AgentKind?
+
+    /// `key`'s conversation as the app has it now; nil for the main conversation, or one the app does not list (it is
+    /// shown as the assistant's).
+    @MainActor static func make(_ key: SessionKey, model: AppModel) -> CallConversation? {
+        make(session: model.session(key), main: model.assistantMain == key, assistant: model.assistantShownName,
+             machine: model.machines.first { $0.id == key.machineID }?.name)
+    }
+
+    /// The same from what the app has: the session, whether it is the main conversation, the assistant's name and the
+    /// session's machine's.
+    static func make(session: Session?, main: Bool, assistant: String, machine: String?) -> CallConversation? {
+        guard !main, let session else { return nil }
+        if session.assistant {
+            let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return CallConversation(title: title.isEmpty ? assistant : title, detail: assistant, agent: nil)
+        }
+        let detail = [session.agentLabel, machine].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ") // i18n-ignore: a separator
+        return CallConversation(title: session.displayTitle, detail: detail.isEmpty ? nil : detail, agent: AgentKind(session))
+    }
+}
+
 /// Who a call is with, as its pages show them (#9290 follow-up): the assistant's look and its name, taken together when
 /// the call is made and once more just before the system's Start (a cold launch's look may have come by then:
 /// `PersonaCalls.place`), then fixed for the call, as the system's handle is. Choosing another avatar, or another hub's,
@@ -119,6 +150,8 @@ struct CallAvatar: View {
     let look: CallAvatarLook
     /// Who the call is with: the look and name it was made with (never the one chosen since).
     let assistant: CallAssistant
+    /// A call to an Agent session (#9887 one button): its mark in the assistant's place.
+    var agent: AgentKind?
     /// 0…1, the voice's level, read only on the ring's clock.
     var level: () -> Double = { 0 }
     /// The box at the default text size; it grows with the text like every `Theme.Size`.
@@ -136,8 +169,14 @@ struct CallAvatar: View {
         Button { if isButton { interrupt?() } } label: {
             ZStack {
                 CallAvatarRing(look: look, level: level, box: box)
-                CallAssistantDot(assistant: assistant, size: face, state: look.state, still: look.still)
-                    .opacity(look.ring == .ended ? PersonaFace.offlineOpacity : 1)
+                Group {
+                    if let agent {
+                        CallAgentFace(agent: agent, size: face)
+                    } else {
+                        CallAssistantDot(assistant: assistant, size: face, state: look.state, still: look.still)
+                    }
+                }
+                .opacity(look.ring == .ended ? PersonaFace.offlineOpacity : 1)
                 if let mark = look.mark {
                     CallAvatarMark(mark: mark, side: box * Theme.Size.callAvatarBadge)
                         .offset(x: face * 0.36, y: face * 0.36)
@@ -272,6 +311,29 @@ struct CallAssistantFace: View {
         } else {
             AssistantAvatar(size: size, design: look.avatarDesign, state: .idle)
         }
+    }
+}
+
+/// An Agent session's face on a call to it (#9887 one button): its runtime's mark (Claude's, Codex's, TRAE's; else the
+/// agent's letter), as the Agents page draws it (`AgentMark`), on the well's round disc, `size` points across (already
+/// scaled with the text). Holds still: the ring around it says what the call does.
+struct CallAgentFace: View {
+    let agent: AgentKind
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            if let brand = agent.brand {
+                BrandMark(brand, side: size * Theme.Size.callAgentMark, scaled: false).foregroundStyle(.secondary)
+            } else {
+                Text(verbatim: agent.letter)
+                    .font(.system(size: size * Theme.Size.callAgentMark * 0.7, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: size, height: size)
+        .background(Theme.Fill.well, in: .circle)
+        .accessibilityHidden(true)
     }
 }
 

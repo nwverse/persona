@@ -11,20 +11,22 @@ extension PersonaCalls {
     /// (one the system showed) or answered. DEBUG samples are pictures, not calls: they guard nothing.
     var guardsLive: Bool { calls.contains(where: \.counts) }
 
-    /// The assistant's name while a call to Persona is live (from "Calling…"), else nil: what a voice chat elsewhere asks
-    /// before it ends the call ("End the call with <name>…?"), and CarPlay's says it is on the phone.
+    /// Who a live call is with as the pages name it (from "Calling…"), else nil: the assistant's name for the main
+    /// conversation, the conversation's title for another (#9887 one button). What the question elsewhere says ("End the
+    /// call with <name>…?"), and CarPlay's that it is on the phone.
     var liveOwnerCallName: String? {
         guard let call = ownerCall, !call.sample, call.phase.isLive else { return nil }
-        return call.name
+        return call.title
     }
 
-    /// `key` is the conversation the live call to Persona talks in (its main conversation): its handset and Voice Chat
-    /// show the call screen instead of starting anything. While the call is still finding its conversation ("Calling…",
-    /// no engine yet), the selected hub's main conversation is taken for it.
+    /// `key` is the conversation the live call talks in: its phone icon shows the call screen instead of starting
+    /// anything. While the call is still finding the main conversation ("Calling…", no engine yet, from Recents or Siri),
+    /// the selected hub's main conversation is taken for it.
     func isOwnerCallConversation(_ key: SessionKey) -> Bool {
         guard let call = ownerCall, call.phase.isLive else { return false }
         if let owner = call.engine as? OwnerCallEngine { return owner.key == key }
-        guard case .owner(let group) = call.kind else { return false }
+        guard case .owner(let group, let target) = call.kind else { return false }
+        if let target { return target == key }
         return key.group == group && AppModel.shared.assistantMain == key
     }
 
@@ -35,7 +37,7 @@ extension PersonaCalls {
     func disconnectRefusal(groups: Set<String>?) -> String? {
         for call in calls where call.counts {
             if let groups, let group = callGroup(call), !groups.contains(group) { continue }
-            return String(localized: "On a call with \(call.name). End the call before disconnecting.")
+            return String(localized: "On a call with \(call.title). End the call before disconnecting.")
         }
         return nil
     }
@@ -44,8 +46,9 @@ extension PersonaCalls {
     /// finding it), an urgent call's ring's. Nil when not known yet.
     private func callGroup(_ call: PersonaCall) -> String? {
         switch call.kind {
-        case .owner(let group):
+        case .owner(let group, let key):
             if let owner = call.engine as? OwnerCallEngine { return owner.key.group }
+            if let key { return key.group }
             return group.isEmpty ? nil : group
         case .urgent:
             return call.urgentSession?.ring.group

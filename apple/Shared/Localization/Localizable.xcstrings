@@ -63433,6 +63433,29 @@
         }
       }
     },
+    "End and Call" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End and Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了して発信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束并呼叫"
+          }
+        }
+      }
+    },
     "End and Write the Minutes" : {
       "localizations" : {
         "en" : {
@@ -63542,6 +63565,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "先结束通话，再开始语音对话。"
+          }
+        }
+      }
+    },
+    "End the call with %@ and call %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the call with %1$@ and call %2$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ との通話を終了して「%2$@」に発信しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束与 %1$@ 的通话，改为呼叫「%2$@」？"
           }
         }
       }
@@ -135761,6 +135807,29 @@
       },
       "extractionState" : "manual"
     },
+    "Returns to the voice chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returns to the voice chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声チャットに戻ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到语音对话"
+          }
+        }
+      }
+    },
     "Review" : {
       "localizations" : {
         "en" : {
@@ -163009,6 +163078,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The call ends, and a new call starts with this conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The call ends, and a new call starts with this conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の通話が終了し、この会話に新しく発信します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前通话会结束，然后呼叫这个对话。"
+          }
+        }
+      }
     },
     "The call ends, and the voice chat starts in this conversation." : {
       "extractionState" : "manual",

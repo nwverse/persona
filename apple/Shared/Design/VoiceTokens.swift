@@ -58,6 +58,9 @@ nonisolated extension Theme.Size {
     static let callAvatarBadge: CGFloat = 0.24
     /// The assistant's small face in the bar back to a minimised call (`CallReturnBar`), and in the urgent call's header.
     static let callBarAvatar: CGFloat = 28
+    /// An Agent session's mark on a call to it (`CallAgentFace`, #9887 one button), as a share of its round disc (the
+    /// face's place on the call screen, the bar's small face).
+    static let callAgentMark: CGFloat = 0.5
     /// The system call UI's template icon (`CallIcon`): Apple's 40 points for a call app's icon, drawn at this scale.
     static let callIconTemplate: CGFloat = 40
     static let callIconTemplateScale: CGFloat = 3

@@ -135,6 +135,9 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     private(set) var activations = 0
     private(set) var deactivations = 0
     private(set) var heldNow = false
+    /// The phone's voice chat brought back after an interruption (#9887): how many times, and what the next one throws.
+    private(set) var resumes = 0
+    var resumeError: (any Error)?
     var onRunning: (@MainActor () -> Void)?
     var onStarting: (@MainActor () -> Void)?
 
@@ -163,6 +166,11 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     func reconfigure(_ format: VoiceAudioFormat) throws {
         self.format = format
         reconfigured.append(format)
+    }
+
+    func resume() throws {
+        resumes += 1
+        if let resumeError { throw resumeError }
     }
 
     func play(_ pcm: Data) { played.append(pcm) }

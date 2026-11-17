@@ -23,16 +23,30 @@ extension VoiceSupport {
         return session.assistant ? model.persona.name : session.agentLabel
     }
 
-    /// Starts a call bound to `key` where the page offers one; otherwise what to say about it. Not while Persona's
-    /// urgent call rings or is on (#9290): its audio is the system's. While a call to Persona is on (#9290 follow-up:
-    /// nothing in the app ends it by itself): in its own conversation the call screen comes up instead (it is the same
-    /// conversation); elsewhere the user is asked first ("End the call with … and start a voice chat here?",
-    /// `VoiceUnavailableNote.endCallFirst`), and `endingCall` is their yes. What can be said at once is returned; why
-    /// the start was refused after its wait (an urgent call rang while the call to Persona let its audio go, a call to
-    /// Persona came meanwhile) goes to `refused`, once the start has run (`begin`).
-    @discardableResult static func start(_ key: SessionKey, model: AppModel, endingCall: Bool = false,
+    /// The phone icon places a system call to its conversation on the iPhone (#9887 one button: the one voice entry, the
+    /// system picks the kind); the iPad and Apple Vision Pro have the voice chat in the app (the Mac and the watch have
+    /// no voice).
+    static var placesSystemCall: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
+    /// The composer's phone icon in `key`'s conversation (#9887 one button): on the iPhone a system call to it
+    /// (`PersonaCalls.callConversation`), elsewhere the voice chat in the app; otherwise what to say about it. Not while
+    /// Persona's urgent call rings or is on (#9290): its audio is the system's. While a system call is on (#9290
+    /// follow-up: nothing in the app ends it by itself): in its own conversation the call screen comes up instead (it is
+    /// the same conversation); elsewhere the user is asked first ("End the call with … and call …?",
+    /// `VoiceUnavailableNote.callElsewhereFirst`, or "… and start a voice chat here?" where the icon is the voice chat:
+    /// `endCallFirst`), and `endingCall` is their yes. `inApp`: the voice chat in the app whatever the device (DEBUG
+    /// `-openVoice`). What can be said at once is returned; why the start was refused after its wait (an urgent call rang
+    /// while the system call let its audio go, a system call came meanwhile) goes to `refused`, once the start has run
+    /// (`begin`).
+    @discardableResult static func start(_ key: SessionKey, model: AppModel, endingCall: Bool = false, inApp: Bool = false,
                                          refused: @escaping @MainActor (VoiceUnavailableNote) -> Void) -> VoiceUnavailableNote? {
-        switch prepare(key, model: model, endingCall: endingCall) {
+        switch prepare(key, model: model, endingCall: endingCall, inApp: inApp) {
         case .said(let note): return note
         case .ready(let begin):
             Task { if let why = await begin() { refused(why) } }
@@ -41,12 +55,21 @@ extension VoiceSupport {
     }
 
     /// `start`, awaited: what to say, at once or after the start ran (VoiceCalls' own refusal after its hand-off), or nil
-    /// when the voice chat started, or the call screen came up instead.
+    /// when the voice chat or the system call started, or the call screen came up instead.
     static func begin(_ key: SessionKey, model: AppModel, endingCall: Bool = false) async -> VoiceUnavailableNote? {
-        switch prepare(key, model: model, endingCall: endingCall) {
+        switch prepare(key, model: model, endingCall: endingCall, inApp: false) {
         case .said(let note): return note
         case .ready(let begin): return await begin()
         }
+    }
+
+    /// What the page calls `key`'s conversation in the question before a call to it (#9887): the assistant's name for
+    /// the main conversation, else its title.
+    static func callTitle(_ key: SessionKey, model: AppModel) -> String {
+        #if os(iOS)
+        if let conversation = CallConversation.make(key, model: model) { return conversation.title }
+        #endif
+        return model.assistantShownName
     }
 
     /// What a start does: says something at once (nil: nothing to say, the call screen came up), or is ready to begin
@@ -56,15 +79,56 @@ extension VoiceSupport {
         case ready(@MainActor () async -> VoiceUnavailableNote?)
     }
 
-    private static func prepare(_ key: SessionKey, model: AppModel, endingCall: Bool) -> Prepared {
+    /// What the phone icon does in a conversation, from where things are (pure, for the tests; #9887 one button).
+    nonisolated enum Choice: Equatable, Sendable {
+        /// Persona's urgent call rings or is on: refused.
+        case urgentCall
+        /// A system call is on with this conversation: its call screen.
+        case showCall
+        /// A system call is on with another conversation (`name`): the question first.
+        case ask(name: String)
+        /// A system call to this conversation (the iPhone).
+        case systemCall
+        /// The voice chat in the app (the iPad, Apple Vision Pro, DEBUG `-openVoice`); with a system call on elsewhere it
+        /// asks first (`endCallFirst`), as before.
+        case inApp
+    }
+
+    nonisolated static func choose(urgent: Bool, ownCall: Bool, liveCall: String?, endingCall: Bool, systemCalls: Bool) -> Choice {
+        if urgent { return .urgentCall }
+        if ownCall { return .showCall }
+        guard systemCalls else { return .inApp }
+        if !endingCall, let liveCall { return .ask(name: liveCall) }
+        return .systemCall
+    }
+
+    private static func prepare(_ key: SessionKey, model: AppModel, endingCall: Bool, inApp: Bool) -> Prepared {
         #if os(iOS)
         let calls = PersonaCalls.shared
-        if calls.urgentInProgress { return .said(PersonaCalls.urgentNote) }
-        if calls.isOwnerCallConversation(key) {
+        switch choose(urgent: calls.urgentInProgress, ownCall: calls.isOwnerCallConversation(key), liveCall: calls.liveOwnerCallName,
+                      endingCall: endingCall, systemCalls: !inApp && placesSystemCall) {
+        case .urgentCall:
+            return .said(PersonaCalls.urgentNote)
+        case .showCall:
             calls.present()
             return .said(nil)
+        case .ask(let name):
+            return .said(.callElsewhereFirst(name, key: key, target: callTitle(key, model: model)))
+        case .systemCall:
+            // The same rules as the voice chat's decide whether this conversation can be called; the call itself asks
+            // again once the hub answered (`PersonaCalls.callConversation`).
+            let availability = VoiceSupport.shared.availability(for: model.session(key), group: key.group)
+            guard availability.isAvailable else {
+                return .said(VoiceUnavailableNote.make(availability, extensionID: VoiceSupport.shared.voiceExtensionID(group: key.group)))
+            }
+            Haptics.tap()
+            return .ready {
+                await calls.callConversation(key, endingCall: endingCall)
+                return nil
+            }
+        case .inApp:
+            if !endingCall, let name = calls.liveOwnerCallName { return .said(.endCallFirst(name, key: key)) }
         }
-        if !endingCall, let name = calls.liveOwnerCallName { return .said(.endCallFirst(name, key: key)) }
         #endif
         let availability = VoiceSupport.shared.availability(for: model.session(key), group: key.group)
         guard case .available(let id) = availability else {
@@ -88,6 +152,7 @@ extension VoiceSupport {
         switch note.proceed {
         case .startVoice(let key): return await begin(key, model: model, endingCall: true)
         case .resumeVoice(let key): return await VoiceCalls.shared.resume(key, endingCall: true)
+        case .callConversation(let key): return await begin(key, model: model, endingCall: true)
         case nil: return nil
         }
     }
@@ -118,8 +183,8 @@ extension View {
     func voiceUnavailableAlert(_ note: Binding<VoiceUnavailableNote?>, model: AppModel) -> some View {
         alert(note.wrappedValue?.title ?? "", isPresented: Binding(get: { note.wrappedValue != nil }, set: { if !$0 { note.wrappedValue = nil } }),
               presenting: note.wrappedValue) { shown in
-            if shown.proceed != nil {
-                Button("End Call and Start", role: .destructive) {
+            if let proceed = shown.proceed {
+                Button(proceed.label, role: .destructive) {
                     Task {
                         // A reason it still cannot (the hub went meanwhile) comes once this alert has gone.
                         guard let why = await VoiceEntry.proceed(shown, model: model) else { return }
@@ -170,10 +235,11 @@ struct VoiceEndedStrip: View {
                     Button {
                         Haptics.tap()
                         #if os(iOS)
-                        // A system call that ended is not picked up again: Persona is called again (a new system call).
+                        // A system call that ended is not picked up again: its conversation is called again (a new
+                        // system call, #9887 one button).
                         if call.surface == .call {
-                            let group = call.key.group
-                            Task { await PersonaCalls.shared.callPersona(group: group, origin: .app) }
+                            let key = call.key
+                            Task { await PersonaCalls.shared.callConversation(key) }
                             return
                         }
                         #endif

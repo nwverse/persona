@@ -269,8 +269,9 @@ struct VoiceDeps {
             if surface == .call, oldValue != muted, !applyingCallMute { deps.callEvents?(.muted(muted)) }
         }
     }
-    /// A system call on hold (#9290: the system paused it, or its audio was interrupted): the microphone sends silence,
-    /// the voice is dropped and nothing plays, the quiet minutes stop counting. Only `PersonaCalls` sets it.
+    /// On hold: a system call the system paused or whose audio was interrupted (#9290, `PersonaCalls` sets it), or the
+    /// phone's voice chat paused by an interruption until it may go on (#9887). The microphone sends silence, the voice is
+    /// dropped and nothing plays, the quiet minutes stop counting, and an extension that takes `hold` hears it.
     private(set) var held = false
     /// When the call first connected (its first `ready`): what its duration counts from.
     private(set) var connectedAt: Date?
@@ -326,6 +327,13 @@ struct VoiceDeps {
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var applyingCallMute = false
+    /// The phone's voice chat is paused by an interruption (a phone call, Siri, another app's audio), until its end says
+    /// it may go on (#9887).
+    @ObservationIgnored private(set) var pausedByInterruption = false
+    /// The voice's levels reach `levels` (the orb's): not while the app is in the background, where nobody sees them.
+    @ObservationIgnored private var levelsShown = true
+    /// Told once it ended, after everything went (`VoiceCalls`: the background tunnels of its group may close).
+    @ObservationIgnored var onEnded: (@MainActor (VoiceEnd) -> Void)?
 
     init(key: SessionKey, extensionID: String, surface: VoiceSurface, recent: [VoiceLine] = [], meeting: VoiceMeeting? = nil,
          deps: VoiceDeps) {
@@ -367,6 +375,7 @@ struct VoiceDeps {
         }
         uplink = VoiceUplink(gated: meeting != nil)
         uplink.isMuted = muted || held
+        uplink.levelsPaused = !levelsShown
         uplink.onLevel { @Sendable [weak self] level in
             Task { @MainActor in
                 guard let self, !self.phase.isEnded else { return }
@@ -439,8 +448,19 @@ struct VoiceDeps {
         levels.reset()
         if speaking { speaking = false }
         if held { held = false }
+        pausedByInterruption = false
         phase = .ended(reason)
         deps.callEvents?(.ended(reason))
+        onEnded?(reason)
+    }
+
+    /// Whether the voice's levels reach the orb: off in the background (nothing sees them there, and each is a hop to
+    /// the main actor 20 times a second), on again in front.
+    func showsLevels(_ on: Bool) {
+        guard levelsShown != on else { return }
+        levelsShown = on
+        uplink.levelsPaused = !on
+        if !on { levels.reset() }
     }
 
     private func end(_ reason: VoiceEnd, epoch: Int) {
@@ -833,12 +853,33 @@ struct VoiceDeps {
             if on { lastActivity = deps.clock.now }
             refreshPhase()
         case .outputLevel(let level):
-            levels.set(output: level)
+            if levelsShown { levels.set(output: level) }
         case .interrupted:
-            // A system call holds instead: its manager hears it (#9290).
-            if surface == .call { deps.callEvents?(.interrupted) } else { end(.interrupted) }
+            if surface == .call {
+                // A system call holds instead: its manager hears it (#9290).
+                deps.callEvents?(.interrupted)
+            } else if surface == .phone, meeting == nil {
+                // The phone's voice chat pauses (#9887): on hold until the interruption is over.
+                pausedByInterruption = true
+                setHeld(true)
+            } else {
+                end(.interrupted)
+            }
         case .interruptionEnded(let resume):
-            if surface == .call { deps.callEvents?(.interruptionEnded(shouldResume: resume)) }
+            if surface == .call {
+                deps.callEvents?(.interruptionEnded(shouldResume: resume))
+            } else if pausedByInterruption {
+                pausedByInterruption = false
+                // Only when the system says the audio may go on, and the session comes back; else it ends as before, with
+                // Continue.
+                guard resume else { return end(.interrupted) }
+                do {
+                    try audio?.resume()
+                } catch {
+                    return end(.interrupted)
+                }
+                setHeld(false)
+            }
         case .reset:
             end(.audioReset)
         case .failed:

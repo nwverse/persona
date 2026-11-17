@@ -20,11 +20,12 @@ nonisolated enum CallWindowMode: Equatable, Sendable {
 
     /// What the window shows, from the call manager's state: the call screen while it is presented (not under an
     /// answered urgent call's page, which goes over the app instead), a refusal's alert, the bar while a call to Persona
-    /// is live and minimised.
-    @MainActor static func make(presented: Bool, owner: PersonaCall?, refusal: Bool, urgentUp: Bool) -> CallWindowMode {
+    /// is live and minimised, or while the phone's voice chat is on away from its page (`voiceAway`, #9887 one button).
+    @MainActor static func make(presented: Bool, owner: PersonaCall?, refusal: Bool, urgentUp: Bool, voiceAway: Bool = false) -> CallWindowMode {
         if presented, owner != nil, !urgentUp { return .screen }
         if refusal { return .refusal }
         if let owner, owner.phase.isLive, !urgentUp { return .bar }
+        if voiceAway, !urgentUp { return .bar }
         return .none
     }
 }
@@ -350,6 +351,14 @@ struct CallWindowRoot: View {
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.top, Theme.Space.xs)
                     .transition(.opacity)
+            } else if mode == .bar, let chat = calls.awayVoiceChat {
+                // The phone's voice chat away from its page (#9887 one button): back to its conversation.
+                VoiceReturnPill(chat: chat, model: model) { calls.returnToVoiceChat(chat) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { state.barFrame = $0 } // perf-ok: the bar's frame, reported only when it changes, is the window's touch area
+                .onDisappear { state.barFrame = .null }
+                .padding(.horizontal, Theme.Space.page)
+                .padding(.top, Theme.Space.xs)
+                .transition(.opacity)
             }
             if mode == .screen, let call = calls.ownerCall {
                 CallScreen(call: call)
@@ -410,7 +419,8 @@ struct PersonaCallCover: ViewModifier {
         content
             .background {
                 CallWindowHook(mode: CallWindowMode.make(presented: calls.presented, owner: calls.ownerCall,
-                                                         refusal: calls.refusal != nil, urgentUp: urgent.session != nil))
+                                                         refusal: calls.refusal != nil, urgentUp: urgent.session != nil,
+                                                         voiceAway: calls.awayVoiceChat != nil))
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { away = true }

@@ -88,15 +88,16 @@ struct CallScreenTests {
         #expect(made == 0 && !calls.systemMade)
     }
 
-    /// The + panel's capture rows: Call Persona right after Voice Chat, and not there where the page offers none (an
-    /// Agent's chat, another assistant conversation).
-    @Test func callPersonaSitsRightAfterVoiceChat() throws {
-        let rows = AttachMoreSection.common(voice: {}, call: {}, camera: {}, glasses: nil, mention: {})
+    /// The + panel (and the iPad's + menu, the iPhone's touch and hold) has no Voice Chat or Call Persona rows any more
+    /// (#9887 one button): the composer's phone icon is the one voice entry. The camera leads its rows.
+    @Test func thePlusHasNoVoiceOrCallRows() throws {
+        let rows = AttachMoreSection.common(camera: {}, glasses: nil, meeting: {}, mention: {}, context: { _ in })
+        let ids = rows.flatMap(\.rows).map(\.id)
+        #expect(!ids.contains("composer-menu-voice") && !ids.contains("composer-menu-call"))
         let capture = try #require(rows.first { $0.id == "capture" })
-        #expect(capture.rows.map(\.id).prefix(3) == ["composer-menu-voice", "composer-menu-call", "composer-menu-camera"])
-        #expect(capture.rows[1].symbol == Theme.Icon.callPersona && capture.rows[1].symbol != capture.rows[0].symbol)
-        let agent = AttachMoreSection.common(voice: {}, camera: {}, glasses: nil, mention: {})
-        #expect(agent.flatMap(\.rows).allSatisfy { $0.id != "composer-menu-call" })
+        #expect(capture.rows.first?.id == "composer-menu-camera")
+        let chat = try Self.code("Persona/Views/Chat/ChatView.swift")
+        #expect(!chat.contains("callPersonaEntry") && !chat.contains("AttachMoreSection.common(voice:"))
     }
 
     /// Call Persona is one glyph wherever it is offered (#9290): the + panel's (above), the App Shortcut's (a literal
@@ -258,14 +259,15 @@ struct CallScreenTests {
         }
     }
 
-    /// A system call's voice bar hangs up, mutes and expands through `PersonaCalls`; its ended line calls Persona again.
+    /// A system call's voice bar hangs up, mutes and expands through `PersonaCalls`; its ended line calls its conversation
+    /// again (#9887).
     @Test func aSystemCallsBarAndEndedLineGoThroughPersonaCalls() throws {
         let bar = try Self.code("Persona/Views/Voice/VoiceBar.swift")
         #expect(bar.contains("if call.surface == .call { return PersonaCalls.shared.setMuted(!call.muted) }"))
         #expect(bar.contains("if call.surface == .call { return PersonaCalls.shared.hangUp() }"))
         #expect(bar.contains("PersonaCalls.shared.present()"))
         let strip = try Self.code("Persona/Views/Voice/VoiceEntry.swift")
-        #expect(strip.contains("PersonaCalls.shared.callPersona(group: group, origin: .app)"))
+        #expect(strip.contains("Task { await PersonaCalls.shared.callConversation(key) }"))
     }
 
     /// Urgent calls start on the earpiece as calls to Persona do (owner decision 2026-11-17): one call category for both

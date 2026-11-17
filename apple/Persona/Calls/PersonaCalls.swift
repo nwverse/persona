@@ -14,12 +14,22 @@ import os
     /// before the system's Start), then fixed for the call (`CallAssistant`).
     let assistant: CallAssistant
     /// The assistant's name as the call carries it (`CallHandle.name`): what the system's call UI, the Lock Screen and
-    /// Recents show, and what the call screen and the bar say under its look.
+    /// Recents show.
     var name: String {
         #if DEBUG
         if let sampleName { return sampleName }
         #endif
         return assistant.name
+    }
+    /// The conversation the call talks in when it is not the main one (#9887 one button): its title, whose it is and its
+    /// mark, for the pages. Fixed when the call is made.
+    var conversation: CallConversation?
+    /// Who the pages say the call is with: the conversation's title, or the assistant's name for the main conversation.
+    var title: String {
+        #if DEBUG
+        if let sampleName { return sampleName }
+        #endif
+        return conversation?.title ?? assistant.name
     }
     private(set) var phase: CallPhase
     private(set) var muted = false
@@ -217,6 +227,15 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     }
     /// A call to Persona is on.
     var ownerInProgress: Bool { calls.contains { !$0.kind.isUrgent && $0.phase.isLive } }
+    /// The phone's voice chat on away from its page (#9887 one button: the fallback where a system call can't be used):
+    /// the call's window shows the bar back to it.
+    var awayVoiceChat: VoiceConversation? { voiceCalls.awayChat }
+
+    /// The bar back to the phone's voice chat tapped: its conversation opens, and the bar goes.
+    func returnToVoiceChat(_ chat: VoiceConversation) {
+        AppModel.shared.open(chat.key)
+        voiceCalls.returned(chat.key)
+    }
 
     func call(_ id: UUID) -> PersonaCall? { calls.first { $0.id == id } }
     /// The urgent call the hub knows as `callID` (its page's header shows who is calling).

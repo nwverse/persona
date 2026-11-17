@@ -7,15 +7,33 @@ import UIKit
 /// The app's voice call: at most one at a time, whichever page or surface started it (docs/assistant/voice.md 6.3). ChatView only
 /// asks `isBound(to:)`; the bar and the thread's tail read `current` themselves.
 ///
-/// Rules (docs/assistant/voice.md 6.5): a new call ends the one before; the app going to the background ends a call started from
-/// the phone, never one started from the car or a system call to Persona (#9290, `PersonaCalls` runs it); leaving the
-/// page ends the phone's call bound to it. Starting a recording or dictation, a phone call, three failed reconnects or
-/// ten idle minutes end it from inside (`VoiceConversation`; a system call holds through a phone call instead).
+/// Rules (docs/assistant/voice.md 6.5): a new call ends the one before. On iOS the phone's voice chat (the fallback where
+/// a system call can't be used: the iPad, a refused Start; #9887 one button) goes on when the app goes to the background
+/// or the phone locks, and leaving its page leaves it with the bar back to it at the top (`away`), as a system call to
+/// Persona does (#9290, `PersonaCalls` runs that one); in the background only its audio and socket work (the voice's
+/// levels stop). On Apple Vision Pro the background and leaving the page end it, as before. Starting a recording or
+/// dictation, three failed reconnects or ten idle minutes end it from inside (`VoiceConversation`); an interruption (a
+/// phone call) pauses it, and it goes on when the system says it may (a system call holds through it instead).
 @MainActor @Observable final class VoiceCalls {
     static let shared = VoiceCalls(watchesApp: true)
 
     /// The call, live or ended. An ended one stays (「语音已结束 · 继续」) until its page goes, unless the user ended it.
     private(set) var current: VoiceConversation?
+    /// The phone's voice chat is on and its page is not (#9887): the bar back to it shows at the top (`CallWindow`).
+    private(set) var away = false
+
+    /// The phone's voice chat goes on away from its page and in the background (iOS; on Apple Vision Pro it ends there,
+    /// with no bar to come back by).
+    nonisolated static var keepsChatAway: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// The app is in the background: a call's levels (the orb's, 20 a second) stop until it is back.
+    @ObservationIgnored private(set) var inBackground = false
 
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// Persona's urgent call rings or is on (#9290): no voice chat starts or is picked up again under it, from any
@@ -33,12 +51,21 @@ import UIKit
 
     /// `watchesApp`: end the phone's call when the app goes to the background (the shared one; the tests drive
     /// `appDidEnterBackground` themselves).
+    /// The app's own (`shared`): it watches the app's lifecycle, and a phone's voice chat that ends lets its group's
+    /// background tunnels go (`AppModel.callEnded`).
+    @ObservationIgnored private let watchesApp: Bool
+
     init(watchesApp: Bool = false) {
+        self.watchesApp = watchesApp
         #if os(iOS) || os(visionOS)
         guard watchesApp else { return }
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
                                                                 queue: .main) { @Sendable [weak self] _ in
             MainActor.assumeIsolated { self?.appDidEnterBackground() }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil,
+                                                                queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.appWillEnterForeground() }
         })
         #endif
     }
@@ -65,6 +92,11 @@ import UIKit
         }
         let call = VoiceConversation(key: key, extensionID: extensionID, surface: surface, recent: recent, deps: deps)
         current = call
+        away = false
+        call.showsLevels(!inBackground)
+        // The phone's voice chat goes on in the background, through its group's tunnels (`AppModel.callTunnelGroup`):
+        // once it ends there, they close.
+        if watchesApp, surface == .phone { call.onEnded = { [group = key.group] _ in AppModel.shared.callEnded(group: group) } }
         await call.begin()
         return nil
     }
@@ -78,6 +110,8 @@ import UIKit
             before.end(.replaced)
         }
         current = call
+        away = false
+        call.showsLevels(!inBackground)
         await call.begin()
     }
 
@@ -95,7 +129,12 @@ import UIKit
 
     /// A system call that ended goes away at once: no Continue (there is no system call to pick up again).
     func release(_ call: VoiceConversation) {
-        if current === call { current = nil }
+        if current === call { clear() }
+    }
+
+    private func clear() {
+        current = nil
+        if away { away = false }
     }
 
     /// Continue on the ended call bound to `key` (not a system call's). Not while Persona's urgent call is on, nor while
@@ -124,28 +163,57 @@ import UIKit
     func end(_ reason: VoiceEnd, from surface: VoiceSurface) {
         guard let call = current, reason == .user || call.surface == surface else { return }
         call.end(reason)
-        if reason.byUser { current = nil }
+        if reason.byUser { clear() }
+        // Ended by itself while its page was away: the bar goes (its Continue waits on the page).
+        if away, call.phase.isEnded { away = false }
     }
 
     /// Whether the call (live or ended) is bound to this conversation: ChatView reads only this.
     func isBound(to key: SessionKey) -> Bool { current?.key == key }
 
-    /// The page bound to `key` went away or was hidden: its call ends, and its Continue row goes with it. A system call
-    /// goes on (it is `PersonaCalls`'), but once it is over its line about how it ended goes with the page too.
+    /// The page bound to `key` went away or was hidden. A system call goes on (it is `PersonaCalls`'), but once it is
+    /// over its line about how it ended goes with the page too. The phone's voice chat goes on with the bar back to it
+    /// at the top (iOS, #9887), or ends (Apple Vision Pro); an ended one's Continue row goes with the page.
     func leave(_ key: SessionKey, from surface: VoiceSurface = .phone) {
         guard let call = current, call.key == key else { return }
         if call.surface == .call {
-            if surface == .phone, call.phase.isEnded { current = nil }
+            if surface == .phone, call.phase.isEnded { clear() }
             return
         }
         guard call.surface == surface else { return }
+        if surface == .phone, Self.keepsChatAway, !call.phase.isEnded {
+            away = true
+            return
+        }
         call.end(.left)
-        current = nil
+        clear()
     }
 
-    /// In the background a call would keep the microphone open and the upstream billing: the phone's ends. The car's
-    /// goes on.
+    /// The page bound to `key` shows again: the bar back to its voice chat goes.
+    func returned(_ key: SessionKey) {
+        guard away, current?.key == key else { return }
+        away = false
+    }
+
+    /// The phone's voice chat whose page is away, live: what the bar back to it shows (`CallWindow`).
+    var awayChat: VoiceConversation? {
+        guard away, let call = current, call.surface == .phone, !call.phase.isEnded else { return nil }
+        return call
+    }
+
+    /// The app went to the background. On iOS the phone's voice chat goes on (#9887 one button: switching away never
+    /// stops it), with its audio session, its socket and the idle rule; the voice's levels, which only the orb reads,
+    /// stop until the app is back, so nothing but the audio works there (iOS's background CPU limit). On Apple Vision
+    /// Pro it ends, as before; the car's goes on.
     func appDidEnterBackground() {
-        end(.background, from: .phone)
+        inBackground = true
+        current?.showsLevels(false)
+        if !Self.keepsChatAway { end(.background, from: .phone) }
+    }
+
+    /// The app is coming back to the front: the levels again.
+    func appWillEnterForeground() {
+        inBackground = false
+        current?.showsLevels(true)
     }
 }

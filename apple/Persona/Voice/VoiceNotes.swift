@@ -16,11 +16,21 @@ nonisolated enum VoiceSettingsPlace: Equatable, Sendable {
     case system
 }
 
-/// What a confirmation goes on to do once the user says yes: end the call to Persona that is on, then start (or pick
-/// up again) the voice chat in this conversation (#9290 follow-up: nothing in the app ends a live call by itself).
+/// What a confirmation goes on to do once the user says yes: end the system call that is on, then start (or pick up
+/// again) the voice chat in this conversation, or call this conversation (#9887 one button) (#9290 follow-up: nothing in
+/// the app ends a live call by itself).
 nonisolated enum VoiceProceed: Equatable, Sendable {
     case startVoice(SessionKey)
     case resumeVoice(SessionKey)
+    case callConversation(SessionKey)
+
+    /// The yes button's words.
+    var label: String {
+        switch self {
+        case .startVoice, .resumeVoice: String(localized: "End Call and Start")
+        case .callConversation: String(localized: "End and Call")
+        }
+    }
 }
 
 /// Why Voice Chat is not offered here, for the 「+」 menu's item (it stays and explains, docs/assistant/voice.md 6.1); or,
@@ -76,6 +86,14 @@ nonisolated struct VoiceUnavailableNote: Equatable, Sendable {
     static func systemCallOn(_ name: String) -> VoiceUnavailableNote {
         VoiceUnavailableNote(title: String(localized: "On a call with \(name)"),
                              message: String(localized: "End the call first, then start a voice chat."), settings: nil)
+    }
+
+    /// The question before the phone icon in another conversation ends the call with `name` (#9887 one button): End and
+    /// Call (this conversation, `target` as the page names it), or Cancel (the call goes on).
+    static func callElsewhereFirst(_ name: String, key: SessionKey, target: String) -> VoiceUnavailableNote {
+        VoiceUnavailableNote(title: String(localized: "End the call with \(name) and call \(target)?"),
+                             message: String(localized: "The call ends, and a new call starts with this conversation."),
+                             settings: nil, proceed: .callConversation(key))
     }
 
     /// The question before a voice chat in another conversation ends the call to `name`: End Call and Start, or Cancel

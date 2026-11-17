@@ -3,7 +3,7 @@ import Testing
 @testable import Persona
 
 /// Who owns the app's one call (docs/assistant/voice.md 6.3, 6.5, 6.10「VoiceCalls 的所有权」): one at a time, another
-/// conversation's call ends the one before, the background and leaving the page end only the phone's.
+/// conversation's call ends the one before; the background and leaving the page end none on the iPhone (#9887).
 @MainActor
 struct VoiceCallsTests {
     @Test func oneCallAtATimeAndAnotherConversationEndsTheFirst() async throws {
@@ -25,7 +25,9 @@ struct VoiceCallsTests {
         #expect(rig.sockets[1].start?["target"] as? [String: String] == ["machine_id": "m2", "session_id": "s9"])
     }
 
-    @Test func theBackgroundEndsOnlyThePhonesCall() async throws {
+    /// The background ends no voice chat on the iPhone (#9887 one button: switching away or locking never stops it): the
+    /// phone's goes on with its socket, only its levels stop until the app is back; the car's goes on as before.
+    @Test func theBackgroundEndsNoVoiceChat() async throws {
         let rig = VoiceRig()
         let calls = VoiceCalls()
         await calls.start(rig.key, extensionID: "voice", surface: .carPlay, deps: rig.deps)
@@ -35,10 +37,17 @@ struct VoiceCallsTests {
         let phone = VoiceRig()
         let phoneCalls = VoiceCalls()
         await phoneCalls.start(phone.key, extensionID: "voice", surface: .phone, deps: phone.deps)
+        let socket = try #require(phone.socket)
+        socket.ready(phone.key)
+        let chat = try #require(phoneCalls.current)
         phoneCalls.appDidEnterBackground()
-        let ended = try #require(phoneCalls.current)
-        #expect(ended.phase == .ended(.background))
-        #expect(phoneCalls.isBound(to: phone.key), "继续 stays on the page")
+        #expect(chat.phase.isLive && !socket.closed, "the phone's voice chat goes on in the background")
+        #expect(phone.audio.uplink?.levelsPaused == true, "no levels where nobody sees them")
+        phone.audio.capture(Data(repeating: 0x7F, count: 3200))
+        #expect(chat.levels.input == 0)
+        phoneCalls.appWillEnterForeground()
+        #expect(phone.audio.uplink?.levelsPaused == false, "the levels again in front")
+        #expect(phoneCalls.isBound(to: phone.key))
     }
 
     @Test func aSurfaceEndsOnlyItsOwnCallButTheUserEndsAny() async {
@@ -51,17 +60,65 @@ struct VoiceCallsTests {
         #expect(calls.current == nil, "结束 tapped ends it whoever started it, and nothing stays")
     }
 
-    @Test func leavingThePageEndsItsCallAndItsContinueRow() async {
+    /// Leaving the page leaves the phone's voice chat on, with the bar back to it (#9887 one button); coming back takes
+    /// the bar away; an ended one's Continue row goes with the page.
+    @Test func leavingThePageKeepsTheVoiceChatWithTheBarBack() async throws {
         let rig = VoiceRig()
         let calls = VoiceCalls()
         await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
         calls.leave(SessionKey(machineID: "m1", sessionID: "other"))
-        #expect(calls.isBound(to: rig.key), "another page leaving changes nothing")
-        let call = calls.current
+        #expect(calls.isBound(to: rig.key) && !calls.away, "another page leaving changes nothing")
+        let call = try #require(calls.current)
         calls.leave(rig.key)
-        #expect(call?.phase == .ended(.left))
-        #expect(calls.current == nil)
+        #expect(!call.phase.isEnded && calls.away && calls.awayChat === call, "the chat goes on, the bar back to it shows")
+        #expect(rig.socket?.closed == false)
+        calls.returned(SessionKey(machineID: "m1", sessionID: "other"))
+        #expect(calls.away, "another page coming back leaves the bar")
+        calls.returned(rig.key)
+        #expect(!calls.away && calls.awayChat == nil && calls.current === call)
+
+        calls.leave(rig.key)
+        call.end(.idle)
+        #expect(calls.awayChat == nil, "an ended chat has no bar")
+        calls.leave(rig.key)
+        #expect(calls.current == nil, "its Continue row goes with the page")
         #expect(rig.microphone.claim(UUID()))
+    }
+
+    /// An interruption pauses the phone's voice chat (on hold: silence up, the extension told) and it goes on when the
+    /// interruption ends with `shouldResume` (the audio brought back); without it, or when the audio will not come back,
+    /// it ends as before, with Continue (#9887).
+    @Test func anInterruptionPausesThePhonesVoiceChatAndItGoesOn() async throws {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
+        let socket = try #require(rig.socket)
+        socket.ready(rig.key)
+        let chat = try #require(calls.current)
+        rig.audio.emit(.interrupted)
+        #expect(chat.held && chat.phase.isLive && chat.pausedByInterruption)
+        rig.audio.emit(.interruptionEnded(shouldResume: true))
+        #expect(!chat.held && chat.phase.isLive && rig.audio.resumes == 1)
+
+        rig.audio.emit(.interrupted)
+        rig.audio.resumeError = VoiceAudioError.session
+        rig.audio.emit(.interruptionEnded(shouldResume: true))
+        #expect(chat.phase == .ended(.interrupted), "the audio would not come back")
+
+        let other = VoiceRig()
+        let otherCalls = VoiceCalls()
+        await otherCalls.start(other.key, extensionID: "voice", surface: .phone, deps: other.deps)
+        let otherChat = try #require(otherCalls.current)
+        other.audio.emit(.interrupted)
+        other.audio.emit(.interruptionEnded(shouldResume: false))
+        #expect(otherChat.phase == .ended(.interrupted) && other.audio.resumes == 0)
+
+        // The car's still ends at an interruption.
+        let car = VoiceRig()
+        let carCalls = VoiceCalls()
+        await carCalls.start(car.key, extensionID: "voice", surface: .carPlay, deps: car.deps)
+        car.audio.emit(.interrupted)
+        #expect(carCalls.current?.phase == .ended(.interrupted))
     }
 
     @Test func leavingAPageDoesNotEndTheCarsCall() async {
@@ -168,7 +225,9 @@ struct VoiceCallsTests {
         let calls = VoiceCalls()
         await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
         rig.socket?.ready(rig.key)
+        // An interruption the system says not to resume from ends it (one that may resume only pauses it, #9887).
         rig.audio.emit(.interrupted)
+        rig.audio.emit(.interruptionEnded(shouldResume: false))
         let call = try #require(calls.current)
         #expect(call.phase == .ended(.interrupted))
         await calls.resume(rig.key)

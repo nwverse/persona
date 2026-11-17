@@ -77,12 +77,14 @@ nonisolated struct CallHandle: Equatable, Sendable {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
-    /// A call to Persona's handle: the assistant's name, as the value of a generic handle or as the display name of the
-    /// placeholder address.
-    static func outgoing(name: String, kind: CallHandleKind) -> CallHandle {
+    /// A call's handle (#9887 one button: one fixed handle for every call, whichever conversation it talks in): the
+    /// assistant's name as the value of a generic handle, or the placeholder address. The display name may carry the
+    /// `conversation`'s title ("Persona · <title>"; the system may show only the value).
+    static func outgoing(name: String, kind: CallHandleKind, conversation: String? = nil) -> CallHandle {
+        let shown = conversation.map { "\(name) · \($0)" } ?? name // i18n-ignore: a name and a title, as the system shows them
         switch kind {
-        case .generic: CallHandle(kind: .generic, value: name, displayName: name)
-        case .email: CallHandle(kind: .email, value: placeholderAddress, displayName: name)
+        case .generic: return CallHandle(kind: .generic, value: name, displayName: shown)
+        case .email: return CallHandle(kind: .email, value: placeholderAddress, displayName: shown)
         }
     }
 
@@ -423,6 +425,14 @@ nonisolated final class PersonaCallsLCKDelegate: ConversationManagerDelegate, @u
     private var active: UUID?
 
     func start(_ id: UUID, handle: CallHandle) async throws {
+        #if DEBUG
+        // `-showCallFallback YES`: the Start refused, as a device that will not place the call refuses it, so the voice
+        // chat in the app takes over (#9887 one button: the fallback's own path).
+        if UserDefaults.standard.bool(forKey: "showCallFallback") {
+            Self.log.notice("call \(id.uuidString, privacy: .public): the stand-in refuses the Start (-showCallFallback)")
+            throw NSError(domain: CallSystemError.requestTransaction, code: 1)
+        }
+        #endif
         known.insert(id)
         Self.log.notice("call \(id.uuidString, privacy: .public): the stand-in starts it")
         await Task.yield() // `perform` returns before the delegate hears the action, as on a device
