@@ -29,7 +29,7 @@ import { Icon, type IconName } from "../ui/icons";
 import { UltraMark } from "./chat/Ultracode";
 import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
-import { rowDetail, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
+import { rowDetail, useAgentDetails } from "../lib/context-usage";
 import { SessionMark } from "../ui/AgentMark";
 import { AgentAvatar } from "./agents/AgentAvatar";
 import { useFolded } from "../lib/use-folded";
@@ -290,7 +290,6 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const preview = sessionPreview(s);
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
-  const contextUsed = useContextAsUsed();
   const withDetail = details && showState && !s.assistant;
   // when it was last active, at the row's end after its hint (#4236; the work-item row, DESIGN_SYSTEM 3.4): not twice
   // when the details line shows it; a tab's row, whose end is the room for "N agents", keeps it to offline and
@@ -305,7 +304,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // mount time until the first tick, and a row may only start showing an age long after it mounted
   const showsAge = ageAtEnd || (withDetail && !!s.updated_at);
   const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit");
-  const detail = withDetail ? rowDetail(s, contextUsed) : [];
+  const detail = withDetail ? rowDetail(s, now) : [];
   const workflow = showState && !s.assistant && st !== "offline" ? workflowShortLine(s) : "";
   const workflowTitle = workflow ? workflowLine(s, now) : "";
   // its own task list (#5302): 3/5 · the step in progress

@@ -188,6 +188,12 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         SourceIdentityConflict("Identity conflict"),
         SourceClaudeBackground("Claude background"),
         SourceClaudeDesktop("Claude desktop app"),
+        /** By App's Codex desktop section (#9199). */
+        AgentsCodexApp("Codex App"),
+        /** By App's section for another agent's desktop app: "TRAE desktop app" (#9199). */
+        AgentsDesktopApp("%1\$s desktop app"),
+        /** Recently Used's section title (#9199). */
+        AgentsRecentlyUsed("Recently Used"),
         SourceClaudeTerminal("Claude in a terminal"),
         SourceNoSend("This source can’t send yet"),
         ReadOnlyBecause("View only: %1\$s"),
@@ -198,6 +204,8 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EngineTern("Terminals in Tern"),
         EnginePaseo("Agents in Paseo"),
         EngineCindy("Agents in Cindy"),
+        EngineNone("No terminal engine"),
+        EngineNoneDetail("Sessions of the desktop apps only"),
         EngineOffline("Offline, no detection info yet"),
         EngineUnknown("No detection info yet"),
         EngineFound("Detected and available"),
@@ -205,6 +213,8 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EngineMissing("Not detected"),
         EngineFooter("Only sessions in the chosen engine show. You can change it anytime in machine monitoring in Agents."),
         EngineFooterOffline("The machine is offline; the choice applies once it connects. Only sessions in the chosen engine show."),
+        EngineFooterNone("Shows the desktop apps' sessions. Starting or continuing a session from your phone is off. You can change it anytime in machine monitoring in Agents."),
+        EngineFooterNoneOffline("The machine is offline; the choice applies once it connects. The desktop apps' sessions show, and starting or continuing a session from your phone is off."),
         EngineSwitched("Engine switched"),
         EngineSavedOffline("Saved. Applies once connected"),
         ToolRun("Run"),

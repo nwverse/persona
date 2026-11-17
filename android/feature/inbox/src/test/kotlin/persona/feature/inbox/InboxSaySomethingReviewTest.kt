@@ -3,6 +3,7 @@ package persona.feature.inbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -65,11 +66,11 @@ class InboxSaySomethingReviewTest {
         val repository = FakeRepository(record("current", "Current"))
         show(repository)
         rule.onNodeWithText("说一句").performClick()
-        rule.onNode(hasSetTextAction()).assertExists()
+        rule.onNode(hasSetTextAction() and !hasTestTag("inbox-handoff-field")).assertExists()
         rule.onNodeWithText("告诉 AI").assertExists()
         rule.onNodeWithText("取消").performClick()
         rule.waitForIdle()
-        rule.onNode(hasSetTextAction()).assertDoesNotExist()
+        rule.onNode(hasSetTextAction() and !hasTestTag("inbox-handoff-field")).assertDoesNotExist()
         assertTrue(repository.requests.isEmpty())
     }
 

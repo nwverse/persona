@@ -216,6 +216,9 @@
     <string name="designsystem_core_source_identity_conflict">身份冲突</string>
     <string name="designsystem_core_source_claude_background">Claude 后台</string>
     <string name="designsystem_core_source_claude_desktop">Claude 桌面版</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$s 桌面版</string>
+    <string name="designsystem_core_agents_recently_used">最近使用</string>
     <string name="designsystem_core_source_claude_terminal">终端里的 Claude</string>
     <string name="designsystem_core_source_no_send">此来源尚未允许发送</string>
     <string name="designsystem_core_read_only_because">仅查看：%1$s</string>
@@ -226,6 +229,8 @@
     <string name="designsystem_core_engine_tern">Tern 里的终端</string>
     <string name="designsystem_core_engine_paseo">Paseo 里的 Agent</string>
     <string name="designsystem_core_engine_cindy">Cindy 里的 Agent</string>
+    <string name="designsystem_core_engine_none">没有终端引擎</string>
+    <string name="designsystem_core_engine_none_detail">只显示桌面 App 的会话</string>
     <string name="designsystem_core_engine_offline">离线，暂无检测信息</string>
     <string name="designsystem_core_engine_unknown">暂无检测信息</string>
     <string name="designsystem_core_engine_found">检测到可用</string>
@@ -233,6 +238,8 @@
     <string name="designsystem_core_engine_missing">没检测到</string>
     <string name="designsystem_core_engine_footer">只显示所选引擎里的会话，随时可在 Agents 的机器监控里修改。</string>
     <string name="designsystem_core_engine_footer_offline">机器离线，选择会在连接后生效。只显示所选引擎里的会话。</string>
+    <string name="designsystem_core_engine_footer_none">显示桌面 App 的会话，不能从手机新建或继续会话，随时可在 Agents 的机器监控里修改。</string>
+    <string name="designsystem_core_engine_footer_none_offline">机器离线，选择会在连接后生效。显示桌面 App 的会话，不能从手机新建或继续会话。</string>
     <string name="designsystem_core_engine_switched">已切换引擎</string>
     <string name="designsystem_core_engine_saved_offline">已保存，连上后生效</string>
     <string name="designsystem_core_tool_run">运行</string>

@@ -117,6 +117,17 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
 			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Main chat compaction window", Actions: getSet,
+			About: "400000 (the default): the main conversation is compacted at about this many tokens (and sent /compact when " +
+				"idle at 75% of it) instead of its model's whole window, when it runs on a launcher Persona manages that declares " +
+				"a larger one; fewer tokens re-read every turn and rewritten after a long pause, while early details stay in the " +
+				"task ledger and the old conversation. 0: the launcher's window, as for every other conversation and Agent. " +
+				"Applies from the main conversation's next message while it is idle",
+			Value: "0, or a whole number of tokens, 100000–10000000"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(mainCompactWindowOf(s.settings(ctx))), nil
+			},
+			set: s.setMainCompactWindow},
 		{Setting: Setting{Key: "assistant.recent_task_chats", Title: "Show scheduled task chats in Recent", Actions: getSet,
 			About: "off (the default): the sidebar's Recent in the apps leaves out the chats a scheduled task or the background " +
 				"supervisor started (they stay in All chats and under Scheduled Tasks); on: Recent lists them by last activity with " +
@@ -215,7 +226,10 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "the lines an execution Agent's start is checked against on every computer: enabled, load_per_core, min_memory_bytes, " +
 				"max_claude_procs (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
 				"direction_cap_by_direction keys are a supervisor conversation id or a direction's displayed name and win over " +
-				"direction_cap_by_project, which wins over direction_cap and the code default; get first and send the whole object",
+				"direction_cap_by_project, which wins over direction_cap and the code default. launcher_groups (none by default) caps " +
+				"running tasks across launchers that share one budget, on every computer: each {name, launchers (exact launcher names), " +
+				"cap}, a launcher in one group at most; a task held by a full group stays queued until it has room. " +
+				"Get first and send the whole object",
 			Value: "the full AdmissionSettings JSON object from get; a nil pointer keeps the code default, every set line must be positive"},
 			get: s.getAdmission,
 			set: s.setAdmission},
@@ -347,7 +361,8 @@ var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
 	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
-	"assistant.recent_task_chats": "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
+	"assistant.main_compact_window": "title_main_compact_window",
+	"assistant.recent_task_chats":   "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {

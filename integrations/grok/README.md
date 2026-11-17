@@ -11,10 +11,21 @@ HTTP MCP servers. Authenticate Grok normally before starting the companion. No c
 node integrations/grok/companion.mjs \
   --socket "$HOME/.persona/runtime.sock" \
   --grok-bin /absolute/path/to/grok \
-  --model <model-id-from-grok> --effort <supported-level>
+  --model <model-id-from-grok> --effort <supported-level> \
+  --assistant-for grok   # optional: the Paseo provider running this same Grok CLI and account
 ```
 
+Why two entries: a Paseo provider (for example `grok`, labelled "Grok · Official") starts Agents through Paseo's ACP
+bridge, and the Paseo runtime does not declare the assistant capability, so the main chat cannot run on it. This companion
+is the assistant runtime for the same CLI: it supplies the assistant's private context, its Persona tools, phone approval
+and the permission modes (`docs/integrations/runtimes.md`, "Assistant").
+
 Optional flags: `--grok-home` selects the native transcript directory; `--launcher` selects another unique launcher name;
+`--display-name` is what the apps call it (default `Grok`); `--assistant-for <launcher>` names the Agent launcher on this
+computer that runs the same Grok CLI and account but can't run assistant chats, such as a Paseo provider `grok`: the main
+chat's menu then shows that one as "Can start Agents … For assistant chats, choose Grok" instead of only refusing it. Set it
+only when the two really are the same account; nothing is inferred from names, and a message is never moved from one to
+the other;
 `--permission-mode` selects the default (`default`, `acceptEdits`, `auto`, `plan`, `bypassPermissions`). An explicit
 conversation setting overrides it. `auto` uses the phone's permission decisions; it does not claim Grok's own automatic
 approval classifier. To align an unattended Paseo profile, use its actual model ID and `thinkingOptionId`, and set
@@ -28,6 +39,14 @@ under the same `grok-chat-<native-id>` IDs.
 Renaming a conversation uses Grok's native `_x.ai/session/rename` operation. The title is saved as a manual title in
 Grok's own session record, remains after restarts and later replies, and can be changed while a reply is running.
 Session discovery reads `generated_title` before the older `session_summary`, which can retain an earlier name.
+
+Conversations started with the Grok CLI in a terminal are listed too, under their working directory, so they appear in
+the Agents list and its repository grouping alongside the assistant's. One updated in the last seven days is listed;
+one a running Grok process holds (Grok's own `active_sessions.json`) is listed however old it is. While a terminal holds
+it, the conversation is read-only from Persona: its turns appear as the terminal writes them, and sending, renaming or
+changing its settings is refused (`terminal_open`), since a second writer would interleave with the terminal's turns.
+Once that terminal exits, the phone continues the conversation through ACP in the same directory. These conversations
+are not the assistant's: they get Persona's Agent tools, not the assistant's.
 
 The model catalog comes from the installed CLI. The companion verifies acknowledged settings and refuses unsupported
 reasoning levels. It supplies assistant tools through a private loopback MCP endpoint backed by the runtime SDK.

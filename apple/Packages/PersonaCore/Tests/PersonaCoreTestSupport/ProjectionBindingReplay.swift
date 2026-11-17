@@ -183,7 +183,8 @@ public enum ProjectionBindingReplay {
         "cross_machine_same_session_id", "cross_machine_same_session_id_reversed",
         "empty_list", "filter_all", "filter_needsyou", "filter_unread", "filter_working",
         "folded_machine_hides_rows", "folded_space_keeps_counts", "folded_state_and_expanded_idle",
-        "kept_cannot_escape_base", "machine_search_before_counts", "machine_uses_registry_order",
+        "kept_cannot_escape_base", "held_quiet_row_keeps_unread_state_section", "held_quiet_space_stays_active",
+        "held_row_stays_out_of_quiet_idle_fold", "machine_search_before_counts", "machine_uses_registry_order",
         "mute_allow_and_explicit_override", "pinned_offline_is_visible", "pinned_sessions_use_pin_order_once",
         "quick_filter_ignores_rank", "quick_spaces_use_updated_time", "rank_all_states_and_mutes",
         "search_expands_idle", "space_header_counts", "space_time_tie", "space_time_tie_reversed",
@@ -202,7 +203,7 @@ public enum ProjectionBindingReplay {
         "recommended.json": Set([
             "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
             "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
-            "recommended_trims_prefix_space", "recommended_unspaced",
+            "recommended_trims_prefix_space", "recommended_unspaced", "recommended_corefoundation_boundary",
         ]),
     ]
 

@@ -1,7 +1,8 @@
 import XCTest
 
 /// iPhone Duo open, the inner screen, in the Separate layout's new look (#4206; it replaced #2623's switch on the page):
-/// - the system's tab bar (down the side on its side), no Assistant | Agents switch drawn on the page;
+/// - the Duo's tab bar in the system's tab bar's place (#4231, `DuoTabSwitchTests`): down the side column on its side,
+///   along the foot upright; no switch drawn on the page's top;
 /// - each tab its part of the one sidebar's column: its fold at the head, New Chat, Search and Settings at the foot;
 /// - Search and Settings over the window, and the iPhone's new conversation with Needs You (#3680);
 /// - an Agent asked for from outside on the Agents tab.
@@ -39,12 +40,15 @@ final class DuoOpenChromeTests: XCTestCase {
 
     @MainActor private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
 
-    /// The system tab bar's item (down the side on its side, at the foot upright): a button of that name a tab item
-    /// wide, not the column's heading of the same name. The bar itself is not a `TabBar` to XCUITest there.
-    @MainActor private func tab(_ label: String) -> XCUIElement {
+    /// The system tab bar's item, were it there: a button of that name a tab item wide, not the column's heading of the
+    /// same name. The bar itself is not a `TabBar` to XCUITest there.
+    @MainActor private func systemTab(_ label: String) -> XCUIElement {
         let narrow = NSPredicate { item, _ in ((item as? XCUIElementAttributes)?.frame.width ?? .infinity) <= Self.tabItemWidth }
         return app.buttons.matching(NSPredicate(format: "label == %@", label)).matching(narrow).firstMatch
     }
+
+    /// The Duo's tab bar's item for a tab (#4231): `shell-assistant`, `shell-agents`.
+    @MainActor private func tab(_ id: String) -> XCUIElement { element(id) }
 
     @MainActor private func shot(_ name: String) {
         XCTContext.runActivity(named: "duo-shot \(name)") { _ in
@@ -52,13 +56,16 @@ final class DuoOpenChromeTests: XCTestCase {
         }
     }
 
-    /// The system's tab bar, no switch drawn on the page (#4206, the new look of the Separate layout): the column's head
-    /// has its fold, its foot Search; the page has its face, and its sidebar button only while the column is away.
-    @MainActor func testTheTabBarAndTheColumnsFold() {
+    /// The Duo's tab bar in the system's tab bar's place (#4231), none drawn on the page's top (#4206, the new look of
+    /// the Separate layout): the column's head has its fold, its foot Search; the page has its face, and its sidebar
+    /// button only while the column is away.
+    @MainActor func testTheTabSwitchAndTheColumnsFold() {
         let main = element("sidebar-main"), fold = element("sidebar-fold-column"), search = element("sidebar-search")
         XCTAssertTrue(main.waitForExistence(timeout: 20), "no column:\n\(app.debugDescription)")
-        XCTAssertTrue(tab("Persona").exists && tab("Agents").exists, "no system tab bar:\n\(app.debugDescription)")
-        XCTAssertFalse(element("page-tab-switch").exists || element("shell-assistant").exists, "a switch drawn on the page")
+        XCTAssertTrue(tab("shell-assistant").exists && tab("shell-agents").exists, "no tabs' switch:\n\(app.debugDescription)")
+        XCTAssertFalse(systemTab("Persona").exists, "the system's tab bar is still there:\n\(app.debugDescription)")
+        XCTAssertFalse(element("page-tab-switch").exists, "a switch drawn on the page")
+        XCTAssertGreaterThan(tab("shell-agents").frame.minY, app.windows.firstMatch.frame.midY, "the switch is not low in the window")
         XCTAssertTrue(fold.exists && search.exists, "no fold or Search:\n\(app.debugDescription)")
         XCTAssertLessThan(fold.frame.maxY, main.frame.minY, "the fold is not at the column's head")
         let window = app.windows.firstMatch.frame
@@ -139,27 +146,27 @@ final class DuoOpenChromeTests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 5) && settings.isHittable, "the page did not come back")
     }
 
-    /// The tab bar's Agents: the same column with the Agents' part beside the Agents' page, and back to Persona's.
+    /// The switch's Agents: the same column with the Agents' part beside the Agents' page, and back to Persona's.
     @MainActor func testTheTabsGoToAgentsAndBack() {
         XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 20), "no column:\n\(app.debugDescription)")
-        tab("Agents").tap()
+        tab("shell-agents").tap()
         XCTAssertTrue(element("sidebar-agents-new").waitForExistence(timeout: 10), "no Agents in the column:\n\(app.debugDescription)")
         XCTAssertFalse(element("sidebar-main").exists, "the Agents tab's column holds Persona's rows")
         shot("agents")
-        tab("Persona").tap()
-        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the tab bar did not go back to Persona")
+        tab("shell-assistant").tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the switch did not go back to Persona")
     }
 
-    /// An agent asked for from outside opens on the Agents tab, beside its column, and the tab bar goes back to Persona.
+    /// An agent asked for from outside opens on the Agents tab, beside its column, and the switch goes back to Persona.
     @MainActor func testAnOpenedAgentIsOnTheAgentsTab() {
         app.terminate()
         app.launchArguments += ["-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000002"]
         app.launchPinned()
         let title = element("chat.title")
         XCTAssertTrue(title.waitForExistence(timeout: 20), "the agent did not open:\n\(app.debugDescription)")
-        XCTAssertTrue(tab("Persona").exists, "no tab bar over the opened agent")
+        XCTAssertTrue(tab("shell-assistant").exists && tab("shell-agents").isSelected, "no switch over the opened agent")
         shot("agent-open")
-        tab("Persona").tap()
-        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the tab bar did not go back to Persona")
+        tab("shell-assistant").tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the switch did not go back to Persona")
     }
 }

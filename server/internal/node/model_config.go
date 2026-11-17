@@ -33,6 +33,11 @@ type modelExecution struct {
 	// worker Agent conversations have neither flag.
 	FollowsSetting bool   `json:",omitempty"`
 	ConfigDir      string `json:"-"` // a conversation's directory, not its model; retained across process restarts
+	// MainCompactWindow: the compaction window the manager holds the main conversation to (assistant.main_compact_window,
+	// #7314), sent with is_main; 0 (another conversation, a launcher Persona does not manage, an older manager, the
+	// setting at 0) leaves the launcher's (assistantCompactionPolicy). Omitted when 0, so a fingerprint from before it
+	// stays the same.
+	MainCompactWindow int `json:",omitempty"`
 	// SupervisionInstructions is manager-authorized role policy, never task or event data.
 	// It changes the execution fingerprint so a role change resumes in a fresh process.
 	SupervisionInstructions string `json:",omitempty"`
@@ -46,6 +51,8 @@ type modelExecution struct {
 	// Goal: a Claude Code /goal condition typed after the first message of a new start is in (startgoal.go). Per start,
 	// never part of a fingerprint, never kept for a resume.
 	Goal string `json:"-"`
+	// InPane is session.start's in_pane: a failed start's kept tab to start in (startremedy.go).
+	InPane string `json:"-"`
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {
@@ -110,10 +117,11 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		ModelFingerprint        string  `json:"model_fingerprint"`
 		Runtime                 string  `json:"runtime"`
 		IsMain                  bool    `json:"is_main"`
+		MainCompact             int     `json:"main_compact_window"`
 		SupervisionInstructions *string `json:"supervision_instructions"`
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain, MainCompactWindow: res.MainCompact}).withSupervision(res.SupervisionInstructions)
 }

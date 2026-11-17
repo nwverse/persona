@@ -583,6 +583,20 @@ version codes and update each other:
   A hub reads it beside `latest.json` to offer the APK to its phones (#5563). A prerelease tag's APK is attached to
   its Release, but `releases/latest/download` never points at a prerelease.
 
+### Android build commit
+
+Settings › About shows the commit an Android APK was built from ([android.md](../android/android.md) "Build commit"). Release
+builds pass it explicitly: `android_release_worker.py` adds `-PpersonaBuildCommit=<sha>` with the full sha it checked out (the
+same value as the receipt's `source_sha`, for main-branch and version-tag builds), and `scripts/app/android.sh release` passes
+this repository's `HEAD`. Version names, version codes, signing and R8 are unchanged.
+
+- **Receipt reuse**: `build.json` records `build_commit` (the full sha). A run directory whose `unsigned.apk` receipt has no
+  `build_commit`, or one that is not the source sha, is built again; an `unsigned.apk` made before this metadata existed is never
+  published, and nobody has to delete the directory by hand.
+- **Check before keeping the APK**: after `:app:assembleRelease` and the R8 check, and before `unsigned.apk` is copied,
+  `scripts/release/check_android_build_commit.py` reads `persona_build_commit` with `aapt2 dump resources` and fails unless it equals
+  the source sha. A build without the injection, with a wrong value, or one that left an old APK behind stops there and writes no receipt.
+
 ## Android publisher repository migration and status retries
 
 `scripts/release/android_release_worker.py` uses a private configuration file. Its `repository`, `git_url`, `branch` and

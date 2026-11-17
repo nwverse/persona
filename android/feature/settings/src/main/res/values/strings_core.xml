@@ -359,6 +359,7 @@
     <string name="settings_ready_needs_confirm">Needs your confirmation</string>
     <string name="settings_ready_skipped_note">Skipped; come back to set it anytime</string>
     <string name="settings_ready_open">Open settings</string>
+    <string name="settings_ready_allow_notifications">Allow</string>
     <string name="settings_ready_open_failed">Couldn\'t open system settings. Open Persona\'s app info from the phone\'s Settings.</string>
     <string name="settings_ready_undo_confirm">Undo</string>
     <string name="settings_ready_mark_done">Mark done</string>

@@ -91,6 +91,13 @@ struct PromptComposer: View {
             }
             PromptBar(model: bar, sources: mentionRows, commands: commands, models: models, placeholder: placeholder,
                       options: o, onSend: { _ in if !disabled { stopDictation(); commitTyped(); send() } })
+                #if os(iOS)
+                // Return Key Sends (#8178): as the bar's send, which empties the draft after; not while its @ or / list is up.
+                .returnSends(text: $text, canSend: !disabled && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments),
+                             paused: bar.token != nil || bar.isSourceMenuOpen || bar.isModelMenuOpen) {
+                    stopDictation(); commitTyped(); send(); text = ""
+                }
+                #endif
                 #if os(iOS) || os(visionOS)
                 .mask { SendCutout(cut: stopping, control: Self.control, inset: Self.barInset).fill(style: FillStyle(eoFill: true)) }
                 .overlay(alignment: .bottomTrailing) { sharedButtons }
@@ -550,7 +557,7 @@ final class Dictation {
 
     private static func allowed() async -> Bool {
         let speech = await withCheckedContinuation { c in
-            // Answered on a background queue: `@Sendable` keeps the block off the main actor (BackgroundCallbackTests).
+            // Answered on a background queue: `@Sendable` keeps the block off the main actor (test_apple_background_callbacks.py).
             SFSpeechRecognizer.requestAuthorization { @Sendable in c.resume(returning: $0) }
         }
         guard speech == .authorized else { return false }
