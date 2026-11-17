@@ -44,7 +44,7 @@ export interface DesktopIslandRow {
   readonly route: string;
 }
 
-/** What the island shows: the counts the Overview and the Dock badge count, and the first rows, most urgent first. */
+/** What the island shows: the Agents by state as the Agents list counts them, and the first rows, most urgent first. */
 export interface DesktopIslandState {
   readonly needsYou: number;
   readonly working: number;

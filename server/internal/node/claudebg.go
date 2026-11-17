@@ -389,13 +389,12 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 // peerAttest is the from-mode the node states in a message to session id, which claude c has open (claudepeer.go). It
 // is the class of whoever's words the message carries, bound to evidence taken when the message is sent, and stated
 // only where that evidence is reliable (#9607):
-//   - the owner's own message (owner_input, which only the hub's check of a full-role device's own typed message sets,
-//     ownerInputExact): it goes in as the session's own user's words, the one authorization the node acts on. The
+//   - the owner's own message (ownerInputExact), card answer or Stop (the Devices manager's owner-control RPC): it goes in as the session's own user's words, the one authorization the node acts on. The
 //     person who owns the session is the one its permission prompts and held messages wait on, and what they type at its
 //     terminal goes in whatever its mode. bypass when the session's own transcript says bypassPermissions now
 //     (peerSessionClass); nothing otherwise (a session that prompts takes a message that states none; plan may be
 //     either class). A stale record can only make the session hold the message, never take more than its owner could.
-//   - anything else (supervision, another Agent's message, a card answer, a Stop): nothing. The node cannot bind such
+//   - anything else (supervision, another Agent's message, non-owner answers and stops): nothing. The node cannot bind such
 //     words to the permission mode they were written in, so a bypass session holds them for approval at the computer.
 func (n *Node) peerAttest(ctx context.Context, c claudeProc, id string) string {
 	if ownerDeliveryOf(ctx) != nil && peerSessionClass(n, c, id) == peerModeBypass {
@@ -469,7 +468,7 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 		offset = st.Size()
 	}
 	stop := prompts.PeerStop()
-	p.fromMode = n.peerAttest(ctx, c, id) // a Stop carries no owner mark (#9645): it states none
+	p.fromMode = n.peerAttest(ctx, c, id)
 	err = peerSendAt(ctx, p, id, stop, peerNow)
 	var pe *errPeer
 	if asPeer(err, &pe) {
