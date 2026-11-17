@@ -992,6 +992,8 @@ Run the standalone check from the repository root; no Android SDK needed:
 python3 scripts/app/android_token_baseline.py
 python3 scripts/app/android_token_baseline.py --report /tmp/android-token-report.json
 python3 scripts/app/test_android_token_baseline.py
+python3 scripts/app/android_motion_baseline.py
+python3 scripts/app/test_android_motion_baseline.py
 ```
 
 The baseline is stored in `android/core/designsystem/tools/token-baseline.json`: each file's nonzero hard-coded counts, nothing else (`--report` writes the full counts). The script scans production Kotlin in every module (`android/app`, `android/core/*`, `android/feature/*`, `android/platform/*`; #4209), the design system included, but not the generated `Tokens.kt`, whose literals are the tokens and which `scripts/assets/gen_tokens.py --check` guards. It skips test directories, ignores comments, strings and imports, and recognizes explicit imports and aliases. It counts hard-coded values, token references and adoption rates per module for colors, font sizes and dp; adoption is `token / (token + hard-coded)`, or `null` when there is no usage.
@@ -1005,6 +1007,10 @@ A fifth category, `icon`, counts the Phosphor glyphs pages name directly (`PhIco
 A fourth category, `material3`, counts the Material 3 components pages may not use ([android-design.md](android-design.md) "2.3 Rules for writing pages"): calls to a denied component imported from `androidx.compose.material3`, or written out in full, outside `android/core/designsystem`, which wraps them. `Text`, `MaterialTheme`, `Local*` and `material3.adaptive` are not counted. A wildcard `material3` import outside the design system fails the check outright, with no baseline, since it hides which components a page uses.
 
 Hard-coded counts for each file and category must not exceed the baseline; new files start at zero. Existing code with permitted fixed sizes, such as the terminal, also counts toward the baseline, and new usage is checked too. Reducing hard-coded values in another file does not offset additions in this file. When a change really must be accepted, run `python3 scripts/app/android_token_baseline.py --update-baseline` and review the baseline diff; the normal check never rewrites it. After merging several lanes, run the check first, fix new hard-coded values first, then decide whether to update the baseline. The Swift output is out of scope here.
+
+## Motion literal baseline
+
+`scripts/app/android_motion_baseline.py` counts literal animation specs per production Kotlin file under `android/**/src/main` (numeric `tween(` / `snap(`, `spring(` with `Spring.*` or numeric damping/stiffness, `keyframes(`, and `AnimatedVisibility` / `Crossfade` that use the default enter/exit or animationSpec). Specs that already name `Tokens.Motion`, `SharedMotion`, `IosSpring`, `ComposerMotion` or `PersonaTheme.motion` are not counted. The baseline is `android/core/designsystem/tools/motion-baseline.json`; a file's count may only go down, and a new file with literals fails. `--update-baseline` rewrites it after a reviewed reduction. CI runs it beside the token checks (`scripts/ci/android.sh`, `scripts/ci/scripts.sh`).
 
 ## Design-system slot order
 
