@@ -419,6 +419,9 @@ struct ChatView: View {
         #if os(macOS)
         .macChatDrop(key) // files dropped anywhere on the page go to the composer (#2113)
         #endif
+        // The header's overlay and the side-bars top under it start a segment of their own (#9709): the chain had grown
+        // two longer at its end, where each slot holds all before it.
+        .stackSegment()
         .overlay(alignment: .top) {
             #if os(macOS)
             if style == .dev { macChrome }
@@ -757,9 +760,9 @@ struct ChatView: View {
         // AnyView here, in chatPresentation and in chatLifecycle: the page's modifiers as one type were ~60 levels deep, and the runtime spent
         // about 100 ms building that type's metadata the first time the page drew (cold start, #1337). Each boundary
         // is the same type every time, so nothing below loses its identity or state. Also cut midway here, in
-        // chatLifecycle, chatSurface, paneContent, mainFooter and Composer: unoptimized, each getter reserved a stack
-        // slot for every intermediate of its chain, each holding all before it, and a Debug build's chat page reached
-        // 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
+        // chatLifecycle, chatSurface, paneContent, chatScroll, mainFooter and Composer: unoptimized, each getter
+        // reserved a stack slot for every intermediate of its chain, each holding all before it, and a Debug build's
+        // chat page reached 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
         let activityTop = AnyView(chatPresentation)
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
         #if os(iOS)
@@ -831,6 +834,9 @@ struct ChatView: View {
         }
         .stackSegment()
         .renameSessionAlert($renaming)
+        // The presenters that each hold a binding to a session (rename, link to a todo, close, delete) got one more
+        // with the link sheet: cut in two (#9709, `MainPagesStackTests`).
+        .stackSegment()
         #if os(iOS)
         .sheet(item: Binding(get: { AgentMenuRouting.shared.linkingSession },
                               set: { AgentMenuRouting.shared.linkingSession = $0 })) {
@@ -851,7 +857,10 @@ struct ChatView: View {
                 })
         }
         .stackSegment()
-        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
+        // Presented here, pushed in Knowledge: the ✕ belongs to the sheet (#9653).
+        .sheet(item: $openedKnowledge) { entry in
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
+        }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
         #if DEBUG
@@ -878,7 +887,7 @@ struct ChatView: View {
         .stackSegment()
         .detailPresentation(item: $linkedTodo) { r in
             DetailStack {
-                TodoDetailView(todoID: r.id).macSheetDone { linkedTodo = nil }
+                TodoDetailView(todoID: r.id).sheetDone { linkedTodo = nil }
             }
             #if os(macOS)
             .macSheet()
@@ -888,7 +897,7 @@ struct ChatView: View {
             if let s = session, let todoID = s.todo?.id,
                 TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
                 DetailStack {
-                    TodoDetailView(todoID: todoID).macSheetDone { showTodoDetail = false }
+                    TodoDetailView(todoID: todoID).sheetDone { showTodoDetail = false }
                 }
                 #if os(macOS)
                 .macSheet()
@@ -3300,7 +3309,10 @@ struct ChatView: View {
             }
         }
         #endif
-        let presented = hooked
+        // The sheets and the rest of the chain start from an erased list (#9709, `MainPagesStackTests`): as one type,
+        // the list's chain with its scroll view and rows was about a hundred levels deep, and the chat pane's first
+        // render built its runtime metadata on top of the page's getters, 515 KB deep in a Debug build.
+        let presented = hooked.stackSegment()
         #if os(macOS)
         .sheet(item: $menu.selecting) { t in SelectableTextSheet(text: t.text, plain: t.plain, quote: menu.selectionQuote(of: t)) }
         #endif
@@ -4130,7 +4142,7 @@ struct ChatView: View {
     /// shows the symbol, the overflow menu both.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
         if !hidesBack && !systemShowsList {
-            ToolbarItem(placement: .cancellationAction) {
+            ToolbarItem(placement: .topBarLeading) {
                 // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
             }
@@ -7269,7 +7281,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
+                                NavigationStack { TodoDetailView(todoID: todo.id).sheetDone { showTodo = false } }
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)
@@ -7302,7 +7314,7 @@ struct SessionInfoSheet: View {
             .navigationTitle("Session Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                SheetClose { dismiss() }
             }
             #endif
         }

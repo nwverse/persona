@@ -77,15 +77,12 @@ final class MeetingReplayUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         try shot(app, "end")
         confirm.tap()
-        let ready = element(app, "meeting-after-minutes")
-        XCTAssertTrue(waitFor(20) { ready.exists && ready.label.contains("纪要") && !ready.label.contains("等") },
-                      "no minutes after the replay: \(app.debugDescription)")
-        try shot(app, "after")
-        let open = app.buttons["recording-wrapup-open"].firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 5), app.debugDescription)
-        open.tap()
-        XCTAssertTrue(app.staticTexts["新版录音入口已合进主干，开始录音只要一步"].firstMatch.waitForExistence(timeout: 10),
+        // After the meeting (#8731 V3) the minutes are on the screen itself: the summary card, and the Minutes part under it.
+        let summary = element(app, "meeting-after-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 20), "no summary after the replay: \(app.debugDescription)")
+        XCTAssertTrue(app.staticTexts["新版录音入口已合进主干，开始录音只要一步"].firstMatch.waitForExistence(timeout: 20),
                       "the tape's minutes aren't shown: \(app.debugDescription)")
+        try shot(app, "after")
         try shot(app, "minutes")
         XCTAssertNil(try upload(hub, replayed), "the replayed meeting went to the hub")
         XCTAssertNil(try transcription(hub, replayed), "the replayed meeting opened an audio socket")
@@ -133,7 +130,7 @@ final class MeetingReplayUITests: XCTestCase {
         let confirm = app.buttons["结束并生成纪要"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         confirm.tap()
-        XCTAssertTrue(element(app, "meeting-after-status").waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(element(app, "meeting-after-facts").waitForExistence(timeout: 20), app.debugDescription)
     }
 
     // MARK: Helpers
