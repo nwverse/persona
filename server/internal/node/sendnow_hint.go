@@ -12,7 +12,7 @@ import (
 // ctrl+enter where the terminal reports extended keys outside tmux and screen (a herdr pane), ctrl+x ctrl+s elsewhere
 // (#2467), and "click to send now" when no key is bound. The hint is its own line under the message (2.1.311 on), or
 // follows the message on its line after a gap (2.1.319); 2.1.326 labels its own line "⎿  Queued · <keys> to send now"
-// where that fits the width, the bare hint as before where it doesn't. The node reads it by that shape, not as fixed
+// where that fits the width, the bare hint as before where it doesn't (#9628). The node reads it by that shape, not as fixed
 // strings (#4537), so another binding, label, separator or letter case still gives its keys. Keys a terminal can't
 // press (cmd, fn, a click) are quoted and nothing is pressed.
 
