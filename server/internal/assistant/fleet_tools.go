@@ -171,6 +171,12 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 // mcpCall runs one: a connector's, Cua's or ego's at the hub (it says whether it is one of them), else the
 // assistant's own (for its conversations), else the phone's.
 func (s *Service) mcpCall(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool) proto.ToolResult {
+	return s.mcpCallWithOrigin(ctx, machine, session, name, args, assistant, "")
+}
+
+// mcpCallWithOrigin also takes the node's attested conversation origin. It is needed before assistant.send returns:
+// the manager's origin book is written from the returned session afterwards.
+func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool, origin string) proto.ToolResult {
 	if res, refused := s.meetingRefuses(ctx, machine, session, name, assistant); refused {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
 	}
@@ -182,6 +188,9 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	}
 	if assistant && !s.assistantCaller(ctx, machine, session) {
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
+	}
+	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
+		return res
 	}
 	if isKnowledgeFolderTool(name) && !assistant {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})

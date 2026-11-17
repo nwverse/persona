@@ -2689,6 +2689,14 @@ and compare the resulting complete total with the fixed main allowance.
 Keep a shared request-context hook separate from repository editor UI, so a lazy naming form does
 not pull that editor into its dependency graph just to reuse ownership and lifetime checks.
 
+The shell's worktree request channel and Agent cleanup reads must also stay separate from creation
+transport and form guidance. Import those narrow modules eagerly and retain the old exports for lazy
+callers; moving only the dialog leaves the form's top-level translations on the first screen.
+
+A cache getter must copy its map while holding the lock before a publisher iterates it. Returning the
+book after unlocking races with tag insertion/deletion even when each record is replaced atomically.
+Keep a snapshot stable across later writes and verify concurrent publication under the race detector.
+
 An automatically merged route inventory can still miss newly registered upstream routes. Regenerate
 it from actual registrations and inspect the classifications; administration routes stay restricted
 to full credentials unless the authorization policy explicitly grants an extension scope.

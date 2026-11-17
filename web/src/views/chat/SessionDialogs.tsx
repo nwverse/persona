@@ -9,7 +9,7 @@ import { href, navigate } from "../../lib/router";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { Button, cx, Dialog, Switch, toast } from "../../ui/atoms";
-import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
+import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree-cleanup";
 import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 import { lazyDialog } from "../LazyOverlay";
