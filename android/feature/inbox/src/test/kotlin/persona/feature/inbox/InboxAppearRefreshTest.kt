@@ -131,7 +131,9 @@ class InboxAppearRefreshTest {
     }
 }
 
+// The section bar opens on Needs you (InboxBar.entered). An FYI row is not in that section, so the title
+// the test waits for has to be an action item.
 private fun inboxSnapshot(title: String) = InboxSnapshot(records = listOf(
     InboxRecord(InboxItem("lark:f2:120", kind = "group", title = title, sender = "示例同事", preview = "周四",
-        tier = "fyi", updatedAt = "2026-11-04T08:10:00Z"), sourceLabel = "飞书"),
+        tier = "action", updatedAt = "2026-11-04T08:10:00Z"), sourceLabel = "飞书"),
 ))
