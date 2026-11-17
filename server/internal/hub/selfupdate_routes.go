@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 func (u *updater) routes(api *http.ServeMux) {
@@ -92,7 +93,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			writeBodyErr(w, err, err)
 			return
 		}
-		if body.Source != nil && *body.Source != "release" && *body.Source != "web-dev" {
+		if body.Source != nil && *body.Source != "release" && *body.Source != "web-dev" && *body.Source != update.ChannelBeta {
 			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
 			return
 		}
@@ -124,6 +125,13 @@ func (u *updater) routes(api *http.ServeMux) {
 				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_config"))
 				return
 			}
+			if *body.Source == update.ChannelBeta {
+				if _, err := update.BetaFeed(u.h.updateURL()); err != nil {
+					u.mu.Unlock()
+					writeErr(w, http.StatusConflict, errInvalidBetaVersion)
+					return
+				}
+			}
 			u.settings.Source = *body.Source
 			u.settings.DevelopmentAuto = false // entering a channel never opts into automatic adoption
 			u.settings.DevelopmentBackup = nil
@@ -150,7 +158,9 @@ func (u *updater) routes(api *http.ServeMux) {
 			u.settings = prev
 		} else if u.settings.Source != prev.Source {
 			u.release, u.blocked, u.lastCheck = nil, nil, time.Time{}
+			u.releaseRead, u.refreshTried = time.Time{}, time.Time{}
 			u.state, u.progress, u.errText = "idle", "", ""
+			u.androidNote, u.behindNote = "", ""
 		}
 		u.mu.Unlock()
 		if err != nil {
