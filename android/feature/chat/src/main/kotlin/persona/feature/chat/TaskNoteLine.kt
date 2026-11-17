@@ -53,6 +53,7 @@ internal fun TaskNoteLine(item: LineItem, last: Boolean = false, onFullText: ((p
     val openPath = LocalChatRowActions.current?.openPath
     val body = if (item.kind == "tool_result") item.text?.takeIf(String::isNotBlank) ?: note.detail else note.detail
     var open by rememberSaveable(item.id) { mutableStateOf(false) }
+    // The note's detail fades in place (TaskNoteRow.swift:182, ChatPin.swift:707-726).
     val edge = rememberOpenEdge(item.id)
     val revealing = edge.revealing(open)
     Column(Modifier.fillMaxWidth()) {

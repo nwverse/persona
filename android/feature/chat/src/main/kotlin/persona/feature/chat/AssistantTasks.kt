@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -248,6 +249,7 @@ internal fun AnsweredLine(item: FeedItem, title: String, onOpenTask: (() -> Unit
     val toggleLabel = stringResource(if (open) R.string.chat_tasks_collapse else R.string.chat_tasks_expand)
     val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
     val openTaskLabel = stringResource(R.string.chat_tasks_open_task)
+    // Opened answers fade in place (iOS AnsweredLine, TaskViews.swift:587, ChatPin.swift:707-726). The same on iPhone and iPad.
     Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).clip(shape).background(PersonaTheme.palette.surfaceStrong)) {
         Row(Modifier.then(if (expandable) Modifier.clickable(onClickLabel = toggleLabel) { open = !open } else Modifier)
             .semantics { if (expandable) stateDescription = toggleState }
@@ -298,6 +300,8 @@ internal fun SentLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) 
     val shape = if (open) PersonaTheme.shapes.cardShape else CircleShape
     val toggleLabel = stringResource(if (open) R.string.chat_tasks_collapse else R.string.chat_tasks_expand)
     val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    // Brief and Board keep AgentSentLine, which fades its text (SentViews.swift:30, ChatPin.swift:707-726).
+    // iPhone assistant chats use the new layout and draw RoutedExchange instead, which has no .unfolding (AgentExchange.swift:29, ChatLayout.swift:39-40).
     Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).clip(shape).background(PersonaTheme.palette.surfaceStrong)
         .testTag("sent-line")) {
         Row(Modifier.clickable(onClickLabel = toggleLabel) { open = !open }.semantics { stateDescription = toggleState }
@@ -362,15 +366,16 @@ internal fun TaskSentRows(sent: List<FeedItem>) {
     }
 }
 
-/** One instruction Persona sent: its time and first line, and the whole text when opened. The text fades in; the row does not grow. */
+/**
+ * One instruction Persona sent: its time and first line, and the whole text when opened.
+ * iOS removed `TaskSentList` (#5569), so this row is not `.unfolding`. It keeps the size change it had.
+ */
 @Composable
 private fun TaskSentEntry(item: FeedItem, open: Boolean, onToggle: () -> Unit) {
-    val edge = rememberOpenEdge(item.id)
-    val revealing = edge.revealing(open)
     val text = item.field("text").orEmpty()
     val locale = currentLocale
     Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
-        .testTag("task-sent-entry")) {
+        .animateContentSize().testTag("task-sent-entry")) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onToggle)
             .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -382,7 +387,7 @@ private fun TaskSentEntry(item: FeedItem, open: Boolean, onToggle: () -> Unit) {
             JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
                 modifier = Modifier.rotate(if (open) 90f else 0f))
         }
-        if (open) SentText(text, Modifier.unfolding(revealing).padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
+        if (open) SentText(text, Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
     }
 }
 

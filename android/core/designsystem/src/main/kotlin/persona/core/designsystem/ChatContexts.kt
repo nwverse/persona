@@ -59,6 +59,7 @@ fun MessageContextGroup(
     val type = PersonaTheme.type
     val style = PersonaTheme.style
     var open by rememberSaveable(id) { mutableStateOf(false) }
+    // The opened list fades in place (ContextGroup, LinkSheet.swift:554, ChatPin.swift:707-726). One context is this fade only.
     val edge = rememberOpenEdge(id)
     val revealing = edge.revealing(open)
     val one = contexts.singleOrNull()
@@ -105,6 +106,7 @@ private fun ContextEntry(context: MessageContext, id: String, onOpen: (String) -
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     var open by rememberSaveable(id) { mutableStateOf(false) }
+    // One title's text fades on its own (ContextRow, LinkSheet.swift:591, ChatPin.swift:707-726).
     val edge = rememberOpenEdge(id)
     val revealing = edge.revealing(open)
     val label = context.label.text()

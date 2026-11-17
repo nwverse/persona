@@ -135,6 +135,8 @@ internal fun SubagentCard(call: ToolCall, live: Boolean, assistant: Boolean, mod
         stringResource(R.string.chat_subagent_running_for, workDuration(res, java.time.Duration.between(started, now).seconds.coerceAtLeast(1)))
         else null
     val shape = PersonaTheme.shapes.cardShape
+    // Details fade over the space they take (SubagentCard.swift:220, ChatPin.swift:707-726). The .move transition is on
+    // that view, and the open runs with animations disabled (ChatPin.swift:686-688), so this does not slide.
     val edge = rememberOpenEdge(call.id)
     val revealing = edge.revealing(open)
     // The page under the card hides the work rail behind it; its avatar sits where the rail runs.

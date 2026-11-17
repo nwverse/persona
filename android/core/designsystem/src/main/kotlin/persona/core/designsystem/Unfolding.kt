@@ -16,18 +16,25 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.IntSize
 
 /**
- * What opens in a chat, as iOS `.unfolding` (`ChatPin.swift`).
+ * What opens in a chat, as iOS `.unfolding` (`ChatPin.swift:707`).
  *
  * A composable [Modifier], not a wrapper: the opened block already has a place in the tree, and a `graphicsLayer`
  * alpha does not change the size it measures. The row is its full height on the first frame and only fades in
- * ([Tokens.Motion.Reveal], easeOut 0.28 s). What closes leaves the composition at once, its space with it (#3005);
- * there is no exit transition. [rememberOpenEdge] is true only on the composition where `open` flips from closed to
- * open, so a row that was already open, or that a lazy list composed again, does not fade again.
+ * (`Theme.Motion.reveal`, easeOut 0.28 s, `Theme.swift:751`; [Tokens.Motion.Reveal]). What closes leaves the
+ * composition at once, its space with it (`toggleInPlace` sets `disablesAnimations`, `ChatPin.swift:686-688`, #3005).
+ * Several iOS sites also write `.transition(.opacity.combined(with: .move(edge: .top)))` on that block. The insertion
+ * runs inside that disabled transaction, so this modifier does not slide. [rememberOpenEdge] is true only on the
+ * composition where `open` flips from closed to open, matching `Unfolding.revealing` (`ChatPin.swift:684-692`): a row
+ * that was already open, or that a lazy list composed again, does not fade again. Reduced motion draws it at once
+ * (`ChatPin.swift:721-722`). iPhone and regular width (iPad, iPhone Duo) use the same modifier; no size class skips it.
  *
- * [Modifier.concealing] is the menu and inbox fade ([Tokens.Motion.Conceal]): the space stays while the alpha goes.
- * A chat does not conceal what it closes. [expandSpec] / [Modifier.expanding] is [Tokens.Motion.Expand] (0.4 s, no
- * bounce), the in-place grow iOS uses for a pinned shelf: an [IosSpring] on Glass, a tween on Brief and Board.
- * A zero duration is a tween, never a spring. Reduced motion makes all three instant.
+ * [Modifier.concealing] copies `Theme.Motion.conceal` (`Theme.swift:752`, [Tokens.Motion.Conceal]). iOS uses it for a
+ * menu (`MessageMenu.swift:97`, `:117`) and an inbox event (`InboxEventViews.swift:843`), not for a chat close, and no
+ * chat calls it. [expandSpec] / [Modifier.expanding] copies `Theme.Motion.expand` (`Theme.swift:736`,
+ * `Animation.smooth(duration: 0.4)`, no bounce, [Tokens.Motion.Expand]). Glass maps that spring the same way it maps
+ * `Theme.Motion.layout` (also `Animation.smooth`); Brief and Board keep a tween. iOS calls it for the Lark pinned
+ * shelf (`LarkPinnedShelf.swift:22`, `LarkConversationsView.swift:186`). Android has no such shelf, so nothing calls
+ * [expanding]. A zero duration is a tween, never a spring. Reduced motion makes all three instant.
  */
 @Stable
 class OpenEdge {

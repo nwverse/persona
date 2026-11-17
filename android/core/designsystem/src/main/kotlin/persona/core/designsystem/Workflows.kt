@@ -512,7 +512,12 @@ private fun TextAction(text: String, inset: Dp, onClick: () -> Unit) {
     }
 }
 
-/** Opens [content] as the chat's unfolding: full height on the first frame, a Reveal fade, gone at once when it closes (#9574, #3005). Not on the first draw. */
+/**
+ * Opens [content] as the chat's unfolding: full height on the first frame, a Reveal fade, gone at once when it closes.
+ * iOS `WorkflowCallCard` body (`WorkflowCallCard.swift:102`) and a phase's rows (`WorkflowViews.swift:498`), both through
+ * `toggleInPlace` (`ChatPin.swift:707-726`). Not on the first draw. Without a chat pin iOS animates with
+ * `Theme.Motion.reveal` instead (`WorkflowViews.swift:509-511`); these cards are in the chat, or always open.
+ */
 @Composable
 private fun Unfold(open: Boolean, content: @Composable () -> Unit) {
     val edge = rememberOpenEdge()

@@ -168,6 +168,7 @@ fun ErrorCard(
         else PaddingValues(horizontal = 16.dp.dense, vertical = 14.dp.dense)
     val spoken = stringResource(R.string.designsystem_api_error, reason)
     val detailGap = 10.dp.dense
+    // Raw details fade in place (APIErrorCard.swift:118 and :189, ChatPin.swift:707-726). The action stays outside the fade.
     val edge = rememberOpenEdge()
     val revealing = edge.revealing(expanded)
     // A details block with nothing in it takes no gap, so the action stays where it was.

@@ -209,7 +209,8 @@ fun WorkGroup(
     terminalLabel: String = "",
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    // Opened steps fade over the space they take; the height changes at once, and folding removes them at once (#9574).
+    // Content under the header fades over the space it takes (iOS ToolGroupView ForEach.unfolding, ToolViews.swift:341,
+    // via toggleInPlace, ChatPin.swift:707-726). Folding removes it at once. Sibling chat-list steps are not this slot.
     val edge = rememberOpenEdge()
     val revealing = edge.revealing(expanded)
     val body: @Composable ColumnScope.() -> Unit = {
