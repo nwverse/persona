@@ -22,7 +22,7 @@ import { Button, cx, Dialog, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Pill } from "../settings/SettingsParts";
-import { Avatar, Box, card, LH, LoadLine, MARK, PILL, type CodeHandlers } from "./CodeViews";
+import { Avatar, Box, card, LH, LoadLine, MARK, PILL, whenDone, type CodeHandlers } from "./CodeViews";
 import { ViewMarkdown } from "./ViewBody";
 import { ReviewContext, useReview, type ReviewApi } from "./review-context";
 import { scopeLocal, useNativeState, type NativeLocal } from "./native-state";
@@ -302,10 +302,8 @@ const BUTTON_TONE = { neutral: "secondary", positive: "accent", caution: "second
 function ReviewForm({ view, act, busy, done }: { view: UIView; done?: () => void } & Pick<CodeHandlers, "act" | "busy">) {
   const r = view.review!;
   const [body, setBody] = useState(r.value ?? "");
-  const press = (a: UIAction) => {
-    act(a, { [r.name]: body });
-    done?.();
-  };
+  // closed (and the summary gone) only once it has been taken
+  const press = (a: UIAction) => whenDone(act(a, { [r.name]: body }), () => done?.());
   return (
     <div className="flex flex-col gap-2.5">
       <Box value={body} onChange={setBody} placeholder={r.placeholder || t("extensions-review.summary")} onSubmit={() => r.buttons[0] && press(r.buttons[0].action)} disabled={!!busy} />
@@ -581,8 +579,10 @@ function ThreadCard({ thread, act, busy, original, local }: { thread: Thread; or
   const range = thread.start_line && thread.start_line < thread.line ? `${thread.start_line}–${thread.line}` : "";
   const send = () => {
     if (!body.trim() || !thread.reply) return;
-    act(thread.reply as UIAction, { ...(thread.id ? { thread: thread.id } : {}), body: body.trim() });
-    if (!local) { setBody(""); setReplying(false); }
+    // kept until it has gone: a reply that failed stays to send again
+    whenDone(act(thread.reply as UIAction, { ...(thread.id ? { thread: thread.id } : {}), body: body.trim() }), () => {
+      if (!local) { setBody(""); setReplying(false); }
+    });
   };
   return (
     <div
@@ -675,8 +675,10 @@ function LineComposer({ pick, body, setBody, item, act, busy, original, onCancel
   });
   const go = (a: UIAction | undefined) => {
     if (!a || !body.trim()) return;
-    act(a, values(body.trim()));
-    if (!local) { onCancel(); setBody(""); }
+    // kept until it has gone: a comment that failed stays to send again
+    whenDone(act(a, values(body.trim())), () => {
+      if (!local) { onCancel(); setBody(""); }
+    });
   };
   const draftFirst = !!item.draft && drafts > 0;
   const primary = draftFirst ? item.draft : item.comment;
