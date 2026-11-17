@@ -230,16 +230,10 @@ func TestClarifyEndedRoomReturnsVisibleError(t *testing.T) {
 		}})
 		done <- preparedTestResult{out: out, err: err}
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, ok := r.s.pendingIx("ix_ended_room"); ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("ended-room approval was not registered")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitFor(t, "ended-room approval registration", func() bool {
+		_, ok := r.s.pendingIx("ix_ended_room")
+		return ok
+	})
 	if err := r.s.clarify(context.Background(), "ix_ended_room", "Can you answer here?", "owner-ended-room", nil); !isCode(err, CodeMeetingEnded) {
 		t.Fatalf("ended-room clarification error = %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
@@ -76,9 +77,10 @@ func waitApprovalResult(t *testing.T, ft *fleetTest, id string) string {
 
 func waitFakeApprovalResult(t *testing.T, f *fakeHub, id string) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	var result string
+	waitFor(t, "approval "+id+" terminal result", func() bool {
 		f.mu.Lock()
+		defer f.mu.Unlock()
 		var found []string
 		for _, p := range f.sends {
 			text, _ := p["text"].(string)
@@ -86,21 +88,16 @@ func waitFakeApprovalResult(t *testing.T, f *fakeHub, id string) string {
 				found = append(found, text)
 			}
 		}
-		f.mu.Unlock()
-		if len(found) == 1 {
-			return found[0]
-		}
 		if len(found) > 1 {
 			t.Fatalf("approval %s delivered %d terminal results: %q", id, len(found), found)
 		}
-		if time.Now().After(deadline) {
-			f.mu.Lock()
-			calls := append([]DeviceCall(nil), f.calls...)
-			f.mu.Unlock()
-			t.Fatalf("approval %s delivered no terminal result; calls=%+v", id, calls)
+		if len(found) == 1 {
+			result = found[0]
+			return true
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		return false
+	})
+	return result
 }
 
 func TestClarifiedApprovalQuestionThenAllowOnce(t *testing.T) {
@@ -294,73 +291,79 @@ func TestClarifyQuestionLengthAndBlankValidation(t *testing.T) {
 }
 
 func TestClarifiedApprovalPauseHasAbsoluteBudget(t *testing.T) {
-	old := clarificationPauseBudget
-	clarificationPauseBudget = 100 * time.Millisecond
-	t.Cleanup(func() { clarificationPauseBudget = old })
-	ft := newFleetTestNoStore(t)
-	preparedTestConversation(ft)
-	done := startPreparedTest(t, ft, "ix_pause_budget", "", nil)
-	if err := ft.s.clarify(context.Background(), "ix_pause_budget", "Please explain", "owner-message-budget", nil); err != nil {
-		t.Fatal(err)
-	}
-	awaitPreparedTest(t, done)
-	time.Sleep(180 * time.Millisecond)
-	ft.waitPending(0)
-	if result := waitApprovalResult(t, ft, "ix_pause_budget"); !strings.Contains(result, "expired") {
-		t.Fatalf("terminal result = %q", result)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		old := clarificationPauseBudget
+		clarificationPauseBudget = 100 * time.Millisecond
+		t.Cleanup(func() { clarificationPauseBudget = old })
+		ft := newFleetTestNoStore(t)
+		preparedTestConversation(ft)
+		done := startPreparedTest(t, ft, "ix_pause_budget", "", nil)
+		if err := ft.s.clarify(context.Background(), "ix_pause_budget", "Please explain", "owner-message-budget", nil); err != nil {
+			t.Fatal(err)
+		}
+		awaitPreparedTest(t, done)
+		elapse(180 * time.Millisecond)
+		ft.waitPending(0)
+		if result := waitApprovalResult(t, ft, "ix_pause_budget"); !strings.Contains(result, "expired") {
+			t.Fatalf("terminal result = %q", result)
+		}
+	})
 }
 
 func TestClarifiedApprovalRepeatedQuestionsDoNotResetPauseBudget(t *testing.T) {
-	old := clarificationPauseBudget
-	clarificationPauseBudget = 300 * time.Millisecond
-	t.Cleanup(func() { clarificationPauseBudget = old })
-	ft := newFleetTestNoStore(t)
-	preparedTestConversation(ft)
-	done := startPreparedTest(t, ft, "ix_pause_repeated", "", nil)
-	if err := ft.s.clarify(context.Background(), "ix_pause_repeated", "First", "owner-message-pause-1", nil); err != nil {
-		t.Fatal(err)
-	}
-	awaitPreparedTest(t, done)
-	time.Sleep(200 * time.Millisecond)
-	if err := ft.s.clarify(context.Background(), "ix_pause_repeated", "Second", "owner-message-pause-2", nil); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(180 * time.Millisecond)
-	// 380ms after the first question, but only 180ms after the second. Resetting
-	// the budget per question would incorrectly leave this card alive.
-	ft.waitPending(0)
-	waitApprovalResult(t, ft, "ix_pause_repeated")
+	synctest.Test(t, func(t *testing.T) {
+		old := clarificationPauseBudget
+		clarificationPauseBudget = 300 * time.Millisecond
+		t.Cleanup(func() { clarificationPauseBudget = old })
+		ft := newFleetTestNoStore(t)
+		preparedTestConversation(ft)
+		done := startPreparedTest(t, ft, "ix_pause_repeated", "", nil)
+		if err := ft.s.clarify(context.Background(), "ix_pause_repeated", "First", "owner-message-pause-1", nil); err != nil {
+			t.Fatal(err)
+		}
+		awaitPreparedTest(t, done)
+		elapse(200 * time.Millisecond)
+		if err := ft.s.clarify(context.Background(), "ix_pause_repeated", "Second", "owner-message-pause-2", nil); err != nil {
+			t.Fatal(err)
+		}
+		elapse(180 * time.Millisecond)
+		// 380ms after the first question, but only 180ms after the second. Resetting
+		// the budget per question would incorrectly leave this card alive.
+		ft.waitPending(0)
+		waitApprovalResult(t, ft, "ix_pause_repeated")
+	})
 }
 
 func TestClarifiedApprovalAnswerEndRestoresRemainingDecisionTime(t *testing.T) {
-	ft := newFleetTestNoStore(t)
-	preparedTestConversation(ft)
-	ix := proto.Interaction{ID: "ix_pause_resume", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
-		ExpiresAt: time.Now().Add(250 * time.Millisecond)}
-	done := make(chan preparedTestResult, 1)
-	go func() {
-		out, err := ft.s.waitPreparedCard(context.Background(), ix, approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
-			return "unexpected", nil
-		}})
-		done <- preparedTestResult{out: out, err: err}
-	}()
-	ft.waitPending(1)
-	if err := ft.s.clarify(context.Background(), "ix_pause_resume", "Please explain", "owner-message-resume", nil); err != nil {
-		t.Fatal(err)
-	}
-	awaitPreparedTest(t, done)
-	time.Sleep(350 * time.Millisecond)
-	if got := len(ft.s.pendingInteractions()); got != 1 {
-		t.Fatalf("the card expired while its answer was outstanding: pending=%d", got)
-	}
-	ref := SessionRef{MachineID: "mac", SessionID: "s1"}
-	ft.s.approvalAnswerTurnStarted(ref)
-	ft.s.approvalAnswerTurnEnded(ref)
-	ft.waitPending(0)
-	if result := waitApprovalResult(t, ft, "ix_pause_resume"); !strings.Contains(result, "expired") {
-		t.Fatalf("terminal result = %q", result)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ft := newFleetTestNoStore(t)
+		preparedTestConversation(ft)
+		ix := proto.Interaction{ID: "ix_pause_resume", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+			ExpiresAt: time.Now().Add(250 * time.Millisecond)}
+		done := make(chan preparedTestResult, 1)
+		go func() {
+			out, err := ft.s.waitPreparedCard(context.Background(), ix, approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+				return "unexpected", nil
+			}})
+			done <- preparedTestResult{out: out, err: err}
+		}()
+		ft.waitPending(1)
+		if err := ft.s.clarify(context.Background(), "ix_pause_resume", "Please explain", "owner-message-resume", nil); err != nil {
+			t.Fatal(err)
+		}
+		awaitPreparedTest(t, done)
+		elapse(350 * time.Millisecond)
+		if got := len(ft.s.pendingInteractions()); got != 1 {
+			t.Fatalf("the card expired while its answer was outstanding: pending=%d", got)
+		}
+		ref := SessionRef{MachineID: "mac", SessionID: "s1"}
+		ft.s.approvalAnswerTurnStarted(ref)
+		ft.s.approvalAnswerTurnEnded(ref)
+		ft.waitPending(0)
+		if result := waitApprovalResult(t, ft, "ix_pause_resume"); !strings.Contains(result, "expired") {
+			t.Fatalf("terminal result = %q", result)
+		}
+	})
 }
 
 func TestEquivalentApprovalReplacesClarifiedCard(t *testing.T) {

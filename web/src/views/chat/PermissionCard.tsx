@@ -69,7 +69,7 @@ export function PermissionCard({ ix }: { ix: Interaction }) {
       <PermissionBody ix={ix} />
       {editable.editor}
       {questionOpen && <Suspense fallback={null}><ApprovalQuestion ix={ix} busy={busy} onClose={() => setQuestionOpen(false)} /></Suspense>}
-      {alwaysScope(ix) && <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
+      {alwaysScope(ix) && <p className="mt-2 text-label leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
     </Card>
   );
 }

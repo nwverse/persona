@@ -49,10 +49,10 @@ export function ApprovalQuestion({ ix, busy, onClose }: { ix: Interaction; busy:
         }}
         placeholder={t("approval-question.placeholder")}
         aria-label={t("chat-interactions.have_question")}
-        className="min-h-16 w-full resize-y rounded-control bg-surface px-2.5 py-2 text-[13px] leading-relaxed text-ink shadow-btn outline-none placeholder:text-ink-3"
+        className="min-h-16 w-full resize-y rounded-control bg-surface px-2.5 py-2 text-meta leading-relaxed text-ink shadow-btn outline-none placeholder:text-ink-3"
       />
       <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span className={cx("min-w-0 text-[11.5px] leading-snug", tooLong ? "text-attention" : "text-ink-3")}>
+        <span className={cx("min-w-0 text-submeta leading-snug", tooLong ? "text-attention" : "text-ink-3")}>
           {t(tooLong ? "approval-question.too_long" : "approval-question.pending_note")}
         </span>
         <span className="flex shrink-0 gap-1.5">
