@@ -257,14 +257,16 @@ func (s *Service) toolMessageSend(ctx context.Context, machine, session string, 
 	if s.inHealth(ctx, session) || s.justMeNow(machine, session) {
 		return "", errors.New("this conversation cannot send outward messages")
 	}
+	// Read the default under the same lock as identity changes and the grant.
+	s.standingMu.Lock()
 	identity, err := s.outboundIdentity(ctx)
 	if err != nil {
+		s.standingMu.Unlock()
 		return "", err
 	}
 	a := outboundApproval{Scenario: "assistant_message", Identity: identity, Machine: machine, Session: session}
 	// Serialize revocation and identity changes with the final grant check and send.
 	// Never hold this lock while waiting for a manual approval.
-	s.standingMu.Lock()
 	grant, err := s.messageGrant(ctx, in.Channel, in.Target, a.Scenario, identity)
 	if err != nil {
 		s.standingMu.Unlock()

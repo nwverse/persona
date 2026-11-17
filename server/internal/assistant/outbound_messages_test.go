@@ -19,11 +19,23 @@ import (
 
 type outboundMemoryStore struct {
 	*inboxMemStore
-	auditMu     sync.Mutex
-	audit       []db.SentAsUser
-	failAudit   bool
-	failOutcome bool
-	claims      map[string]string
+	auditMu      sync.Mutex
+	audit        []db.SentAsUser
+	failAudit    bool
+	failOutcome  bool
+	claims       map[string]string
+	identityRead chan struct{}
+}
+
+func (st *outboundMemoryStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	found, err := st.inboxMemStore.Setting(ctx, key, out)
+	if key == outboundIdentityKey && st.identityRead != nil {
+		select {
+		case st.identityRead <- struct{}{}:
+		default:
+		}
+	}
+	return found, err
 }
 
 func (st *outboundMemoryStore) ClaimSend(_ context.Context, id, _, _ string) (string, error) {
@@ -395,6 +407,56 @@ func TestOutboundManualMessageNeedsItsOwnPermission(t *testing.T) {
 	}
 	if len(c.got) != 1 || c.identities[0] != "user" {
 		t.Fatalf("selected sender ignored: %+v %v", c.got, c.identities)
+	}
+}
+
+func TestOutboundQueuedMessageReadsTheNewDefaultAfterIdentityChange(t *testing.T) {
+	h, st, c, _ := outboundTestHub(t)
+	putMessageGrant(t, st, "assistant_message")
+	st.identityRead = make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.standingMu.Lock()
+	started, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := h.runTool(ctx, "server", "s1", "message_send",
+			json.RawMessage(`{"channel":"larkcli","target":"oc_example_group","text":"Read the new sender.","idempotency_key":"identity-race"}`))
+		done <- err
+	}()
+	<-started
+	readBeforeChange := false
+	select {
+	case <-st.identityRead:
+		readBeforeChange = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	_ = st.PutSetting(context.Background(), outboundIdentityKey, "user")
+	h.standingMu.Unlock()
+	if readBeforeChange {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("queued automatic send read the old identity outside the grant/change lock")
+	}
+	card, ok := awaitCard(h.Service)
+	if !ok || len(c.got) != 0 {
+		t.Fatal("old bot grant covered the newly selected user identity")
+	}
+	no := false
+	if _, err := h.Action(context.Background(), Action{Op: "answer", InteractionID: card.ID,
+		Answer: standingJSON(t, proto.Resolution{Allow: &no})}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("declined message reported sent")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("declined identity card did not settle")
 	}
 }
 
