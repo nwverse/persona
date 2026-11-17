@@ -5,6 +5,7 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
+import { agentRowKey, agentRowLabel, agentRowMark, agentRowTone, todoChipLabel, todoChipState } from "../../lib/task-row-status";
 import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -82,7 +83,7 @@ import { lazyPage } from "../../lib/lazy-page";
 const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
-const ParkedTaskRow = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRow));
+const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
 import { conversationTitle } from "./conversations";
 import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
 import type { TaskWorkspace } from "../../lib/feed";
@@ -773,14 +774,6 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
   return <HandoffCards handoffs={handoffs} />;
 }
 
-/** The colour of a row's status word: Needs you attention, a usage limit orange, a cut or failed task red. */
-function statusTone(state: string, toStart: boolean): string {
-  if (toStart || state === "needs_you") return "text-attention";
-  if (state === "usage_limit") return "text-orange";
-  if (state === "interrupted" || state === "failed") return "text-red";
-  return "text-ink-2";
-}
-
 /** One slot, one row: live task/session state wins over historical feed metadata. */
 function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorReview, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; supervisorReview?: boolean; onOpen?: () => void }) {
   const todo = useTodo(card.todo_id);
@@ -809,11 +802,12 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorR
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
   const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
+  // the status column is the Agent's own state, drawn with the Agents' marks; the to-do's own state is its chip (#6492)
+  const agentKey = agentRowKey({ live: !!liveWork, status: state, lead: task?.lead, todo: !!todo, starting });
+  const rowIsFinished = !countsOpen && finished;
+  const chip = todoChipState({ toStart, status: state, done: finished, stage: todo?.stage, pr, todo });
   // judged finished and with its supervisor for review (the Persona reviewing tray, lib/assistant-entries `review`): the row says whose turn it is
   const reviewing = !!supervisorReview && !liveWork && !finished && state !== "cancelled";
-  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : reviewing ? t("assistant-tasks.review_supervisor") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" && starting ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
-  // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
-  const mark: TodoStatus = liveWork ? "working" : accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
   // what a waiting task waits for (#3274): its agent's own line for it
   const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
@@ -834,15 +828,22 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorR
       if (card.todo_id) openTask(card.todo_id);
       else window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }));
     }} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
-      <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} starting={starting} /></span>
+      <span data-task-mark={rowIsFinished ? "done" : reviewing ? "follow_up" : agentKey} className="flex w-4 shrink-0 justify-center">
+        {rowIsFinished ? <TaskMark status="done" size={8} /> : reviewing ? <TaskMark status="follow_up" size={8} /> : <StatusMark state={agentRowMark(agentKey)} size="sm" />}
+      </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold" title={title}>{title}</div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-sm font-semibold" title={title}>{title}</span>
+          {chip && <span data-task-todo-state className="max-w-1/2 shrink-0 truncate rounded-full bg-field px-1.5 text-xs text-ink-2">{todoChipLabel(chip)}</span>}
+        </div>
         <BackgroundWorkDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
           something, ✓ once finished, ⓘ for a usage limit (#5569) */}
-      <span data-task-status={state} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", statusTone(state, toStart))}>{statusLabel}</span>
+      <span data-task-status={rowIsFinished ? "done" : reviewing ? "review" : agentKey} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", rowIsFinished || reviewing ? "text-ink-2" : agentRowTone(agentKey))}>
+        {rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : reviewing ? t("assistant-tasks.review_supervisor") : agentRowLabel(agentKey)}
+      </span>
       <span className="flex w-4 shrink-0 justify-center">
         {finished ? <Icon name="check" className="text-green" /> : state === "usage_limit" ? <Icon name="info" className="text-orange" /> : <Icon name="chevronRight" className="text-ink-3" />}
       </span>
@@ -986,7 +987,7 @@ function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
 }
 
 /** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
-function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
   const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <PlanCard plan={item.plan} />;
   if (item.kind === "message") return <MessageCard item={item.item} />;
@@ -1234,7 +1235,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {/* what just finished, under its own heading and not counted (#8237): how a task ended, instead of a card in the chat */}
             {entries.justFinished.length > 0 && (
               <div data-progress-just-finished className="flex w-full items-center gap-2 px-3 py-2 text-xs text-ink-2">
-                <span className="min-w-0 flex-1 truncate">{t("assistant-tasks.tray_just_finished")}</span>
+                <span className="min-w-0 flex-1 truncate">{stateName("just_finished")}</span>
                 <span className="shrink-0 tabular-nums">{entries.justFinished.length}</span>
               </div>
             )}
@@ -1245,7 +1246,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {!entries.review.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_review")}</p>}
           </div>}
           {tray === "parked" && <div className="divide-y divide-line">
-            <Suspense fallback={<Loading />}>{entries.parked.map((item) => item.kind === "task" && <ParkedTaskRow key={item.key} todo={item.todo} countsOpen={item.countsOpen} />)}</Suspense>
+            <Suspense fallback={<Loading />}><ParkedTasks items={entries.parked} /></Suspense>
             {!entries.parked.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_parked")}</p>}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">

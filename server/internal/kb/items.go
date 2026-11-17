@@ -535,10 +535,14 @@ func (e *Engine) List(kind, tag string) []Entry {
 }
 
 // recordingEntry is a recording as lists show it: Extra is the device it was made on, RecordingKind its kind (a
-// recording stored before kinds is a note, as an upload without one is).
+// recording stored before kinds is a note, as an upload without one is), MeetingID its imported meeting's id (#8872).
 func recordingEntry(r *Recording) Entry {
-	return Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
+	e := Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
 		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device, RecordingKind: cmp.Or(r.Kind, RecordingNote)}
+	if r.ImportedMeeting != nil {
+		e.MeetingID = r.ImportedMeeting.ID
+	}
+	return e
 }
 
 // Prompt is a short Markdown digest of the most important projects and chats, for the assistant's live snapshot.

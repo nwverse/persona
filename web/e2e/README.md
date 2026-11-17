@@ -60,6 +60,24 @@ drawn after it with the header where it was tapped, and a search for `make step-
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
 
+## Sidebar groups (#9071)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 MOCK_SIDEBAR_GROUPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-groups.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off as well
+node web/e2e/sidebar-groups.mjs <loopback-web-origin> <artifact-directory> --old-hub [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. Made-up extension pages name 工作台, 资产 and
+家里; the run checks that Today comes in under 工作台, then in Settings › General › Sidebar pages makes "Life" and renames
+it 生活, moves built-in and extension pages between groups (Calendar from its manifest's 工作台 to 生活), moves 生活 up and
+Pages to the end, and removes a group with Undo. It checks the sidebar's groups and their pages, that no page is lost, that
+the hub keeps the arrangement and that a second browser draws the same groups; `--old-hub` that the arrangement stays in
+the browser and the setting says so. Light and dark screenshots of the sidebar (the phone's drawer open) and of the editor
+at 1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory; a 300-second watchdog ends the run.
+
 ## Start page (#9071)
 
 ```sh
@@ -418,3 +436,21 @@ open, **Done** in an opened item's header leaves the list where it was (it used 
 opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
 end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
 four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
+
+## Long tasks in a long conversation (#9795)
+
+```sh
+node web/e2e/chat-long-tasks.mjs <web origin> <artifact-directory> [--items <n>] [--secs <s>] [--chromium <executable>]
+```
+
+Opens the real app in a fresh headless browser with every hub request and the socket answered in the browser by invented
+data, and every other origin refused, so it can be pointed at any server of the web bundle (Vite, `vite preview`, or a
+hub serving its build) without reaching a hub. The text is shaped like real chats: branch and repository names without
+an extension, quotes and tables. Two scenarios: an Agent chat of `--items` items (2,000 by default) opening, watched for
+10 seconds after its newest message is on the page; then the main conversation (240 items and a question) while a reply
+naming 80 branches streams for `--secs` seconds (30 by default), a delta about every 80 ms and a tool call every
+second. A trivial script is run in the page again and again; one not answered within 5 seconds counts as stuck.
+`results.json` has, per scenario, when the newest message was drawn, the longest task and those over 1 second, the
+slowest answer and the stuck ones; a screenshot of each is taken when the page can still draw. It fails on any task over
+1 second, a stuck answer, a page error, a request leaving the origin, or a conversation not drawn within 30 seconds;
+the last line is the verdict, and a watchdog ends a run that overruns with a timeout verdict.
