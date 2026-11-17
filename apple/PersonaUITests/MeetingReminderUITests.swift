@@ -27,18 +27,17 @@ final class MeetingReminderUITests: XCTestCase {
         try shot(app, "list")
     }
 
-    /// Start: the meeting named after the event records, in its room, on a hub with the meeting conversation and the
-    /// note-taker (#8851): Persona wasn't invited, so it never "joined".
+    /// Start: the meeting named after the event records, in its room, as a real start begins it (a hub with the meeting
+    /// conversation, Invite Persona Automatically on: Persona is in the room).
     @MainActor func testStartOpensTheRoom() throws {
         if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] {
             try post(hub, "/mock/meeting_conversation", ["on": true, "room": "ok", "end_seconds": 180])
-            try post(hub, "/mock/meeting_live_view", ["on": true])
+            try post(hub, "/mock/meeting_attendance", ["on": true, "default": "listener"])
         }
         let app = try launch(["-tab", "assistant", "-showMeetingReminder", "start"])
         XCTAssertTrue(element(app, "recording-live-hide").waitForExistence(timeout: 25), "no meeting room:\n\(app.debugDescription)")
         XCTAssertTrue(app.staticTexts["产品周会"].firstMatch.exists, "not the event's name:\n\(app.debugDescription)")
-        sleep(2) // the room's first message
-        XCTAssertFalse(element(app, "meeting-thread-joined").exists, "Persona joined a meeting it wasn't invited to")
+        XCTAssertTrue(element(app, "meeting-room-persona").waitForExistence(timeout: 10), "Persona isn't in the room:\n\(app.debugDescription)")
         try shot(app, "start")
     }
 
