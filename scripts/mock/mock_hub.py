@@ -11305,6 +11305,7 @@ HELLO = {}
 # Settings › Connectors › Lark bot (GET/PUT /api/v1/bots/feishu); MOCK_BOT=pairing shows a code waiting, =off a fresh hub.
 FEISHU_BOT = {"enabled": True, "app_id": "cli_example0001", "domain": "https://open.feishu.cn", "has_secret": True,
               "from_config": False, "connected": True, "bot_name": "Persona", "target": "主对话",
+              "source_report_delay_minutes": 10, "source_report_full_reply": False,
               "features": {"main": True, "cards": True, "all_cards": False, "pushes": True, "sync": False, "agents": True},
               "owner": {"name": "我", "paired_at": int(time.time()) - 86400 * 3},
               "agents": [{"title": "persona › api「修登录」 · server", "machine_id": "server", "session_id": "s1"}]}
@@ -28428,7 +28429,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if p == "/api/v1/bots/feishu" and self.command == "PUT":
             body = json.loads(self.last_body or b"{}")
-            for k in ("enabled", "features", "domain"):
+            for k in ("enabled", "features", "domain", "source_report_delay_minutes", "source_report_full_reply"):
                 if k in body: FEISHU_BOT[k] = body[k]
             if body.get("app_id"):
                 FEISHU_BOT.update(app_id=body["app_id"], has_secret=True, connected=True, bot_name="Persona")

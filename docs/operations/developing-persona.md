@@ -10,8 +10,8 @@ hub or anyone else unless the owner sends the file, and then only as an ordinary
 | Client | State |
 | --- | --- |
 | iPhone / iPad | #9460: switch, recording, MetricKit, export with Send to Agent and Share File |
-| Web, desktop app | planned: same switch and package (the desktop app adds its main process) |
-| Android | planned, separate issue |
+| Web, desktop app | #9617: switch, recording, export with Send to Agent and Download (the desktop app's own main process: planned) |
+| Android | planned, #9618 |
 | Watch | not in the first version (MetricKit is not available on watchOS) |
 
 ## The switch
@@ -51,6 +51,31 @@ with `.devScreen(…)` (`chat`, `assistant-chat`, `screen`, `knowledge`).
 behind a lock and lines are appended in batches on a utility queue (crash reports are written at once). While off, the
 hooks (`DevProbe`, `HubRedirects.finished`) are nil checks.
 
+## What is recorded (web and the desktop app)
+
+The same lines and limits in spirit, kept in IndexedDB (`persona-dev-mode`) at most 24 hours and 5 MB. The switch is
+`localStorage` `persona.devMode` (when it was turned on) in Settings › About Persona; turning it off deletes the records,
+asking first when something is recorded.
+
+- `minute` (a minute while the page is visible, one per hidden stretch): hub requests by route pattern (count, bytes as
+  declared, median and longest time to the answer, status codes), hub WebSocket frames by type, bytes, connects and drops,
+  seconds per page (the address's first word: `s` for an Agent's chat, `settings`, `home`), `online`, `memory_mb` where the
+  browser tells it.
+- `foreground` per visible period; `app` (recording, visible, hidden), `page`, `network`, `socket`, `request_error`.
+- `errors.jsonl`: uncaught errors, unhandled rejections and freezes of 5 s or more (`lib/freeze-watch.ts`), whether or not
+  the hub takes error reports. `log.txt`: `console.error` / `console.warn` lines, scrubbed (an error a boundary caught is
+  logged there too).
+- The manifest names the platform (`web`, or `desktop` inside the desktop app), the system and browser, the web build (its
+  entry script's name) and the hub's version.
+
+**No first-screen cost.** Everything lives in chunks that load only while the switch is on (`lib/dev-mode.ts`,
+`lib/dev-package.ts` with jszip, `views/settings/DevExportDialog.tsx`). The start-up check and the WebSocket wrap are in
+`lib/dev-probe.ts`, loaded by `lib/error-reports-start.ts`, which runs before the app opens its socket and is outside the
+first screen's budget. The recorder hooks `fetch`, `history`, `popstate`, `error`, `unhandledrejection`, the console and
+the freeze watch itself and puts them back when the switch goes off; it imports nothing from the first screen's modules
+that they do not already export, so its route word list is a copy of `lib/error-reports.ts`'s (`dev-mode.test.ts` keeps
+them equal). A socket already open when the switch is turned on is counted from its next connection.
+
 ## The package
 
 `persona-diagnostics-<platform>-<yyyyMMdd-HHmm>.zip` (local time), a folder of the same name inside:
@@ -80,6 +105,12 @@ diagnostics from my device (since …). Please find out what is using the batter
 already holds words. Nothing is sent until the owner sends it; the Agent reads the zip from that computer. Persona with no
 main conversation yet: the new conversation's box. **Share File…** is the system share sheet.
 
+On the web the export dialog's first button is the same: Send To lists Forward to's targets with its rows (exported from
+`views/chat/ForwardDialog.tsx`), and the zip goes into the chosen chat's composer files (`lib/composer-files.ts` `addFiles`,
+uploaded to that chat's computer) with the note put in the box before any words it holds (`sendDraft` `unsent`).
+**Download** saves the zip.
+
+
 ## What is never included
 
 Message text, knowledge base content, keys, tokens, passwords, cookies, pairing links, the device's name, the hub's
@@ -102,3 +133,10 @@ and lines), `DevStore` (files, limits), `DevMetrics` (MetricKit), `DevPackage` (
 (About's group, Export Diagnostics), `DevSend` (Send To and the hand-off to a chat's box). Shared code reports through `apple/Shared/DevProbe.swift`; requests through
 `HubRedirects.finished` in PersonaWire. DEBUG: `-openAbout YES` opens About, `-openAbout export` its export page.
 Tests: `apple/PersonaTests/DevModeTests.swift`.
+
+## Code (web)
+
+`web/src/lib/dev-probe.ts` (the switch's key, the WebSocket wrap), `web/src/lib/dev-mode.ts` (recorder, store, hooks),
+`web/src/lib/dev-scrub.ts`, `web/src/lib/dev-package.ts`, `web/src/views/settings/DevModeSettings.tsx` (About Persona's
+rows), `web/src/views/settings/DevExportDialog.tsx` (export, Send To, Download). Tests: `web/src/lib/dev-mode.test.ts`,
+`web/src/views/settings/DevModeSettings.test.tsx`.
