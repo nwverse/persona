@@ -30,19 +30,21 @@ type phone struct {
 	t   *testing.T
 	ack bool // acknowledge what arrives
 
-	mu         sync.Mutex
-	got        map[byte][]byte
-	recv       map[byte]uint64
-	tcpData    map[byte]int // every TCP data payload, before deduplication or assembly
-	parsers    map[byte]*phoneVideoParser
-	closeAt    map[byte]uint64
-	ended      map[byte]bool
-	drops      map[byte]bool // data that the network loses before the phone sees it
-	resetDrops map[byte]bool // resets lost the same way
-	failures   []error
-	resets     int
-	msgs       chan msg
-	carriers   []*carrier
+	mu          sync.Mutex
+	got         map[byte][]byte
+	recv        map[byte]uint64
+	tcpData     map[byte]int // every TCP data payload, before deduplication or assembly
+	parsers     map[byte]*phoneVideoParser
+	closeAt     map[byte]uint64
+	ended       map[byte]bool
+	drops       map[byte]bool // data that the network loses before the phone sees it
+	resetDrops  map[byte]bool // resets lost the same way
+	flowTCP     bool          // released phone: while a UDP flow carries a channel, ignore its TCP data
+	flowParents map[byte]*carrier
+	failures    []error
+	resets      int
+	msgs        chan msg
+	carriers    []*carrier
 }
 
 // phoneVideoParser is the released app's VideoMessageAssembler: only whole video wire messages come out.
@@ -84,7 +86,7 @@ type carrier struct {
 func newPhone(t *testing.T, ack bool) *phone {
 	return &phone{t: t, ack: ack, got: map[byte][]byte{}, recv: map[byte]uint64{}, tcpData: map[byte]int{},
 		parsers: map[byte]*phoneVideoParser{}, closeAt: map[byte]uint64{}, ended: map[byte]bool{},
-		drops: map[byte]bool{}, resetDrops: map[byte]bool{}, msgs: make(chan msg, 1024)}
+		drops: map[byte]bool{}, resetDrops: map[byte]bool{}, flowParents: map[byte]*carrier{}, msgs: make(chan msg, 1024)}
 }
 
 func (p *phone) carry(conn io.ReadWriteCloser) *carrier {
@@ -111,7 +113,11 @@ func (p *phone) carry(conn io.ReadWriteCloser) *carrier {
 				id, off, data, _ := readChanOffset(body)
 				p.mu.Lock()
 				p.tcpData[id] += len(data)
+				ignore := p.flowTCP && p.flowParents[id] != nil
 				p.mu.Unlock()
+				if ignore {
+					continue // the released phone applies only TCP reset and close while a flow carries this channel
+				}
 				recv, err := p.accept(id, off, data)
 				if err == nil && p.ack {
 					c.send(TypeAck, chanOffset(id, recv))
@@ -234,6 +240,32 @@ func (p *phone) rewind(id byte, off uint64) {
 		parser.reset()
 	}
 	p.mu.Unlock()
+}
+
+// enableFlowTCP applies the released phone's flow rule in reset-delivery tests; main's fixtures leave it off.
+func (p *phone) enableFlowTCP() {
+	p.mu.Lock()
+	p.flowTCP = true
+	p.mu.Unlock()
+}
+
+// startFlow records the parent a UDP flow carries the channel for. TCP reset and close still apply; data does not.
+func (p *phone) startFlow(id byte, parent *carrier) {
+	p.mu.Lock()
+	p.flowParents[id] = parent
+	p.mu.Unlock()
+}
+
+// leaveFlow models the released phone leaving a dead UDP path: it sends use on the parent with its ordered offset.
+func (p *phone) leaveFlow(id byte) {
+	p.mu.Lock()
+	parent := p.flowParents[id]
+	delete(p.flowParents, id)
+	off := p.recv[id]
+	p.mu.Unlock()
+	if parent != nil {
+		parent.send(TypeUse, chanOffset(id, off))
+	}
 }
 
 func (p *phone) received(id byte) []byte {

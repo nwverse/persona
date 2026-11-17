@@ -663,18 +663,19 @@ func (s *Session) moveLocked(ch *channel, t *transport, off uint64) bool {
 	}
 	ch.sent, ch.progress = ch.base, s.now()
 	ch.resetOut = false // the new route owes an unconfirmed reset itself; the old writer no longer holds one
-	if ch.jumpValid && !ch.jumpConfirmed {
-		if ch.jumpData {
-			// The phone may have received data past the old jump, even in the middle of a message. A reset at the old
-			// offset is no longer safe: jump to the end of everything handed out and start at a new keyframe. Keep
-			// non-frame messages (format, encoding, …): a keyframe request does not make the helper repeat them.
-			s.dropFramesLocked(ch, "video moved with an unconfirmed reset")
-		} else {
-			// No post-jump data was handed out, so the phone is still at or before the jump and the same reset is safe.
-			ch.reset = true
-		}
-	} else if ch.video() && len(ch.buf) > 0 && s.ageLocked(ch) > s.limits.VideoBacklog {
+	// An old backlog drops first, as on main. Its end is a safe new jump in either unconfirmed case: the phone's reset
+	// only moves forward and clears a half message.
+	switch {
+	case ch.video() && len(ch.buf) > 0 && s.ageLocked(ch) > s.limits.VideoBacklog:
 		s.dropBacklogLocked(ch)
+	case ch.jumpValid && !ch.jumpConfirmed && ch.jumpData:
+		// The phone may have received data past the old jump, even in the middle of a message. A reset at the old
+		// offset is no longer safe: jump to the end of everything handed out and start at a new keyframe. Keep
+		// non-frame messages (format, encoding, …): a keyframe request does not make the helper repeat them.
+		s.dropFramesLocked(ch, "video moved with an unconfirmed reset")
+	case ch.jumpValid && !ch.jumpConfirmed:
+		// The backlog is young and no post-jump data was handed out, so the same reset remains safe.
+		ch.reset = true
 	}
 	s.cond.Broadcast()
 	return true

@@ -419,17 +419,6 @@ func TestVideoResetDeliveryR11RFBUnchanged(t *testing.T) {
 	}
 }
 
-func udpFlowTransport(s *Session) *transport {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for tr := range s.ts {
-		if tr.flow != nil {
-			return tr
-		}
-	}
-	return nil
-}
-
 func prepareUDPReset(t *testing.T, l *udpLink, dropResets int) (uint64, <-chan []byte) {
 	t.Helper()
 	l.up.mu.Lock()
@@ -449,18 +438,18 @@ func awaitUDPResetLoss(t *testing.T, u *udpPhone) {
 	}
 }
 
-// R8: a UDP reset is dequeued and lost, with no later data on the flow. Automatic parent fallback owes that reset.
+// R8: a UDP reset is dequeued and lost, with no later data on the flow. The phone leaves the dead path and its use moves
+// the channel to the parent, which owes that reset before real TCP delivery resumes.
 func TestVideoResetDeliveryR8UDPResetLostThenParent(t *testing.T) {
-	l := openUDPLink(t, resetTestLimits())
+	l := openResetUDPLink(t, resetTestLimits())
 	l.up.prove()
 	l.up.use(l.id, 0)
-	flow := udpFlowTransport(l.s)
 	parent := directTransport(l.s)
 	jump, requests := prepareUDPReset(t, l, 1)
 	nextKeyframeRequest(t, requests)
 	awaitUDPResetLoss(t, l.up)
 
-	flow.flow.closeTransport()
+	l.up.leaveFlow()
 	waitChannelActive(t, l.s, l.id, parent)
 	l.p.dropData(l.id, false)
 	key := videoFrameMsg(2, true, 100)
@@ -474,13 +463,43 @@ func TestVideoResetDeliveryR8UDPResetLostThenParent(t *testing.T) {
 	l.p.checkHealthy()
 }
 
-// R9: data followed the lost UDP reset and only some datagrams arrived. Parent fallback must drop again rather than
-// send the old reset into a message the phone may already have started.
-func TestVideoResetDeliveryR9UDPDataLostThenParent(t *testing.T) {
-	l := openUDPLink(t, resetTestLimits())
+// When the node closes a flow, its parent reset still precedes data. The released phone ignores that parent data until
+// it leaves the flow, so this asserts only the node's wire order, not phone delivery.
+func TestVideoResetDeliveryNodeClosedFlowParentResetPrecedesData(t *testing.T) {
+	l := openResetUDPLink(t, resetTestLimits())
 	l.up.prove()
 	l.up.use(l.id, 0)
+	parent := directTransport(l.s)
+	dataWrite := installWriteGate(t, l.s, parent, TypeData, 0)
+	jump, requests := prepareUDPReset(t, l, 1)
+	nextKeyframeRequest(t, requests)
+	awaitUDPResetLoss(t, l.up)
 	flow := udpFlowTransport(l.s)
+	flow.flow.closeTransport()
+	waitChannelActive(t, l.s, l.id, parent)
+	reset := l.p.nextOf(TypeReset)
+	_, at, _, _ := readChanOffset(reset.body)
+	if at != jump || reset.via != l.direct {
+		t.Fatalf("reset at %d on the wrong route, want %d on the UDP parent", at, jump)
+	}
+	l.p.dropData(l.id, false)
+	key := videoFrameMsg(2, true, 100)
+	writeVideo(l.helper, key)
+	dataWrite.await(t)
+	if n := l.p.rawTCPData(l.id); n != 0 {
+		t.Fatalf("%d parent data bytes arrived before the reset", n)
+	}
+	dataWrite.complete(nil)
+	dataWrite.waitComplete(t)
+	l.p.checkHealthy()
+}
+
+// R9: data followed the lost UDP reset and only some datagrams arrived. When the phone leaves that dead path, the parent
+// must drop again rather than send the old reset into a message the phone may already have started.
+func TestVideoResetDeliveryR9UDPDataLostThenParent(t *testing.T) {
+	l := openResetUDPLink(t, resetTestLimits())
+	l.up.prove()
+	l.up.use(l.id, 0)
 	parent := directTransport(l.s)
 	jump, requests := prepareUDPReset(t, l, 1)
 	nextKeyframeRequest(t, requests)
@@ -504,7 +523,7 @@ func TestVideoResetDeliveryR9UDPDataLostThenParent(t *testing.T) {
 		l.up.mu.Unlock()
 		return sent && received
 	})
-	flow.flow.closeTransport()
+	l.up.leaveFlow()
 	waitChannelActive(t, l.s, l.id, parent)
 	l.p.dropData(l.id, false)
 	secondKey := videoFrameMsg(3, true, 100)
@@ -581,7 +600,7 @@ func TestVideoResetDeliveryEOFWaitsForJumpConfirmation(t *testing.T) {
 // A final UDP reset has no data tail to probe. If it or its acknowledgement is lost, the ordinary stall watchdog must
 // still move the quiet channel so its parent can owe the reset again instead of waiting forever for confirmation.
 func TestVideoResetDeliveryEOFLostUDPResetFallsBack(t *testing.T) {
-	l := openUDPLink(t, resetTestLimits())
+	l := openResetUDPLink(t, resetTestLimits())
 	l.up.prove()
 	l.up.use(l.id, 0)
 	clock := useClock(l.s)
@@ -620,8 +639,9 @@ func TestVideoResetDeliveryEOFLostUDPResetFallsBack(t *testing.T) {
 	l.p.checkHealthy()
 }
 
-// A reset blocked in a writer is outstanding even when no post-jump byte has been handed out. At EOF the retained
-// messages stay intact; StallAfter moves the route, and the next route repeats the same reset before messages and close.
+// A reset blocked in a writer is outstanding even when no post-jump byte has been handed out. At EOF this retained
+// backlog is young (VideoBacklog remains an hour, beyond StallAfter), so it stays intact; the next route repeats the same
+// reset before messages and close.
 func TestVideoResetDeliveryEOFBlockedResetRetainsBufferAndFallsBack(t *testing.T) {
 	limits := resetTestLimits()
 	limits.StallAfter = 100 * time.Millisecond
@@ -763,7 +783,7 @@ func TestVideoResetDeliveryLiveLostResetOnQuietRouteFallsBack(t *testing.T) {
 // later keyframe, so the skip drops those messages and repeats the close at E only after its reset is confirmed.
 func TestVideoResetDeliveryEOFSkipDoesNotOutrunClose(t *testing.T) {
 	limits := resetTestLimits()
-	l := openUDPLink(t, limits)
+	l := openResetUDPLink(t, limits)
 	l.up.prove()
 	l.up.use(l.id, 0)
 	parent := directTransport(l.s)
@@ -811,10 +831,10 @@ func TestVideoResetDeliveryEOFSkipDoesNotOutrunClose(t *testing.T) {
 	l.p.checkHealthy()
 }
 
-// A second safety drop must retain the non-frame messages skipBacklogLocked kept for the decoder. In particular, a
-// keyframe request does not make the helper repeat unchanged parameter sets.
+// A second safety drop must retain the non-frame messages skipBacklogLocked kept for the decoder. The phone leaves the
+// flow before parent delivery. A keyframe request does not make the helper repeat unchanged parameter sets.
 func TestVideoResetDeliveryHandoffKeepsFormat(t *testing.T) {
-	l := openUDPLink(t, resetTestLimits())
+	l := openResetUDPLink(t, resetTestLimits())
 	l.up.prove()
 	l.up.use(l.id, 0)
 	l.up.mu.Lock()
@@ -848,9 +868,8 @@ func TestVideoResetDeliveryHandoffKeepsFormat(t *testing.T) {
 		return ch.base == jump && ch.sent == jump+uint64(len(format)) && len(ch.buf) == len(format)
 	})
 
-	flow := udpFlowTransport(l.s)
 	parent := directTransport(l.s)
-	flow.flow.closeTransport()
+	l.up.leaveFlow()
 	waitChannelActive(t, l.s, l.id, parent)
 	nextKeyframeRequest(t, requests)
 	key := videoFrameMsg(3, true, 100)
@@ -915,12 +934,12 @@ func TestVideoResetDeliveryTypeUseResumesPartialMessage(t *testing.T) {
 	noKeyframeRequest(t, requests)
 }
 
-// A delivered UDP reset is acknowledged even without a completed message. Its later parent fallback adds nothing.
+// A delivered UDP reset is acknowledged even without a completed message. When the phone later leaves the flow, that
+// confirmed jump adds nothing and parent data arrives for real.
 func TestVideoResetDeliveryUDPResetConfirmedBeforeFallback(t *testing.T) {
-	l := openUDPLink(t, resetTestLimits())
+	l := openResetUDPLink(t, resetTestLimits())
 	l.up.prove()
 	l.up.use(l.id, 0)
-	flow := udpFlowTransport(l.s)
 	parent := directTransport(l.s)
 	jump, requests := prepareUDPReset(t, l, 0)
 	nextKeyframeRequest(t, requests)
@@ -933,7 +952,7 @@ func TestVideoResetDeliveryUDPResetConfirmedBeforeFallback(t *testing.T) {
 		defer l.s.mu.Unlock()
 		return l.s.chans[l.id].jumpConfirmed
 	})
-	flow.flow.closeTransport()
+	l.up.leaveFlow()
 	waitChannelActive(t, l.s, l.id, parent)
 	l.p.dropData(l.id, false)
 	key := videoFrameMsg(2, true, 100)
@@ -948,7 +967,7 @@ func TestVideoResetDeliveryUDPResetConfirmedBeforeFallback(t *testing.T) {
 // Losing a UDP reset does not require a route change: want from behind the jump re-arms it on the surviving flow,
 // then ordinary nack recovery completes the keyframe.
 func TestVideoResetDeliveryUDPSameFlowWantRetriesReset(t *testing.T) {
-	l := openUDPLink(t, resetTestLimits())
+	l := openResetUDPLink(t, resetTestLimits())
 	l.up.prove()
 	l.up.use(l.id, 0)
 	flow := udpFlowTransport(l.s)
@@ -986,14 +1005,14 @@ func TestVideoResetDeliveryUDPSameFlowWantRetriesReset(t *testing.T) {
 }
 
 // A stale TCP reset write completing after a UDP handoff cannot change the flow's jump state, whether it succeeds or
-// fails. The UDP reset is still owed to the parent afterwards.
+// fails. Once the phone leaves the flow, the UDP reset is still owed to the parent before real delivery resumes.
 func TestVideoResetDeliveryStaleTCPCompletionAfterUDP(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
 	}{{"late failure", io.ErrClosedPipe}, {"late success", nil}} {
 		t.Run(tc.name, func(t *testing.T) {
-			l := openUDPLink(t, resetTestLimits())
+			l := openResetUDPLink(t, resetTestLimits())
 			l.up.prove()
 			l.up.mu.Lock()
 			l.up.autoAsk = false
@@ -1023,7 +1042,7 @@ func TestVideoResetDeliveryStaleTCPCompletionAfterUDP(t *testing.T) {
 				t.Fatalf("stale TCP completion changed UDP state: before %+v, after %+v", before, after)
 			}
 			parent := directTransport(l.s)
-			flow.flow.closeTransport()
+			l.up.leaveFlow()
 			waitChannelActive(t, l.s, l.id, parent)
 			l.p.dropData(l.id, false)
 			key := videoFrameMsg(2, true, 100)

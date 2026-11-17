@@ -852,15 +852,16 @@ iPhone's side comes next.
 - **Moving a channel**: RFB is always sent on exactly from the phone's offset; its protocol state can't lose a byte.
   Video with a backlog older than 200 ms is not replayed: the node drops it, sends `reset` with where the stream goes
   on, asks Persona Screen for a keyframe (between two of the phone's messages, never inside one) and drops frames until
-  it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. When the
-  transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
+  it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. Every move
+  applies that age drop first, whether or not an earlier jump is confirmed; the new jump replaces an unconfirmed one.
+  When the transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
   A dropped backlog's reset stays owed until an offset stated by the phone confirms the jump; dequeuing or successfully
   writing the reset does not confirm delivery. When an unconfirmed jump changes transport, the new route sends its reset
   before data; if post-jump data was already handed to a writer, the node drops to a fresh message boundary and keyframe
-  first, so the reset cannot land inside a message the phone may have started. While the stream is live, that safety drop
-  retains non-frame decoder messages (`format`, `encoding`, …), because the helper need not repeat them for the new
-  keyframe. A safety drop after EOF discards the remaining video buffer: no later keyframe can follow, and retained
-  messages must not move the stream's end beyond a close the phone already holds. EOF by itself leaves buffered messages
+  first, so the reset cannot land inside a message the phone may have started. While no close has gone out, that safety
+  drop retains non-frame decoder messages (`format`, `encoding`, …), even at EOF, because the helper need not repeat them
+  for the new keyframe. Once a close has gone out, the drop discards the remaining video buffer instead: no later keyframe
+  can follow, and retained messages must not move the stream's end beyond that close. EOF by itself leaves buffered messages
   intact while a reset awaits confirmation. The close of a stream is handed out only once the phone has confirmed its
   final jump. A new jump after a close went out owes another close after confirmation, because the phone's reset handler
   does not re-check an earlier close; moving or losing a route alone does not owe the close again. A reset handed to a

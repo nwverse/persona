@@ -47,6 +47,17 @@ func activeTransport(s *Session, id byte) *transport {
 	return s.chans[id].active
 }
 
+func udpFlowTransport(s *Session) *transport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tr := range s.ts {
+		if tr.flow != nil {
+			return tr
+		}
+	}
+	return nil
+}
+
 func (g *writeGate) Write(b []byte) (int, error) {
 	g.mu.Lock()
 	if g.fired {
@@ -130,6 +141,14 @@ func resetTestLimits() Limits {
 	l.StallAfter = time.Hour
 	l.Grace = time.Hour
 	l.VideoBacklog = time.Hour
+	return l
+}
+
+// openResetUDPLink enables the released phone's TCP-data rule for reset-delivery tests without changing main's fixtures.
+func openResetUDPLink(t *testing.T, limits Limits) *udpLink {
+	t.Helper()
+	l := openUDPLink(t, limits)
+	l.p.enableFlowTCP()
 	return l
 }
 

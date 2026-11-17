@@ -87,7 +87,7 @@ func TestVideoResetDeliveryCloseWaitsForConfirmationTCP(t *testing.T) {
 func TestVideoResetDeliveryCloseWaitsForConfirmationUDP(t *testing.T) {
 	for _, confirmation := range []string{"ack", "want"} {
 		t.Run(confirmation, func(t *testing.T) {
-			l := openUDPLink(t, resetTestLimits())
+			l := openResetUDPLink(t, resetTestLimits())
 			l.up.prove()
 			l.up.use(l.id, 0)
 			l.up.mu.Lock()
@@ -230,7 +230,7 @@ func TestVideoResetDeliveryDataDoesNotRestartResetStallClockTCP(t *testing.T) {
 func TestVideoResetDeliveryDataDoesNotRestartResetStallClockUDP(t *testing.T) {
 	limits := resetTestLimits()
 	limits.StallAfter = 100 * time.Millisecond
-	l := openUDPLink(t, limits)
+	l := openResetUDPLink(t, limits)
 	l.up.prove()
 	l.up.use(l.id, 0)
 	clock := useClock(l.s)
@@ -297,7 +297,7 @@ func TestVideoResetDeliveryAckBelowResetDoesNotConfirmTCP(t *testing.T) {
 func TestVideoResetDeliveryAckBelowResetDoesNotConfirmUDP(t *testing.T) {
 	limits := resetTestLimits()
 	limits.StallAfter = 100 * time.Millisecond
-	l := openUDPLink(t, limits)
+	l := openResetUDPLink(t, limits)
 	l.up.prove()
 	l.up.use(l.id, 0)
 	clock := useClock(l.s)

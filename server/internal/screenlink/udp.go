@@ -504,12 +504,12 @@ func (s *Session) skipBacklogLocked(ch *channel) {
 // dropFramesLocked drops frames to the buffer's end but keeps its whole non-frame messages after the new jump. A
 // handoff whose old reset may be unsafe uses the same boundary without losing decoder state the helper will not repeat.
 func (s *Session) dropFramesLocked(ch *channel, reason string) {
-	if ch.eof {
-		// Retained decoder messages have no later keyframe to serve and could outrun a close already held by the phone.
+	if ch.sentClose {
+		// The stream has ended and a close has gone out; retained messages must not move the end beyond it.
 		s.dropBacklogLocked(ch)
 		return
 	}
-	// The stream has not ended here, so no close has gone out that this jump would have to owe again.
+	// No close has gone out here, so this jump has no close to owe again.
 	var keep [][]byte
 	end := ch.base + uint64(len(ch.buf))
 	for i, mk := range ch.marks {

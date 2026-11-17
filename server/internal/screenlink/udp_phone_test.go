@@ -19,6 +19,7 @@ import (
 type udpPhone struct {
 	t      *testing.T
 	shared *phone // the same ordered receiver and assembler the TCP carriers use
+	parent *carrier
 	conn   *net.UDPConn
 	keys   *udpKeys
 	out    *udpSealer
@@ -115,6 +116,7 @@ func openUDPLink(t *testing.T, limits Limits) *udpLink {
 	l := &udpLink{s: s, p: p, direct: direct, dc: dc, helper: helper, ss: ss, id: id, paths: paths, ready: ready, nodeAt: nodeAt}
 	l.up = newUDPPhone(t, p, dc, ready, nodeAt)
 	l.up.ch = id
+	l.up.parent = direct
 	l.up.onError = func() {
 		if tr := udpFlowTransport(s); tr != nil {
 			tr.flow.closeTransport()
@@ -204,6 +206,7 @@ func (u *udpPhone) use(ch byte, off uint64) []byte {
 	if ch == u.ch {
 		u.expected = off
 		u.shared.rewind(ch, off)
+		u.shared.startFlow(ch, u.parent)
 	}
 	u.mu.Unlock()
 	for i := 0; i < 20; i++ {
@@ -218,6 +221,12 @@ func (u *udpPhone) use(ch byte, off uint64) []byte {
 	}
 	u.t.Fatal("no resumed")
 	return nil
+}
+
+// leaveFlow models the phone itself leaving a dead UDP path, rather than the node closing the flow transport.
+func (u *udpPhone) leaveFlow() {
+	_ = u.conn.Close()
+	u.shared.leaveFlow(u.ch)
 }
 
 // ping asks for parity at ratio (ten-thousandths) and returns the pong's counters: data, parity, resent bytes.
