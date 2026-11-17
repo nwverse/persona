@@ -81,6 +81,8 @@ struct ChatView: View {
     @State private var showTodoDetail = false
     /// A task a hub link in this chat opened (`/todos?id=…`, #2696): its detail rises like a link.
     @State private var linkedTodo: TodoDetailRoute?
+    /// A knowledge entry or computer a link in this chat opened (#9926); a to-do keeps `linkedTodo`.
+    @State private var hubSheet: HubLinkSheet?
     @State private var showLink = false
     /// The Mac's chat column has room for its title in the title bar's row (`macTitleRow`).
     @State private var macWide = true
@@ -189,6 +191,8 @@ struct ChatView: View {
     @Environment(\.shell) private var shell
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
     @Environment(\.shellRailEdge) private var railEdge
+    /// iPhone Duo's side column under the tab bar: how much of it this chat's buttons have (`sideButtons`, #9837).
+    @Environment(\.sideColumn) private var sideColumn
     /// The page draws this chat's lifted message (`MessageLiftHost`).
     @Environment(\.messageLiftHost) private var liftHost
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
@@ -207,6 +211,8 @@ struct ChatView: View {
     @State private var chrome = ChatChrome()
     /// The page's height, read by the pending cards only (#926).
     @State private var footerRoom = FooterRoom()
+    /// Where each pending card's message is in the chat, for its View in Chat (#9392).
+    @State private var cardSources = CardSources()
     @Environment(\.openSpace) private var openSpace
     @State private var link: LinkTarget?
     /// ⋯ › Preview's list of the session's dev servers, and the one picked there, opened once the list is gone (#150).
@@ -419,6 +425,9 @@ struct ChatView: View {
         #if os(macOS)
         .macChatDrop(key) // files dropped anywhere on the page go to the composer (#2113)
         #endif
+        // The header's overlay and the side-bars top under it start a segment of their own (#9709): the chain had grown
+        // two longer at its end, where each slot holds all before it.
+        .stackSegment()
         .overlay(alignment: .top) {
             #if os(macOS)
             if style == .dev { macChrome }
@@ -757,9 +766,9 @@ struct ChatView: View {
         // AnyView here, in chatPresentation and in chatLifecycle: the page's modifiers as one type were ~60 levels deep, and the runtime spent
         // about 100 ms building that type's metadata the first time the page drew (cold start, #1337). Each boundary
         // is the same type every time, so nothing below loses its identity or state. Also cut midway here, in
-        // chatLifecycle, chatSurface, paneContent, mainFooter and Composer: unoptimized, each getter reserved a stack
-        // slot for every intermediate of its chain, each holding all before it, and a Debug build's chat page reached
-        // 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
+        // chatLifecycle, chatSurface, paneContent, chatScroll, mainFooter and Composer: unoptimized, each getter
+        // reserved a stack slot for every intermediate of its chain, each holding all before it, and a Debug build's
+        // chat page reached 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
         let activityTop = AnyView(chatPresentation)
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
         #if os(iOS)
@@ -831,6 +840,9 @@ struct ChatView: View {
         }
         .stackSegment()
         .renameSessionAlert($renaming)
+        // The presenters that each hold a binding to a session (rename, link to a todo, close, delete) got one more
+        // with the link sheet: cut in two (#9709, `MainPagesStackTests`).
+        .stackSegment()
         #if os(iOS)
         .sheet(item: Binding(get: { AgentMenuRouting.shared.linkingSession },
                               set: { AgentMenuRouting.shared.linkingSession = $0 })) {
@@ -851,7 +863,10 @@ struct ChatView: View {
                 })
         }
         .stackSegment()
-        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
+        // Presented here, pushed in Knowledge: the ✕ belongs to the sheet (#9653).
+        .sheet(item: $openedKnowledge) { entry in
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
+        }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
         #if DEBUG
@@ -876,9 +891,10 @@ struct ChatView: View {
         #endif
         // Pushed into the detail column in regular width (iPad, #2816), a sheet otherwise.
         .stackSegment()
+        .hubLinkSheet($hubSheet)
         .detailPresentation(item: $linkedTodo) { r in
             DetailStack {
-                TodoDetailView(todoID: r.id).macSheetDone { linkedTodo = nil }
+                TodoDetailView(todoID: r.id).sheetDone { linkedTodo = nil }
             }
             #if os(macOS)
             .macSheet()
@@ -888,7 +904,7 @@ struct ChatView: View {
             if let s = session, let todoID = s.todo?.id,
                 TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
                 DetailStack {
-                    TodoDetailView(todoID: todoID).macSheetDone { showTodoDetail = false }
+                    TodoDetailView(todoID: todoID).sheetDone { showTodoDetail = false }
                 }
                 #if os(macOS)
                 .macSheet()
@@ -1275,6 +1291,12 @@ struct ChatView: View {
             guard let k = model.linkedConversation(group, id: id) else { return false }
             target = k
             item = at
+        default:
+            // Any other page of the route table (#9926): where the app has it, a detail over this chat.
+            guard let opened = model.openHubPage(page, group: group) else { return false }
+            Haptics.tap()
+            if case .sheet(let s) = opened { hubSheet = s }
+            return true
         }
         Haptics.tap()
         if target == key || target == shownKey { // this chat: only to the message
@@ -1348,7 +1370,8 @@ struct ChatView: View {
             openPlan: { planOpen = true },
             openFold: openFold,
             jumpToCall: { jumpToCall($0) },
-            openQuote: { jumpToQuoted($0) })
+            openQuote: { jumpToQuoted($0) },
+            openAppLink: { openHubPage($0) })
     }
 
     /// Folds or opens a work line without moving what you were reading. In the upside-down list the newest end holds
@@ -2511,14 +2534,36 @@ struct ChatView: View {
         if ref.isForward { return openForwarded(ref) }
         if openContextLink(ref) { return true }
         guard ref.kind == "quote", !ref.msg.isEmpty else { return false }
+        return jumpToMessage(ref.msg, hold: hold)
+    }
+
+    /// Finds the pending cards' messages in the loaded chat (`CardSource`) and how View in Chat goes to one (#9392).
+    private func findCardSources() {
+        let items = store.items
+        var found: [String: String] = [:]
+        for card in pendingCards { found[card.id] = CardSource.item(for: card.interaction, in: items) }
+        if cardSources.items != found { cardSources.items = found }
+        // After the card has folded (`InteractionPanel`): the list's new height first, then the jump, which lands where
+        // the list measured it.
+        cardSources.open = { id in
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                _ = jumpToMessage(id)
+            }
+        }
+    }
+
+    /// Brings message `msg` (an item's id) of the loaded chat to the middle of the list and lights it up for `hold`, opening
+    /// the work line it is folded in; the list stops following the newest. False when it is not in the loaded chat.
+    private func jumpToMessage(_ msg: String, hold: Duration = Theme.Quote.flashHold) -> Bool {
         var target: String?
         for line in currentLines() {
             switch line.content {
             case .row, .recaps, .answerPart:
-                if line.holds(ref.msg) { target = line.id }
+                if line.holds(msg) { target = line.id }
             case .work(let wid, let items, let live, _, _):
                 // The agent's words before its last ones are in the work line: open it, go to that step.
-                if let item = items.first(where: { if case .text(let i) = $0 { i.id == ref.msg } else { false } }) {
+                if let item = items.first(where: { if case .text(let i) = $0 { i.id == msg } else { false } }) {
                     if !isOpen(wid, live: live) {
                         var t = Transaction()
                         t.disablesAnimations = true
@@ -2527,7 +2572,7 @@ struct ChatView: View {
                     target = wid + "/" + item.id
                 }
             case .workStep(let group, let item, _):
-                if case .text(let i) = item, i.id == ref.msg { target = group + "/" + item.id }
+                if case .text(let i) = item, i.id == msg { target = group + "/" + item.id }
             default: break
             }
             if target != nil { break }
@@ -2732,7 +2777,7 @@ struct ChatView: View {
     @ViewBuilder private var taskFooter: some View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
-        TaskQuestions(conversation: conversation)
+        TaskQuestions(conversation: conversation, room: footerRoom)
         DraftReader(key: key) { typed in
             if let range = TaskMentionList.mention(in: typed) {
                 TaskMentionList(conversation: conversation) { todo in
@@ -2829,6 +2874,10 @@ struct ChatView: View {
                 }
                 if !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
+                        .environment(\.cardSources, cardSources)
+                        .task(id: CardSourceInputs(cards: pendingCards.map(\.id), count: store.items.count, last: store.items.last?.id)) {
+                            findCardSources()
+                        }
                 }
                 // The latest question the assistant answered here (#544), until put away; Session Info lists them all.
                 if let answered = model.delegated(for: key).last {
@@ -3300,7 +3349,10 @@ struct ChatView: View {
             }
         }
         #endif
-        let presented = hooked
+        // The sheets and the rest of the chain start from an erased list (#9709, `MainPagesStackTests`): as one type,
+        // the list's chain with its scroll view and rows was about a hundred levels deep, and the chat pane's first
+        // render built its runtime metadata on top of the page's getters, 515 KB deep in a Debug build.
+        let presented = hooked.stackSegment()
         #if os(macOS)
         .sheet(item: $menu.selecting) { t in SelectableTextSheet(text: t.text, plain: t.plain, quote: menu.selectionQuote(of: t)) }
         #endif
@@ -4130,25 +4182,37 @@ struct ChatView: View {
     /// shows the symbol, the overflow menu both.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
         if !hidesBack && !systemShowsList {
-            ToolbarItem(placement: .cancellationAction) {
+            ToolbarItem(placement: .topBarLeading) {
                 // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if pane != .chat {
-                Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Chat", systemImage: SessionPane.chat.symbol) }
-            }
-            if session?.canTerminal == true {
-                Button { Haptics.tap(); openTerminal() } label: { Label("Terminal", systemImage: SessionPane.terminal.symbol).lineLimit(1) }
-            }
-            ForEach(panes.filter { ($0 == .git || $0 == .files) && $0 != pane }) { p in
-                Button { Haptics.tap(); withAnimation(Theme.Motion.standard) { pane = p } } label: {
-                    Label(paneBadges[p].map { String(localized: "\(p.title) (\($0))") } ?? p.title, systemImage: p.symbol)
+            ForEach(sideButtons) { p in
+                switch p {
+                case .chat:
+                    Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Chat", systemImage: SessionPane.chat.symbol) }
+                case .terminal:
+                    Button { Haptics.tap(); openTerminal() } label: { Label("Terminal", systemImage: SessionPane.terminal.symbol).lineLimit(1) }
+                default:
+                    Button { Haptics.tap(); withAnimation(Theme.Motion.standard) { pane = p } } label: {
+                        Label(paneBadges[p].map { String(localized: "\(p.title) (\($0))") } ?? p.title, systemImage: p.symbol)
+                    }
                 }
             }
             Menu { moreMenuItems } label: { Label("More", systemImage: Theme.Icon.more) }
         }
+    }
+
+    /// The side column's buttons between Back and ⋯, in order (back to the chat from a pane, the terminal, Git, Files),
+    /// as many of them as stand clear of the Duo's tab bar under them (#9837, `TabSwitchLayout.pageButtons`): the leading
+    /// ones; ⋯ has every one of them (`moreMenuItems`), so what has no room is still a tap away there.
+    private var sideButtons: [SessionPane] {
+        var all: [SessionPane] = pane != .chat ? [.chat] : []
+        if session?.canTerminal == true { all.append(.terminal) }
+        all += panes.filter { ($0 == .git || $0 == .files) && $0 != pane }
+        let back = !hidesBack && !systemShowsList
+        return Array(all.prefix(TabSwitchLayout.pageButtons(all.count, back: back, room: sideColumn?.room)))
     }
 
     /// The header's other half while its buttons are in the side column: the title (a tap shows the session's info),
@@ -5576,6 +5640,21 @@ struct Composer: View, Equatable {
         voiceNote = VoiceEntry.start(key, model: model)
     }
 
+    /// Call Persona in the 「+」 panel (#9290): Persona's main conversation only, on the iPhone and iPad (the system's calls);
+    /// Voice Chat beside it stays the chat's own voice. Why a call could not be placed shows over the app
+    /// (`PersonaCalls.refusal`, `personaCallCover`).
+    private var callPersonaEntry: (() -> Void)? {
+        #if os(iOS)
+        guard isMainAssistantChat, VoicePlatform.current == .phone else { return nil }
+        return {
+            focused = false
+            Task { [group = key.group] in await PersonaCalls.shared.callPersona(group: group, origin: .app) }
+        }
+        #else
+        return nil
+        #endif
+    }
+
     /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
@@ -6307,6 +6386,7 @@ struct Composer: View, Equatable {
     /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
+                                                call: callPersonaEntry,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
@@ -7269,7 +7349,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
+                                NavigationStack { TodoDetailView(todoID: todo.id).sheetDone { showTodo = false } }
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)
@@ -7302,7 +7382,7 @@ struct SessionInfoSheet: View {
             .navigationTitle("Session Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                SheetClose { dismiss() }
             }
             #endif
         }
@@ -7630,6 +7710,9 @@ struct WorkStepView: View, Equatable {
         var openFold: (Item) async throws -> Void = { _ in }
         var jumpToCall: (String) -> Void = { _ in }
         var openQuote: (ContextRef) -> Bool = { _ in false }
+        /// An app link to one of Persona's pages (`persona://open<path>`, an older `persona://` form, #9926): true when it
+        /// opened.
+        var openAppLink: (URL) -> Bool = { _ in false }
     }
 
     private var handlers = Handlers()
@@ -7673,6 +7756,9 @@ struct WorkStepView: View, Equatable {
             return .handled
         }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let self else {
+            // A link to one of Persona's pages written into a message (#9926): handed to the system it came back to
+            // `onOpenURL` and went nowhere.
+            if self?.handlers.openAppLink(url) == true { return .handled }
             // Mac: NSWorkspace would run any scheme it names (LinkPolicy).
             #if os(macOS)
             return LinkPolicy.system(url)

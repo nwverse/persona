@@ -322,6 +322,50 @@ func TestOrcaStartWaitsForTheScreenAndTypesAShortLine(t *testing.T) {
 	}
 }
 
+// On Windows Orca's terminals run Windows PowerShell by default, which reads neither Run's `cd -- <dir> &&` nor a POSIX
+// start: the node opens the start's terminal in Git Bash when Orca can be told the shell, and types the start file's
+// line there as on macOS. An older Orca, which would ignore the shell, and other platforms get Orca's default (#9810).
+func TestOrcaStartOpensGitBashOnWindows(t *testing.T) {
+	selection := []string{"terminal.prompt-delivery.v1", orcart.CapShellSelection}
+	for _, tc := range []struct {
+		name      string
+		windows   bool
+		paneShell string // herdrPaneShell(): "" on Windows, the login shell elsewhere
+		caps      []string
+		shell     any // terminal.create's shell; nil when not sent
+		sourced   bool
+	}{
+		{"windows", true, "", selection, "git-bash", true},
+		{"windows, older Orca", true, "", []string{"terminal.prompt-delivery.v1"}, nil, false},
+		{"macOS", false, "/bin/zsh", selection, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withPaneShell(t, tc.paneShell)
+			old := orcaOnWindows
+			orcaOnWindows = func() bool { return tc.windows }
+			t.Cleanup(func() { orcaOnWindows = old })
+			n, _, o, _, home := orcaNode(t)
+			o.SetStatus(map[string]any{"capabilities": tc.caps})
+			repoDir := mkdir(t, filepath.Join(home, "proj"))
+			o.SetWorktrees(orcarttest.Worktree("wt-proj", repoDir, "refs/heads/main"))
+			o.Handle("terminal.read", func(p map[string]any) any {
+				return map[string]any{"terminal": map[string]any{"handle": p["terminal"], "tail": []string{"bash-5.2$ "}, "source": "screen"}}
+			})
+			if _, err := request(t, n, "session.start", map[string]any{"session_id": startID, "cwd": repoDir, "async": true}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "the start line", func() bool { return len(o.Writes()) > 0 })
+			if got := o.Params("terminal.create")[0]["shell"]; got != tc.shell {
+				t.Errorf("terminal.create shell = %v, want %v", got, tc.shell)
+			}
+			typed := o.Writes()[0].Text
+			if sourced := strings.HasPrefix(typed, "cd -- "+shellQuote(repoDir)+" && . "); sourced != tc.sourced {
+				t.Errorf("typed %q: sources the start file = %v, want %v", typed, sourced, tc.sourced)
+			}
+		})
+	}
+}
+
 // orcaTypedStarts has o's terminal.send read the start file an Orca start's typed line (`cd -- <dir> && . <file>…`)
 // sources, while it is still there (typedstart.go), and returns the commands read so far.
 func orcaTypedStarts(o *orcarttest.Fake) func() []string {

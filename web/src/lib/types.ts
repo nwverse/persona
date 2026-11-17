@@ -185,6 +185,10 @@ export interface WorkState {
    *  (the closeout says merged and it is not) carries it with an empty `phase`. */
   closeout?: Closeout;
   interaction_id?: string;
+  /** The hub's triage found the turn done before anybody looked at it, less than three hours ago: listed as Just
+   *  finished (lib/agent-groups.ts justFinished, docs/protocol/agent-states.md "Just finished", #9751). Older hubs
+   *  never send it. */
+  just_finished?: boolean;
 }
 
 /** An agent's closeout (docs/assistant/agent-work.md "Closeout"): its own claim of where the work stands. `merged` and
@@ -431,6 +435,9 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
+  /** The user-defined labels of an assistant conversation (docs/assistant/assistant.md "Conversation tags"), newest
+   *  write first's provenance aside; omitted when it carries none. An older hub never sends it. */
+  tags?: string[];
   /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers, and they are
    *  the dev servers a preview offers (docs/web/preview.md). */
   ports?: Port[];
