@@ -22,6 +22,12 @@ final class DevModeUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+    /// Lets a sheet or the keyboard finish moving before a picture.
+    @MainActor private func settle(_ app: XCUIApplication) {
+        _ = app.wait(for: .runningForeground, timeout: 1)
+        Thread.sleep(forTimeInterval: 1.2)
+    }
+
     @MainActor private func shot(_ name: String, _ look: String) {
         let png = XCUIScreen.main.screenshot().pngRepresentation
         let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
@@ -102,6 +108,7 @@ final class DevModeUITests: XCTestCase {
         XCTAssertTrue(element("dev-send.sheet", app).waitForExistence(timeout: 20), "Send To did not open")
         XCTAssertTrue(element("dev-send.file", app).exists)
         XCTAssertTrue(element("dev-send.persona", app).exists)
+        settle(app)
         shot("5-send", look)
         element("dev-send.persona", app).tap()
 
@@ -111,6 +118,10 @@ final class DevModeUITests: XCTestCase {
         let note = NSPredicate(format: "value CONTAINS %@", "这是我设备上的 Persona 诊断数据")
         XCTAssertTrue(app.textViews.matching(note).firstMatch.waitForExistence(timeout: 10)
                       || app.textFields.matching(note).firstMatch.exists, "no note in the box")
+        // The keyboard's first-use tip on a fresh simulator covers the box: put it away for the picture.
+        let tip = app.buttons["Continue"]
+        if tip.waitForExistence(timeout: 2) { tip.tap() }
+        settle(app)
         shot("6-chat", look)
         app.terminate()
     }
