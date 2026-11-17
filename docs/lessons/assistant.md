@@ -715,3 +715,11 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## Manual compaction is not a main-only policy (#10064)
+
+The manual HTTP and node paths already accept side conversations, but all three client menus hid the action behind
+the main-chat check. Android also read and displayed only the main chat's progress. When extending a conversation
+action, trace its eligibility, request target and progress source together; progress must reset when the selected
+conversation changes. Keep automatic main-chat policy and the main-only clear/new actions separate. Menu regressions
+must exercise a real non-main selection and fail when the old guard is restored.

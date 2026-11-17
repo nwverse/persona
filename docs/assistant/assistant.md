@@ -810,7 +810,11 @@ before the next message, Claude Code thinks the window is exceeded and auto-comp
 
 ### Manual compaction (2026-11-04, #1727)
 
-User selects "Compact context" in main-chat menu: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
+User selects "Compact context" in any open Assistant conversation's menu, including direction and other persistent side
+conversations: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
+Web, iOS and Android offer it when the hub advertises `assistant_compact`; progress belongs to the conversation on
+screen. "Clear context" and "New main chat" remain main-only. This manual action does not change automatic compaction
+windows or any main-only automatic policy.
 
 - Same path as idle compaction: write `/compact` into an existing process, or start with `--resume` (chat's previous launcher / model); Codex uses `thread/compact/start`; runtime chats unsupported.
   A guest conversation (a meeting's room too, which the manager compacts in long meetings: [meeting-minutes.md](meeting-minutes.md) "Long meetings: lean batches and compaction (#8253)") resumes as on any message, with its guest flags and settings from its record; one whose launcher runs another agent by now is refused, nothing started (#8253). The manager compacting a room sends `only_running: true`: a process that is not running is refused with `not_running` instead of being started only to be compacted (an older node ignores the field).
