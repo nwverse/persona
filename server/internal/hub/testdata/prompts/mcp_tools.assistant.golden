@@ -2634,6 +2634,58 @@
                 true
               ],
               "description": "merge_review only: the named reviewer can review the PR/MR"
+            },
+            "reply": {
+              "type": "object",
+              "required": [
+                "source",
+                "brand",
+                "app_id",
+                "account_open_id",
+                "person_open_id",
+                "chat_id",
+                "thread_id",
+                "request_message_id"
+              ],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "larkcli"
+                  ]
+                },
+                "brand": {
+                  "type": "string",
+                  "enum": [
+                    "feishu",
+                    "lark"
+                  ]
+                },
+                "app_id": {
+                  "type": "string",
+                  "description": "the configured reader's app identity, not a display name"
+                },
+                "account_open_id": {
+                  "type": "string",
+                  "description": "the configured reader's user OpenID within that app"
+                },
+                "person_open_id": {
+                  "type": "string",
+                  "description": "the exact expected human sender's OpenID within that app; not the owner"
+                },
+                "chat_id": {
+                  "type": "string"
+                },
+                "thread_id": {
+                  "type": "string",
+                  "description": "the provider's topic ID, not a root-message guess"
+                },
+                "request_message_id": {
+                  "type": "string",
+                  "description": "the already-sent request's actual source message ID"
+                }
+              },
+              "description": "optional for person_reply only: explicit named-person/topic observation through an already configured lark-cli reader. contact.url must be that sent request's provider topic AppLink with matching open_chat_id/open_thread_id. Inspect actual source IDs; never infer them from names. The bounded reader independently verifies the request before a matching new human reply can end this park and ask the current supervisor to review; this does not deliver an Agent instruction"
             }
           },
           "description": "required for parked; do not supply recorded_by. Inspect the source receipt; the tool records your attestation, not an independent provider check. recorded_by is server-authored for the current task_review conversation and is output only. Missing evidence on a legacy park means unrecorded, not verified"
