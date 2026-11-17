@@ -135,15 +135,13 @@ export function countGroups(counts: ListCounts | null, dimension: GroupDimension
  *  turn nobody looked at have a Just finished section before Seen, whose number leaves them out (#9751). */
 function stateGroups(counts: ListCounts | null, justFinished: boolean): SessionGroup[] {
   const by = counts?.state ?? {};
-  const finished = justFinished ? Math.min(counts?.just_finished ?? 0, by.idle ?? 0) : 0;
-  return STATE_ORDER.flatMap((s): SessionGroup[] => {
-    if (s !== "idle" || !justFinished) return (by[s] ?? 0) > 0 ? [{ key: s, name: STATE_LABEL[s as AgentState] ?? s, count: by[s]!, needs: 0, places: [], filters: { state: s } }] : [];
-    const seen = (by.idle ?? 0) - finished;
-    return [
-      ...(finished > 0 ? [{ key: JUST_FINISHED_KEY, name: stateName("just_finished"), count: finished, needs: 0, places: [], filters: { state: "idle", just_finished: "1" } }] : []),
-      ...(seen > 0 ? [{ key: s, name: STATE_LABEL.idle, count: seen, needs: 0, places: [], filters: { state: "idle", just_finished: "0" } }] : []),
-    ];
-  });
+  const finished = Math.min(counts?.just_finished ?? 0, by.idle ?? 0);
+  const group = (key: string, name: string, count = 0, filters: ListFilters = { state: key }): SessionGroup[] =>
+    count > 0 ? [{ key, name, count, needs: 0, places: [], filters }] : [];
+  return STATE_ORDER.flatMap((s) => s === "idle" && justFinished
+    ? [...group(JUST_FINISHED_KEY, stateName("just_finished"), finished, { state: s, just_finished: "1" }),
+      ...group(s, STATE_LABEL.idle, (by.idle ?? 0) - finished, { state: s, just_finished: "0" })]
+    : group(s, STATE_LABEL[s as AgentState] ?? s, by[s]));
 }
 
 /** The key of a list by state's Just finished section: what a Just finished session's place says it is in. */
