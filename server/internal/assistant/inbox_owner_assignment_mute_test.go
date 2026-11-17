@@ -145,15 +145,20 @@ func TestInboxOwnerAssignedBypassesOnlyLarkCLISenderMute(t *testing.T) {
 		t.Fatalf("sender mute settings changed: %+v", got)
 	}
 
-	// A later source move that no longer names an owner replaces the flag and is covered by the same sender mute.
+	// A different selected message keeps its own assignment facts and sender mute.
+	followup := ownerAssignmentThing(ownerAssignmentThread, "synthetic-owner-assignment-followup", false, now.Add(time.Second))
 	if err := h.Service.InboxCollected(context.Background(), ownerAssignmentRound(ownerAssignmentSource, 2,
-		ownerAssignmentThing(ownerAssignmentThread, "synthetic-owner-assignment-followup", false, now.Add(time.Second)),
+		followup,
 	)); err != nil {
 		t.Fatal(err)
 	}
-	updated := ownerAssignmentState(h, ownerAssignmentSource, ownerAssignmentThread)
-	if !updated.found || updated.open || !updated.done || updated.doneBy != "read" || updated.assigned {
-		t.Fatalf("unassigned update retained the old owner-assigned flag or escaped the mute: %+v", updated)
+	h.inbox.mu.Lock()
+	updated, original := h.inbox.items[replayWriteFailureItemID(followup)], h.inbox.items[assigned.id]
+	muted := updated != nil && !updated.open() && updated.DoneAt != nil && updated.DoneBy == "read" && !updated.Connector.OwnerAssigned
+	preserved := original != nil && original.open() && original.Connector.OwnerAssigned && original.Last == ownerAssignmentLast
+	h.inbox.mu.Unlock()
+	if !muted || !preserved {
+		t.Fatalf("a separate unassigned selection changed the original assignment or escaped its mute: muted=%v preserved=%v", muted, preserved)
 	}
 	if got := ownerAssignmentMutes(h); len(got) != 1 || got[0] != mute {
 		t.Fatalf("update changed sender mute settings: %+v", got)

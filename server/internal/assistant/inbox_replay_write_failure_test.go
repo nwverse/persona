@@ -125,16 +125,18 @@ func TestInboxReplayPartialWriteFailureKeepsSavedRowsAndReturnsError(t *testing.
 	savedOld := replayWriteFailureSeed(t, h, "chat:saved", "old:saved", "group", TierFYI)
 	failed := replayWriteFailureThing("chat:failed", "new:failed", "group", connector.TierFYI)
 	saved := replayWriteFailureThing("chat:saved", "new:saved", "group", connector.TierFYI)
-	replayWriteFailureStore(h, map[string]bool{failedOld.ID: true})
+	failedID, savedID := replayWriteFailureItemID(failed), replayWriteFailureItemID(saved)
+	replayWriteFailureStore(h, map[string]bool{failedID: true})
 
 	err := h.InboxCollected(ctx, replayWriteFailureRound(failed, saved))
 	if err == nil {
 		t.Fatal("partially failed replay returned nil")
 	}
-	failedID, savedID := failedOld.ID, savedOld.ID
 	h.inbox.mu.Lock()
 	failedItem, failedInMemory := h.inbox.items[failedID]
 	savedItem, savedInMemory := h.inbox.items[savedID]
+	originalsKept := h.inbox.items[failedOld.ID] == failedOld && failedOld.Last == "old:failed" &&
+		h.inbox.items[savedOld.ID] == savedOld && savedOld.Last == "old:saved"
 	failedLastInMemory, savedLastInMemory := "", ""
 	if failedItem != nil {
 		failedLastInMemory = failedItem.Last
@@ -145,8 +147,8 @@ func TestInboxReplayPartialWriteFailureKeepsSavedRowsAndReturnsError(t *testing.
 	h.inbox.mu.Unlock()
 	failedLast, failedStored := replayWriteFailureStoredLast(h.st, failedID)
 	savedLast, savedStored := replayWriteFailureStoredLast(h.st, savedID)
-	if !failedInMemory || failedLastInMemory != "old:failed" || !savedInMemory || savedLastInMemory != "new:saved" ||
-		!failedStored || failedLast != "old:failed" || !savedStored || savedLast != "new:saved" {
+	if failedInMemory || failedStored || !originalsKept || !savedInMemory || savedLastInMemory != "new:saved" ||
+		!savedStored || savedLast != "new:saved" {
 		t.Fatalf("partial replay rollback/persistence mismatch: failed(memory=%v,last=%q; stored=%v,last=%q) saved(memory=%v,last=%q; stored=%v,last=%q)",
 			failedInMemory, failedLastInMemory, failedStored, failedLast, savedInMemory, savedLastInMemory, savedStored, savedLast)
 	}

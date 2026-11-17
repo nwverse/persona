@@ -74,10 +74,11 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 		switch v := value.(type) {
 		case map[string]any:
 			tag, _ := v["tag"].(string)
-			if tag != "at" && tag != "person" {
-				role = role || cardRoleElement(v, true)
-			} else {
+			if tag == "at" || tag == "person" {
 				hasIdentity = true
+			} else if cardRoleElement(v, false) {
+				// A completed field ends an inherited label, even through an extra container.
+				role = cardRoleElement(v, true)
 			}
 			// A direct label belongs to this identity, not to unrelated descendants.
 			identityRole := role || cardRoleElement(v, false)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
@@ -25,6 +26,8 @@ type InboxConnector struct {
 	RuleTier string `json:"rule_tier,omitempty"`
 	// OwnerAssigned preserves a source-verified responsibility card's sender-mute exception.
 	OwnerAssigned bool `json:"owner_assigned,omitempty"`
+	// Replay retains this exact move instead of accumulating later moves of its thread.
+	Replay bool `json:"replay,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
 	Tags []connector.Tag `json:"tags,omitempty"`
 }
@@ -90,49 +93,57 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		}
 	}
 	type move struct{ thread, last string }
-	var selected map[move]*InboxItem
-	if scoped {
-		selected = make(map[move]*InboxItem, len(things))
-		for _, t := range things {
-			selected[move{t.Thread, t.Last}] = nil
-		}
-		b.each(func(it *InboxItem) {
-			if it.Source == id && it.Connector != nil {
-				key := move{it.Connector.Thread, it.Last}
-				if prior, ok := selected[key]; ok && (prior == nil || newerItem(it, prior)) {
-					selected[key] = it
-				}
-			}
-		})
+	selected := make(map[move]*InboxItem, len(things))
+	for _, t := range things {
+		selected[move{t.Thread, t.Last}] = nil
 	}
+	b.each(func(it *InboxItem) {
+		if it.Source == id && it.Connector != nil && (scoped || it.Connector.Replay) {
+			key := move{it.Connector.Thread, it.Last}
+			if prior, ok := selected[key]; ok && (prior == nil || newerItem(it, prior)) {
+				selected[key] = it
+			}
+		}
+	})
 	index := b.threads(func(it *InboxItem) (string, bool) {
 		if it.Source != id || it.Connector == nil {
 			return "", false
 		}
-		if _, ok := selected[move{it.Connector.Thread, it.Last}]; ok {
-			return "", false // another selected move must not absorb this activity, even on a retry
+		if scoped {
+			if _, ok := selected[move{it.Connector.Thread, it.Last}]; ok {
+				return "", false // another selected move must not absorb this activity, even on a retry
+			}
+		}
+		if it.Connector.Replay && it.DoneAt == nil {
+			// The recovery boundary survives storage and later ordinary collection.
+			return "", false
 		}
 		return it.Connector.Thread, true
 	})
 	for _, t := range things {
 		open, done := index.openFor(t.Thread)
 		if exact := selected[move{t.Thread, t.Last}]; exact != nil {
+			if exact.Connector.OwnerAssigned != t.OwnerAssigned || !slices.Equal(exact.Connector.Tags, t.Tags) ||
+				scoped && exact.DoneAt == nil && !exact.Connector.Replay {
+				b.roundWrite(exact)
+				exact.Connector.OwnerAssigned, exact.Connector.Tags = t.OwnerAssigned, t.Tags
+				if scoped && exact.DoneAt == nil {
+					exact.Connector.Replay = true
+				}
+				changed = append(changed, exact)
+			}
 			if exact.DoneAt != nil {
 				continue // recovery must not reopen an already handled selected activity
 			}
 			open, done = exact, nil
-		}
-		if scoped && open != nil && open.Last != t.Last {
-			if t.At.IsZero() || t.At.Before(open.UpdatedAt) {
-				continue // recovery cannot replace or retier another, newer or undated move
-			}
-			if t.At.Equal(open.UpdatedAt) {
-				open = nil // coarse timestamps cannot order these IDs; retain the selected move separately
-			}
+		} else if scoped {
+			open = nil // only the exact selected message may be changed; keep the completed-thread guard
 		}
 		if t.Done != "" {
 			if open != nil && b.settleThing(open, t, now) {
-				changed = append(changed, open)
+				if !containsItem(changed, open) {
+					changed = append(changed, open)
+				}
 			}
 			continue
 		}
@@ -156,7 +167,9 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				b.roundWrite(open)
 				setRuleTier(open, t)
 				b.noteTriaged(open)
-				changed = append(changed, open)
+				if !containsItem(changed, open) {
+					changed = append(changed, open)
+				}
 			}
 			// Read elsewhere counts only for the item's newest move: an older thing read (a connector restarted after it
 			// moved the item to a later step it was not notified of) says nothing of whether that step was seen.
@@ -183,6 +196,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		}
 		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: moveCount(t)}
 		fillConnectorItem(it, t)
+		it.Connector.Replay = scoped
 		b.noteReceived(it, inboxSeen{}, nil)
 		if t.Tier != "" {
 			b.noteTriaged(it)
@@ -191,6 +205,9 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		b.add(id, it)
 		b.roundNew(it)
 		index.note(it)
+		if scoped {
+			selected[move{t.Thread, t.Last}] = it
+		}
 		changed = append(changed, it)
 	}
 	for _, it := range renamed {
