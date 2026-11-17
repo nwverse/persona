@@ -10,7 +10,6 @@ import {
   hitView,
   KIND_TITLE,
   LIST_KINDS,
-  mergeMeetingLists,
   projectInfo,
   recordingKindTag,
   rowTags,
@@ -30,6 +29,7 @@ import { Icon } from "../../ui/icons";
 import { BrandMark } from "../../ui/BrandMark";
 import { connectorBrand } from "../../lib/connectors";
 import { lists, listKey, remember, searches, searchKey } from "./cache";
+import { mergeMeetingLists } from "./meetings";
 import { Badges, Card, importedNotesLabel, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 

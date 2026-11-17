@@ -335,7 +335,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               {imported && (
                 <section>
                   <Card>
-                    <button type="button" onClick={() => openPanel({ kind: "link", url: imported.url, title: importedNotesLabel(imported.source) })} className="flex w-full items-center gap-2 whitespace-nowrap px-4 py-2.5 text-left text-[13px] font-medium text-accent-ink hover:bg-hover">
+                    <button type="button" onClick={() => openPanel({ kind: "link", url: imported.url, title: importedNotesLabel(imported.source) })} className="flex w-full items-center gap-2 whitespace-nowrap px-4 py-2.5 text-left text-meta font-medium text-accent-ink hover:bg-hover">
                       {importedBrand ? <BrandMark brand={importedBrand} size={16} fit="badge" /> : <Icon name="external" size={14} />}
                       {importedNotesLabel(imported.source)}
                     </button>
