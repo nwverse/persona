@@ -906,9 +906,19 @@ final class LiveConnection {
     /// device for the assistant (`AppVersion`). Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
         let client = RequestClientMetadata.current
-        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
+        send(["type": "client_hello", "locale": LanguageStore.shared.launched,
+              "features": Self.helloFeatures(client) + (followsMessaging ? [Self.larkViaMessagingFeature] : []),
               "platform": client.platform, "version": client.version, "os": AppVersion.helloOS])
     }
+
+    /// The app's Feishu screens follow the hub's `messaging` events (a messaging source, #2138), so the legacy `lark`
+    /// event, which `AppModel.handle` drops then, need not come: said in `client_hello` (`lark_via_messaging`), and
+    /// said again in a new one when it changes (#9591). A busy Feishu account sent 40–50 of them a minute.
+    var followsMessaging = false {
+        didSet { if followsMessaging != oldValue, state == .connected { sayHello() } }
+    }
+
+    nonisolated static let larkViaMessagingFeature = "lark_via_messaging"
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
     /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
