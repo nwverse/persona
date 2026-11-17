@@ -98,7 +98,7 @@ struct ReadinessSheets: ViewModifier {
             .sheet(item: Binding(get: { route.flatMap { r -> ReadinessRoute? in
                 switch r { case .link, .addComputer, .confirmComputer: nil; default: r } } }, set: { route = $0 }),
                    onDismiss: { model.readinessChanged() }) { r in
-                sheet(r).overTabSwitch()
+                sheet(r)
             }
             .sheet(item: Binding(get: { route.flatMap { if case .link(let u) = $0 { LinkTarget(url: u) } else { nil } } },
                                  set: { if $0 == nil { route = nil } })) { LinkSheet(target: $0) }
@@ -281,8 +281,8 @@ struct ReadinessHelpView: View {
             para(String(localized: "Come back here once it's installed; this updates shortly after."), secondary: true)
             useKey
         case "login_claude":
-            para(String(localized: "On \(name), open Terminal, type this word, press Return, and sign in once in the browser as it asks:"))
-            CommandLine(text: "claude")
+            para(String(localized: "Persona runs the Claude Code CLI on \(name), and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:"))
+            CommandLine(text: "claude auth login")
             para(String(localized: "Once signed in, come back here and send a message to try it."), secondary: true)
             useKey
         case "how_to_connect_model":

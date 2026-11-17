@@ -1,35 +1,29 @@
-import { t } from "../../i18n";
 import { openTask } from "../../lib/handoff";
-import { parkedLine } from "../../lib/supervision";
-import { openMergePRs, prBlockers } from "../../lib/todo-triage";
+import type { RunningItem } from "../../lib/assistant-entries";
+import { compareWaitAge } from "../../lib/task-wait";
+import { openMergePRs } from "../../lib/todo-triage";
 import type { Todo } from "../../lib/todos";
 import { Icon } from "../../ui/icons";
-import { TaskMark } from "./Tasks";
+import { useNow } from "../../ui/atoms";
+import { TaskWaitInfo } from "./TaskWaitInfo";
 
-/** Loaded when Parked opens, not on the first screen. A hold never borrows an Agent's finished-turn check. */
+/** The tray already loads waiting rows on demand; keep their ordering on that same lazy boundary. */
+export function ParkedTaskRows({ items }: { items: readonly RunningItem[] }) {
+  const now = useNow(60_000);
+  return <>{items.filter((item) => item.kind === "task").sort((a, b) => compareWaitAge(a.todo, b.todo, now))
+    .map((item) => <ParkedTaskRow key={item.key} todo={item.todo} countsOpen={item.countsOpen} />)}</>;
+}
+
+/** Preserve the dedicated waiting tray's row contract and group membership. */
 export function ParkedTaskRow({ todo, countsOpen }: { todo: Todo; countsOpen: boolean }) {
   const prs = openMergePRs(todo, Date.now());
-  return <div data-parked-task-row={todo.id} data-counts-open={countsOpen ? "true" : "false"}>
-    {prs.length ? (
-      <div data-pr-waiting-row={todo.id} className="flex items-start gap-2 px-3 py-2.5">
-        <Icon name="pullRequest" size={14} className="mt-0.5 shrink-0 text-accent-ink" />
-        <div className="min-w-0 flex-1">
-          <button type="button" data-pr-task-link={todo.id} onClick={() => openTask(todo.id)} className="block max-w-full truncate text-left text-sm font-medium hover:underline">{todo.title}</button>
-          {prs.map((facts) => <div key={facts.url} data-pr-waiting-url={facts.url}>
-            <a href={facts.url} target="_blank" rel="noreferrer noopener" title={facts.url} className="block max-w-full truncate text-xs text-accent-ink hover:underline">{facts.url}</a>
-            <div className="truncate text-xs text-ink-2">{prBlockers(todo, facts).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</div>
-          </div>)}
-        </div>
-      </div>
-    ) : (
-      <button type="button" onClick={() => openTask(todo.id)} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover">
-        <TaskMark status="waiting" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{todo.title}</span>
-          <span className="block truncate text-xs text-ink-2">{parkedLine(todo)}</span>
-        </span>
-        <span className="shrink-0 text-xs text-ink-2">{t("assistant-tasks.review_parked")}</span>
-      </button>
-    )}
+  return <div data-parked-task-row={todo.id} data-counts-open={countsOpen ? "true" : "false"}
+    data-pr-waiting-row={prs.length ? todo.id : undefined} className="flex items-start gap-2 px-3 py-2.5">
+    <span data-task-mark="waiting" className="mt-0.5 shrink-0 text-ink-3"><Icon name={prs.length ? "pullRequest" : "clock"} /></span>
+    <div className="min-w-0 flex-1">
+      <button type="button" data-pr-task-link={prs.length ? todo.id : undefined} onClick={() => openTask(todo.id)}
+        className="block min-w-11 max-w-full truncate text-left text-sm font-medium hover:underline pointer-coarse:min-h-11">{todo.title}</button>
+      <TaskWaitInfo todo={todo} merges={prs} />
+    </div>
   </div>;
 }

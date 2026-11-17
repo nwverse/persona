@@ -159,8 +159,8 @@ type todoStore interface {
 	ListTodoSources(ctx context.Context) (map[string]db.TodoSource, error)
 	SetTodoSource(ctx context.Context, todoID string, src db.TodoSource) error
 	StopTodoSourceReport(ctx context.Context, todoID string, at time.Time) (bool, error)
-	PlanTodoSourceReport(ctx context.Context, todoID, text string, due time.Time) (bool, error)
-	ClaimTodoSourceReport(ctx context.Context, todoID string, now time.Time, maxAttempts int) (int, string, bool, error)
+	PlanTodoSourceReport(ctx context.Context, todoID, text string, due time.Time, fullReply bool, doneAt *time.Time) (bool, error)
+	ClaimTodoSourceReport(ctx context.Context, todoID string, now time.Time, maxAttempts int) (int, string, bool, bool, error)
 	ReleaseTodoSourceReport(ctx context.Context, todoID string) error
 	ClearTodoSourcePlan(ctx context.Context, todoID string) (bool, error)
 }
@@ -201,7 +201,7 @@ type todoBook struct {
 
 	// reporting are the todos whose report back to their source is waiting for the outcome (todo_source.go).
 	reportMu  sync.Mutex
-	reporting map[string]bool
+	reporting map[string]time.Time
 	runMu     sync.Mutex // one report step at a time (sourceReportNow)
 
 	// importing is held across a batch of imported reminders, and imports are their links when there is no store
@@ -618,6 +618,11 @@ func copyTodoLocked(t *Todo) Todo {
 // that worked for it (latest released first).
 func formatTodo(t Todo) Todo {
 	out := t
+	if out.Source != nil && out.Source.ReportFullReply {
+		source := *out.Source
+		source.ReportText = "" // the delivery payload is not part of the to-do list
+		out.Source = &source
+	}
 	// Existing clients use review for cancellation labels and reasons. Keep that wire value;
 	// the stored marker distinguishes cancellation even for tasks without a supervision ledger.
 	if out.DoneBy == db.DoneByCancelled {

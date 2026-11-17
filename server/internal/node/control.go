@@ -37,6 +37,16 @@ func newUUID() string {
 // the launcher runs.
 func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
 	execution := executionOption(options)
+	// A start named to a failed start's kept tab holds it from here, sync and async alike: newTab uses it, else it is
+	// kept again when the start returns (startremedy.go).
+	claim, claimErr := n.claimKeptTab(execution.InPane)
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	defer claim.release()
+	if claim != nil {
+		ctx = context.WithValue(ctx, keptClaimKey{}, claim)
+	}
 	// The effort is checked against the agent this start actually dispatches: an explicit agentType wins over the
 	// launcher's name, so a Claude start refuses ultra even on a launcher named codex.
 	kind := agentType

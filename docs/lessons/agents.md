@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+- Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
+  (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
+  `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
+  `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
@@ -31,6 +36,10 @@ Persist reuse separately from creation and keep its machine/path on retry; do no
 
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
+
+- A native terminal Codex start must preserve a user's same-name `codex()` function (#4876), not just find the executable. `codex-start` used to bypass it, losing launcher environment while a normal terminal command worked; the assistant app-server fix (#3707) did not cover this path. Pass the launcher and prompt as positional arguments to the interactive shell, never interpolate them as shell code, and keep the shell inside the agent sandbox.
+  Fake-launcher tests must isolate rc paths such as `ZDOTDIR`, not just `HOME`: an inherited rc directory can otherwise load the user's real startup file and change the fake executable or flags.
+  A native launcher must prefer the user's supported login shell even when another shell's rc file exists; test with both rc files present, not just one.
 
 ## A saved task name can disappear without another model failure (#7337)
 
@@ -568,6 +577,10 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - Don't read a shell's lines by their English words alone (#6122): bash translates them through gettext (about 40 catalogs) and glibc translates `strerror`, and Homebrew's bash on a Mac follows the system language even without `LANG` (`bash: nosuch: 未找到命令`), so the start waited out its timeout on any non-English machine. Read the line's shape instead (a shell's name first, then colon or full-width colon parts, one of them the start's own command), and only for the command the start itself typed, so rc noise in any language still never ends a start.
 - Don't compare a node's timestamps with the manager's clock: a node whose clock ran behind made a first failed start look counted already. Keep what was counted instead (with the health records, across restarts).
 
+## A subscription reset time is not proof that quota is still exhausted (#9386)
+
+Quota can recover before the reported reset. Skipping every on-demand probe until `resets_at` made a stale usage-limit record refuse starts even while the launcher worked. Reuse the machine × launcher single-flight probe and throttle; only a passing model request clears the record. A successful terminal start alone does not prove quota recovered. A default Sonnet probe cannot clear an Opus limit: request and verify the limited family. Capture the health record before sending the probe and compare it atomically when recording the answer; newer exhaustion must survive an older success. Save a failed probe's new reset evidence instead of releasing a weekly limit at an older short-window reset. Merge, never overwrite: a later failure with fewer details ("usage limit reached") must not erase the known family or reset, an unrelated failure (a timeout) says nothing of the quota, and a pass clears only its own family; patching each overwrite one at a time kept reopening the same hole. Keep each family's own reset: one shared reset let a known Opus reset release a Sonnet limit whose reset was unknown. Any change to the evidence, merging an older failure included, is a new version of the record that an in-flight pass cannot clear; comparing only the check time missed merges that keep it. An unknown reset is rechecked on the same throttle, not left to the periodic round. Keep periodic probes waiting for the reset so an idle, genuinely exhausted subscription spends no extra requests.
+
 ## Don't default to bare claude when resuming externally created sessions (2026-11-05, #411)
 
 - On many computers, `claude` itself isn't logged in; launchers (functions in `~/.zshrc`, or Persona-added launchers) supply the gateway and key.
@@ -1038,6 +1051,18 @@ screen, saw a queue in the transcript and no hint.
   they are (`ESC [1;5F` for ctrl+End), which Claude Code reads as the key.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
+
+## Claude Code put a label in front of the send-now keys (2026-11-17, #9628, 2.1.326)
+
+"Send now" was refused as `send_now_unrecognized` on a screen showing `  ⎿  Queued · ctrl+enter to send now`. 2.1.326 labels
+the hint under a queued message; the keys and the `to send now` after them did not change. The reader took keys only from a
+line of their own or after the gap following a queued message, so the label in front hid them.
+
+- When reading a hint by its shape, anchor on the keys and the words after them, and let the keys start after any of the
+  line's separators (a gap, ` · `), not only at a fixed position. Words that aren't strokes between the separator and the
+  keys still lend nothing.
+- To date a new shape, grep each version's binary for the component's template (`Queued \xB7 ${`) instead of guessing:
+  `npm pack @anthropic-ai/claude-code-<platform>@<version>` fetches one without installing it.
 
 ## Rewind positions are not message identities (#9410)
 

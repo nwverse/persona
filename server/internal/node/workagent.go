@@ -52,6 +52,9 @@ func workAgentKind(launcher, agentType string) string {
 
 // workAgentCommand is what a start types into the pane: the launcher (the program, for the agent's own name) with the
 // model when one was picked. The first message is not an argument: it is delivered once the agent is up.
+// pi also gets --approve: in a directory with project-local resources (.agents/, AGENTS.md, .pi/) it otherwise stops at
+// its Trust prompt, which nobody at the pane answers, and the start is abandoned (#9462). The flag trusts the directory
+// the start chose for this run only; it writes nothing to ~/.pi/agent/trust.json, so a pi the user runs keeps asking.
 func workAgentCommand(launcher, program, model string) string {
 	cmd := launcher
 	if launcher == "" || launcher == program || workAgentKind(launcher, "") == launcher {
@@ -59,6 +62,9 @@ func workAgentCommand(launcher, program, model string) string {
 	}
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
+	}
+	if program == "pi" {
+		cmd += " --approve"
 	}
 	return cmd
 }
