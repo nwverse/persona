@@ -328,7 +328,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     /**
      * The stack is only a place root. Switch to the conversation without a push or a pop
-     * (`leavePlace`, AssistantView.swift:680–686; `assistantReveal`, AppModel.swift:1355–1362).
+     * (`leavePlace`, AssistantView.swift:682–686; `assistantReveal`, AppModel.swift:1381 and :1393;
+     * `onChange` calls `leavePlace()` at AssistantView.swift:446).
      */
     fun leavePlaceRoot(): Boolean {
         if (!windowRegular.value || selected != AppTab.Persona) return false
@@ -760,7 +761,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         dismissSidebar()
                         if (windowRegular.value) {
                             // Health, Schedule and New chat draw inside the conversation page. iOS Health selects the
-                            // conversation and then backToRoot() (AssistantView.swift:700–703, 739–741), so that page
+                            // conversation and then backToRoot() (AssistantView.swift:706–717), so that page
                             // is what is showing. These actions are not their own navigation roots on Android.
                             // contentChanged already returns an empty path, so step.stack is that conversation root.
                             val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
