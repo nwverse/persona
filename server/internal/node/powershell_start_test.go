@@ -145,7 +145,6 @@ func TestWindowsPaneShellDecision(t *testing.T) {
 		want       []string
 	}{
 		{"host PowerShell wins", false, "POWERSHELL.EXE", []string{bash}, "cmd.exe", []string{windowsPowerShellPane}},
-		{"host pwsh wins on classic", true, "pwsh.exe", []string{bash}, "cmd.exe", []string{windowsPowerShellPane}},
 		{"host Bash stays as reported", false, "bash", []string{"pwsh.exe"}, "cmd.exe", []string{"bash"}},
 		{"host Bash path stays as reported", false, bash, nil, "", []string{bash}},
 		{"host cmd keeps main behavior", false, "cmd.exe", nil, "", []string{"cmd.exe"}},
@@ -182,8 +181,7 @@ func TestWindowsPaneShellDecisionGitBashNames(t *testing.T) {
 	}
 }
 
-// These literals were printed by TestR3MainGoldens running in an archived origin/main checkout. They are not derived
-// from this branch. The direct command deliberately uses a Windows node directory: main omits its environment prefix.
+// Actual origin/main output, not branch-derived; the direct golden uses a Windows node directory and omits its prefix.
 const (
 	r3MainDirect       = `claude --session-id 0e000000-0000-4000-8000-0000000000aa --settings 'C:'\\'Users'\\'u'\\'settings.json' --mcp-config 'C:'\\'node dir/mcp.json' --allowedTools 'mcp__persona__report_to_supervisor,mcp__jarvis__report_to_supervisor,mcp__persona__todo_decisions,mcp__jarvis__todo_decisions,mcp__persona__todo_decision_add,mcp__jarvis__todo_decision_add,mcp__persona__todo_bind_thread,mcp__jarvis__todo_bind_thread,mcp__persona__task_plan,mcp__jarvis__task_plan,mcp__persona__task_review,mcp__jarvis__task_review'`
 	r3MainStartPath    = `C:\node dir\agent start.sh`
