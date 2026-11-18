@@ -1058,8 +1058,10 @@ including a refusal with an explanation, stands on its own. A successfully displ
 also counts as a user-visible outcome. Stops, existing model errors, queued work, and inputs from supervision,
 scheduled tasks or other conversations are excluded. The original transcript stays available.
 
-The input must be tied to a device's verified send or to the verified start and first transcript page of a new
-conversation. If that evidence is unavailable, for example across a manager restart before the first look,
+The input must be tied to a verified app send or to the verified start and first transcript page of a new
+conversation. Direct app requests authenticated with the older owner credential qualify for reply recovery.
+Secret hand-offs still require their full-device provenance. If that evidence is unavailable for recovery,
+for example across a manager restart before the first look,
 recovery may be skipped. An intentional request for silence or for exactly
 one of the listed strings can cause one extra model turn. Other vague or unhelpful replies are outside the check.
 The follow-up asks for text only and tells the model to avoid tools and repeated work. Normal tool permissions

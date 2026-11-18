@@ -72,6 +72,7 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 			err = s.call(ctx, machine, assistantwire.DeviceAssistantAnswerAgain, params, nil)
 		}
 		if err == nil {
+			s.logf("assistant %s: asked for a missing reply again", short(sid))
 			return
 		}
 		var refused *rpc.Error

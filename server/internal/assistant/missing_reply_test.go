@@ -180,6 +180,24 @@ func TestMissingReplyInOrdinaryConversation(t *testing.T) {
 	}
 }
 
+func TestMissingReplyFromLegacyApp(t *testing.T) {
+	s, f, items, sends := missingReplyFixture(t, "side-chat", nil)
+	items[0].ClientMsgID = "legacy-app-input"
+	if _, err := s.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: "side-chat", ReplyInput: true,
+		Params: map[string]any{"client_msg_id": items[0].ClientMsgID, "text": items[0].Text}}); err != nil {
+		t.Fatal(err)
+	}
+	owner := items[0]
+	if s.humanSent.has("side-chat", owner.ClientMsgID, owner.Text, false, handoffLine(owner.ID)) {
+		t.Fatal("a legacy app send qualified for a secret hand-off")
+	}
+	f.setItems(items...)
+	s.assistantTurnSettled(t.Context(), "server", "side-chat")
+	if len(*sends) != 1 {
+		t.Fatalf("follow-up calls = %d, want one for the legacy app input", len(*sends))
+	}
+}
+
 func TestMissingReplySkipsOrdinaryConversationBackground(t *testing.T) {
 	for _, kind := range []string{proto.SourceSupervision, proto.SourcePatrol, proto.SourceScheduledTask, proto.SourceConversation} {
 		t.Run(kind, func(t *testing.T) {

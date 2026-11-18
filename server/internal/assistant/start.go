@@ -373,7 +373,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		sess.Status, sess.State = proto.StatusIdle, proto.StateIdle
 	}
 	if p.Human && (p.Origin == "" || p.Origin == OriginUser) && strings.TrimSpace(p.Text) != "" {
-		s.humanSent.note(sess.SessionID, firstReplySendID, p.Text)
+		s.humanSent.noteForReply(sess.SessionID, firstReplySendID, p.Text)
 	}
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
@@ -932,7 +932,8 @@ func (s *Service) startRoutes() {
 		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, ServiceTier: in.ServiceTier, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: own && in.Via == "" && assistantwire.HumanStartOf(r.Context())})
+			OpenedBy: requestOpener(r), GuestTools: guestTools,
+			Human: own && in.Via == "" && (assistantwire.HumanStartOf(r.Context()) || assistantwire.ReplyInputOf(r.Context()))})
 		var refused *pickError
 		switch {
 		case errors.As(err, &refused):
@@ -1082,12 +1083,14 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		err = s.validateSkillSelections(ctx, p.MachineID, p.SessionID, params)
 	}
 	switch {
-	case !p.Human || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
+	case (!p.Human && !p.ReplyInput) || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
 		// old main conversation's) or sent by Siri or the share sheet, never counts, nor does a person's id once
 		// another sent it (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)
-	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
+	case err == nil && p.Human: // a paired device can also vouch for handoffUserTurn
 		s.humanSent.note(p.SessionID, id, sent)
+	case err == nil:
+		s.humanSent.noteForReply(p.SessionID, id, sent)
 	}
 	if err == nil && said && owner {
 		s.ownerInterjects(p.SessionID, params)
