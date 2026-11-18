@@ -34,6 +34,29 @@ func (s *Service) feishuPushKeyed(ctx context.Context, machine, session, title, 
 // feishuPushTold is feishuPushKeyed telling r whether the push goes to the bot at all and, when it does, whether its
 // first card landed (notify_user's answer, channels_copies.go).
 func (s *Service) feishuPushTold(ctx context.Context, machine, session, title, body, key string, r *copyReport) error {
+	return s.feishuPushToldTodo(ctx, machine, session, title, body, key, r, nil)
+}
+
+// feishuTodoReminder sends a reminder in its own bounded background context, as feishuPush does for notify_user.
+func (s *Service) feishuTodoReminder(machine, session, title, body string, todo Todo) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = s.feishuTodoPush(ctx, machine, session, title, body, todo)
+}
+
+// feishuTodoPush is a to-do reminder's Feishu copy. Its body has the complete stored notes (answerCards still applies
+// the card budget), its button opens that to-do, and a reply carries its id back into the same main conversation.
+func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, body string, todo Todo) error {
+	return s.feishuPushToldTodo(ctx, machine, session, title, body, "", nil, &todo)
+}
+
+// feishuPushToldTodo is feishuPushTold, with a to-do only on the reminder path. Ordinary notify_user passes nil and
+// keeps its conversation link, context-free reply routing and body exactly as before.
+func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, title, body, key string, r *copyReport, todo *Todo) error {
+	private := todo != nil && s.todoInHealth(ctx, *todo)
+	if private {
+		title, body = healthNotice(s.botLang(ctx))
+	}
 	st, err := s.feishuStatus(ctx)
 	ready := err == nil && st.Ready
 	s.workbenchOn(st.Features, ready) // as feishuFeatures
@@ -60,7 +83,12 @@ func (s *Service) feishuPushTold(ctx context.Context, machine, session, title, b
 			ac.card.Config = head.Config
 		}
 		if i == len(cards)-1 && session != "" {
-			ac.card.Buttons(s.openButton(ctx, machine, session))
+			if todo != nil {
+				web := todoLink(strings.TrimRight(st.PublicURL, "/"), todo.ID)
+				ac.card.Buttons(s.openLinkButton(ctx, web))
+			} else {
+				ac.card.Buttons(s.openButton(ctx, machine, session))
+			}
 		}
 	}
 	if s.divertAnswer(ctx, "push", cards) { // a notifications companion takes it (feishu_companions.go)
@@ -93,7 +121,11 @@ func (s *Service) feishuPushTold(ctx context.Context, machine, session, title, b
 			r.went(channel.Feishu, nil)
 		}
 		if session != "" {
-			s.rememberBotThread(mid, botTarget{Kind: targetPersona, MachineID: machine, SessionID: session}, title)
+			target := botTarget{Kind: targetPersona, MachineID: machine, SessionID: session}
+			if todo != nil && !private {
+				target.TodoID = todo.ID
+			}
+			s.rememberBotThread(mid, target, title)
 		}
 	}
 	if len(missing) > 0 && (key == "" || again == nil) { // one sent again says nothing of the pieces it will send

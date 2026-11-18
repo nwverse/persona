@@ -444,8 +444,18 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	}
 	var created *host.Created
 	var err error
+	createSpace, createSlot := launch.CreateSpace, launch.CreateSlot
+	if el, ok := launch.(host.EnvLauncher); ok { // the shell starts marked as an Agent's (agentenv.go agentMarkEnv)
+		env := []string{agentMarkEnv}
+		createSpace = func(ctx context.Context, cwd, label string) (*host.Created, error) {
+			return el.CreateSpaceEnv(ctx, cwd, label, env)
+		}
+		createSlot = func(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+			return el.CreateSlotEnv(ctx, space, cwd, label, env)
+		}
+	}
 	if ws == "" {
-		if created, err = launch.CreateSpace(ctx, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
+		if created, err = createSpace(ctx, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
 			var taken map[string]bool
 			if _, ok := launch.(*herdrCoreHost); ok {
 				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder.
@@ -453,11 +463,12 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
 	} else {
-		created, err = launch.CreateSlot(ctx, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+		created, err = createSlot(ctx, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
 	markPersonaTab(ctx, launch, created.Pane, id)
+	n.agentTerminalOpened(launch, created.Pane) // finished_close.go
 	return created, nil
 }

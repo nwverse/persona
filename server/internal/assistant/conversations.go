@@ -972,6 +972,7 @@ func (s *Service) toolConversationRead(ctx context.Context, self string, args js
 func (s *Service) toolConversationRename(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		ID        string `json:"id"`
+		Name      string `json:"name"`
 		Kind      string `json:"kind"`
 		Topic     string `json:"topic"`
 		UserAsked bool   `json:"user_asked"`
@@ -983,6 +984,20 @@ func (s *Service) toolConversationRename(ctx context.Context, self string, args 
 	}
 	if c.SessionID == s.settings(ctx).Main {
 		return "", errors.New("the main conversation is always shown as 主对话: it has no title to change")
+	}
+	if s.isLeader(ctx, c.SessionID) {
+		if d := s.directionOf(c.SessionID); d != nil && d.NameBy == directionByUser && !a.UserAsked {
+			return "", errors.New("the user named this direction themselves: rename it only when they ask you to, and then pass user_asked")
+		}
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			name = strings.TrimSpace(a.Topic) // compatible with older callers that supplied kind/topic
+		}
+		if name == "" {
+			return "", errors.New("name is required for a direction: use its project-supervisor name without a date or kind prefix")
+		}
+		raw, _ := json.Marshal(map[string]string{"id": c.SessionID, "name": name})
+		return s.toolDirectionName(ctx, self, raw) // retains the existing main-only direction-name permission
 	}
 	if !slices.Contains(titleKinds, a.Kind) {
 		return "", fmt.Errorf("kind must be one of %s", strings.Join(titleKinds, " / "))
