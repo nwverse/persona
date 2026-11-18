@@ -46,6 +46,7 @@ function oneOfOne(): Doc {
 function invalidValues(): Doc {
   const doc = clone(example);
   const values = doc.values as Record<string, unknown>;
+  doc.groups[0].fields.find((f) => f.id === "compact")!.default = true;
   delete values.compact;
   values.label = 7;
   values.notes = false;
@@ -234,12 +235,12 @@ describe("a saved value this build can't read", () => {
     const hint = t("settings-configuration.invalid_value");
     for (const id of ["compact", "label", "notes", "layout", "accent", "motion", "sections", "interval"]) expect(row(id).textContent, id).toContain(hint);
 
-    // toggle: off (the notice says the saved value isn't readable), and clicking writes true
-    const sw = row("compact").querySelector<HTMLButtonElement>('[role="switch"]')!;
-    expect(sw.getAttribute("aria-checked")).toBe("false");
-    act(() => sw.click());
+    // An unreadable toggle with an On default can be saved as Off in one write.
+    expect(radios("compact").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    act(() => radios("compact").find((r) => r.textContent === t("settings-configuration.off"))!.click());
     await settle();
-    expect(m.updates.at(-1)?.changes).toEqual({ compact: true });
+    expect(m.updates.at(-1)?.changes).toEqual({ compact: false });
+    expect(row("compact").querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
     expect(row("compact").textContent).not.toContain(hint);
 
     // text and number: empty, typed, saved
@@ -250,6 +251,12 @@ describe("a saved value this build can't read", () => {
     await settle();
     expect(m.updates.at(-1)?.changes).toEqual({ label: "Recovered" });
     expect(label.value).toBe("Recovered");
+    const notes = row("notes").querySelector("textarea")!;
+    type(notes, "Draft");
+    type(notes, "");
+    act(() => buttonIn(row("notes"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ notes: "" });
     const interval = row("interval").querySelector("input")!;
     expect(interval.value).toBe("");
     type(interval, "45");
@@ -291,7 +298,7 @@ describe("a saved value this build can't read", () => {
     const hint = t("settings-configuration.invalid_value");
     const hintId = (id: string) => [...row(id).querySelectorAll("p")].find((p) => p.textContent === hint)?.id;
     for (const [id, control] of [
-      ["compact", '[role="switch"]'],
+      ["compact", "fieldset"],
       ["label", "input"],
       ["layout", "fieldset"],
       ["accent", "select"],

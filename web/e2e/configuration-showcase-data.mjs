@@ -277,116 +277,18 @@ function emptyDoc(lang) {
   };
 }
 
-/** A valid definition whose saved values are missing or unreadable: every control must show its own empty state and let
- *  the person correct it (query scenario only). */
+/** Use the shared definitions to exercise missing and invalid saved values. */
 function invalidDoc(lang) {
-  return {
-    schema_version: CONFIGURATION_VERSION,
-    id: "showcase-recovery",
-    revision: "recovery-1",
-    title: T(lang, "Settings that need a choice", "需要重新选择的设置", "選び直しが必要な設定"),
-    description: T(
-      lang,
-      "Their saved values couldn't be read here. Choose each one again, or reset it to the default.",
-      "这些设置的已保存值在这里无法读取。请重新选择，或重置为默认值。",
-      "保存されている値をここで読み取れませんでした。もう一度選ぶか、既定値に戻してください。",
-    ),
-    groups: [
-      {
-        id: "recovery",
-        title: T(lang, "Choose again", "重新选择", "選び直す"),
-        fields: [
-          {
-            id: "reminders",
-            kind: "toggle",
-            title: T(lang, "Send reminders", "发送提醒", "リマインダーを送る"),
-            description: T(lang, "One reminder a day.", "每天发送一次提醒。", "1日1回リマインダーを送ります。"),
-            default: false,
-          },
-          {
-            id: "arrangement",
-            kind: "select",
-            title: T(lang, "Arrangement", "排列方式", "並べ方"),
-            default: "list",
-            select: {
-              presentation: "list",
-              options: [
-                { value: "list", title: T(lang, "List", "列表", "リスト") },
-                { value: "grid", title: T(lang, "Grid", "网格", "グリッド") },
-              ],
-            },
-          },
-          {
-            id: "accent",
-            kind: "select",
-            title: T(lang, "Accent", "强调色", "アクセント"),
-            default: "blue",
-            select: {
-              presentation: "dropdown",
-              options: [
-                { value: "blue", title: T(lang, "Blue", "蓝色", "青") },
-                { value: "green", title: T(lang, "Green", "绿色", "緑") },
-              ],
-            },
-          },
-          {
-            id: "motion",
-            kind: "select",
-            title: T(lang, "Motion", "动效", "モーション"),
-            default: "standard",
-            select: {
-              presentation: "segmented",
-              options: [
-                { value: "standard", title: T(lang, "Standard", "标准", "標準") },
-                { value: "reduced", title: T(lang, "Reduced", "减弱", "控えめ") },
-              ],
-            },
-          },
-          {
-            id: "sections",
-            kind: "multiselect",
-            title: T(lang, "Sections", "分区", "セクション"),
-            description: T(lang, "Choose up to two.", "最多选择两个。", "2つまで選べます。"),
-            default: ["summary"],
-            multiselect: {
-              min_selected: 1,
-              max_selected: 2,
-              options: [
-                { value: "summary", title: T(lang, "Summary", "摘要", "概要") },
-                { value: "activity", title: T(lang, "Activity", "活动", "アクティビティ") },
-                { value: "files", title: T(lang, "Files", "文件", "ファイル") },
-              ],
-            },
-          },
-          {
-            id: "label",
-            kind: "text",
-            title: T(lang, "Label", "标签", "ラベル"),
-            description: T(lang, "Shown above the list.", "显示在列表上方。", "リストの上に表示されます。"),
-            default: "",
-            text: { max_length: 20 },
-          },
-          {
-            id: "interval",
-            kind: "number",
-            title: T(lang, "Refresh interval", "刷新间隔", "更新間隔"),
-            description: T(lang, "Seconds between refreshes.", "两次刷新之间的秒数。", "更新の間隔（秒）です。"),
-            default: 30,
-            number: { integer: true, minimum: 5, maximum: 600, step: 5 },
-          },
-        ],
-      },
-    ],
-    values: {
-      reminders: "sometimes",
-      arrangement: "mosaic",
-      accent: "violet",
-      motion: "slow",
-      sections: ["other"],
-      label: 7,
-      interval: "often",
-    },
-  };
+  const doc = clone(allTypes);
+  doc.id = "showcase-recovery";
+  doc.revision = "recovery-1";
+  doc.title = T(lang, "Settings that need a choice", "需要重新选择的设置", "選び直しが必要な設定");
+  delete doc.description;
+  doc.groups[0].fields.find((f) => f.id === "compact").default = true;
+  doc.values = { ...doc.values, label: 7, notes: false, layout: "mosaic", accent: "violet", motion: "slow", interval: "often" };
+  delete doc.values.compact;
+  delete doc.values.sections;
+  return doc;
 }
 
 function newerKindDoc(lang) {

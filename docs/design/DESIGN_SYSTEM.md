@@ -2289,9 +2289,9 @@ The footer reserves the small-button height when no action is shown, and longer 
 - Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
   **Try again**) are one card above the groups.
 - An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a
-  control. A known field whose saved value is missing or unreadable keeps its control in its own empty state (a switch
-  off, no selection or checks, an empty input) with the invalid-value line, also named in the control's description for
-  assistive technology; choosing or typing a valid value writes it, and **Reset** returns the default.
+  control. A known field whose saved value is missing or unreadable shows an empty input or unselected choices, including
+  an On/Off choice for an unreadable switch. The hint is part of the control's accessible description. Choosing or
+  entering a valid value repairs the field, and **Reset** returns the default.
 Why one form: the user asked for settings that modules inject with one portable contract and shared styles, so a new
 module adds data, not a page, and the same states (pending, saved, failed, conflict, read only) look the same everywhere.
 

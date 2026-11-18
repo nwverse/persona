@@ -359,8 +359,7 @@ function fieldsOf(doc: ConfigurationDocument): Map<string, ConfigurationField> {
  * What the writer would say to `update` against `doc` (README "Change and reset", the server's CheckUpdate): null when
  * it would accept it, else the error. A version it doesn't know, then another resource or revision, then an empty update,
  * then each change (sorted by id) and each reset: unknown, unsupported, read-only or invalid fields, duplicate resets, a
- * field both changed and reset. A field this client can't check (an unsupported definition) is read-only here too: the
- * server rejects a change or reset to it with `unsupported`, so the client says so before sending anything.
+ * field both changed and reset. A field this client can't interpret also rejects either operation locally.
  */
 export function checkUpdate(doc: ConfigurationDocument, update: ConfigurationUpdate): ConfigurationError | null {
   if (update.schema_version !== CONFIGURATION_VERSION) return new ConfigurationError("configuration_version");

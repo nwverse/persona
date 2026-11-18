@@ -260,28 +260,31 @@ try {
     } else if (scenario === "invalid") {
       const recovery = form(page, "showcase-recovery");
       const fieldOf = (id) => recovery.locator(`[data-configuration-field="${id}"]`);
+      const toggle = fieldOf("compact");
+      const notes = fieldOf("notes");
       const emptyStates = {
-        toggle: (await fieldOf("reminders").locator('[role="switch"]').getAttribute("aria-checked")) === "false",
+        toggle: (await toggle.locator('[role="radio"][aria-checked="false"]').count()) === 2,
         dropdown: (await fieldOf("accent").locator("select").inputValue()) === "",
         segmented: (await fieldOf("motion").locator('[role="radio"][aria-checked="true"]').count()) === 0,
-        list: (await fieldOf("arrangement").locator('[role="radio"][aria-checked="true"]').count()) === 0,
+        list: (await fieldOf("layout").locator('[role="radio"][aria-checked="true"]').count()) === 0,
         checks: (await fieldOf("sections").locator('[role="checkbox"][aria-checked="true"]').count()) === 0,
         text: (await fieldOf("label").locator("input").inputValue()) === "",
         number: (await fieldOf("interval").locator("input").inputValue()) === "",
       };
       for (const [name, empty] of Object.entries(emptyStates)) if (!empty) fail(`${tag}: ${name} does not show its empty state`);
-      if (!(await fieldOf("reminders").innerText()).includes("isn't valid here")) fail(`${tag}: no invalid-value hint`);
+      if (!(await toggle.innerText()).includes("isn't valid here")) fail(`${tag}: no invalid-value hint`);
       await page.screenshot({ path: join(shots, `${tag}-before.png`), fullPage: true });
       // The hint itself says "saved", so wait for the exact save-state line, not any text containing it.
       const saved = (fieldLocator, what) => fieldLocator.locator('[aria-live="polite"]', { hasText: /^Saved$/ }).waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: ${what} did not save`));
-      // Correct the toggle and a typed field; each hint goes away with its value.
-      await fieldOf("reminders").locator('[role="switch"]').click();
-      await saved(fieldOf("reminders"), "the toggle");
-      if ((await fieldOf("reminders").locator('[role="switch"]').getAttribute("aria-checked")) !== "true") fail(`${tag}: the toggle did not take true`);
-      if ((await fieldOf("reminders").innerText()).includes("isn't valid here")) fail(`${tag}: the toggle kept the invalid hint`);
-      await fieldOf("label").locator("input").fill("Recovered");
-      await fieldOf("label").locator("button", { hasText: "Save" }).click();
-      await saved(fieldOf("label"), "the text");
+      // Save Off directly with an On default, and repair the unreadable notes with valid empty text.
+      await toggle.getByRole("radio", { name: "Off", exact: true }).click();
+      await saved(toggle, "the toggle");
+      if ((await toggle.getByRole("switch").getAttribute("aria-checked")) !== "false") fail(`${tag}: the toggle did not take Off`);
+      if ((await toggle.innerText()).includes("isn't valid here")) fail(`${tag}: the toggle kept the invalid hint`);
+      await notes.locator("textarea").fill("Draft");
+      await notes.locator("textarea").fill("");
+      await notes.getByRole("button", { name: "Save", exact: true }).click();
+      await saved(notes, "the empty text");
       await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
       ok(`${tag}: invalid values show empty states and can be corrected`);
     } else if (scenario === "empty") {

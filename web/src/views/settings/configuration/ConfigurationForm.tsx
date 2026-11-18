@@ -104,22 +104,6 @@ function Banner({ tone, action, children }: { tone: "caution" | "alert"; action?
   );
 }
 
-/** What a control shows when the Document holds no valid value for it: its own empty/unselected state, never the field's
- *  default (which would look like a committed value). */
-function emptyValue(field: KnownField): FieldValue {
-  switch (field.kind) {
-    case "toggle":
-      return false;
-    case "select":
-      return "";
-    case "multiselect":
-      return [];
-    case "text":
-    case "number":
-      return "";
-  }
-}
-
 /** A value as a line of text (the default value in the footer). */
 function valueText(field: KnownField, v: FieldValue): string {
   switch (field.kind) {
@@ -153,14 +137,13 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
   const editable = !!known && s.writable && !known.read_only && !known.disabled_reason;
   // a multiselect's unsaved checks are what it shows; its pending write once committed
   const checked = known?.kind === "multiselect" && fs.selection !== undefined ? (fs.selection as FieldValue) : undefined;
-  // a saved value this build can't read still leaves a control to correct it: the field's own empty state, not its default
-  const shown = fs.pending !== undefined ? fs.pending : checked !== undefined ? checked : value !== undefined ? value : known ? emptyValue(known) : undefined;
+  const shown = fs.pending ?? checked ?? value;
   const inline = known && (known.kind === "toggle" || (known.kind === "select" && (known.select.presentation === "segmented" || known.select.presentation === "dropdown")));
   const selectionDirty = !!known && known.kind === "multiselect" && fs.selection !== undefined && !sameValue(fs.selection, value);
   const typed = !!known && (known.kind === "text" || known.kind === "number");
   const committed = typed && shown !== undefined ? String(shown) : "";
   const text = fs.draft ?? committed;
-  const typedDirty = typed && fs.draft !== undefined && fs.draft !== committed;
+  const typedDirty = typed && fs.draft !== undefined && (shown === undefined || fs.draft !== committed);
   const count = known?.kind === "text" && known.text.max_length !== undefined ? t("settings-configuration.count", { n: scalarLength(text), max: known.text.max_length }) : undefined;
   const invalid = !!known && value === undefined;
   const described = [field.description ? descId : undefined, count !== undefined ? countId : undefined, invalid ? invalidId : undefined].filter(Boolean).join(" ") || undefined;
@@ -173,11 +156,11 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
           <div id={titleId} className="text-[13px] text-ink">{field.title}</div>
           {field.description && <p id={descId} className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{field.description}</p>}
         </div>
-        {inline && shown !== undefined && <div className="shrink-0"><InlineControl ctl={ctl} field={known!} shown={shown} can={can} titleId={titleId} descId={described} /></div>}
+        {known && inline && <div className="shrink-0"><InlineControl ctl={ctl} field={known} shown={shown} can={can} titleId={titleId} descId={described} invalidValue={invalid} /></div>}
       </div>
-      {known && !inline && shown !== undefined && (
+      {known && !inline && (
         <div className="mt-2">
-          <BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={described} countId={count !== undefined ? countId : undefined} invalidValue={invalid} />
+          <BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={described} dirty={typedDirty} />
         </div>
       )}
       {fs.error && <p role="alert" className="mt-1.5 text-[11.5px] leading-snug text-red">{problemText(fs.error)}</p>}
@@ -254,33 +237,43 @@ function Note({ tone, id, children }: { tone?: "caution"; id?: string; children:
 interface ControlProps {
   ctl: ConfigurationController;
   field: KnownField;
-  shown: FieldValue;
+  shown: FieldValue | undefined;
   titleId: string;
   descId?: string;
 }
 
 /** Controls at the end of the title row: a switch, a segmented choice, a dropdown. */
-function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps & { can: boolean }) {
-  if (field.kind === "toggle") return <Switch on={shown as boolean} onChange={(on) => ctl.choose(field.id, on)} disabled={!can} label={field.title} describedBy={descId} />;
+function InlineControl({ ctl, field, shown, can, titleId, descId, invalidValue }: ControlProps & { can: boolean; invalidValue: boolean }) {
+  if (field.kind === "toggle") {
+    // With no saved boolean, offer both values without implying either was already set.
+    if (invalidValue) return (
+      <fieldset disabled={!can} aria-describedby={descId}>
+        <Segmented<string> label={field.title} value={shown === undefined ? "" : shown ? "on" : "off"}
+          options={[{ v: "off", label: t("settings-configuration.off") }, { v: "on", label: t("settings-configuration.on") }]}
+          onChange={(v) => ctl.choose(field.id, v === "on")} />
+      </fieldset>
+    );
+    return <Switch on={shown === true} onChange={(on) => ctl.choose(field.id, on)} disabled={!can} label={field.title} describedBy={descId} />;
+  }
   if (field.kind !== "select") return null;
+  const selected = shown === undefined ? "" : (shown as string);
   if (field.select.presentation === "dropdown") {
     return (
-      <select aria-labelledby={titleId} aria-describedby={descId} className={settingsInputClass} value={shown as string} disabled={!can} onChange={(e) => ctl.choose(field.id, e.target.value)}>
-        {/* no valid value: a placeholder, never the default or the first option as if it were saved */}
-        {(shown as string) === "" && <option value="" disabled hidden>{t("settings-configuration.none")}</option>}
+      <select aria-labelledby={titleId} aria-describedby={descId} className={settingsInputClass} value={selected} disabled={!can} onChange={(e) => ctl.choose(field.id, e.target.value)}>
+        {shown === undefined && <option value="" disabled hidden>{t("settings-configuration.none")}</option>}
         {field.select.options.map((o) => <option key={o.value} value={o.value}>{o.title}</option>)}
       </select>
     );
   }
   return (
     <fieldset disabled={!can} aria-describedby={descId}>
-      <Segmented<string> label={field.title} value={shown as string} options={field.select.options.map((o) => ({ v: o.value, label: o.title }))} onChange={(v) => ctl.choose(field.id, v)} />
+      <Segmented<string> label={field.title} value={selected} options={field.select.options.map((o) => ({ v: o.value, label: o.title }))} onChange={(v) => ctl.choose(field.id, v)} />
     </fieldset>
   );
 }
 
 /** Controls under the title: a list of choices, a list of checks, a text or number field. */
-function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId, countId, invalidValue }: ControlProps & { fs: FieldState; can: boolean; editable: boolean; countId?: string; invalidValue: boolean }) {
+function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId, dirty }: ControlProps & { fs: FieldState; can: boolean; editable: boolean; dirty: boolean }) {
   if (field.kind === "select") {
     const options = field.select.options;
     return (
@@ -289,8 +282,8 @@ function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId, c
       </fieldset>
     );
   }
-  if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={shown as string[]} editable={editable} titleId={titleId} descId={descId} />;
-  if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} editable={editable} titleId={titleId} descId={descId} countId={countId} invalidValue={invalidValue} />;
+  if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={(shown as string[] | undefined) ?? []} editable={editable} titleId={titleId} descId={descId} />;
+  if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} editable={editable} titleId={titleId} descId={descId} dirty={dirty} />;
   return null;
 }
 
@@ -342,10 +335,9 @@ function Checks({ ctl, field, chosen, editable, titleId, descId }: { ctl: Config
   );
 }
 
-function Typed({ ctl, field, shown, fs, editable, titleId, descId, countId, invalidValue }: ControlProps & { fs: FieldState; editable: boolean; countId?: string; invalidValue: boolean }) {
-  const committed = String(shown);
+function Typed({ ctl, field, shown, fs, editable, titleId, descId, dirty }: ControlProps & { fs: FieldState; editable: boolean; dirty: boolean }) {
+  const committed = shown === undefined ? "" : String(shown);
   const text = fs.draft ?? committed;
-  const dirty = fs.draft !== undefined && fs.draft !== committed;
   const multiline = field.kind === "text" && field.text?.multiline;
   const onKey = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -367,8 +359,8 @@ function Typed({ ctl, field, shown, fs, editable, titleId, descId, countId, inva
   };
   const common = {
     "aria-labelledby": titleId,
-    "aria-describedby": [descId, countId].filter(Boolean).join(" ") || undefined,
-    "aria-invalid": fs.error || invalidValue ? true : undefined,
+    "aria-describedby": descId,
+    "aria-invalid": fs.error || shown === undefined ? true : undefined,
     value: text,
     disabled: !editable,
     onKeyDown: onKey,
