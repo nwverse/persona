@@ -172,11 +172,15 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	label := i18n.T(l, "assistant-feishu_cards.main_chat")
 	if !main {
 		label = i18n.T(l, "assistant-feishu_cards.scheduled_task", i18n.Args{"task": task})
-		run, claimed := s.briefClaim(session, asked, turn, sess.TurnError != "" || cutOff(answer))
+		cut := sess.TurnError != "" || cutOff(answer)
+		if s.briefFailure(session, asked, cut) {
+			return // watchScheduledRun sends the persisted one-per-occurrence facts fallback instead
+		}
+		run, claimed := s.briefClaim(session, asked, turn, cut)
 		if claimed {
 			return // the same retained turn already owns a briefing card, including its pending retries
 		}
-		if run != nil { // a routine with facts: one card Persona lays out (briefing.go)
+		if run != nil { // a routine with facts: fixed cards Persona lays out (briefing.go)
 			s.briefMirror(ctx, machine, session, label, run, answer, turn)
 			return
 		}
