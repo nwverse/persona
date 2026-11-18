@@ -1968,6 +1968,21 @@ Mac app is frozen: it decodes the same models and draws none of this (`#if os(ma
   `-showCloseoutSample confirmed|contradicted|blocked|rows|orphaned|decision|armed` shows each state with made-up
   content and no hub.
 
+## To-dos (V1, #10465)
+
+The To-dos redesign (`docs/design/proposals/todos-redesign.md`, its V1 frames in `docs/design/prototypes/todos/v1/`) is
+built in stages behind the hub's `todo_view`; this section grows with it.
+
+- **Mock hub**: `MOCK_TODO_VIEW=1` serves the design prototype's to-dos (`docs/design/prototypes/todos/data/todos.js`)
+  as a hub with the view does: `view` on every row of `GET /api/v1/todos`, the list's `counts`, the item and places
+  routes, Someday and restore (`scripts/mock/todo_view_mock.py`). A screenshot lines up with its V1 frame when it is
+  taken soon after the mock starts, since the start plays the prototype's 10:14, with `-AppleLanguages "(en)"`.
+  `MOCK_TODO_VIEW=old` is a hub from before the view (405 for the item and places routes, which clients take as "not
+  there"),
+  `late` one whose hello names the view only after a reconnect, and `MOCK_TODO_MANAGERS=2` gives the Weather App's
+  to-dos to a second manager. `docs/operations/testing.md` has the details, and `GET /mock/churn?todos=1` for
+  measuring a push on the list.
+
 ## Quiet supervision rounds (#2092)
 
 Persona conversations on iOS, iPadOS and macOS share the web's whole-round visibility contract. A `system` / `supervise`
