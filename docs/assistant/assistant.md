@@ -1145,6 +1145,38 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
 
+## Messages that could not go in (#10194)
+
+The owner's own message must never vanish. When the owner writes to one of the assistant's conversations while it
+cannot take the message (its process did not start, as a cold start killed on a loaded computer, #10192; its computer is
+away), nothing was typed. The hub used to answer the app with the failure and forget the message; a replay of the app's
+operation then read as accepted and the bubble waited for the transcript and went.
+
+- **Kept.** The hub hands such a message (a 5xx with nothing delivered, with a `client_msg_id`) to the conversation's
+  manager, `assistant.keep_undelivered`, with the app's own fields (`text`, `images`, `launcher`, `model`, `effort`),
+  never what `assistant.send_params` added. The manager keeps it in its Postgres (setting `assistant.undelivered`,
+  `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
+  (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
+  cannot keep it leaves the failure as before.
+- **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web and iOS draw each as the
+  owner's bubble marked "Not delivered", with why and "It will be sent automatically", and Delete; one that gave up
+  in red with Retry and Delete. Every device sees it, not only the one that sent it (`web/src/lib/undelivered.ts`;
+  iOS and Android follow in their own changes).
+- **Sent by itself, once.** The manager tries again with backoff (15 s, 30 s, 1 min, 2 min, then every 5 min), at once
+  when the conversation is seen running again on a session list, oldest first, one pass per conversation at a time.
+  A try runs `SendParams` again (the live snapshot and the pick of now) and the node's `session.send` under the
+  message's own `client_msg_id`: the node sends an id once, and its transcript line is tied to the id, so the bubble
+  turns into the real line. A try that may have gone in (no answer in time, or the manager stopped during it) is
+  looked for in the conversation's latest turns first, by id, or by its words written since the try where the node
+  forgot the tie.
+- **In order.** While a conversation has kept messages, `assistant.send_params` answers `undelivered_ahead` for a newer
+  owner message, and the hub keeps it behind them instead of letting it overtake.
+- **Gives up after a day.** A message not delivered within 24 hours is marked failed; the owner picks Retry (a new day
+  of tries) or Delete. A conversation that was deleted fails it at once.
+- **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
+  the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
+  take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
+
 ## Availability metrics (#4924)
 
 Step M1 of `docs/design/proposals/main-chat-availability.md`: four numbers that say whether the main chat stays
