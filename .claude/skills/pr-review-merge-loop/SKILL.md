@@ -72,8 +72,12 @@ They never contain a real username, host, token, proxy, repository checkout or r
 files into a private runtime directory and replace every placeholder; restrict those copies with `chmod 600`.
 
 - `herdr_review.py CONFIG -- <watcher CLI args>` creates one isolated tab in the configured existing Herdr session,
-  launches the configured reviewer there, forwards `-p --output-format json`, and returns its structured result. It
-  never starts or stops Herdr and closes only its own tab. Reviewer tool boundaries and model overrides remain enforced.
+  launches the configured reviewer there through `systemd-run --user --scope --collect`, forwards
+  `-p --output-format json`, and returns its structured result. Each unique `pr-review-rNN-....scope` uses the explicit
+  `scope_properties`; memory and task values are integer byte/task counts and `CPUQuota` is a percentage string. Keep
+  `process_wrapper` for CPU affinity and rlimits: a scope property shown by `systemctl` is not proof that a cgroup v1
+  memory or CPU controller enforces it. The helper never starts or stops Herdr and closes only its own tab and scope.
+  Reviewer tool boundaries and model overrides remain enforced.
 - `pr_watch_resources.py CONFIG COMMAND ...` allocates locked CPU groups, preserves the lock across `exec`, and applies
   optional address-space and CPU-time limits. `RLIMIT_AS` is not a cgroup RSS limit. The watcher uses it only when the
   trusted `PR_WATCH_PROCESS_WRAPPER` environment is explicitly configured.

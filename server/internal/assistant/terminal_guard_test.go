@@ -25,7 +25,8 @@ var terminalClosers = map[string][]string{
 		"closeMain",                // the user's Clear context (#5095): the main chat's own headless process, never a pane (session.stop refuses assistant conversations)
 	},
 	"session.retire": {
-		"retireArchived", // the user's "Archive and close" (close_terminal)
+		"retireArchived",     // the user's "Archive and close" (close_terminal)
+		"closeEndedTerminal", // the owner's opt-in close_ended_terminals setting, when an Agent's session ends (#10355)
 	},
 	"panes.close": {},
 	"tabs.close":  {},
