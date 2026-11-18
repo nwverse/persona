@@ -12,7 +12,7 @@ import (
 // Stopping the agents of finished tasks (docs/assistant/todos.md "Stop Agents of completed tasks"). Once a task opened from an
 // assistant conversation is done — by the user or by the assistant's judge (done.go) — its agents that have stayed
 // still for a while are stopped: the node quits the agent process and keeps its terminal, the shell it ran in (node
-// retire.go, session.stop; #4754: Persona never closes an agent's terminal on its own). The todo keeps the agents
+// retire.go, session.stop; #4754; the node closes that terminal itself only after its grace period, #10111). The todo keeps the agents
 // (machine, session id, directory) and the node keeps how each was started (launcher, model, modes), so reading one
 // goes on from its transcript and its terminal stays open on its computer.
 //

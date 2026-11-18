@@ -1966,7 +1966,11 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 	if strings.TrimSpace(text) != "" {
 		text = s.withTodoDecisions(ctx, h.TodoID, text)
 		if h.New {
-			text = s.withProjectContext(ctx, h.MachineID, h.Cwd, text) // a new agent: its project's background first
+			lead := ""
+			if t.Supervision != nil {
+				lead = t.Supervision.Supervisor
+			}
+			text = s.withProjectContext(ctx, h.MachineID, h.Cwd, lead, text) // a new agent: its project's background first
 		}
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}
