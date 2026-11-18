@@ -222,7 +222,8 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
 
 - **Metering** (`node/usage.go`): every 10 seconds the node reads what its agents' records gained. An adapter per agent (`node/usage_adapters.go`, #9923) says which files hold its usage,
   which session a file belongs to and which parser reads it: Claude Code's main and subagent transcripts in every config directory, and the agents of its workflow runs
-  (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex and of the compatible traex CLI; the sessions of pi and omp
+  (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex (every Codex home: the default and the registered ones) and of the compatible traex CLI, each segment of a
+  continued thread (the session list follows a thread's newest), and for a backfill reaching further back than two weeks every rollout on disk, archived ones too (#10002); the sessions of pi and omp
   (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent` and `~/.omp/agent`: `sessions/<cwd>/<time>_<id>.jsonl`, #9992). opencode keeps its steps in a SQLite database (`$PERSONA_OPENCODE_DB`,
   else `$XDG_DATA_HOME/opencode/opencode.db`, default `~/.local/share/opencode/opencode.db`): its adapter queries it with the system `sqlite3` (`node/usage_opencode.go`), the rows added
   since the last read and the unfinished ones again, nothing while the database has not changed; without `sqlite3` (a Linux machine often has none) opencode is not metered.
@@ -291,11 +292,13 @@ The history starts the day the manager began keeping it; the days before are onl
   (as hour rows, `step = 3600`) only when the machine had no row in it before the request, so the live meter's count of an hour always stays; in the same transaction it records
   the last hour sent and, with the last request, when the scan finished. A scan cut off (a restart, a dropped connection) asks again on the next connection and reads from the
   hour after the last stored; a request sent twice adds nothing. Once finished, the node is not asked again.
-- **By agent** (#9984): the node names the agents it reads and the manager keeps a record per agent (`usage_backfill.agent`). Claude Code, Codex and traex, what the
-  backfill read before, share the machine's first record (`''`): done stays done. An agent whose adapter a node gains later has its own record, so its history is read
-  (only its files) from the history's start, and its hours are stored beside the others: an hour is stored for an agent only when the machine had none of that agent's usage
-  in it (Claude Code, Codex, traex and the rows from before agents were kept count together). A request names the agents it read; only their buckets are stored and only
-  their records move on. An older node names none (the first record, as before); an older manager answers its one range, which the node then reads for every agent.
+- **By agent** (#9984): the node names the agents it reads and the manager keeps a record per agent (`usage_backfill.agent`). Claude Code's is the machine's first
+  record (`''`): done stays done. Every other agent has its own, so an agent whose adapter a node gains later has its history read (only its files) from the history's start,
+  and its hours are stored beside the others: an hour is stored for an agent only when the machine had none of that agent's usage in it, nor, for an agent metered before
+  agents were kept apart (Claude Code, Codex, traex), usage stored then (`''`, which may hold theirs). Codex and traex got records of their own with #10002: the first
+  backfill listed only the rollouts written in the last two weeks, so their older history is read again, and fills the hours that held none of it. A request names the
+  agents it read; only their buckets are stored and only their records move on. An older node names none (the first record, as before); an older manager answers its one
+  range, which the node then reads for every agent.
 
 ## Gaps
 

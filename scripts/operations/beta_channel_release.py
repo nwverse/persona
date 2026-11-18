@@ -100,16 +100,26 @@ def main():
     remote = get_json(args.gh, f"repos/{args.repository}/releases/tags/{POINTER}")
     existing = {asset["name"]: asset for asset in remote.get("assets", [])}
     pointers = []
+    same = True
     for name in ("latest.json", "android.json"):
         if name not in index:
             continue
-        item = {"path": str(index[name]), "name": name}
+        item = next(item for item in assets if item["name"] == name)
         if name in existing:
-            verify_remote_assets(args.repository, POINTER, [item], remote.get("assets", []), args.gh)
-            print(f"Beta pointer {name} already has the verified digest; keeping it")
+            try:
+                verify_remote_assets(args.repository, POINTER, [item], remote.get("assets", []), args.gh)
+                print(f"Beta pointer {name} already has the verified digest; keeping it")
+            except ConfigError as error:
+                # A normal advance intentionally replaces the previous beta's index with this tag's verified bytes.
+                # The old pointer was authenticated above; this expected digest change is not artifact substitution.
+                if not str(error).startswith("another artifact already owns Release asset name:"):
+                    raise
+                same = False
+                pointers.append(item)
         else:
+            same = False
             pointers.append(item)
-    if not pointers:
+    if same:
         print(f"Beta pointer {POINTER} already describes {args.tag} ({commit})")
         return
     subprocess.run([args.gh, "release", "edit", POINTER, "--repo", args.repository,

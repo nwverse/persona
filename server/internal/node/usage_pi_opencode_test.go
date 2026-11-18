@@ -149,3 +149,63 @@ func TestUsageOpencode(t *testing.T) {
 		t.Fatalf("without a database = %+v", recs)
 	}
 }
+
+// Codex (#10002): every segment of a continued thread is read, under the thread's session (the session list follows
+// its newest file); a rollout older than the session list's two weeks is read when the backfill reaches back to it.
+func TestUsageCodexSegmentsAndOldRollouts(t *testing.T) {
+	n, home := testNode(t)
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	const thread = "0199a213-81c0-7800-8aa1-0000000000aa"
+	const segment = "0199a213-81c0-7800-8aa1-0000000000bb"
+	count := func(at time.Time, total, in, out int) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":%d},`+
+			`"last_token_usage":{"input_tokens":%d,"cached_input_tokens":0,"output_tokens":%d}}}}`, at.Format(time.RFC3339Nano), total, in, out)
+	}
+	day := filepath.Join(home, ".codex", "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
+	meta := `{"timestamp":"` + now.Format(time.RFC3339) + `","type":"session_meta","payload":{"id":"` + thread + `"}}`
+	write := func(p string, at time.Time, lines ...string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(day, "rollout-2026-11-17T08-00-00-"+thread+".jsonl"), now.Add(-time.Minute), meta, count(now, 100, 60, 40))
+	write(filepath.Join(day, "rollout-2026-11-17T09-00-00-"+thread+"_"+segment+".jsonl"), now, meta, count(now, 150, 30, 20))
+	oldAt := now.Add(-40 * 24 * time.Hour)
+	old := filepath.Join(home, ".codex", "sessions", oldAt.Format("2006"), oldAt.Format("01"), oldAt.Format("02"),
+		"rollout-2026-10-08T08-00-00-0199a213-81c0-7800-8aa1-0000000000cc.jsonl")
+	write(old, oldAt, `{"timestamp":"`+oldAt.Format(time.RFC3339)+`","type":"session_meta","payload":{"id":"0199a213-81c0-7800-8aa1-0000000000cc"}}`,
+		count(oldAt, 9, 4, 5))
+
+	m := newUsageMeter()
+	sessions := map[string]bool{}
+	m.launcherOf = func(s string) string { sessions[s] = true; return "codex" }
+	cutoff := now.Add(-usageWindow)
+	listed := map[string]bool{}
+	for _, f := range n.usageFiles(cutoff) {
+		listed[filepath.Base(f.path)] = true
+		m.scan(f, cutoff)
+	}
+	if len(listed) != 2 || listed[filepath.Base(old)] {
+		t.Fatalf("listed %v, want the thread's two segments", listed)
+	}
+	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "codex", "codex", tokenuse.Codex}]; b == nil || b.Requests != 2 || b.Output != 60 {
+		t.Fatalf("bucket = %+v, want both segments' requests", b)
+	}
+	if len(sessions) != 1 || !sessions[thread] {
+		t.Fatalf("sessions asked %v, want the thread", sessions)
+	}
+	found := false
+	for _, f := range n.usageFiles(now.Add(-60 * 24 * time.Hour)) {
+		found = found || f.path == old
+	}
+	if !found {
+		t.Fatal("a backfill reaching back 60 days does not read a rollout written 40 days ago")
+	}
+}

@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Empty assistant creation must not become a model turn
+
+Android allocates an assistant conversation before sending its queued message. The manager passed an empty prompt
+correctly, but the node appended its live snapshot and delivered a context-only turn. Check for text or images before
+requesting context or submitting model input, and keep the new conversation idle. Preserve deferred runtime instructions
+in the session record until the first successful delivery. A manager test with a fake node cannot catch this: exercise
+the real node against a recording CLI and runtime, including prewarmed sessions, whitespace, images and node restart.
+
 ## Progress snapshots must be JSONB-safe (#9755)
 
 A Go map key joined with NUL marshals to `\u0000`, which PostgreSQL JSONB rejects with `22P05`.

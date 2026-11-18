@@ -95,8 +95,8 @@ func TestPutUsageBackfill(t *testing.T) {
 	}
 }
 
-// A node that names its agents gets each one's range: the agents read before agents were kept apart share the
-// machine's first record (done stays done), another one has a record of its own and starts from the history's start.
+// A node that names its agents gets each one's range: Claude Code's is the machine's first record (done stays done),
+// any other agent's a record of its own, from the history's start or after its last hour stored.
 func TestUsageBackfillStatusByAgent(t *testing.T) {
 	now := time.Date(2026, 11, 17, 9, 30, 0, 0, time.UTC)
 	st := &usageBackfillMemStore{memStore: newMemStore(), record: db.UsageBackfill{Done: now.Add(-time.Hour)},
@@ -111,7 +111,7 @@ func TestUsageBackfillStatusByAgent(t *testing.T) {
 	before := time.Date(2026, 11, 16, 7, 0, 0, 0, time.UTC)
 	for a, want := range map[string]map[string]any{
 		"claude": {"done": true},
-		"codex":  {"done": true},
+		"codex":  {"done": false, "since": first.Unix(), "before": before.Unix()}, // a record of its own since #10002
 		"pi":     {"done": false, "since": first.Unix(), "before": before.Unix()},
 		"omp":    {"done": false, "since": time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).Unix(), "before": before.Unix()},
 	} {
