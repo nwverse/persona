@@ -237,7 +237,7 @@ struct LarkChatView: View {
         .background(pageBackground)
         .themedPage()
         .navigationTitle(conversation.name)
-        .navigationSubtitle([isTopic ? String(localized: "Lark Topic Group") : String(localized: "Lark [Inbox Event Views 7e4419]"), conversation.accountName].compactMap { $0 }.joined(separator: " · "))
+        .navigationSubtitleWhenSupported([isTopic ? String(localized: "Lark Topic Group") : String(localized: "Lark [Inbox Event Views 7e4419]"), conversation.accountName].compactMap { $0 }.joined(separator: " · "))
         .navigationBarTitleDisplayMode(.inline)
         // Keep the bar's material during push/pop instead of resolving its scroll-edge state after arrival.
         .toolbarBackground(.bar, for: .navigationBar)
