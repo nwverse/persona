@@ -84,6 +84,50 @@ func BenchmarkTodosList(b *testing.B) {
 	}
 }
 
+// BenchmarkTodosView: the To-dos view's part of GET /api/v1/todos (todo_view_routes.go: every row's view and the
+// list's counts over the listed rows), with n finished supervised tasks as BenchmarkTodosList has them; open=n with
+// every one of them open again and its run's session listed, so each reads its run, the pass at its dearest.
+func BenchmarkTodosView(b *testing.B) {
+	for _, n := range []int{250, 1000, 4000} {
+		for _, open := range []bool{false, true} {
+			name := fmt.Sprintf("todos=%d", n)
+			if open {
+				name = fmt.Sprintf("open=%d", n)
+			}
+			b.Run(name, func(b *testing.B) {
+				s, ctx := manyTodos(n), context.Background()
+				if open {
+					reopenForBench(s)
+				}
+				list, err := s.listedTodos(ctx, true)
+				if err != nil {
+					b.Fatal(err)
+				}
+				now := time.Now()
+				b.ReportAllocs()
+				for b.Loop() {
+					s.viewed(ctx, list, now).counts()
+				}
+			})
+		}
+	}
+}
+
+// reopenForBench opens every to-do of manyTodos again, accepted and not seen, with its run's session idle on its computer.
+func reopenForBench(s *Service) {
+	var sessions []proto.Session
+	s.todos.mu.Lock()
+	for _, t := range s.todos.todos {
+		t.DoneAt, t.DoneBy, t.DoneReason = nil, "", ""
+		for _, a := range t.Agents {
+			sessions = append(sessions, proto.Session{MachineID: a.MachineID, SessionID: a.SessionID, Title: a.Title,
+				Status: proto.StatusIdle, State: proto.StateIdle, StateSince: t.UpdatedAt, UpdatedAt: t.UpdatedAt})
+		}
+	}
+	s.todos.mu.Unlock()
+	s.hub.(*fakeHub).setSessions("box", sessions...)
+}
+
 // BenchmarkSuperviseWatch: one pass of the supervision loop (every superviseTick) over n finished supervised tasks.
 func BenchmarkSuperviseWatch(b *testing.B) {
 	for _, n := range []int{250, 4000} {

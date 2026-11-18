@@ -12,9 +12,9 @@ import (
 // The To-dos view (#10226): what the manager works out for each to-do and for the list, by the pure projection in
 // todo/projection (its rules: spec/fixtures/todo-view and spec/fixtures/todo-counts). This file is the adapter: it reads
 // the to-dos as GET /api/v1/todos lists them, their runs' sessions and the owner's zone once per read, and hands them
-// over as projection.Facts; the places also read the knowledge base's project titles. No route calls it yet; the routes
-// come next. The legacy triage (todo_triage.go) keeps placing to-dos for the direction tree and leader reports until
-// they read the view.
+// over as projection.Facts; the places also read the knowledge base's project titles. The routes call it once per read
+// (todo_view_routes.go). The legacy triage (todo_triage.go) keeps placing to-dos for the direction tree and leader
+// reports until they read the view.
 
 // todoProjection is a list's facts and their views, each ranked within its section; facts[i] and views[i] are the
 // list's i-th row.
