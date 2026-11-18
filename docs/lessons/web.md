@@ -1413,6 +1413,15 @@ owner retyped it on the computer. Keep the node's code on the entry and word the
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
 
+## A terminal menu must own focus before taking typing keys (#10239)
+
+An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
+N, I and Backspace accelerators safe: a program or a field can regain focus while the menu is still open. The terminal
+toolbar opts into Menu's focus scope, accepts keys only from its own trigger or menu levels, and explicitly focuses the
+trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
+pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
+and lose the busy-Agent warning.
+
 ## Local font preferences (#10243)
 
 A stylesheet's normal custom property loses to a theme's inline value. An explicit font preference needs precedence while keeping the inline default intact for reset and fallback. Do not replace the theme's token in place. Keep before-paint validation and runtime validation contract-tested, quote a custom family as one CSS string, and treat FontFaceSet checks as advisory: they cannot reliably establish whether every installed family exists.
