@@ -352,7 +352,8 @@ export interface Session {
   /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
   turn_error?: string;
   /** What the agent's record says of turn_error: "transient" (worth a "Continue"), "user" (the user must act),
-   *  or "usage_limit" (a subscription limit, until it resets). */
+   *  or "usage_limit" (a subscription limit, until it resets). Or the hub's own word on a task Agent's turn with no
+   *  output (#10187): "no_output" or "stopped" (Persona's Stop interrupted it), turn_error then being its sentence. */
   turn_error_kind?: string;
   /** What is wrong, when the hub can tell from turn_error (docs/assistant/onboarding.md 5.2): not_logged_in / auth_failed /
    *  model_route / rate_limited / model_fallback_unavailable (the model Claude Code fell back to after a refusal can't
