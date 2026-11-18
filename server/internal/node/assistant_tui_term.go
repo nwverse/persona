@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -157,15 +158,19 @@ func (b *tuiBridge) launch() error {
 const tuiServerWait = 10 * time.Second
 
 // newSession creates the pane, running script, once the server listens; a server that exits first says why.
+//
+// -N: new-session starts a server of its own (a daemon) when none listens on the socket yet. Asked before the bridge's
+// server listened, it did, and the bridge's server, finding one there, acted as a client and exited ("open terminal
+// failed: not a terminal"): Claude Code ran under the daemon, again no process the node runs (1 start in 4 in tests).
 func (b *tuiBridge) newSession(script string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), tuiServerWait)
 	defer cancel()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		out, err := b.tmuxRun(ctx, "new-session", "-d", "-s", tuiPane, "-x", "200", "-y", "50", "-c", b.spec.Cwd, "--", "/bin/sh", script)
+		out, err := b.tmuxRun(ctx, "-N", "new-session", "-d", "-s", tuiPane, "-x", "200", "-y", "50", "-c", b.spec.Cwd, "--", "/bin/sh", script)
 		if err == nil {
-			return nil
+			return b.ownSession(ctx)
 		}
 		select {
 		case <-b.serverDone:
@@ -179,6 +184,18 @@ func (b *tuiBridge) newSession(script string) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// ownSession checks that the session is the bridge's server's: the process Claude Code must descend from.
+func (b *tuiBridge) ownSession(ctx context.Context) error {
+	out, err := b.tmuxRun(ctx, "display-message", "-p", "-t", tuiPane, "#{pid}")
+	if err != nil {
+		return fmt.Errorf("tmux: %s", strings.TrimSpace(out))
+	}
+	if got, want := strings.TrimSpace(out), strconv.Itoa(b.server.Process.Pid); got != want {
+		return fmt.Errorf("tmux ran the session in another server (pid %s, not %s)", got, want)
+	}
+	return nil
 }
 
 // tuiScript is the pane's script: Claude Code's command, run by a shell that first forgets it is in tmux. Persona's

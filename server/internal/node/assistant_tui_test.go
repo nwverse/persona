@@ -588,25 +588,16 @@ func TestAMessageWithNoModelPickKeepsInteractive(t *testing.T) {
 // Interactive Claude Code and what it runs (its MCP server, its hooks) descend from the bridge, the process the node
 // runs for the conversation, as claude -p's do: that is how the node takes the assistant's MCP server for the
 // assistant's (mcpAssistantOf). Under a tmux server that ran as a daemon of its own they descended from no process the
-// node runs, and the main conversation got an Agent's four tools.
+// node runs, and the main conversation got an Agent's four tools. Also when the bridge's server is slow to listen:
+// new-session then started a daemon of its own, and the bridge's server exited (1 start in 4 without the delay).
 func TestInteractiveClaudeCodeDescendsFromTheBridge(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
+	real, err := exec.LookPath("tmux")
+	if err != nil {
 		t.Skip("tmux is not installed")
 	}
-	dir := t.TempDir()
-	child := filepath.Join(dir, "child")
-	b := &tuiBridge{spec: tuiSpec{Cwd: dir, TUI: []string{"/bin/sh", "-c", `sleep 30 & echo $! > "$1.tmp"; mv "$1.tmp" "$1"; wait`, "sh", child}}}
-	if err := b.launch(); err != nil {
+	slow := t.TempDir() // a tmux whose server listens 300 ms late
+	if err := os.WriteFile(filepath.Join(slow, "tmux"), []byte("#!/bin/sh\n[ \"$1\" = -D ] && /bin/sleep 0.3\nexec "+real+" \"$@\"\n"), 0o700); err != nil {
 		t.Fatal(err)
-	}
-	defer b.shutdown()
-	var pid int
-	waitFor(t, "the pane's child", func() bool {
-		raw, err := os.ReadFile(child)
-		return err == nil && json.Unmarshal(bytes.TrimSpace(raw), &pid) == nil
-	})
-	if line := lineage(pid, parentPID); !slices.Contains(line, os.Getpid()) {
-		t.Fatalf("the pane's child (pid %d) does not descend from the bridge (pid %d): %v", pid, os.Getpid(), line)
 	}
 	self, err := os.FindProcess(os.Getpid())
 	if err != nil {
@@ -616,8 +607,29 @@ func TestInteractiveClaudeCodeDescendsFromTheBridge(t *testing.T) {
 	n.mu.Lock()
 	n.procs["main-chat"] = &assistantProc{id: "main-chat", cmd: &exec.Cmd{Process: self}}
 	n.mu.Unlock()
-	if id, ok := n.mcpAssistantOf(pid, nil, parentPID, "main-chat"); !ok || id != "main-chat" {
-		t.Fatalf("the node does not take the pane's MCP server for the assistant's: %q %v", id, ok)
+	for _, path := range []string{os.Getenv("PATH"), slow + string(os.PathListSeparator) + os.Getenv("PATH")} {
+		t.Setenv("PATH", path)
+		dir := t.TempDir()
+		child := filepath.Join(dir, "child")
+		b := &tuiBridge{spec: tuiSpec{Cwd: dir, TUI: []string{"/bin/sh", "-c", `sleep 30 & echo $! > "$1.tmp"; mv "$1.tmp" "$1"; wait`, "sh", child}}}
+		if err := b.launch(); err != nil {
+			b.shutdown()
+			t.Fatal(err)
+		}
+		var pid int
+		waitFor(t, "the pane's child", func() bool {
+			raw, err := os.ReadFile(child)
+			return err == nil && json.Unmarshal(bytes.TrimSpace(raw), &pid) == nil
+		})
+		line := lineage(pid, parentPID)
+		id, ok := n.mcpAssistantOf(pid, nil, parentPID, "main-chat")
+		b.shutdown()
+		if !slices.Contains(line, os.Getpid()) {
+			t.Fatalf("tmux %s: the pane's child (pid %d) does not descend from the bridge (pid %d): %v", b.tm.Bin, pid, os.Getpid(), line)
+		}
+		if !ok || id != "main-chat" {
+			t.Fatalf("tmux %s: the node does not take the pane's MCP server for the assistant's: %q %v", b.tm.Bin, id, ok)
+		}
 	}
 }
 
