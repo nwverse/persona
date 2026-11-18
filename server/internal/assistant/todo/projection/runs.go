@@ -39,13 +39,17 @@ const (
 	runPersona                    // one of Persona's own conversations works now
 )
 
-// run is one active linked run: its link, its session when the hub lists it, and how it stands.
+// run is one active linked run: its link, its session when the hub lists it (else noSession), and how it stands. s
+// points into the facts' Sessions: a session is 1.5 KB, and every read of the list makes a run of each active link.
 type run struct {
 	link  Agent
-	s     proto.Session
+	s     *proto.Session
 	found bool
 	kind  runKind
 }
+
+// noSession is the session of a run the hub does not list: the zero session, never written.
+var noSession proto.Session
 
 // title is the run's title as the session list has it, else as the link recorded it.
 func (r run) title() string {
@@ -71,9 +75,9 @@ func activeRuns(f *Facts, now time.Time) []run {
 		if a.ReleasedAt != nil || a.DismissedAt != nil || a.StartError != "" {
 			continue // a run whose start failed counts as stopped
 		}
-		r := run{link: a}
-		for _, s := range f.Sessions {
-			if s.MachineID == a.MachineID && s.SessionID == a.SessionID {
+		r := run{link: a, s: &noSession}
+		for i := range f.Sessions {
+			if s := &f.Sessions[i]; s.MachineID == a.MachineID && s.SessionID == a.SessionID {
 				r.s, r.found = s, true
 				break
 			}
@@ -90,7 +94,7 @@ func runReading(r run, now time.Time) runKind {
 	if !r.found {
 		return runOffline
 	}
-	s := r.s
+	s := *r.s
 	st := stateOf(s)
 	switch {
 	case st == proto.StateNeedsYou:
@@ -361,6 +365,9 @@ func openPRs(f *Facts, now time.Time) []PRStatus {
 func dueEnd(f *Facts) (time.Time, bool) {
 	if f.DueAt != nil {
 		return *f.DueAt, true
+	}
+	if f.DueDate == "" { // most to-dos have no date: a failed parse would allocate its error on every read
+		return time.Time{}, false
 	}
 	loc := f.Loc
 	if loc == nil {

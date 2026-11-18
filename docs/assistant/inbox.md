@@ -228,6 +228,13 @@ a summary up to 40 characters, and a short reason:
   no markers, so their absence there says nothing and the kind and text decide (#9124). Grouping's input names the other side of a direct chat in
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
+  For a `larkcli` human DM, the triage input also names the newest message's preview separately from the conversation.
+  This boundary belongs only to triage and its no-write preview; drafts, task judging and handling conversations keep
+  their existing item inputs without a repeated preview.
+  An older answer or acknowledgement does not resolve a later request. An `[Image: ...]` marker is an unread image,
+  not its contents: a new work-related DM screenshot still needs the owner to look or respond unless explicit text
+  makes it informational or confirms that the current issue is resolved. This does not add OCR or a fixed connector
+  tier; the model and the user's rules still decide. Already-triaged FYI items are not replayed automatically (#9124).
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
   records the one its tier was given under (`triage_rev`, kept, not listed; a rule tier given under the current criteria stays,
   unless it is provisional: below). Each triage pass also takes up to 8 open Needs you items tiered under an older revision (newest activity first): Lark and
@@ -309,6 +316,8 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
   uncertainty merges into an existing event; the prompt asks for at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
   + batch text. Existing events for the chat are preloaded (the no-query result of `events` below), saving one call. Each model response is JSON, either one tool call or a result.
+  Each touched event is tiered as a whole using its own assigned new activity and unresolved requests, not the batch's last message.
+  A reply or acknowledgement assigned to another event cannot resolve it; an earlier reply cannot close a later request in the same event.
   The output budget is `256 + 48 × new messages + 160 × min(new messages, candidate events + 3)`, clamped to 1024–4096 tokens on every model call.
   The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
@@ -830,7 +839,7 @@ which users saw as one action: clear this batch they do not need to handle now. 
   With nothing open iOS says "Nothing left to handle" only for the whole Inbox; under filters or a search it names them without a count ("Lark · Group chat"),
   and while nothing is shown because the list is still being read, or its read failed, the item has no line at all (#7551, as the web).
   Mac has one toolbar button (scope on hover) and one Inbox-menu item, ⇧⌘E while Inbox is active. Apple passes `items` (ID + version) for current filtered / searched unhandled items, not `filter`.
-  Section Mark All Seen / Clear All still use `/done`. Watch has only single-item done, no bulk entry, and reply-only devices cannot call `/bulk`; extensions need `inbox.write`.
+  Section Mark All Seen / Clear All (and the same from a group's title, "Group titles") still use `/done`. Watch has only single-item done, no bulk entry, and reply-only devices cannot call `/bulk`; extensions need `inbox.write`.
 - **Old hubs**: without `/bulk` (404 / 405), fall back to `/done`. It lacks dismiss, so Clean up all records done (`done_by=user`), still removing items from the list. Reopen also falls back to `/done`.
 - Tests: `inbox_bulk_test.go` (`TestInboxBulkFilterAsOf`: post-cutoff items / messages unchanged, dismiss, Undo only changed items; IDs, single dismiss, bad requests),
   `hub/devicetokens_test.go` `TestAnswerRoleOnlyWhatTheWatchDoes` (Watch blocked), `hub/testdata/route_scopes.txt` (`inbox.write` required); web `inbox.test.ts`; Android `InboxBulkTest`, `InboxRepositoryTest`, `InboxAssistantTransportTest`;
@@ -933,6 +942,29 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 - DEBUG (iOS): `-showInboxSection action|working|fyi|done|all` (the section bar on that choice; without it `-showInboxDone` and `-showInboxJump` choose Done and `-showInboxPickGroups` All, and `-showInboxPickedDone` shows Done after marking), `-showInboxPicked <n>`, `-showInboxPickedDone YES`, `-showInboxDone YES` (Done and its newest group open), `-showInboxPickGroups YES`, `-showInboxDue YES` / `-showInboxMerge YES` / `-showInboxTodo YES` (the first two rows picked and the due sheet open / merged / added to to-dos for today, #6480; `MOCK_INBOX_TODO=1|time` puts a to-do suggestion on the mock's design-review mail),
   `-showInboxJump <group>` (Done jumped to that group, `week` or `month`, its first page loaded). Mock hub: `MOCK_INBOX_HISTORY=busy` (36 done a day for two months), `MOCK_INBOX_DAYS=none`.
 - Tests: web `lib/inbox-groups.test.ts`, `views/inbox/Inbox.groups.test.tsx`, `views/inbox/Inbox.select.test.tsx`; Apple `InboxGroupsTests`, `InboxBulkTests`, `InboxFilteredEmptyTests`, and for the section bar `InboxBarFixtureTests` (the three shared files), `InboxBarTests` and `InboxSectionBarUITests`.
+
+## Group titles (2026-11-18, #10422)
+
+A group's title in **FYI** offers **Mark all seen ⌄**, and in **Collapsed** **Clear all ⌄**: a pull-down with two choices, the
+group's items ("Mark all 4 in “Assistant” seen") or the whole section's ("Mark all 6 in “FYI” seen"). Group titles stick to
+the top while their rows scroll by, so once the section's own button has scrolled away this is the one in sight. Who it
+serves: everyone reading the Inbox on the Assistant side; it adds no setting and no request.
+
+- **Where**: only the sections with a section-wide action (FYI, Collapsed). Needs you and In progress get none: their items
+  need the owner (or the AI is on them), and a batch there is how things get missed; Done is already done. A section with one
+  group shows no group titles, so its own button acts at once, as before. Not while selecting.
+- **Scope and counts**: the open list is complete (`GET /api/v1/inbox` lists every open item; only Done pages), so "all" is
+  every item the group or section shows under the current filters, folder and search, the number on its title. With any of
+  them on, each choice says under it what it covers in Clean up all's words ("Lark · @Me", "Search “report”"). The request is
+  the section button's own (Apple `POST /api/v1/inbox/done`; the web `/bulk` with `action: done`, falling back to `/done`):
+  ids and versions, one request per manager. Items that took new messages after the list was read stay open, and the toast
+  says how many.
+- **Undo**: the rows leave at once and the toast's Undo reopens what moved; a failure puts them back ("Mark All as Done").
+- **Look**: the section's own words and a small chevron (iOS `Theme.Icon.pullDown`, the web's `chevron`) at the right of the
+  group's title, its target 44 pt tall on iOS; the words stay whole and a long group title gives way.
+- **Android**: #10425.
+- Tests: Apple `InboxGroupClearTests` and UI `InboxGroupClearUITests` (with the mock's `MOCK_INBOX_EXTRA=<n>` it also shows the
+  mail group's title stuck at the top); web `views/inbox/InboxList.group-clear.test.tsx`.
 
 ## App
 
