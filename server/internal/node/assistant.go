@@ -219,7 +219,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	_, ok := n.procs[id]
 	a := n.agents[id]
 	n.mu.Unlock()
-	if ok {
+	if ok || n.externalStarts.has(id) {
 		return true
 	}
 	// A real host pane is stronger evidence than a working directory: users may resume a terminal session there.
@@ -287,8 +287,25 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
+	externalLauncher := launcher
+	if externalLauncher == "" && id != "" {
+		if saved, ok := n.state.get(id); ok {
+			externalLauncher = saved.Launcher
+		}
+	}
+	if proto.IsExternalLauncher(externalLauncher) {
+		key := cmp.Or(id, newIDFrom(ctx))
+		if key != "" {
+			var finish func()
+			ctx, finish = n.beginExternalStartup(ctx, key)
+			defer finish()
+		}
+	}
 	if id != "" {
 		defer n.typing.lock(id)()
+	}
+	if externalStartupOf(ctx) != nil && ctx.Err() != nil {
+		return "", externalAdapterError(ctx, ctx.Err())
 	}
 	timing.mark("typing_locked", true)
 	recovery, restart := assistantRecoveryOf(ctx)
@@ -324,6 +341,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	restartForRecovery := recovery != nil && restart
 	resume := id != ""
 	st, _ := n.state.get(id)
+	// External authority and the raw runtime must be checked before guest/resume normalization can replace options.
+	requested := executionOption(options)
+	requestedLauncher := launcherOr(launcher, st.Launcher)
+	if proto.IsExternalLauncher(requestedLauncher) || requested.External != nil {
+		bindingID := id
+		if bindingID == "" {
+			bindingID = newIDFrom(ctx)
+		}
+		if err := n.checkExternalAssistant(ctx, bindingID, requestedLauncher, requested, false); err != nil {
+			return "", err
+		}
+	}
 	// Read and consume the one-shot choice before guest or launcher normalization can replace options. A resumed send
 	// must never lose an explicit tier and quietly continue on the thread's current speed.
 	startTier := executionOption(options).ServiceTier
@@ -397,6 +426,16 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
 	rl := launcherOr(launcher, st.Launcher)
+	if proto.IsExternalLauncher(rl) {
+		execution.IsMain = isMain && guest == nil
+		bindingID := id
+		if bindingID == "" {
+			bindingID = newIDFrom(ctx)
+		}
+		if err := n.checkExternalAssistant(ctx, bindingID, rl, execution, false); err != nil {
+			return "", err
+		}
+	}
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
@@ -454,17 +493,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
 		return "", err
 	}
-	if recovery == nil && id != "" {
+	if recovery == nil && id != "" && !proto.IsExternalLauncher(launcher) {
 		askedModel := execution.Model
 		// The fallback that answered (#3788). holdExpired is declared apart: ":=" would shadow execution in this block.
 		var holdExpired bool
 		execution, holdExpired = n.heldFallbackWithExpiry(id, launcher, execution)
 		execution = n.applyModelRecoveryReturn(ctx, id, askedModel, execution, holdExpired)
-	}
-	if execution.Model != "" {
-		if _, err := n.launcherModelCheck(ctx, launcher, execution.Model); err != nil {
-			return "", err
-		}
 	}
 	execution.IsMain = isMain && guest == nil
 	// Only a managed launcher's start applies the main conversation's window (capMain): on another one it would only
@@ -477,6 +511,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil {
 		execution.SupervisionInstructions = ""
 	}
+	var existing *assistantProc
+	if proto.IsExternalLauncher(launcher) {
+		n.mu.Lock()
+		existing = n.procs[id]
+		n.mu.Unlock()
+	}
+	if execution.Model != "" && !sameExternalProcessModel(existing, launcher, execution.Model) {
+		if _, err := n.launcherModelCheck(ctx, launcher, execution.Model); err != nil {
+			return "", err
+		}
+	}
+	execution.IsMain = isMain && guest == nil
 	agent, err := n.assistantAgent(ctx, launcher)
 	if err != nil {
 		return "", err
@@ -495,6 +541,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	} else if executionOption(options).ConfigDir != "" {
 		return "", errors.New(assistantwire.ConfigDirClaudeOnly)
+	}
+	if proto.IsExternalLauncher(launcher) {
+		execution.StartupContext = ctx
 	}
 	timing.mark("preflight_done", true)
 	var p *assistantProc
@@ -600,9 +649,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// goes into a plain resume with every tool below rather than into the round's process (assistant_round.go).
 		n.awaitRoundTurn(ctx, p)
 	}
+	currentExecution := execution
+	// Pin only a process this send can actually retain. A restart for tools, permissions, instructions or recovery must
+	// use the manager's current revision, never the old process's binding in a new process.
+	if proto.IsExternalLauncher(launcher) && p != nil && p.alive() && !otherTools && !restartForRecovery && !p.needsRestartFor(want) && !p.instructionsStale() {
+		execution = pinExternalExecution(p, launcher, execution)
+	}
 	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
+		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
+			active = p.workingLocked() // compactions and accepted/unacknowledged queued input also belong to this process
+		}
 		if otherTools {
 			// A round's process is not replaced for its tools while anything in it would be lost (workingLocked): also
 			// a compaction, the user's included, which sets no busy flag, and a message Claude Code queued or started.
@@ -618,6 +676,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			active = !n.stopSettled(ctx, p) // once it settled: one that began to work meanwhile is not cut
 		}
 		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
+			if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
+				return "", externalRefusal(ctx, "adapter_busy")
+			}
 			if roleChanged {
 				// Do not kill active work, or deliver a new role's message on the old system
 				// policy. Manager-generated messages remain queued for an idle retry.
@@ -650,6 +711,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only), new instructions or tools: resume in a fresh one
 			n.rememberTasks(id, nil)
 			p = nil
+			if proto.IsExternalLauncher(launcher) {
+				execution = currentExecution
+			}
 		}
 	}
 	if startTier == "" {
@@ -697,6 +761,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		err := n.syncAssistantModes(ctx, p)
 		awaitList(n.notifySessionsSoon())
 		if err != nil {
+			return "", err
+		}
+		if err := finishExternalStartup(ctx); err != nil {
 			return "", err
 		}
 		return id, nil
@@ -770,6 +837,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		startAttemptsAt = p.born
 	}
 	for attempt := 1; ; attempt++ {
+		if proto.IsExternalLauncher(launcher) && ctx.Err() != nil {
+			return "", externalAdapterError(ctx, ctx.Err())
+		}
 		var controlErr error
 		if attempt == 1 {
 			controlErr = <-modec
@@ -801,6 +871,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		var timeout *assistantControlTimeoutError
 		retryControl := errors.As(controlErr, &timeout)
 		werr := controlErr
+		if proto.IsExternalLauncher(launcher) && ctx.Err() != nil {
+			return "", externalAdapterError(ctx, ctx.Err())
+		}
 		if werr == nil {
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 			timing.mark("input_written", werr == nil)
@@ -875,6 +948,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 		n.noteAssistantRecoveryProcess(ctx, p) // the replacement is the process the recovery follows now (#3495)
+	}
+	if err := finishExternalStartup(ctx); err != nil {
+		return "", err
 	}
 	commit()
 	awaitList(n.notifySessionsSoon())
