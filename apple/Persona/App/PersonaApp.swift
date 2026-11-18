@@ -173,6 +173,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
         UrgentCallPush.shared.start()
         #endif
+        #if DEBUG && os(iOS)
+        TerminationActivities.install() // a test's Live Activities end with the app, not at the next run's install (#10109)
+        #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
         // (several groups, docs/protocol/multi-hub.md「Tests」).

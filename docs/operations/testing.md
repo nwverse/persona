@@ -612,6 +612,20 @@ checks the largest text. Set actual appearance with `xcrun simctl ui <udid> appe
 Run `PersonaTests/AgentsTabNavigationTests` too: explicit selection cancels restoration, reselection returns to the list,
 notification/link targets are preserved, and a consumed newer target invalidates an older deferred list reset.
 
+### Live Activities a run leaves (#10109)
+
+`xcodebuild test-without-building` installs the app again at the start of every run. A Live Activity the last run left up
+(a meeting still recording when its test ended) is stopped by that install, and liveactivitiesd wakes the app in the
+background to deliver it (`OpenApplication … ForRequester(liveactivitiesd)` in SpringBoard's log), a few milliseconds
+before the test's own launch. The test's launch then lands in that process, started without its arguments: the page
+in the simulator's language, none of `-openShellPage` / `-showMeetingSample` / `-AppleLanguages`. It shows when classes
+run one by one on one simulator (the lanes' scripts), after a class that ended mid-meeting.
+
+A Debug build ends every Live Activity on SIGTERM before it exits (`TerminationActivities`, `apple/Persona/Debug/`):
+the runner's SIGTERM between runs takes them with the app, and a launch that isn't recording ends a recording's
+activity it finds (`RecordingActivity`). If a test lands on a page in English with nothing it asked for, look for that
+`OpenApplication … liveactivitiesd` line before its launch.
+
 ### Simulators: always `scripts/app/sim-boot.sh`, slim by default (simslim, #2287, #2801)
 
 **Create, reuse and boot simulators through `scripts/app/sim-boot.sh`**, not direct `simctl create` / `simctl boot` or letting `xcodebuild test` create one.
