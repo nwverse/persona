@@ -392,6 +392,10 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 				list[i].Queued = append(slices.Clip(list[i].Queued), q...) // the node's slice is shared: never write into it
 				list[i].QueuedRelayed = uint16(min(len(q), math.MaxUint16))
 			}
+			if u := shown[list[i].SessionID].Undelivered; len(u) > 0 {
+				kept := slices.Clone(u) // the owner's messages that could not go in (undelivered.go, #10194)
+				list[i].Undelivered = &kept
+			}
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
 		localizeSession(lang, &list[i]) // the node's Chinese activity line… (fleet_text.go)
