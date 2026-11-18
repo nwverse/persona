@@ -485,7 +485,13 @@ func (s *Service) machineLauncherRoutes() {
 		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
 			host = agentStartHost(d, r.URL.Query().Get("host"))
 		}
-		list, err := s.pickerLaunchersOn(ctx, mid, host)
+		var list []ConfiguredLauncher
+		var err error
+		if d.ExternalInventory && r.URL.Query().Get("purpose") == "assistant" {
+			list, err = s.externalPickerLaunchers(ctx, d, r.URL.Query().Get("refresh") == "1")
+		} else {
+			list, err = s.pickerLaunchersOn(ctx, mid, host)
+		}
 		var unavailable []unavailableLauncher
 		if err == nil && r.URL.Query().Get("purpose") == "assistant" { // the main chat's menu, and the scheduled tasks' that follow it
 			all := list

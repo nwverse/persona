@@ -98,6 +98,8 @@ type Node struct {
 	managed managedLaunchers
 	// external is registered only by this node's trusted local configuration.
 	external *externalAdapterRegistry
+	// externalStarts contains cancelable initialization only, never the lifetime of an established conversation.
+	externalStarts externalStarts
 
 	hosts    *host.Registry // the terminal hosts, by kind (hosts.go): the one of the machine's engine
 	eng      engineState    // which engine, and its change stream (engine.go)
@@ -1117,6 +1119,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "usage.windows": // subscription rate-limit windows read from local files (usagewindows.go, #2432)
 		return n.usageSnapshot(false), nil
 	case "launchers.list":
+		if p.Source == proto.ExternalLauncherSource {
+			return n.externalLauncherList(ctx, p.Refresh)
+		}
 		if p.Host != "" {
 			// What a start in that host can run (the manager's New Agent and its starts, #8140): where it is an engine
 			// runtime that runs only its own launchers, its providers and what starts elsewhere whatever the host.
@@ -1144,11 +1149,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			ls, err = withApp, nil
 		}
 		shell, rcFile := launcherShell()
-		if n.external != nil {
-			if external := n.external.launchers(ctx, p.Refresh); len(external) > 0 {
-				ls, err = append(ls, external...), nil // local adapters do not depend on a working login shell
-			}
-		}
 		out := map[string]any{"launchers": typedLaunchers(ls), "shell": shell, "rc_file": rcFile}
 		if p.Host != "" {
 			out["host"] = p.Host // answered for that host: a terminal's (or an engine away), whose launchers these are
@@ -1199,6 +1199,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		return map[string]any{"detail": n.launcherProbeCached(ctx, p.Name)}, nil
 	case "launchers.models":
+		if proto.IsExternalLauncher(p.Name) {
+			return n.externalLauncherModels(ctx, p.Name, p.Refresh)
+		}
 		if !p.Configured && p.AgentType == "" && !n.knownLauncher(ctx, p.Name) { // either: the hub vouches, from hub.json
 			return nil, fmt.Errorf("unknown launcher %q", p.Name)
 		}

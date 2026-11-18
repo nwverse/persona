@@ -32,6 +32,11 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 	if n.runtimeAssistant(id) {
 		return refusal("unsupported", "这个对话由 runtime 运行，不能在这里压缩", nil)
 	}
+	if saved, ok := n.state.get(id); ok && proto.IsExternalLauncher(saved.Launcher) {
+		var finish func()
+		ctx, finish = n.beginExternalStartup(ctx, id)
+		defer finish()
+	}
 	defer n.assistantLife.lock(id)() // not while a send or a restore has this conversation's process (model_restore.go)
 	n.mu.Lock()
 	p := n.procs[id]
@@ -93,6 +98,9 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		if current.SupervisionResolved {
 			execution.SupervisionInstructions = current.SupervisionInstructions
 		}
+		if proto.IsExternalLauncher(launcher) {
+			execution.StartupContext = ctx
+		}
 		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
 			return err
 		}
@@ -100,6 +108,9 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 			st.SupervisionInstructions = execution.SupervisionInstructions
 			n.state.put(id, st)
 		}
+	}
+	if proto.IsExternalLauncher(p.launcher) && ctx.Err() != nil {
+		return externalAdapterError(ctx, ctx.Err())
 	}
 	p.mu.Lock()
 	p.compacting, p.compacted, p.manual = true, true, true
@@ -118,6 +129,9 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		p.compacting, p.manual = false, false
 		p.mu.Unlock()
 		n.compactionEnded(id, "没能开始压缩："+err.Error())
+		return err
+	}
+	if err := finishExternalStartup(ctx); err != nil {
 		return err
 	}
 	n.logger.Printf("assistant %s: compacting, as the user asked", short(id))

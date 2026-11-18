@@ -217,7 +217,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	_, ok := n.procs[id]
 	a := n.agents[id]
 	n.mu.Unlock()
-	if ok {
+	if ok || n.externalStarts.has(id) {
 		return true
 	}
 	// A real host pane is stronger evidence than a working directory: users may resume a terminal session there.
@@ -285,8 +285,25 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
+	externalLauncher := launcher
+	if externalLauncher == "" && id != "" {
+		if saved, ok := n.state.get(id); ok {
+			externalLauncher = saved.Launcher
+		}
+	}
+	if proto.IsExternalLauncher(externalLauncher) {
+		key := cmp.Or(id, newIDFrom(ctx))
+		if key != "" {
+			var finish func()
+			ctx, finish = n.beginExternalStartup(ctx, key)
+			defer finish()
+		}
+	}
 	if id != "" {
 		defer n.typing.lock(id)()
+	}
+	if externalStartupOf(ctx) != nil && ctx.Err() != nil {
+		return "", externalAdapterError(ctx, ctx.Err())
 	}
 	timing.mark("typing_locked", true)
 	recovery, restart := assistantRecoveryOf(ctx)
@@ -523,6 +540,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	} else if executionOption(options).ConfigDir != "" {
 		return "", errors.New(assistantwire.ConfigDirClaudeOnly)
 	}
+	if proto.IsExternalLauncher(launcher) {
+		execution.StartupContext = ctx
+	}
 	timing.mark("preflight_done", true)
 	var p *assistantProc
 	if id == "" && guest != nil {
@@ -636,6 +656,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
+		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
+			active = p.workingLocked() // compactions and accepted/unacknowledged queued input also belong to this process
+		}
 		if otherTools {
 			// A round's process is not replaced for its tools while anything in it would be lost (workingLocked): also
 			// a compaction, the user's included, which sets no busy flag, and a message Claude Code queued or started.
@@ -739,6 +762,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if err != nil {
 			return "", err
 		}
+		if err := finishExternalStartup(ctx); err != nil {
+			return "", err
+		}
 		return id, nil
 	}
 	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
@@ -802,6 +828,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	in := assistantInput{text: text, images: images, content: content}
 	for attempt := 1; ; attempt++ {
+		if proto.IsExternalLauncher(launcher) && ctx.Err() != nil {
+			return "", externalAdapterError(ctx, ctx.Err())
+		}
 		var controlErr error
 		if attempt == 1 {
 			controlErr = <-modec
@@ -825,6 +854,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		p.partial.Reset()
 		p.mu.Unlock()
 		werr := controlErr
+		if proto.IsExternalLauncher(launcher) && ctx.Err() != nil {
+			return "", externalAdapterError(ctx, ctx.Err())
+		}
 		if werr == nil {
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 			timing.mark("input_written", werr == nil)
@@ -888,6 +920,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 		n.noteAssistantRecoveryProcess(ctx, p) // the replacement is the process the recovery follows now (#3495)
+	}
+	if err := finishExternalStartup(ctx); err != nil {
+		return "", err
 	}
 	commit()
 	awaitList(n.notifySessionsSoon())

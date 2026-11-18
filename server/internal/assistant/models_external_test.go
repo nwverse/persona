@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func externalTestLauncher() proto.Launcher {
@@ -31,6 +35,7 @@ func externalPickFixture(t *testing.T) (*Service, *fakeHub, proto.Launcher) {
 	l := externalTestLauncher()
 	f.mu.Lock()
 	f.launcherList = append(f.launcherList, l)
+	f.devices = []Device{{ID: "server", Name: "Computer", Online: true, Reachable: true, ExternalInventory: true}}
 	f.agentModels = map[string][]proto.AgentModel{l.Name: l.External.Models}
 	f.mu.Unlock()
 	return s, f, l
@@ -452,6 +457,438 @@ func TestExternalRuntimeAdmissionLeavesOrdinaryRuntimeIgnored(t *testing.T) {
 	}
 }
 
+func TestExternalClearRestoresTheExplicitPickOnTheNextMain(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pick := pickExternal(t, s, l, "vendor/model-two")
+	if _, err := s.clearMain(t.Context(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	if h := s.loadHandoff(t.Context()); h.Pick == nil || *h.Pick != pick {
+		t.Fatalf("clear did not preserve the explicit pick: %+v", h)
+	}
+	code, sess := startConv(t, s, `{"prompt":"hi","main":true}`)
+	if code != 200 {
+		retry := appRequest(t, s, "POST", "/api/v1/assistant/conversations", `{"prompt":"try again","main":true}`, "en")
+		t.Fatalf("a carried external pick blocked consecutive main starts: first=%d retry=%d %s", code, retry.Code, retry.Body.String())
+	}
+	params := f.lastSend(t)
+	binding, ok := params["external"].(map[string]any)
+	if !ok || binding["session_id"] != sess.SessionID || params["new_session_id"] != sess.SessionID || params["session_id"] != nil ||
+		sess.SessionID == "main" || sess.SessionID == "" || params["launcher"] != pick.Launcher || params["model"] != pick.Model || params["is_main"] != true {
+		t.Fatalf("the new main was not bound to the carried selection: session=%+v params=%v", sess, params)
+	}
+	if kept, ok := s.modelPickOf(t.Context(), "server", sess.SessionID); !ok || kept.Launcher != pick.Launcher || kept.Model != pick.Model {
+		t.Fatalf("the new main did not keep its external pick: %+v %v", kept, ok)
+	}
+	if h := s.loadHandoff(t.Context()); h.Pick != nil {
+		t.Fatalf("the carried pick was not consumed: %+v", h)
+	}
+	params, err := send(t, s, sess.SessionID, map[string]any{})
+	if err != nil || params["launcher"] != pick.Launcher || params["model"] != pick.Model || params["external"] == nil {
+		t.Fatalf("the restored main did not keep running its selection: %v %v", params, err)
+	}
+}
+
+func TestExternalClearFailureKeepsTheSelectionForRetry(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pick := pickExternal(t, s, l, "vendor/model-one")
+	if _, err := s.clearMain(t.Context(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := externalTestLauncher()
+	unavailable.External.CredentialState = "missing"
+	setExternalAdvertisement(f, unavailable)
+	for range 2 {
+		r := appRequest(t, s, "POST", "/api/v1/assistant/conversations", `{"prompt":"hi","main":true}`, "en")
+		if r.Code == 200 || len(f.sends) != 0 || s.settings(t.Context()).Main != "" {
+			t.Fatalf("a failed restore changed source or made a main: %d %s sends=%v", r.Code, r.Body.String(), f.sends)
+		}
+		if h := s.loadHandoff(t.Context()); h.Pick == nil || *h.Pick != pick {
+			t.Fatalf("a failed restore lost its carried pick: %+v", h)
+		}
+	}
+	setExternalAdvertisement(f, l)
+	if code, sess := startConv(t, s, `{"prompt":"hi","main":true}`); code != 200 || sess.ModelPick == nil || sess.ModelPick.Launcher != pick.Launcher {
+		t.Fatalf("the recovered source could not restore its selection: %d %+v", code, sess)
+	}
+}
+
+func TestExternalClearRetryUsesTheSameServerOwnedSession(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pick := pickExternal(t, s, l, "vendor/model-one")
+	if _, err := s.clearMain(t.Context(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	var attempts []string
+	f.onAssistantSend = func(_ *fakeHub, params map[string]any) {
+		id, _ := params["new_session_id"].(string)
+		attempts = append(attempts, id)
+	}
+	f.failAssistant = errors.New("example node unavailable")
+	for range 2 {
+		r := appRequest(t, s, "POST", "/api/v1/assistant/conversations", `{"prompt":"hi","main":true,"new_session_id":"forged"}`, "en")
+		if r.Code == 200 || s.settings(t.Context()).Main != "" {
+			t.Fatalf("failed node start changed the main route: %d %s", r.Code, r.Body.String())
+		}
+	}
+	h := s.loadHandoff(t.Context())
+	if h.For == "" || h.For == "forged" || h.Pick == nil || *h.Pick != pick || len(attempts) != 2 || attempts[0] != h.For || attempts[1] != h.For {
+		t.Fatalf("retry changed the reserved ID or choice: handoff=%+v attempts=%v", h, attempts)
+	}
+	if _, err := s.clearMain(t.Context(), ""); err != nil || s.loadHandoff(t.Context()).For != h.For {
+		t.Fatalf("a second clear discarded the pending reservation: %v", err)
+	}
+	for _, tc := range []struct {
+		name, machine string
+		main          bool
+		params        StartParams
+	}{
+		{"ordinary new chat", "server", false, StartParams{Launcher: pick.Launcher, Model: pick.Model, NewSessionID: h.For}},
+		{"forged main start", "server", true, StartParams{Launcher: pick.Launcher, Model: pick.Model, NewSessionID: h.For}},
+		{"another machine", "other", true, StartParams{Launcher: pick.Launcher, Model: pick.Model, NewSessionID: h.For}},
+		{"guest", "server", true, StartParams{Launcher: pick.Launcher, Model: pick.Model, NewSessionID: h.For, GuestTools: []string{}}},
+	} {
+		if _, err := s.startOn(t.Context(), tc.machine, tc.params, tc.main); err == nil {
+			t.Fatalf("%s acquired a reservation without its private manager proof", tc.name)
+		}
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("a forged start reached the node: %v", attempts)
+	}
+	f.failAssistant = nil
+	again := newServiceOn(t, f, s.store())
+	if code, sess := startConv(t, again, `{"prompt":"hi","main":true}`); code != 200 || sess.SessionID != h.For || sess.ModelPick == nil || sess.ModelPick.Launcher != pick.Launcher {
+		t.Fatalf("a restarted manager did not recover the exact reservation: %d %+v", code, sess)
+	}
+	if len(attempts) != 3 || attempts[2] != h.For {
+		t.Fatalf("manager restart changed the reserved start: %v", attempts)
+	}
+}
+
+type externalReservationStore struct {
+	Store
+	afterHandoff func(context.Context)
+}
+
+func (st externalReservationStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	ok, err := st.Store.Setting(ctx, key, out)
+	if key == mainHandoffKey && err == nil {
+		st.afterHandoff(ctx)
+	}
+	return ok, err
+}
+
+func TestExternalClearRetryCannotOverwriteConcurrentPick(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	original := pickExternal(t, s, l, "vendor/model-one")
+	if _, err := s.clearMain(t.Context(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	f.failAssistant = errors.New("example node unavailable")
+	if _, err := s.startMain(t.Context(), StartParams{Text: "hi"}); err == nil {
+		t.Fatal("the first start unexpectedly succeeded")
+	}
+	f.failAssistant = nil
+	s.work.eventWrites.Wait() // the failed send's diagnostics must finish before this fixture swaps its Store accessor
+	h := s.loadHandoff(t.Context())
+	if h.For == "" {
+		t.Fatal("the first start did not reserve its ID")
+	}
+	userHeld, releaseUser := make(chan struct{}), make(chan struct{})
+	userDone := make(chan error, 1)
+	changed := modelPick{MachineID: "server", Launcher: "gw", Model: "user-model", At: time.Now().UTC()}
+	go func() {
+		userDone <- s.updateModelPick(t.Context(), h.For, func(current modelPick, had bool) (*modelPick, bool) {
+			if !had || current != original {
+				t.Errorf("reserved selection changed before the user edit: %+v %v", current, had)
+			}
+			close(userHeld)
+			<-releaseUser
+			return &changed, true
+		})
+	}()
+	<-userHeld
+	// Pause the retry after it checked the handoff but before it acquires the pick book's write lock.
+	// The user already holds that lock; their choice therefore commits first, without timing assumptions.
+	type retryKey struct{}
+	var arm, blocked atomic.Bool
+	waiting, releaseRetry := make(chan struct{}), make(chan struct{})
+	base := s.store()
+	wrapped := externalReservationStore{Store: base, afterHandoff: func(ctx context.Context) {
+		if ctx.Value(retryKey{}) == true && !blocked.Load() {
+			arm.Store(true)
+		}
+	}}
+	s.store = func() Store {
+		if arm.CompareAndSwap(true, false) {
+			blocked.Store(true)
+			close(waiting)
+			<-releaseRetry
+		}
+		return wrapped
+	}
+	retryDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := s.prepareExternalMain(context.WithValue(t.Context(), retryKey{}, true), StartParams{}, h)
+		retryDone <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		close(releaseUser)
+		close(releaseRetry)
+		t.Fatal("the retry did not reach the controlled pick-write boundary")
+	}
+	close(releaseUser)
+	if err := <-userDone; err != nil {
+		close(releaseRetry)
+		t.Fatal(err)
+	}
+	close(releaseRetry)
+	if err := <-retryDone; err == nil {
+		t.Fatal("the retry overwrote a concurrent user choice")
+	}
+	if kept, ok := s.modelPickOf(t.Context(), "server", h.For); !ok || kept != changed {
+		t.Fatalf("the retry replaced the user's new choice: %+v %v", kept, ok)
+	}
+	if next := s.loadHandoff(t.Context()); next.For != h.For || next.Pick == nil || *next.Pick != original || len(f.sends) != 0 {
+		t.Fatalf("a conflicted retry consumed its handoff or ran: %+v sends=%v", next, f.sends)
+	}
+}
+
+func TestExternalClearUnreadableHandoffCannotFallBack(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-one")
+	if _, err := s.clearMain(t.Context(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	st := &downStore{memStore: s.store().(*memStore)}
+	again := newServiceOn(t, f, st)
+	st.failing(true)
+	for range 2 {
+		r := appRequest(t, again, "POST", "/api/v1/assistant/conversations", `{"prompt":"hi","main":true}`, "en")
+		if r.Code == 200 || len(f.sends) != 0 {
+			t.Fatalf("an unreadable handoff fell back: %d %s sends=%v", r.Code, r.Body.String(), f.sends)
+		}
+	}
+	st.failing(false)
+	if code, sess := startConv(t, again, `{"prompt":"hi","main":true}`); code != 200 || sess.ModelPick == nil || sess.ModelPick.Launcher != l.Name {
+		t.Fatalf("the readable handoff did not restore its choice: %d %+v", code, sess)
+	}
+}
+
+func TestExternalRelaysFailClosedBeforeTheOldOrdinaryConversationRuns(t *testing.T) {
+	for _, entry := range []string{"conversation tool", "internal relay", "quiet task notice", "queued relay"} {
+		for _, failure := range []string{"target removed", "model removed", "credentials removed"} {
+			t.Run(entry+"/"+failure, func(t *testing.T) {
+				s, f, l := externalPickFixture(t)
+				pickExternal(t, s, l, "vendor/model-one")
+				f.mu.Lock()
+				f.known["main"] = true
+				for i := range f.sessions["server"] {
+					f.sessions["server"][i].MachineID = "server"
+				}
+				f.mu.Unlock()
+				changed := externalTestLauncher()
+				switch failure {
+				case "target removed":
+					f.mu.Lock()
+					f.launcherList = []proto.Launcher{{Name: "claude"}}
+					f.mu.Unlock()
+				case "model removed":
+					changed.External.Models = changed.External.Models[1:]
+					setExternalAdvertisement(f, changed)
+				case "credentials removed":
+					changed.External.CredentialState = "missing"
+					setExternalAdvertisement(f, changed)
+				}
+				msg := relayMsg{From: "side", FromTitle: "Sample", Tool: "conversation_send", Text: "sample relay", At: time.Now().UTC()}
+				switch entry {
+				case "conversation tool":
+					out, err := s.toolConversationSend(t.Context(), "side", json.RawMessage(`{"id":"main","text":"sample relay"}`))
+					if err == nil || strings.Contains(out, "Sent") {
+						t.Fatalf("the failed external relay was reported sent: %q %v", out, err)
+					}
+				case "internal relay":
+					if err := s.deliverRelay(t.Context(), "server", "main", msg); err == nil {
+						t.Fatal("an internal relay silently used the old ordinary connection")
+					}
+				case "quiet task notice":
+					s.quiet.pending = map[string]*quietNotice{"sample-task": {todo: Todo{ID: "sample-task", Title: "Sample task", Origin: "main", Quiet: true}, state: "done"}}
+					s.sendQuietNotice("sample-task")
+					if s.queuedFor("main") != 1 {
+						t.Fatal("a refused quiet task notice did not remain queued")
+					}
+				case "queued relay":
+					s.queueRelay("main", msg)
+					s.drainRelays("server", []proto.Session{{SessionID: "main", Assistant: true, Status: proto.StatusIdle}})
+					waitFor(t, "the refused relay to settle", func() bool { return !drainingNow(s, "main") })
+					if s.queuedFor("main") != 1 {
+						t.Fatal("a refused queued relay was consumed")
+					}
+				}
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				for _, call := range f.calls {
+					if call.Method == DeviceAssistantSend || call.Method == DeviceSessionSend {
+						t.Fatalf("a failed external relay reached the old ordinary process: %+v", call)
+					}
+				}
+			})
+		}
+	}
+}
+
+type externalPickUnreadableStore struct{ Store }
+
+func (st externalPickUnreadableStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == modelPicksKey {
+		return false, errors.New("example selection store unavailable")
+	}
+	return st.Store.Setting(ctx, key, out)
+}
+
+func TestExternalRelayUnreadablePickBookDoesNotUseTheOldConnection(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-one")
+	f.mu.Lock()
+	f.known["main"] = true
+	for i := range f.sessions["server"] {
+		f.sessions["server"][i].MachineID = "server"
+	}
+	f.mu.Unlock()
+	again := newServiceOn(t, f, externalPickUnreadableStore{Store: s.store()})
+	out, err := again.toolConversationSend(t.Context(), "side", json.RawMessage(`{"id":"main","text":"sample relay"}`))
+	if err == nil || strings.Contains(out, "Sent") {
+		t.Fatalf("an unreadable external pick fell back during relay: %q %v", out, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, call := range f.calls {
+		if call.Method == DeviceAssistantSend || call.Method == DeviceSessionSend {
+			t.Fatalf("unknown model selection reached the old ordinary process: %+v", call)
+		}
+	}
+}
+
+func TestExternalRelayKeepsTheValidExecutionBinding(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-one")
+	f.mu.Lock()
+	f.known["main"] = true
+	for i := range f.sessions["server"] {
+		f.sessions["server"][i].MachineID = "server"
+	}
+	f.mu.Unlock()
+	out, err := s.toolConversationSend(t.Context(), "side", json.RawMessage(`{"id":"main","text":"sample relay"}`))
+	if err != nil || !strings.Contains(out, "Sent") {
+		t.Fatalf("valid external relay: %q %v", out, err)
+	}
+	params := f.lastSend(t)
+	binding, ok := params["external"].(map[string]any)
+	if !ok || binding["session_id"] != "main" || binding["target_id"] != l.External.ID || params["launcher"] != l.Name || params["model"] != "vendor/model-one" {
+		t.Fatalf("valid external relay lost its binding: %v", params)
+	}
+}
+
+func TestExternalRelayChangesLeaveOrdinaryLegacyDeliveryIntact(t *testing.T) {
+	for _, launcher := range []string{"", "gw", "far"} {
+		t.Run("pick="+launcher, func(t *testing.T) {
+			s, f := pickFixture(t)
+			f.mu.Lock()
+			f.known["main"] = true
+			for i := range f.sessions["server"] {
+				f.sessions["server"][i].MachineID = "server"
+			}
+			f.mu.Unlock()
+			if launcher != "" {
+				if err := s.setModelPick(t.Context(), "main", &modelPick{MachineID: "server", Launcher: launcher, At: time.Now().UTC()}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, err := s.toolConversationSend(t.Context(), "side", json.RawMessage(`{"id":"main","text":"ordinary relay"}`))
+			if err != nil || !strings.Contains(out, "Sent") || f.lastSend(t)["external"] != nil {
+				t.Fatalf("ordinary legacy relay changed: %q %v", out, err)
+			}
+		})
+	}
+}
+
+func TestExternalAgentKindChecksNeverReadTheOrdinaryShell(t *testing.T) {
+	for _, entry := range []string{"pick", "send"} {
+		for _, agent := range []string{"claude", "codex"} {
+			for _, slow := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/slow=%v", entry, agent, slow), func(t *testing.T) {
+					s, f, l := externalPickFixture(t)
+					if entry == "send" {
+						pickExternal(t, s, l, "vendor/model-one")
+					}
+					f.setSessions("server", proto.Session{SessionID: "main", MachineID: "server", Assistant: true, Agent: agent, Launcher: "gw"})
+					if !s.launcherModelSet(withLauncherPurpose(t.Context(), "assistant"), "server", l.Name)["vendor/model-one"] {
+						t.Fatal("the model metadata cache was not primed")
+					}
+					var ordinary atomic.Int32
+					s.hub = externalInventoryContextHub{Hub: f, list: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+						var params map[string]any
+						if err := json.Unmarshal(call.Params, &params); err != nil {
+							return nil, err
+						}
+						if params["source"] == "external" {
+							return json.Marshal(launcherListing{Source: "external", Launchers: []proto.Launcher{l}})
+						}
+						ordinary.Add(1)
+						if slow {
+							<-ctx.Done()
+						}
+						return nil, errors.New("example login shell failed")
+					}}
+					ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+					defer cancel()
+					var params map[string]any
+					var err error
+					if entry == "pick" {
+						_, err = s.pickModel(ctx, "main", "server", proto.ModelPick{Launcher: l.Name, Model: "vendor/model-one"}, i18n.En)
+					} else {
+						params, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "main", Lang: "en", Params: map[string]any{"text": "hi"}})
+					}
+					if ordinary.Load() != 0 {
+						t.Fatalf("an external %s entered the ordinary shell %d times: %v", entry, ordinary.Load(), err)
+					}
+					if agent == "claude" {
+						if err != nil {
+							t.Fatalf("compatible external %s: %v", entry, err)
+						}
+						if entry == "send" {
+							externalExecutionOf(t, params, l)
+						}
+					} else {
+						var refused *rpc.Error
+						if !errors.As(err, &refused) || refused.Code != assistantwire.CodeLauncherOtherKind || params["external"] != nil {
+							t.Fatalf("an incompatible external %s was not refused: %v %v", entry, params, err)
+						}
+					}
+					if len(f.sends) != 0 || len(f.starts) != 0 {
+						t.Fatal("agent-kind admission started a process")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestExternalAgentKindCacheDoesNotGrantScope(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	f.setSessions("server", proto.Session{SessionID: "main", MachineID: "server", Assistant: true, Agent: "claude", Launcher: "gw"})
+	if !s.launcherModelSet(withLauncherPurpose(t.Context(), "assistant"), "server", l.Name)["vendor/model-one"] {
+		t.Fatal("the model metadata cache was not primed")
+	}
+	_, err := s.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: "main", Params: map[string]any{
+		"launcher": l.Name, "model": "vendor/model-one", "is_main": true, "external": &proto.ExternalExecution{Scope: proto.ExternalMainChatScope, SessionID: "main"}}})
+	if err == nil || len(f.sends) != 0 || len(f.starts) != 0 {
+		t.Fatalf("a warm model cache granted unpersisted external scope: %v", err)
+	}
+}
+
 func TestExternalModelReadbackFollowsTheConfirmedMainComputer(t *testing.T) {
 	s, f, l := externalPickFixture(t)
 	pickExternal(t, s, l, "vendor/model-one")
@@ -485,9 +922,9 @@ func TestExternalColdInventoryRestoresPersistedMainPick(t *testing.T) {
 			t.Errorf("inventory read on %q, want %q", machine, pick.MachineID)
 		}
 		if params["refresh"] == true {
-			return launcherListing{Launchers: []proto.Launcher{l}}, nil
+			return launcherListing{Source: proto.ExternalLauncherSource, Launchers: []proto.Launcher{l}}, nil
 		}
-		return launcherListing{Launchers: []proto.Launcher{{Name: "claude"}}}, nil
+		return launcherListing{Source: proto.ExternalLauncherSource, Launchers: []proto.Launcher{}}, nil
 	})
 	params, err := send(t, again, "main", map[string]any{})
 	if err != nil {
@@ -502,7 +939,7 @@ func TestExternalColdInventoryRestoresPersistedMainPick(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(requests) != 2 || len(requests[0]) != 0 || !reflect.DeepEqual(requests[1], map[string]any{"refresh": true}) {
+	if len(requests) != 2 || !reflect.DeepEqual(requests[0], map[string]any{"source": "external"}) || !reflect.DeepEqual(requests[1], map[string]any{"refresh": true, "source": "external"}) {
 		t.Fatalf("cold inventory calls: %v", requests)
 	}
 }
@@ -521,9 +958,9 @@ func TestExternalColdInventoryValidatesExplicitPick(t *testing.T) {
 			refreshes++
 		}
 		if refreshes > 0 {
-			return launcherListing{Launchers: []proto.Launcher{l}}, nil
+			return launcherListing{Source: proto.ExternalLauncherSource, Launchers: []proto.Launcher{l}}, nil
 		}
-		return launcherListing{}, nil
+		return launcherListing{Source: proto.ExternalLauncherSource}, nil
 	})
 	pick := pickExternal(t, s, l, "")
 	if pick.Model != "vendor/model-one" {
@@ -570,16 +1007,16 @@ func TestExternalColdInventoryFailsClosed(t *testing.T) {
 					return nil, err
 				}
 				if !params.Refresh {
-					return launcherListing{}, nil
+					return launcherListing{Source: proto.ExternalLauncherSource}, nil
 				}
 				refreshes++
 				if tc.refreshErr != nil {
 					return nil, tc.refreshErr
 				}
 				if tc.missing {
-					return launcherListing{}, nil
+					return launcherListing{Source: proto.ExternalLauncherSource}, nil
 				}
-				return launcherListing{Launchers: []proto.Launcher{changed}}, nil
+				return launcherListing{Source: proto.ExternalLauncherSource, Launchers: []proto.Launcher{changed}}, nil
 			})
 			before, puts := profileStoreSnapshot(s.store().(*memStore))
 			params := map[string]any{}
@@ -629,8 +1066,8 @@ func TestExternalColdInventoryRefreshKeepsCallerContextAndBound(t *testing.T) {
 			calls := 0
 			s.hub = externalInventoryContextHub{Hub: f, list: func(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
 				calls++
-				if string(p.Params) != `{"refresh":true}` {
-					return json.Marshal(launcherListing{})
+				if string(p.Params) != `{"refresh":true,"source":"external"}` {
+					return json.Marshal(launcherListing{Source: proto.ExternalLauncherSource})
 				}
 				if ctx.Value(contextKey{}) != "caller" {
 					t.Error("refresh discarded caller context")
@@ -663,7 +1100,7 @@ func TestExternalColdInventoryDoesNotGrantAnotherMachineScope(t *testing.T) {
 	var calls int
 	f.answerNode(DeviceLaunchersList, func(_ string, _ json.RawMessage) (any, error) {
 		calls++
-		return launcherListing{Launchers: []proto.Launcher{l}}, nil
+		return launcherListing{Source: proto.ExternalLauncherSource, Launchers: []proto.Launcher{l}}, nil
 	})
 	_, err := s.externalPickContext(t.Context(), "other", "main", pick)
 	requireExternalError(t, err, "scope_required")
@@ -693,10 +1130,10 @@ func TestExternalHotInventoryAndOrdinaryListsDoNotRefresh(t *testing.T) {
 				if err := json.Unmarshal(raw, &params); err != nil {
 					return nil, err
 				}
-				if len(params) != 0 {
-					t.Errorf("hot/ordinary list changed params: %s", raw)
+				if params["refresh"] != nil || len(params) != 0 && !reflect.DeepEqual(params, map[string]any{"source": "external"}) {
+					t.Errorf("hot/ordinary list refreshed or changed its source: %s", raw)
 				}
-				return launcherListing{Launchers: []proto.Launcher{l}}, nil
+				return launcherListing{Source: proto.ExternalLauncherSource, Launchers: []proto.Launcher{l}}, nil
 			})
 			err := s.sendModel(t.Context(), "server", "main", map[string]any{}, i18n.En)
 			if invalid {

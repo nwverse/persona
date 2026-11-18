@@ -162,6 +162,8 @@ func (r *externalAdapterRegistry) launchersLocked(now time.Time) []proto.Launche
 		out = append(out, proto.Launcher{
 			Name: proto.ExternalLauncherName(r.config.ID, target.ID), Source: proto.ExternalLauncherSource,
 			Agent: "claude", External: &external,
+			Assistant: target.Engine == "claude-code" && slices.Contains(target.Capabilities.Contexts, "main-chat") &&
+				slices.Contains(target.Capabilities.Runtimes, "cli") && slices.Contains(target.Capabilities.Platforms, "posix"),
 		})
 	}
 	return out
@@ -633,7 +635,7 @@ func externalAdapterValidateModel(m proto.AgentModel) bool {
 }
 
 func externalAdapterModelID(value string) bool {
-	if !externalAdapterToken(value, 256, "_-.:/@+[]") || strings.Contains(value, "//") ||
+	if !proto.ValidModelID(value) || strings.Contains(value, "//") ||
 		strings.Contains(strings.ToLower(value), "www.") {
 		return false
 	}

@@ -299,10 +299,17 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, errors.New("a supervision round resumes a Claude conversation")
 	}
 	execution := executionOption(options)
+	startCtx := context.Background()
+	if proto.IsExternalLauncher(launcher) {
+		startCtx = externalStartContext(execution)
+		if err := startCtx.Err(); err != nil {
+			return nil, externalAdapterError(startCtx, err)
+		}
+	}
 	if err := execution.check("claude"); err != nil {
 		return nil, err
 	}
-	if err := n.checkExternalAssistant(context.Background(), id, launcher, execution, spare); err != nil {
+	if err := n.checkExternalAssistant(startCtx, id, launcher, execution, spare); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(cwd, 0o700); err != nil {
@@ -416,7 +423,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	var cmd *exec.Cmd
 	if proto.IsExternalLauncher(launcher) {
-		cmd, cleanupAdapter, err = n.externalCLICommand(id, launcher, cwd, execution, args, env)
+		cmd, cleanupAdapter, err = n.externalCLICommand(startCtx, id, launcher, cwd, execution, args, env)
 		if err != nil {
 			cleanupAdapter = func() {}
 			return nil, err
@@ -439,15 +446,25 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, err
 	}
 	instructions := instructionsDigest(cwd)
-	startErr := cmd.Start()
+	var startErr error
+	if proto.IsExternalLauncher(launcher) {
+		startErr = startExternalCommand(startCtx, cmd, stdin)
+	} else {
+		startErr = cmd.Start()
+	}
 	closeStderrWriter()
 	if startErr != nil {
 		_ = stderr.Close()
+		if proto.IsExternalLauncher(launcher) {
+			return nil, externalAdapterError(startCtx, startErr)
+		}
 		return nil, fmt.Errorf("start %s: %w", launcher, startErr)
 	}
 	started = true
+	processExecution := execution
+	processExecution.StartupContext = nil // a live or resident process must never keep the completed RPC's context
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
-		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: execution, fingerprint: n.executionFingerprint(launcher, execution),
+		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
 		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
 		round: round.anchor != "", toolSet: round.toolSet}
 	if !spare {
@@ -460,6 +477,9 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	go n.readAssistant(p, stdout)
 	go func() {
 		_ = cmd.Wait()
+		if proto.IsExternalLauncher(launcher) && !osproc.SweepGroup(cmd.Process.Pid, externalAdapterGroupSweep) {
+			n.logger.Printf("assistant %s: external process group cleanup budget exhausted", short(id))
+		}
 		cleanupMCP()
 		cleanupAdapter()
 		releaseGates()
@@ -491,13 +511,23 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		n.notifySessions()
 	}()
 	if proto.IsExternalLauncher(launcher) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(startCtx, 5*time.Second)
 		err := p.control(ctx, map[string]any{"subtype": "initialize"})
 		cancel()
-		if err != nil {
+		if err != nil || startCtx.Err() != nil {
 			_ = osproc.StopGroup(cmd.Process.Pid, true)
+			// The same waiter owns descendant cleanup and private settings. Bound the join; an exhausted budget is
+			// unknown cleanup evidence, never a reason to claim the process group is empty.
+			select {
+			case <-p.exited:
+			case <-time.After(externalAdapterGroupSweep + externalAdapterPipeGrace):
+				n.logger.Printf("assistant %s: external initialization cleanup budget exhausted", short(id))
+			}
+			if startCtx.Err() != nil {
+				return nil, externalAdapterError(startCtx, startCtx.Err())
+			}
 			if errors.Is(err, context.DeadlineExceeded) {
-				return nil, externalRefusal(context.Background(), "adapter_timeout")
+				return nil, externalRefusal(startCtx, "adapter_timeout")
 			}
 			return nil, p.startFailure()
 		}

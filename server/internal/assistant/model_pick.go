@@ -105,14 +105,20 @@ func (s *Service) modelPicksSet() (map[string]modelPick, bool) {
 // pick nobody could see never ran a leader or the supervisor): what the apps show as the conversation's model_pick is
 // exactly what its next message runs on.
 func (s *Service) modelPickOf(ctx context.Context, machine, sid string) (modelPick, bool) {
+	p, ok, _ := s.readModelPick(ctx, machine, sid)
+	return p, ok
+}
+
+// readModelPick distinguishes an absent selection from an unreadable one at delivery boundaries.
+func (s *Service) readModelPick(ctx context.Context, machine, sid string) (modelPick, bool, error) {
 	b := &s.modelPicks
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.modelPicksLocked(ctx) {
-		return modelPick{}, false
+		return modelPick{}, false, i18n.Err("assistant-model_pick.err_unreadable")
 	}
 	p, ok := b.m[sid]
-	return p, ok && p.MachineID == machine
+	return p, ok && p.MachineID == machine, nil
 }
 
 // setModelPick keeps p as conversation sid's pick (nil: drops it) and tells the apps. Dropping a pick that isn't there
@@ -221,16 +227,19 @@ func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPic
 }
 
 // relayOnPick puts conversation sid's pick into params, a message the hub relays to it (supervision, notices, another
-// conversation's): it runs on the pick like one the user types, so the model the apps show is the next one's. A pick
-// that can't run here leaves the message on what the conversation ran last, saying why in the log; the user's own
-// messages are the ones refused with the reason (sendOnPick).
-func (s *Service) relayOnPick(ctx context.Context, machine, sid string, params map[string]any, pick modelPick) {
+// conversation's): it runs on the pick like one the user types, so the model the apps show is the next one's.
+// Ordinary legacy picks keep the previous fallback behavior; an external refusal never reaches the old connection.
+func (s *Service) relayOnPick(ctx context.Context, machine, sid string, params map[string]any, pick modelPick) error {
 	p := maps.Clone(params)
 	if err := s.sendOnPick(ctx, machine, sid, p, pick, s.lang(ctx)); err != nil {
+		if proto.IsExternalLauncher(pick.Launcher) {
+			return err
+		}
 		s.logf("[%s] %s: its pick can't run a relayed message: %v; it keeps what it ran last", machine, short(sid), err)
-		return
+		return nil
 	}
 	maps.Copy(params, p)
+	return nil
 }
 
 // pickEffortSet makes effort the pick's effort of conversation sid on machine, when it has a pick: the apps set it
@@ -338,8 +347,11 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 		return modelPick{}, err
 	}
 	var other *launcherOtherKind
-	if err := s.otherKindPick(ctx, machine, sid, in.Launcher); errors.As(err, &other) {
-		return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
+	if err := s.otherKindPick(ctx, machine, sid, in.Launcher); err != nil {
+		if errors.As(err, &other) {
+			return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
+		}
+		return modelPick{}, refusePick(http.StatusBadRequest, err)
 	}
 	if in.Model != "" && !external {
 		if err := s.pickedModelRefusal(ctx, machine, in.Launcher, in.Model); err != nil {

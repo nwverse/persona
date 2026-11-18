@@ -26,7 +26,9 @@ type modelExecution struct {
 	PlanThen string `json:"-"`
 	// Runtime preserves an external request's raw value for admission only. Ordinary conversations always use the CLI.
 	Runtime string `json:"-"`
-	IsMain  bool   `json:",omitempty"`
+	// StartupContext belongs to the current external send only and is cleared before recording a process model.
+	StartupContext context.Context `json:"-"`
+	IsMain         bool            `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
 	// setting (#7824). With IsMain it identifies the protected conversations whose recovery is visible and reversible;
 	// worker Agent conversations have neither flag.

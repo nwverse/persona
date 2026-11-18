@@ -147,15 +147,21 @@ func pinExternalExecution(p *assistantProc, launcher string, execution modelExec
 	return execution
 }
 
-func (n *Node) externalCLICommand(id, launcher, cwd string, execution modelExecution, args, env []string) (*exec.Cmd, func(), error) {
-	if err := n.checkExternalAssistant(context.Background(), id, launcher, execution, false); err != nil {
+func (n *Node) externalCLICommand(ctx context.Context, id, launcher, cwd string, execution modelExecution, args, env []string) (*exec.Cmd, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, externalAdapterError(ctx, err)
+	}
+	if err := n.checkExternalAssistant(ctx, id, launcher, execution, false); err != nil {
 		return nil, nil, err
 	}
 	if err := n.externalSettingsModeCheck(cwd, args, env); err != nil {
 		return nil, nil, err
 	}
-	if _, err := n.external.models(context.Background(), launcher, true); err != nil {
-		return nil, nil, externalAdapterError(context.Background(), err)
+	if _, err := n.external.models(ctx, launcher, true); err != nil {
+		return nil, nil, externalAdapterError(ctx, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, externalAdapterError(ctx, err)
 	}
 	cmd, err := n.external.command(launcher, execution.External, execution.Model, cwd, args, env)
 	if err != nil {
@@ -200,27 +206,19 @@ func (n *Node) externalSettingsModeCheck(cwd string, args, env []string) error {
 	if profile == "" {
 		profile = filepath.Join(n.home, ".claude")
 	}
+	// Managed and remotely cached policies are not fully interpretable by this
+	// bounded adapter. Refuse their presence rather than read or bypass them.
+	for _, path := range claudePolicyPaths(profile) {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			return conflict()
+		}
+	}
 	files := []string{filepath.Join(profile, "settings.json")}
 	if cwd != "" {
 		for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
 			files = append(files, filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json"))
 			if parent := filepath.Dir(dir); parent == dir {
 				break
-			}
-		}
-	}
-	files = append(files, claudeManagedSettings...)
-	for _, dir := range claudeManagedSettingsDirs {
-		entries, err := os.ReadDir(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return conflict()
-		}
-		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".json") {
-				files = append(files, filepath.Join(dir, entry.Name()))
 			}
 		}
 	}

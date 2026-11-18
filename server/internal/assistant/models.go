@@ -263,6 +263,8 @@ type modelsState struct {
 	customMu sync.Mutex // one change of the remembered typed ids at a time (models_custom.go)
 
 	zshrcMu           sync.Mutex
+	zshrcWrite        sync.Mutex // serialize source-scoped snapshot persistence without holding the reader lock
+	externalRefresh   map[string]*externalDirectoryRefresh
 	zshrc             map[string][]proto.Launcher // machine → its rc-file launchers (nil: not asked since the start)
 	zshrcRefreshing   bool                        // one background refresh fills the last-seen snapshot at a time
 	zshrcRefreshAgain bool                        // a node changed its directory during that refresh

@@ -77,19 +77,27 @@ must contain one JSON document, without banners. A minimal synthetic response is
 ```
 
 Targets have stable IDs independent of display names. One target represents a connection and execution method;
-its models retain their original IDs. A target may carry an `unavailable_code` from the adapter error vocabulary.
+its models retain their original IDs and use the same `proto.ValidModelID` grammar as saved Persona picks and native
+execution, including a supported `~` prefix. An adapter must not advertise IDs that cannot be saved or executed.
+A target may carry an `unavailable_code` from the adapter error vocabulary.
 `credential_state` is `configured`, `missing` or `unknown`: configured is not a successful call, unknown can be tried
 explicitly, and missing cannot start. No URL, key, secret reference, raw environment, argument recipe or local path
 belongs in this response. Unknown fields and invalid or duplicate identities are rejected rather than forwarded.
 
-Inventory reads have a five-second deadline and a one-MiB stdout limit, at most 256 targets and 4096 models. They
-are independent of the shell's launcher cache. A cold read returns immediately while inventory loads; a changed
-snapshot emits `launchers.changed` so the manager refreshes in the background. Failed refreshes keep the previous
-snapshot marked stale and do not fail the other launcher sources. An explicit model refresh can wait for the
-bounded inventory read. When validating a specific saved pick that is missing from a cold snapshot, the manager
-retries `launchers.list` once with `refresh:true`; ordinary directory reads remain nonblocking. Execution admission
-also joins a bounded load before rejecting a cache miss, including after resident-node handover. The loaded target
-must still pass the existing identity, scope, capability and revision checks; refreshing never grants authority.
+Inventory reads have a five-second deadline and a one-MiB stdout limit, at most 256 targets and 4096 models.
+An enabled node announces `external_launcher_inventory_v1`; the manager's internal device row projects it as
+`external_inventory:true`. Nodes without the local opt-in advertise neither, and the manager does not probe them.
+
+The manager reads this source through `launchers.list {source:"external",refresh:true}`. This branch runs before
+shell, host or runtime discovery and returns only the registered adapter's sanitized entries. Missing registration,
+invalid inventory and refresh failures are explicit errors, not a healthy empty source. A saved external target or
+model refresh can load a cold registry directly, without waiting for shell startup files. The loaded target still
+passes identity, scope, capability, model and revision checks; refreshing never grants authority.
+
+External and ordinary snapshots are updated independently. A successful external read replaces only that machine's
+external entries; a failed read does not erase ordinary last-seen launchers. A late or failed shell refresh cannot
+erase the external snapshot or turn a partial result into a complete successful list. `launchers.changed` invalidates
+this source in the background, and ordinary directory reads keep their existing nonblocking/cache behavior.
 
 ### Native bootstrap and credentials
 
@@ -108,7 +116,11 @@ arguments. The adapter parses only its own side of `--`, does not read stdin in 
 `-p` through its interactive command parser. Execution uses argument arrays without a shell. Stdout belongs only to
 the native stream, stderr diagnostics contain static codes without configuration values, and exit status, EOF and
 termination signals must survive the wrapper. Native initialization is acknowledged before Persona delivers the
-first user message.
+first user message. External inventory/bootstrap waits share the current operation's cancellation token, so Stop
+can cancel a pending start before it obtains the conversation's typing lock or delivers input. That startup token
+is detached after initialization and is not stored as the lifetime context of a resident conversation; completing
+one RPC does not terminate a successfully started native process. External startup errors expose static codes,
+not executable paths or raw operating-system exceptions.
 
 The adapter resolves credentials locally, never from RPC arguments. It preserves Persona's settings and pins only
 the selected connection's approved environment in a single final settings file, because process environment alone
@@ -117,9 +129,12 @@ is 0600 and its directory is 0700. Credentials can therefore exist in protected 
 in inventory, command arguments, manager state or diagnostics. The adapter cleans up normally and the node removes
 the directory after exit or a forced stop. User settings and credential files are not rewritten.
 
-Settings or native program paths are not accepted from a request. Native user, project and managed settings are
-checked for provider-mode switches that could override the selected route; an unreadable or ambiguous configuration
-is refused. The adapter does not disable those settings sources or rewrite the user's proxy/egress policy.
+Settings or native program paths are not accepted from a request. User and project settings are checked for native
+provider-mode switches that could override the selected route. A managed or remotely cached policy may have effective
+rules this bounded integration cannot establish, so its presence is refused rather than read or bypassed. The shared
+native policy locations include the selected profile's `remote-settings.json`, Linux `/etc/claude-code` policy files
+and directories, and the platform's managed policy roots. The adapter does not disable settings sources or rewrite
+the user's proxy/egress policy.
 
 Source-tool session and permission preferences are not authority to change Persona's controls. An implementation
 must explicitly exclude those preferences and diagnose them without values; unknown or unsafe recipe fields fail
@@ -132,7 +147,13 @@ The manager materializes an external target's default row into an exact model ID
 A later catalog default change does not change that choice. Resetting the pick returns to the existing Persona
 default; it does not make the external target a global default or a fallback for other conversations. When changing
 to or away from an external connection while the previous process is busy, the next message is refused until that
-work finishes or is stopped; it is never delivered using the previous external authorization.
+work finishes or is stopped; it is never delivered using the previous external authorization. Compaction, accepted
+queued input and active background work also count as work that must not be cut off by a model/source change.
+
+Clearing the main conversation retains its explicit choice in the manager's durable handoff. Only that handoff can
+reserve a server-generated replacement main-conversation ID and carry the external choice into the new main chat;
+a normal new chat, guest or caller-supplied ID cannot obtain this scope. Failed starts keep the reservation and choice
+for retry instead of falling back or repeatedly losing the user's selection.
 
 A revision identifies the effective non-secret recipe, not the label, usage order or credential value. The adapter
 re-reads configuration and authentication at each new start and refuses a revision mismatch before native creation.

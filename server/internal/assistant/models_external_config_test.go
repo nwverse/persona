@@ -38,6 +38,14 @@ func TestExternalCannotBeConfiguredForAnyPurpose(t *testing.T) {
 	st := s.store().(*memStore)
 	_ = s.modelProviders(t.Context())
 	_ = s.taskViews(t.Context())
+	// Provider discovery also initializes the enabled node's external directory asynchronously.
+	// Finish that observable cache write before checking that every rejected edit writes nothing.
+	waitFor(t, "the fixture's external directory initialization", func() bool {
+		s.models.zshrcMu.Lock()
+		defer s.models.zshrcMu.Unlock()
+		return s.models.externalRefresh["server"] == nil && slices.ContainsFunc(s.models.zshrc["server"], func(x proto.Launcher) bool { return x.Name == l.Name })
+	})
+	s.waitWorkEvents()
 	before, puts := profileStoreSnapshot(st)
 	for _, p := range modelPurposes {
 		if err := s.saveModelRecord(t.Context(), p.ID, 0, binding); err == nil {

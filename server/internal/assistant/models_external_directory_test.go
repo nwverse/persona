@@ -3,15 +3,21 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestExternalDirectoryIsMainChatOnlyAndMachineLocal(t *testing.T) {
@@ -20,7 +26,7 @@ func TestExternalDirectoryIsMainChatOnlyAndMachineLocal(t *testing.T) {
 	other.External.Name, other.External.Revision = "Other computer connection", "other-recipe"
 	other.External.Models = []proto.AgentModel{{ID: "vendor/other-model", Default: true}}
 	f.mu.Lock()
-	f.devices = []Device{{ID: "server", Name: "First computer", Online: true}, {ID: "other", Name: "Second computer", Online: true}}
+	f.devices = []Device{{ID: "server", Name: "First computer", Online: true, ExternalInventory: true}, {ID: "other", Name: "Second computer", Online: true, ExternalInventory: true}}
 	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "claude"}, l}, "other": {{Name: "claude"}, other}}
 	f.sessions["other"] = nil
 	// Hub-configured wrappers cannot overwrite a local adapter's identity or recipe.
@@ -160,6 +166,151 @@ func TestExternalModelListKeepsDirectoryOrderWithoutGuessedModels(t *testing.T) 
 			t.Fatalf("external model order/identity changed: %+v", res.Models)
 		}
 	}
+}
+
+func TestExternalDirectoryDoesNotWaitForOrReplaceTheOrdinarySource(t *testing.T) {
+	for _, shellFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shellFails=%v", shellFails), func(t *testing.T) {
+			s, f, l := externalPickFixture(t)
+			ordinary := proto.Launcher{Name: "ordinary-pick", Source: "path"}
+			f.mu.Lock()
+			f.launcherList = append(f.launcherList, ordinary)
+			f.mu.Unlock()
+			if err := s.putSetting(t.Context(), launchersZshrcKey, map[string][]proto.Launcher{"server": {ordinary}}); err != nil {
+				t.Fatal(err)
+			}
+			if r := putPick(t, s, "main", `{"launcher":"ordinary-pick"}`); r.Code != 200 {
+				t.Fatal(r.Body.String())
+			}
+			s.zshrcLaunchersLastSeen(t.Context())
+			started, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			s.hub = externalInventoryContextHub{Hub: f, list: func(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+				var params map[string]any
+				if err := json.Unmarshal(p.Params, &params); err != nil {
+					return nil, err
+				}
+				if params["source"] == "external" {
+					return json.Marshal(launcherListing{Source: "external", Launchers: []proto.Launcher{l}})
+				}
+				once.Do(func() { close(started) })
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				if shellFails {
+					return nil, errors.New("example shell inventory failed")
+				}
+				return json.Marshal(launcherListing{Launchers: []proto.Launcher{ordinary}})
+			}}
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			// The normal HTTP route must answer before the ordinary shell is released.
+			answer := make(chan string, 1)
+			go func() {
+				r := httptest.NewRequest("GET", "/api/v1/machines/server/launchers?purpose=assistant", nil).WithContext(ctx)
+				w := httptest.NewRecorder()
+				s.ServeHTTP(w, r)
+				answer <- fmt.Sprintf("%d %s", w.Code, w.Body.String())
+			}()
+			select {
+			case raw := <-answer:
+				if !strings.HasPrefix(raw, "200 ") || !strings.Contains(raw, l.Name) || !strings.Contains(raw, ordinary.Name) {
+					close(release)
+					t.Fatalf("independent directory lost a source: %s", raw)
+				}
+			case <-time.After(time.Second):
+				close(release)
+				t.Fatal("the external directory waited for the ordinary login shell")
+			}
+			<-started
+			close(release)
+			waitFor(t, "the ordinary source refresh", func() bool {
+				s.models.zshrcMu.Lock()
+				defer s.models.zshrcMu.Unlock()
+				return !s.models.zshrcRefreshing
+			})
+			seen, _ := s.zshrcLaunchersLastSeen(t.Context())
+			for _, machine := range seen {
+				if machine.MachineID != "server" {
+					continue
+				}
+				if !slices.ContainsFunc(machine.Launchers, func(x proto.Launcher) bool { return x.Name == ordinary.Name }) ||
+					!slices.ContainsFunc(machine.Launchers, func(x proto.Launcher) bool { return x.Name == l.Name }) || shellFails && machine.Sync.State != "error" {
+					t.Fatalf("one source overwrote another or masked its failure: %+v", machine)
+				}
+			}
+			params, err := send(t, s, "main", map[string]any{})
+			if err != nil || params["launcher"] != ordinary.Name || params["external"] != nil {
+				t.Fatalf("an external update invalidated the ordinary pick: %v %v", params, err)
+			}
+		})
+	}
+}
+
+func TestExternalDirectoryRequiresTheEnabledNodeSignal(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-one")
+	if err := s.syncExternalDirectory(t.Context(), f.devices[0], false); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.devices[0].ExternalInventory = false
+	f.mu.Unlock()
+	var calls atomic.Int32
+	s.hub = externalInventoryContextHub{Hub: f, list: func(_ context.Context, _ DeviceCall) (json.RawMessage, error) {
+		calls.Add(1)
+		return json.Marshal(launcherListing{})
+	}}
+	requireExternalError(t, s.sendModel(t.Context(), "server", "main", map[string]any{}, i18n.En), "disabled")
+	if calls.Load() != 0 {
+		t.Fatal("a stale external snapshot caused an inventory RPC on a disabled node")
+	}
+	if err := s.syncExternalDirectory(t.Context(), Device{ID: "server", Online: true}, true); err != nil || calls.Load() != 0 {
+		t.Fatalf("disabled source refresh probed a legacy node: %v calls=%d", err, calls.Load())
+	}
+}
+
+func TestExternalDirectoryFailureIsNotAHealthyEmptySnapshot(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	ordinary := proto.Launcher{Name: "ordinary-before", Source: "path"}
+	if err := s.putSetting(t.Context(), launchersZshrcKey, map[string][]proto.Launcher{"server": {ordinary}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.syncExternalDirectory(t.Context(), f.devices[0], false); err != nil {
+		t.Fatal(err)
+	}
+	f.answerNode(DeviceLaunchersList, func(_ string, _ json.RawMessage) (any, error) {
+		return nil, &rpc.Error{Code: "adapter_timeout", Message: "example private adapter diagnostic"}
+	})
+	if err := s.syncExternalDirectory(t.Context(), f.devices[0], true); err == nil || strings.Contains(err.Error(), "private") {
+		t.Fatalf("source error was hidden or leaked diagnostics: %v", err)
+	}
+	s.models.zshrcMu.Lock()
+	list := slices.Clone(s.models.zshrc["server"])
+	s.models.zshrcMu.Unlock()
+	if !slices.ContainsFunc(list, func(x proto.Launcher) bool { return x.Name == ordinary.Name }) {
+		t.Fatal("a failed external source removed the ordinary last-seen provider")
+	}
+	for _, item := range list {
+		if item.Name == l.Name {
+			if item.External == nil || item.External.UnavailableCode != "adapter_timeout" || externalLauncherError(item) == nil {
+				t.Fatalf("a failed external source remained healthy: %+v", item)
+			}
+			return
+		}
+	}
+	t.Fatal("the failed source lost its unavailable diagnostic row")
+}
+
+func TestExternalDirectoryRequiresASourceTaggedAnswer(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-one")
+	f.answerNode(DeviceLaunchersList, func(_ string, _ json.RawMessage) (any, error) {
+		return launcherListing{Launchers: []proto.Launcher{l}}, nil
+	})
+	requireExternalError(t, s.sendModel(t.Context(), "server", "main", map[string]any{}, i18n.En), "protocol_unsupported")
 }
 
 func TestExternalLaunchersChangedDoesNotWaitForConversationReads(t *testing.T) {

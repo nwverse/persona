@@ -19,13 +19,14 @@ import (
 // launcherListing is a node's launchers.list: the launchers, and the shell and rc file they came from ("" from an
 // older node).
 type launcherListing struct {
+	Source    string           `json:"source,omitempty"`
 	Launchers []proto.Launcher `json:"launchers"`
 	Shell     string           `json:"shell"`
 	RCFile    string           `json:"rc_file"`
 }
 
 // listLaunchers asks one machine for its list, giving it launcherSyncTimeout; an offline machine is not asked.
-// Only an explicit refresh waits for external sources; ordinary lists keep their nonblocking snapshot behavior.
+// Ordinary lists never load external sources; those use their own handshake-gated, source-scoped RPC.
 func (s *Service) listLaunchers(ctx context.Context, d Device, refresh ...bool) (launcherListing, error) {
 	var res launcherListing
 	if !d.Online {
@@ -193,11 +194,13 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 // providers and what starts elsewhere whatever the host. A provider kept in Persona and plain claude are not added
 // then (the engine would run one of its own in their place), and one named like an engine provider is that provider;
 // only a managed Antigravity launcher, which its own runtime runs on any host, still is.
+type machineLauncherListing struct {
+	Launchers   []proto.LauncherEnvelope `json:"launchers"`
+	HostRuntime bool                     `json:"host_runtime"`
+}
+
 func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) (list []proto.Launcher, hostRuntime bool, err error) {
-	var res struct {
-		Launchers   []proto.LauncherEnvelope `json:"launchers"`
-		HostRuntime bool                     `json:"host_runtime"`
-	}
+	var res machineLauncherListing
 	params := map[string]any{}
 	if host != "" {
 		params["host"] = host
@@ -205,6 +208,12 @@ func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) 
 	if err := s.call(ctx, machine, DeviceLaunchersList, params, &res); err != nil {
 		return nil, false, err
 	}
+	list, hostRuntime = s.machineLaunchersFrom(ctx, machine, res)
+	return list, hostRuntime, nil
+}
+
+func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res machineLauncherListing) ([]proto.Launcher, bool) {
+	d, _ := s.device(ctx, machine)
 	hidden := s.hiddenLaunchers(ctx)
 	// Only the providers in this computer's scope: one out of it is not named to the node, whose own launcher by
 	// that name (if any) is what runs there.
@@ -217,6 +226,9 @@ func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) 
 	out := make([]proto.Launcher, 0, len(res.Launchers)+len(managed))
 	for _, envelope := range res.Launchers {
 		l := proto.Launcher(envelope)
+		if (proto.IsExternalLauncher(l.Name) || l.Source == proto.ExternalLauncherSource) && !d.ExternalInventory {
+			continue // a historical snapshot never replaces the current node's enabled-source handshake
+		}
 		if slices.Contains(hidden, l.Name) || slices.ContainsFunc(managed, func(m storedLauncher) bool { return m.Name == l.Name }) {
 			continue
 		}
@@ -233,7 +245,6 @@ func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) 
 	codexHere := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "codex" && l.RunHere })
 	// The node leaves plain claude out when its shell has another Claude launcher. devices.list's version is the
 	// same installation signal used by the built-in provider and Agent-start fallback, and works with older nodes.
-	d, _ := s.device(ctx, machine)
 	if !res.HostRuntime && d.ClaudeVersion != "" && !slices.Contains(hidden, "claude") &&
 		!slices.ContainsFunc(out, func(l proto.Launcher) bool { return l.Name == "claude" }) {
 		out = append(out, proto.Launcher{Name: "claude", Source: "builtin"})
@@ -245,7 +256,7 @@ func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) 
 		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy",
 			PromptOptional: m.Agent == "codex" && codexOptional, RunHere: m.Agent == "codex" && codexHere, Pi: m.PiAPI() != ""})
 	}
-	return out, res.HostRuntime, nil
+	return out, res.HostRuntime
 }
 
 // pickerLaunchers is what machine can start, as New Agent's picker lists it: machineLaunchers with hub.json's

@@ -356,6 +356,59 @@ func TestExternalAdapterMainChatLifecycleAndRevision(t *testing.T) {
 	}
 }
 
+func TestExternalAdapterRejectsManagedPolicyPresence(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		t.Run(map[bool]string{false: "managed_file", true: "managed_directory"}[directory], func(t *testing.T) {
+			f, _, _, _ := externalAssistantFixture(t)
+			path := filepath.Join(t.TempDir(), "managed-policy")
+			if directory {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				claudeManagedSettingsDirs = []string{path}
+			} else {
+				if err := os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				claudeManagedSettings = []string{path}
+			}
+			requireExternalCode(t, f.n.externalSettingsModeCheck(t.TempDir(), nil, nil), "adapter_config_conflict")
+		})
+	}
+}
+
+func TestExternalAdapterPolicyPathsIncludeEveryNativePlatform(t *testing.T) {
+	profile := t.TempDir()
+	programFiles := t.TempDir()
+	t.Setenv("ProgramFiles", programFiles)
+	paths := claudePolicyPaths(profile)
+	for _, required := range []string{
+		filepath.Join(profile, "remote-settings.json"),
+		"/etc/claude-code/managed-settings.json", "/etc/claude-code/managed-settings.d",
+		filepath.Join(programFiles, "ClaudeCode", "managed-settings.json"),
+		filepath.Join(programFiles, "ClaudeCode", "managed-settings.d"),
+	} {
+		found := false
+		for _, path := range paths {
+			found = found || path == required
+		}
+		if !found {
+			t.Fatalf("native policy location is not checked: %s", required)
+		}
+	}
+}
+
+func TestExternalAdapterRejectsRemotePolicyProviderMode(t *testing.T) {
+	f, _, _, _ := externalAssistantFixture(t)
+	profile := t.TempDir()
+	path := filepath.Join(profile, "remote-settings.json")
+	if err := os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_USE_VERTEX":"1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := f.n.externalSettingsModeCheck(t.TempDir(), nil, []string{"CLAUDE_CONFIG_DIR=" + profile})
+	requireExternalCode(t, err, "adapter_config_conflict")
+}
+
 func TestExternalAdapterChecksLowerSettingsWithoutChangingNetworkPolicy(t *testing.T) {
 	f, _, _, _ := externalAssistantFixture(t)
 	cwd := t.TempDir()
