@@ -216,8 +216,8 @@ engine, so they carry over when the hub's settings change and a new engine is bu
 its run with the engine it started with. Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
 <n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). A call with
 no model set up for it (no provider with a key for the step's purpose) is neither a call nor a failure: the lane logs
-`kb: <lane> lane: no model is set up for its work …` once, and `kb: <lane> lane: a model answers again` once a call of its
-gets an answer (#10435; before, such a lane logged "1 model call(s), 1 failed" every 2 minutes). While the
+`kb: <lane> lane: no model is set up for <purpose> …` once for each purpose, and `kb: <lane> lane: a model answers <purpose>
+again` once a call for that purpose gets an answer (a failed call is no answer) (#10435; before, such a lane logged "1 model call(s), 1 failed" every 2 minutes). While the
 assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
 
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
