@@ -29,8 +29,12 @@ type launcherCheckOpts struct {
 	configDir     string // the profile when the conversation has none recorded: the main chat's for new conversations
 }
 
-// assistantCheckToolSearch is the ENABLE_TOOL_SEARCH value an assistant turn on launcher/model starts with.
-var assistantCheckToolSearch = func(n *Node, launcher, model string) string { return "true" }
+// assistantCheckToolSearch is the ENABLE_TOOL_SEARCH value an assistant turn on launcher/model starts with: the start's
+// own decision (assistantToolSearch), with the endpoint read as the start reads it from the check's directory and
+// profile (selected, a profile name as assistantProfileSelection gives it).
+var assistantCheckToolSearch = func(n *Node, launcher, model, dir, selected string) string {
+	return n.assistantToolSearch(launcher, model, n.assistantCompactionPolicy(launcher, dir, "", modelExecution{Model: model, ConfigDir: selected})).env
+}
 
 // assistantCheck is what an assistant-turn check of a Claude Code launcher adds to the plain one (the zero value: the
 // plain check).
@@ -62,7 +66,7 @@ func (n *Node) assistantCheckFor(ctx context.Context, launcher, model string, o 
 		c.args += " " + shellQuote(f)
 	}
 	env := []string{"PERSONA_ASSISTANT=1"}
-	if v := assistantCheckToolSearch(n, launcher, model); v != "" {
+	if v := assistantCheckToolSearch(n, launcher, model, dir, selected); v != "" {
 		env = append(env, "ENABLE_TOOL_SEARCH="+v)
 	}
 	c.env = n.claudeProcessEnv(identity.Environment(os.Environ(), env...), c.configDir)

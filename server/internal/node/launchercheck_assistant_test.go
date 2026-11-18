@@ -167,7 +167,7 @@ func TestLauncherCheckAssistantTurnToolSearch(t *testing.T) {
 	t.Cleanup(func() { assistantCheckToolSearch = old })
 	for _, want := range []string{"false", ""} {
 		var asked []string
-		assistantCheckToolSearch = func(_ *Node, launcher, model string) string {
+		assistantCheckToolSearch = func(_ *Node, launcher, model, _, _ string) string {
 			asked = append(asked, launcher+"/"+model)
 			return want
 		}
