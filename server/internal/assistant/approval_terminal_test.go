@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
@@ -30,102 +31,66 @@ func (h *snapshotHookHub) Tell(event string, params any) error {
 }
 
 func TestPreparedSnapshotWaiterCannotStealOriginalResult(t *testing.T) {
-	f := newFakeHub()
-	d := newFleetDevs()
-	d.add("mac", "Mac")
-	h := &snapshotHookHub{fakeHub: f}
-	s := New(Options{Hub: h, Logf: testLogf(t), Devices: d})
-	ft := &fleetTest{t: t, s: s, d: d, f: f}
-	preparedTestConversation(ft)
-	ix := proto.Interaction{ID: "ix_snapshot_first", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
-		ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)}
-	type waiterResult struct {
-		r   proto.Resolution
-		err error
-	}
-	snapshot := make(chan waiterResult, 1)
-	announced := make(chan struct{})
-	h.onCard = func() {
-		go func() {
-			r, err := s.waitOwnedQuestion(context.Background(), ix)
-			snapshot <- waiterResult{r, err}
-		}()
-		// The original caller is still inside Tell, so only the snapshot waiter can
-		// be waiting here. This is the order that used to consume the one-shot done.
-		time.Sleep(200 * time.Millisecond)
-		close(announced)
-	}
-	var applies atomic.Int32
-	done := startPreparedInteraction(t, ft, ix, approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
-		applies.Add(1)
-		return "setting applied", nil
-	}})
-	<-announced
-	allow := true
-	if err := s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
-		t.Fatal(err)
-	}
-	got := awaitPreparedTest(t, done)
-	if got.err != nil || got.out.Clarifying || got.out.Text != "setting applied" {
-		t.Fatalf("original prepared call = %+v, %v", got.out, got.err)
-	}
-	select {
-	case other := <-snapshot:
-		if other.err != nil || other.r.Allow == nil || !*other.r.Allow {
-			t.Fatalf("snapshot waiter result = %+v, %v", other.r, other.err)
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeHub()
+		d := newFleetDevs()
+		d.add("mac", "Mac")
+		h := &snapshotHookHub{fakeHub: f}
+		s := New(Options{Hub: h, Logf: testLogf(t), Devices: d})
+		ft := &fleetTest{t: t, s: s, d: d, f: f}
+		preparedTestConversation(ft)
+		ix := proto.Interaction{ID: "ix_snapshot_first", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+			ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)}
+		type waiterResult struct {
+			r   proto.Resolution
+			err error
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the snapshot waiter did not receive the broadcast result")
-	}
-	if applies.Load() != 1 {
-		t.Fatalf("owner Allow applied %d times", applies.Load())
-	}
-}
-
-func TestPreparedSnapshotAfterOriginalWaitsSharesResult(t *testing.T) {
-	ft := newFleetTestNoStore(t)
-	preparedTestConversation(ft)
-	id := "ix_snapshot_after_original"
-	var applies atomic.Int32
-	done := startPreparedInteraction(t, ft, proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
-		ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)},
-		approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+		snapshot := make(chan waiterResult, 1)
+		announced := make(chan struct{})
+		h.onCard = func() {
+			go func() {
+				r, err := s.waitOwnedQuestion(context.Background(), ix)
+				snapshot <- waiterResult{r, err}
+			}()
+			// The original caller is still inside Tell, so only the snapshot waiter can
+			// be waiting here. This is the order that used to consume the one-shot done.
+			time.Sleep(200 * time.Millisecond) // sleep-ok: virtual synctest time orders the snapshot waiter first
+			synctest.Wait()
+			close(announced)
+		}
+		var applies atomic.Int32
+		done := startPreparedInteraction(t, ft, ix, approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
 			applies.Add(1)
 			return "setting applied", nil
 		}})
-	time.Sleep(20 * time.Millisecond) // the original caller reaches awaitPrepared first
-	ft.s.publish(context.Background())
-	time.Sleep(20 * time.Millisecond) // the snapshot waiter attaches second
-	allow := true
-	if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
-		t.Fatal(err)
-	}
-	got := awaitPreparedTest(t, done)
-	if got.err != nil || got.out.Clarifying || got.out.Text != "setting applied" || applies.Load() != 1 {
-		t.Fatalf("original prepared call = %+v, %v, applies=%d", got.out, got.err, applies.Load())
-	}
+		<-announced
+		allow := true
+		if err := s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+			t.Fatal(err)
+		}
+		got := awaitPreparedTest(t, done)
+		if got.err != nil || got.out.Clarifying || got.out.Text != "setting applied" {
+			t.Fatalf("original prepared call = %+v, %v", got.out, got.err)
+		}
+		select {
+		case other := <-snapshot:
+			if other.err != nil || other.r.Allow == nil || !*other.r.Allow {
+				t.Fatalf("snapshot waiter result = %+v, %v", other.r, other.err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the snapshot waiter did not receive the broadcast result")
+		}
+		if applies.Load() != 1 {
+			t.Fatalf("owner Allow applied %d times", applies.Load())
+		}
+	})
 }
 
-func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
-	const rounds = 150
-	for i := 0; i < rounds; i++ {
+func TestPreparedSnapshotAfterOriginalWaitsSharesResult(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
 		ft := newFleetTestNoStore(t)
 		preparedTestConversation(ft)
-		stop := make(chan struct{})
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-					ft.s.publish(context.Background())
-				}
-			}
-		}()
-		id := fmt.Sprintf("ix_snapshot_round_%d", i)
+		id := "ix_snapshot_after_original"
 		var applies atomic.Int32
 		done := startPreparedInteraction(t, ft, proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
 			ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)},
@@ -133,24 +98,81 @@ func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
 				applies.Add(1)
 				return "setting applied", nil
 			}})
-		time.Sleep(10 * time.Millisecond) // let the original and a snapshot waiter overlap
+		time.Sleep(20 * time.Millisecond) // sleep-ok: virtual synctest time lets the original caller await first
+		synctest.Wait()
+		ft.s.publish(context.Background())
+		time.Sleep(20 * time.Millisecond) // sleep-ok: virtual synctest time lets the snapshot waiter attach second
+		synctest.Wait()
 		allow := true
 		if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
-			t.Fatalf("round %d: %v", i, err)
+			t.Fatal(err)
 		}
-		select {
-		case got := <-done:
-			if got.err != nil || got.out.Text != "setting applied" {
-				t.Fatalf("round %d: original result = %+v, %v", i, got.out, got.err)
+		got := awaitPreparedTest(t, done)
+		if got.err != nil || got.out.Clarifying || got.out.Text != "setting applied" || applies.Load() != 1 {
+			t.Fatalf("original prepared call = %+v, %v, applies=%d", got.out, got.err, applies.Load())
+		}
+	})
+}
+
+func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
+	const rounds = 150
+	for i := 0; i < rounds; i++ {
+		synctest.Test(t, func(t *testing.T) {
+			ft := newFleetTestNoStore(t)
+			preparedTestConversation(ft)
+			id := fmt.Sprintf("ix_snapshot_round_%d", i)
+			var applies atomic.Int32
+			done := startPreparedInteraction(t, ft, proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+				ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)},
+				approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+					applies.Add(1)
+					return "setting applied", nil
+				}})
+			// Let the original caller reach awaitPrepared before repeated snapshots start.
+			synctest.Wait()
+			stop := make(chan struct{})
+			ticker := time.NewTicker(time.Millisecond)
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					case <-ticker.C:
+						ft.s.publish(context.Background())
+					}
+				}
+			}()
+			var stopOnce sync.Once
+			stopPublisher := func() {
+				stopOnce.Do(func() {
+					ticker.Stop()
+					close(stop)
+				})
+				wg.Wait()
 			}
-		case <-time.After(2 * time.Second):
-			t.Fatalf("round %d: owner Allow applied %d times but the original tool call hung", i, applies.Load())
-		}
-		close(stop)
-		wg.Wait()
-		if applies.Load() != 1 {
-			t.Fatalf("round %d applied %d times", i, applies.Load())
-		}
+			t.Cleanup(stopPublisher)
+			time.Sleep(10 * time.Millisecond) // sleep-ok: virtual synctest time overlaps the original and repeated snapshot waiters
+			synctest.Wait()
+			allow := true
+			if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
+				t.Fatalf("round %d: %v", i, err)
+			}
+			select {
+			case got := <-done:
+				if got.err != nil || got.out.Text != "setting applied" {
+					t.Fatalf("round %d: original result = %+v, %v", i, got.out, got.err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("round %d: owner Allow applied %d times but the original tool call hung", i, applies.Load())
+			}
+			stopPublisher()
+			if applies.Load() != 1 {
+				t.Fatalf("round %d applied %d times", i, applies.Load())
+			}
+		})
 	}
 }
 

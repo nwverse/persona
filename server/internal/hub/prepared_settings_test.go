@@ -181,14 +181,14 @@ func TestPreparedSettingHandleOutlivesPauseBudgetButNotItsGrace(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(15*time.Minute + preparedSettingPauseBudget)
+		time.Sleep(15*time.Minute + preparedSettingPauseBudget) // sleep-ok: virtual synctest time advances the bounded handle lifetime
 		h.prepared.mu.Lock()
 		_, kept := h.prepared.byID[ix.ID]
 		h.prepared.mu.Unlock()
 		if !kept {
 			t.Fatal("the handle expired before the cumulative clarification budget plus decision time")
 		}
-		time.Sleep(cardAnswerGrace)
+		time.Sleep(cardAnswerGrace) // sleep-ok: virtual synctest time crosses the answer grace
 		synctest.Wait()
 		h.prepared.mu.Lock()
 		_, kept = h.prepared.byID[ix.ID]
@@ -211,7 +211,7 @@ func TestPreparedSettingWaitingCardOutlivesWaitingAndPauseBudgets(t *testing.T) 
 		h.askVia = nil
 		mgr := playManager(t, h, func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil })
 		mgr.peer.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
-			time.Sleep(15 * time.Minute) // the coordinator's first decision window
+			time.Sleep(15 * time.Minute) // sleep-ok: virtual synctest time covers the coordinator's first decision window
 			return approval.Outcome{Clarifying: true, Text: approval.WaitingText}, nil
 		}
 		start := time.Now()
@@ -229,7 +229,7 @@ func TestPreparedSettingWaitingCardOutlivesWaitingAndPauseBudgets(t *testing.T) 
 
 		// The original pause-only deadline ends here. A waiting card must still
 		// retain its handle for the clarification budget that can follow.
-		time.Sleep(preparedSettingPauseBudget + cardAnswerGrace)
+		time.Sleep(preparedSettingPauseBudget + cardAnswerGrace) // sleep-ok: virtual synctest time advances the bounded handle lifetime
 		synctest.Wait()
 		h.prepared.mu.Lock()
 		_, kept := h.prepared.byID[ix.ID]
@@ -237,7 +237,7 @@ func TestPreparedSettingWaitingCardOutlivesWaitingAndPauseBudgets(t *testing.T) 
 		if !kept {
 			t.Fatal("the handle expired between the unanswered window and its clarification budget")
 		}
-		time.Sleep(preparedSettingPauseBudget)
+		time.Sleep(preparedSettingPauseBudget) // sleep-ok: virtual synctest time spends the clarification budget
 		synctest.Wait()
 		h.prepared.mu.Lock()
 		_, kept = h.prepared.byID[ix.ID]
@@ -290,7 +290,7 @@ func TestPreparedSettingWithoutExpiryGetsBoundedAfterClarification(t *testing.T)
 		if err != nil || !out.Clarifying {
 			t.Fatalf("clarifying no-expiry card = %+v, %v", out, err)
 		}
-		time.Sleep(preparedSettingPauseBudget + cardAnswerGrace)
+		time.Sleep(preparedSettingPauseBudget + cardAnswerGrace) // sleep-ok: virtual synctest time advances the bounded handle lifetime
 		synctest.Wait()
 		h.prepared.mu.Lock()
 		_, kept := h.prepared.byID["ix_hub_no_expiry"]
