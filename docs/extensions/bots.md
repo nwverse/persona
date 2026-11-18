@@ -359,6 +359,13 @@ With a scheduled task's `facts` setting on, its run has a part Persona fixes and
 - **No second reminder that day.** Once the briefing card is out, the to-dos it listed with an Accept button are not asked again by the morning reminder (`RemindedAt` is set). When the morning routine has `facts` on, is due that day and its card can go out (the Lark bot is on with `pushes`), that reminder waits until an hour after the routine's time (never past midnight); if the briefing has not gone out by then, the reminders go one by one as before. To-dos the card did not fit ("and N more") are reminded as before.
 - **The push** says the counts instead of the first words of the model's answer: "waiting for you 3 · not through 1 · done 2 · to verify 2 · can wait 2". Only the turn a scheduled run started says them; a turn that failed, was cut off or asks a question, and a health conversation, are pushed as before.
 
+- **Delivery retries and retained claims** (#10290). During an existing mirror retry, a temporary failure to read
+  Lark status uses an existing retry slot, as a temporary post failure does. A post resumes only after its channel is confirmed enabled and its turn
+  is still current, using the original card and UUID; the three-retry limit and 30-second interval are unchanged.
+  While the run's turn claim remains cached, another completion for that turn cannot fall through to a generic
+  reply, during its post or after its facts have aged out. Later turns and later routine runs keep their own sends.
+  This is an in-memory guarantee; cache eviction, replacement by a later run and service restart are outside it.
+
 ## Questions that can wait (`urgent: false`)
 
 An Agent working on a supervised to-do can say a question does not hold it up: `report_to_supervisor` with `kind: "question"` and `urgent: false` (#6287). Its other ways to ask stop it until the owner answers (its own question tool, a permission, a plan) or start a turn of the main conversation (`report_to_supervisor`, urgent). This one waits for the next morning or evening briefing. Code: `server/internal/assistant/later.go`, `agent_control.go`.
