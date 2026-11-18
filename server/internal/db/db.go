@@ -316,18 +316,22 @@ func (d *DB) migrateFrom(ctx context.Context, fsys fs.FS) error {
 }
 
 // schemaMigrationsSplit says whether schema_migrations is already as splitSchemaMigrations' statements leave it: a
-// table in the schema CREATE TABLE makes it in, with a part column, without schema_migrations_pkey, and with a
-// relation named schema_migrations_version_part next to it. Each condition is what one statement's IF [NOT] EXISTS
-// looks at.
+// table in the schema CREATE TABLE makes it in, with a part column and a bigint version, without
+// schema_migrations_pkey, and with a relation named schema_migrations_version_part next to it. Each condition is what
+// one statement's IF [NOT] EXISTS, or the type it sets, looks at.
 const schemaMigrationsSplit = `SELECT coalesce((
 	SELECT c.relkind = 'r' AND n.nspname = current_schema()
 		AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'part' AND a.attnum > 0 AND NOT a.attisdropped)
+		AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'version' AND a.atttypid = 'bigint'::regtype)
 		AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid AND k.conname = 'schema_migrations_pkey')
 		AND EXISTS (SELECT 1 FROM pg_class i WHERE i.relnamespace = c.relnamespace AND i.relname = 'schema_migrations_version_part')
 	FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = to_regclass('schema_migrations')), false)`
 
 // splitSchemaMigrations makes schema_migrations, or gives one from before the split its part column: the rows it has
-// keep part NULL, and a version may have a row for each part. A table that is so already is left alone: an ALTER TABLE
+// keep part NULL, and a version may have a row for each part. It also widens an int version to bigint, as a
+// timestamped migration's version needs (migrationVersion); the rows keep their numbers. A build from before reads the
+// wider column into a Go int, 64 bits on every platform the hub and the managers are built for, and finds its own
+// migrations done (TestOlderBuildAfterTimestampedMigrations). A table that is so already is left alone: an ALTER TABLE
 // that changes nothing still takes an ACCESS EXCLUSIVE lock and a transaction id, on every start.
 func splitSchemaMigrations(ctx context.Context, conn *pgxpool.Conn) error {
 	var split bool
@@ -339,10 +343,11 @@ func splitSchemaMigrations(ctx context.Context, conn *pgxpool.Conn) error {
 	}
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
-			version int NOT NULL, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), part text)`,
+			version bigint NOT NULL, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), part text)`,
 		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS part text`,
 		`ALTER TABLE schema_migrations DROP CONSTRAINT IF EXISTS schema_migrations_pkey`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS schema_migrations_version_part ON schema_migrations (version, (coalesce(part, '')))`,
+		`ALTER TABLE schema_migrations ALTER COLUMN version TYPE bigint`,
 	} {
 		if _, err := conn.Exec(ctx, q); err != nil {
 			return fmt.Errorf("schema_migrations: %w", err)
@@ -358,7 +363,7 @@ type schemaRecord struct {
 }
 
 // schemaRecords are schema_migrations' rows by version.
-type schemaRecords map[int][]schemaRecord
+type schemaRecords map[int64][]schemaRecord
 
 func readSchemaRecords(ctx context.Context, conn *pgxpool.Conn) (schemaRecords, error) {
 	rows, err := conn.Query(ctx, `SELECT version, name, part FROM schema_migrations`)
@@ -366,7 +371,7 @@ func readSchemaRecords(ctx context.Context, conn *pgxpool.Conn) (schemaRecords, 
 		return nil, err
 	}
 	recs := schemaRecords{}
-	var version int
+	var version int64
 	var r schemaRecord
 	_, err = pgx.ForEachRow(rows, []any{&version, &r.name, &r.part}, func() error {
 		recs[version] = append(recs[version], r)
@@ -389,7 +394,7 @@ func (recs schemaRecords) named(name string) bool {
 
 // done says whether part has migration name (numbered version) applied: a row of that part, or a NULL-part one from up
 // to lastUnified or of the same file (migrateFrom).
-func (recs schemaRecords) done(version int, name, part string) bool {
+func (recs schemaRecords) done(version int64, name, part string) bool {
 	for _, r := range recs[version] {
 		if r.part.Valid && r.part.String == part || !r.part.Valid && (version <= lastUnified || r.name == name) {
 			return true
@@ -406,12 +411,18 @@ func migrateSet(ctx context.Context, conn *pgxpool.Conn, fsys fs.FS, part string
 		return err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	seen := map[int64]string{}
 	for _, e := range entries {
 		name := e.Name()
 		version, err := migrationVersion(name)
 		if err != nil {
 			return err
 		}
+		// The record of one would make the other look done: refuse the set rather than skip a migration.
+		if was, ok := seen[version]; ok {
+			return fmt.Errorf("migrations/%s: %s and %s have the same version %d", part, was, name, version)
+		}
+		seen[version] = name
 		if recs.done(version, name, part) {
 			continue
 		}
@@ -434,13 +445,30 @@ func migrateSet(ctx context.Context, conn *pgxpool.Conn, fsys fs.FS, part string
 	return nil
 }
 
-// migrationVersion is the number a migration file name starts with.
-func migrationVersion(name string) (int, error) {
-	version, err := strconv.Atoi(strings.SplitN(name, "_", 2)[0])
-	if err != nil {
-		return 0, fmt.Errorf("bad migration name %s", name)
+// A migration file is named YYYYMMDDHHMM_<name>.sql, the UTC minute it was written, so two lines of work adding one
+// at once don't pick the same version by looking at the same files (docs/server/server.md "Migrations"). The files
+// from before are NNNN_<name>.sql, numbers picked by hand, frozen (migrations_test.go lastNumbered). A timestamp has
+// more digits than a number and starts with 2 where every number starts with 0, so the timestamped files sort after
+// the numbered ones, and name order is version order.
+const (
+	numberedDigits = 4
+	stampLayout    = "200601021504"
+)
+
+// migrationVersion is the version a migration file name starts with: its number, or its timestamp read as one
+// (202611191230).
+func migrationVersion(name string) (int64, error) {
+	prefix, _, ok := strings.Cut(name, "_")
+	if !ok || strings.Trim(prefix, "0123456789") != "" ||
+		len(prefix) != numberedDigits && len(prefix) != len(stampLayout) {
+		return 0, fmt.Errorf("bad migration name %s: want YYYYMMDDHHMM_<name>.sql", name)
 	}
-	return version, nil
+	if len(prefix) == len(stampLayout) {
+		if _, err := time.Parse(stampLayout, prefix); err != nil {
+			return 0, fmt.Errorf("bad migration name %s: %s is not a time YYYYMMDDHHMM", name, prefix)
+		}
+	}
+	return strconv.ParseInt(prefix, 10, 64)
 }
 
 // renumberMigration moves a database's record of migration from (applied under its old number) to to's name and

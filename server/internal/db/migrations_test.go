@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"regexp"
@@ -25,8 +26,20 @@ import (
 var bothSets = []string{"0001_init.sql", "0071_sent_messages.sql", "0241_sent_echo.sql"}
 
 // sharedNumbers are numbers both sets use for different migrations, frozen: two lines of work took 421 at once
-// (#5751). Harmless, since each set records its own part, but a new migration takes a number neither set has.
-var sharedNumbers = map[int][2]string{421: {"0421_hub_settings.sql", "0421_machine_usage.sql"}}
+// (#5751). Harmless, since each set records its own part, but a new migration takes a version neither set has.
+var sharedNumbers = map[int64][2]string{421: {"0421_hub_settings.sql", "0421_machine_usage.sql"}}
+
+// lastNumbered is the last migration numbered by hand, and numberedFiles how many numbered files each set has, both
+// frozen: every migration after them is named YYYYMMDDHHMM_<name>.sql, the UTC minute it was written (`date -u
+// +%Y%m%d%H%M`), which another line of work adding one meanwhile doesn't pick too (db.go migrationVersion, #10618).
+const lastNumbered = 561
+
+var numberedFiles = map[string]int{"hub": 35, "manager": 86}
+
+// firstStamp is the day migrations began to be timestamped: none is earlier.
+const firstStamp = 202611190000
+
+var migrationName = regexp.MustCompile(`^([0-9]{4}|[0-9]{12})_[a-z0-9_]+\.sql$`)
 
 // sharedTables are the tables both sets make (a database the hub and the default manager share has one of each).
 var sharedTables = []string{"sent_messages"}
@@ -69,8 +82,9 @@ func setTables(t *testing.T, part string) []string {
 	return out
 }
 
-// Every migration is in exactly one set and has a number of its own (docs/server/server.md "Migrations"), but for the frozen
-// few in bothSets and sharedNumbers.
+// Every migration is in exactly one set and has a version of its own (docs/server/server.md "Migrations"), but for the
+// frozen few in bothSets and sharedNumbers; the numbered ones are frozen, and the rest timestamped, after them in name
+// order as in version order.
 func TestMigrationSets(t *testing.T) {
 	root, err := fs.ReadDir(migrations, "migrations")
 	if err != nil {
@@ -82,29 +96,8 @@ func TestMigrationSets(t *testing.T) {
 		}
 	}
 	files := setFiles(t)
-	versions := map[int]string{}
-	for _, part := range []string{"hub", "manager"} {
-		seen := map[int]bool{}
-		for _, name := range files[part] {
-			if !strings.HasSuffix(name, ".sql") {
-				t.Errorf("migrations/%s/%s: not a .sql file", part, name)
-				continue
-			}
-			v, err := migrationVersion(name)
-			if err != nil {
-				t.Error(err)
-				continue
-			}
-			if seen[v] {
-				t.Errorf("migrations/%s: two migrations numbered %d", part, v)
-			}
-			seen[v] = true
-			pair, known := sharedNumbers[v]
-			if was, ok := versions[v]; ok && (was != name || !slices.Contains(bothSets, name)) && !(known && was == pair[0] && name == pair[1]) {
-				t.Errorf("migration %d is in both sets (%s, %s): a new migration goes in exactly one; take a number neither set has", v, was, name)
-			}
-			versions[v] = name
-		}
+	for _, p := range migrationNameProblems(files) {
+		t.Error(p)
 	}
 	for v, pair := range sharedNumbers {
 		if !slices.Contains(files["hub"], pair[0]) || !slices.Contains(files["manager"], pair[1]) {
@@ -125,6 +118,134 @@ func TestMigrationSets(t *testing.T) {
 	}
 	if !slices.Equal(both, sharedTables) {
 		t.Errorf("tables both sets make: %v, want %v: a table is one side's (docs/server/server.md \"Migrations\")", both, sharedTables)
+	}
+}
+
+// migrationNameProblems are what is wrong with the names of each part's migrations (sorted): a name that is not
+// numbered or timestamped, a number added after they were frozen, a version two files have (but the frozen
+// exceptions), a name that sorts before an earlier version.
+func migrationNameProblems(files map[string][]string) []string {
+	const rename = "name a new migration YYYYMMDDHHMM_<name>.sql, the UTC minute you write it (date -u +%Y%m%d%H%M)"
+	var out []string
+	type file struct{ part, name string }
+	versions := map[int64]file{}
+	for _, part := range []string{"hub", "manager"} {
+		seen := map[int64]bool{}
+		numbered := 0
+		var last int64 = -1
+		for _, name := range files[part] {
+			if !migrationName.MatchString(name) {
+				out = append(out, fmt.Sprintf("migrations/%s/%s: %s, in lower case", part, name, rename))
+				continue
+			}
+			v, err := migrationVersion(name)
+			if err != nil {
+				out = append(out, err.Error())
+				continue
+			}
+			if name[numberedDigits] == '_' {
+				numbered++
+				if v > lastNumbered {
+					out = append(out, fmt.Sprintf("migrations/%s/%s: numbers stopped at %04d; %s", part, name, lastNumbered, rename))
+				}
+			} else if v < firstStamp {
+				out = append(out, fmt.Sprintf("migrations/%s/%s: a time before migrations were timestamped; %s", part, name, rename))
+			}
+			if seen[v] {
+				out = append(out, fmt.Sprintf("migrations/%s: two migrations with version %d: give the newer one another minute", part, v))
+			}
+			seen[v] = true
+			if v < last {
+				out = append(out, fmt.Sprintf("migrations/%s/%s sorts after a migration with a later version (%d)", part, name, last))
+			}
+			last = v
+			pair, known := sharedNumbers[v]
+			if was, ok := versions[v]; ok && was.part != part && (was.name != name || !slices.Contains(bothSets, name)) &&
+				!(known && was.name == pair[0] && name == pair[1]) {
+				out = append(out, fmt.Sprintf("migration %d is in both sets (%s, %s): a new migration goes in exactly one; give it a minute neither set has", v, was.name, name))
+			}
+			versions[v] = file{part, name}
+		}
+		if numbered != numberedFiles[part] {
+			out = append(out, fmt.Sprintf("migrations/%s has %d numbered migrations, %d when they were frozen: %s", part, numbered, numberedFiles[part], rename))
+		}
+	}
+	return out
+}
+
+// The guard on names: a numbered file added after the freeze (above the last number, or in a gap) fails, as do a
+// timestamp that is no time, one before the switch, and a minute taken twice; a timestamped file passes, in one set or
+// the other.
+func TestMigrationNameProblems(t *testing.T) {
+	with := func(part string, names ...string) map[string][]string {
+		files := setFiles(t)
+		files[part] = append(files[part], names...)
+		sort.Strings(files[part])
+		return files
+	}
+	for _, c := range []struct {
+		name  string
+		files map[string][]string
+		want  []string // a part of each problem, in order
+	}{
+		{"frozen", setFiles(t), nil},
+		{"timestamped", with("manager", "202611191230_probe.sql", "202611191231_probe_more.sql"), nil},
+		{"timestamped in each set", with("hub", "202611191232_hub_probe.sql"), nil},
+		{"next number", with("manager", "0562_probe.sql"), []string{"numbers stopped at 0561", "87 numbered migrations, 86"}},
+		{"a gap", with("hub", "0559_probe.sql"), []string{"36 numbered migrations, 35"}},
+		{"upper case", with("hub", "202611191230_Probe.sql"), []string{"in lower case"}},
+		{"three digits", with("hub", "562_probe.sql"), []string{"in lower case"}},
+		{"no time", with("hub", "202611311230_probe.sql"), []string{"not a time"}},
+		{"before the switch", with("hub", "202611181230_probe.sql"), []string{"before migrations were timestamped"}},
+		{"one minute twice", with("manager", "202611191230_a.sql", "202611191230_b.sql"), []string{"two migrations with version 202611191230"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := migrationNameProblems(c.files)
+			if len(got) != len(c.want) {
+				t.Fatalf("problems %q, want %q", got, c.want)
+			}
+			for i, w := range c.want {
+				if !strings.Contains(got[i], w) {
+					t.Errorf("problem %q, want %q in it", got[i], w)
+				}
+			}
+		})
+	}
+	both := setFiles(t)
+	both["hub"] = append(both["hub"], "202611191230_probe.sql")
+	both["manager"] = append(both["manager"], "202611191230_probe_too.sql")
+	if got := migrationNameProblems(both); len(got) != 1 || !strings.Contains(got[0], "is in both sets") {
+		t.Fatalf("one minute in both sets: %q", got)
+	}
+}
+
+// migrationVersion reads a number or a UTC minute, and nothing else; name order is version order.
+func TestMigrationVersion(t *testing.T) {
+	for name, want := range map[string]int64{
+		"0001_init.sql":          1,
+		"0561_model_usage.sql":   561,
+		"202611191230_probe.sql": 202611191230,
+		"209912312359_late.sql":  209912312359,
+	} {
+		if got, err := migrationVersion(name); err != nil || got != want {
+			t.Errorf("%s: %d %v, want %d", name, got, err, want)
+		}
+	}
+	for _, name := range []string{"init.sql", "0001.sql", "561_x.sql", "00561_x.sql", "+561_x.sql", "20261119123_x.sql",
+		"2026111912300_x.sql", "202613191230_x.sql", "202602301230_x.sql", "202611192430_x.sql", "202611191260_x.sql"} {
+		if v, err := migrationVersion(name); err == nil {
+			t.Errorf("%s: version %d, want an error", name, v)
+		}
+	}
+	names := []string{"202611191230_b.sql", "0561_model_usage.sql", "202611191229_z.sql", "0001_init.sql", "202701010000_a.sql"}
+	sort.Strings(names)
+	var last int64 = -1
+	for _, name := range names {
+		v, err := migrationVersion(name)
+		if err != nil || v <= last {
+			t.Fatalf("%v: %s is version %d (%v), after %d", names, name, v, err, last)
+		}
+		last = v
 	}
 }
 
@@ -184,7 +305,7 @@ func records(t *testing.T, d *DB) []string {
 	}
 	var out []string
 	for rows.Next() {
-		var v int
+		var v int64
 		var name, part string
 		if err := rows.Scan(&v, &name, &part); err != nil {
 			t.Fatal(err)
@@ -247,7 +368,7 @@ func TestMigrateFreshSets(t *testing.T) {
 
 // unifiedUpTo are the migrations as the migrator from before the split had them, up to version until, in order, with
 // their SQL: 0001 was both parts in one; the others in both sets are the same in each.
-func unifiedUpTo(t *testing.T, until int) [][2]string {
+func unifiedUpTo(t *testing.T, until int64) [][2]string {
 	t.Helper()
 	sql := map[string]string{}
 	for _, part := range []string{"hub", "manager"} {
@@ -275,7 +396,7 @@ func unifiedUpTo(t *testing.T, until int) [][2]string {
 
 // unifiedMigrate is the migrator from before the split: one schema_migrations row per version, every migration in
 // order, up to version until (419 at most: the split came after it).
-func unifiedMigrate(t *testing.T, url string, until int) {
+func unifiedMigrate(t *testing.T, url string, until int64) {
 	t.Helper()
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)

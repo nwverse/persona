@@ -207,7 +207,8 @@ The full list is in `docs/lessons/`; read the file for the area you touch first.
 
 - **Several Agents share this repository**: work in your own worktree from `origin/main`, stage only your files, and check that
   `git diff origin/main...HEAD --stat` lists only them before pushing. Use your own simulator and mock hub port (check with `lsof`; stop a
-  mock by its port, never `pkill -f mock_hub.py`). Look at every worktree before picking a database migration number (`docs/lessons/workflow.md`).
+  mock by its port, never `pkill -f mock_hub.py`). Name a new database migration by its UTC minute, `$(date -u +%Y%m%d%H%M)_<name>.sql`,
+  never a hand-picked number (`docs/lessons/workflow.md`).
 - Scripts that wait for background jobs or logs always have a timeout and end with a one-line verdict on success, failure and timeout.
 - **Simulators only through `scripts/app/sim-boot.sh`** (`--profile default|watch|live-activity|stock`, slimmed by default); never
   `simctl create/boot` or `-destination name=…`, and never reboot someone else's. A failure only on a slim simulator gets rerun on

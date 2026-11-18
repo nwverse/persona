@@ -16,6 +16,7 @@ import migration_freeze
 ROOT = Path(__file__).resolve().parents[2]
 HUB = "server/internal/db/migrations/hub/0001_init.sql"
 MANAGER = "server/internal/db/migrations/manager/0002_settings.sql"
+STAMPED = "server/internal/db/migrations/hub/202611191230_extra.sql"
 ORIGINAL = "CREATE TABLE devices (\n    id int\n);\n"
 OTHER = "-- the manager's settings\nCREATE TABLE settings (id int);\n"
 
@@ -89,6 +90,30 @@ class CompareTests(unittest.TestCase):
         self.assertIn("add a new migration instead", edited)
         self.assertIn("add a new migration instead", deleted)
         self.assertTrue(edited.startswith("migration freeze: " + HUB))
+        numbered = migration_freeze.describe_numbered(STAMPED.replace("202611191230", "0009"))
+        self.assertEqual(numbered.count("\n"), 0)
+        self.assertIn("YYYYMMDDHHMM_<name>.sql", numbered)
+        self.assertIn("date -u +%Y%m%d%H%M", numbered)
+
+
+class NamingTests(unittest.TestCase):
+    def test_a_new_name_is_a_real_utc_minute(self):
+        for name in ("202611191230_probe.sql", "202612312359_end_of_year.sql", "202802291200_leap_day.sql"):
+            self.assertTrue(migration_freeze.timestamped(name), name)
+        for name in ("0562_probe.sql", "20261119123_probe.sql", "2026111912300_probe.sql", "202613011230_probe.sql",
+                     "202602301230_probe.sql", "202611192400_probe.sql", "202611191260_probe.sql",
+                     "202611191230_Probe.sql", "202611191230-probe.sql", "202611191230_probe.SQL", "202611191230.sql"):
+            self.assertFalse(migration_freeze.timestamped(name), name)
+
+    def test_only_new_files_need_a_minute(self):
+        base = {HUB: ORIGINAL, MANAGER: OTHER}
+        numbered = "server/internal/db/migrations/manager/0009_extra.sql"
+        current = dict(base)
+        current[STAMPED] = "CREATE TABLE extra (id int);\n"
+        self.assertEqual(migration_freeze.numbered_additions(base, [current, dict(current)]), [])
+        current[numbered] = "CREATE TABLE more (id int);\n"
+        self.assertEqual(migration_freeze.numbered_additions(base, [current, dict(current)]), [numbered])
+        self.assertEqual(migration_freeze.numbered_additions(base, [{numbered: ""}, base]), [numbered])
 
 
 class GitFreezeTests(unittest.TestCase):
@@ -140,8 +165,26 @@ class GitFreezeTests(unittest.TestCase):
     def test_a_comment_or_reindent_passes_and_a_new_file_passes(self):
         self.write(HUB, "-- added\r\nCREATE TABLE devices (id int);\n")
         self.assertEqual(0, self.run_check())
-        self.write("server/internal/db/migrations/hub/0009_extra.sql", "CREATE TABLE extra (id int);\n")
+        self.write(STAMPED, "CREATE TABLE extra (id int);\n")
         self.assertEqual(0, self.run_check())
+
+    def test_a_new_numbered_migration_fails(self):
+        numbered = "server/internal/db/migrations/manager/0009_extra.sql"
+        self.write(STAMPED, "CREATE TABLE extra (id int);\n")
+        self.write(numbered, "CREATE TABLE more (id int);\n")
+        self.git("add", numbered)
+        stderr = sys.stderr
+        try:
+            from io import StringIO
+            buf = StringIO()
+            sys.stderr = buf
+            code = self.run_check()
+        finally:
+            sys.stderr = stderr
+        self.assertEqual(1, code)
+        self.assertEqual(1, buf.getvalue().count(numbered), buf.getvalue())
+        self.assertIn("not named by the UTC minute", buf.getvalue())
+        self.assertNotIn(STAMPED, buf.getvalue())
 
     def test_an_edited_migration_fails(self):
         self.write(HUB, "CREATE TABLE devices (id text);\n")

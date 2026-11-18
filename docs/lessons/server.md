@@ -494,10 +494,11 @@ cost is smaller than a broken image. When something has to be listed by hand in 
 
 ## Sharing frontiers and migration lanes (#3604)
 
-- Migration numbers are global across the hub and manager sets, even though their
-  files live in separate directories. Inventory both sets in every worktree;
-  distinct filenames with the same numeric prefix still collide. Renumber only
-  unpublished migrations, never an applied migration or the guard.
+- Migration versions are global across the hub and manager sets, even though their
+  files live in separate directories: distinct filenames with the same prefix
+  still collide. New migrations are named by the UTC minute they are written
+  (`docs/lessons/workflow.md`), so nobody picks a number; move only an unpublished
+  migration to another minute, never an applied migration or the guard.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen

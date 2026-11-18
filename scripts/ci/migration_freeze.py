@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Fail when a database migration already on the base branch is edited, deleted or renamed.
+"""Fail when a database migration already on the base branch is edited, deleted or renamed, or a new one is numbered by hand.
 
 Migrations that have been applied are recorded by file name and are not run again, so a later
 edit does not repair existing databases. Comment-only and whitespace-only edits pass (whitespace
-outside quoted strings is ignored; text inside quotes is not). A new .sql file may be added.
+outside quoted strings is ignored; text inside quotes is not). A new .sql file may be added,
+named by the UTC minute it was written: YYYYMMDDHHMM_<name>.sql (date -u +%Y%m%d%H%M). Numbers
+picked by hand (NNNN_<name>.sql) collided when two lines of work took the same one, so only the
+numbered files already on the base remain.
 
 The frozen files are the .sql files directly under server/internal/db/migrations/hub and
 server/internal/db/migrations/manager at the merge base of HEAD and the base ref. The base ref
@@ -11,10 +14,11 @@ is --base, else CI_BASE_SHA, else the clone's default branch: origin/HEAD if it 
 commit, else origin/main, else origin/master. Those files are compared with the index and the
 working tree.
 
-Duplicate numbers across the two sets are not checked here. TestMigrationSets already rejects
+Duplicate versions across the two sets are not checked here. TestMigrationSets already rejects
 them, with the frozen bothSets and sharedNumbers exceptions kept in that test.
 """
 import argparse
+from datetime import datetime
 import os
 from pathlib import Path
 import re
@@ -23,6 +27,19 @@ import sys
 
 MIGRATION_DIRS = ("server/internal/db/migrations/hub", "server/internal/db/migrations/manager")
 MIGRATION_PATH = re.compile(r"^server/internal/db/migrations/(hub|manager)/[^/]+\.sql$")
+TIMESTAMPED = re.compile(r"^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})_[a-z0-9_]+\.sql$")
+
+
+def timestamped(name):
+    """Whether a migration file name starts with a real minute, YYYYMMDDHHMM, and a lower-case name."""
+    match = TIMESTAMPED.match(name)
+    if not match:
+        return False
+    try:
+        datetime(*(int(part) for part in match.groups()))
+    except ValueError:
+        return False
+    return True
 
 
 class FreezeError(Exception):
@@ -92,6 +109,12 @@ def changes_against(base, views):
             if path not in kinds or kind == "deleted":
                 kinds[path] = kind
     return [(path, kinds[path]) for path in sorted(kinds)]
+
+
+def numbered_additions(base, views):
+    """New paths (in a view, not on the base) whose file name is not a UTC minute, each once."""
+    return sorted({path for view in views for path in view
+                   if path not in base and not timestamped(path.rsplit("/", 1)[-1])})
 
 
 def _git(root, args, check=True):
@@ -215,13 +238,20 @@ def describe(path, kind):
     return "migration freeze: {0} {1}; add a new migration instead".format(path, action)
 
 
+def describe_numbered(path):
+    return ("migration freeze: {0} is a new migration not named by the UTC minute it was written; "
+            "name it YYYYMMDDHHMM_<name>.sql in lower case (date -u +%Y%m%d%H%M)").format(path)
+
+
 def check(root, base=None, env=None):
     """Return (commit, frozen count, violation lines). Raises FreezeError when the base cannot be resolved."""
     root = Path(root)
     commit = resolve_base_commit(root, base, env)
     base_files = tree_migrations(root, commit)
-    violations = changes_against(base_files, [index_migrations(root), worktree_migrations(root)])
-    return commit, len(base_files), [describe(path, kind) for path, kind in violations]
+    views = [index_migrations(root), worktree_migrations(root)]
+    violations = [describe(path, kind) for path, kind in changes_against(base_files, views)]
+    violations += [describe_numbered(path) for path in numbered_additions(base_files, views)]
+    return commit, len(base_files), violations
 
 
 def main(argv=None):
