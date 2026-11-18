@@ -114939,6 +114939,29 @@
       },
       "extractionState" : "manual"
     },
+    "Open Persona once and allow the microphone, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Persona once and allow the microphone, then try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一度Personaを開いてマイクを許可してから、もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先打开一次 Persona 并允许使用麦克风，然后再试一次。"
+          }
+        }
+      }
+    },
     "Open Persona to connect [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -144913,6 +144936,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已交回 Persona"
+          }
+        }
+      }
+    },
+    "Sent by a scheduled task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent by a scheduled task"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由已安排任务发送"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定期タスクから送信"
           }
         }
       }
@@ -181245,6 +181291,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Transcribing on this device needs iOS 26 or later. You can transcribe recordings on your hub instead." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribing on this device needs iOS 26 or later. You can transcribe recordings on your hub instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスでの文字起こしにはiOS 26以降が必要です。代わりにハブで録音を文字起こしできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在本设备上转写需要 iOS 26 或更高版本。你可以改为在 hub 上转写录音。"
+          }
+        }
+      }
     },
     "Transcribing the last %lld min" : {
       "extractionState" : "manual",

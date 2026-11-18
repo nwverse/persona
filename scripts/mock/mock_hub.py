@@ -3319,6 +3319,14 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+# MOCK_TODO_ASK_LONG=1 (with MOCK_TODO_ASKS): the PR check's decision has a question and a recommendation of several lines, the
+# way a supervisor writes them, so the Needs you tray's decision card can be checked with long text, hours of waiting and its
+# buttons at the bottom of a short window.
+if os.environ.get("MOCK_TODO_ASK_LONG") == "1" and "todo_review" in TODO_ASKS:
+    TODO_ASKS["todo_review"].update(
+        verdict="🤔 要你拍板：PR #42 改的公开接口已经合进 2.0 版，但旧接口还有一半的客户端在用，2.0 放量之前它们的列表页会整个空掉。要不要先把旧接口加回来止损？",
+        recommend="先加回旧接口，通知客户端的负责人这个版本之后再删")
+    TODO_ASKED_AT = ago(hours=12, minutes=31)
 # MOCK_ASK_HELD=1 (#4930, #5803, docs/assistant/todos.md "Decisions that can wait"): with MOCK_TODO_ASKS, the PR
 # check's decision is held for the next briefing (`ask.for_briefing`), so the apps mark it.
 if os.environ.get("MOCK_ASK_HELD") == "1" and "todo_review" in TODO_ASKS:
@@ -10582,6 +10590,7 @@ def mock_interactions():
 #   done        only finished-unseen agents
 #   one         exactly one working agent (a tap opens it)
 #   empty       nothing (the connection line)
+#   off         the default: GET serves an empty Fleet, with no fleet events
 # A working agent whose turn is over while its background work runs (MOCK_WORKFLOW=1, MOCK_WORKFLOW_CARDS=1) is a
 # background item, as the hub sends it (#3437): background, its workflow's line and bar, the workflow's start as since.
 MOCK_FLEET = os.environ.get("MOCK_FLEET", "")
@@ -10704,18 +10713,19 @@ def push_fleet():
         except Exception: pass
 
 
-FLEET_MODES = ("1", "all", "permission", "working", "done", "one", "empty")
+FLEET_MODES = ("1", "all", "permission", "working", "done", "one", "empty", "off")
 
 
 def set_fleet_mode(mode):
     """GET /mock/fleet?mode=…: switch MOCK_FLEET while running and push the new fleet. Restarting the mock instead
-    changes HUB_ID, and the app's pairing no longer matches (docs/lessons/android.md)."""
+    changes HUB_ID, and the app's pairing no longer matches (docs/lessons/android.md). `off` restores the default."""
     global MOCK_FLEET
     if mode not in FLEET_MODES:
         return {"error": "mode is one of " + ", ".join(FLEET_MODES)}, 400
-    MOCK_FLEET = mode
+    MOCK_FLEET = "" if mode == "off" else mode
     push_fleet()
-    return {"mode": MOCK_FLEET, "fleet": mock_fleet()}, 200
+    fleet = mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}
+    return {"mode": MOCK_FLEET, "fleet": fleet}, 200
 
 
 def mock_notify(interaction_id):
