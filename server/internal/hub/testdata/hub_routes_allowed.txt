@@ -103,6 +103,7 @@ POST /api/v1/admin/machines
 POST /api/v1/admin/machines/{id}/connector
 POST /api/v1/admin/machines/{id}/link-pair
 POST /api/v1/admin/machines/{id}/reconnect
+POST /api/v1/admin/machines/{mid}/link-switch # admin relay to the computer's manager (link_switch.go)
 POST /api/v1/admin/password
 POST /api/v1/admin/peers
 POST /api/v1/admin/peers/code

@@ -78,6 +78,68 @@ func TestRevokeMachineCredentials(t *testing.T) {
 	}
 }
 
+// Whether a computer has a Persona Link already (a switch from ssh refuses one that has): a live link credential or
+// a pairing code for it that is still open counts; a revoked credential, a used or expired code, another computer's,
+// and a peer hub's credential that binds the same id do not.
+func TestMachineLinkInUse(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	inUse := func(machine string) bool {
+		t.Helper()
+		got, err := d.MachineLinkInUse(ctx, machine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if inUse("laptop") {
+		t.Fatal("nothing yet")
+	}
+	if err := d.CreateDeviceToken(ctx, DeviceToken{ID: "peer-1", Name: "hub", Kind: "peer", Role: "peer", MachineID: "laptop"}, "hash-peer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreateDeviceToken(ctx, DeviceToken{ID: "link-desk", Name: "desk", Kind: "link", Role: "link", MachineID: "desk"}, "hash-desk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreatePairToken(ctx, "pair-desk", time.Now().Add(time.Hour), "desk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreatePairToken(ctx, "pair-over", time.Now().Add(-time.Minute), "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreatePairToken(ctx, "pair-app", time.Now().Add(time.Hour), ""); err != nil {
+		t.Fatal(err)
+	}
+	if inUse("laptop") {
+		t.Fatal("a peer's credential, another computer's, an expired code or an app's code counts")
+	}
+	if err := d.CreatePairToken(ctx, "pair-open", time.Now().Add(time.Hour), "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if !inUse("laptop") {
+		t.Fatal("an open pairing code does not count")
+	}
+	link := DeviceToken{ID: "link-1", Name: "laptop", Kind: "link", Role: "link", MachineID: "laptop"}
+	if ok, err := d.RedeemPairToken(ctx, "pair-open", link, "hash-link-1"); err != nil || !ok {
+		t.Fatalf("redeem: %v %v", ok, err)
+	}
+	if !inUse("laptop") {
+		t.Fatal("a live credential does not count")
+	}
+	if ok, err := d.RevokeDeviceToken(ctx, "link-1"); err != nil || !ok {
+		t.Fatalf("revoke: %v %v", ok, err)
+	}
+	if inUse("laptop") {
+		t.Fatal("a revoked credential or a used code counts")
+	}
+	if !inUse("desk") {
+		t.Fatal("desk's credential and code do not count")
+	}
+	if _, err := d.MachineLinkInUse(ctx, ""); err == nil {
+		t.Fatal("no machine accepted")
+	}
+}
+
 func TestMachineAudit(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
