@@ -273,7 +273,9 @@ The node joins as another bus client (`server/internal/node/codex_desktop.go`):
 
 `node/codexapp_new.go`. New Agent with the launcher `codex-app` starts the chat in the Codex App: it is in the App's sidebar (in the project its folder is in, or among the chats in no project), and the App runs it from its first message on. No client needs a release: it is a launcher like a runtime's, and needs no terminal engine (the start goes to the App before the engine check).
 
-- **Offered:** `launchers.list` has `{name: "codex-app", source: "codex_app", agent: "codex"}` when the App runs for the node's Codex home (its bus socket is there) and a Codex CLI is found: the one the App bundles (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` on a Mac, the same version as the App's own app-server), else one on PATH or where Codex installs. A login-shell launcher of that name runs instead.
+- **Offered:** `launchers.list` has `{name: "codex-app", source: "codex_app", agent: "codex"}` when the App runs for the node's Codex home (its bus socket is there) and a Codex CLI is found: the one the App bundles (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` on a Mac, the same version as the App's own app-server), else one on PATH or where Codex installs. A login-shell launcher of that name runs instead. It is only an explicit pick: where a
+  launcher is chosen for a start (a default the computer lacks), plain `codex` and the machine's other launchers come first and
+  `codex-app` is never chosen.
 - **Why this way:** `codex://new` only fills the App's composer. The App's sidebar lists any chat in its Codex home from an interactive source (`thread/list` with no `sourceKinds`: cli, vscode, …; no originator filter locally), `codex://threads/<id>` opens one, and a follower runs a turn in one it has loaded (above).
 - **The start:**
   1. The App's codex starts the chat with no model request: `codex app-server` over stdio in the folder (`CODEX_HOME` the node's), `initialize` as client `persona_codex_app`, `thread/start {cwd}`, then `thread/name/set` with the title, which writes the rollout (Codex writes a chat at its first turn otherwise; a chat with no message is not in the App's sidebar), and the app-server ends. It resumes nothing. The title is the first line of the first message (or the start's `name_hint`), spaces folded, at most 40 characters.
@@ -309,7 +311,11 @@ Since 2026-11-02, choosing a Codex launcher in the phone's "New Chat" starts a n
 Since 2026-11-12 the message is optional: with none, Codex opens in its tab and waits for one ("Starting without a first message" below).
 The entry point is the same as Claude's (machine, directory, launcher); subsequent behavior uses "Sessions on the daemon" above (bare `codex` 0.163 joins automatically) or the terminal route below.
 
-- **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
+- **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. On a Mac where the login shell finds
+  no `codex` and has no alias or function of that name, the CLI the ChatGPT app bundles is that launcher, run by its absolute path
+  (`bundledCodexCLI` in `node/codexapp_new.go`, #10437); its base name is still `codex`, so herdr recognizes the pane, `codex-start`
+  runs it and the effort check treats it as plain `codex`. `agentExecutable("codex")` finds it last too. Without this, such a Mac
+  offered only `codex-app`, so its Codex Agents ran as Codex App chats outside herdr on the App's model. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
   They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
   under other names (rejected with an explanation, `codex_launcher`), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
