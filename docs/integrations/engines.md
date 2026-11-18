@@ -310,7 +310,8 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   Wait for connectable socket (at most 20 seconds) before create / continue.
 - **Clean environment**: herdr server passes its environment to every pane and claude. Node uses `env -i` with only `HOME`, `USER`, `LOGNAME`, `TMPDIR`, language,
   `XDG_*`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, `HERDR_CONFIG_PATH` (the server reads the config file the node reads for the worktrees directory), `PERSONA_HOME` (panes find the node socket in that directory), then user's login shell (`$SHELL -l -c 'exec herdr server'`; if launchd has no `SHELL`, read account login shell).
-  PATH comes from that shell; no node / launcher `ANTHROPIC_*` or proxy variables. Find herdr on node PATH first, then ask login shell.
+  PATH comes from that shell, which starts from the system directories with the tool directories after them: hub.json `machines[].extra_path` and the mise / asdf shims
+  directories that exist (#10127, `docs/operations/config.md` ("hub runtime config (hub.json)"); a profile that sets PATH outright drops them). No node / launcher `ANTHROPIC_*` or proxy variables. Find herdr on node PATH first, then ask login shell.
 - **What a start types** (#744, `node/agentenv.go`): a pane has its engine's environment, not the node's. A herdr server started some other way, or Orca's app, may lack the node's `PERSONA_HOME`, and an engine started from the assistant's Bash tool hands the assistant's own variables to every pane.
   So every command the node types into a pane to start or resume an Agent (Claude, Codex, compatible CLIs, pi; herdr's `resume_argv` too) does two things:
   - It puts `PERSONA_HOME=<the node's data directory>` in front, where the pane's shell takes `VAR=val cmd`.
