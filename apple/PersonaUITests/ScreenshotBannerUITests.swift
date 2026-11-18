@@ -72,23 +72,32 @@ final class ScreenshotBannerUITests: XCTestCase {
         }
     }
 
-    /// For a look (#10172): with the switch on, system screenshots of the Assistant chat in light and dark, at the
-    /// default text size and the largest the bar takes (xxxLarge), with the mock's assistant name and a very long one.
-    /// Only with TEST_RUNNER_PERSONA_SHOTS: `screenshot-banner-looks-<light|dark>-<L|XXXL>-<short|long>.png`.
+    /// For a look (#10172): with the switch on, system screenshots of the Assistant chat at the default text size and
+    /// the largest the bar takes (xxxLarge), with the mock's assistant name and a very long one, and of an Agent chat.
+    /// Only with TEST_RUNNER_PERSONA_SHOTS: `screenshot-banner-looks-<look>-<page>-<L|XXXL>-<short|long>.png`. The look
+    /// is the simulator's (`xcrun simctl ui <udid> appearance light|dark` before the run; TEST_RUNNER_PERSONA_LOOKS
+    /// names it): the app's own Light / Dark switches its icon too, and the system's "icon changed" alert would cover
+    /// the screenshots.
     @MainActor func testLooks() async throws {
-        guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots for a look") }
+        let env = ProcessInfo.processInfo.environment
+        guard env["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots for a look") }
+        let appearance = env["PERSONA_LOOKS"] ?? "system"
         let hub = hub
         addTeardownBlock { _ = try? await Self.rename(hub, "助手") } // the mock's own name for it
+        let pages: [(page: String, args: [String], control: String)] = [
+            ("assistant", ["-openAssistant", Self.main], "assistant-new"),
+            ("agent", ["-openSession", Self.agent, "-holdChromeOpen", "YES"], "chat.more"),
+        ]
         for (label, name) in [("short", nil), ("long", "家庭生活、研究资料与日程整理全能助理")] as [(String, String?)] {
             if let name {
                 let status = try await Self.rename(hub, name)
                 XCTAssertEqual(status, 200, "the mock did not rename the assistant")
             }
-            for scheme in ["light", "dark"] {
+            for p in pages {
                 for (size, category) in [("L", "UICTContentSizeCategoryL"), ("XXXL", "UICTContentSizeCategoryXXXL")] {
-                    _ = try look(banner: true, scheme: scheme, page: "assistant",
-                                 ["-openAssistant", Self.main, "-UIPreferredContentSizeCategoryName", category],
-                                 control: "assistant-new", name: "screenshot-banner-looks-\(scheme)-\(size)-\(label)")
+                    try look(banner: true, scheme: "system", page: p.page,
+                             p.args + ["-UIPreferredContentSizeCategoryName", category], control: p.control,
+                             name: "screenshot-banner-looks-\(appearance)-\(p.page)-\(size)-\(label)", measure: false)
                 }
             }
         }
@@ -136,18 +145,21 @@ final class ScreenshotBannerUITests: XCTestCase {
     }
 
     /// Opens the page, checks its bar is on screen (it takes taps, VoiceOver reaches it) and the banner is not in the
-    /// accessibility tree, takes a system screenshot and returns the control's square in it.
-    @MainActor private func look(banner: Bool, scheme: String, page: String, _ extra: [String], control id: String,
-                                 tapThrough: String? = nil, name: String? = nil) throws -> Crop {
+    /// accessibility tree, takes a system screenshot and returns the control's square in it. `measure: false` only
+    /// waits for the control and keeps the screenshot (at xxxLarge the Assistant bar lays New Chat out of reach).
+    @MainActor @discardableResult
+    private func look(banner: Bool, scheme: String, page: String, _ extra: [String], control id: String,
+                      tapThrough: String? = nil, name: String? = nil, measure: Bool = true) throws -> Crop {
         let app = launch(["-ui.scheme", scheme] + extra, banner: banner)
         defer { app.terminate() }
         let el = app.descendants(matching: .any)[id].firstMatch
         XCTAssertTrue(el.waitForExistence(timeout: 30), "\(page): no \(id)")
-        XCTAssertTrue(el.isHittable, "\(page): \(id) is on screen")
+        if measure { XCTAssertTrue(el.isHittable, "\(page): \(id) is on screen") }
         XCTAssertFalse(app.staticTexts[Self.repository].exists, "\(page): the banner is out of VoiceOver's reach")
         RunLoop.current.run(until: Date().addingTimeInterval(2))
         let shot = XCUIScreen.main.screenshot()
         save(shot, name ?? "screenshot-banner-\(page)-\(banner ? "on" : "off")-\(scheme)")
+        guard measure else { return Crop(luma: []) }
         let crop = try Self.crop(shot, el.frame.insetBy(dx: 4, dy: 4))
         if let tapThrough {
             // The bar in the capture layer still takes its taps.
