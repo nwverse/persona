@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recentConversations } from "./conversation-origins";
+import { chooseManager } from "./manager-choice";
 import { applyCompleteSessions, connect, getState, reset } from "./store";
 import type { Session } from "./types";
 
@@ -23,11 +24,13 @@ const working = (id: string, extra: Partial<Session> = {}) => row(id, { status: 
 let changed: Session[];
 let conversations: Session[];
 let assistantReads: number;
+let assistantFails: number; // the next reads of /assistant that answer 503
 
 beforeEach(() => {
   vi.useFakeTimers();
   changed = [];
   assistantReads = 0;
+  assistantFails = 0;
   conversations = [working("main"), working("leader", { turn_error: "API Error: 503", turn_error_kind: "server" })];
   vi.stubGlobal("WebSocket", Socket);
   vi.stubGlobal("location", { protocol: "http:", host: "demo" });
@@ -37,6 +40,7 @@ beforeEach(() => {
     const url = new URL(path, "http://demo");
     if (url.pathname === "/api/v1/assistant") {
       assistantReads++;
+      if (assistantFails > 0 && assistantFails--) return Response.json({ error: "database down" }, { status: 503 });
       return Response.json({ machine_id: "hub", main: "main", background_supervisor: "bg", conversations });
     }
     if (url.pathname === "/api/v1/sessions") {
@@ -143,6 +147,42 @@ describe("a conversation made elsewhere comes into Recent (#10190)", () => {
     await hint("r3");
     expect(assistantReads).toBe(2);
     expect(recent()).toEqual(["leader"]);
+  });
+
+  // review of #10199: the once-for-each guard was one for every manager's page, and for a read that failed
+  it("one whose read failed is asked about again at its next row", async () => {
+    await listMode();
+    assistantFails = 1;
+    conversations = [...conversations, lark()];
+    changed = [lark({ waiting: false })];
+    await hint("r2");
+    expect(assistantReads).toBe(2);
+    expect(recent()).toEqual(["leader"]);
+    changed = [lark({ state: "working", status: "working", waiting: false })];
+    await hint("r3");
+    expect(assistantReads).toBe(3);
+    expect(recent()).toEqual(["lark", "leader"]);
+  });
+
+  it("another manager's page asks about it for its own answer", async () => {
+    await listMode();
+    changed = [lark({ waiting: false })]; // the default's page: its answer does not list it
+    await hint("r2");
+    expect(assistantReads).toBe(2);
+    try {
+      chooseManager("m-2"); // another manager's page, read before its hub listed the conversation
+      await settle();
+      await settle();
+      expect(assistantReads).toBe(3);
+      expect(recent()).toEqual(["leader"]);
+      conversations = [...conversations, lark()];
+      changed = [lark({ state: "working", status: "working", waiting: false })];
+      await hint("r3");
+      expect(assistantReads).toBe(4);
+      expect(recent()).toEqual(["lark", "leader"]);
+    } finally {
+      chooseManager(null);
+    }
   });
 
   it("the main conversation and the background supervisor read nothing and stay out of Recent", async () => {

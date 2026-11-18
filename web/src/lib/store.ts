@@ -1163,7 +1163,9 @@ export function upsertSession(s: Session) {
   set({ sessions: { ...state.sessions, [s.machine_id]: next }, ...syncAssistant(s.machine_id, [s]) });
 }
 
-/** The conversations the assistant was read again for (unlistedConversations): once each, whatever it answered. */
+/** The conversations the assistant was read again for (unlistedConversations), each for the page it was read for
+ *  (pageOf: another manager's page reads its own answer, review of #10199): once each, whatever that read answered; one
+ *  whose read failed is asked about again at its next row. */
 const askedForUnlisted = new Set<string>();
 
 /** `rows` (of the assistant's machine) bring conversations the held answer does not list (#10190): one another client
@@ -1172,10 +1174,11 @@ const askedForUnlisted = new Set<string>();
  *  as a list row laid in by this page. */
 function askAboutUnlisted(rows: readonly Session[]) {
   const a = state.assistant;
-  const ids = a ? unlistedConversations(a, rows).filter((id) => !askedForUnlisted.has(id)) : [];
-  if (!ids.length) return;
-  ids.forEach((id) => askedForUnlisted.add(id));
-  void refreshAssistant().catch(() => {});
+  const page = pageOf();
+  const keys = a ? unlistedConversations(a, rows).map((id) => `${page}\u0000${id}`).filter((k) => !askedForUnlisted.has(k)) : [];
+  if (!keys.length) return;
+  keys.forEach((k) => askedForUnlisted.add(k));
+  void refreshAssistant().catch(() => keys.forEach((k) => askedForUnlisted.delete(k)));
 }
 
 // The assistant's conversations are sessions on its machine too: the change that keeps the copy in `assistant`
