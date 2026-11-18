@@ -2106,6 +2106,17 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_UNDELIVERED=1 (#10194, docs/assistant/assistant.md "Messages that could not go in"): the first Persona chat could
+# not start, and its manager keeps two of the owner's messages: one it sends again by itself, one that gave up (Retry /
+# Delete).
+if os.environ.get("MOCK_UNDELIVERED") == "1":
+    ASSISTANT[0].update({"status": "offline", "state": "offline", "undelivered": [
+        {"id": "a0d1e2f3-0000-4000-8000-00000000f001", "text": "帮我看一下备份任务昨晚有没有跑完", "at": ago(minutes=50),
+         "state": "failed", "attempts": 40, "error": "助手没能启动"},
+        {"id": "a0d1e2f3-0000-4000-8000-00000000f002", "text": "顺便把结果发到今天的待办里", "at": ago(minutes=2),
+         "state": "waiting", "attempts": 2, "next_at": ago(minutes=-1), "error": "助手没能启动"},
+    ]})
+
 # MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
 # the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
 # the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
@@ -2164,6 +2175,9 @@ if os.environ.get("MOCK_RECENT") == "1":
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
 MOCK_DIRECTION_NAMES = {}
+# A direction's notes (#10086, assistant/direction_notes.go): the first leader has some, PUT …/directions/{id}/notes keeps them.
+MOCK_DIRECTION_NOTES = {}
+MOCK_DIRECTION_PROJECTS = {}
 if os.environ.get("MOCK_LEADERS") == "1":
     for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
         ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
@@ -2176,13 +2190,23 @@ if os.environ.get("MOCK_LEADERS") == "1":
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
+        if i == 0:
+            MOCK_DIRECTION_PROJECTS[c["session_id"]] = "persona-app"
+            MOCK_DIRECTION_NOTES[c["session_id"]] = ("Readings that count: the deployed build number and the test totals.\n"
+                                                     "- Every change goes issue → PR → local checks → merge.\n"
+                                                     "- Ask before touching the hub machine.")
 
 
 def mock_leaders_list():
     """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
     titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
-    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
-                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
+    out = []
+    for sid in MOCK_LEADERS:
+        row = {"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user", "at": "2026-11-10T08:00:00Z"}
+        if MOCK_DIRECTION_PROJECTS.get(sid): row["project"] = MOCK_DIRECTION_PROJECTS[sid]
+        if MOCK_DIRECTION_NOTES.get(sid): row["notes"], row["notes_at"] = MOCK_DIRECTION_NOTES[sid], "2026-11-17T03:00:00Z"
+        out.append(row)
+    return {"leaders": out}
 
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
@@ -28544,6 +28568,12 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and p.endswith("/seen"):
             mark_seen(p.split("/")[5])
             return self.send_json({"ok": True})
+        if p.startswith("/api/v1/assistant/directions/") and p.endswith("/notes") and self.command == "PUT":  # #10086
+            lead = p.split("/")[5]
+            if lead not in MOCK_LEADERS: return self.send_json({"error": "no such direction"}, 404)
+            notes = str(json.loads(self.last_body or b"{}").get("notes", "")).strip()[:4000]
+            MOCK_DIRECTION_NOTES[lead] = notes
+            return self.send_json({"notes": notes})
         # 设为常驻 / 取消常驻 (#4331, assistant/route.go makeDirection / endDirection): the leaders list changes
         if p.startswith("/api/v1/assistant/directions/") and p.split("/")[-1] in ("make", "end") and self.command == "POST":
             lead, op = p.split("/")[5], p.split("/")[6]

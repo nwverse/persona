@@ -119,7 +119,7 @@ a program run under the assistant's own process (its Bash tool) counts as the as
 
 **Audience: assistant supervisors.** All ordinary assistant conversations share a working directory and the generated `CLAUDE.md` / `AGENTS.md`. Those files contain common interaction and task-planning instructions, not a role-specific supervision manual. Never rewrite them per conversation; switching the main/background supervision mode leaves their bytes unchanged.
 
-The manager derives `supervision_instructions` from settings and the task ledger, overwriting caller-supplied values on `assistant.send`, internal `session.send`, warm starts and model resolution (`SendParams`, including `assistant.model`). Its only nonempty value is the exact rendering of `prompts/assistant/supervision_instructions.md`, with no time, session, title, task or event interpolation:
+The manager derives `supervision_instructions` from settings and the task ledger, overwriting caller-supplied values on `assistant.send`, internal `session.send`, warm starts and model resolution (`SendParams`, including `assistant.model`). Its nonempty value is the exact rendering of `prompts/assistant/supervision_instructions.md`, with no time, session, title, task or event interpolation; the one addition is a current leader's own direction notes (#10086, `docs/assistant/unified-entry.md` "Direction notes"): what the owner wrote for that direction and its kb project's name and goal, appended after the fragment from `prompts/assistant/direction_notes.md`, only while the notes are not empty. Editing them changes that leader's policy alone, so the rules below restart that one process (busy turns first finish) and no other:
 
 - Main receives it only when `main_supervises_own_tasks` is explicitly true, on the main route's computer. Main otherwise remains the secretary, including for escalations and emergency fallback messages; those messages do not silently grant a supervisor role.
 - Current `assistant.leaders` receive it on the assistant's computer. The persisted background supervisor receives it there too, even after a setting switch, so it can finish already-delivered work.
@@ -1144,6 +1144,38 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   unblocked: a gate holds the queue, never the owner's own answers (`relayMsg.Owner`).
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
+
+## Messages that could not go in (#10194)
+
+The owner's own message must never vanish. When the owner writes to one of the assistant's conversations while it
+cannot take the message (its process did not start, as a cold start killed on a loaded computer, #10192; its computer is
+away), nothing was typed. The hub used to answer the app with the failure and forget the message; a replay of the app's
+operation then read as accepted and the bubble waited for the transcript and went.
+
+- **Kept.** The hub hands such a message (a 5xx with nothing delivered, with a `client_msg_id`) to the conversation's
+  manager, `assistant.keep_undelivered`, with the app's own fields (`text`, `images`, `launcher`, `model`, `effort`),
+  never what `assistant.send_params` added. The manager keeps it in its Postgres (setting `assistant.undelivered`,
+  `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
+  (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
+  cannot keep it leaves the failure as before.
+- **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web and iOS draw each as the
+  owner's bubble marked "Not delivered", with why and "It will be sent automatically", and Delete; one that gave up
+  in red with Retry and Delete. Every device sees it, not only the one that sent it (`web/src/lib/undelivered.ts`;
+  iOS and Android follow in their own changes).
+- **Sent by itself, once.** The manager tries again with backoff (15 s, 30 s, 1 min, 2 min, then every 5 min), at once
+  when the conversation is seen running again on a session list, oldest first, one pass per conversation at a time.
+  A try runs `SendParams` again (the live snapshot and the pick of now) and the node's `session.send` under the
+  message's own `client_msg_id`: the node sends an id once, and its transcript line is tied to the id, so the bubble
+  turns into the real line. A try that may have gone in (no answer in time, or the manager stopped during it) is
+  looked for in the conversation's latest turns first, by id, or by its words written since the try where the node
+  forgot the tie.
+- **In order.** While a conversation has kept messages, `assistant.send_params` answers `undelivered_ahead` for a newer
+  owner message, and the hub keeps it behind them instead of letting it overtake.
+- **Gives up after a day.** A message not delivered within 24 hours is marked failed; the owner picks Retry (a new day
+  of tries) or Delete. A conversation that was deleted fails it at once.
+- **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
+  the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
+  take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
 
 ## Availability metrics (#4924)
 
