@@ -163,3 +163,61 @@ func TestWithoutAMainConversationOnlyWhatNobodyCanBeToldWaits(t *testing.T) {
 		t.Fatalf("no-main lines: %d, want only the first", n)
 	}
 }
+
+// With no main conversation set, a worker's signal whose task leader cannot be reached, with no conversation above the
+// leader either, waits (#5420) instead of being taken from the pending ones and dropped (review of #10133). Once a main
+// conversation is set it goes up there as the leader's decision.
+func TestUnreachableLeaderWithNobodyAboveWaitsWithoutAMainConversation(t *testing.T) {
+	s, f := newQuietService(t)
+	logged := noMainLog(s)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = ""; return true }); err != nil {
+		t.Fatal(err)
+	}
+	// The leader's agent row is released (it was replaced): there is no leader agent to reach.
+	s.todos.mu.Lock()
+	for i := range s.todos.todos[todo.ID].Agents {
+		if a := &s.todos.todos[todo.ID].Agents[i]; a.SessionID == "s1" {
+			now := time.Now().UTC()
+			a.ReleasedAt = &now
+		}
+	}
+	s.todos.mu.Unlock()
+	if lead, handled, ok := s.leaderSupervisor(todoNow(s, w.ID)); !handled || ok {
+		t.Fatalf("setup: the leader is reachable or not the worker's supervisor: %+v %v %v", lead, handled, ok)
+	}
+	if up, _ := s.supervisorAboveTask(ctx, todoNow(s, w.ID)); up != "" {
+		t.Fatalf("setup: a conversation above the leader: %q", up)
+	}
+	f.setSessions("box", proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusDone, State: proto.StateUnread, LastText: "做完了", UpdatedAt: time.Now()})
+	s.signal(superviseSignal{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了，等你验收", At: time.Now().Add(-time.Minute)})
+	for range 5 { // the watch's passes
+		s.sendDigest(ctx)
+	}
+	id := superviseSignal{Todo: w.ID, Kind: sigReview}.id()
+	b := &s.supervise
+	b.mu.Lock()
+	_, waiting := b.pending[id]
+	told := b.sent[id] != ""
+	b.mu.Unlock()
+	if !waiting || told {
+		t.Fatalf("the worker's signal: pending %v, marked told %v; want it waiting, untold", waiting, told)
+	}
+	if n := logged("no main conversation; 1 signal(s) wait for one"); n != 1 {
+		t.Fatalf("logged that one waits %d times, want once", n)
+	}
+	if n := f.notices(); len(n) != 0 {
+		t.Fatalf("told while nobody could be: %q", n)
+	}
+
+	// A main conversation is set: the decision goes up to it.
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	waitFor(t, "the decision to go up to the main conversation", func() bool { return len(f.notices()) == 1 })
+	if n := f.notices()[0]; !strings.Contains(n, "cannot be reached") {
+		t.Fatalf("the main conversation's escalation:\n%s", n)
+	}
+}

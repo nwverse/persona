@@ -66,7 +66,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	// (#10126): the rest goes there now.
 	waits := map[string]bool{}
 	for _, g := range list {
-		if here.MachineID == "" || here.Main == "" && !s.toldWithoutMain(here, g, there) {
+		if here.MachineID == "" || here.Main == "" && !s.toldWithoutMain(ctx, here, g, there) {
 			waits[g.id()] = true
 		}
 	}
@@ -176,8 +176,12 @@ func (s *Service) sendDigest(ctx context.Context) {
 			}
 			// Unreachable, not dropped: it becomes a decision for the conversation above the leader (escalateLeaderSignal),
 			// which has its own delivery target below.
+			worker := g
 			g = s.escalateLeaderSignal(ctx, g)
 			if g.Todo == "" { // nobody above it: it is told again next time
+				if _, open := s.todoNow(worker.Todo); open && here.Main == "" {
+					wait = append(wait, worker) // nobody above it since the check (toldWithoutMain): it waits as that one would
+				}
 				continue
 			}
 		}
@@ -231,10 +235,20 @@ func (s *Service) routeTo(here Settings, g superviseSignal, there func(string) b
 }
 
 // toldWithoutMain: signal g can be told now while no main conversation is set: its task leader's agent takes it
-// (leaderRoute: never the main conversation's), or a conversation does (routeTo).
-func (s *Service) toldWithoutMain(here Settings, g superviseSignal, there func(string) bool) bool {
-	if _, handled, _ := s.leaderRoute(g); handled {
-		return true
+// (leaderRoute: never the main conversation's); with that agent unreachable, the conversation above the leader does
+// (supervisorAboveTask, the decision escalateLeaderSignal makes, routed as sendDigest routes it); or a conversation does
+// (routeTo). A leader's signal with nobody above the leader to tell waits, as every signal did before (#5420).
+func (s *Service) toldWithoutMain(ctx context.Context, here Settings, g superviseSignal, there func(string) bool) bool {
+	if _, handled, reachable := s.leaderRoute(g); handled {
+		if reachable {
+			return true
+		}
+		t, ok := s.todoNow(g.Todo)
+		if !ok {
+			return true // its task went meanwhile: nothing is told of it
+		}
+		up, _ := s.supervisorAboveTask(ctx, t)
+		return up != "" && s.routeTo(here, superviseSignal{Todo: g.Todo, Kind: sigDecide, To: up}, there) != ""
 	}
 	return s.routeTo(here, g, there) != ""
 }
