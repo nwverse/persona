@@ -280,6 +280,14 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         app.searchFields.firstMatch.typeText("\n")
         openFirstResultAndReturn()
         _ = assertRetainedAtRest("before Agents leaves the front")
+        // First with the list at its top, where an empty field folds again when the tab comes back (#740): the
+        // retained one must leave the list where it is, or its first rows go under the field.
+        let topFiltersY = app.buttons["agents.filter.all"].firstMatch.frame.midY
+        leaveAndReturnToAgents()
+        _ = assertRetainedAtRest("Agents returned to front with the list at its top")
+        XCTAssertEqual(app.buttons["agents.filter.all"].firstMatch.frame.midY, topFiltersY, accuracy: 1,
+                       "tab return folded the list's top under the retained field")
+        // Then with the list left part way, where an empty field would settle.
         let from = agentsList.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
         from.press(forDuration: 0.05, thenDragTo: agentsList.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62)),
                    withVelocity: .slow, thenHoldForDuration: 0.2)
