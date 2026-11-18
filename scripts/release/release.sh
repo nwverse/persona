@@ -70,6 +70,8 @@ python3 scripts/release/debug_switches.py check "$APP/Persona"
 # Every bundle signed with its target's keychain groups (the app shares the Live Activity's persona with PersonaWidgets,
 # the push key with PersonaNotify): build 92 shipped without them (docs/operations/release.md "entitlements").
 python3 scripts/release/entitlements.py check "$ARCHIVE"
+# An iPhone app on a Mac must not strongly bind a symbol the Mac's frameworks lack (dyld stops before app code).
+python3 scripts/release/check_mac_imports.py "$APP/Persona"
 
 OPTS=$(mktemp -t export).plist
 if [ -n "$EXPORT_ONLY" ]; then

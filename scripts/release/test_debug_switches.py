@@ -95,8 +95,8 @@ def run(*args, cwd=None):
 class DebugSwitchListTest(unittest.TestCase):
     def test_the_list_is_sorted_unique_and_well_formed(self):
         self.assertEqual(ds.problems(ds.LIST.read_text(encoding="utf-8")), [],
-                         "run python3 scripts/release/debug_switches.py sort (a union merge can leave two new names "
-                         "out of order, or the same name twice)")
+                         "fix debug_switches.txt; python3 scripts/release/debug_switches.py sort puts it in order (a "
+                         "union merge can leave two new names out of order, or the same name twice)")
 
     def test_no_name_of_the_old_regex_is_dropped(self):
         self.assertEqual(len(set(SNAPSHOT)), len(SNAPSHOT))
