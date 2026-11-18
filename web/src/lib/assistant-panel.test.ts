@@ -91,6 +91,24 @@ describe("the setup a Persona chat's next message runs on", () => {
     expect(view(chat({ session: session({ model_pick: { launcher: "claude" } }) })).model).toBe("Default (recommended)");
     expect(view(chat({ session: session({ model_pick: { launcher: "codex", model: "gpt-5.5" } }) }))).toMatchObject({ engine: "codex", model: "5.5" });
   });
+  it("treats an older node's Chinese default placeholder exactly like an empty launcher model", () => {
+    const withModel = (model?: string): AssistantLaunchers => ({
+      launchers: [{ name: "claude", source: "builtin", ...(model ? { model } : {}) }],
+      def: { provider: "claude" },
+      unavailable: [],
+    });
+    const c = chat({ isMain: true, session: session({ model: undefined }) });
+    const emptyCatalog = (): ModelList => ({ list: { agent: "claude", models: [] } });
+    const view = (launchers: AssistantLaunchers) => {
+      const setup = assistantSetup(c, launchers);
+      return {
+        setup,
+        pill: assistantPillView(c, setup, launchers, emptyCatalog()),
+        panel: assistantPanel(setup, launchers, emptyCatalog),
+      };
+    };
+    expect(view(withModel("默认"))).toEqual(view(withModel()));
+  });
 });
 
 describe("the panel's providers", () => {

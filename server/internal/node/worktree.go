@@ -375,7 +375,8 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 	// A host that ran git on this computer wrote the links under the home's real path; nothing to do when the host's
 	// git (herdr's, in its own environment) or worktreeByGit already wrote the home's spelling (worktree_links.go).
 	n.portableWorktreeLinks(cmp.Or(created.Path, dest))
-	_ = n.refreshHosts(ctx, h) // the new workspace is in the layout the terminal page lists
+	n.markWorktreeShell(ctx, h, created) // an Agent's worktree: its first shell is Persona's (finished_close.go)
+	_ = n.refreshHosts(ctx, h)           // the new workspace is in the layout the terminal page lists
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: dest, Branch: branch}
 	if h.Kind() == host.Orca {
 		res.ParentWorkspaceID = parent
@@ -436,6 +437,7 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 	if err != nil {
 		return res, errors.New(gitFailure(err))
 	}
+	n.markWorktreeShell(ctx, h, created)
 	_ = n.refreshHosts(ctx, h)
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: created.Path,
 		Branch: created.Branch, ParentWorkspaceID: parent}
