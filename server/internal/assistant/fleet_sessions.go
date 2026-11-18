@@ -94,6 +94,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		}
 	}
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
+	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.fleetKeep(machine, list, connected, unsure)
 	for _, sess := range unsure {
 		go s.reconnectedTurnEnd(machine, sess)
@@ -420,6 +421,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	asks := s.fleet.asks.reader(machine, complete)
 	defer asks.done()
 	suggested := s.hubSuggestions(machine)
+	quiet := s.quietMarks(machine) // turns of task Agents that had no output (silent_turns.go)
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
@@ -460,6 +462,8 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
+		// A task Agent's turn with no output: interrupted or stopped, not done (silent_turns.go, #10187).
+		putQuietTurn(&list[i], quiet, lang)
 		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
 		list[i].TurnErrorCode = sessionTurnErrorCode(list[i])
 		if list[i].TurnError != "" {

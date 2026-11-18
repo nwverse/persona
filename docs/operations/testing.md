@@ -18,7 +18,9 @@ n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modu
 **No workflow runs automatically for a pull request, branch push, merge queue or schedule.** Before merging a PR, run the relevant
 commands in "Build and verify" locally, inspect required screenshots and run `scripts/privacy_check.py`. The `CI required` check is
 not a PR gate. A scheduler explicitly dispatches full CI on the latest `main`; a failure is fixed separately. Local PR verification
-and scheduled post-merge CI are both required operational checks, not substitutes for one another.
+and scheduled post-merge CI are both required operational checks, not substitutes for one another. The independent
+`main-verify-fix-loop` (`docs/operations/main-verification.md`) also checks new main commits for Go build/vet and repository-rule
+failures and opens a bounded repair PR; the PR semantic-review/merge watcher does not repeat those full checks or own main repairs.
 
 `ci.yml` accepts only `workflow_dispatch`. Its `full` boolean defaults to **true**, so a plain dispatch runs all seven required
 platform lanes plus the independently reported Mac lane even on unchanged `main`; path filtering cannot silently turn a default run

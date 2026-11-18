@@ -114,6 +114,7 @@ openMarketPlugin
 openMeeting
 openMeetingAudio
 openMeetingSettings
+openMeetingTapes
 openMentionMenu
 openMessagesChat
 openMessagesChats
