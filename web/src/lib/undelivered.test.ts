@@ -25,5 +25,6 @@ describe("undelivered messages (#10194)", () => {
     ] };
     expect(shownUndelivered(row, [{ client_msg_id: "a" }, {}]).map((m) => m.id)).toEqual(["b"]);
     expect(shownUndelivered(undefined, [])).toEqual([]);
+    expect(shownUndelivered(row, [], ["b"]).map((m) => m.id)).toEqual(["a"]); // still drawn as sending here
   });
 });

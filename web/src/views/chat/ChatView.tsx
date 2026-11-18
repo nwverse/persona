@@ -418,7 +418,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const queued = session?.queued ?? [];
   const shownPending = queued.length ? pending.filter((p) => !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
-  const keptUndelivered = shownUndelivered(session, tr.items);
+  // (not one this page still draws as sending: the row can come before the send's answer)
+  const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
   // a queued message taken back or deleted (QueueStrip) is not on its way any more: its sending bubble goes with it,
   // rather than showing again until the turn ends (#4342)
   // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words).

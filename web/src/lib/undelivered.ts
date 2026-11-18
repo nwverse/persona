@@ -37,10 +37,10 @@ export function showKept(mid: string, sid: string, kept: UndeliveredMessage | un
 }
 
 /** The kept messages to draw: not one the transcript has already (the row may lag behind the line). */
-export function shownUndelivered(row: Pick<Session, "undelivered"> | undefined, items: readonly Pick<Item, "client_msg_id">[]): UndeliveredMessage[] {
+export function shownUndelivered(row: Pick<Session, "undelivered"> | undefined, items: readonly Pick<Item, "client_msg_id">[], sending: readonly string[] = []): UndeliveredMessage[] {
   const list = row?.undelivered ?? [];
   if (!list.length) return list;
-  const landed = new Set(items.map((i) => i.client_msg_id).filter(Boolean));
+  const landed = new Set([...items.map((i) => i.client_msg_id).filter(Boolean), ...sending]);
   return list.filter((m) => !landed.has(m.id));
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The assistant manages its own conversations (docs/assistant/assistant.md "Managing its own conversations", the user's ask on 2026-11-01):
@@ -37,6 +38,25 @@ const (
 	relayWindow    = 10 * time.Minute // … in this long
 	relayHopMemory = time.Hour        // a hop count older than this no longer counts (the user has moved on)
 )
+
+// relayRetryable: a delivery that failed because the conversation could not take it now and may later: the outcome
+// is in doubt, its computer is away, or its node answered a failure with no code (an assistant process that did not
+// start, #10192). Anything the manager refused itself (a pick, model or connection that is gone or cannot be read) or
+// the node refused with a code is no passing failure: the sender is told, nothing is queued (#10194).
+func relayRetryable(err error) bool {
+	if relayInDoubt(err) {
+		return true
+	}
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	switch re.Code {
+	case "", "internal", CodeMachineOffline, CodeNodeClosed:
+		return !strings.Contains(re.Message, "is gone")
+	}
+	return false
+}
 
 // relayRetryGap is how long a conversation that did not take a message (relayBook.failedAt) waits for the next try.
 var relayRetryGap = 30 * time.Second
@@ -1068,8 +1088,8 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		return fmt.Sprintf("%q has messages waiting, or the user is talking in it: the message is queued (%d waiting) and goes in after them.%s", name, n, back), nil
 	}
 	if err := s.deliverRelay(ctx, c.MachineID, c.SessionID, msg); err != nil {
-		if strings.Contains(err.Error(), "is gone") || keptErrCode(err) == "conversation_deleted" || keptErrCode(err) == CodeBadRequest {
-			return "", err
+		if !relayRetryable(err) {
+			return "", err // a refusal for good (its model or connection gone, a pick that cannot be read): fail closed
 		}
 		// It could not take the message now (it did not start, its computer is away, the answer did not come): kept
 		// in its queue and tried again, under the same once_id, until it goes in (#10194). Never dropped.
