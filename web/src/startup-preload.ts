@@ -403,9 +403,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // lib/todo-triage.ts's functions; a direct import from the recorder's chunk split lib/todo-triage.ts into a chunk of its
 // own, about 700 B). 49 B in each language, measured in one environment against main d5050affc5 (ja 482,098 B to
 // 482,147 B; en 478,979 B to 479,028 B, zh-Hans 479,841 B to 479,890 B). The budget stays.
-// #10047: personal verification reuses the review chip and Needs you. Its open-task state and label must fit the
-// latest main's first-screen budget rather than retaining the allowance measured against an older main.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// #10047: personal verification reuses the review chip and Needs you. Rechecked against main 51eb4b6a47 with the
+// same dependencies: ja 482,722 B to 482,767 B (+45 B), en 479,634 B to 479,681 B, zh-Hans 480,477 B to 480,508 B.
+// Main already exceeds its 482,683 B budget by 39 B. Cover that inherited 39 B, this change's 45 B in the fullest
+// language and the existing 40 B headroom (#9847), rather than retaining the older PR's 482,971 B allowance.
+export const FIRST_SCREEN_BUDGET = 482_807;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
