@@ -318,6 +318,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
 
   fish gets the directory only. A shell that takes no assignments (csh, nu, pwsh), and Windows, get the command as before. An Agent that should have `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or `ENABLE_TOOL_SEARCH` gets it from its launcher or from Claude Code's settings, not from the pane.
   The generated `mcp.json` (the server's `env`) and the hook commands (`PERSONA_HOME=… personad hook`) name the directory as well, so they work even when the start command could not carry it.
+- **When a stdio node ends** (#10114): a node serving one hub connection over stdio (`personad node --stdio`, a hub's `kind: local` machine) stops, as it exits, a herdr server it started itself in that process when the server has no panes, so a throwaway hub leaves no server behind. A server with panes, one started by anyone else, and the resident node's (`--attach`) are left running.
 - **Only one**: in-node mutex plus `flock` on herdr configuration directory (another node for the same account); recheck socket after locking.
 - **One server per data directory** (#6482): a herdr server's panes reach the node whose `PERSONA_HOME` the server was started with, so two nodes with different data directories on one account must not share a server.
   A node whose data directory is not `~/.persona` uses a herdr session named after it (`persona-<8 hex of the directory's hash>`): socket `<herdr config dir>/sessions/<name>/herdr.sock`, its own saved workspaces and log, the same `config.toml`.
