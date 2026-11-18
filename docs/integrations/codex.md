@@ -51,6 +51,10 @@ Continuation filenames may append `_<segment UUID>` after the thread UUID. The a
 | FileChange | One `Edit` per file, input includes `diff` (unified diff, rendered by the App's `UnifiedDiffView`) |
 | McpToolCall | `mcp__<server>__<tool>` |
 | ImageView | `Read` |
+| Extension `web.search` | `WebSearch` / `WebFetch` (below) |
+| Extension `clock.sleep` | `sleep`, input `duration` (`25s`, `1m30s`) and `duration_ms`; a run of sleeps folds with the work around it |
+| SubAgentActivity (`started` / `interacted` / `completed`) | `subagent`, input `name` (the last segment of `agent_path`), `event`, `agent_path`, `agent_thread_id`, and on `started` the `model` and `reasoning_effort` Codex gave the subagent; the activity line follows `event` (dispatching, messaging, finished) |
+| CollabAgentToolCall | `wait_agent` for `wait`, otherwise the record's `tool`; input `receiver_thread_ids` / `receiver_agents`, result `agents_states`, `status: failed` marks failure; the `wait` records seen so far carry none of the three, so a wait shows without a subject or a count |
 | ContextCompaction | "Context compacted" notice |
 | `event_msg/turn_aborted` | "Interrupted" notice |
 | `turn_context` / `token_count` | Model, approval policy, context tokens |
@@ -63,7 +67,7 @@ strip `<in-app-browser-context>` (browser state automatically attached by the Co
 `<environment_context>`, `<INSTRUCTIONS>`, `<skill>`, `<turn_aborted>`, `<subagent_notification>`, `<realtime_delegation>`,
 and `<codex_internal_context>` appear only in response_item (model input), not in the chat.
 
-`response_item` is the model wire format for the same content and is skipped. Extension `web.search` displays as `WebSearch` (search, query input) / `WebFetch` (`action.type=openPage`, URL input), with one "title  URL" per result. SubAgentActivity, other Extensions (image generation), and CollabAgentToolCall remain recognizable event notices; the original session history is still authoritative for full content.
+`response_item` is the model wire format for the same content and is skipped. Extension `web.search` displays as `WebSearch` (search, query input) / `WebFetch` (`action.type=openPage`, URL input), with one "title  URL" per result. A coordinating chat's `clock.sleep`, SubAgentActivity and CollabAgentToolCall are finished tool calls, not notices (#10436): the apps draw them as ordinary calls ("Call subagent · review_api") and they fold into the turn's work, so a chat that delegates shows its prompt, one folded work row and its reply rather than a line per sleep or subagent ping. The subagents themselves are their own threads, listed under the chat. Other Extensions (image generation) and item types Persona does not know remain recognizable event notices; the original session history is still authoritative for full content.
 
 The Persona assistant ("Persona" tab) can also use Codex launchers through `codex app-server`; see `docs/assistant/assistant.md` ("Codex").
 
@@ -273,7 +277,9 @@ The node joins as another bus client (`server/internal/node/codex_desktop.go`):
 
 `node/codexapp_new.go`. New Agent with the launcher `codex-app` starts the chat in the Codex App: it is in the App's sidebar (in the project its folder is in, or among the chats in no project), and the App runs it from its first message on. No client needs a release: it is a launcher like a runtime's, and needs no terminal engine (the start goes to the App before the engine check).
 
-- **Offered:** `launchers.list` has `{name: "codex-app", source: "codex_app", agent: "codex"}` when the App runs for the node's Codex home (its bus socket is there) and a Codex CLI is found: the one the App bundles (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` on a Mac, the same version as the App's own app-server), else one on PATH or where Codex installs. A login-shell launcher of that name runs instead.
+- **Offered:** `launchers.list` has `{name: "codex-app", source: "codex_app", agent: "codex"}` when the App runs for the node's Codex home (its bus socket is there) and a Codex CLI is found: the one the App bundles (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` on a Mac, the same version as the App's own app-server), else one on PATH or where Codex installs. A login-shell launcher of that name runs instead. It is only an explicit pick: where a
+  launcher is chosen for a start (a default the computer lacks), plain `codex` and the machine's other launchers come first and
+  `codex-app` is never chosen.
 - **Why this way:** `codex://new` only fills the App's composer. The App's sidebar lists any chat in its Codex home from an interactive source (`thread/list` with no `sourceKinds`: cli, vscode, …; no originator filter locally), `codex://threads/<id>` opens one, and a follower runs a turn in one it has loaded (above).
 - **The start:**
   1. The App's codex starts the chat with no model request: `codex app-server` over stdio in the folder (`CODEX_HOME` the node's), `initialize` as client `persona_codex_app`, `thread/start {cwd}`, then `thread/name/set` with the title, which writes the rollout (Codex writes a chat at its first turn otherwise; a chat with no message is not in the App's sidebar), and the app-server ends. It resumes nothing. The title is the first line of the first message (or the start's `name_hint`), spaces folded, at most 40 characters.
@@ -309,7 +315,11 @@ Since 2026-11-02, choosing a Codex launcher in the phone's "New Chat" starts a n
 Since 2026-11-12 the message is optional: with none, Codex opens in its tab and waits for one ("Starting without a first message" below).
 The entry point is the same as Claude's (machine, directory, launcher); subsequent behavior uses "Sessions on the daemon" above (bare `codex` 0.163 joins automatically) or the terminal route below.
 
-- **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
+- **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. On a Mac where the login shell finds
+  no `codex` and has no alias or function of that name, the CLI the ChatGPT app bundles is that launcher, run by its absolute path
+  (`bundledCodexCLI` in `node/codexapp_new.go`, #10437); its base name is still `codex`, so herdr recognizes the pane, `codex-start`
+  runs it and the effort check treats it as plain `codex`. `agentExecutable("codex")` finds it last too. Without this, such a Mac
+  offered only `codex-app`, so its Codex Agents ran as Codex App chats outside herdr on the App's model. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
   They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
   under other names (rejected with an explanation, `codex_launcher`), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
