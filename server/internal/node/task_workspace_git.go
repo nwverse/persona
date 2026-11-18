@@ -405,9 +405,24 @@ func (n *Node) workspaceSourceAllowed(input repository.PreparationRepository) bo
 	if transport == "" || len(transport) > 4096 || strings.ContainsFunc(transport, unicode.IsControl) {
 		return false
 	}
-	identity, err := repository.Parse(input.SourceSnapshot.Identity.CanonicalURL, input.SourceSnapshot.Identity.Provider)
-	if err != nil || identity != input.SourceSnapshot.Identity {
-		return false
+	source := input.SourceSnapshot.Identity
+	if repository.IsExtensionProvider(source.Provider) {
+		// The Manager resolved the provider before freezing this source. Recheck its shape locally; preparation
+		// does not need the provider to remain installed and never calls it.
+		u, err := url.Parse(source.InstanceURL)
+		if err != nil || u.Hostname() == "" {
+			return false
+		}
+		checked, err := repository.CheckParseAnswer(repository.ProviderInfo{ID: source.Provider, Hosts: []string{u.Hostname()}},
+			repository.ParseAnswer{InstanceURL: source.InstanceURL, Path: source.Path, CanonicalURL: source.CanonicalURL})
+		if err != nil || checked.Identity != source {
+			return false
+		}
+	} else {
+		identity, err := repository.Parse(source.CanonicalURL, source.Provider)
+		if err != nil || identity != source {
+			return false
+		}
 	}
 	local := transport
 	if strings.HasPrefix(transport, "file://") {
@@ -420,6 +435,6 @@ func (n *Node) workspaceSourceAllowed(input repository.PreparationRepository) bo
 	if filepath.IsAbs(local) {
 		return n.offLimits(local) == nil && workspaceNoLinks(local) == nil
 	}
-	_, err = repository.CloneTransport(transport, input.SourceSnapshot.Identity)
+	_, err := repository.CloneTransport(transport, input.SourceSnapshot.Identity)
 	return err == nil
 }

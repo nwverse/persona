@@ -17,6 +17,7 @@ type CatalogEntry = repositorywire.CatalogEntry
 type Catalog = repositorywire.Catalog
 type SourceSnapshot = repositorywire.SourceSnapshot
 type LinkInput = repositorywire.LinkInput
+type ResolvedLink = repositorywire.ResolvedLink
 type TaskLink = repositorywire.TaskLink
 type TaskInput = repositorywire.TaskInput
 type TaskRepository = repositorywire.TaskRepository

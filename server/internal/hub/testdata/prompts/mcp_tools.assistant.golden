@@ -1952,7 +1952,7 @@
   },
   {
     "name": "repository_add",
-    "description": "On the user's request, add a reference for this assistant using Settings \u003e Repositories URLs/metadata and guarded existence checks. Refuse duplicates, concurrent changes and URL credentials. A permission card shows normalized details; only the user's own approval saves. Returns the saved binding with id and verified_at. Reference only, not authorization or an allowlist: no clone, source fetch, permission grant, machine or local checkout. If saving is uncertain or its response lost, inspect repositories_list/repository_get before retrying. Undo in Settings \u003e Repositories.",
+    "description": "On the user's request, add a reference for this assistant using Settings \u003e Repositories URLs/metadata and existence checks through its provider. Refuse duplicates, concurrent changes and URL credentials. A permission card shows normalized details; only the user's own approval saves. Returns the saved binding with id and verified_at. Reference only, not authorization or an allowlist: no clone, source fetch, permission grant, machine or local checkout. If saving is uncertain or its response lost, inspect repositories_list/repository_get before retrying. Undo in Settings \u003e Repositories.",
     "input_schema": {
       "type": "object",
       "additionalProperties": false,
@@ -1964,7 +1964,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 2048,
-          "description": "GitHub or GitLab repository URL, repository page, or git SSH remote without credentials."
+          "description": "Repository URL, repository page, or git SSH remote without credentials."
         },
         "provider": {
           "type": "string",
@@ -1972,7 +1972,7 @@
             "github",
             "gitlab"
           ],
-          "description": "Required for a self-hosted instance; public GitHub/GitLab is detected from its host."
+          "description": "Required for a self-hosted GitHub/GitLab; other providers are detected from the host."
         },
         "name": {
           "type": "string",
@@ -2227,7 +2227,7 @@
   },
   {
     "name": "conversation_send",
-    "description": "Message another Persona conversation. It waits for a running turn or 2 minutes of user quiet. Marked as from this one; replies use conversation_send. A few requests per user message (not for main; a scheduled wake-up resets), a few messages per pair per ten minutes; a first reply to a request adds no hop. Don't reply just to acknowledge. Policy refusals say why: follow them, don't retry. Owner-verbatim words to main stay allowed: start with them. Handing on a user request: set quote.",
+    "description": "Message another conversation. It waits for a running turn or 2 min of user quiet. Marked as from this one; replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none); long back-and-forth is cut. Past the rate it queues: the result says when, no resend. Don't reply just to acknowledge. Follow policy refusals; don't retry. Owner-verbatim words to main stay allowed: start with them. Handing on a user request: set quote (free once).",
     "input_schema": {
       "type": "object",
       "required": [
