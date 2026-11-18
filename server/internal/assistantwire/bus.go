@@ -301,6 +301,9 @@ var Routes = []string{
 	"DELETE /api/v1/todos/{id}/thread",
 	"PUT /api/v1/todos/{id}/seen", // Got it on a Just finished to-do, and its Undo (todo_seen.go, #5707)
 	"DELETE /api/v1/todos/{id}/seen",
+	"PUT /api/v1/todos/{id}/restored", // Restore on an inactive to-do, and Someday and back (todo_marks.go, #10226)
+	"PUT /api/v1/todos/{id}/someday",
+	"DELETE /api/v1/todos/{id}/someday",
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
