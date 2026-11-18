@@ -343,6 +343,9 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 		proto.Item{ID: "a1", Role: "assistant", Kind: proto.KindText, Text: "API Error: 529 quota unavailable"})
 	f.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking, Assistant: true,
 		Cwd: "/home/me/.persona/assistant"})
+	turnSent := make(chan int, 2)
+	watching := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	sends := 0
 	f.onAssistantSend = func(f *fakeHub, _ map[string]any) {
 		for i := range f.sessions["server"] {
 			if f.sessions["server"][i].SessionID == "s1" {
@@ -350,6 +353,31 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 				f.sessions["server"][i].TurnError = ""
 			}
 		}
+		sends++
+		turnSent <- sends
+	}
+	if f.nodes == nil {
+		f.nodes = map[string]nodeAnswer{}
+	}
+	f.nodes[DeviceSessionGet] = func(machine string, params json.RawMessage) (any, error) {
+		var asked struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = json.Unmarshal(params, &asked)
+		for _, sess := range f.sessions[machine] {
+			if sess.SessionID != asked.SessionID {
+				continue
+			}
+			if sess.SessionID == "s1" && sess.State == proto.StateWorking && sends >= 1 && sends <= len(watching) {
+				select {
+				case <-watching[sends-1]:
+				default:
+					close(watching[sends-1])
+				}
+			}
+			return map[string]any{"session": sess, "ok": true}, nil
+		}
+		return map[string]any{"ok": false}, nil
 	}
 	sess, err := runNow(t, s, "morning")
 	if err != nil {
@@ -360,16 +388,20 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 	}
 	go func() {
 		for step := 1; step <= 2; step++ {
-			for deadline := time.Now().Add(5 * time.Second); f.sent() < step && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			select {
+			case <-turnSent:
+			case <-time.After(5 * time.Second):
+				return
 			}
-			if f.sent() < step {
+			select {
+			case <-watching[step-1]:
+			case <-time.After(5 * time.Second):
 				return
 			}
 			if step == 2 && succeedRetry {
 				f.setItems(proto.Item{ID: "u2", Role: "user", Kind: proto.KindText, Text: "⏰ Morning briefing"},
 					proto.Item{ID: "a2", Role: "assistant", Kind: proto.KindText, Text: briefSummary})
 			}
-			time.Sleep(30 * time.Millisecond)
 			f.mu.Lock()
 			for i := range f.sessions["server"] {
 				if f.sessions["server"][i].SessionID == "s1" {
@@ -388,6 +420,12 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 		if f.sent() < 2 {
 			return false
 		}
+		s.sched.mu.Lock()
+		watchDone := len(s.sched.stateDrafts) == 0
+		s.sched.mu.Unlock()
+		if !watchDone {
+			return false
+		}
 		sc := s.loadSchedule(context.Background())
 		sc.mu.Lock()
 		defer sc.mu.Unlock()
@@ -401,7 +439,6 @@ func briefRetryRun(t *testing.T, succeedRetry bool) (*Service, *fakeHub, *briefF
 		}
 		return false
 	})
-	time.Sleep(60 * time.Millisecond) // let a duplicate retry notification, if any, reach the fake hub
 	sc := s.loadSchedule(context.Background())
 	sc.mu.Lock()
 	runs := append([]ScheduleRun(nil), sc.runs...)
