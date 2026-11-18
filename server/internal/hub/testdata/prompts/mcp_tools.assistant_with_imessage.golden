@@ -2099,18 +2099,21 @@
   },
   {
     "name": "conversation_rename",
-    "description": "Rename a Persona conversation. Titles read 「MMDD | 类型 | 主题」: give `kind` and `topic` and the hub puts the day the conversation started in front. A title the user gave stays: renaming one fails unless the user asked for this rename in so many words (then pass `user_asked`). The main conversation has no title to change.",
+    "description": "Rename: direction name via main-only direction_name (no date/kind); ordinary kind/topic becomes MMDD | kind | topic using its start date. User-chosen names/titles require user_asked. Main has no title.",
     "input_schema": {
       "type": "object",
       "required": [
-        "id",
-        "kind",
-        "topic"
+        "id"
       ],
       "properties": {
         "id": {
           "type": "string",
-          "description": "full id or its first 8 characters; this conversation's own id renames it"
+          "description": "conversation id or first 8 characters"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "direction: plain project-supervisor name"
         },
         "kind": {
           "type": "string",
@@ -2125,15 +2128,16 @@
             "研究",
             "评审",
             "定时"
-          ]
+          ],
+          "description": "ordinary conversation kind"
         },
         "topic": {
           "type": "string",
-          "description": "what it is about, at most 14 characters"
+          "description": "ordinary topic, at most 14 characters"
         },
         "user_asked": {
           "type": "boolean",
-          "description": "the user asked for this rename; needed to replace a title they gave"
+          "description": "explicit user request to replace their title/name"
         }
       }
     }
@@ -2223,7 +2227,7 @@
   },
   {
     "name": "conversation_send",
-    "description": "Message another Persona conversation. It waits for a running turn or 2 minutes of user quiet. Marked as from this one; replies use conversation_send. A few requests per user message (not for main; a scheduled wake-up resets), a few messages per pair per ten minutes; a first reply to a request adds no hop. Don't reply just to acknowledge. Policy refusals say why: follow them, don't retry. Owner-verbatim words to main stay allowed: start with them. Handing on a user request: set quote.",
+    "description": "Message another conversation. It waits for a running turn or 2 min of user quiet. Marked as from this one; replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none); long back-and-forth is cut. Past the rate it queues: the result says when, no resend. Don't reply just to acknowledge. Follow policy refusals; don't retry. Owner-verbatim words to main stay allowed: start with them. Handing on a user request: set quote (free once).",
     "input_schema": {
       "type": "object",
       "required": [
