@@ -40,6 +40,10 @@ type PlanTask struct {
 	Title   string `json:"title"`
 	Prompt  string `json:"prompt"`
 	Machine string `json:"machine"`
+	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
+	InboxItem string `json:"inbox_item,omitempty"`
+	// InboxHandoff is the hub-owned operation validated when the plan was made.
+	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
 	Cwd           string `json:"cwd"`
@@ -283,8 +287,8 @@ type tasksState struct {
 	retrying map[string]*taskStart
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
 	outcomes map[string]time.Time
-	// reusing: the todos a started plan took over (PlanTask.ReuseTodo) whose agent is not linked yet, so that a second
-	// plan cannot take the same todo in that gap (takeTodoForTask).
+	// reusing holds taken-over todos and newly created Inbox tasks until their first Agent is linked or failed.
+	// Another plan cannot take a task while its source binding or first start is still being admitted.
 	reusing map[string]bool
 	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome; the tests wait on them).
 	outcomeRuns sync.WaitGroup

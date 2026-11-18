@@ -396,17 +396,30 @@ func (n *Node) liveClaudeOf(pid int) (claudeProc, bool) {
 // devices manager strips every such key a caller sent (devices/owner_input.go); this keeps a node from honouring a
 // variant that reached it some other way (#9607).
 func ownerInputExact(params json.RawMessage) bool {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(params, &fields) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(params))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return false
 	}
-	n := 0
-	for k := range fields {
-		if strings.EqualFold(k, "owner_input") {
-			n++
+	owner := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		var value json.RawMessage
+		if err != nil || !ok || decoder.Decode(&value) != nil {
+			return false
+		}
+		if strings.EqualFold(key, "owner_input") {
+			if owner || key != "owner_input" || string(value) != "true" {
+				return false
+			}
+			owner = true
 		}
 	}
-	return n == 1 && string(fields["owner_input"]) == "true"
+	if _, err := decoder.Token(); err != nil {
+		return false
+	}
+	_, err := decoder.Token()
+	return owner && err == io.EOF
 }
 
 // ownerDelivery is where sendOutside says how the owner's message went in, for session.send's answer.

@@ -648,6 +648,9 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		snapshot.peer, snapshot.revision = p, m.sessionRevision
 		m.mu.Unlock()
 	}
+	if nodeHas(info, nodeproto.OwnerControls) {
+		method = ownerControlMethod(ctx, method)
+	}
 	return p.Call(ctx, method, params, out)
 }
 
@@ -872,6 +875,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_unavailable")
 		}
 		return // the manager's alone
+	case proto.EventModeRestart: // what became of a queued restart into a mode (mode_changes.go)
+		m.onModeRestart(params)
+		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
 	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
@@ -947,7 +953,7 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"sessions": out}, nil
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
-		return m.d.usageBackfillStatus(ctx, m.cfg.ID, time.Now())
+		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":
 		sctx, cancel := m.storeCtx()
 		defer cancel()

@@ -16,6 +16,7 @@ After sign-in, **Settings › General › This computer** opens that same local 
 
 - The desktop loads only the configured hub origin (including its reverse-proxy prefix). Other HTTP/HTTPS links open in the system browser. Authentication, service-worker permission actions, notification text/tags/deduplication/withdrawal, quiet hours and the Needs-you count stay in the existing web code.
 - Native notification clicks return to the existing SPA route. Native display failure keeps the browser fallback. Signing out clears the previous account's native notices.
+- `persona://` links open a page of the route table in the window (`docs/protocol/deep-links.md`, #9931): `persona://open<path>` (the hub's web path after `persona://open`) and the first form `persona://open?route=<path>` go through the same route as a notification click, with only the query keys a page reads (no `hub`, no token). The web app opens the path or says it is no page. A port, a user name, a fragment, or a route that does not start with a single `/` or would leave the hub is refused (`src/urls.ts` `parseDeepLink`, checked against `spec/fixtures/deep-links/cases.json`). The packaged app lists the scheme in `electron-builder.yml` `protocols`, so macOS hands it these links (its Info.plist `CFBundleURLTypes`); Windows registers it at run time. Pairing links (`persona://pair`, `persona://link`) are data as before, never automatic pairing. A route that comes before the page listens for it (the link that started the app, a notification or island click while the page reloads) waits in the main process until the page's app calls `onOpenNotification`; only the latest one waits (`src/page-routes.ts`, #10282).
 - `register_desktop` uses the existing authenticated web socket, never a token in the Electron main process. An active, unlocked, recently used desktop with notifications may register. Locking, idling or disabling notifications withdraws it. New hubs use `unregister_desktop`; older hubs use socket-close withdrawal and reconnect only when active and notifying again. Resume alone does not mean unlocked; only the actual unlock event restores presence.
 - Standard platform TLS validation is used. There is no broad certificate bypass and no unverified saved-pin shortcut.
 
@@ -59,13 +60,17 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
 - **What it shows**: closed, a black pill around the notch: the most urgent category with its symbol and count on the left
   (Needs you, then Working, then Unread), the next one on the right, the iPhone's preset A (`IslandCell.sides`), in the
   iPhone island's colors. With the pointer over it, it opens downward into the agents that need you, then the working
-  ones (at most five, newest first), each with its title, state and the line its Agents-list row shows. A click shows the
-  desktop window at that session through the notification-click path. With nothing to count, it is hidden.
-- **Data**: the web works it out where the Dock badge's count comes from (`web/src/lib/desktop-island.ts`, a leaf beside
-  `AttentionSignals`) and sends it with `setIslandState` when it changes, words already in the user's language. The shell
-  keeps the latest even while the island is off, so turning it on shows the current counts at once. No second
-  connection to the hub. The counts are the whole hub's, so the rows cover every agent too: on a hub with the paged
-  Agents list, which pushes only its first page, they come from the complete list the pins and grouping read
+  ones, then the ones that finished unseen (at most five; in each state the one that entered it last first, by
+  `state_since`, so a working agent's updates do not move its row), each with its title, state and the line its
+  Agents-list row shows. A click shows the desktop window at that session through the notification-click path. With
+  nothing to count, it is hidden.
+- **Data**: the web works it out from the Agents list (`web/src/lib/desktop-island.ts`, a leaf beside
+  `AttentionSignals`) and sends it with `setIslandState` when it changes, words already in the user's language. The
+  counts and the rows come from the same list, so the pill counts no agent its list cannot show: not the Persona
+  assistant's conversations, which the Agents list leaves out, and no count ahead of its row. The shell keeps the latest
+  even while the island is off, so turning it on shows the current counts at once. No second connection to the hub.
+  The counts are the whole hub's, so the rows cover every agent too: on a hub with the paged Agents list, which pushes
+  only its first page, they come from the complete list the pins and grouping read
   (`useFullAgentSessions`), and only while the island is on, as the web learns from `getIsland` at start and from the
   Settings switch; the pushed page stands in until it has loaded. A row's line finds its card as the Agents list does,
   including a question from a child session folded under it (`sessionCard`). Signing out, or a credential that stops
@@ -210,6 +215,8 @@ The exported helpers in `desktop/scripts/update-test-receipts.mjs` read `app-upd
 The Desktop workflow runs it on all three systems (`update` job in `.github/workflows/desktop-test.yml`) and uploads `result.json` and the app's log.
 
 Not proven by this test: a signed build updating from a published GitHub Release, the macOS install, notarization, and the tray entries as drawn on screen (their text and order are unit-tested; no screenshot of a native menu is taken).
+
+On macOS, `desktop/src/app-menu.ts` reproduces Electron's default application menu with native roles and the same order; only About, Hide and Quit take labels from `desktop/src/locales` (Quit reuses `tray_quit`), unchanged role labels stay with Electron, and the About panel is explicitly named Persona. This does not change `app.name` or the profile folder. `desktop/test/app-menu.test.ts` checks all three languages, the complete item/role order and the macOS-only decision; a development run compares `Menu.getApplicationMenu()` before and after. Like the tray entries, the native application menu is not screenshotted.
 
 # Acceptance evidence
 

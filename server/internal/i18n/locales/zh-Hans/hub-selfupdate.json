@@ -1,5 +1,6 @@
 {
   "err_no_update": "没有更新的版本",
+  "err_beta_channel": "Beta 更新需要官方 GitHub 发布源和有效的 Beta 清单；当前更新来源保持不变",
   "err_not_release": "这个 hub 不能自己更新",
   "err_busy": "助手和 Agent 一直在忙，这次没更新，稍后再试",
   "err_auto_off": "自动更新已关",

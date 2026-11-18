@@ -54,8 +54,11 @@ export function trimURL(url: string): string {
 // end of its quote or list item, or of the text while streaming), indented code (4 spaces after a blank line, outside
 // lists) and code spans (a run of n backticks up to the next run of n). Returns text and code alternately, so odd
 // indices are code: left alone by normalizeMath and linkify.
-const QUOTES = /^(?:[ \t]*>[ \t]?)*/;
-const FENCE = /^((?:[ \t]*>[ \t]?)*)([ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*)(`{3,}|~{3,})/;
+// Quote markers are each taken with the spaces before them, then one space after the last. Written as
+// (?:[ \t]*>[ \t]?)*, a space between two markers fits either way, and a deeply quoted line that is no fence tried every
+// split before failing (24 markers took half a second, each one more doubled it; #9795).
+const QUOTES = /^(?:[ \t]*>)*(?:(?<=>)[ \t])?/;
+const FENCE = /^((?:[ \t]*>)*(?:(?<=>)[ \t])?)([ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*)(`{3,}|~{3,})/;
 const LIST_ITEM = /^(?:[ \t]*>)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]/;
 const INDENTED = /^( {4}|\t)/;
 
@@ -148,7 +151,7 @@ export function splitCode(md: string): string[] {
 
 // What starts a line inside a quote or list item, and what a new line needs to stay in it: quote markers are kept,
 // a list marker becomes spaces.
-const PREFIX = /^(?:[ \t]*>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?/;
+const PREFIX = /^(?:[ \t]*>)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?/;
 const continuation = (prefix: string) => prefix.replace(/[-*+]|\d{1,9}[.)]/, (m) => " ".repeat(m.length));
 
 // Bare URLs and <autolinks>: a $ in them (https://…/odata/$metadata) is part of the address, not math.
@@ -186,7 +189,7 @@ export function normalizeMath(md: string): string {
         return u.includes("$") ? `${pre}${hold(u, true)}${url.slice(u.length)}` : m;
       })
       .replace(
-        /^((?:[ \t]*>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)\$\$([^$\n]+)\$\$[ \t]*$/gm,
+        /^((?:[ \t]*>)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)\$\$([^$\n]+)\$\$[ \t]*$/gm, // quote markers as in QUOTES
         (m, pre: string, tex: string, off: number) =>
           off === 0 && midLine ? m : `${pre}$$\n${continuation(pre)}${tex.trim()}\n${continuation(pre)}$$`,
       )
@@ -331,10 +334,11 @@ export function linkify(md: string, { math = false }: { math?: boolean } = {}): 
     .join("");
 }
 
-// persona://session links survive (they move to that conversation); everything else as react-markdown decides
-// (javascript: and other apps' schemes are dropped).
+// App links to a page of Persona's survive (persona://open<path>, persona://session|task|kb…: they open that page,
+// docs/protocol/deep-links.md); everything else as react-markdown decides (javascript: and other apps' schemes are dropped).
 export function markdownUrl(url: string): string {
-  return linkRoute(url).kind === "session" ? url : defaultUrlTransform(url);
+  const kind = linkRoute(url).kind;
+  return kind === "session" || kind === "app" ? url : defaultUrlTransform(url);
 }
 
 // A link opens where it belongs (lib/links.ts): Feishu documents in the side panel (read as the chat's manager),

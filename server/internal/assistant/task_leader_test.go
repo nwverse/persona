@@ -1266,7 +1266,6 @@ func TestLeaderlessWorkerWithNobodyAboveIsCancelled(t *testing.T) {
 func TestLeaderResumeFailureEscalatesAndRetries(t *testing.T) {
 	s, f := newQuietService(t)
 	s.leaderResume = 40 * time.Millisecond
-	ctx := context.Background()
 	startTaskLeader(t, s, f)
 	w := planWorker(t, s, f, nil)
 	lead, _, _ := s.leaderSupervisor(todoNow(s, w.ID))
@@ -1278,9 +1277,7 @@ func TestLeaderResumeFailureEscalatesAndRetries(t *testing.T) {
 	f.mu.Unlock()
 	kept := []superviseSignal{{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了"}}
 	text := prompts.RenderWorkerSupervise([]prompts.SuperviseEntry{{ID: w.ID, Title: w.Title, Kind: "review"}})
-	if err := s.sendToLeader(ctx, lead, text, kept, nil); err != nil {
-		t.Fatalf("the resume is scheduled, not failed synchronously: %v", err)
-	}
+	s.resumeLeaderForSupervision(lead, text, kept, func(context.Context, error) {}, nil)
 	waitFor(t, "the failed resume to go up", func() bool { return len(f.notices()) >= 1 })
 	n := f.notices()[0]
 	if !strings.Contains(n, "改登录页") || !strings.Contains(n, w.ID) || !strings.Contains(n, "联系不上") || strings.Contains(n, "判断要用户决定") {
@@ -1311,9 +1308,7 @@ func TestUndeliveredMessageWithNobodyAboveIsRetried(t *testing.T) {
 	f.mu.Unlock()
 	kept := []superviseSignal{{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了"}}
 	const text = "Persona · supervision: undelivered"
-	if err := s.sendToLeader(ctx, lead, text, kept, nil); err != nil {
-		t.Fatal(err)
-	}
+	s.resumeLeaderForSupervision(lead, text, kept, func(context.Context, error) {}, nil)
 	time.AfterFunc(150*time.Millisecond, func() { f.mu.Lock(); f.failSend = nil; f.mu.Unlock() })
 	waitFor(t, "the undelivered message to reach the leader after a few tries", func() bool {
 		return slices.Contains(deliveredTo(f, "s1"), text)
@@ -1578,6 +1573,13 @@ func TestLeaderSupervisionStatesNoClass(t *testing.T) {
 // A retry that gets an unconfirmed supervision message to the leader records it as a digest would: its turn is told
 // then, so a manager restarted afterwards does not deliver it again (#9607).
 func TestLeaderRetryDeliveredMarksTheTurnToldAndDeduplicatesSignals(t *testing.T) {
+	for _, status := range []string{proto.StatusIdle, proto.StatusOffline} {
+		t.Run(status, func(t *testing.T) { checkLeaderRetryDelivery(t, status) })
+	}
+}
+
+func checkLeaderRetryDelivery(t *testing.T, status string) {
+	t.Helper()
 	s, f := newQuietService(t)
 	s.leaderResume = 50 * time.Millisecond
 	ctx := context.Background()
@@ -1608,6 +1610,8 @@ func TestLeaderRetryDeliveredMarksTheTurnToldAndDeduplicatesSignals(t *testing.T
 	if !ok {
 		t.Fatal("no leader")
 	}
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: status, UpdatedAt: time.Now()})
 	f.mu.Lock()
 	f.failSend = &rpc.Error{Code: "peer_unconfirmed", Message: "not taken", Data: json.RawMessage(`{"delivered":"unknown"}`)}
 	f.mu.Unlock()
@@ -1620,6 +1624,7 @@ func TestLeaderRetryDeliveredMarksTheTurnToldAndDeduplicatesSignals(t *testing.T
 	if first || toldBefore {
 		t.Fatalf("the unconfirmed send: delivered %v, told %v", first, toldBefore)
 	}
+	waitFor(t, "the first attempt to escalate", func() bool { return leaderEscalations(f) > 0 })
 	f.mu.Lock()
 	f.failSend = nil
 	f.mu.Unlock()

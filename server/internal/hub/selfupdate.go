@@ -759,6 +759,16 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 	v.Development = &developmentView{Configured: u.developmentConfig() != nil, Branch: "main", CurrentCommit: u.h.build.Commit, CurrentUpdatedAt: u.currentUpdatedAtLocked()}
 	if u.developmentLocked() {
 		v.Source, v.CanUpdate, v.Auto, v.AutoNotice = "web-dev", u.developmentAvailable(), u.settings.DevelopmentAuto, false
+	} else {
+		v.Source = u.settings.Source
+		if u.betaLocked() {
+			selected, err := u.releaseSource()
+			if err == nil {
+				v.UpdateURL = selected.url
+			} else {
+				v.UpdateURL, v.UpdateFrom, v.CanUpdate, v.Auto = "", "", false, false
+			}
+		}
 	}
 	if v.Busy == nil {
 		v.Busy = []busyItem{}

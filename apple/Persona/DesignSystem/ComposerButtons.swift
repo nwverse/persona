@@ -77,12 +77,13 @@ private struct WritingMicPress: ViewModifier {
 extension Dictation {
     /// A mic's tap: a second one ends it; otherwise what is heard goes after what `text` holds, and why it could not
     /// start shows as a toast. The draft and `hints` tell it the language spoken (`DictationLanguage`).
-    func toggle(into text: Binding<String>, hints: () -> [String] = { [] }) {
+    func toggle(into text: Binding<String>, hints: () -> [String] = { [] }, onFailure: (() -> Void)? = nil) {
         if isListening { stop(); return }
         let typed = text.wrappedValue
         let base = typed.isEmpty || typed.last?.isWhitespace == true ? typed : typed + " "
         start(hints: [typed] + hints(), update: { heard in text.wrappedValue = base + heard }) { problem in
             AppModel.shared.toast = Toast(problem, style: .error)
+            onFailure?()
         }
     }
 }
@@ -158,16 +159,18 @@ extension ComposerRoundButton {
 }
 
 /// Voice Chat from the composer (docs/assistant/voice.md 6.1, `Theme.Icon.voiceChannel`): in send's place a round ink button like
-/// send; beside stop (the agent works) a plain icon like dictation's.
+/// send; beside stop (the agent works) a plain icon like dictation's. `label`: what a tap does, for VoiceOver (#9887: the
+/// conversation's phone icon calls it on the iPhone or shows its call, `VoiceEntry.iconLabel`); Voice Chat by default.
 struct ComposerVoiceButton: View {
     var round: Bool
     var id = "composer-voice"
+    var label = String(localized: "Voice Chat")
     var action: () -> Void
     @Environment(\.buiTheme) private var theme
 
     var body: some View {
         if round {
-            ComposerRoundButton(symbol: Theme.Icon.voiceChannel, label: String(localized: "Voice Chat"), id: id, action: action)
+            ComposerRoundButton(symbol: Theme.Icon.voiceChannel, label: label, id: id, action: action)
         } else {
             Button(action: action) {
                 ThemedIcon(Theme.Icon.voiceChannel)
@@ -178,7 +181,7 @@ struct ComposerVoiceButton: View {
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Voice Chat")
+            .accessibilityLabel(label)
             .accessibilityIdentifier(id)
             .shellScaled()
             .transition(.scale.combined(with: .opacity))

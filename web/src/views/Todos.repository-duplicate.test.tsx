@@ -21,6 +21,7 @@ vi.hoisted(() => {
 });
 
 const api = vi.fn(async (_path: string, _init?: unknown): Promise<unknown> => ({}));
+const fixture = vi.hoisted(() => ({ extension: false }));
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   api: (path: string, init?: unknown) => api(path, init),
@@ -40,8 +41,17 @@ vi.mock("../ui/TaskRepositoryBindingsEditor", async () => {
     React.useEffect(() => {
       if (once.current) return;
       once.current = true;
-      onCatalog?.(catalogData);
-      onChange(duplicate);
+      if (fixture.extension) {
+        const source = { provider: "ext:acme-code/acme", instance_url: "https://code.acme.test", path: "team/app", canonical_url: "https://code.acme.test/team/app" };
+        onCatalog?.({ ...catalogData, repositories: [{ ...catalogData.repositories[0], ...source }] });
+        onChange({ ...duplicate, repositories: [{ ...duplicate.repositories[0], links: [
+          { url: source.canonical_url + "/reviews/13", title: "First review" },
+          { url: source.canonical_url + "/issues/14", title: "Second issue" },
+        ] }] });
+      } else {
+        onCatalog?.(catalogData);
+        onChange(duplicate);
+      }
     }, []);
     return React.createElement("div", { "data-duplicate-draft": "" },
       React.createElement("span", null, JSON.stringify(value?.repositories[0].links ?? [])),
@@ -71,6 +81,7 @@ const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unk
 const before = { ...getState() };
 
 beforeEach(async () => {
+  fixture.extension = false;
   await initI18n("en");
   api.mockReset();
   api.mockImplementation(async (path, init) => {
@@ -101,6 +112,29 @@ const write = async (el: HTMLInputElement | HTMLTextAreaElement, value: string) 
 });
 
 describe("New Todo with a duplicate repository-link draft", () => {
+  it("creates once with two distinct pending extension URLs and retains the title", async () => {
+    fixture.extension = true;
+    await act(async () => button(t("todos.new_todo"))!.click());
+    await flush();
+    await write(dialog()!.querySelector<HTMLInputElement>("input[type=text]")!, "Pack");
+    await flush();
+    expect(button(t("todos.create"))!.disabled).toBe(false);
+    const form = dialog()!.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(posts()).toEqual([{
+      title: "Pack", repository_bindings: { catalog_revision: 1, repositories: [{
+        repo_id: "web", requested_ref: { kind: "default" }, links: [
+          { url: "https://code.acme.test/team/app/reviews/13", title: "First review" },
+          { url: "https://code.acme.test/team/app/issues/14", title: "Second issue" },
+        ],
+      }] },
+    }]);
+  });
+
   it("shows the normalized duplicate, guards every submit path and creates once after correction", async () => {
     await act(async () => button(t("todos.new_todo"))!.click());
     await flush();

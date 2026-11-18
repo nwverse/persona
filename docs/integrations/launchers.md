@@ -4,13 +4,14 @@ A launcher determines which gateway and model claude uses. Previously, all were 
 node types the name into the interactive shell in a herdr pane, expanding functions and aliases, prefixed with `HERDR_AGENT=claude`; see “How herdr recognizes Agents started by launchers” below). Since 2026-10-31, “Settings › Model Providers” manages them alongside entries added in the app.
 Code: `server/internal/assistant/models_launchers.go` (owned by the manager; hub only forwards these routes, `docs/assistant/model-config.md`, “Who owns models”), `server/internal/node/managed.go`; app `Views/Settings/ModelLaunchersView.swift`.
 
-## Two sources
+## Sources
 
 | Source | Defined in | Actions |
 | --- | --- | --- |
 | **Persona-managed** | Added in the app: name, Base URL, API Key, authentication method, model, small model, sub-Agent model, custom model option, extra arguments | Edit, delete |
 | **rc file (~/.zshrc / ~/.bashrc) and PATH** | Functions and aliases in each computer's login shell config (zsh reads `~/.zshrc`, bash reads `~/.bashrc`), grouped by file, and wrapper scripts on its PATH (`source: "path"`), shown from the last snapshot and refreshed in the background when opening this page (node caches for 1 minute) | View each computer's function definition or script text (Key / Token redacted), hide / restore in Persona |
 | **Built-in** | Each computer's plain `claude` command (“Claude Code default” in Model Configuration, `source: "builtin"`), listed per computer with its version | View, hide / restore in Persona (#4384) |
+| **External adapter** | An explicitly registered local program supplies a sanitized inventory (`source: "external"`); connection configuration and credentials stay on that computer | Choose a model explicitly in the main chat; edit the connection in its source tool, not in Persona |
 
 - Scope: each Persona-managed entry has its own **device scope** (“Device scope and on-demand delivery” below): all your computers, chosen ones, or none (the key stays with the manager). ~/.zshrc entries identify their source computers (same-name entries merge into one row). Offline computers use their last synchronized lists (settings `launchers.zshrc`).
 - A computer that reported its Claude Code version offers the built-in `claude` in its pickers even when the node's shell-wrapper list omits plain `claude` (#4660). The hub uses that same installation signal as the built-in provider and Agent-start fallback; it does not infer an installation from wrappers alone, and a hidden built-in stays hidden. A new work session takes it the same way: the node's start options and work start accept plain `claude` whenever its login shell runs it, listed or not (#7425).
@@ -26,6 +27,144 @@ Code: `server/internal/assistant/models_launchers.go` (owned by the manager; hub
 The answer adds `sync`: one item per computer, with `state` `ok` / `offline` / `timeout` / `error` (`error` carries the reason), plus `shell`, `rc_file` and the last successful sync time `synced_at`
 (settings `launchers.zshrc.meta`). A computer that didn't answer still shows its last list, but the entries' `stale` names that computer; every client marks them “Not updated” and explains why in the per-computer group.
 An entry's `rc_files` are the files it came from (`source: "zshrc"` only; older nodes don't report it, so it is `~/.zshrc`).
+
+## External model adapters (#7940)
+
+For advanced users who already manage connections in another local tool, an optional adapter supplies the model
+inventory and prepares a native CLI's connection settings. It is not a runtime or a model gateway: Persona still
+owns the conversation, permissions, hooks, MCP tools, controls and cancellation. Without the local opt-in described
+in `docs/operations/config.md` ("A local external model adapter"), the node does not read adapter configuration,
+search for a program or start background work.
+
+### Local authority and supported use
+
+Only the node's startup environment may select the registry through `PERSONA_LAUNCHER_ADAPTER_CONFIG`. The registry
+contains a stable adapter ID, a fixed command argument array and a trusted absolute `native_program` path. The hub,
+clients and inventory cannot provide commands. Interpreter-based programs must name the interpreter explicitly;
+an absolute script with an `env` shebang alone may still depend on the service's PATH.
+
+Version 1 supports an explicit, saved model pick in the user's main conversation on a POSIX computer, with the
+Claude Code CLI and a policy that does not require the agent sandbox. It does not support Agent SDK, coding or
+terminal starts, automatic fallback, global purpose defaults, profiles, tiers or background tasks. A required or
+unknown sandbox policy refuses the start; it never disables the sandbox or substitutes another runtime.
+
+The manager checks the actual main conversation and its persisted pick before supplying an internal execution
+binding. The node checks that binding and its local registry again. A stale client, a forged source field or a
+missing registry cannot turn the reserved `persona_ext_` launcher namespace into a shell command.
+
+### Inventory contract
+
+The node appends `inventory --protocol 1 --offline` to the locally registered command. Stdin is closed and stdout
+must contain one JSON document, without banners. A minimal synthetic response is:
+
+```json
+{
+  "protocol": 1,
+  "targets": [{
+    "id": "example-target",
+    "name": "Example connection",
+    "engine": "claude-code",
+    "revision": "example-revision",
+    "capabilities": {
+      "contexts": ["main-chat"],
+      "runtimes": ["cli"],
+      "platforms": ["posix"]
+    },
+    "credential_state": "unknown",
+    "models": [{"id": "example-model", "name": "Example model", "default": true}]
+  }]
+}
+```
+
+Targets have stable IDs independent of display names. One target represents a connection and execution method;
+its models retain their original IDs and use the same `proto.ValidModelID` grammar as saved Persona picks and native
+execution, including a supported `~` prefix. An adapter must not advertise IDs that cannot be saved or executed.
+A target may carry an `unavailable_code` from the adapter error vocabulary.
+`credential_state` is `configured`, `missing` or `unknown`: configured is not a successful call, unknown can be tried
+explicitly, and missing cannot start. No URL, key, secret reference, raw environment, argument recipe or local path
+belongs in this response. Unknown fields and invalid or duplicate identities are rejected rather than forwarded.
+
+Inventory reads have a five-second deadline and a one-MiB stdout limit, at most 256 targets and 4096 models.
+An enabled node announces `external_launcher_inventory_v1`; the manager's internal device row projects it as
+`external_inventory:true`. Nodes without the local opt-in advertise neither, and the manager does not probe them.
+
+The manager reads this source through `launchers.list {source:"external",refresh:true}`. This branch runs before
+shell, host or runtime discovery and returns only the registered adapter's sanitized entries. Missing registration,
+invalid inventory and refresh failures are explicit errors, not a healthy empty source. A saved external target or
+model refresh can load a cold registry directly, without waiting for shell startup files. The loaded target still
+passes identity, scope, capability, model and revision checks; refreshing never grants authority.
+
+External and ordinary snapshots are updated independently. A successful external read replaces only that machine's
+external entries; a failed read does not erase ordinary last-seen launchers. A late or failed shell refresh cannot
+erase the external snapshot or turn a partial result into a complete successful list. `launchers.changed` invalidates
+this source in the background, and ordinary directory reads keep their existing nonblocking/cache behavior.
+
+### Native bootstrap and credentials
+
+For a supported start the node appends the following arguments to its fixed local command:
+
+```sh
+exec --protocol 1 --context main-chat --runtime cli \
+  --target example-target --model example-model --revision example-revision \
+  --native-program /absolute/path/to/claude \
+  --settings-output /absolute/private/process-directory/settings.json \
+  -- -p --input-format stream-json --output-format stream-json
+```
+
+The shown native flags are abbreviated: Persona supplies the full settings, session/resume, hooks, tools and MCP
+arguments. The adapter parses only its own side of `--`, does not read stdin in advance and never sends the native
+`-p` through its interactive command parser. Execution uses argument arrays without a shell. Stdout belongs only to
+the native stream, stderr diagnostics contain static codes without configuration values, and exit status, EOF and
+termination signals must survive the wrapper. Native initialization is acknowledged before Persona delivers the
+first user message. External inventory/bootstrap waits share the current operation's cancellation token, so Stop
+can cancel a pending start before it obtains the conversation's typing lock or delivers input. That startup token
+is detached after initialization and is not stored as the lifetime context of a resident conversation; completing
+one RPC does not terminate a successfully started native process. External startup errors expose static codes,
+not executable paths or raw operating-system exceptions.
+
+The adapter resolves credentials locally, never from RPC arguments. It preserves Persona's settings and pins only
+the selected connection's approved environment in a single final settings file, because process environment alone
+cannot establish precedence over existing settings. The node assigns a random private directory; the final file
+is 0600 and its directory is 0700. Credentials can therefore exist in protected temporary local files, but never
+in inventory, command arguments, manager state or diagnostics. The adapter cleans up normally and the node removes
+the directory after exit or a forced stop. User settings and credential files are not rewritten.
+
+Settings or native program paths are not accepted from a request. User and project settings are checked for native
+provider-mode switches that could override the selected route. A managed or remotely cached policy may have effective
+rules this bounded integration cannot establish, so its presence is refused rather than read or bypassed. The shared
+native policy locations include the selected profile's `remote-settings.json`, Linux `/etc/claude-code` policy files
+and directories, and the platform's managed policy roots. The adapter does not disable settings sources or rewrite
+the user's proxy/egress policy.
+
+Source-tool session and permission preferences are not authority to change Persona's controls. An implementation
+must explicitly exclude those preferences and diagnose them without values; unknown or unsafe recipe fields fail
+before native execution. It must not silently import bypass mode, replace hooks/MCP, change the model by an alias
+search or run an additional proxy.
+
+### Selection, revision and failure
+
+The manager materializes an external target's default row into an exact model ID when saving the main chat's pick.
+A later catalog default change does not change that choice. Resetting the pick returns to the existing Persona
+default; it does not make the external target a global default or a fallback for other conversations. When changing
+to or away from an external connection while the previous process is busy, the next message is refused until that
+work finishes or is stopped; it is never delivered using the previous external authorization. Compaction, accepted
+queued input and active background work also count as work that must not be cut off by a model/source change.
+
+Clearing the main conversation retains its explicit choice in the manager's durable handoff. Only that handoff can
+reserve a server-generated replacement main-conversation ID and carry the external choice into the new main chat;
+a normal new chat, guest or caller-supplied ID cannot obtain this scope. Failed starts keep the reservation and choice
+for retry instead of falling back or repeatedly losing the user's selection.
+
+A revision identifies the effective non-secret recipe, not the label, usage order or credential value. The adapter
+re-reads configuration and authentication at each new start and refuses a revision mismatch before native creation.
+An inventory update does not restart an existing conversation: its actual process binding and the current catalog
+revision are separate. A later new process uses a freshly validated binding; Persona does not replay a user message
+or silently select another connection after a mismatch.
+
+Unsupported scope/runtime/platform/sandbox, missing credentials, invalid inventory and local adapter failures are
+not vendor outages. The separate shell probe, automatic connection test and repair do not run through this source
+in version 1. Verify the supported path by explicitly using it in the main chat. Changing the trusted command or
+disabling the registry takes effect when the node is restarted; it does not rewrite saved model picks.
 
 ## Which shell
 
@@ -131,7 +270,7 @@ The first message is never typed into the pane:
 - **pi**: through the Persona extension in that pi process (`session.send`, `docs/integrations/pi.md`). If the extension does not list the session within 30 seconds, Persona uses bounded, best-effort agent cleanup and leaves the tab at the shell; a user-picked pane with ambiguous ownership is left untouched. The message is not sent (`pi_no_extension`), so a start never falls back to typing into pi's input.
 - **cursor and agy**: through herdr's `agent.prompt`, once herdr reports the agent. herdr 0.9.5 detects both (its integrations `cursor` and `antigravity-cli`) and reads `HERDR_AGENT` for a wrapper that execs them under another name. Persona does not read their conversations: the phone shows the terminal and can send and interrupt.
 
-Neither cursor nor agy names a session Persona can resume, so a herdr restart starts them again without one; pi's resume names its session (`pi --session`). pi runs with `--approve` on start and resume, so a directory with project-local files does not stop it at a Trust prompt nobody answers (`docs/integrations/pi.md`, "Project trust"). Resuming one of these sessions from the phone with `session.start` is refused (`work_agent_resume`): a stopped pi resumes in its own herdr tab when the phone sends it a message (`docs/integrations/pi.md`), and the others are resumed on the computer.
+Neither keeps token counts the node can read, so their usage is not on the token calendar (`docs/server/machines.md`, "Token usage"). Neither cursor nor agy names a session Persona can resume, so a herdr restart starts them again without one; pi's resume names its session (`pi --session`). pi runs with `--approve` on start and resume, so a directory with project-local files does not stop it at a Trust prompt nobody answers (`docs/integrations/pi.md`, "Project trust"). Resuming one of these sessions from the phone with `session.start` is refused (`work_agent_resume`): a stopped pi resumes in its own herdr tab when the phone sends it a message (`docs/integrations/pi.md`), and the others are resumed on the computer.
 
 **The Cursor CLI on a Mac over SSH.** `cursor-agent` keeps its sign-in in the macOS keychain. A pane opened inside an SSH session (or by a launchd job that is not the GUI user's) finds the keychain locked and asks for it, so the agent never becomes ready and the start fails. Run it in the GUI session: herdr itself started there (the node service of a logged-in user), not `ssh mac cursor-agent`. The same applies to anything else the CLI reads from the keychain.
 
@@ -174,7 +313,7 @@ What these agents do not do here, and why:
   But a proxy app that has quit, still named in the shell or in the Claude config directory's `settings.json` `env`, held every request until it timed out.
   So when the gateway itself takes a direct TCP connection (its Base URL's host and port; none: `api.anthropic.com:443`), `personad launch` drops an inherited
   `HTTP(S)_PROXY` / `ALL_PROXY` (either case) whose address takes no TCP connection within a second, twice, and says so on stderr; the settings file above sets such a
-  variable from `settings.json` empty (settings `env` cannot unset), noted in the node log; the main conversation through the Agent SDK does the same.
+  variable from `settings.json` empty (settings `env` cannot unset), noted in the node log.
   A gateway that does not answer directly either keeps every proxy: nothing would be gained, and the proxy may come back while the session runs.
   Variables the launcher sets itself (`proxy`, `env`) are never touched (`node/deadproxy.go`).
 - **Artifacts are always disabled**: claude started by a Persona-managed launcher gets `CLAUDE_CODE_DISABLE_ARTIFACT=1` (both in `personad launch` environment and the settings `env` above).
@@ -183,7 +322,7 @@ What these agents do not do here, and why:
   (`400 request is not representable on this edge: Claude Code Artifacts are enabled`), failing a new herdr Agent's first turn; `claude -p` is unaffected.
 - **No automatic refusal fallback to a model the gateway lacks** (#7319): a provider of #2455's shape with a Base URL whose host is not Anthropic's own API, and whose `models` list is not empty
   but lacks one of the models Claude Code falls back to (`claude-opus-4-8`, `claude-opus-5`, `claude-sonnet-5` as of Claude Code 2.1.322; compared trimmed, in any case, without `[1m]`), gets
-  `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` (both in `personad launch` environment and the settings `env` above, the Agent SDK bridge's too), so a refused reply ends on its refusal instead
+  `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` (both in `personad launch` environment and the settings `env` above), so a refused reply ends on its refusal instead
   of moving to a model the gateway does not serve. A provider with no `models` list, or one that lists all three, keeps Claude Code's fallback. The rule reads the declared list, not what the
   gateway serves: a provider imported from a computer's aliases lists only the model its alias names, so it has the fallback off until its list names all three or its `env` empties the variable. The provider's `env` wins either way:
   `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` keeps the fallback, `=1` turns it off (`docs/integrations/claude-integration.md`, "Refusal fallback behind a gateway").
