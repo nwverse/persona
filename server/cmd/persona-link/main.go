@@ -149,36 +149,6 @@ var helpTopics = map[string]bool{"pair": true, "mode": true, "node": true, "disc
 	"uninstall": true, "status": true, "reconnect": true, "logs": true, "log": true, "run": true, "supervise": true, "ssh": true,
 	"address": true, "name": true, "plugin": true, "proxy": true}
 
-func proxyCmd(e *env, args []string) error {
-	if len(args) > 1 {
-		return errUsage
-	}
-	if len(args) == 1 {
-		raw := args[0]
-		if raw == "--off" {
-			raw = "off"
-		}
-		if err := link.SetProxy(e.configPath(), raw); err != nil {
-			return err
-		}
-		pokeRunning(e.configPath())
-	}
-	value := ""
-	if c, err := link.Read(e.configPath()); err == nil {
-		value = link.RedactedProxy(c.Proxy)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if value == "" {
-		value = terminalText("link-cli.proxy_environment")
-	}
-	if value == "off" {
-		value = terminalText("link-cli.proxy_off")
-	}
-	fmt.Fprintln(e.stdout, terminalText("link-cli.proxy_current", i18n.Args{"proxy": value}))
-	return nil
-}
-
 // wantsHelp says whether args ask for help (-h, -help or --help anywhere).
 func wantsHelp(args []string) bool {
 	for _, a := range args {
@@ -249,10 +219,18 @@ func pairCmd(e *env, args []string) error {
 	var machine, raw, listen string
 	var addrs []string
 	var sshFlags sshPairFlags
+	var proxy proxyFlag
 	seen, passive := false, false
 	for i := 0; i < len(args); i++ {
 		if v, next, ok := optionalValue(args, i, "--listen"); ok {
 			passive, listen, i = true, v, next
+			continue
+		}
+		if next, ok, err := proxy.consume(args, i); ok || err != nil {
+			if err != nil {
+				return err
+			}
+			i = next
 			continue
 		}
 		if next, ok, err := sshFlags.consume(args, i); ok || err != nil {
@@ -284,10 +262,16 @@ func pairCmd(e *env, args []string) error {
 		if sshFlags.any() {
 			return link.NewTextError("link-cli.pair_listen_ssh", nil)
 		}
+		if proxy.set {
+			return link.NewTextError("link-cli.listen_proxy", nil)
+		}
 		if seen || machine != "" {
 			return link.NewTextError("link-cli.pair_listen_machine", nil)
 		}
 		return pairListen(e, listen, addrs)
+	}
+	if err := proxy.save(e); err != nil {
+		return err
 	}
 	c, err := pairWithSSH(e, raw, machine, sshFlags)
 	if err != nil {

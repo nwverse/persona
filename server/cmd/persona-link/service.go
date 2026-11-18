@@ -103,6 +103,7 @@ func install(e *env, args []string) error {
 	var pairLink, machine, listen, personad string
 	var addrs []string
 	var sshFlags sshPairFlags
+	var proxy proxyFlag
 	nodeBinAny := false // --node-bin: either program, asked which (nodeInstall)
 	pairing, passive, withNode := false, false, true
 	for i := 0; i < len(args); i++ {
@@ -123,6 +124,13 @@ func install(e *env, args []string) error {
 				continue
 			}
 			if next, ok, err := sshFlags.consume(args, i); ok || err != nil {
+				if err != nil {
+					return err
+				}
+				i = next
+				continue
+			}
+			if next, ok, err := proxy.consume(args, i); ok || err != nil {
 				if err != nil {
 					return err
 				}
@@ -170,6 +178,9 @@ func install(e *env, args []string) error {
 	if sshFlags.any() && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.install_listen_ssh", nil)
 	}
+	if proxy.set && (passive || len(addrs) > 0) {
+		return link.NewTextError("link-cli.listen_proxy", nil)
+	}
 	switch e.goos {
 	case "linux", "darwin", "windows":
 	default:
@@ -177,6 +188,9 @@ func install(e *env, args []string) error {
 	}
 	if e.goos == "windows" && nodeBinAny && personad != "" && e.programOf(personad) != programPersonad {
 		return link.NewTextError("link-cli.windows_personad_required", nil, i18n.Args{"path": personad})
+	}
+	if err := proxy.save(e); err != nil {
+		return err
 	}
 	if pairing {
 		c, err := pairWithSSH(e, pairLink, machine, sshFlags)

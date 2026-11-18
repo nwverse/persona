@@ -19,21 +19,6 @@ import (
 
 // A stripped release retains the build number the manifest verifier needs on every platform, including Windows.
 // `-v` reports that same number alongside the version and channel, as personad and persona-node do.
-func TestProxyCommandRedactsCredentials(t *testing.T) {
-	f := newFakeEnv(t)
-	if err := proxyCmd(f.env, []string{"http://user:secret@proxy.example:8080"}); err != nil { t.Fatal(err) }
-	if strings.Contains(f.out.String(), "user") || strings.Contains(f.out.String(), "secret") { t.Fatalf("proxy command leaked credentials: %s", f.out) }
-	f.out.Reset()
-	_ = status(f.env, []string{"--json"})
-	if strings.Contains(f.out.String(), "user:secret") || strings.Contains(f.out.String(), "secret@") { t.Fatalf("status leaked credentials: %s", f.out) }
-	var r report
-	if err := json.Unmarshal(f.out.Bytes(), &r); err != nil || r.Proxy != "http://proxy.example:8080" { t.Fatalf("status: %v %s", err, f.out) }
-	f.out.Reset()
-	if err := proxyCmd(f.env, []string{"--off"}); err != nil { t.Fatal(err) }
-	c, err := link.Read(f.configPath())
-	if err != nil || c.Proxy != "off" { t.Fatalf("off: %v %+v", err, c) }
-}
-
 func TestVersionReportsReleaseBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the release connector")

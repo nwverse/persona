@@ -165,7 +165,10 @@ func describe(err error) string { return describeText(i18n.Default, err) }
 func describeText(l i18n.Lang, err error) string {
 	var he *httpError
 	var ne net.Error
+	var pe *proxyError
 	switch {
+	case errors.As(err, &pe): // before the network's words: the proxy, not the hub, failed
+		return pe.Text(l)
 	case errors.As(err, &he):
 		return i18n.T(l, "link-errors.http_response", i18n.Args{"error": he.Error()})
 	case errors.Is(err, errPin):
@@ -200,9 +203,7 @@ var statusTemplateKeys = []string{
 	"link-errors.node_how_other",
 	"link-errors.pin_mismatch",
 	"link-errors.proxy_invalid",
-	"link-errors.proxy_invalid_target",
-	"link-errors.proxy_unavailable",
-	"link-errors.proxy_connection_failed",
+	"link-errors.proxy_unreachable",
 	"link-errors.proxy_tls_failed",
 	"link-errors.proxy_connect_failed",
 	"link-errors.proxy_rejected",

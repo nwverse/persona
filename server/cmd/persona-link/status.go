@@ -32,8 +32,10 @@ type report struct {
 	// Endpoints: the candidates in link.json, in the order they are tried.
 	Endpoints []link.Endpoint `json:"endpoints,omitempty"`
 	// SSH: the optional SSH tunnel in link.json.
-	SSH   *link.SSH `json:"ssh,omitempty"`
-	Proxy string    `json:"proxy,omitempty"`
+	SSH *link.SSH `json:"ssh,omitempty"`
+	// Proxy: link.json's outbound proxy without its user name and password, or "off"; missing when none is set
+	// (HTTPS_PROXY and ALL_PROXY apply). link.proxy says the one a link is connected through.
+	Proxy string `json:"proxy,omitempty"`
 	// Trust: how the hub is checked, "pin" (its key, from the pairing) | "system" (behind an HTTPS reverse proxy:
 	// the system's CAs and the host name).
 	Trust string `json:"trust,omitempty"`
@@ -184,13 +186,6 @@ func (r report) text(now time.Time, user string) string {
 		return b.String()
 	}
 	line("%s", terminalText("link-cli.mode_current", i18n.Args{"mode": modeName(r.Mode)}))
-	if r.Proxy != "" {
-		value := r.Proxy
-		if value == "off" {
-			value = terminalText("link-cli.proxy_off")
-		}
-		line("%s", terminalText("link-cli.proxy_current", i18n.Args{"proxy": value}))
-	}
 	switch {
 	case r.Error != "":
 		line("%s", terminalText("link-cli.credentials_error", i18n.Args{"error": r.credentialsErrorText()}))
@@ -273,6 +268,22 @@ func (r report) text(now time.Time, user string) string {
 					note = terminalText("link-cli.candidate_notes", i18n.Args{"notes": strings.Join(notes, terminalText("link-cli.candidate_note_separator"))})
 				}
 				line("%s", terminalText("link-cli.candidate_endpoint", i18n.Args{"kind": kindName(ep.Kind), "address": ep.URL, "notes": note}))
+			}
+			// The proxy comes after the direct addresses, as it is tried: the one in use, else link.json's.
+			if proxy := r.Proxy; (live && st.State == "connected" && st.Kind == link.KindProxy) || (proxy != "" && proxy != link.ProxyOff) {
+				var notes []string
+				if live && st.State == "connected" && st.Kind == link.KindProxy {
+					proxy = st.Proxy
+					notes = append(notes, terminalText("link-cli.note_in_use"))
+				}
+				if r.SSH != nil && r.SSH.Always {
+					notes = append(notes, terminalText("link-cli.note_skip_direct"))
+				}
+				note := ""
+				if len(notes) > 0 {
+					note = terminalText("link-cli.candidate_notes", i18n.Args{"notes": strings.Join(notes, terminalText("link-cli.candidate_note_separator"))})
+				}
+				line("%s", terminalText("link-cli.candidate_endpoint", i18n.Args{"kind": kindName(link.KindProxy), "address": proxy, "notes": note}))
 			}
 			if r.SSH != nil && !r.SSH.Always {
 				sshLine()

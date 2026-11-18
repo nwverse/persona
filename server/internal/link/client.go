@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -88,10 +89,12 @@ type Status struct {
 	// Pending, while connected: the hub waits for the user to confirm this computer ("It's mine" in the app);
 	// missing once confirmed, and with older hubs.
 	Pending bool `json:"pending,omitempty"`
-	// connected: the hub URL in use, its kind (lan | ipv6 | name | ipv4) and since when.
+	// connected: the hub URL in use, its kind (lan | ipv6 | name | ipv4, ssh, proxy) and since when.
 	Address string     `json:"address,omitempty"`
 	Kind    string     `json:"kind,omitempty"`
 	Since   *time.Time `json:"since,omitempty"`
+	// Proxy, connected with kind proxy: the outbound proxy the link runs through, never its user name or password.
+	Proxy string `json:"proxy,omitempty"`
 	// Trust: "system" when the hub is checked with the system's CAs and host name (it sits behind an HTTPS reverse
 	// proxy, Config.Trust); empty when it is pinned.
 	Trust string `json:"trust,omitempty"`
@@ -283,14 +286,15 @@ func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc
 func runActive(ctx context.Context, o Options, rep *reporter) {
 	rep.switchTo(ModeActive)
 	var b backoff
-	var lastSSH, lastProxy bool
-	var lastToken, lastProxyConfig string
+	// last is the kind of route that worked last when it was not direct (KindSSH, KindProxy): the next attempt
+	// tries it first. A new credential, tunnel or proxy setting starts over from direct.
+	var last, lastToken, lastProxy string
 	var lastSSHConfig *SSH
 	for ctx.Err() == nil {
 		was := stampOf(o.Path) // a change from here on (paired again, an address added) cuts the wait below short
 		c, err := Load(o.Path)
 		if err != nil {
-			lastSSH, lastProxy, lastToken, lastProxyConfig, lastSSHConfig = false, false, "", "", nil
+			last, lastToken, lastProxy, lastSSHConfig = "", "", "", nil
 			if errors.Is(err, os.ErrNotExist) {
 				rep.set(func(s *Status) { *s = Status{State: "unpaired"} })
 			} else {
@@ -299,25 +303,26 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			o.wait(ctx, time.Hour, was)
 			continue
 		}
-		if c.Token != lastToken || !c.SSH.Equal(lastSSHConfig) || c.Proxy != lastProxyConfig {
-			lastSSH, lastProxy = false, false
-			lastProxyConfig = c.Proxy
-			lastToken = c.Token
+		if c.Token != lastToken || !c.SSH.Equal(lastSSHConfig) || c.Proxy != lastProxy {
+			last = ""
+			lastToken, lastProxy = c.Token, c.Proxy
 			lastSSHConfig = cloneSSH(c.SSH)
 		}
 		rep.set(func(s *Status) {
 			*s = Status{State: "connecting", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Trust: trustOf(c),
 				Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 		})
-		l, err := dialActiveProxy(ctx, c, o.SSHBin, lastSSH, lastProxy)
+		l, err := dialActive(ctx, c, o.SSHBin, last)
 		var end error
 		state := "waiting"
 		if err != nil {
 			end = err
 		} else {
 			for {
-				lastSSH = l.ep.Kind == KindSSH
-				lastProxy = l.ep.Kind == KindProxy
+				last = ""
+				if l.ep.Kind == KindSSH || l.ep.Kind == KindProxy {
+					last = l.ep.Kind
+				}
 				start := time.Now()
 				rep.links++
 				l.gen = rep.links
@@ -338,7 +343,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 				// Serve the exact socket the SSH probe connected, under the configuration that validated it. A redial
 				// here would both lose that ownership and reintroduce the gap that dropped working SSH links.
 				l, c = handoff.candidate, handoff.config
-				lastSSH, lastProxy = false, false
+				last = ""
 				b = backoff{}
 			}
 			// The link writes link.json itself (the hub's addresses and names): from here only a new credential or tunnel
@@ -356,7 +361,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 		var he *httpError
 		switch {
 		case errors.Is(end, errDirectReady):
-			lastSSH = false
+			last = ""
 			b, wait = backoff{}, 0
 		case errors.Is(end, errRedial), errors.Is(end, errRepaired):
 			b, wait = backoff{}, 0
@@ -382,105 +387,53 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 	}
 }
 
-func dialActiveProxy(ctx context.Context, c *Config, sshBin string, preferSSH, preferProxy bool) (*link, error) {
+// dialActive tries c's routes in turn: direct candidates, then the outbound proxy, then the SSH tunnel; the route
+// that worked last (last: KindProxy, KindSSH) goes first, as it is likely what this network needs. Always use SSH
+// leaves only the tunnel. A pinned hub that refused the credential on its own route ends the attempt: no other route
+// can do better (docs/operations/link.md "Outbound proxy").
+func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*link, error) {
 	if c.SSH != nil && (c.SSH.Always || len(c.Endpoints) == 0) {
 		return dialSSH(ctx, c, sshBin)
 	}
-	available := false
-	for _, ep := range c.Endpoints {
-		p, err := proxyURL(c, ep.URL)
-		if err != nil {
-			return nil, err
-		}
-		available = available || p != nil
+	type route struct {
+		kind string
+		dial func() (*link, error)
 	}
-	if !available {
-		return dialActive(ctx, c, sshBin, preferSSH)
+	routes := []route{{"", func() (*link, error) { return dial(ctx, c) }}}
+	if p, _, err := proxied(c); p != nil || err != nil {
+		routes = append(routes, route{KindProxy, func() (*link, error) { return dialProxy(ctx, c) }})
 	}
-	var failures []error
-	try := func(fn func() (*link, error)) *link {
-		l, err := fn()
-		if err != nil {
-			failures = append(failures, err)
-		}
-		return l
+	if c.SSH != nil {
+		routes = append(routes, route{KindSSH, func() (*link, error) { return dialSSH(ctx, c, sshBin) }})
 	}
-	proxy := func() (*link, error) { return dialProxy(ctx, c) }
-	direct := func() (*link, error) { return dial(ctx, c) }
-	ssh := func() (*link, error) { return dialSSH(ctx, c, sshBin) }
-	if preferProxy {
-		if l := try(proxy); l != nil {
+	if i := slices.IndexFunc(routes, func(r route) bool { return r.kind == last }); i > 0 {
+		first := routes[i] // before Delete, which clears the slot it frees
+		routes = slices.Insert(slices.Delete(routes, i, i+1), 0, first)
+	}
+	var errs []error
+	for _, r := range routes {
+		l, err := r.dial()
+		if err == nil {
 			return l, nil
 		}
+		errs = append(errs, err)
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-	}
-	if preferSSH && c.SSH != nil {
-		if l := try(ssh); l != nil {
-			return l, nil
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-	}
-	if l := try(direct); l != nil {
-		return l, nil
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	var he *httpError
-	if c.FP != "" && errors.As(failures[len(failures)-1], &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden) {
-		return nil, failures[len(failures)-1]
-	}
-	if !preferProxy {
-		if l := try(proxy); l != nil {
-			return l, nil
-		}
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if c.SSH != nil && !preferSSH {
-		if l := try(ssh); l != nil {
-			return l, nil
-		}
-	}
-	return nil, errors.Join(failures...)
-}
-
-func dialActive(ctx context.Context, c *Config, sshBin string, preferSSH bool) (*link, error) {
-	switch {
-	case c.SSH == nil:
-		return dial(ctx, c)
-	case c.SSH.Always || len(c.Endpoints) == 0:
-		return dialSSH(ctx, c, sshBin)
-	case preferSSH:
-		l, sshErr := dialSSH(ctx, c, sshBin)
-		if sshErr == nil || ctx.Err() != nil {
-			return l, sshErr
-		}
-		l, directErr := dial(ctx, c)
-		if directErr == nil {
-			return l, nil
-		}
-		return nil, errors.Join(sshErr, directErr)
-	default:
-		l, directErr := dial(ctx, c)
-		if directErr == nil || ctx.Err() != nil {
-			return l, directErr
+			break
 		}
 		var he *httpError
-		if c.FP != "" && errors.As(directErr, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden) {
-			return nil, directErr
+		if r.kind != KindSSH && c.FP != "" && errors.As(err, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden) {
+			break
 		}
-		l, sshErr := dialSSH(ctx, c, sshBin)
-		if sshErr == nil {
-			return l, nil
-		}
-		return nil, errors.Join(directErr, sshErr)
 	}
+	return nil, joinErrors(errs)
+}
+
+// joinErrors is errors.Join that leaves a single error as it is (and none as nil).
+func joinErrors(errs []error) error {
+	if len(errs) == 1 {
+		return errs[0]
+	}
+	return errors.Join(errs...)
 }
 
 // wait sleeps up to d, less if the network changed, a reconnect was asked for or link.json changed (paired again,
