@@ -284,7 +284,6 @@ func TestKeptTabStartFailsFastOnAnOpenQuestion(t *testing.T) {
 	first := n.keptStarts["w1:p2"].until
 	n.mu.Unlock()
 	n.shellAsk = 30 * time.Second // what a new tab's question would be waited for
-	time.Sleep(10 * time.Millisecond)
 	began := time.Now()
 	_, err := request(t, n, "session.start", map[string]any{"cwd": home, "workspace_id": "w1", "launcher": "claude", "in_pane": "w1:p2"})
 	if rpcCode(err) != proto.CodeShellWaiting {
