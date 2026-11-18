@@ -5400,7 +5400,7 @@ struct Composer: View, Equatable {
         // The main conversation adds `/clear` (#5100). The quick messages, /loop and extension prompts stay.
         // the chat's own commands, then the user's saved prompts (#9436), then extensions' quick prompts, as on the web
         var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop)
-            + (shellChat ? [] : savedPrompts.prompts.map { PromptCommand("/" + $0.name, detail: String(localized: "Saved", comment: "Slash list: where a row comes from, the user's saved prompts"), insert: $0.text, id: "saved:\($0.id)") })
+            + savedPrompts.prompts.map { PromptCommand("/" + $0.name, detail: SlashMenuRow.savedDetail, insert: $0.text, id: "saved:\($0.id)") }
             + declarations.prompts.map {
             PromptCommand(String(localized: "/extension/\($0.title)", comment: "Menu name of a prompt an extension adds"), detail: $0.ownerName, insert: $0.text)
         }
@@ -5445,7 +5445,7 @@ struct Composer: View, Equatable {
         return SlashMenuRow.slashRows(draft: text, picked: slashPicked, showsList: agentList || mainList,
                                        model: model.session(key)?.takesModelCommand == true, loop: canLoop,
                                        agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear,
-                                       saved: !shellChat && plain ? savedPrompts.prompts : [])
+                                       saved: plain ? savedPrompts.prompts : [])
     }
 
     /// A "/" row picked: its text in the box to send or edit, as on the web; an agent's /clear asks first, as the + menu's.
@@ -5841,10 +5841,10 @@ struct Composer: View, Equatable {
             if comments.wrappedValue.isEmpty { comments.wrappedValue = MessageComment.samples }
         }
         #endif
-        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots
-            guard UserDefaults.standard.bool(forKey: "openSlashMenu") else { return }
+        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots; `-openSlashMenu /re`: that draft
+            guard let draft = UserDefaults.standard.string(forKey: "openSlashMenu") else { return }
             try? await Task.sleep(for: .seconds(4))
-            text = "/"
+            text = draft.hasPrefix("/") ? draft : "/"
         }
         .task { // `-openMentionMenu @Sources/`: that draft ("@" for any other value) with the keyboard up and its @ list open (#2319, screenshots)
             guard let draft = UserDefaults.standard.string(forKey: "openMentionMenu") else { return }
@@ -6241,8 +6241,11 @@ struct SlashMenuRow: Identifiable, Equatable {
     /// A saved prompt as a row (docs/apple/ios.md "Saved prompts"): its name after "/", **Saved** as where it comes from,
     /// and its text, which picking it types into the box.
     static func saved(_ p: SavedPrompt) -> SlashMenuRow {
-        SlashMenuRow(word: "/" + p.name, detail: String(localized: "Saved", comment: "Slash list: where a row comes from, the user's saved prompts"), text: p.text, savedID: p.id)
+        SlashMenuRow(word: "/" + p.name, detail: savedDetail, text: p.text, savedID: p.id)
     }
+
+    /// A saved prompt's row says where it comes from (#9436), in both "/" lists.
+    static let savedDetail = String(localized: "Saved [Slash Menu 9436a1]", comment: "Slash list: where a row comes from, the user's saved prompts")
 
     /// What a quick message sends, shown at the row's end; a command is its own text.
     var preview: String? { text.hasPrefix("/") ? nil : text }

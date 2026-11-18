@@ -386,7 +386,7 @@ Chat page:
   same web ordering; command and description per row, quick-message original text right; further typing filters command prefixes/descriptions. Tap fills input, does not send
   (/clear uses existing confirmation); an exact inserted command such as /context does not reopen the list until draft changes. Beyond 5½ rows scroll internally.
   Assistant chats have none, like web, except the main chat keeps those rows and adds `/clear` when the hub has `assistant_main_clear` (#5100); that `/clear` does not ask first. In `Composer` VStack, not overlay, because the composer's own hosting controller makes out-of-bounds overlays untappable (#518).
-  + Shortcuts unchanged; `-openSlashMenu YES` screenshots, `PersonaUITests/SlashMenuTests` both layouts.
+  + Shortcuts unchanged; `-openSlashMenu YES` screenshots (`-openSlashMenu /re` opens it on that draft), `PersonaUITests/SlashMenuTests` both layouts.
 - **Typing @ offers files, folders, workspaces and sessions** (#2319, workspaces #2599; matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
   new conversation, `StarterComposer`), an `@word` before the caret, at the start or after whitespace (an e-mail address opens nothing) and not while the keyboard still
   has marked text (Pinyin; `TypedText.composingFocused`), shows `ComposerMentionMenu` above the input where `SlashMenu` sits: the files this chat's tools read or wrote
@@ -2541,7 +2541,7 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
 - **The `/` lists**: the plain composer's (`SlashMenuRow.slashRows`, also in chats that have no commands of their own) and
   BeautifulUI's prompt bar (`promptCommands`) list them after the chat's own commands and before extensions' quick
   prompts, as `/name` with **Saved**; picking one types its text into the box and never sends it. A saved `/commit`
-  beside the chat's own is a row of its own (ids `saved:<id>`). Not in terminal chats.
+  beside the chat's own is a row of its own (ids `saved:<id>`). Persona chats, which have no agent commands, list the saved prompts (the main chat after its `/clear`).
 - **Assistant Profile › In Chats › Saved Prompts** (`Views/Settings/SavedPromptsView.swift`; both styles): each prompt's
   `/name` and its text's first two lines, New Prompt, and per row (context menu, swipe, VoiceOver actions) Edit, Move Up /
   Move Down (`PUT …/order`) and Delete, confirmed. Delete and a move show at once and come back with the reason when the
@@ -2550,7 +2550,10 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
   (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
   80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
 - Save as Prompt… on a message's menu, and Android, follow in their own issues.
-- DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt|deletePrompt`. Tests: `PersonaTests/SavedPromptsTests.swift`.
+- DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
+  Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
+  `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
+  Cancel sends nothing, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm>.png`.
 
 ## The pages show the current assistant
 

@@ -102,10 +102,14 @@ struct SavedPromptsView: View {
     private func load() async {
         await store.load()
         #if DEBUG
-        switch UserDefaults.standard.string(forKey: "openAssistantPage") {
+        let page = UserDefaults.standard.string(forKey: "openAssistantPage")
+        // The app's own reread at launch can supersede this one: wait for the list itself.
+        for _ in 0..<50 where page == "prompt" && store.prompts.isEmpty {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        switch page {
         case "prompt" where editing == nil: editing = store.prompts.first.map(SavedPromptDraft.init)
         case "newPrompt" where editing == nil: editing = SavedPromptDraft()
-        case "deletePrompt" where deleting == nil: deleting = store.prompts.first
         default: break
         }
         #endif

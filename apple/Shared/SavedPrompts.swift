@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The user's own "/" prompts (#7329, iOS #9436): instructions they send again and again, kept on the hub as the current
 /// assistant's settings so every device has the same list (docs/protocol/protocol.md, `/api/v1/assistant/saved-prompts`;

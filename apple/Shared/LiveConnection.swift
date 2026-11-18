@@ -370,7 +370,7 @@ nonisolated extension ServerEvent {
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall: return self
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts: return self
         }
     }
 }

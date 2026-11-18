@@ -67,7 +67,7 @@ struct AssistantProfileView: View {
         #if DEBUG
         .onAppear {
             if debugPage == nil, let p = UserDefaults.standard.string(forKey: "openAssistantPage"),
-               !["profile", "assistant", "avatars"].contains(p) { debugPage = p }
+               !["profile", "assistant", "avatars", "promptsEntry"].contains(p) { debugPage = p }
         }
         .navigationDestination(item: $debugPage) { p in
             switch p {
@@ -75,7 +75,7 @@ struct AssistantProfileView: View {
             case "runs": AssistantRunsView()
             case "memory", "memoryFile", "memoryEdit": AssistantMemoryView()
             case "places", "place", "newPlace": SavedPlacesView()
-            case "prompts", "prompt", "newPrompt", "deletePrompt": SavedPromptsView()
+            case "prompts", "prompt", "newPrompt": SavedPromptsView()
             case "standing": StandingAuthorizationsView()
             case "agentFollowUp": AgentFollowUpView()
             default: AssistantNotesView()
@@ -85,6 +85,7 @@ struct AssistantProfileView: View {
     }
 
     private var list: some View {
+        ScrollViewReader { proxy in
         List {
             Section { header }
                 .listRowBackground(Color.clear)
@@ -145,6 +146,7 @@ struct AssistantProfileView: View {
             } footer: {
                 Text(Self.savedPromptsFooter)
             }
+            .id("assistant-in-chats")
             if let quiet = quietTasks {
                 Section {
                     Toggle(isOn: quiet) {
@@ -215,6 +217,14 @@ struct AssistantProfileView: View {
             }
         }
         .themedPage()
+        #if DEBUG
+        .task { // `-openAssistantPage promptsEntry`: scrolled to In Chats, for screenshots of the Saved Prompts row
+            guard UserDefaults.standard.string(forKey: "openAssistantPage") == "promptsEntry" else { return }
+            try? await Task.sleep(for: .seconds(2))
+            proxy.scrollTo("assistant-in-chats", anchor: .center)
+        }
+        #endif
+        }
     }
 
     /// The BeautifulUI style: its list cards, a heading over each and a note under it.
