@@ -809,7 +809,8 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 // retryTaskWith is retryTask, on another launcher of the same computer when with names one (retryOn, #10365): checked
 // before the to-do is reopened, a refusal changes nothing. The same launcher goes back to the tab its last start
 // stopped in while the computer keeps it (keptTabOf), so a shell question answered there meanwhile does not stop it
-// again in a new tab; another launcher opens a new one.
+// again in a new tab; another launcher opens a new one. With an answer, that answer is typed into the tab first
+// (answerKeptTab), and only a failed start whose question it answers starts again: refused, nothing changes.
 func (s *Service) retryTaskWith(ctx context.Context, todoID string, with retryWith) (json.RawMessage, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return nil, err
@@ -827,6 +828,9 @@ func (s *Service) retryTaskWith(ctx context.Context, todoID string, with retryWi
 		return nil, errTaskNotRetryable
 	}
 	if cur.DoneAt == nil {
+		if with.answer != "" { // open: started again, or remedied by the assistant
+			return nil, errAnswerNotWaiting
+		}
 		return s.continueTask(ctx, cur)
 	}
 	failed := cur.failedStart()
@@ -838,6 +842,9 @@ func (s *Service) retryTaskWith(ctx context.Context, todoID string, with retryWi
 		busy = !claimed
 	}
 	if busy || !failed {
+		if with.answer != "" { // another start is on its way, or it is done: one answer is typed by one start
+			return nil, errAnswerNotWaiting
+		}
 		if !busy && cur.DoneAt != nil {
 			return nil, errTaskNotRetryable // done by hand or by the hub, not a failed start
 		}
@@ -874,6 +881,11 @@ func (s *Service) retryTaskWith(ctx context.Context, todoID string, with retryWi
 	if t.Launcher != launcher || t.Model != model { // another launcher starts in a new tab, as task_retry's does
 		inPane = ""
 	}
+	if with.answer != "" {
+		if err := s.answerKeptTab(ctx, m, t, inPane, with.answer); err != nil {
+			return nil, err
+		}
+	}
 	reopened, ok, err := s.reopenFailedTodo(ctx, todoID)
 	if err != nil {
 		return nil, err
@@ -896,6 +908,9 @@ func (s *Service) retryTaskWith(ctx context.Context, todoID string, with retryWi
 	if t.Launcher != launcher && with.by != "" { // the step the task's history shows: who moved it to which launcher
 		s.remedyStep(ctx, p.Conversation, todoID, startRemedyBody{Action: "retry", By: with.by, LauncherFrom: s.startLauncher(ctx, launcher),
 			LauncherTo: t.Launcher})
+	}
+	if with.answer != "" { // the answer's id, never what a prompt asked for
+		s.remedyStep(ctx, p.Conversation, todoID, startRemedyBody{Action: "answer", By: with.by, Choice: with.answer})
 	}
 	s.logf("task %s: retrying its start on %s", todoID, m.ID)
 	started = true

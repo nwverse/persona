@@ -66,6 +66,8 @@ type startRemedyBody struct {
 	// LauncherFrom, LauncherTo: a retry on another launcher of the same computer (start_retry_launcher.go, #10365).
 	LauncherFrom string `json:"launcher_from,omitempty"`
 	LauncherTo   string `json:"launcher_to,omitempty"`
+	// Choice: the id of the answer the owner gave the tab's startup question from the app (start_answer.go, #10365).
+	Choice string `json:"choice,omitempty"`
 }
 
 // remedyReasonMax bounds a reason the assistant gives, as an answered card's text is bounded.

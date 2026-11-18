@@ -17,6 +17,19 @@ type StartContinueParams struct {
 	Choice string `json:"choice"`
 }
 
+// MethodStartAnswer is the node method (capability nodeproto.StartAnswer): StartAnswerParams → {"ok": true}. It
+// answers the question a failed start's kept tab stopped on with the same guards as start.continue, for a start the
+// hub runs again itself in that tab (a planned task's, POST /api/v1/todos/{id}/start/answer).
+const MethodStartAnswer = "start.answer"
+
+// StartAnswerParams is start.answer's params: the kept tab (Pane, the failed start's start_error_args pane), the
+// question it listed (Line: typed into only while it is still the tab's last line) and one of its Choices.
+type StartAnswerParams struct {
+	Pane   string `json:"pane"`
+	Line   string `json:"line"`
+	Choice string `json:"choice"`
+}
+
 // StartErrorArgs keys of a CodeShellWaiting start (besides line, screen, pane and kept_until): the question's kind
 // (update, yes_no, press_key, compinit, ssh_host_key, zsh_newuser, p10k_wizard, rvm_trust, secret), its answers' ids
 // joined by commas, "true" when it reads a whole line or a secret, and the answer Enter alone gives.

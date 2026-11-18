@@ -43,10 +43,9 @@ func (n *Node) startContinue(ctx context.Context, id, choice string) (*proto.Ses
 		return nil, refusal(proto.CodeSecretEnvGone, "this start's secret values were used up; start it again", nil)
 	}
 	pane, line := listed.StartErrorArgs["pane"], listed.StartErrorArgs["line"]
-	ask := questionChoices(line)
-	c, ok := ask.choice(choice)
-	if !ok || ask.Secret && c.ID != choiceCancel.ID { // a password prompt never gets anything typed from the app
-		return nil, errChoiceNotOffered
+	ask, c, err := offeredAnswer(line, choice)
+	if err != nil {
+		return nil, err
 	}
 	// One answer at a time per tab, and none while another request takes the tab for a start of its own (start.keys).
 	unlock := n.typing.lock(workAgentPaneLockPrefix + pane)
@@ -54,23 +53,9 @@ func (n *Node) startContinue(ctx context.Context, id, choice string) (*proto.Ses
 	if again, _ := n.starts.failed(id); again != failed { // an answer before this one started it again
 		return nil, errStartNotWaiting
 	}
-	if pane == "" {
-		return nil, errStartTabGone
-	}
-	if _, ok := n.keptStartTab(pane); !ok {
-		return nil, errStartTabGone
-	}
-	shown, err := n.readPane(ctx, pane, "visible", 60)
-	if err != nil {
+	if err := n.typeAnswer(ctx, pane, line, ask, c); err != nil {
 		return nil, err
 	}
-	if shellQuestion(shown) != line {
-		return nil, errPromptChanged
-	}
-	if err := n.sendKeys(ctx, pane, c.Keys...); err != nil {
-		return nil, err
-	}
-	n.enterAfterEcho(ctx, pane, line, c, ask.LineMode)
 	n.logf("start %s: answered its tab's question %q with %s", id, line, c.Label)
 	spec := *failed.spec
 	spec.execution.InPane = pane // the kept tab, not a new one (claimKeptTab)
@@ -80,6 +65,68 @@ func (n *Node) startContinue(ctx context.Context, id, choice string) (*proto.Ses
 		return nil, err
 	}
 	return n.runAsyncStart(context.WithValue(sctx, answeredKey{}, true), id, r), nil
+}
+
+// startAnswer answers line, the startup question the kept tab on pane stopped on, with choice, as startContinue does,
+// for a start the hub runs again itself: a planned task's (POST /api/v1/todos/{id}/start/answer), whose start was
+// not the node's own async one and has no record here to restart. The hub then starts it in that tab (session.start's
+// in_pane); the tab is marked answered so that start waits out the question's line as startContinue's does.
+func (n *Node) startAnswer(ctx context.Context, pane, line, choice string) error {
+	if pane == "" || line == "" {
+		return errStartNotWaiting
+	}
+	ask, c, err := offeredAnswer(line, choice)
+	if err != nil {
+		return err
+	}
+	unlock := n.typing.lock(workAgentPaneLockPrefix + pane)
+	defer unlock()
+	if err := n.typeAnswer(ctx, pane, line, ask, c); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	if k, ok := n.keptStarts[pane]; ok {
+		k.answered = true
+		n.keptStarts[pane] = k
+	}
+	n.mu.Unlock()
+	n.logf("kept tab %s: answered its question %q with %s", pane, line, c.Label)
+	return nil
+}
+
+// offeredAnswer is the answer choice names among those line, a startup question, is offered (questionChoices), and
+// the question's ask: errChoiceNotOffered for any other, and for anything but Ctrl-C to a password prompt.
+func offeredAnswer(line, choice string) (shellAsk, shellChoice, error) {
+	ask := questionChoices(line)
+	c, ok := ask.choice(choice)
+	if !ok || ask.Secret && c.ID != choiceCancel.ID { // a password prompt never gets anything typed from the app
+		return ask, shellChoice{}, errChoiceNotOffered
+	}
+	return ask, c, nil
+}
+
+// typeAnswer types c, an answer to line (ask), into the kept tab on pane: only while it is still a failed start's
+// kept tab (errStartTabGone) and its last line is still line (errPromptChanged: answered at the computer, or gone by
+// itself, so an answer now could run as a command at the prompt). The caller holds the pane's typing lock.
+func (n *Node) typeAnswer(ctx context.Context, pane, line string, ask shellAsk, c shellChoice) error {
+	if pane == "" {
+		return errStartTabGone
+	}
+	if _, ok := n.keptStartTab(pane); !ok {
+		return errStartTabGone
+	}
+	shown, err := n.readPane(ctx, pane, "visible", 60)
+	if err != nil {
+		return err
+	}
+	if shellQuestion(shown) != line {
+		return errPromptChanged
+	}
+	if err := n.sendKeys(ctx, pane, c.Keys...); err != nil {
+		return err
+	}
+	n.enterAfterEcho(ctx, pane, line, c, ask.LineMode)
+	return nil
 }
 
 // enterAfterEcho presses Enter after c, a one-key answer, when the question reads a whole line: its line then shows
@@ -123,6 +170,7 @@ type answeredKey struct{}
 // answeredOf: ctx is the start startContinue runs right after answering its tab's question. Its question stays the
 // last line written until the shell prints something more (oh-my-zsh only moves the cursor down after the key), however
 // long the rest of the startup files take, so it is waited out as in a new tab, not refused at once (keptQuestionWait).
+// A kept tab startAnswer answered is the same for the start that claims it next (keptStart.answered).
 func answeredOf(ctx context.Context) bool {
 	answered, _ := ctx.Value(answeredKey{}).(bool)
 	return answered

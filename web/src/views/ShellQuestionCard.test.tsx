@@ -2,7 +2,8 @@
 // The question a New Agent start's terminal tab stopped on (#10365): the card quotes it, offers its answers as buttons,
 // says until when the tab waits and folds its last lines; a tap sends the answer, after which the refused messages go
 // again; it hides once the tab is no longer kept, and a password prompt gets Cancel alone. The launch page shows it for
-// a first message refused with shell_waiting.
+// a first message refused with shell_waiting. A planned task's failed start offers its plan task's question where the
+// hub takes the answer (todo_start_answer), and posts it to the to-do's start/answer.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,8 @@ const resend = vi.hoisted(() => vi.fn());
 vi.mock("../lib/start-continue", async (original) => ({ ...(await original<typeof import("../lib/start-continue")>()), resendRefused: resend }));
 
 import { setToken } from "../lib/api";
+import type { PlanTask } from "../lib/feed";
+import type { Todo } from "../lib/todos";
 import { clock } from "../lib/format";
 import type { AgentLaunch } from "../lib/new-agent";
 import { shellQuestion } from "../lib/start-continue";
@@ -151,6 +154,56 @@ describe("a session's start", () => {
     state.sessions = {};
     act(() => root.render(<StartingAgent launch={{ ...launch, shellWaiting: undefined }} />));
     await flush();
+    expect(card()).toBeNull();
+  });
+});
+
+describe("a planned task's failed start", () => {
+  const todo = { id: "todo_1", title: "Inspect the logs" } as Todo;
+  const task = (o: Partial<PlanTask> = {}): PlanTask => ({ title: "Inspect the logs", prompt: "", machine: "mac", cwd: "/code/app", todo_id: "todo_1",
+    error: "stopped on a question", error_code: "shell_waiting", error_args: args(), ...o }) as PlanTask;
+  beforeEach(() => { state.features = ["todo_start_answer"]; });
+
+  it("offers the plan task's question and posts the answer to the to-do's start/answer", async () => {
+    const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
+      String(url).endsWith("/start/answer") ? { todo: { id: "todo_1", title: "Inspect the logs", done_at: null } } : { todos: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetcher);
+    act(() => root.render(<ShellQuestion todo={todo} task={task()} />));
+    expect(card()!.textContent).toContain(t("shellquestioncard.asking", { line: LINE }));
+    expect(buttons()).toEqual([t("shellquestioncard.update_yes", { key: "y" }), t("shellquestioncard.update_no", { key: "n" }), t("shellquestioncard.enter_yes")]);
+    act(() => host.querySelector<HTMLButtonElement>("[data-testid=shell-choice-n]")!.click());
+    await flush();
+    const posts = fetcher.mock.calls.filter((c) => c[1]?.method === "POST");
+    expect(posts.map((c) => c[0])).toEqual(["/api/v1/todos/todo_1/start/answer"]);
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ choice: "n" });
+    expect(resend).not.toHaveBeenCalled();
+    expect(host.querySelector("[role=alert]")).toBeNull();
+  });
+
+  it("keeps the hub's refusal on the card", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "prompt_changed", error: "The terminal prompt has changed. Refresh before answering." }), { status: 409 })));
+    act(() => root.render(<ShellQuestion todo={todo} task={task()} />));
+    act(() => host.querySelector<HTMLButtonElement>("[data-testid=shell-choice-y]")!.click());
+    await flush();
+    expect(host.querySelector("[role=alert]")!.textContent).toContain("The terminal prompt has changed.");
+  });
+
+  it("is absent on a hub that cannot take it, for another failure, and once the tab is no longer kept", () => {
+    state.features = ["start_continue"]; // a session's own start only: the task's Retry stays its way on
+    act(() => root.render(<ShellQuestion todo={todo} task={task()} />));
+    expect(card()).toBeNull();
+    state.features = ["todo_start_answer"];
+    act(() => root.render(<ShellQuestion todo={todo} task={task({ error_code: "launcher_missing", error_args: { where: "terminal" } })} />));
+    expect(card()).toBeNull();
+    act(() => root.render(<ShellQuestion todo={todo} task={task({ error_args: args({ kept_until: new Date(Date.now() - 1_000).toISOString() }) })} />));
+    expect(card()).toBeNull();
+  });
+
+  it("hides when the tab's time runs out", () => {
+    vi.useFakeTimers();
+    act(() => root.render(<ShellQuestion todo={todo} task={task({ error_args: args({ kept_until: new Date(Date.now() + 20_000).toISOString() }) })} />));
+    expect(card()).not.toBeNull();
+    act(() => { vi.advanceTimersByTime(31_000); });
     expect(card()).toBeNull();
   });
 });

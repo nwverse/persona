@@ -65,6 +65,8 @@ const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.Held
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one.
 const NeedsYouPart = lazy(() => import("./TaskDecision"));
+// the question a failed start's tab stopped on, answered on its row (#10365): only for such a failure
+const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 /** The suggested rule's line of a card, drawn right after it; nothing for a card without the field, unless Always
  *  was answered on it here (the line then says what was made, though the hub sent the card again without the field). */
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
@@ -1091,6 +1093,7 @@ function FailedTaskRow({ rowKey, todo, countsOpenAttr }: { rowKey: string; todo:
       </div>
       {/* in plain words; the hub's raw error is the task's details' (#8237) */}
       {why && <div className="truncate pl-6 text-xs text-ink">{startFailureRowLine(why, task)}</div>}
+      {task?.error_code === "shell_waiting" && <Suspense fallback={null}><ShellQuestion todo={todo} task={task} /></Suspense>}
       <div className={ROW_ACTIONS}>
         {/* its launcher can't start there: the one-tap way out first, on the computer's other launcher (#10365) */}
         {instead && (

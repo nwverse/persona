@@ -222,7 +222,7 @@ func (n *Node) settleShell(ctx context.Context, pane string) error {
 		return nil
 	}
 	settle, quiet, ask := n.shellWaits()
-	if c := keptClaimOf(ctx); c != nil && c.pane == pane && !answeredOf(ctx) && ask > keptQuestionWait {
+	if c := keptClaimOf(ctx); c != nil && c.pane == pane && !answeredOf(ctx) && !c.k.answered && ask > keptQuestionWait {
 		ask = keptQuestionWait
 	}
 	began := time.Now()
@@ -283,6 +283,9 @@ type keptStart struct {
 	ws      string
 	until   time.Time
 	taken   bool // a start holds it (claimKeptTab): only that start settles or releases it
+	// answered: start.answer typed an answer to its question (startAnswer), so the start that claims it next waits
+	// out the question's line as in a new tab (answeredOf).
+	answered bool
 }
 
 // keepStartTab keeps the tab of a start that failed waiting on its shell or on the agent's screen, created, open for
