@@ -1980,13 +1980,14 @@ built in stages behind the hub's `todo_view`; this section grows with it.
 
 - **Mock hub**: `MOCK_TODO_VIEW=1` serves the design prototype's to-dos (`docs/design/prototypes/todos/data/todos.js`)
   as a hub with the view does: `view` on every row of `GET /api/v1/todos`, the list's `counts`, the item and places
-  routes, Someday and restore (`scripts/mock/todo_view_mock.py`). A screenshot lines up with its V1 frame when it is
-  taken soon after the mock starts, since the start plays the prototype's 10:14, with `-AppleLanguages "(en)"`.
-  `MOCK_TODO_VIEW=old` is a hub from before the view (405 for the item and places routes, which clients take as "not
-  there"),
-  `late` one whose hello names the view only after a reconnect, and `MOCK_TODO_MANAGERS=2` gives the Weather App's
-  to-dos to a second manager. `docs/operations/testing.md` has the details, and `GET /mock/churn?todos=1` for
-  measuring a push on the list.
+  routes, Someday and restore, and today's answers to its asks (`scripts/mock/todo_view_mock.py`). A screenshot lines
+  up with its V1 frame when it is taken soon after the mock starts (its start plays the prototype's 10:14) and the app
+  runs with `-AppleLanguages "(en)"`. `MOCK_TODO_VIEW=old` is a hub from before the view (405 for the item and places
+  routes, as an older hub answers them), `late` one whose hello names the view only after a reconnect, and
+  `MOCK_TODO_MANAGERS=2` gives the Weather App's to-dos to a second manager. `MOCK_MANAGERS=1` lists one manager, for
+  the path that reads the hub's counts and places as sent; the default roster lists several.
+  `docs/operations/testing.md` has the details, including `GET /mock/churn?todos=1` for measuring a push on the list
+  and where the mock is not a hub.
 
 ## Quiet supervision rounds (#2092)
 

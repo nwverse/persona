@@ -2,12 +2,15 @@
 from the design prototype's to-dos. Every answer holds to schema/wire/todo-view.schema.json; the counts are the rows'
 sections counted as spec/fixtures/todo-counts/README.md counts them, and the prototype's own numbers (todos.js
 EXPECTED, read with Node); the places add up; an unchanged list answers 304; the writes move the views; an older hub
-(old) answers 405; the hellos under late lack the view, have it, lack it, have it; two managers' answers are joined as
-the hub joins them.
+(old) answers 405 and lists none of stage 1's fields; today's answers (accept, Don't handle, retry, a tick on a failed
+start, the Widget's plan card) move the views without MOCK_TASKS, and a refused write changes nothing; the hellos under
+late lack the view, have it, lack it, have it, and again after /mock/reset; two managers' answers are joined as the hub
+joins them.
 
     python3 -B scripts/mock/test_todo_view_mock.py
 """
 import base64
+import functools
 import importlib.util
 import json
 import os
@@ -170,6 +173,7 @@ class Socket:
         self.sock.close()
 
 
+@functools.lru_cache(maxsize=1)
 def prototype():
     """The prototype's EXPECTED numbers and its to-dos in rank order ({id, section, project, title}), read with Node."""
     script = ('const vm = require("vm"), fs = require("fs"); const c = {window: {}, console}; vm.createContext(c);'
@@ -221,6 +225,9 @@ class Case(unittest.TestCase):
 
     def row(self, tid):
         return next(t for t in self.rows() if t["id"] == tid)
+
+    def post(self, path, body=None, **headers):
+        return self.hub.call(path, "POST", {} if body is None else body, headers)
 
     def holds(self, definition, sample, where):
         schema = DOC["$defs"][definition]
@@ -402,6 +409,135 @@ class ViewTests(Case):
         self.assertNotIn("asks", t02)
         self.assertEqual(listed["counts"], d3_counts(listed["todos"]))
 
+    def test_a_choice_answers_t01(self):
+        asked = self.row("t01")["ask"]["asked_at"]
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {"asked_at": "2026-01-01T00:00:00Z"})[0], 409)
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {"asked_at": asked, "option": "Elsewhere"})[0], 400)
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {})[0], 400)
+        reader = {"Authorization": "", "X-Mock-Role": "readonly"}
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {"asked_at": asked}, **reader)[0], 403)
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {"asked_at": asked, "option": "Kaede"})[2], {"ok": True})
+        listed = self.hub.get("/api/v1/todos")
+        t01 = next(t for t in listed["todos"] if t["id"] == "t01")
+        self.assertNotIn("ask", t01)
+        self.assertNotIn("decision_review", t01)
+        v = t01["view"]
+        self.holds("TodoSummary", v, "t01")
+        self.assertEqual((v["section"], v["reason"], v["line"], v["rank"], v["steps"]),
+                         ("working", "persona_working", {"key": "persona_working", "args": {"text": "booking Kaede"}},
+                          0, {"done": 3, "total": 5}))
+        self.assertNotIn("asks", v)
+        self.assertEqual(listed["counts"], d3_counts(listed["todos"]))
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {"asked_at": asked})[0], 409, "the round is over")
+
+    def test_the_fixed_answers(self):
+        asked = self.row("t01")["ask"]["asked_at"]
+        both = {"asked_at": asked, "option": "Kaede", "response": "explain_first"}
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", both)[0], 400)
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", {"asked_at": asked, "response": "later"})[0], 400)
+        said = {"asked_at": asked, "response": "explain_first"}
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", said)[0], 200)
+        t01 = self.row("t01")  # the round waits, its default no longer taken
+        self.assertEqual((t01["ask"]["response"], t01["ask"]["default"]), ("explain_first", "never"))
+        self.assertNotIn("deadline", t01["ask"])
+        self.assertEqual(t01["view"]["section"], "needs_you")
+        self.assertNotIn("default_at", t01["view"]["asks"][0])
+        said = {"asked_at": asked, "response": "decide_yourself"}
+        self.assertEqual(self.post("/api/v1/todos/t01/accept", said)[0], 200)
+        t01 = self.row("t01")
+        self.assertNotIn("ask", t01)
+        self.assertEqual((t01["view"]["section"], t01["view"]["reason"]), ("todo", "rest"))
+
+    def test_dont_handle_and_its_undo(self):
+        before = self.hub.get("/api/v1/todos")["counts"]
+        at = self.row("t01")["decision_review"]["review_at"]
+        self.assertEqual(self.post("/api/v1/todos/t01/decision-dismiss", {"review_at": "2026-01-01T00:00:00Z"})[0], 409)
+        status, _, receipt = self.post("/api/v1/todos/t01/decision-dismiss", {"review_at": at})
+        self.assertEqual((status, receipt["review_at"]), (200, at))
+        listed = self.hub.get("/api/v1/todos")
+        v = next(t for t in listed["todos"] if t["id"] == "t01")["view"]
+        self.assertEqual((v["section"], v["reason"]), ("todo", "rest"))
+        self.assertEqual(listed["counts"]["needs_you"], before["needs_you"] - 1)
+        undo = {"review_at": at, "dismissal_id": receipt["dismissal_id"]}
+        self.assertEqual(self.post("/api/v1/todos/t01/decision-undo-dismiss", undo)[0], 200)
+        self.assertEqual(self.row("t01")["view"]["section"], "needs_you")
+        self.assertEqual(self.hub.get("/api/v1/todos")["counts"], before)
+
+    def test_retry_starts_a_failed_start(self):
+        v = self.row("t03")["view"]
+        self.assertEqual((v["reason"], [a["kind"] for a in v["asks"]]), ("failed_start", ["retry"]))
+        status, _, body = self.post("/api/v1/todos/t03/retry")
+        self.assertEqual(status, 200)
+        v = body["todo"]["view"]
+        self.holds("TodoSummary", v, "t03")
+        self.assertEqual((v["section"], v["reason"], v["line"]),
+                         ("working", "agent_running", {"key": "working", "args": {
+                             "run": "Sort last year’s photos", "text": "Grouping the photos by trip."}}))
+        self.assertNotIn("asks", v)
+        self.assertEqual(self.row("t03")["view"], v)
+        self.assertEqual(self.post("/api/v1/todos/t03/retry")[0], 200, "an open one answers as it is")
+        self.assertEqual(self.post("/api/v1/todos/t11/retry")[0], 409, "no origin")
+        self.assertEqual(self.post("/api/v1/todos/t08/retry")[0], 409, "closed some other way")
+        self.assertEqual(self.post("/api/v1/todos/nope/retry")[0], 404)
+
+    def test_a_tick_closes_a_failed_start(self):
+        status, _, body = self.hub.call("/api/v1/todos/t03", "PATCH", {"done": True})
+        self.assertEqual((status, body["todo"].get("start_error")), (200, ""))
+        listed = self.hub.get("/api/v1/todos")
+        v = next(t for t in listed["todos"] if t["id"] == "t03")["view"]
+        self.assertEqual((v["phase"], v["section"], v["reason"], v["line"]),
+                         ("done", "just_finished", "closed_unseen", {"key": "completed"}))
+        done = datetime.fromisoformat(v["since"].replace("Z", "+00:00"))
+        self.assertLess(datetime.now(timezone.utc) - done, timedelta(minutes=1))
+        self.assertEqual(listed["counts"], d3_counts(listed["todos"]))
+
+    def test_a_refused_write_changes_nothing(self):
+        reader = {"Authorization": "", "X-Mock-Role": "readonly"}
+        self.assertEqual(self.hub.call("/api/v1/todos/t14", "PATCH", {"done": False}, reader)[0], 403)
+        self.assertEqual(self.row("t14")["view"]["section"], "someday")
+        self.assertEqual(self.hub.call("/api/v1/todos/t14", "PATCH", {"done": False, "title": " "})[0], 400)
+        self.assertEqual(self.row("t14")["view"]["section"], "someday")
+        self.assertEqual(self.hub.call("/api/v1/todos/t03", "PATCH", {"done": True}, reader)[0], 403)
+        self.assertEqual(self.row("t03")["view"]["reason"], "failed_start")
+        self.assertEqual(self.hub.call("/api/v1/todos/t14", "PATCH", {"done": False})[0], 200)
+        self.assertEqual(self.row("t14")["view"]["section"], "todo")
+
+    def test_seen_on_open_rows(self):
+        self.assertNotIn("seen", self.row("t01")["view"])
+        self.hub.call("/api/v1/todos/t01/seen", "PUT")
+        self.assertTrue(self.row("t01")["view"]["seen"])
+        self.hub.call("/api/v1/todos/t01/seen", "DELETE")
+        self.assertNotIn("seen", self.row("t01")["view"])
+        # a parent its step leads: seen against the latest activity of both
+        self.hub.call("/api/v1/todos/t02/seen", "PUT")
+        self.assertTrue(self.row("t02")["view"]["seen"])
+        self.hub.call("/api/v1/todos/t02-widget", "PATCH", {"notes": "Small and medium first."})
+        v = self.row("t02")["view"]
+        self.assertEqual(v["line"]["args"]["step"], "Widget")
+        self.assertNotIn("seen", v)
+
+    def test_the_widget_plan_card(self):
+        def card():
+            cards = self.hub.get("/api/v1/interactions")["interactions"]
+            return next((x for x in cards if x["id"] == "ix_todo_widget_plan"), None)
+
+        ask = self.row("t02")["view"]["asks"][0]
+        self.assertEqual((card()["kind"], card()["session_id"]), (ask["kind"], ask["run"]["session_id"]))
+        self.assertEqual(self.post("/api/v1/interactions/ix_todo_widget_plan/resolve", {"approve": True})[0], 200)
+        self.assertIsNone(card())
+        listed = self.hub.get("/api/v1/todos")
+        rows = {t["id"]: t for t in listed["todos"]}
+        v = rows["t02-widget"]["view"]
+        self.assertEqual((v["section"], v["reason"], v["line"]),
+                         ("working", "agent_running",
+                          {"key": "working", "args": {"run": "Widget", "text": "Building the widget."}}))
+        self.assertEqual(rows["t02"]["view"]["section"], "working")
+        self.assertNotIn("asks", rows["t02"]["view"])
+        self.assertEqual(listed["counts"], d3_counts(listed["todos"]))
+        self.hub.get("/mock/reset")
+        self.assertIsNotNone(card())
+        self.assertEqual(self.row("t02")["view"]["section"], "needs_you")
+
     def test_churn_moves_a_working_line_and_pushes(self):
         tag = self.hub.call("/api/v1/todos")[1]["ETag"]
         ws = Socket(self.hub.port)
@@ -427,6 +563,8 @@ class OldHubTests(Case):
         self.assertNotIn("counts", listed)
         self.assertTrue(listed["todos"])
         self.assertFalse([t["id"] for t in listed["todos"] if "view" in t])
+        self.assertFalse([t["id"] for t in listed["todos"] if "someday_until" in t or "restored_at" in t])
+        self.assertTrue(next(t for t in listed["todos"] if t["id"] == "t01")["ask"])
         for path in ("/api/v1/todos/t01", "/api/v1/todos/places"):
             self.assertEqual(self.hub.call(path)[0], 405, path)
         self.assertEqual(self.hub.call("/api/v1/todos/t12/someday", "PUT")[0], 404)
@@ -451,6 +589,12 @@ class LateTests(Case):
         self.assertEqual(seen, [(False, False), (True, True), (False, False), (True, True)])
         self.assertFalse(ws.closed(3), "after the fourth hello the socket stays")
         self.assertEqual(self.hub.get("/mock/todo-view")["phase"], 3)
+        self.hub.get("/mock/reset")  # the sequence starts again: the socket closes, and the next hello lacks the view
+        self.assertTrue(ws.closed(5))
+        again = Socket(self.hub.port)
+        self.addCleanup(again.close)
+        self.assertNotIn("todo_view", again.message(lambda m: m.get("type") == "hello")["features"])
+        self.assertEqual(self.hub.get("/mock/todo-view")["phase"], 0)
 
 
 class TwoManagersTests(Case):
