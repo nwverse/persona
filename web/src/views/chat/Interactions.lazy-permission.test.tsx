@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // A permission card's own chunk can be slow or unavailable after a deploy: its slot keeps saying what is waiting, and
 // a local failure offers a retry without taking down the surrounding conversation.
-import { act, Suspense, type ComponentType } from "react";
+import { act, type ComponentType } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -9,7 +9,7 @@ vi.hoisted(() => {
 });
 const reported = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/error-reports", () => ({ reportBoundary: reported }));
-import { PermissionCardBoundary, PermissionCardLoading } from "./Interactions";
+import { PermissionCardFrame } from "./Interactions";
 import { lazyPage, type LazyPageComponent } from "../../lib/lazy-page";
 import { t } from "../../i18n";
 import type { Interaction } from "../../lib/types";
@@ -24,9 +24,7 @@ let root: Root;
 async function render(Lazy: LazyPageComponent<{ ix: Interaction }>) {
   await act(async () => {
     root.render(
-      <PermissionCardBoundary ix={ix}>
-        <Suspense fallback={<PermissionCardLoading ix={ix} />}><Lazy ix={ix} /></Suspense>
-      </PermissionCardBoundary>,
+      <PermissionCardFrame ix={ix}><Lazy ix={ix} /></PermissionCardFrame>,
     );
     await Promise.resolve();
   });

@@ -82,6 +82,30 @@ func TestPreparedSnapshotWaiterCannotStealOriginalResult(t *testing.T) {
 	}
 }
 
+func TestPreparedSnapshotAfterOriginalWaitsSharesResult(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	preparedTestConversation(ft)
+	id := "ix_snapshot_after_original"
+	var applies atomic.Int32
+	done := startPreparedInteraction(t, ft, proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)},
+		approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+			applies.Add(1)
+			return "setting applied", nil
+		}})
+	time.Sleep(20 * time.Millisecond) // the original caller reaches awaitPrepared first
+	ft.s.publish(context.Background())
+	time.Sleep(20 * time.Millisecond) // the snapshot waiter attaches second
+	allow := true
+	if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	got := awaitPreparedTest(t, done)
+	if got.err != nil || got.out.Clarifying || got.out.Text != "setting applied" || applies.Load() != 1 {
+		t.Fatalf("original prepared call = %+v, %v, applies=%d", got.out, got.err, applies.Load())
+	}
+}
+
 func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
 	const rounds = 150
 	for i := 0; i < rounds; i++ {
@@ -130,6 +154,34 @@ func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
 	}
 }
 
+func TestClarifiedSnapshotsDoNotRestartWaiters(t *testing.T) {
+	ft := newFleetTest(t)
+	preparedTestConversation(ft)
+	id := "ix_clarified_snapshot_noise"
+	done := startPreparedTest(t, ft, id, "", nil)
+	if err := ft.s.clarify(context.Background(), id, "Why?", "owner-"+id, nil); err != nil {
+		t.Fatal(err)
+	}
+	awaitPreparedTest(t, done)
+	ix, ok := ft.s.pendingIx(id)
+	if !ok {
+		t.Fatal("the clarified card did not stay pending")
+	}
+	for range 3 {
+		ft.s.askOnPhone([]proto.Interaction{ix})
+	}
+	ft.s.fleet.askMu.Lock()
+	waiter := ft.s.fleet.asked[id]
+	ft.s.fleet.askMu.Unlock()
+	if waiter != nil {
+		t.Fatal("a clarified card spawned another snapshot waiter")
+	}
+	allow := true
+	if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type preparedLifecycleEnd struct {
 	name   string
 	status string
@@ -141,6 +193,24 @@ var preparedLifecycleEnds = []preparedLifecycleEnd{
 	{name: "session close", status: "cancelled", end: func(ft *fleetTest, _ string) { ft.s.endSessionCards("mac", "s1") }},
 	{name: "dismiss", status: "dismissed", end: func(ft *fleetTest, id string) { ft.event("mac", "interaction.dismiss", map[string]any{"id": id}) }},
 	{name: "cancel", status: "cancelled", end: func(ft *fleetTest, id string) { ft.event("mac", "interaction.cancel", map[string]any{"id": id}) }},
+	{name: "TTL expiry", status: "expired", end: func(ft *fleetTest, id string) {
+		ft.s.fleet.mu.Lock()
+		p := ft.s.fleet.interactions[id]
+		ft.s.fleet.mu.Unlock()
+		if p == nil {
+			return
+		}
+		ft.s.fleet.mu.Lock()
+		paused := p.prepared != nil && p.prepared.paused
+		ft.s.fleet.mu.Unlock()
+		if paused {
+			// The pause-budget timer uses this same guarded terminal path once its
+			// cumulative budget is spent; the timer itself has a separate synctest.
+			ft.s.endPreparedIf(p, "expired", "", func(a *preparedApproval) bool { return a.paused })
+		} else {
+			ft.s.expirePrepared(p)
+		}
+	}},
 }
 
 func TestPreparedLifecycleEndReleasesOriginalCallExactlyOnce(t *testing.T) {
@@ -159,6 +229,13 @@ func TestPreparedLifecycleEndReleasesOriginalCallExactlyOnce(t *testing.T) {
 			got := awaitPreparedTest(t, done)
 			if got.err != nil || got.out.Text == "" || got.out.Clarifying {
 				t.Fatalf("original tool outcome = %+v, %v", got.out, got.err)
+			}
+			if tc.status == "expired" {
+				for _, want := range []string{id, "expired", "nothing was executed"} {
+					if !strings.Contains(got.out.Text, want) {
+						t.Errorf("expired original tool outcome = %q, want %q", got.out.Text, want)
+					}
+				}
 			}
 			select {
 			case duplicate := <-done:

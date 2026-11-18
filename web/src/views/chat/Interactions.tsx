@@ -586,12 +586,16 @@ export class PermissionCardBoundary extends Component<{ ix: Interaction; childre
   }
 }
 
-function PermissionCardSlot({ ix }: { ix: Interaction }) {
+export function PermissionCardFrame({ ix, children }: { ix: Interaction; children: ReactNode }) {
   return (
     <PermissionCardBoundary ix={ix}>
-      <Suspense fallback={<PermissionCardLoading ix={ix} />}><PermissionCard ix={ix} /></Suspense>
+      <Suspense fallback={<PermissionCardLoading ix={ix} />}>{children}</Suspense>
     </PermissionCardBoundary>
   );
+}
+
+function PermissionCardSlot({ ix }: { ix: Interaction }) {
+  return <PermissionCardFrame ix={ix}><PermissionCard ix={ix} /></PermissionCardFrame>;
 }
 
 /** A terminal dialog's words under its question (#6638): at most six lines in view, the rest a scroll inside them. */

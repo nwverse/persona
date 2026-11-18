@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -23,7 +24,7 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 	}
 	for _, f := range p.ix.Fields {
 		if r.Allow != nil && *r.Allow && !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
-			return fmt.Errorf("%s was left empty on the phone: nothing changed", f.Label)
+			return i18n.Err("hub-hub.fill_in", i18n.Args{"field": f.Label})
 		}
 	}
 	r.Values = declaredValues(p.ix, r.Values)
