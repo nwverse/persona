@@ -53,7 +53,7 @@ export function DirectionNotes({ deps }: { deps: DirectionNotesDeps }) {
       {list === null ? (
         <div className="px-4 py-4"><Loading /></div>
       ) : list.length === 0 ? (
-        <p className="px-4 py-4 text-[12.5px] leading-relaxed text-ink-3">
+        <p className="px-4 py-4 text-label leading-relaxed text-ink-3">
           {error ? t("settings-directionnotes.load_failed", { error }) : t("settings-directionnotes.empty")}
         </p>
       ) : (
@@ -90,8 +90,8 @@ function DirectionNotesRow({ entry, deps }: { entry: DirectionNotesEntry; deps: 
   return (
     <div className="px-4 py-3" data-direction={entry.id}>
       <div className="mb-2 flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{name}</span>
-        {meta && <span className="shrink-0 truncate text-[11px] text-ink-3">{meta}</span>}
+        <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink">{name}</span>
+        {meta && <span className="shrink-0 truncate text-submeta text-ink-3">{meta}</span>}
       </div>
       <textarea
         className={cx(textareaClass, "min-h-[88px]")}
@@ -102,7 +102,7 @@ function DirectionNotesRow({ entry, deps }: { entry: DirectionNotesEntry; deps: 
         onChange={(e) => setText(e.target.value)}
       />
       <div className="mt-2 flex items-center gap-3">
-        <span className={cx("min-w-0 flex-1 text-[11.5px] tabular-nums", over ? "text-red" : "text-ink-3")}>
+        <span className={cx("min-w-0 flex-1 text-submeta tabular-nums", over ? "text-red" : "text-ink-3")}>
           {changed || over ? t("settings-directionnotes.count", { count: [...text].length, max: DIRECTION_NOTES_MAX }) : ""}
         </span>
         {changed && <Button tone="quiet" disabled={busy} onClick={() => setText(base)}>{t("settings-assistantsettings.revert")}</Button>}
