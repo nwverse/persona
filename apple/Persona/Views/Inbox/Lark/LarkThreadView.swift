@@ -404,7 +404,7 @@ private struct LarkThreadTitle: ViewModifier {
 
     func body(content: Content) -> some View {
         if let chatName {
-            content.navigationTitle("Topic Details").navigationSubtitle(String(localized: "From \(chatName)"))
+            content.navigationTitle("Topic Details").navigationSubtitleWhenSupported(String(localized: "From \(chatName)"))
         } else {
             content.navigationTitle("Topic")
         }

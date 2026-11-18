@@ -826,10 +826,17 @@ struct ChatView: View {
         #endif
         // A different chat shown in place: its own cards decide whether another conversation needs you (#4348).
         .onChange(of: key) { _, _ in offeredNext = nil }
-        // Leaving the conversation ends the phone's voice call bound to it (docs/assistant/voice.md 6.5): another agent shown in
-        // place, the page gone, or hidden in the shell (`onTabVisibility`).
-        .onChange(of: key) { old, _ in VoiceCalls.shared.leave(old) }
-        .onTabVisibility(appear: {}, disappear: { [key] in VoiceCalls.shared.leave(key) })
+        // Leaving the conversation (another agent shown in place, the page gone, or hidden in the shell: `onTabVisibility`)
+        // leaves the phone's voice chat bound to it with the bar back to it at the top, and coming back takes the bar away
+        // (docs/assistant/voice.md 6.5; #9887 one button: it no longer ends there).
+        .onChange(of: key) { old, new in
+            VoiceCalls.shared.leave(old)
+            VoiceCalls.shared.returned(new)
+        }
+        .onTabVisibility(appear: { [key] in VoiceCalls.shared.returned(key) }, disappear: { [key] in VoiceCalls.shared.leave(key) })
+        // The bar back to this conversation's voice chat tapped over a cover of this page (#9887: a full-screen picture,
+        // the terminal): the cover goes, and the page showing again takes the bar away (`VoiceCalls.returnTo`).
+        .onChange(of: VoiceCalls.shared.returning == key) { _, back in if back { closeCovers() } }
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
         let activityMiddle = AnyView(activityTop)
@@ -2155,6 +2162,13 @@ struct ChatView: View {
     /// strip shows them).
     private var shownPending: [PendingMessage] { pendingPlacement.chat }
 
+    /// The row's kept messages (#10194) the transcript does not have yet (the row may lag behind the line).
+    private var keptUndelivered: [UndeliveredMessage] {
+        guard let list = session?.undelivered, !list.isEmpty else { return [] }
+        return UndeliveredMessage.shown(list, landed: store.items.compactMap(\.clientMsgID),
+                                        drawn: (store.pending + store.arriving).map(\.id.uuidString))
+    }
+
     /// What was sent from here and is not in the transcript yet, split between the chat and the queue strip (#1461).
     private var pendingPlacement: (strip: [PendingMessage], chat: [PendingMessage]) {
         QueuePlacement.split(store.arriving + store.pending, working: session?.status.isActive == true, queued: session?.queued ?? [],
@@ -3090,6 +3104,17 @@ struct ChatView: View {
                     .allowsHitTesting(!pick.on)
                     #endif
             }
+            // Your messages the assistant keeps after they could not go in, from the row: on every device (#10194).
+            ForEach(keptUndelivered.reversed()) { m in
+                UndeliveredBubble(message: m, retry: { Task { await model.retryUndelivered(key, m.id) } },
+                                  discard: { Task { await model.deleteUndelivered(key, m.id) } })
+                    .chatMark("chat.undelivered.\(m.state).\(m.id)")
+                    #if os(iOS)
+                    .allowsHitTesting(!pick.on) // not sent yet: never picked, and quiet while selecting
+                    #endif
+                    .flippedBack()
+                    .id("undelivered-" + m.id)
+            }
             // The first message of a conversation, not in the transcript yet: its day over it, as the new-conversation
             // page drew it (`FirstMessagePending`) and the transcript's lines will (#1911).
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
@@ -3207,7 +3232,7 @@ struct ChatView: View {
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
-        .scrollEdgeEffectHidden(true, for: .all)
+        .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
         .scrollPosition($position)
         // The part over the footer: what the page shows of the list, as the follow, the landings and the navigator take it.
         .onGeometryChange(for: CGRect.self, of: { g in
@@ -4030,7 +4055,7 @@ struct ChatView: View {
         let header = ChromeHeader(chrome: chrome, touched: { scratch.lastActivity = .now }) {
             VStack(spacing: 0) {
                 // One container for the row's glass (back, the terminal, ⋯): drawn together instead of as separate glasses.
-                GlassEffectContainer(spacing: 8) {
+                GlassGroup(spacing: 8) {
                     HStack(spacing: Theme.Space.s) {
                         headerBack
                         if pane == .chat, let expand = host?.expand { hostedExpandButton(expand) }
@@ -4540,6 +4565,16 @@ struct ChatView: View {
         guard model.latestAnswerFor == key else { return false }
         model.latestAnswerFor = nil
         return true
+    }
+
+    /// What covers this page full screen goes (the bar back to its voice chat was tapped, #9887): the picture viewer and
+    /// the terminal. Their dismissal shows the page again, which takes the bar away (`VoiceCalls.returned`).
+    private func closeCovers() {
+        if viewingImages != nil { viewingImages = nil }
+        if showTerminal {
+            showTerminal = false
+            resumeOnOpen = false // as its own dismissal does
+        }
     }
 
     private func appeared() {
@@ -5628,34 +5663,22 @@ struct Composer: View, Equatable {
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
     private var voiceCall: VoiceConversation? { VoiceCalls.shared.call(on: key) }
 
-    /// The composer's voice button (docs/assistant/voice.md 6.1): only where a call can start; the 「+」 menu's item stays and says why
-    /// not.
+    /// The composer's phone icon (docs/assistant/voice.md 6.1; #9887 one button: the one voice entry): only where a call
+    /// can start. On the iPhone it calls this conversation through the system; elsewhere it is the voice chat in the app
+    /// (`VoiceEntry.start`). Why a call could not be placed shows over the app (`PersonaCalls.refusal`).
     private var voiceEntry: (() -> Void)? {
         guard VoiceSupport.shared.availability(for: model.session(key), group: key.group).isAvailable else { return nil }
         return { startVoice() }
     }
 
-    private func startVoice() {
+    /// `inApp`: the voice chat in the app whatever the device (DEBUG `-openVoice`).
+    private func startVoice(inApp: Bool = false) {
         focused = false
-        voiceNote = VoiceEntry.start(key, model: model)
+        voiceNote = VoiceEntry.start(key, model: model, inApp: inApp) { voiceNote = $0 }
     }
 
-    /// Call Persona in the 「+」 panel (#9290): Persona's main conversation only, on the iPhone and iPad (the system's calls);
-    /// Voice Chat beside it stays the chat's own voice. Why a call could not be placed shows over the app
-    /// (`PersonaCalls.refusal`, `personaCallCover`).
-    private var callPersonaEntry: (() -> Void)? {
-        #if os(iOS)
-        guard isMainAssistantChat, VoicePlatform.current == .phone else { return nil }
-        return {
-            focused = false
-            Task { [group = key.group] in await PersonaCalls.shared.callPersona(group: group, origin: .app) }
-        }
-        #else
-        return nil
-        #endif
-    }
-
-    /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
+    /// Voice Chat in the 「+」 menu of the composers with no phone icon (Apple Vision Pro's: the Mac has no call audio yet,
+    /// docs/assistant/voice.md 6.9). The iPhone's and the iPad's + have none: the phone icon is their one voice entry.
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
             Button { startVoice() } label: { Label("Voice Chat", systemImage: Theme.Icon.voiceChannel) }
@@ -6027,7 +6050,7 @@ struct Composer: View, Equatable {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let call, inCall {
-                VoiceBar(call: call, key: key, label: VoiceEntry.label(model.session(key), model: model))
+                VoiceBar(call: call, key: key, label: VoiceEntry.label(key, model: model))
                     .transition(.opacity)
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
@@ -6037,6 +6060,7 @@ struct Composer: View, Equatable {
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
+                                 voiceLabel: VoiceEntry.iconLabel(key),
                                  modesTitle: modesTitle,
                                  modesDisclosure: assistantModelPickAvailable,
                                  quotes: contexts,
@@ -6181,7 +6205,7 @@ struct Composer: View, Equatable {
             await declarations.refreshWhileActive(api: model.api(key.group))
         }
         // Voice (docs/assistant/voice.md 6.1): asks the hub about it, says why there is none, and the DEBUG switches (6.8).
-        .modifier(ComposerVoice(key: key, note: $voiceNote, active: phase == .active, offered: { voiceEntry != nil }, start: { startVoice() }))
+        .modifier(ComposerVoice(key: key, note: $voiceNote, active: phase == .active, offered: { voiceEntry != nil }, start: { startVoice(inApp: true) }))
         #if DEBUG
         .task { // `-showSampleQuotes YES`: a page's text and another session quoted over the box (#986, screenshots)
             guard UserDefaults.standard.bool(forKey: "showSampleQuotes") else { return }
@@ -6382,12 +6406,10 @@ struct Composer: View, Equatable {
 
     /// What + offers besides photos and files (#3225), one list for three places: the panel's More tab, the iPhone's touch
     /// and hold on +, and the iPad's + menu under Photos and Files. The most used first (the menu puts it nearest the
-    /// finger): calls, the camera and (Persona's main conversation) Meeting Recording, Mention, an Agent's Quick Commands,
-    /// then extension prompts. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
+    /// finger): the camera and (Persona's main conversation) Meeting Recording, Mention, an Agent's Quick Commands, then
+    /// extension prompts. No voice or call rows (#9887 one button): the composer's phone icon is the one voice entry. Rows a chat or device can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
-        var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
-                                                call: callPersonaEntry,
-                                                camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+        var sections = AttachMoreSection.common(camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
                                                 // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
