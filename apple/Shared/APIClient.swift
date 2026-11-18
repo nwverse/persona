@@ -1318,6 +1318,32 @@ nonisolated struct APIClient: Sendable {
     }
     func sessionInfo(_ k: SessionKey) async throws -> SessionInfo { try await get(sp(k) + "/info") }
 
+    /// A session's permission mode changes the hub recorded, oldest first (#10297, docs/protocol/protocol.md「Session
+    /// mode changes」): each change made through /modes, and what became of a queued restart into Allow Everything.
+    nonisolated struct ModeChange: Decodable, Hashable, Sendable {
+        /// "set", "restart_done", "restart_failed" or "restart_dropped".
+        var kind: String
+        var from: String?
+        var to: String?
+        /// For "set": "now", or "restart" for a restart into it that waits for the turn to end; empty from an older node.
+        var applied: String?
+        /// Who asked: "device", "hub" (the hub's own token), "extension".
+        var actorKind: String?
+        var deviceName: String?
+        /// What became of a restart, why: a code ("process_exited", "replaced"…).
+        var reason: String?
+        var at: Date
+        enum CodingKeys: String, CodingKey {
+            case kind, from, to, applied, reason, at
+            case actorKind = "actor_kind", deviceName = "device_name"
+        }
+    }
+    private struct ModeChanges: Decodable, Sendable { var changes: [ModeChange]? }
+    /// Off the main actor (`docs/apple/performance.md` P1): a chat opening reads it.
+    func modeChanges(_ k: SessionKey) async throws -> [ModeChange] {
+        try await getDecodedOffMain(sp(k) + "/mode-changes", as: ModeChanges.self).changes ?? []
+    }
+
     struct ModesBody: Encodable {
         var permissionMode: String?
         var effort: String?
