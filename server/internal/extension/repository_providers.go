@@ -94,7 +94,7 @@ func shortText(s string, most int) bool {
 	return strings.TrimSpace(s) != "" && utf8.RuneCountInString(s) <= most && !strings.ContainsFunc(s, unicode.IsControl)
 }
 
-// endsInNumber is a host whose last label is a number, all digits or 0x and hex digits: an IPv4 address (10.0.0.1,
+// endsInNumber is a host whose last label is a number, all digits or 0x and hex digits: an IPv4 address (192.0.2.1,
 // 0x7f000001), or what a browser's URL parser reads as one and refuses (code.123, code.0x1f; the WHATWG URL
 // standard's "ends in a number"), never a domain name. Upper case is refused before this (hostPattern).
 var endsInNumber = lazyre.New(`(^|\.)([0-9]+|0x[0-9a-f]*)$`)

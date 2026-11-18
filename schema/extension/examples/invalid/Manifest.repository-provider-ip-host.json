@@ -5,5 +5,5 @@
   "version": "1.0.0",
   "engines": {"extension_protocol": 1},
   "runtime": {"command": {"linux-amd64": "bin/acme-code"}},
-  "contributes": {"repository_providers": [{"id": "acme", "name": "Acme Code", "hosts": ["10.0.0.1"]}]}
+  "contributes": {"repository_providers": [{"id": "acme", "name": "Acme Code", "hosts": ["192.0.2.1"]}]}
 }

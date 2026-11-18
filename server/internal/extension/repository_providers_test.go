@@ -108,7 +108,7 @@ func TestRepositoryProvidersRefusals(t *testing.T) {
 		{"upper case", edit(func(it map[string]any) { it["hosts"] = []string{"Code.acme.test"} }), false, false},
 		{"a port", edit(func(it map[string]any) { it["hosts"] = []string{"code.acme.test:8443"} }), false, false},
 		{"a scheme", edit(func(it map[string]any) { it["hosts"] = []string{"https://code.acme.test"} }), false, false},
-		{"an IP address", edit(func(it map[string]any) { it["hosts"] = []string{"10.0.0.1"} }), false, false},
+		{"an IP address", edit(func(it map[string]any) { it["hosts"] = []string{"192.0.2.1"} }), false, false},
 		{"a numeric last label", edit(func(it map[string]any) { it["hosts"] = []string{"code.acme.123"} }), false, false},
 		// A browser's URL parser reads a last label of 0x and hex digits as a number too (WHATWG "ends in a number").
 		{"a hex IP address", edit(func(it map[string]any) { it["hosts"] = []string{"0x7f000001"} }), false, false},

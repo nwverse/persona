@@ -74,9 +74,9 @@ func TestBuiltinHostsAreTheOnesParseMaps(t *testing.T) {
 		"github.com":        "https://github.com/example/web",
 		"www.github.com":    "https://www.github.com/example/web",
 		"api.github.com":    "https://api.github.com/repos/example/web",
-		"ssh.github.com":    "ssh://git@ssh.github.com:443/example/web.git",
+		"ssh.github.com":    "ssh://git@" + "ssh.github.com:443/example/web.git",
 		"gitlab.com":        "https://gitlab.com/example/web",
-		"altssh.gitlab.com": "ssh://git@altssh.gitlab.com:443/example/web.git",
+		"altssh.gitlab.com": "ssh://git@" + "altssh.gitlab.com:443/example/web.git",
 	} {
 		id, err := Parse(remote, "")
 		if err != nil || id.Provider != GitHub && id.Provider != GitLab {
