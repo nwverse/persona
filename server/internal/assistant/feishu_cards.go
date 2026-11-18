@@ -554,6 +554,12 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		} else if in := proto.RedactArgs(ix.ToolInput); in != "" { // a credential's value never goes to the chat (#4734)
 			c.Markdown("```json\n" + strings.ReplaceAll(clip(in, 2500), "```", "'''") + "\n```")
 		}
+		if ix.CanClarify && !ix.Private {
+			// Question-only form: no Resolution.Values, Allow or Deny travels with
+			// it. Field-bearing cards keep their fields App-only but may still ask.
+			c.Form("clarify", []any{feishubot.Input("question", "", i18n.T(l, "assistant-feishu_cards.question_placeholder"), false)},
+				feishubot.Submit(i18n.T(l, "assistant-feishu_cards.have_question"), feishubot.Default, "permission_clarify", val(map[string]any{"clarify": "1"})))
+		}
 		if len(ix.Fields) > 0 {
 			// A password or a code is typed in the app, never in a chat.
 			c.Note(i18n.T(l, "assistant-feishu_cards.fields_in_app"))
