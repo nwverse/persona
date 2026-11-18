@@ -116,14 +116,16 @@ func lsStageScript(op, sum string) string {
 
 // lsInstallScript refuses when Persona Link appeared since the probe, links the staged build of op into place as
 // bin/persona-link (never over a file there), says placed=1, and runs its installer with the pairing link on stdin
-// (`install --pair -` reads it to EOF): the script's exit is the installer's from there.
+// (`install --pair -` reads it to EOF): the script's exit is the installer's from there, and paired=1 says the
+// installer got as far as pairing (link.json is there), so its link may still come.
 func lsInstallScript(op string) string {
 	lines := append(lsPrelude(), "f="+lsStaged(op), "t="+lsIn("B", lsLinkBin),
 		`for p in `+lsLinkPaths()+`; do if e "$p"; then rm -f "$f"; exit `+strconv.Itoa(lsExitInstallExists)+`; fi; done`,
 		`[ -f "$f" ] || exit `+strconv.Itoa(lsExitInstallStaged),
 		`ln "$f" "$t" 2>/dev/null || { rm -f "$f"; exit `+strconv.Itoa(lsExitInstallPlace)+`; }`,
 		`rm -f "$f"`, "echo placed=1",
-		`"$t" install --pair -`)
+		`"$t" install --pair -`, "x=$?",
+		`if [ -e `+lsIn("D", "link.json")+` ]; then echo paired=1; fi`, `exit "$x"`)
 	return lsScript(lines...)
 }
 

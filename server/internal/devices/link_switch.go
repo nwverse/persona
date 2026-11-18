@@ -770,7 +770,8 @@ func (r *linkSwitchRun) begin(ctx context.Context) (link, refused string, err er
 // in the record), else why the switch fails.
 func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 	exit, out := r.ssh(ctx, "install", lsInstallScript(r.rec.Operation), strings.NewReader(link+"\n"), r.t.Install)
-	placed := outputOf(out)["placed"] == "1"
+	kv := outputOf(out)
+	placed, paired := kv["placed"] == "1", kv["paired"] == "1"
 	switch {
 	case placed:
 		r.rec.Install = lsInstallPlaced
@@ -786,8 +787,12 @@ func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 		return proto.LinkSwitchReasonExistingLink
 	case !placed && (exit == lsExitInstallStaged || exit == lsExitInstallPlace):
 		return proto.LinkSwitchReasonInstallFailed
+	case placed && exit > 0 && !sshFailed(exit) && !paired:
+		// The installer gave up before it paired (the hub not reachable from there, the code refused): no link comes.
+		return proto.LinkSwitchReasonInstallFailed
 	}
-	return "" // the installer ran (whatever it said, the link may come still), or ssh failed with it perhaps running
+	// The installer worked, or paired and its link may come still, or ssh failed with it perhaps running: wait.
+	return ""
 }
 
 // linkOnline: the machine's entry is kind link and its node answered through Persona Link.
