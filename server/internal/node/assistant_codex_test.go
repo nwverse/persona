@@ -896,14 +896,12 @@ func TestAssistantCodexTurnError(t *testing.T) {
 	transient := map[string]any{"message": "unexpected status 503", "codexErrorInfo": map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 503}}}
 	f.push(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": testThread,
 		"turn": map[string]any{"id": "t1", "status": "failed", "error": transient}}})
-	waitFor(t, "the same-model Codex retry", func() bool { return len(f.sent("turn/start")) == 1 })
-	if got := f.sent("turn/start"); len(got) != 1 || !strings.Contains(string(got[0].Params), "persona-context") {
-		t.Fatalf("the retry did not resume with hidden context: %+v", got)
+	waitFor(t, "transient failure published", func() bool { return session().TurnError != "" })
+	if got := f.sent("turn/start"); len(got) != 0 {
+		t.Fatalf("node retried instead of awaiting manager: %+v", got)
 	}
-	turn("t1-retry")
-	end("t1-retry", "failed", transient) // no next model: the second failure is final
 	if s := session(); s.TurnError != "unexpected status 503" || s.TurnErrorKind != proto.TurnErrorTransient {
-		t.Fatalf("failed turn after its bounded recovery: %q, %q", s.TurnError, s.TurnErrorKind)
+		t.Fatalf("transient failure: %+v", s)
 	}
 
 	turn("t2")

@@ -444,12 +444,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return err
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		id, _ := p["session_id"].(string)
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
 			return err
 		}
-		if method == DeviceSessionSend {
+		if method == DeviceSessionSend || method == DeviceSessionSendOnce {
 			cfg := s.settings(ctx)
 			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
 				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
@@ -457,7 +457,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if text, ok := p["text"].(string); ok {
 			source, _ := p["message_source"].(*proto.MessageSource)
 			if id, _ := p["session_id"].(string); source != nil && method == DeviceAssistantSend {
@@ -475,7 +475,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceSessionSend {
+	if p, ok := params.(map[string]any); ok && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if id, _ := p["session_id"].(string); id != "" {
 			s.workTold(device, id) // the turn it starts is this manager's doing, not the owner's hand (setup_suggest.go)
 		}

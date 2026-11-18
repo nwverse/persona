@@ -473,6 +473,11 @@ func (n *Node) sendEchoed(id, clientMsgID, text string, images int, after echoAf
 	if clientMsgID == "" {
 		return send()
 	}
+	if strings.HasPrefix(clientMsgID, "model-retry:") {
+		if r, known := n.echoes.record(id, clientMsgID); known && r.Line != "" {
+			return nil // a restored transcript receipt proves this continuation arrived
+		}
+	}
 	r := echoRecord{SessionID: id, ClientMsgID: clientMsgID, Text: text, Images: images, SentAt: time.Now(), AfterSeq: after.seq, In: after.in}
 	fresh := n.echoes.expect(r)
 	err := send()

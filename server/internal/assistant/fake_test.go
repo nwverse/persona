@@ -369,6 +369,17 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
 		f.sentOnce = append(f.sentOnce, a)
+		if id, _ := a["client_msg_id"].(string); strings.HasPrefix(id, "model-retry:") {
+			for _, prior := range f.agentSent {
+				if prior["client_msg_id"] == id {
+					return json.RawMessage(`{}`), nil
+				}
+			}
+			f.agentSent = append(f.agentSent, a)
+			if f.onSend != nil {
+				f.onSend(f, a)
+			}
+		}
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers

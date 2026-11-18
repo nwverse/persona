@@ -38,8 +38,8 @@ while IFS= read -r line; do
       count=$((count+1))
       echo "$count" > "$CLI_FAKE_DIR/attempts"
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
-      if [ "$count" -le 2 ]; then
-        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+      if [ "$count" -le 1 ]; then
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged"}'
       else
         echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
         echo '{"type":"result","subtype":"success","is_error":false,"result":"answered by fallback"}'
@@ -60,7 +60,7 @@ func TestAssistantFallbackAsksClaudeForItsTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	cliWait(t, "the second refusal to resume on the next launcher model", func() bool {
-		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 3
+		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 2
 	})
 	f.idle(t, id)
 	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" {
@@ -265,7 +265,7 @@ func TestAssistantFirstFailureInTheHandoverGapIsCarried(t *testing.T) {
 	p := keptProc(t, a, id, "claude")
 	p.launcher, p.model, p.busy = "claude", modelExecution{Model: "primary-model"}, true
 	a.handOverAssistants()
-	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
+	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged") {
 		t.Fatal("the first failure in the handover gap was published as final")
 	}
 	send := assistantRecoverySend
@@ -281,8 +281,8 @@ func TestAssistantFirstFailureInTheHandoverGapIsCarried(t *testing.T) {
 	b.resumeAdoptedFailures(true)
 	select {
 	case got := <-selected:
-		if got != "primary-model" {
-			t.Fatalf("the carried first failure did not retry on its own model: %q", got)
+		if got == "primary-model" || got == "" {
+			t.Fatalf("the carried safeguards failure did not select a fallback: %q", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the carried first failure did not resume on the new Node")
@@ -347,17 +347,15 @@ func TestAssistantUnavailableFallbackMovesOn(t *testing.T) {
 	n.procs[id] = p
 	n.recoveries = map[string]*assistantTurnRecovery{id: {retried: map[string]bool{"": true}, switched: true,
 		used: map[string]bool{"claude-opus-5-5": true, "fable": true}}}
-	if !n.recoverAssistantResult(p, true, missing, proto.TurnErrorUser, assistantRecordKind) {
-		t.Fatal("an unavailable fallback ended the recovery")
+	if n.recoverAssistantResult(p, true, missing, proto.TurnErrorUser, assistantRecordKind) {
+		t.Fatal("permanent fallback error started recovery")
 	}
 	select {
-	case m := <-got:
-		if m != "haiku" {
-			t.Fatalf("the chain went on to %q, want haiku", m)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no recovery send after the unavailable fallback")
+	case <-got:
+		t.Fatal("permanent fallback error sent another request")
+	default:
 	}
+
 	own := assistantNode(t)
 	q := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fable"}}
 	own.procs[id] = q
@@ -368,60 +366,20 @@ func TestAssistantUnavailableFallbackMovesOn(t *testing.T) {
 
 // A fallback the gateway does not serve is remembered for its launcher: the next chain, in this conversation or
 // another, does not pick it again until it expires (#5234).
-func TestAssistantUnavailableFallbackIsRemembered(t *testing.T) {
+func TestAssistantUnavailableFallbackIsNotAutomaticallyRetried(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
-	const missing = "There's an issue with the selected model (ccone/claude-fable-5-2). It may not exist or you may not have access to it."
-	list := proto.LauncherModels{Models: []proto.AgentModel{{ID: "default", Default: true, Resolved: "claude-opus-5-5"},
-		{ID: "fable", Resolved: "ccone/claude-fable-5-2"}, {ID: "haiku", Resolved: "gemini-3.8-flash-tiered"}}}
-	models, send := assistantRecoveryModels, assistantRecoverySend
-	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) { return list, nil }
-	got := make(chan string, 4)
-	assistantRecoverySend = func(_ context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
-		got <- execution.Model
-		return nil
-	}
 	n := assistantNode(t)
-	p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fable"}}
+	p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
 	n.procs[id] = p
-	n.recoveries = map[string]*assistantTurnRecovery{id: {retried: map[string]bool{"": true}, switched: true, launcher: "claude",
-		used: map[string]bool{"claude-opus-5-5": true, "fable": true}}}
-	if !n.recoverAssistantResult(p, true, missing, proto.TurnErrorUser, assistantRecordKind) {
-		t.Fatal("an unavailable fallback ended the recovery")
-	}
-	if m := <-got; m != "haiku" {
-		t.Fatalf("went on to %q, want haiku", m)
-	}
-
-	// The next message's chain, from the configured model: refused on it, it must not offer fable again.
-	const other = "22222222-3333-4444-5555-666666666666"
-	q := &assistantProc{id: other, agent: "claude", launcher: "claude", model: modelExecution{}}
-	n.mu.Lock()
-	n.procs[other] = q
-	n.mu.Unlock()
-	if !n.recoverAssistantResult(q, true, "API Error: Opus 5.5's safeguards flagged this message") {
-		t.Fatal("the refusal was not recovered")
-	}
-	if m := <-got; m != "haiku" {
-		t.Fatalf("a later chain picked %q, want haiku (fable is unavailable)", m)
-	}
-
-	// Once it expires the model is offered again.
-	n.mu.Lock()
-	for k := range n.unavailable {
-		n.unavailable[k] = time.Now().Add(-time.Minute)
-	}
-	used := map[string]bool{}
-	n.markUnavailableUsed("claude", used)
-	n.mu.Unlock()
-	if len(used) != 0 {
-		t.Fatalf("an expired unavailable model is still skipped: %v", used)
+	n.recoveries = map[string]*assistantTurnRecovery{id: {switched: true}}
+	if n.recoverAssistantResult(p, true, "API Error: 404 model not found", proto.TurnErrorUser, assistantRecordKind) {
+		t.Fatal("permanent fallback was retried")
 	}
 }
 
-// A model that answered here within the hour and now "does not exist" is the gateway's passing failure: the turn is
-// recovered. One that never answered here stays the user's to fix (#5234).
-func TestAssistantTransient404OnAModelThatJustAnswered(t *testing.T) {
+// Explicit missing-model/access errors stay permanent even when the model
+// answered recently; historical success cannot override the current refusal.
+func TestAssistantMissingModelNeverBypassesAccessFailure(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	const gone = "There's an issue with the selected model (claude-opus-5-5). It may not exist or you may not have access to it."
 	send := assistantRecoverySend
@@ -436,7 +394,7 @@ func TestAssistantTransient404OnAModelThatJustAnswered(t *testing.T) {
 		repliedAt time.Time
 		want      bool
 	}{
-		{"answered two minutes ago", time.Now().Add(-2 * time.Minute), true},
+		{"answered two minutes ago", time.Now().Add(-2 * time.Minute), false},
 		{"answered yesterday", time.Now().Add(-26 * time.Hour), false},
 		{"never answered here", time.Time{}, false},
 	} {

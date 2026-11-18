@@ -1523,6 +1523,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		if strings.HasPrefix(opts.ClientMsgID, "model-retry:") && n.stopCause(p.SessionID) == proto.StopUser {
+			return nil, n.stoppedRefusal(p.SessionID)
+		}
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
 		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
