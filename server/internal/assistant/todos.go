@@ -457,6 +457,7 @@ func (s *Service) todosPushSoon() {
 		p.mu.Lock()
 		p.armed = false
 		p.mu.Unlock()
+		s.todoViewPushed() // every app reads the list again from here (todo_view_push.go)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.event(ctx, map[string]any{"type": "todos"})
@@ -896,12 +897,11 @@ func (s *Service) todoRoutes() {
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
-		list, err := s.listedTodos(r.Context(), true)
+		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		p := s.viewed(r.Context(), list, time.Now())
 		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
 

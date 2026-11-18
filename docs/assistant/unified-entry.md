@@ -446,8 +446,9 @@ lines, and in the user's own color and alignment they read as something the user
   The title is the session's, then the Agent row's, then the task's. The second line is that Agent's `activity_at` (else `updated_at`) as a relative time and
   its state; before there is an Agent it says "Starting the agent", a task closed without one "Closed
   before an Agent started", a task the list no longer has "This task no longer exists".
-  Apple renders this with `DispatchHandoffCards` and `DispatchedTasks`: on iPhone that Agent is pushed using
-  `TasksStore.expand`, and Back returns to the same Assistant conversation without switching to Agents. On Mac the
+  Apple renders this with `DispatchHandoffCards` and `DispatchedTasks`: on iPhone and iPad that Agent is pushed using
+  `TasksStore.expand`, and Back returns to the same Assistant conversation without switching to Agents. In the Sidebar
+  layout too it is pushed on the page's path, not made a root: the sidebar's choice stays on the conversation (#9971). On Mac the
   task's own detail hosts the Agent chat, carrying that `SessionKey` into its initial selection (validated
   against that task's active sessions); while no Agent is available, the detail shows its starting/failure state.
   The card is one accessibility element and button (`dispatch.task.<todo id>`); the badge never wraps.

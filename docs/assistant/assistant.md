@@ -1152,9 +1152,11 @@ cannot take the message (its process did not start, as a cold start killed on a 
 away), nothing was typed. The hub used to answer the app with the failure and forget the message; a replay of the app's
 operation then read as accepted and the bubble waited for the transcript and went.
 
-- **Kept.** The hub hands such a message (a 5xx with nothing delivered, with a `client_msg_id`) to the conversation's
-  manager, `assistant.keep_undelivered`, with the app's own fields (`text`, `images`, `launcher`, `model`, `effort`),
-  never what `assistant.send_params` added. The manager keeps it in its Postgres (setting `assistant.undelivered`,
+- **Kept.** The hub hands such a message (a 5xx with nothing delivered, or a transport outcome whose delivery is
+  unknown, with a `client_msg_id`) to the conversation's manager, `assistant.keep_undelivered`, with the app's own fields
+  (`text`, `images`, `launcher`, `model`, `effort`), never what `assistant.send_params` added. An unknown first attempt
+  is marked `delivery_unknown` and carries `tried_at`, the original send's start, so the manager looks for it before
+  trying again rather than either dropping it or resending blindly. The manager keeps it in its Postgres (setting `assistant.undelivered`,
   `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
   (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
   cannot keep it leaves the failure as before.
