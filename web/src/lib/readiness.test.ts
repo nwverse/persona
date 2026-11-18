@@ -175,17 +175,20 @@ describe("turn errors", () => {
   });
 
   it("says a gateway that refused on-demand tools needs only a retry, in every language", async () => {
+    // The card can't tell whether the conversation's computer runs a node that now sends every tool there (an older one
+    // keeps tool search on), so its words promise only a retry; the hub's readiness step says more when it knows.
     const words = {
-      en: ["load tools on demand", "every tool"],
-      "zh-Hans": ["按需加载工具", "全部工具"],
-      ja: ["必要時読み込み", "すべてのツール"],
+      en: ["load tools on demand", "Try again", "every tool"],
+      "zh-Hans": ["按需加载工具", "重试", "全部工具"],
+      ja: ["必要時読み込み", "再試行", "すべてのツール"],
     };
     try {
-      for (const [lang, [title, detail]] of Object.entries(words)) {
+      for (const [lang, [title, detail, promise]] of Object.entries(words)) {
         await initI18n(lang);
         const fix = turnErrorFix("tool_search_unsupported")!;
         expect(fix.title).toContain(title);
         expect(fix.detail).toContain(detail);
+        expect(fix.detail).not.toContain(promise);
         expect(fix.action).toBe("retry");
       }
     } finally {

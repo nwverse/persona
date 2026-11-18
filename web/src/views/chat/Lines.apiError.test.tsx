@@ -63,7 +63,7 @@ describe("a gateway that refused on-demand tools (tool_search_unsupported)", () 
   it("says so in a Persona conversation and offers Retry, not a provider to set up", () => {
     const html = banner(edge, true);
     expect(html).toContain("这个网关不支持按需加载工具");
-    expect(html).toContain("全部工具");
+    expect(html).not.toContain("全部工具"); // an older computer's node keeps tool search on: no promise it can't keep
     expect(html).toContain(">重试</button>");
     expect(html).not.toContain("去修");
     // the record in the chat says the same, with no button of its own

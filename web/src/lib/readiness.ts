@@ -229,7 +229,8 @@ export interface TurnFix {
 
 /** A turn that ended on a model error the user must fix: the card's title and its button (4.4 "Model error"). A model
  *  the chat can't run is fixed by picking another one for it (`pick_model`), not by adding a provider; a gateway that
- *  refused on-demand tool loading needs only a retry, as Persona now sends every tool. */
+ *  refused on-demand tool loading gets a retry, in words that promise nothing more: a current node sends that gateway
+ *  every tool from then on, an older one does not, and the card can't tell which runs the chat. */
 export function turnErrorFix(code: string | undefined): TurnFix | null {
   switch (code) {
     case "not_logged_in":

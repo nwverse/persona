@@ -153,6 +153,11 @@ const (
 	// the hub starts again in that tab itself (docs/protocol/protocol.md "Answering a start's question"). Without it
 	// the manager answers node_outdated.
 	StartAnswer = "start_answer"
+	// AssistantToolSearchFallback: an assistant turn a gateway refused for Claude Code's tool search is resent once with
+	// every tool loaded, and that launcher and model start so from then on (docs/integrations/claude-integration.md
+	// "Tool search behind a gateway"). Only then do the hub's words for tool_search_unsupported say Persona now sends
+	// every tool there; an older node keeps tool search on, and a retry meets the same refusal.
+	AssistantToolSearchFallback = "assistant_tool_search_fallback"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -182,7 +187,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer}
+var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

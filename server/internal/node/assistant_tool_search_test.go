@@ -63,6 +63,9 @@ func TestToolSearchFor(t *testing.T) {
 // --settings, the project's local then shared settings, the user's), then what the launcher exports, then the shell's
 // unless the launcher unset it. The first that names ANTHROPIC_BASE_URL counts, empty too.
 func TestClaudeEndpointLayers(t *testing.T) {
+	managed := claudeManagedSettingsFiles // not the machine's own policy (TestClaudeEndpointManagedPolicy)
+	claudeManagedSettingsFiles = func() []string { return nil }
+	t.Cleanup(func() { claudeManagedSettingsFiles = managed })
 	home, cwd, profile := t.TempDir(), t.TempDir(), t.TempDir()
 	writeFile(t, filepath.Join(home, "own.json"), `{"env":{"ANTHROPIC_BASE_URL":"https://own.example.com"}}`)
 	writeFile(t, filepath.Join(cwd, ".claude", "settings.local.json"), `{"env":{"ANTHROPIC_BASE_URL":"https://local.example.com"}}`)
@@ -94,6 +97,45 @@ func TestClaudeEndpointLayers(t *testing.T) {
 		if got != tc.want || ownTS != tc.ownTS {
 			t.Errorf("%s: %q own %v, want %q own %v", tc.name, got, ownTS, tc.want, tc.ownTS)
 		}
+	}
+}
+
+// An administrator's managed settings sit above every other layer (#10365): their ANTHROPIC_BASE_URL is where claude's
+// requests go, a managed-settings.d drop-in over managed-settings.json (the last in alphabetical order first, hidden
+// ones skipped), and their ENABLE_TOOL_SEARCH is not Persona's to override. A start of plain claude behind such a
+// policy's gateway loads every tool up front, as behind any other gateway.
+func TestClaudeEndpointManagedPolicy(t *testing.T) {
+	old := claudeManagedSettingsFiles
+	t.Cleanup(func() { claudeManagedSettingsFiles = old })
+	dir := t.TempDir()
+	policy := filepath.Join(dir, "managed-settings.json")
+	claudeManagedSettingsFiles = func() []string { return []string{filepath.Join(dir, "absent", "managed-settings.json"), policy} }
+	writeFile(t, policy, `{"env":{"ANTHROPIC_BASE_URL":"https://policy.example.com"}}`)
+	own := filepath.Join(dir, "own.json")
+	writeFile(t, own, `{"env":{"ANTHROPIC_BASE_URL":"https://own.example.com"}}`)
+	p := Probe{Env: map[string]string{"ANTHROPIC_BASE_URL": "https://env.example.com"}, Shell: map[string]string{}}
+	endpoint := func() (string, bool) { return claudeEndpoint(p, own, t.TempDir(), t.TempDir(), dir) }
+	if got, ownTS := endpoint(); got != "https://policy.example.com" || ownTS {
+		t.Fatalf("managed-settings.json: %q own %v", got, ownTS)
+	}
+	dropIns := filepath.Join(dir, "managed-settings.d")
+	writeFile(t, filepath.Join(dropIns, "10-gateway.json"), `{"env":{"ANTHROPIC_BASE_URL":"https://dropin.example.com"}}`)
+	writeFile(t, filepath.Join(dropIns, "20-tools.json"), `{"env":{"ENABLE_TOOL_SEARCH":"true"}}`)
+	writeFile(t, filepath.Join(dropIns, ".30-hidden.json"), `{"env":{"ANTHROPIC_BASE_URL":"https://hidden.example.com"}}`)
+	writeFile(t, filepath.Join(dropIns, "30-notes.txt"), `{"env":{"ANTHROPIC_BASE_URL":"https://notes.example.com"}}`)
+	if got, ownTS := endpoint(); got != "https://dropin.example.com" || !ownTS {
+		t.Fatalf("drop-ins: %q own %v", got, ownTS)
+	}
+	writeFile(t, filepath.Join(dropIns, "40-anthropic.json"), `{"env":{"ANTHROPIC_BASE_URL":""}}`)
+	if got, _ := endpoint(); got != "" {
+		t.Fatalf("the last drop-in's empty Base URL (Anthropic's own API): %q", got)
+	}
+
+	f := cliTest(t)
+	claudeManagedSettingsFiles = func() []string { return []string{filepath.Join(dir, "gw", "managed-settings.json")} }
+	writeFile(t, filepath.Join(dir, "gw", "managed-settings.json"), `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:9"}}`)
+	if _, env, settings := toolSearchStartOf(t, f, "claude", cliExec()); env != "false" || settings != "-" {
+		t.Fatalf("plain claude behind the policy's gateway: env %q, settings env %q", env, settings)
 	}
 }
 
@@ -370,6 +412,40 @@ func TestIdleConversationRestartsWhenItsLauncherRefusedToolSearch(t *testing.T) 
 	g.n.noteToolSearchRefused("claude", spare.model.Model, spare.endpoint)
 	if got := g.n.adoptSpare(cwd, "claude", cliExec()); got != nil {
 		t.Fatal("a spare started with tool search on was adopted after its endpoint refused it")
+	}
+}
+
+// The next warm replaces a spare its endpoint's refusal made stale since (#10365): it is stopped, and the one waiting
+// instead starts with every tool loaded, which the next new conversation adopts rather than cold-starting.
+func TestWarmReplacesASpareMadeStaleByAToolSearchRefusal(t *testing.T) {
+	f := cliTest(t)
+	cwd, execution := t.TempDir(), cliExec()
+	execution.ConfigDir = t.TempDir() // the profile the hub warms and starts new conversations in
+	if err := f.n.assistantWarm(cwd, "claude", execution); err != nil {
+		t.Fatal(err)
+	}
+	spare := func() *assistantProc {
+		f.n.mu.Lock()
+		defer f.n.mu.Unlock()
+		return f.n.spare
+	}
+	stale := spare()
+	t.Cleanup(stale.stop)
+	f.n.noteToolSearchRefused("claude", stale.model.Model, stale.endpoint)
+	if got := f.n.adoptSpare(cwd, "claude", execution); got != nil {
+		t.Fatal("a spare started with tool search on was adopted after its endpoint refused it")
+	}
+	if err := f.n.assistantWarm(cwd, "claude", execution); err != nil {
+		t.Fatal(err)
+	}
+	fresh := spare()
+	if fresh == nil || fresh == stale || !fresh.toolSearch.forceOff {
+		t.Fatalf("the stale spare was kept (same %v), or its replacement has tool search on", fresh == stale)
+	}
+	t.Cleanup(fresh.stop)
+	cliWait(t, "the stale spare to stop", func() bool { return !stale.alive() })
+	if got := f.n.adoptSpare(cwd, "claude", execution); got != fresh {
+		t.Fatal("the spare started with every tool loaded was not adopted")
 	}
 }
 

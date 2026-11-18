@@ -29,11 +29,12 @@ type launcherCheckOpts struct {
 	configDir     string // the profile when the conversation has none recorded: the main chat's for new conversations
 }
 
-// assistantCheckToolSearch is the ENABLE_TOOL_SEARCH value an assistant turn on launcher/model starts with: the start's
-// own decision (assistantToolSearch), with the endpoint read as the start reads it from the check's directory and
-// profile (selected, a profile name as assistantProfileSelection gives it).
-var assistantCheckToolSearch = func(n *Node, launcher, model, dir, selected string) string {
-	return n.assistantToolSearch(launcher, model, n.assistantCompactionPolicy(launcher, dir, "", modelExecution{Model: model, ConfigDir: selected})).env
+// assistantCheckToolSearch is the tool search an assistant turn on launcher/model starts with: the start's own
+// decision (assistantToolSearch), with the endpoint read as the start reads it from the check's directory and profile
+// (selected, a profile name as assistantProfileSelection gives it). model is the one asked for, before claudeModelArg:
+// a refusal is remembered by the start's.
+var assistantCheckToolSearch = func(n *Node, launcher, model, dir, selected string) toolSearchStart {
+	return n.assistantToolSearch(launcher, model, n.assistantCompactionPolicy(launcher, dir, "", modelExecution{Model: model, ConfigDir: selected}))
 }
 
 // assistantCheck is what an assistant-turn check of a Claude Code launcher adds to the plain one (the zero value: the
@@ -44,11 +45,14 @@ type assistantCheck struct {
 	env        []string // the process's environment
 	configDir  string   // CLAUDE_CONFIG_DIR, "" for Claude Code's default
 	configPath string   // the profile's directory, for the managed settings merge
-	done       func()
+	// toolSearchOff: the start would write ENABLE_TOOL_SEARCH=false into its settings (toolSearchStart.forceOff), over
+	// the provider's and the launcher's own value; withSettings does the same to the check's.
+	toolSearchOff bool
+	done          func()
 }
 
-// assistantCheckFor is the assistant-turn shape of a check of launcher with model in dir.
-func (n *Node) assistantCheckFor(ctx context.Context, launcher, model string, o launcherCheckOpts, dir string) (assistantCheck, error) {
+// assistantCheckFor is the assistant-turn shape of a check of launcher with o's model in dir.
+func (n *Node) assistantCheckFor(ctx context.Context, launcher string, o launcherCheckOpts, dir string) (assistantCheck, error) {
 	selected := n.checkProfile(ctx, launcher, o.conversation, o.configDir)
 	c := assistantCheck{on: true, configDir: n.assistantConfigDir(launcher, selected), configPath: n.assistantConfigPath(selected)}
 	if slices.Contains(effortLevels, o.effort) {
@@ -66,11 +70,39 @@ func (n *Node) assistantCheckFor(ctx context.Context, launcher, model string, o 
 		c.args += " " + shellQuote(f)
 	}
 	env := []string{"PERSONA_ASSISTANT=1"}
-	if v := assistantCheckToolSearch(n, launcher, model, dir, selected); v != "" {
-		env = append(env, "ENABLE_TOOL_SEARCH="+v)
+	toolSearch := assistantCheckToolSearch(n, launcher, o.model, dir, selected)
+	if toolSearch.env != "" {
+		env = append(env, toolSearchEnv+"="+toolSearch.env)
 	}
-	c.env = n.claudeProcessEnv(identity.Environment(os.Environ(), env...), c.configDir)
+	c.toolSearchOff = toolSearch.forceOff
+	// As the start: a value the node inherited never reaches claude.
+	c.env = n.claudeProcessEnv(identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv}), env...), c.configDir)
 	return c, nil
+}
+
+// withSettings is the check's --settings (path, what claudeSettings gave) as the start's are: with tool search forced
+// off, ENABLE_TOOL_SEARCH=false over the env the provider or the launcher merged in (assistantCompactionSettings does
+// the same), else path. The copy goes in the check's directory (dir), which goes with it.
+func (c assistantCheck) withSettings(path, dir, home string) (string, error) {
+	if !c.toolSearchOff {
+		return path, nil
+	}
+	s, err := readLauncherSettings(path, dir, home)
+	if err != nil {
+		return "", err
+	}
+	env, _ := s["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	env[toolSearchEnv] = "false"
+	s["env"] = env
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "check-settings-tools.json")
+	return out, os.WriteFile(out, b, 0o600)
 }
 
 // checkProfile is the profile an assistant-turn check of launcher runs in, as assistantProfileSelection would choose it

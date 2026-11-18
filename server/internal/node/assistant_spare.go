@@ -92,7 +92,8 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 	if old != nil && old.alive() && old.launcher == launcher && old.cwd == cwd &&
 		((old.agent != "claude" && old.agent != "codex") || old.personaMCPOnly == n.hubSupportsPersonaContracts()) &&
 		(old.agent != "claude" || sameAssistantProfile(old.model.ConfigDir, execution.ConfigDir)) &&
-		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 {
+		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 &&
+		!n.toolSearchStale(old) { // one adoptSpare would refuse: replaced by one started with every tool loaded (#10365)
 		n.mu.Unlock()
 		return nil
 	}

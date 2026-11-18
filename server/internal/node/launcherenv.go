@@ -258,14 +258,25 @@ func isTierAlias(m string) bool {
 }
 
 // resolveTier is m with a tier alias (opus, sonnet, haiku, fable) replaced by the model its tier variable names (get),
-// when that is no alias itself; otherwise m.
+// when that is no alias itself; otherwise m. An alias asked for with [1m] keeps it (withMarker), as Claude Code
+// resolves one.
 func resolveTier(m string, get func(string) string) string {
 	if k, ok := tierAliasVars[strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))]; ok {
 		if v := get(k); v != "" && !isTierAlias(v) {
-			return v
+			return withMarker(m, v)
 		}
 	}
 	return m
+}
+
+// withMarker is model, the one a tier alias asked for (alias) stands for, with alias's [1m] when it has none: Claude
+// Code runs `opus[1m]` as its Opus tier's model with the 1M window, whatever window that model is declared with, and
+// a mapped --model without it would run in 200K (#10365).
+func withMarker(alias, model string) string {
+	if strings.HasSuffix(alias, oneMillionSuffix) && model != "" && !strings.HasSuffix(model, oneMillionSuffix) {
+		return model + oneMillionSuffix
+	}
+	return model
 }
 
 // managedBaseURL is the Base URL claude runs provider l against: the one its own environment sets, else the stored one
@@ -304,15 +315,16 @@ func tierAliasFields(l proto.ManagedLauncher, alias string) []string {
 
 // providerAliasModel is m for provider l behind a gateway (#10365): a model ID as it is; a tier alias (opus, sonnet…),
 // which Claude Code would send to the gateway as the model's name once its tier variable holds no ID, is the
-// provider's model for that tier, else its default model, else "" (none: the variables stay unset). A field that
-// holds an alias itself counts as empty; default and inherit are the provider's default model.
+// provider's model for that tier, else its default model, else "" (none: the variables stay unset), with the alias's
+// [1m] (withMarker). A field that holds an alias itself counts as empty; default and inherit are the provider's default
+// model.
 func providerAliasModel(l proto.ManagedLauncher, m string) string {
 	if !isTierAlias(m) {
 		return m
 	}
 	for _, f := range append(tierAliasFields(l, m), l.Model) {
 		if f != "" && !isTierAlias(f) {
-			return f
+			return withMarker(m, f)
 		}
 	}
 	return ""
@@ -359,11 +371,11 @@ func providerModelArg(l proto.ManagedLauncher, model string) string {
 	return ""
 }
 
-// planTier is m with opusplan (Opus in plan mode, Sonnet otherwise) read as the Opus tier: a gateway provider's process
-// runs one model for it (providerAliasModel).
+// planTier is m with opusplan (Opus in plan mode, Sonnet otherwise) read as the Opus tier, [1m] kept: a gateway
+// provider's process runs one model for it (providerAliasModel).
 func planTier(m string) string {
 	if strings.EqualFold(strings.TrimSuffix(m, oneMillionSuffix), "opusplan") {
-		return "opus"
+		return withMarker(m, "opus")
 	}
 	return m
 }

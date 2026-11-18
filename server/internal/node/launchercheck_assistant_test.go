@@ -167,9 +167,9 @@ func TestLauncherCheckAssistantTurnToolSearch(t *testing.T) {
 	t.Cleanup(func() { assistantCheckToolSearch = old })
 	for _, want := range []string{"false", ""} {
 		var asked []string
-		assistantCheckToolSearch = func(_ *Node, launcher, model, _, _ string) string {
+		assistantCheckToolSearch = func(_ *Node, launcher, model, _, _ string) toolSearchStart {
 			asked = append(asked, launcher+"/"+model)
-			return want
+			return toolSearchStart{env: want}
 		}
 		checkRun(t, n, map[string]any{"name": "claude", "model": "opus", "assistant_turn": true})
 		env, _ := recorded(t, home)
@@ -177,5 +177,55 @@ func TestLauncherCheckAssistantTurnToolSearch(t *testing.T) {
 		if want == "" && got != "unset" || want != "" && got != want || !slices.Equal(asked, []string{"claude/opus"}) {
 			t.Fatalf("tool search %q: env %q, asked %v", want, got, asked)
 		}
+	}
+}
+
+// A launcher and model whose endpoint refused tool search are checked as the chat now starts them (#10365): off in the
+// check's settings too, over a provider that opts in with its own ENABLE_TOOL_SEARCH=true (a settings env wins over the
+// process's), the refusal found by the model asked for (a tier alias the start remembers it by, not the provider's
+// model --model maps it to); and a value the node inherited does not reach claude when the start sets none.
+func TestLauncherCheckAssistantTurnAfterAToolSearchRefusal(t *testing.T) {
+	n, home := checkNode(t, resultOK)
+	bin := filepath.Join(home, "bin", "personad")
+	writeFile(t, bin, "#!/bin/sh\nshift 2\nexec claude \"$@\"\n") // personad launch <name> …: the machine's claude
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n.bin = bin
+	l := proto.ManagedLauncher{Name: "gwopt", Kind: "api", BaseURL: "https://gw.example.com", Model: "m1", OpusModel: "o1", Env: "ENABLE_TOOL_SEARCH=true"}
+	n.setManaged([]proto.ManagedLauncher{l})
+	settingsToolSearch := func() string {
+		t.Helper()
+		s, err := readLauncherSettings(filepath.Join(home, "check-settings"), home, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := settingsEnv(s)[toolSearchEnv]; ok {
+			return v
+		}
+		return "-"
+	}
+	check := checkRun(t, n, map[string]any{"name": "gwopt", "model": "opus", "assistant_turn": true})
+	env, args := recorded(t, home)
+	if !check.OK || env[toolSearchEnv] != "unset" || settingsToolSearch() != "true" || argAfter(args, "--model") != "o1" {
+		t.Fatalf("before a refusal: %+v, env %v, settings %q, args %q", check, env, settingsToolSearch(), args)
+	}
+	n.noteToolSearchRefused("gwopt", "opus", managedBaseURL(l))
+	check = checkRun(t, n, map[string]any{"name": "gwopt", "model": "opus", "assistant_turn": true})
+	env, args = recorded(t, home)
+	if !check.OK || env[toolSearchEnv] != "false" || settingsToolSearch() != "false" || argAfter(args, "--model") != "o1" {
+		t.Fatalf("after a refusal: %+v, env %v, settings %q, args %q", check, env, settingsToolSearch(), args)
+	}
+	if !strings.Contains(settingsArg(args), launcherCheckDir) {
+		t.Fatalf("the check's own settings are not in its directory: %q", settingsArg(args))
+	}
+
+	old := assistantCheckToolSearch
+	t.Cleanup(func() { assistantCheckToolSearch = old })
+	assistantCheckToolSearch = func(*Node, string, string, string, string) toolSearchStart { return toolSearchStart{} }
+	t.Setenv(toolSearchEnv, "true")
+	checkRun(t, n, map[string]any{"name": "claude", "assistant_turn": true})
+	if env, _ := recorded(t, home); env[toolSearchEnv] != "unset" {
+		t.Fatalf("the node's own ENABLE_TOOL_SEARCH reached the check: %v", env)
 	}
 }
