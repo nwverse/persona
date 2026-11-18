@@ -499,6 +499,19 @@ class CheckFastScriptsTests(unittest.TestCase):
                 self.assertIn("FAIL     scripts/ci/test_changed_ratchets.py", out)
                 self.assertIn("FAIL     scripts/test/test_merge_pr_sh.py", out)
 
+    def test_a_go_trimpath_change_also_runs_the_suites_of_its_callers(self):
+        # server.sh and check-fast.sh compose GOFLAGS with the helper (#10614); test_ci.py and this suite run them.
+        helper = "scripts/test/go_trimpath.sh"
+        self.commit_on_top(helper, "#!/bin/sh\nprintf '%s\\n' -trimpath\n", "base")
+        for suite in ("scripts/test/test_go_trimpath.py", "scripts/ci/test_ci.py", "scripts/test/test_check_fast.py"):
+            self.commit_on_top(suite, FAILING, "base")
+        self.write(helper, "#!/bin/sh\n# changed\nprintf '%s\\n' -trimpath\n")
+        code, out = self.check_fast()
+        self.assertEqual(1, code, out)
+        self.assertIn("FAIL     scripts/test/test_go_trimpath.py", out)
+        self.assertIn("FAIL     scripts/ci/test_ci.py", out)
+        self.assertIn("FAIL     scripts/test/test_check_fast.py", out)
+
     def test_a_migration_edit_runs_the_freeze_check(self):
         self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
         self.write("server/internal/db/migrations/hub/0001_init.sql", "CREATE TABLE t (id int);\n")

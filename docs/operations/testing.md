@@ -199,10 +199,13 @@ copy of every package for each, and every new worktree starts cold. With `-trimp
 
 The scripts that build and test Go for verification add `-trimpath` to `GOFLAGS`: `scripts/check-fast.sh`,
 `scripts/ci/server.sh`, `scripts/test/server_test_env.py` (so `scripts/test/test-server.sh` on the hub machine and the
-CI server shards) and the PR watcher's verification environment. The effective `GOFLAGS` (the environment, else
-`go env -w`) is kept and gains `-trimpath` unless it already sets that flag; `-trimpath=false` opts out.
-`scripts/test/go_trimpath.sh` holds the rule for the shell scripts. Steps that change one flag do it on the command
-line (`go vet -ldflags=`), never by replacing `GOFLAGS`. The server test launcher passes the value on explicitly: the
+CI server shards), `scripts/test/relay_sim_e2e.sh` and the PR watcher's verification environment. Each keeps its base
+value and adds `-trimpath` unless that value already sets the flag; `-trimpath=false` opts out. All but the watcher
+start from the effective `GOFLAGS` (the environment, else `go env -w`). The watcher starts from the `GOFLAGS` in its
+own environment, else its default (`docs/operations/pr-review-automation.md`); either one overrides a
+`go env -w GOFLAGS`, so opt out there by setting `GOFLAGS` in the watcher's environment. `scripts/test/go_trimpath.sh`
+holds the rule for the shell scripts. Their steps that change one flag do it on the command line (`go vet -ldflags=`,
+`go build -mod=readonly`), never by replacing `GOFLAGS`. The server test launcher passes the value on explicitly: the
 temporary `HOME` it gives the tests would hide a `go env -w` setting.
 
 Tests find repository files from the working directory (`go test` runs in the package directory), never through

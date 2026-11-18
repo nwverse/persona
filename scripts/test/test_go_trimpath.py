@@ -10,8 +10,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/test/go_trimpath.sh"
 SH = shutil.which("sh") or "/bin/sh"
-# A fake go answers `go env GOFLAGS` as the real one does: the environment's value, else the go env file's.
-FAKE_GO = '#!/bin/sh\n[ "$*" = "env GOFLAGS" ] || exit 2\nprintf "%s\\n" "${GOFLAGS-$FAKE_GO_ENV_FILE}"\n'
+# A fake go answers `go env GOFLAGS` as the real one does: the environment's value, else (unset or empty) the go env
+# file's.
+FAKE_GO = '#!/bin/sh\n[ "$*" = "env GOFLAGS" ] || exit 2\nprintf "%s\\n" "${GOFLAGS:-$FAKE_GO_ENV_FILE}"\n'
 # The Python copies (the PR watcher, the server test launcher) follow the same rule.
 COPIES = {"pr_watch_common": ROOT / "scripts/operations/pr_watch_common.py",
           "server_test_env": ROOT / "scripts/test/server_test_env.py"}
@@ -58,6 +59,8 @@ class GoTrimpathTests(unittest.TestCase):
         self.assertEqual(self.run_script(str(self.bin)), "-trimpath")
         self.assertEqual(self.run_script(str(self.bin), FAKE_GO_ENV_FILE="-mod=mod"), "-mod=mod -trimpath")
         self.assertEqual(self.run_script(str(self.bin), FAKE_GO_ENV_FILE="-trimpath"), "-trimpath")
+        # An empty GOFLAGS counts as unset: go reports the env file's value.
+        self.assertEqual(self.run_script(str(self.bin), GOFLAGS="", FAKE_GO_ENV_FILE="-mod=mod"), "-mod=mod -trimpath")
 
     def test_without_go_the_environment_value_is_the_base(self):
         empty = self.bin / "empty"

@@ -138,6 +138,8 @@ class PathTests(unittest.TestCase):
 
     def test_shard_implementation_changes_select_their_lane(self):
         self.assertTrue(paths.select(["scripts/ci/server-shards.py"])["server"])
+        # server.sh composes every Go step's GOFLAGS with this helper (#10614).
+        self.assertTrue(paths.select(["scripts/test/go_trimpath.sh"])["server"])
         self.assertTrue(paths.select(["scripts/ci/android-shards.py"])["android"])
 
     def test_the_callkit_guards_select_the_apple_lane(self):
