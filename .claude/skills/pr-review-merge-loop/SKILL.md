@@ -72,8 +72,12 @@ They never contain a real username, host, token, proxy, repository checkout or r
 files into a private runtime directory and replace every placeholder; restrict those copies with `chmod 600`.
 
 - `herdr_review.py CONFIG -- <watcher CLI args>` creates one isolated tab in the configured existing Herdr session,
-  launches the configured reviewer there, forwards `-p --output-format json`, and returns its structured result. It
-  never starts or stops Herdr and closes only its own tab. Reviewer tool boundaries and model overrides remain enforced.
+  launches the configured reviewer there through `systemd-run --user --scope --collect`, forwards
+  `-p --output-format json`, and returns its structured result. Each unique `pr-review-rNN-....scope` uses the explicit
+  `scope_properties`; memory and task values are integer byte/task counts and `CPUQuota` is a percentage string. Keep
+  `process_wrapper` for CPU affinity and rlimits: a scope property shown by `systemctl` is not proof that a cgroup v1
+  memory or CPU controller enforces it. The helper never starts or stops Herdr and closes only its own tab and scope.
+  Reviewer tool boundaries and model overrides remain enforced.
 - `pr_watch_resources.py CONFIG COMMAND ...` allocates locked CPU groups, preserves the lock across `exec`, and applies
   optional address-space and CPU-time limits. `RLIMIT_AS` is not a cgroup RSS limit. The watcher uses it only when the
   trusted `PR_WATCH_PROCESS_WRAPPER` environment is explicitly configured.
@@ -84,8 +88,11 @@ files into a private runtime directory and replace every placeholder; restrict t
   non-secret environment value. Never put credentials in these environment variables or tracked JSON files.
 
 Keep the repository's existing watcher as the only review, repair and merge policy. P0 findings block and enter bounded
-semantic repair; P1/P2 remain published notes. Verification failures continue only when the same failed lane and
-concrete signature reproduce independently on clean main, and are disclosed as base-owned rather than passing tests.
+semantic repair; P1/P2 remain published notes. In an explicitly configured `semantic_only` repository, verification is
+limited to lightweight privacy/documentation guards: do not repeat full build/vet, cross-platform, build-tag or full-test
+lanes, and do not start CI failure repair. Success comments must disclose that full CI was not run. In the other
+profiles, verification failures continue only when the same failed lane and concrete signature reproduce independently
+on clean main, and are disclosed as base-owned rather than passing tests.
 
 Test the helpers without using a real PR or Herdr session:
 
