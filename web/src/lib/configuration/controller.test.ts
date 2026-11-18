@@ -487,6 +487,24 @@ describe("a change made elsewhere during a write", () => {
     expect(m.reads).toHaveLength(2);
     expect(ctl.snapshot().busy).toBeNull();
   });
+
+  it("keeps the committed choice saved when the deferred read is its own same-revision echo", async () => {
+    const { ctl, m } = await ready();
+    ctl.choose("layout", "dense");
+    m.change(); // a change notification while the write is in flight: the read waits for it
+    const committed = commit(example, m.updates[0].body);
+    m.updates[0].resolve(committed);
+    await flush();
+    expect(ctl.snapshot().busy).toBeNull();
+    expect(ctl.snapshot().fields.layout).toEqual({ saved: true });
+    // the read after the write returns the committed Document again (a source's echo of its own write)
+    expect(m.reads).toHaveLength(2);
+    m.reads[1].resolve(committed);
+    await flush();
+    expect(ctl.snapshot().fields.layout).toEqual({ saved: true });
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().doc?.revision).toBe(committed.revision);
+  });
 });
 
 describe("the HTTP source", () => {

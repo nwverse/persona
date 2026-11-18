@@ -8,8 +8,9 @@
      part of a build. The default view is three genuine-looking module documents over in-memory sources
      (configuration-showcase-data.mjs); nothing is read from or written to real settings or storage, and the mock framing
      is deliberately not shown (the user asked for the real appearance). ?scenario= selects a coverage case
-     (overview/default, slow, load-fail, reject, conflict, unconfirmed, contract, empty, unsupported); the navigation is
-     not drawn. The page checks its own documents with the real parser and shows a red line if one is invalid.
+     (overview/default, slow, load-fail, reject, conflict, unconfirmed, contract, invalid, empty, unsupported); the
+     navigation is not drawn. The page checks its own documents with the real parser and shows a red line if one is
+     invalid.
      web/e2e/configuration-showcase.mjs drives and captures it. -->
 <style>
   /* src/styles.css keeps e2e out of Tailwind's scan ("@source not \"../e2e\""), so a fixture-only utility would not
@@ -59,7 +60,9 @@
   app.append(mk("h1", "mb-4 px-1 text-[20px] font-semibold leading-tight text-ink", s.title));
 
   // The real parser checks every document and effective value: a fixture this build can't read is a bug in the page,
-  // not something to discover while clicking. It draws only on that bug.
+  // not something to discover while clicking. It draws only on that bug. The `invalid` coverage scenario deliberately
+  // holds unreadable saved values, so only its definitions are checked.
+  const allowInvalidValues = scenario === "invalid";
   const problems = [];
   for (const module of modules) {
     try {
@@ -68,7 +71,7 @@
       if (writable !== expected) problems.push(`${module.key}: writable=${writable}`);
       for (const group of doc.groups) {
         for (const field of group.fields) {
-          if (field.kind !== "unsupported" && fieldValue(doc, field) === undefined) problems.push(`${module.key}:${field.id}`);
+          if (!allowInvalidValues && field.kind !== "unsupported" && fieldValue(doc, field) === undefined) problems.push(`${module.key}:${field.id}`);
         }
       }
     } catch (error) {

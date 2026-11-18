@@ -187,6 +187,41 @@ describe("the shared write-validation cases (schema/configuration/validation-cas
   });
 });
 
+describe("an update to a field this build can't check", () => {
+  const withField = (raw: Record<string, unknown>) => {
+    const doc = JSON.parse(JSON.stringify(example));
+    doc.id = "with-unsupported";
+    doc.groups[0].fields.push({ id: "future", title: "From a newer build", default: "#1f6feb", ...raw });
+    doc.values.future = "#1f6feb";
+    return parseDocument(doc).doc;
+  };
+  const update = (doc: ReturnType<typeof withField>, change: Partial<ConfigurationUpdate>) => ({ schema_version: 1, id: doc.id, revision: doc.revision, ...change });
+
+  it("rejects a change and a reset to an unknown kind with unsupported", () => {
+    const doc = withField({ kind: "colour" });
+    for (const change of [{ changes: { future: "#000" } }, { reset: ["future"] }]) {
+      const got = checkUpdate(doc, update(doc, change));
+      expect(got?.code).toBe("configuration_invalid");
+      expect(got?.fieldErrors).toEqual([{ id: "future", code: "unsupported" }]);
+    }
+  });
+
+  it("rejects both for a known kind whose definition is malformed", () => {
+    const doc = withField({ kind: "text", text: 42 });
+    expect(doc.groups[0].fields.at(-1)).toMatchObject({ id: "future", kind: "unsupported", reason: "definition" });
+    for (const change of [{ changes: { future: "text" } }, { reset: ["future"] }]) {
+      const got = checkUpdate(doc, update(doc, change));
+      expect(got?.fieldErrors).toEqual([{ id: "future", code: "unsupported" }]);
+    }
+  });
+
+  it("still accepts an update that leaves the unsupported field alone", () => {
+    const doc = withField({ kind: "colour" });
+    expect(checkUpdate(doc, update(doc, { changes: { label: "Fine" } }))).toBeNull();
+    expect(checkUpdate(doc, update(doc, { reset: ["label"] }))).toBeNull();
+  });
+});
+
 describe("the error body", () => {
   it("reads error, code and field_errors", () => {
     const e = ConfigurationError.fromBody({ error: "Nope", code: "configuration_invalid", field_errors: [{ id: "a", code: "max_length" }, { id: "b", code: "custom", message: "Pick another" }, { bad: true }] });
