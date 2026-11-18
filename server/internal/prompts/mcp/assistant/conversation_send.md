@@ -1,4 +1,4 @@
-Send a message to another Persona conversation (not this one). It waits for the current turn if running, or for 2 minutes of user quiet if they are talking; the result says which. Marked as from this one, it lets the other side answer with conversation_send. Forwarding allows a few requests per user message and a few messages per pair in ten minutes; your first reply to the conversation you are answering is its answer and adds no hop. Do not reply just to acknowledge. Policy refusals to main or a leader state why: follow it and do not retry. Owner-verbatim words to main stay allowed: start with them.
+Message another conversation. It waits for a running turn or 2 min of user quiet. Marked as from this one; replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none); long back-and-forth is cut. Past the rate it queues: the result says when, no resend. Don't reply just to acknowledge. Follow policy refusals; don't retry. Owner-verbatim words to main stay allowed: start with them. Handing on a user request: set quote (free once).
 
 ```json
 {
@@ -11,6 +11,10 @@ Send a message to another Persona conversation (not this one). It waits for the 
     },
     "text": {
       "type": "string"
+    },
+    "quote": {
+      "type": "string",
+      "description": "\"latest\" or a message id: the user's words, carried verbatim"
     }
   }
 }

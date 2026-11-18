@@ -539,7 +539,8 @@ Who does the follow-up: by default the **background supervisor** (#4927, "Backgr
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
   Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior. A text of only `/exit` / `/quit` (no attachments) from such a conversation, as `agent_send` or as `agent_interrupt`'s `then`, is refused before anything is stopped, sent or confirmed on the phone, and again after the phone answers should the agent have become such a task meanwhile (#3537): the node closes an agent only for the bare command, and the agent a task runs on is not another conversation's to close (the user can close it in the app, or with `agent_archive` and `close` once it is idle).
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
-  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), or in any other state (waiting on background work, a wake, stopped) with nothing new in its transcript for more than max(2 hours, estimate × 1.5), so a wait nothing ends is still heard of (#5124), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default).
+  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), or in any other state (waiting on background work, a wake, stopped) with nothing new in its transcript for more than max(2 hours, estimate × 1.5), so a wait nothing ends is still heard of (#5124), `no_progress` working with its session moving but no real progress, only waits, polls or the same command again (below), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default).
+  **`no_progress`** (#10089, `server/internal/assistant/supervise_progress.go`): `stalled` reads only whether the session moved, and an Agent looping on `sleep` plus a status check writes to its transcript every minute. The hub keeps, in memory, a stretch per Agent since its last real progress. Progress is a `report_to_supervisor` with evidence or a later step, a `done_when` criterion whose state or evidence changed, the Agent's own plan with more steps done or another current step, a tool call that changes something (editing or writing a file, a commit, a push, a PR opened or merged, a release, a deploy), and a message from the user or the supervisor (`agent_send`); transcript writes, reports without evidence, and reading, searching, building or testing are not. Each tool call it sees (a new `activity_at`, from the session lists and the supervision pass) counts once, and is a wait when its activity is waiting (`sleep` / `until` / `while` / `wait`, ScheduleWakeup, Monitor, background output), checking CI, or the same activity line as an earlier call of the stretch. A working Agent is told of once the stretch is max(30 minutes, estimate × 1.5) old, the hub saw at least 4 calls in it, at least four in five were waits, and the latest started within max(20 minutes, estimate × 1.5) (one silent longer is `stalled`'s). One signal per stretch (key: session and stretch start), dropped before delivery if progress came meanwhile, never alongside `stalled` for the same Agent, and none for a parked task or one with the owner or waiting for review. After a manager restart a stretch starts over, so the signal can come later than the threshold, never sooner; a short call between two observations can be missed. It does not stop the Agent: closing stuck Agents is #4784.
   These follow the task's current Agents (#6483, `supersededAgents` in `server/internal/assistant/task_completion.go`): an unreleased link whose session is offline or no longer listed, while a link made after it is listed and not offline, is an Agent the task was handed over from. It is left out of the stop receipt and its judgment (the task settles once the current Agent stops, so `idle` reaches the supervisor) and out of `needs_you` / `stalled`. A lone offline Agent with no later one is still the task's Agent.
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, evidence and links; no handling instructions).
   The first waits 15 seconds to coalesce; subsequent messages are at most one per 10 minutes, with a 2-minute minimum for decision-waiting signals such as `needs_you` / `idle` / `interrupted` / `failed`. If the main chat is running, queue between turns ("Supervision message" above the input); replace any queued, undelivered supervision message with the merged one. A supervision message also waits while the owner is talking in the conversation, a decision-waiting one at most 5 minutes, and the queue goes out by rank (`docs/assistant/assistant.md` "Messages from the system wait for the owner").
@@ -589,7 +590,7 @@ record per piece of work, made when the work is handed out and never rewritten (
 
 | Field | From | Meaning |
 | --- | --- | --- |
-| `request` | the hub | The owner's message that led to the task, verbatim: `text` (cut at 2000 characters, then `truncated`), `at`, and where the whole of it is (`conversation`, `message_id`). Absent when the owner did not ask for it |
+| `request` | the hub | The owner's message that led to the task, verbatim: `text` (cut at 2000 characters, then `truncated`), `at`, and where the whole of it is (`conversation`, `message_id`); `via`: the conversations that relayed it, oldest first ("Across a relay" below). Absent when the owner did not ask for it |
 | `started_by`, `trigger`, `trigger_title`, `reason` | the hub, `reason` from the model | Who started it: `owner`, `assistant`, `leader`, `routine`, `hub`, or `unknown`; what the turn followed when it was not the owner (`supervision`, `followup`, `routine`, `conversation`, `notice`, `meeting`, `wake`); and why (`task_plan`'s `started_why`) |
 | `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
 | `done_when`, `expect_minutes`, `out_of_bounds` | the model | What done means, about how long it should take, what the Agent must not do |
@@ -602,6 +603,21 @@ not just ask: the work is recorded as started by the assistant (a leader convers
 `routine`) with what it followed, and no older message of the owner's is attributed to it. A conversation that cannot
 be read records `unknown`. The hub's own starts (an Agent that became a task, an inbox hand-off) record `hub`. The model
 never writes `request`: a `brief` in the tool call is dropped.
+
+**Across a relay.** When the main conversation hands the owner's request to a leader, the leader's latest message is
+the relay, so its brief would only say a conversation started it. `conversation_send` and `conversation_new` take an
+optional `quote`: `"latest"` or a message id (`server/internal/assistant/relay_quote.go`). The hub reads the sending
+conversation's last ten turns and accepts only a message the owner sent there from an app (it has a client message
+id), or a verified quote that conversation itself received, so a quote passes on through more than one conversation.
+Anything else refuses the send before the hop and rate limits count it. The hub keeps what it verified (setting
+`assistant.quotes`, by sender and message id, 14 days, at most 64) and the receiver gets the text verbatim in a
+`<persona-context kind="owner-request" message_id="…">` block right after the relay context
+(`prompts/assistant/relay.md`). When the receiver hands work out on that message, `request` is the kept quote,
+found by the sender (the item's `source`) and the id in that block; only a block directly after the canonical relay
+context counts (`prompts.ParseRelayQuoteID`), and its text is never read as the request. `started_by` stays
+`leader` / `assistant` with trigger `conversation`, and `request.via` lists who passed it on. A relayed quote is the
+owner's request, never their approval: a scope change that needs the owner's yes takes only a message they wrote in
+the conversation making the change. Hops and rate limits are as before.
 
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
 `expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
@@ -937,12 +953,12 @@ project it is filed under, who filed it, since when, and when it ended (it left 
 deleted). Extensions granted `leaders.read` are told each change once (`leader.changed`), and the hub reports from the
 task ledger, with no model call (`leader_reports.go`, `leader.report`): `reached` when a review accepts a leader's task,
 `decision` when a review needs the owner, and `stuck` when, by the To-dos SOP's Go copy (`todo_triage.go`), the task sits
-in Waiting on you or stopped unfinished with no move for 24 hours. Stuck is told at most once a day, and only by the
+in Waiting on you or stopped unfinished with no move for max(2 hours, `expect_minutes` × 1.5); a missing estimate uses 2 hours. Stuck is told at most once a day, and only by the
 10-minute loop, because it asks the agents' machines. What was told is kept in `assistant.leader_reports`, so a restart
 tells nothing again. Reviews from before reports started on the hub are not told. A stuck task is also one
 main-chat entry (`leader_stuck`, a supervision signal to the main chat naming the direction, which the secretary turns
 into one visible line with no push), and the morning and evening briefings' facts carry one line per leader (its open
-tasks, those waiting for the owner, those stuck over a day, and its leader's summary of the day) (#3609).
+tasks, those waiting for the owner, those past that stuck threshold, and its leader's summary of the day) (#3609).
 
 **The prompts (P1, #3609).** The main chat's context lists the current directions (id and name) and its CLAUDE.md
 makes it the secretary: it routes work to a direction with `task_plan supervisor`, records what the owner wants an
@@ -995,13 +1011,25 @@ the New agent field come with W1 / I1 / A1.
   `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
   `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
   conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).
+- **The main chat moves an existing task**: `agent_transfer {machine, session_id, supervisor}` uses the same Move to
+  operation as the App, without adoption. The destination is a current direction or the main conversation; transfer
+  back to undo. The task, brief, criteria, estimate, origin and Agent session stay. Its supervision and task card move;
+  no message, interruption or restart is sent. Non-main callers, owner-created to-dos, assistant sessions and Agents
+  without an open task are refused.
 - **A leader hands out its own** `task_plan`, as before.
 
 A plan of a leader's (its own, or one the main chat handed to it) that waits for the owner's Start is a `decision`
 report (`leader.report` with `plan`, told once), as the owner ruled after H1. The waiting plans are read from the plans
 themselves every 10 minutes and right after a leader's plan is made, not on every change.
 
-**Names and progress (#3679).** A direction is shown by its `name` (`direction_progress.go`): the one the owner gave
+**Names and progress (#3679).** Active directions use their canonical name as the shared session title on every
+client: conversation lists, headers and sidebars show the same project-supervisor identity, without an automatic
+date or task-kind prefix. `conversation_rename` accepts `name` for a direction through the existing main-only
+`direction_name` operation; ordinary conversations still use `kind` / `topic`. The stored ordinary title is preserved
+and shown again when the direction ends. Explicit name changes publish the updated session title immediately. The App’s existing Rename action also updates
+the canonical direction name, marked as user-chosen, while retaining its ordinary stored title.
+
+A direction is shown by its `name` (`direction_progress.go`): the one the owner gave
 it (`PUT /api/v1/assistant/directions/{id}/name`, or Start direction's offered name) or the secretary gave it
 (`direction_name`, main chat only), else its kb project's name, else its title without the `MMDD | kind | ` prefix (and without a `你是「X」…` role wrapping: just `X`, #3744).
 `leader.changed` and `GET /api/v1/assistant/leaders` carry it. Besides the hub's own reached / decision / stuck
@@ -1009,6 +1037,30 @@ reports, a leader writes its direction's progress itself with `leader_progress` 
 is being done and where it is stuck, what the owner has to do, and evidence links; it goes to the extensions as
 `leader.report` kind `progress` and the latest stays on the direction (listed by `GET /api/v1/assistant/leaders`).
 It never messages the owner: the work-log card shows it.
+
+### Direction notes (#10086)
+
+A direction carries **notes** the owner writes for it: its rules, the readings that prove progress, its terms
+(`direction_notes.go`; web: Settings › Persona › Direction notes; `PUT /api/v1/assistant/directions/{id}/notes`, at most
+4,000 characters, `""` clears them; `GET /api/v1/assistant/leaders` lists `notes` and `notes_at`). They are the owner's
+content, not memory: memory stays one for every conversation (#9440), and a direction's lessons go into its notes.
+
+- **The leader** gets them in its own system prompt: they are appended, with the name and goal of the kb project the
+  direction is filed under, to its role policy (`supervision_instructions`, which the node passes as
+  `--append-system-prompt` or a Codex thread's developer instructions; template `assistant/direction_notes`). The node
+  keeps that policy with the conversation and compares it on every send, so the notes survive a restart, a resume and a
+  compaction, and changing them restarts only that leader's process on its next message: the shared `CLAUDE.md` and
+  every other conversation's prompt cache are untouched. The project's one-line status, which a summary rewrite changes,
+  goes into the leader line of the per-message context instead, so it never restarts the leader.
+- **New Agents for the direction** get them before the project background (template `todo/direction`): an Agent the
+  leader starts (`agent_start`) or supervises (a task it plans, a to-do it supervises handed to a new Agent), and an
+  Agent whose directory belongs to the direction's kb project, whoever starts it. At most two directions' notes, the
+  supervising leader's first; an ended direction's never; an Agent on a work machine gets none.
+- **Without notes nothing changes**: the leader's policy and context are byte for byte as before (a project's goal or
+  status alone is never added), and no block goes to Agents.
+- **Checks**: `server/internal/assistant/direction_notes_test.go` (the route, the leader's policy and context, new
+  Agents) and the goldens `direction_notes.*` / `todo_direction.*`; the web editor's browser check runs against the mock
+  hub with `MOCK_LEADERS=1`: `node web/e2e/direction-notes.mjs` (desktop and phone width, light and dark).
 
 ### Agent tasks (#3617)
 
