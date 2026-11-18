@@ -306,11 +306,12 @@ describe("Assistant Needs you / In progress trays", () => {
       await act(async () => {
         await refreshTodos();
       });
-      act(() => entry("needs").click());
+      // the failed start's row comes with the tray's first one (TaskDecision's chunk), not with the first screen
+      await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
       const row = host.querySelector<HTMLElement>("[data-failed-task=launcher-todo]")!;
-      expect(row.textContent).toContain(t("assistant-tasks.start_code_launcher_terminal", { launcher: "work" }));
+      expect(row.textContent).toContain(t("lib-start-retry.start_code_launcher_terminal", { launcher: "work" }));
       const buttons = [...row.querySelectorAll("button")].map((b) => b.textContent);
-      expect(buttons.slice(1)).toEqual([t("assistant-tasks.use_launcher_instead", { launcher: "claude" }), t("assistant-tasks.retry"), t("assistant-tasks.remove")]);
+      expect(buttons.slice(1)).toEqual([t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }), t("assistant-tasks.retry"), t("assistant-tasks.remove")]);
       await act(async () => row.querySelector<HTMLButtonElement>("[data-retry-launcher=claude]")!.click());
       expect(writes).toContain("/api/v1/todos/launcher-todo/retry");
     } finally {

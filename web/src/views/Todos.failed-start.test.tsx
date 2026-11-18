@@ -167,7 +167,8 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
   });
 
   it("offers its computer's other launcher first when its own can't start there, where the hub takes it (#10365)", async () => {
-    const { getFeedState, TASK_RETRY_LAUNCHER_FEATURE } = await import("../lib/feed");
+    const { getFeedState } = await import("../lib/feed");
+    const { TASK_RETRY_LAUNCHER_FEATURE } = await import("../lib/start-retry");
     const plan = { id: "p2", conversation: "conv", state: "started" as const, tasks: [{ title: "Renew the certificate", prompt: "", machine: "m1", cwd: "/w",
       todo_id: "again", error: "terminal", error_code: "launcher_missing", error_args: { where: "terminal", launcher: "work" }, retry_with: ["claude", "work2"] }] };
     getFeedState().plans[plan.id] = plan;
@@ -176,11 +177,11 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
       // an older hub would start the launcher that failed again: no such button
       seed({ features: ["todo_seen"] });
       await show("again");
-      expect(button(t("assistant-tasks.use_launcher_instead", { launcher: "claude" }))).toBeUndefined();
+      expect(button(t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }))).toBeUndefined();
       seed({ features: ["todo_seen", TASK_RETRY_LAUNCHER_FEATURE] });
       await show("again");
       expect(button(t("todos.retry"))).toBeTruthy();
-      await act(async () => button(t("assistant-tasks.use_launcher_instead", { launcher: "claude" }))!.click());
+      await act(async () => button(t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }))!.click());
       await flush();
       expect(calls("POST", "/todos/again/retry")).toEqual([{ launcher: "claude" }]);
     } finally {

@@ -15,7 +15,6 @@ import { agentName } from "../../lib/agent-kind";
 import { onModelPicker, requestModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { modelSupportsFast } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
-import { dropConversationPick } from "../../lib/assistant-pick";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
@@ -255,7 +254,8 @@ function followsDefaultOf(assistant: AssistantInfo | null, session: Session): bo
 
 /** A Persona chat's card for its last turn's model error (turnErrorFix of the session's turn_error_code): a model the chat
  *  can't run opens the chat's own model panel, where another one is picked; while the hub keeps a pick for the chat the
- *  card also offers the panel's way back (follow the default again, or undo the pick). `on`: a Persona chat. */
+ *  card also offers the panel's way back (follow the default again, or undo the pick), whose code (lib/assistant-pick.ts)
+ *  loads on the tap, not with the first screen (startup-preload's budget). `on`: a Persona chat. */
 export function useAssistantTurnFix(session: Session | undefined, on: boolean): TurnFix | null {
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
@@ -266,7 +266,7 @@ export function useAssistantTurnFix(session: Session | undefined, on: boolean): 
   if (kept && session.model_pick) {
     fix.back = {
       label: t(followsDefaultOf(assistant, session) ? "chat-modelpill.follow_default" : "chat-modelpill.undo_pick"),
-      run: () => void dropConversationPick(getSession(mid, sid) ?? session),
+      run: () => void import("../../lib/assistant-pick").then((m) => m.dropConversationPick(getSession(mid, sid) ?? session)),
     };
   }
   return fix;

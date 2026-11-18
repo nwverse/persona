@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n";
 import {
   answeredItems,
   cardFiled,
@@ -13,12 +14,9 @@ import {
   mergeInto,
   quickResult,
   receiptState,
-  planTaskOf,
   removeTask,
   retryKey,
-  retryLauncher,
   retryTask,
-  TASK_RETRY_LAUNCHER_FEATURE,
   sendMessage,
   sendRouted,
   setRoute,
@@ -28,6 +26,7 @@ import {
   type TaskPlan,
 } from "./feed";
 import { conversationCards } from "./assistant-views";
+import { retryOnLauncher, TASK_RETRY_LAUNCHER_FEATURE } from "./start-retry";
 import { getPanel, openPanel } from "./panel";
 import { getState, markConversationDeleted, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
@@ -210,25 +209,14 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
       const features = getState().features;
       Object.assign(getState(), { features: ["todo_seen"] });
       // an older hub ignores the body and would start the launcher that failed again: refused here, nothing sent
-      await expect(retryTask(failed, { launcher: "claude" })).rejects.toThrow();
+      await expect(retryOnLauncher(failed, "claude")).rejects.toThrow(t("lib-start-retry.retry_launcher_unsupported"));
       expect(posts()).toHaveLength(0);
       expect(getFeedState().busy[retryKey("t1")]).toBeFalsy();
       Object.assign(getState(), { features: [TASK_RETRY_LAUNCHER_FEATURE] });
-      await retryTask(failed, { launcher: "claude" });
+      await retryOnLauncher(failed, "claude");
       await retryTask(failed);
       expect(posts().map(([, init]) => init?.body ?? null)).toEqual([JSON.stringify({ launcher: "claude" }), null]);
       Object.assign(getState(), { features });
-    });
-
-    it("suggests the plan task's first other launcher only where the hub takes it", () => {
-      const task = { title: "t", prompt: "p", machine: "box", cwd: "/w", todo_id: "t1", error: "x", retry_with: ["claude", "work2"] };
-      expect(retryLauncher(task, [TASK_RETRY_LAUNCHER_FEATURE])).toBe("claude");
-      expect(retryLauncher(task, ["todo_seen"])).toBeUndefined();
-      expect(retryLauncher({ ...task, retry_with: [] }, [TASK_RETRY_LAUNCHER_FEATURE])).toBeUndefined();
-      // a to-do a plan took over through todo_id has no plan id: the plan that holds it is found all the same
-      const plans: Record<string, TaskPlan> = { p1: { id: "p1", conversation: "c1", state: "started", tasks: [task] } };
-      expect(planTaskOf(todo({ plan_id: undefined }), plans)).toBe(task);
-      expect(planTaskOf(todo({ plan_id: undefined }), { p1: { ...plans.p1, state: "dismissed" } })).toBeUndefined();
     });
 
     it("says why when the hub refuses the retry, and can be tapped again", async () => {

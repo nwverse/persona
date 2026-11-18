@@ -13,7 +13,8 @@ import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
 import { PanelHeader } from "../../ui/PanelHeader";
-import { place, removeTaskNow, retryTaskNow, useFailedStart, useRetrying, useTaskState, useTodo } from "./Tasks";
+import { place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
+import { retryOnLauncherNow, useFailedStart } from "./FailedTaskRow";
 import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { href, type Route } from "../../lib/router";
@@ -97,8 +98,8 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
             <div className="flex flex-wrap gap-2">
               {/* its launcher can't start there: on the computer's other launcher first (#10365) */}
               {st.status === "failed" && instead && (
-                <Button icon="retry" tone="accent" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "retry", instead)} testId="task-retry-launcher">
-                  {t("assistant-tasks.use_launcher_instead", { launcher: instead })}
+                <Button icon="retry" tone="accent" busy={retrying} disabled={retrying} onClick={() => retryOnLauncherNow(todo, instead)} testId="task-retry-launcher">
+                  {t("assistant-task-actions.use_launcher_instead", { launcher: instead })}
                 </Button>
               )}
               {st.status === "failed" && (

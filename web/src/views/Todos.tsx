@@ -114,7 +114,8 @@ import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
 import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
-import { planTaskOf, retryKey, retryLauncher, retryTask, useFeed } from "../lib/feed";
+import { retryKey, retryTask, useFeed } from "../lib/feed";
+import { planTaskOf, retryLauncher, retryOnLauncher } from "../lib/start-retry";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
@@ -2111,7 +2112,7 @@ function TodoDetail({
   // reopens shows at once; its agent starts in the background and the list says how the start goes
   const retrying = useFeed((s) => Boolean(s.busy[retryKey(todo.id)]));
   const retry = (launcher?: string) =>
-    retryTask(todo, launcher ? { launcher } : {}).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
+    (launcher ? retryOnLauncher(todo, launcher) : retryTask(todo)).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
   // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
@@ -2456,7 +2457,7 @@ function TodoDetail({
             testId="todo-retry-launcher"
             className="h-8.5 px-3.5 text-meta whitespace-nowrap"
           >
-            {t("assistant-tasks.use_launcher_instead", { launcher: instead })}
+            {t("assistant-task-actions.use_launcher_instead", { launcher: instead })}
           </Button>
         )}
         {canRetry && (

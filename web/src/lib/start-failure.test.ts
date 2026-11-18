@@ -2,7 +2,7 @@
 // raw error stays in the task's details.
 import { describe, expect, it } from "vitest";
 import { t } from "../i18n";
-import { startFailureCardLine, startFailureCause, startFailureCodeLine, startFailurePlain, startFailureRowLine } from "./start-failure";
+import { startFailureCardLine, startFailureCause, startFailurePlain, startFailureRowLine } from "./start-failure";
 
 describe("a failed start's reason", () => {
   it("names the known causes in a raw error", () => {
@@ -27,20 +27,5 @@ describe("a failed start's reason", () => {
     expect(startFailureRowLine("rpc: connection closed")).toBe(t("assistant-tasks.start_cause_connection_lost"));
     expect(startFailureCardLine("rpc: connection closed")).toBe(t("assistant-tasks.start_failed", { error: t("assistant-tasks.start_cause_connection_lost") }));
     expect(startFailureCardLine("exit status 1")).toBe(t("assistant-tasks.start_failed_details"));
-  });
-
-  it("reads the plan task's code before the text: a launcher the terminal can't run, a workspace in the way (#10365)", () => {
-    // the hub's long sentence (the shells, the file it could not run) stays for the details; Chinese text no longer wins
-    const long = "示例电脑 上新开的终端标签页（bash）运行不了启动模型入口「work」要用的「/opt/p/personad」……"; // i18n-ignore
-    const terminal = { error_code: "launcher_missing", error_args: { where: "terminal", launcher: "work", missing: "/opt/p/personad" } };
-    const short = t("assistant-tasks.start_code_launcher_terminal", { launcher: "work" });
-    expect(startFailureCodeLine(terminal)).toBe(short);
-    expect(startFailureRowLine(long, terminal)).toBe(short);
-    expect(startFailureCardLine(long, terminal)).toBe(t("assistant-tasks.start_failed", { error: short }));
-    expect(startFailureRowLine("checkout path exists", { error_code: "worktree_path_taken", error_args: { path: "/w/task" } })).toBe(t("assistant-tasks.start_code_worktree_path_taken"));
-    // a launcher missing from the computer's list, or a code the page does not know: the text says it
-    expect(startFailureCodeLine({ error_code: "launcher_missing", error_args: { where: "list", launcher: "work" } })).toBeUndefined();
-    expect(startFailureRowLine("rpc: connection closed", { error_code: "something_new" })).toBe(t("assistant-tasks.start_cause_connection_lost"));
-    expect(startFailureRowLine(long)).toBe(long);
   });
 });

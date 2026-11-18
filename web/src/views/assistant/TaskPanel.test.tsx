@@ -230,7 +230,7 @@ describe("task panel dispatch feedback (#7552)", () => {
     try {
       await open({ kind: "task", todo: todo.id }, todo, [], { [plan.id]: plan });
       const instead = host.querySelector<HTMLButtonElement>("[data-testid=task-retry-launcher]");
-      expect(instead?.textContent).toBe(t("assistant-tasks.use_launcher_instead", { launcher: "claude" }));
+      expect(instead?.textContent).toBe(t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }));
       expect(panelText()).toContain(t("assistant-taskpanel.retry"));
       await act(async () => instead!.click());
       await settle();
