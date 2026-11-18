@@ -65,6 +65,19 @@ func TestLocalizedTranscriptItems(t *testing.T) {
 	}
 }
 
+func TestLocalizedCodexHeartbeatAnswer(t *testing.T) {
+	items := []proto.Item{{Kind: proto.KindText, Role: "assistant", Text: transcript.CodexHeartbeatQuiet}}
+	for lang, want := range map[i18n.Lang]string{
+		i18n.ZhHans: "心跳检查已完成，无新动态",
+		i18n.En:     "Heartbeat check complete. No updates.",
+		i18n.Ja:     "ハートビートチェックが完了しました。新着情報はありません",
+	} {
+		if got := localizedItems(lang, items)[0].Text; got != want {
+			t.Errorf("%s: got %q, want %q", lang, got, want)
+		}
+	}
+}
+
 // Every heading the node writes for a task note (transcript/tasknote.go noteText) is one the hub knows: its zh-Hans
 // text is the node's, word for word, so en and ja get theirs instead of the node's Chinese.
 func TestTaskNoteHeadsMatchTheNode(t *testing.T) {

@@ -338,10 +338,11 @@ type MessageSource struct {
 }
 
 const (
-	SourceConversation = "conversation"
-	SourcePatrol       = "patrol"
-	SourceFollowup     = "followup"
-	SourceSupervision  = "supervision"
+	SourceConversation  = "conversation"
+	SourcePatrol        = "patrol"
+	SourceFollowup      = "followup"
+	SourceSupervision   = "supervision"
+	SourceScheduledTask = "scheduled_task" // a scheduler outside Persona, e.g. a Codex heartbeat
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"

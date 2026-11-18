@@ -191,6 +191,21 @@
     max-height: 3lh;
     overflow: hidden;
   }
+  .chat-scheduled-source {
+    @apply ml-auto flex w-fit min-w-0 max-w-[min(100%,488px)] flex-col items-end gap-1.5;
+  }
+  .chat-scheduled-body {
+    font-size: var(--chat-body);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .chat-scheduled-body[data-collapsed] {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: clip;
+  }
   .chat-source-toggle {
     @apply rounded-control font-medium whitespace-nowrap text-ink-3 hover:text-ink-2;
     font-size: var(--chat-secondary);

@@ -376,3 +376,12 @@ A view that fetches once per id cannot recover when the store puts the same id b
   final output: fall back to a standalone call and result pair, as a cold read does when it no longer tracks the call.
 - Keep the pending queue and map in sync and remove the entry on completion. Otherwise a later command that reuses the
   id inherits the old queue position, and the cap evicts it instead of the oldest live command.
+
+## Codex's scheduled checks are not user-authored XML (#10251)
+
+- The desktop scheduler writes a whole `<heartbeat>` item with the automation id, scheduled time and instructions;
+  the final answer writes the same envelope with a decision and optional message. Decode these before clipping the
+  transcript. Only recognize the complete role-specific shapes, so an example in prose or fenced code stays a message.
+- Keep the request as a user-role turn boundary with explicit scheduled provenance and its existing item id. Show the
+  instructions in a constrained preview. The quiet decision is an answer with no updates, not protocol text or a signal
+  to close a turn early; `task_complete` still determines completion and recorded duration.

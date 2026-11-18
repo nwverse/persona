@@ -144503,6 +144503,29 @@
         }
       }
     },
+    "Sent by a scheduled task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent by a scheduled task"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由已安排任务发送"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定期タスクから送信"
+          }
+        }
+      }
+    },
     "Sent by the extension itself" : {
       "localizations" : {
         "en" : {

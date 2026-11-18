@@ -5003,6 +5003,7 @@ On reading back, web only recognizes blocks after the first block whose first li
 | `patrol` | A repeating scheduled run, including daily routines and interval patrols | `title` is the scheduled task title; `conversation_id` is the originating conversation when recorded; `push: "asked"` marks a run whose normal completion stays quiet |
 | `followup` | A one-shot scheduled follow-up, wake, or usage-limit continuation | `title` and originating `conversation_id` when recorded; `push: "asked"` as for `patrol` |
 | `supervision` | A supervision dispatch | Existing `injected.level` and turn-folding behavior still apply |
+| `scheduled_task` | An automatic input from an external scheduler, such as a Codex heartbeat | `text` is the visible task instructions, not the runtime envelope; no Persona `injected` follow-up or patrol is implied |
 | `meeting` | A batch from a recorded meeting this session attends: live sentences, questions and answers since the last batch, the end of the meeting (#2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Feeding the attending session") | `title` is the meeting's name; no `conversation_id` |
 
 The manager persists explicit provenance in the native transcript with a leading context block, rendered by `shared/message_source.md`:
