@@ -1,0 +1,4412 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "owner_rounds_and_one_line_per_run",
+      "description": "The owner's request heads the start round; each later instruction of theirs heads a round of its own. A run's turns in a round are one line, its latest summary with how many turns; the run works now, so its line in the latest round is live and says what it does. Persona's relays fold under the round they fall in, with the run they reached when the relay names it. A run is named by its session's title (the session list's, renamed since the link), and the hand-off card that started it says nothing its link does not.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1, R2, R4"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_k1",
+          "title": "Plan the Kyoto trip",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-16T00:12:30Z",
+          "updated_at": "2026-11-16T00:12:30Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-flights",
+              "linked_at": "2026-11-16T00:13:00Z",
+              "title": "Flight search",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "brief": {
+            "id": "brief_k1",
+            "created_at": "2026-11-16T00:12:30Z",
+            "started_by": "owner",
+            "conversation": "conv_main",
+            "goal": "Plan the Kyoto trip",
+            "done_when": [],
+            "log": [],
+            "criteria": [],
+            "clock_at": "2026-11-16T00:12:30Z",
+            "due_at": "2026-11-16T00:12:30Z",
+            "request": {
+              "text": "Plan the Kyoto trip, Apr 3 to 9, a ryokan near Gion, under ¥60k a night.",
+              "at": "2026-11-16T00:12:00Z",
+              "conversation": "conv_main"
+            }
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_k1a",
+            "conversation": "conv_main",
+            "at": "2026-11-16T00:12:40Z",
+            "kind": "task",
+            "ref": "todo_k1"
+          },
+          {
+            "id": "feed_k1b",
+            "conversation": "conv_main",
+            "at": "2026-11-16T00:19:00Z",
+            "kind": "receipt",
+            "ref": "todo_k1",
+            "body": {
+              "title": "Plan the Kyoto trip",
+              "state": "done",
+              "summary": "Two flight options: A at ¥79,800 and B at ¥84,200 for two.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          },
+          {
+            "id": "feed_k1c",
+            "conversation": "conv_main",
+            "at": "2026-11-16T09:40:00Z",
+            "kind": "routed",
+            "ref": "todo_k1",
+            "body": {
+              "text": "Option B, please. Hold it until Friday.",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          },
+          {
+            "id": "feed_k1d",
+            "conversation": "conv_main",
+            "at": "2026-11-16T09:41:00Z",
+            "kind": "routed",
+            "ref": "todo_k1",
+            "body": {
+              "text": "Hold option B until Friday and tell me the price.",
+              "from": "assistant"
+            }
+          },
+          {
+            "id": "feed_k1e",
+            "conversation": "conv_main",
+            "at": "2026-11-16T09:44:00Z",
+            "kind": "receipt",
+            "ref": "todo_k1",
+            "body": {
+              "title": "Plan the Kyoto trip",
+              "state": "done",
+              "summary": "Held option B until Friday, ¥84,200 for two.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          },
+          {
+            "id": "feed_k1f",
+            "conversation": "conv_main",
+            "at": "2026-11-18T01:02:00Z",
+            "kind": "routed",
+            "ref": "todo_k1",
+            "body": {
+              "text": "Now find a ryokan near Gion, under ¥60k.",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          },
+          {
+            "id": "feed_k1g",
+            "conversation": "conv_main",
+            "at": "2026-11-18T01:05:00Z",
+            "kind": "receipt",
+            "ref": "todo_k1",
+            "body": {
+              "title": "Plan the Kyoto trip",
+              "state": "done",
+              "summary": "Searched 41 ryokans near Gion and kept 3.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          },
+          {
+            "id": "feed_k1h",
+            "conversation": "conv_main",
+            "at": "2026-11-18T01:11:00Z",
+            "kind": "receipt",
+            "ref": "todo_k1",
+            "body": {
+              "title": "Plan the Kyoto trip",
+              "state": "done",
+              "summary": "Three ryokans: Hanami, Kaede and Tsuki. Hanami is my pick.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          },
+          {
+            "id": "feed_k1i",
+            "conversation": "conv_main",
+            "at": "2026-11-18T01:12:00Z",
+            "kind": "routed",
+            "ref": "todo_k1",
+            "body": {
+              "text": "Check that breakfast is included at all three.",
+              "from": "assistant",
+              "machine_id": "mac-1",
+              "session_id": "s-flights"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-flights",
+            "title": "Ryokan search",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-18T01:12:10Z",
+            "updated_at": "2026-11-18T01:12:10Z",
+            "pending_interactions": 0,
+            "activity": "reading the breakfast menus",
+            "last_text": "Checking breakfast at Hanami"
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        },
+        "loc": "Asia/Tokyo"
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-16T00:12:00Z",
+              "header": {
+                "id": "brief:brief_k1:request",
+                "type": "instruction",
+                "at": "2026-11-16T00:12:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Plan the Kyoto trip, Apr 3 to 9, a ryokan near Gion, under ¥60k a night.",
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-flights:linked",
+                  "type": "run_started",
+                  "at": "2026-11-16T00:13:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-flights",
+                      "title": "Ryokan search"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Ryokan search"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-flights",
+                    "title": "Ryokan search"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-flights@start",
+                  "type": "run",
+                  "at": "2026-11-16T00:19:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-flights",
+                      "title": "Ryokan search"
+                    }
+                  },
+                  "text": "Two flight options: A at ¥79,800 and B at ¥84,200 for two.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-flights",
+                    "title": "Ryokan search"
+                  },
+                  "turns": 1
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_k1c",
+              "kind": "owner",
+              "at": "2026-11-16T09:40:00Z",
+              "header": {
+                "id": "feed:feed_k1c",
+                "type": "instruction",
+                "at": "2026-11-16T09:40:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Option B, please. Hold it until Friday.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-flights",
+                  "title": "Ryokan search"
+                },
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "feed:feed_k1d",
+                  "type": "relay",
+                  "at": "2026-11-16T09:41:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Hold option B until Friday and tell me the price."
+                },
+                {
+                  "id": "run:mac-1/s-flights@r:feed:feed_k1c",
+                  "type": "run",
+                  "at": "2026-11-16T09:44:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-flights",
+                      "title": "Ryokan search"
+                    }
+                  },
+                  "text": "Held option B until Friday, ¥84,200 for two.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-flights",
+                    "title": "Ryokan search"
+                  },
+                  "turns": 1
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_k1f",
+              "kind": "owner",
+              "at": "2026-11-18T01:02:00Z",
+              "header": {
+                "id": "feed:feed_k1f",
+                "type": "instruction",
+                "at": "2026-11-18T01:02:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Now find a ryokan near Gion, under ¥60k.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-flights",
+                  "title": "Ryokan search"
+                },
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-flights@r:feed:feed_k1f",
+                  "type": "run",
+                  "at": "2026-11-18T01:11:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-flights",
+                      "title": "Ryokan search"
+                    }
+                  },
+                  "text": "reading the breakfast menus",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-flights",
+                    "title": "Ryokan search"
+                  },
+                  "turns": 2,
+                  "live": true
+                },
+                {
+                  "id": "feed:feed_k1i",
+                  "type": "relay",
+                  "at": "2026-11-18T01:12:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Check that breakfast is included at all three.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-flights",
+                    "title": "Ryokan search"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "start_round_without_the_owners_request",
+      "description": "Persona started the work on its own (the brief's started_by is assistant), so the start round has no header: it holds what came before the owner's first word. A hand-off card that started its run says nothing the run's link does not.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R2"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_w1",
+          "title": "Renew the passport",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T01:00:00Z",
+          "updated_at": "2026-11-17T01:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-passport",
+              "linked_at": "2026-11-17T01:00:20Z",
+              "title": "Passport renewal",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "brief": {
+            "id": "brief_w1",
+            "created_at": "2026-11-17T01:00:00Z",
+            "started_by": "assistant",
+            "conversation": "conv_main",
+            "goal": "Renew the passport before the trip",
+            "done_when": [],
+            "log": [],
+            "criteria": [],
+            "clock_at": "2026-11-17T01:00:00Z",
+            "due_at": "2026-11-17T01:00:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_w1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:00:05Z",
+            "kind": "task",
+            "ref": "todo_w1"
+          },
+          {
+            "id": "feed_w1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:20:00Z",
+            "kind": "receipt",
+            "ref": "todo_w1",
+            "body": {
+              "title": "Renew the passport",
+              "state": "done",
+              "summary": "The renewal form is filled in; it needs a photo.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-passport"
+            }
+          },
+          {
+            "id": "feed_w1c",
+            "conversation": "conv_main",
+            "at": "2026-11-17T02:00:00Z",
+            "kind": "routed",
+            "ref": "todo_w1",
+            "body": {
+              "text": "Use the photo from last year's visa.",
+              "machine_id": "mac-1",
+              "session_id": "s-passport"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-passport",
+            "title": "Passport renewal",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T02:05:00Z",
+            "updated_at": "2026-11-17T02:05:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T01:00:20Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-passport:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T01:00:20Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-passport",
+                      "title": "Passport renewal"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Passport renewal"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-passport",
+                    "title": "Passport renewal"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-passport@start",
+                  "type": "run",
+                  "at": "2026-11-17T01:20:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-passport",
+                      "title": "Passport renewal"
+                    }
+                  },
+                  "text": "The renewal form is filled in; it needs a photo.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-passport",
+                    "title": "Passport renewal"
+                  },
+                  "turns": 1
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_w1c",
+              "kind": "owner",
+              "at": "2026-11-17T02:00:00Z",
+              "header": {
+                "id": "feed:feed_w1c",
+                "type": "instruction",
+                "at": "2026-11-17T02:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Use the photo from last year's visa.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-passport",
+                  "title": "Passport renewal"
+                },
+                "state": "delivered"
+              },
+              "entries": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "answer_in_words_folds_its_decision",
+      "description": "The owner answered the decision in their own words; the hub relayed them (an instruction) and recorded the decision with that instruction as its source. One act, one round: the instruction heads it and the decision folds under it. The ask it answered is no longer open, so the ask entry carries no ask id.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1 (routeDecisionAnswer, server/internal/assistant/decision.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_r1",
+          "title": "Book the ryokan",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-18T01:00:00Z",
+          "updated_at": "2026-11-18T01:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-ryokan",
+              "linked_at": "2026-11-18T01:00:30Z",
+              "title": "Ryokan booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-18T01:30:00Z",
+                "verdict": "needs_user",
+                "reason": "Which ryokan?",
+                "recommend": "Hanami",
+                "options": [
+                  {
+                    "label": "Hanami"
+                  },
+                  {
+                    "label": "Kaede"
+                  }
+                ]
+              }
+            ],
+            "updated_at": "2026-11-18T01:30:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_r1a",
+            "conversation": "conv_main",
+            "at": "2026-11-18T01:30:00.4Z",
+            "kind": "review",
+            "ref": "todo_r1",
+            "body": {
+              "title": "Book the ryokan",
+              "verdict": "needs_user",
+              "note": "Three fit; Hanami is closest to Gion."
+            }
+          },
+          {
+            "id": "feed_r1b",
+            "conversation": "conv_main",
+            "at": "2026-11-18T02:10:00Z",
+            "kind": "routed",
+            "ref": "todo_r1",
+            "body": {
+              "text": "Kaede, it has the garden.",
+              "machine_id": "mac-1",
+              "session_id": "s-ryokan"
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_r1",
+            "todo_id": "todo_r1",
+            "question": "Which ryokan?",
+            "choice": "Kaede, it has the garden.",
+            "reason": "",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "feed_r1b",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T02:10:00.2Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-ryokan",
+            "title": "Ryokan booking",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-18T02:10:01Z",
+            "updated_at": "2026-11-18T02:10:01Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-18T01:00:30Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-ryokan:linked",
+                  "type": "run_started",
+                  "at": "2026-11-18T01:00:30Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-ryokan",
+                      "title": "Ryokan booking"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Ryokan booking"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-ryokan",
+                    "title": "Ryokan booking"
+                  }
+                },
+                {
+                  "id": "feed:feed_r1a",
+                  "type": "ask",
+                  "at": "2026-11-18T01:30:00.4Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Which ryokan?"
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_r1b",
+              "kind": "owner",
+              "at": "2026-11-18T02:10:00Z",
+              "header": {
+                "id": "feed:feed_r1b",
+                "type": "instruction",
+                "at": "2026-11-18T02:10:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Kaede, it has the garden.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-ryokan",
+                  "title": "Ryokan booking"
+                },
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "dec:dec_r1",
+                  "type": "answer",
+                  "at": "2026-11-18T02:10:00.2Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "Kaede, it has the garden.",
+                  "question": "Which ryokan?",
+                  "decision": "dec_r1"
+                },
+                {
+                  "id": "run:mac-1/s-ryokan@r:feed:feed_r1b",
+                  "type": "run",
+                  "at": "2026-11-18T02:10:01Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-ryokan",
+                      "title": "Ryokan booking"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-ryokan",
+                    "title": "Ryokan booking"
+                  },
+                  "live": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "card_answer_folds_its_card_decisions",
+      "description": "The owner answered a run's card: the hub wrote the answer to the conversation and the card's decision to the to-do, in no fixed order and a moment apart. The answer heads the round and the decision folds under it. A card decision with no answer near it (from a card answered where no conversation follows the to-do) heads a round of its own.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1 (server/internal/assistant/answered.go, server/internal/assistant/todo_decisions.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_c1",
+          "title": "Release Weather App 1.3",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-widget",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Widget",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app"
+        },
+        "feed": [
+          {
+            "id": "feed_c1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:00:03Z",
+            "kind": "answered",
+            "ref": "todo_c1",
+            "body": {
+              "question": "Implement the widget in SwiftUI or WidgetKit only?",
+              "answer": "WidgetKit only",
+              "items": [
+                {
+                  "question": "Implement the widget in SwiftUI or WidgetKit only?",
+                  "answer": "WidgetKit only"
+                }
+              ]
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_c1",
+            "todo_id": "todo_c1",
+            "question": "Implement the widget in SwiftUI or WidgetKit only?",
+            "choice": "WidgetKit only",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-widget",
+            "source_message": "ix_c1",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T01:00:01Z"
+          },
+          {
+            "id": "dec_c2",
+            "todo_id": "todo_c1",
+            "question": "Show the forecast for 7 or 10 days?",
+            "choice": "7 days",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-widget",
+            "source_message": "ix_c2",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T03:00:00Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-widget",
+            "title": "Widget",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T03:10:00Z",
+            "updated_at": "2026-11-17T03:10:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-widget:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-widget",
+                      "title": "Widget"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Widget"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-widget",
+                    "title": "Widget"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_c1a",
+              "kind": "owner",
+              "at": "2026-11-17T01:00:03Z",
+              "header": {
+                "id": "feed:feed_c1a",
+                "type": "answer",
+                "at": "2026-11-17T01:00:03Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "WidgetKit only",
+                "question": "Implement the widget in SwiftUI or WidgetKit only?",
+                "via": "card"
+              },
+              "entries": [
+                {
+                  "id": "dec:dec_c1",
+                  "type": "answer",
+                  "at": "2026-11-17T01:00:01Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "WidgetKit only",
+                  "question": "Implement the widget in SwiftUI or WidgetKit only?",
+                  "via": "card",
+                  "decision": "dec_c1"
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_c2",
+              "kind": "owner",
+              "at": "2026-11-17T03:00:00Z",
+              "header": {
+                "id": "dec:dec_c2",
+                "type": "answer",
+                "at": "2026-11-17T03:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "7 days",
+                "question": "Show the forecast for 7 or 10 days?",
+                "via": "card",
+                "decision": "dec_c2"
+              },
+              "entries": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chosen_option_folds_its_relay",
+      "description": "The owner chose an option: the hub worded it for the run (a relay), then recorded the decision a moment later. The decision heads the round and the relay folds under it. Later nobody answered a second decision by its deadline, so Persona took the recommendation: that is Persona's call (via default), relayed and recorded the same way, and it stays in the round it falls in.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1 (chooseOption, server/internal/assistant/decision.go; takeRecommendation, server/internal/assistant/conclusion.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_d1",
+          "title": "Book the airport transfer",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-16T00:00:00Z",
+          "updated_at": "2026-11-16T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-transfer",
+              "linked_at": "2026-11-16T00:00:30Z",
+              "title": "Airport transfer",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "feed": [
+          {
+            "id": "feed_d1a",
+            "conversation": "conv_main",
+            "at": "2026-11-16T03:00:00Z",
+            "kind": "routed",
+            "ref": "todo_d1",
+            "body": {
+              "text": "The owner chose: Shared shuttle (cheaper, 20 minutes longer).",
+              "relay": "answer",
+              "machine_id": "mac-1",
+              "session_id": "s-transfer"
+            }
+          },
+          {
+            "id": "feed_d1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T09:00:00Z",
+            "kind": "routed",
+            "ref": "todo_d1",
+            "body": {
+              "text": "Nobody answered by the deadline; take the recommendation: Morning pickup.",
+              "relay": "answer",
+              "machine_id": "mac-1",
+              "session_id": "s-transfer"
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_d1",
+            "todo_id": "todo_d1",
+            "question": "Private car or shared shuttle?",
+            "choice": "Shared shuttle",
+            "reason": "",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-16T03:00:00.3Z"
+          },
+          {
+            "id": "dec_d2",
+            "todo_id": "todo_d1",
+            "question": "Morning or evening pickup?",
+            "choice": "Morning pickup",
+            "reason": "No answer by Tue 18:00; took the recommendation.",
+            "source": "agent",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T09:00:00.2Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-transfer",
+            "title": "Airport transfer",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T09:05:00Z",
+            "updated_at": "2026-11-17T09:05:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-16T00:00:30Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-transfer:linked",
+                  "type": "run_started",
+                  "at": "2026-11-16T00:00:30Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-transfer",
+                      "title": "Airport transfer"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Airport transfer"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-transfer",
+                    "title": "Airport transfer"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_d1",
+              "kind": "owner",
+              "at": "2026-11-16T03:00:00.3Z",
+              "header": {
+                "id": "dec:dec_d1",
+                "type": "answer",
+                "at": "2026-11-16T03:00:00.3Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Shared shuttle",
+                "question": "Private car or shared shuttle?",
+                "decision": "dec_d1"
+              },
+              "entries": [
+                {
+                  "id": "feed:feed_d1a",
+                  "type": "relay",
+                  "at": "2026-11-16T03:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "The owner chose: Shared shuttle (cheaper, 20 minutes longer).",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-transfer",
+                    "title": "Airport transfer"
+                  }
+                },
+                {
+                  "id": "feed:feed_d1b",
+                  "type": "relay",
+                  "at": "2026-11-17T09:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "Nobody answered by the deadline; take the recommendation: Morning pickup.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-transfer",
+                    "title": "Airport transfer"
+                  }
+                },
+                {
+                  "id": "dec:dec_d2",
+                  "type": "decision",
+                  "at": "2026-11-17T09:00:00.2Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Morning pickup",
+                  "question": "Morning or evening pickup?",
+                  "reason": "No answer by Tue 18:00; took the recommendation.",
+                  "via": "default",
+                  "decision": "dec_d2"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "background_round_per_day_in_the_owners_zone",
+      "description": "Supervision nobody asked for (a rework, the run's report to its supervisor, a park, the overdue mark, a review waiting to be done) forms one Background round per day in the owner's zone (Tokyo here): 14:50 and 15:10 UTC are one UTC day but two Tokyo days. Each Background round sits among the owner's rounds by its first entry's time. A needs_user review the background supervisor gave stays in its round, since it asks the owner.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6 (\"one folded Background round per day\")",
+        "spec/fixtures/todo-rounds/README.md R3"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_b1",
+          "title": "Release Weather App 1.3",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-notes",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Release notes",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app",
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "needs_user",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-17T14:49:59.5Z",
+                "verdict": "rework",
+                "round": 1,
+                "note": "The notes miss the widget."
+              },
+              {
+                "at": "2026-11-18T02:00:00Z",
+                "verdict": "parked",
+                "reason": "App Review has the build",
+                "until": "2026-11-19T02:00:00Z",
+                "waiting_on": "external"
+              },
+              {
+                "at": "2026-11-18T04:00:00Z",
+                "verdict": "pending_review"
+              },
+              {
+                "at": "2026-11-18T05:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Mention the widget in What's New?"
+              }
+            ],
+            "updated_at": "2026-11-18T05:00:00Z"
+          },
+          "brief": {
+            "id": "brief_b1",
+            "created_at": "2026-11-17T00:00:00Z",
+            "started_by": "assistant",
+            "conversation": "conv_main",
+            "goal": "Ship 1.3 by Friday",
+            "done_when": [],
+            "log": [
+              {
+                "at": "2026-11-18T03:00:00Z",
+                "kind": "overdue",
+                "todo_id": "todo_b1"
+              }
+            ],
+            "criteria": [],
+            "clock_at": "2026-11-17T00:00:00Z",
+            "due_at": "2026-11-17T00:00:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_b1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T10:00:00Z",
+            "kind": "routed",
+            "ref": "todo_b1",
+            "body": {
+              "text": "Keep the notes under 300 words.",
+              "machine_id": "mac-1",
+              "session_id": "s-notes"
+            }
+          },
+          {
+            "id": "feed_b1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T14:50:00Z",
+            "kind": "review",
+            "ref": "todo_b1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "verdict": "rework",
+              "round": 1,
+              "note": "The notes miss the widget.",
+              "by": "background"
+            }
+          },
+          {
+            "id": "feed_b1c",
+            "conversation": "conv_main",
+            "at": "2026-11-17T15:10:00Z",
+            "kind": "report",
+            "ref": "todo_b1",
+            "body": {
+              "kind": "blocked",
+              "text": "Waiting for the final screenshots."
+            }
+          },
+          {
+            "id": "feed_b1d",
+            "conversation": "conv_main",
+            "at": "2026-11-18T05:00:00.6Z",
+            "kind": "review",
+            "ref": "todo_b1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "verdict": "needs_user",
+              "note": "",
+              "by": "background"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-notes",
+            "title": "Release notes",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-18T01:00:00Z",
+            "updated_at": "2026-11-18T01:00:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        },
+        "loc": "Asia/Tokyo"
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-notes:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-notes",
+                      "title": "Release notes"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Release notes"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-notes",
+                    "title": "Release notes"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_b1a",
+              "kind": "owner",
+              "at": "2026-11-17T10:00:00Z",
+              "header": {
+                "id": "feed:feed_b1a",
+                "type": "instruction",
+                "at": "2026-11-17T10:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Keep the notes under 300 words.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-notes",
+                  "title": "Release notes"
+                },
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "feed:feed_b1d",
+                  "type": "ask",
+                  "at": "2026-11-18T05:00:00.6Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Mention the widget in What's New?"
+                }
+              ]
+            },
+            {
+              "id": "bg:2026-11-17",
+              "kind": "background",
+              "at": "2026-11-17T14:50:00Z",
+              "entries": [
+                {
+                  "id": "feed:feed_b1b",
+                  "type": "review",
+                  "at": "2026-11-17T14:50:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "The notes miss the widget.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "round": "1",
+                      "verdict": "rework"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "bg:2026-11-18",
+              "kind": "background",
+              "at": "2026-11-17T15:10:00Z",
+              "entries": [
+                {
+                  "id": "feed:feed_b1c",
+                  "type": "report",
+                  "at": "2026-11-17T15:10:00Z",
+                  "actor": {
+                    "kind": "run"
+                  },
+                  "text": "Waiting for the final screenshots.",
+                  "line": {
+                    "key": "report",
+                    "args": {
+                      "kind": "blocked"
+                    }
+                  }
+                },
+                {
+                  "id": "review:2026-11-18T02:00:00Z",
+                  "type": "parked",
+                  "at": "2026-11-18T02:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "parked",
+                    "args": {
+                      "reason": "App Review has the build",
+                      "until": "2026-11-19T02:00:00Z"
+                    }
+                  }
+                },
+                {
+                  "id": "brief:brief_b1:0",
+                  "type": "overdue",
+                  "at": "2026-11-18T03:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "overdue"
+                  }
+                },
+                {
+                  "id": "review:2026-11-18T04:00:00Z",
+                  "type": "review",
+                  "at": "2026-11-18T04:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "verdict": "pending_review"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "older_receipts_given_to_their_run",
+      "description": "Receipts written before #10465 name only the run's computer. Each goes to the one run on that computer whose link covers its time: on MacBook only Widget; on Desk Mac Release notes alone at 08:10, both Release notes and Screenshots at 08:40 (several: \"A run\"), Screenshots alone at 09:30 once Release notes was let go of. A computer no run is on gives \"A run\" too, and the unnamed turns of a round make one line.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R4"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_g1",
+          "title": "Release Weather App 1.3",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T07:58:00Z",
+          "updated_at": "2026-11-17T07:58:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-widget",
+              "linked_at": "2026-11-17T08:00:00Z",
+              "title": "Widget",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            },
+            {
+              "machine_id": "mac-2",
+              "session_id": "s-notes",
+              "linked_at": "2026-11-17T08:00:00Z",
+              "title": "Release notes",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "released_at": "2026-11-17T09:00:00Z"
+            },
+            {
+              "machine_id": "mac-2",
+              "session_id": "s-shots",
+              "linked_at": "2026-11-17T08:30:00Z",
+              "title": "Screenshots",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app"
+        },
+        "feed": [
+          {
+            "id": "feed_g1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T07:59:00Z",
+            "kind": "routed",
+            "ref": "todo_g1",
+            "body": {
+              "text": "Ship 1.3 on Friday, no beta this time."
+            }
+          },
+          {
+            "id": "feed_g1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T08:20:00Z",
+            "kind": "receipt",
+            "ref": "todo_g1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "done",
+              "summary": "The widget's plan is ready.",
+              "machine": "MacBook"
+            }
+          },
+          {
+            "id": "feed_g1c",
+            "conversation": "conv_main",
+            "at": "2026-11-17T08:10:00Z",
+            "kind": "receipt",
+            "ref": "todo_g1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "done",
+              "summary": "Drafted What's New.",
+              "machine": "Desk Mac"
+            }
+          },
+          {
+            "id": "feed_g1d",
+            "conversation": "conv_main",
+            "at": "2026-11-17T08:40:00Z",
+            "kind": "receipt",
+            "ref": "todo_g1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "done",
+              "summary": "Six screenshots taken.",
+              "machine": "Desk Mac"
+            }
+          },
+          {
+            "id": "feed_g1e",
+            "conversation": "conv_main",
+            "at": "2026-11-17T09:30:00Z",
+            "kind": "receipt",
+            "ref": "todo_g1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "done",
+              "summary": "Screenshots framed for the store.",
+              "machine": "Desk Mac"
+            }
+          },
+          {
+            "id": "feed_g1f",
+            "conversation": "conv_main",
+            "at": "2026-11-17T09:40:00Z",
+            "kind": "receipt",
+            "ref": "todo_g1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "done",
+              "summary": "Checked the store listing.",
+              "machine": "Studio"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-widget",
+            "title": "Widget",
+            "status": "waiting",
+            "state": "needs_you",
+            "state_since": "2026-11-17T08:20:00Z",
+            "updated_at": "2026-11-17T08:20:00Z",
+            "pending_interactions": 0
+          },
+          {
+            "machine_id": "mac-2",
+            "session_id": "s-shots",
+            "title": "Screenshots",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T09:30:00Z",
+            "updated_at": "2026-11-17T09:30:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook",
+          "mac-2": "Desk Mac"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "r:feed:feed_g1a",
+              "kind": "owner",
+              "at": "2026-11-17T07:59:00Z",
+              "header": {
+                "id": "feed:feed_g1a",
+                "type": "instruction",
+                "at": "2026-11-17T07:59:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Ship 1.3 on Friday, no beta this time.",
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-widget:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T08:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-widget",
+                      "title": "Widget"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Widget"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-widget",
+                    "title": "Widget"
+                  }
+                },
+                {
+                  "id": "run:mac-2/s-notes:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T08:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-2",
+                      "session_id": "s-notes",
+                      "title": "Release notes"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Release notes"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-notes",
+                    "title": "Release notes"
+                  }
+                },
+                {
+                  "id": "run:mac-2/s-notes@r:feed:feed_g1a",
+                  "type": "run",
+                  "at": "2026-11-17T08:10:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-2",
+                      "session_id": "s-notes",
+                      "title": "Release notes"
+                    }
+                  },
+                  "text": "Drafted What's New.",
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-notes",
+                    "title": "Release notes"
+                  },
+                  "turns": 1
+                },
+                {
+                  "id": "run:mac-1/s-widget@r:feed:feed_g1a",
+                  "type": "run",
+                  "at": "2026-11-17T08:20:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-widget",
+                      "title": "Widget"
+                    }
+                  },
+                  "text": "The widget's plan is ready.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-widget",
+                    "title": "Widget"
+                  },
+                  "turns": 1
+                },
+                {
+                  "id": "run:mac-2/s-shots:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T08:30:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-2",
+                      "session_id": "s-shots",
+                      "title": "Screenshots"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Screenshots"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-shots",
+                    "title": "Screenshots"
+                  }
+                },
+                {
+                  "id": "run:mac-2/s-notes:ended",
+                  "type": "run_ended",
+                  "at": "2026-11-17T09:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_ended",
+                    "args": {
+                      "run": "Release notes"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-notes",
+                    "title": "Release notes"
+                  }
+                },
+                {
+                  "id": "run:mac-2/s-shots@r:feed:feed_g1a",
+                  "type": "run",
+                  "at": "2026-11-17T09:30:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-2",
+                      "session_id": "s-shots",
+                      "title": "Screenshots"
+                    }
+                  },
+                  "text": "Screenshots framed for the store.",
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-shots",
+                    "title": "Screenshots"
+                  },
+                  "turns": 1
+                },
+                {
+                  "id": "run:?@r:feed:feed_g1a",
+                  "type": "run",
+                  "at": "2026-11-17T09:40:00Z",
+                  "actor": {
+                    "kind": "run"
+                  },
+                  "text": "Checked the store listing.",
+                  "turns": 2
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "superseded_decision_stays",
+      "description": "Decisions the owner wrote by hand are answers that head their rounds. A decision a later one superseded stays in the timeline, marked with the one that replaced it: the timeline is a record. A run's own note of a call (todo_decision_add) is the run's decision.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R5"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_s1",
+          "title": "Plan the Kyoto trip",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-15T00:00:00Z",
+          "updated_at": "2026-11-15T00:00:00Z",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-days",
+              "linked_at": "2026-11-15T00:10:00Z",
+              "title": "Day planner",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "feed": [],
+        "decisions": [
+          {
+            "id": "dec_s1",
+            "todo_id": "todo_s1",
+            "question": "Dates",
+            "choice": "Apr 2 to 8",
+            "reason": "",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "dec_s2",
+            "created_at": "2026-11-15T01:00:00Z"
+          },
+          {
+            "id": "dec_s2",
+            "todo_id": "todo_s1",
+            "question": "Dates",
+            "choice": "Apr 3 to 9",
+            "reason": "The ryokan is full on the 2nd.",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "dec_s1",
+            "superseded_by": "",
+            "created_at": "2026-11-16T01:00:00Z"
+          },
+          {
+            "id": "dec_s3",
+            "todo_id": "todo_s1",
+            "question": "Which day for Nara?",
+            "choice": "Apr 6",
+            "reason": "The deer park is quieter midweek.",
+            "source": "agent",
+            "source_machine": "mac-1",
+            "source_session": "s-days",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-16T02:00:00Z"
+          }
+        ],
+        "sessions": [],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-15T00:10:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-days:linked",
+                  "type": "run_started",
+                  "at": "2026-11-15T00:10:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-days",
+                      "title": "Day planner"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Day planner"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-days",
+                    "title": "Day planner"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_s1",
+              "kind": "owner",
+              "at": "2026-11-15T01:00:00Z",
+              "header": {
+                "id": "dec:dec_s1",
+                "type": "answer",
+                "at": "2026-11-15T01:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Apr 2 to 8",
+                "question": "Dates",
+                "decision": "dec_s1",
+                "superseded_by": "dec_s2"
+              },
+              "entries": []
+            },
+            {
+              "id": "r:dec:dec_s2",
+              "kind": "owner",
+              "at": "2026-11-16T01:00:00Z",
+              "header": {
+                "id": "dec:dec_s2",
+                "type": "answer",
+                "at": "2026-11-16T01:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Apr 3 to 9",
+                "question": "Dates",
+                "reason": "The ryokan is full on the 2nd.",
+                "decision": "dec_s2"
+              },
+              "entries": [
+                {
+                  "id": "dec:dec_s3",
+                  "type": "decision",
+                  "at": "2026-11-16T02:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-days",
+                      "title": "Day planner"
+                    }
+                  },
+                  "text": "Apr 6",
+                  "question": "Which day for Nara?",
+                  "reason": "The deer park is quieter midweek.",
+                  "decision": "dec_s3"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "ledger_review_read_once",
+      "description": "A review the conversation shows is also in the ledger, written a moment before its feed row: it is read once, under the feed row, with what only the ledger keeps (who gave it: the independent reviewer; a decision's question). A ledger review with no feed row (given before the to-do had a conversation) is read from the ledger: an acceptance that wants the owner to check closes nothing, so it is a review line. The open decision is on the needs_user review that raised it, under the id the view gives its ask.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R6, R7"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_l1",
+          "title": "Release Weather App 1.3",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-widget",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Widget",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app",
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "needs_user",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-17T09:00:00Z",
+                "verdict": "accepted",
+                "note": "First pass looks right.",
+                "user_check": true
+              },
+              {
+                "at": "2026-11-17T10:00:00.12Z",
+                "verdict": "rework",
+                "by": "reviewer",
+                "round": 1
+              },
+              {
+                "at": "2026-11-17T12:00:00.5Z",
+                "verdict": "needs_user",
+                "reason": "Ship the widget in 1.3 or 1.4?",
+                "recommend": "1.3",
+                "options": [
+                  {
+                    "label": "1.3"
+                  },
+                  {
+                    "label": "1.4"
+                  }
+                ]
+              }
+            ],
+            "updated_at": "2026-11-17T12:00:00.5Z"
+          },
+          "ask": {
+            "outcome": "decide",
+            "verdict": "Needs your decision",
+            "recommend": "1.3",
+            "asked_at": "2026-11-17T12:00:02.25Z",
+            "risk": "safe",
+            "question": "Ship the widget in 1.3 or 1.4?",
+            "options": [
+              {
+                "label": "1.3"
+              },
+              {
+                "label": "1.4"
+              }
+            ]
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_l1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T10:00:01Z",
+            "kind": "review",
+            "ref": "todo_l1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "verdict": "rework",
+              "round": 1,
+              "note": "The widget crashes on iPad: fix it before review."
+            }
+          },
+          {
+            "id": "feed_l1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T12:00:01Z",
+            "kind": "review",
+            "ref": "todo_l1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "verdict": "needs_user",
+              "note": "The widget is ready."
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-widget",
+            "title": "Widget",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T11:50:00Z",
+            "updated_at": "2026-11-17T11:50:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-widget:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-widget",
+                      "title": "Widget"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Widget"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-widget",
+                    "title": "Widget"
+                  }
+                },
+                {
+                  "id": "review:2026-11-17T09:00:00Z",
+                  "type": "review",
+                  "at": "2026-11-17T09:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "First pass looks right.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "verdict": "accepted"
+                    }
+                  }
+                },
+                {
+                  "id": "feed:feed_l1b",
+                  "type": "ask",
+                  "at": "2026-11-17T12:00:01Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Ship the widget in 1.3 or 1.4?",
+                  "ask": "todo:decision@2026-11-17T12:00:02.25Z"
+                }
+              ]
+            },
+            {
+              "id": "bg:2026-11-17",
+              "kind": "background",
+              "at": "2026-11-17T10:00:01Z",
+              "entries": [
+                {
+                  "id": "feed:feed_l1a",
+                  "type": "review",
+                  "at": "2026-11-17T10:00:01Z",
+                  "actor": {
+                    "kind": "run"
+                  },
+                  "text": "The widget crashes on iPad: fix it before review.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "round": "1",
+                      "verdict": "rework"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "leader_task_without_a_feed",
+      "description": "A to-do a task leader handed to its Agent writes no feed (nobody reads one there), so its timeline comes from the ledger, the decisions and the runs' links alone. The supervisor's acceptance is a review line in the owner's round; the close that followed is the to-do's own entry, by Persona (done_by review).",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R6 (appendFeedItem, server/internal/assistant/tasks.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_p1",
+          "title": "Write the What's New text",
+          "notes": "",
+          "done_at": "2026-11-17T06:00:01Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "lead:weather-release",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-whatsnew",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "What's New",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "leader",
+              "released_at": "2026-11-17T06:00:01Z"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app",
+          "done_by": "review",
+          "done_reason": "Accepted",
+          "supervision": {
+            "supervisor": "lead:weather-release",
+            "done_when": [],
+            "criteria": [],
+            "state": "accepted",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-17T03:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Mention the price change?"
+              },
+              {
+                "at": "2026-11-17T06:00:00Z",
+                "verdict": "accepted",
+                "note": "Clear and short."
+              }
+            ],
+            "updated_at": "2026-11-17T06:00:00Z"
+          }
+        },
+        "feed": [],
+        "decisions": [
+          {
+            "id": "dec_p1",
+            "todo_id": "todo_p1",
+            "question": "Mention the price change?",
+            "choice": "No, not this time",
+            "reason": "",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T04:00:00Z"
+          }
+        ],
+        "sessions": [],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-whatsnew:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-whatsnew",
+                      "title": "What's New"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "What's New"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-whatsnew",
+                    "title": "What's New"
+                  }
+                },
+                {
+                  "id": "review:2026-11-17T03:00:00Z",
+                  "type": "ask",
+                  "at": "2026-11-17T03:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Mention the price change?"
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_p1",
+              "kind": "owner",
+              "at": "2026-11-17T04:00:00Z",
+              "header": {
+                "id": "dec:dec_p1",
+                "type": "answer",
+                "at": "2026-11-17T04:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "No, not this time",
+                "question": "Mention the price change?",
+                "decision": "dec_p1"
+              },
+              "entries": [
+                {
+                  "id": "review:2026-11-17T06:00:00Z",
+                  "type": "review",
+                  "at": "2026-11-17T06:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Clear and short.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "verdict": "accepted"
+                    }
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-whatsnew:ended",
+                  "type": "run_ended",
+                  "at": "2026-11-17T06:00:01Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_ended",
+                    "args": {
+                      "run": "What's New"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-whatsnew",
+                    "title": "What's New"
+                  }
+                },
+                {
+                  "id": "todo:closed@2026-11-17T06:00:01Z",
+                  "type": "closed",
+                  "at": "2026-11-17T06:00:01Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "persona",
+                      "outcome": "done"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "failed_starts",
+      "description": "Each failed start is one line: a failed start's receipt says why in the hub's words, as the conversation showed them. A run whose own start failed is the same failure as the receipt written with it, which then names the run and its error; such a run never starts or ends. The latest failure, which the to-do's start error belongs to, says that error as a line.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_f1",
+          "title": "Fix the login crash for SSO users",
+          "notes": "",
+          "done_at": "2026-11-17T05:00:00Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-2",
+              "session_id": "s-login",
+              "linked_at": "2026-11-17T00:00:40Z",
+              "title": "Login fix",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "start_error": "The launcher was not found",
+              "released_at": "2026-11-17T00:01:00Z"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app",
+          "start_error": "Desk Mac is offline"
+        },
+        "feed": [
+          {
+            "id": "feed_f1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T00:01:00Z",
+            "kind": "receipt",
+            "ref": "todo_f1",
+            "body": {
+              "title": "Fix the login crash for SSO users",
+              "state": "failed",
+              "summary": "Could not start: the launcher was not found."
+            }
+          },
+          {
+            "id": "feed_f1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T05:00:01Z",
+            "kind": "receipt",
+            "ref": "todo_f1",
+            "body": {
+              "title": "Fix the login crash for SSO users",
+              "state": "failed",
+              "summary": "Could not start: Desk Mac is offline."
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [],
+        "machines": {
+          "mac-2": "Desk Mac"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "feed:feed_f1a",
+                  "type": "run_failed",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "Could not start: the launcher was not found.",
+                  "line": {
+                    "key": "run_failed",
+                    "args": {
+                      "error": "The launcher was not found",
+                      "run": "Login fix"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-login",
+                    "title": "Login fix"
+                  }
+                },
+                {
+                  "id": "feed:feed_f1b",
+                  "type": "run_failed",
+                  "at": "2026-11-17T05:00:01Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "Could not start: Desk Mac is offline.",
+                  "line": {
+                    "key": "run_failed",
+                    "args": {
+                      "error": "Desk Mac is offline"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "failed_start_without_a_conversation",
+      "description": "A to-do no conversation follows has no failed start's receipt: its start error goes on the failure nearest its done_at, here its run's, which names the run; with neither it would be a line of its own at its done_at.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_f2",
+          "title": "Back up the photos",
+          "notes": "",
+          "done_at": "2026-11-17T00:02:00Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-2",
+              "session_id": "s-backup",
+              "linked_at": "2026-11-17T00:01:40Z",
+              "title": "Photo backup",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "start_error": "Desk Mac is offline",
+              "released_at": "2026-11-17T00:02:00Z"
+            }
+          ],
+          "quiet": false,
+          "start_error": "Desk Mac is offline"
+        },
+        "feed": [],
+        "decisions": [],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:40Z",
+              "entries": [
+                {
+                  "id": "run:mac-2/s-backup:failed",
+                  "type": "run_failed",
+                  "at": "2026-11-17T00:01:40Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_failed",
+                    "args": {
+                      "error": "Desk Mac is offline",
+                      "run": "Photo backup"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-backup",
+                    "title": "Photo backup"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "failed_start_with_nothing_to_go_on",
+      "description": "A failed start with no receipt and no run linked: the start error is a line of its own, at the to-do's done_at.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_f3",
+          "title": "Back up the photos",
+          "notes": "",
+          "done_at": "2026-11-17T00:02:00Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "start_error": "No computer can run this task"
+        },
+        "feed": [],
+        "decisions": [],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:02:00Z",
+              "entries": [
+                {
+                  "id": "todo:failed@2026-11-17T00:02:00Z",
+                  "type": "run_failed",
+                  "at": "2026-11-17T00:02:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_failed",
+                    "args": {
+                      "error": "No computer can run this task"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "interrupted_and_live_lines",
+      "description": "A run whose latest turn in the round was cut off is an interrupted line, still counting its turns. A run that was cut off and works again now is a live line, saying what it does. A run that works now with no turn in the latest round yet gets a live line there, from when it has worked.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R4"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_i1",
+          "title": "Release Weather App 1.3",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-widget",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Widget",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            },
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-notes",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Release notes",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            },
+            {
+              "machine_id": "mac-2",
+              "session_id": "s-shots",
+              "linked_at": "2026-11-17T00:02:00Z",
+              "title": "Screenshots",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app"
+        },
+        "feed": [
+          {
+            "id": "feed_i1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T00:00:30Z",
+            "kind": "routed",
+            "ref": "todo_i1",
+            "body": {
+              "text": "Ship 1.3 on Friday."
+            }
+          },
+          {
+            "id": "feed_i1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:00:00Z",
+            "kind": "receipt",
+            "ref": "todo_i1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "done",
+              "summary": "The widget builds.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-widget"
+            }
+          },
+          {
+            "id": "feed_i1c",
+            "conversation": "conv_main",
+            "at": "2026-11-17T02:00:00Z",
+            "kind": "receipt",
+            "ref": "todo_i1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "interrupted",
+              "summary": "The model service errored and was interrupted",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-widget",
+              "cause": "model_error",
+              "error": "overloaded"
+            }
+          },
+          {
+            "id": "feed_i1d",
+            "conversation": "conv_main",
+            "at": "2026-11-17T02:30:00Z",
+            "kind": "receipt",
+            "ref": "todo_i1",
+            "body": {
+              "title": "Release Weather App 1.3",
+              "state": "interrupted",
+              "summary": "The model service errored and was interrupted",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-notes",
+              "cause": "rate_limited"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-widget",
+            "title": "Widget",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T02:00:00Z",
+            "updated_at": "2026-11-17T02:00:00Z",
+            "pending_interactions": 0
+          },
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-notes",
+            "title": "Release notes",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-17T02:40:00Z",
+            "updated_at": "2026-11-17T02:40:00Z",
+            "pending_interactions": 0,
+            "last_text": "Drafting What's New\nThe widget comes first."
+          },
+          {
+            "machine_id": "mac-2",
+            "session_id": "s-shots",
+            "title": "Screenshots",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-17T00:05:00Z",
+            "updated_at": "2026-11-17T00:05:00Z",
+            "pending_interactions": 0,
+            "activity": "framing the iPad screenshots"
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook",
+          "mac-2": "Desk Mac"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "r:feed:feed_i1a",
+              "kind": "owner",
+              "at": "2026-11-17T00:00:30Z",
+              "header": {
+                "id": "feed:feed_i1a",
+                "type": "instruction",
+                "at": "2026-11-17T00:00:30Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Ship 1.3 on Friday.",
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-notes:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-notes",
+                      "title": "Release notes"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Release notes"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-notes",
+                    "title": "Release notes"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-widget:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-widget",
+                      "title": "Widget"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Widget"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-widget",
+                    "title": "Widget"
+                  }
+                },
+                {
+                  "id": "run:mac-2/s-shots:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:02:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-2",
+                      "session_id": "s-shots",
+                      "title": "Screenshots"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Screenshots"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-shots",
+                    "title": "Screenshots"
+                  }
+                },
+                {
+                  "id": "run:mac-2/s-shots@r:feed:feed_i1a",
+                  "type": "run",
+                  "at": "2026-11-17T00:05:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-2",
+                      "session_id": "s-shots",
+                      "title": "Screenshots"
+                    }
+                  },
+                  "text": "framing the iPad screenshots",
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-shots",
+                    "title": "Screenshots"
+                  },
+                  "live": true
+                },
+                {
+                  "id": "run:mac-1/s-widget@r:feed:feed_i1a",
+                  "type": "interrupted",
+                  "at": "2026-11-17T02:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-widget",
+                      "title": "Widget"
+                    }
+                  },
+                  "line": {
+                    "key": "interrupted",
+                    "args": {
+                      "run": "Widget"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-widget",
+                    "title": "Widget"
+                  },
+                  "turns": 2
+                },
+                {
+                  "id": "run:mac-1/s-notes@r:feed:feed_i1a",
+                  "type": "run",
+                  "at": "2026-11-17T02:30:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-notes",
+                      "title": "Release notes"
+                    }
+                  },
+                  "text": "Drafting What's New",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-notes",
+                    "title": "Release notes"
+                  },
+                  "turns": 1,
+                  "live": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "calls_made_for_the_owner",
+      "description": "Persona answering a run's card in the owner's place is Persona's decision, its answer as a line; a call Persona made on a run's card (a standing permission) is Persona's too, and a run's own note is the run's. A run the task did not start but took on as it was says how it came (wake) on its start.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_m1",
+          "title": "Update the app's privacy page",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-privacy",
+              "linked_at": "2026-11-17T00:00:10Z",
+              "title": "Privacy page",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "space"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app"
+        },
+        "feed": [
+          {
+            "id": "feed_m1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T00:00:12Z",
+            "kind": "task",
+            "ref": "todo_m1",
+            "body": {
+              "wake": "active"
+            }
+          },
+          {
+            "id": "feed_m1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:00:00Z",
+            "kind": "answered",
+            "ref": "todo_m1",
+            "body": {
+              "question": "Use Bash",
+              "answer": "Persona answered: Approved",
+              "items": [
+                {
+                  "question": "Use Bash\nnpm test",
+                  "answer": "Approved"
+                }
+              ],
+              "by": "assistant",
+              "reason": "Running the tests changes nothing."
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_m1",
+            "todo_id": "todo_m1",
+            "question": "Merge once checks pass?",
+            "choice": "Yes",
+            "reason": "Standing permission: merge in this repository once checks pass.",
+            "source": "agent",
+            "source_machine": "mac-1",
+            "source_session": "s-privacy",
+            "source_message": "ix_m1",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T02:00:00Z"
+          },
+          {
+            "id": "dec_m2",
+            "todo_id": "todo_m1",
+            "question": "Link the policy from Settings?",
+            "choice": "Yes, under About",
+            "reason": "",
+            "source": "agent",
+            "source_machine": "mac-1",
+            "source_session": "s-privacy",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T03:00:00Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-privacy",
+            "title": "Privacy page",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T03:10:00Z",
+            "updated_at": "2026-11-17T03:10:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:00:10Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-privacy:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:00:10Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-privacy",
+                      "title": "Privacy page"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Privacy page",
+                      "wake": "active"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-privacy",
+                    "title": "Privacy page"
+                  }
+                },
+                {
+                  "id": "feed:feed_m1b",
+                  "type": "decision",
+                  "at": "2026-11-17T01:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "question": "Use Bash",
+                  "reason": "Running the tests changes nothing.",
+                  "line": {
+                    "key": "answered_by_persona",
+                    "args": {
+                      "answer": "Approved"
+                    }
+                  }
+                },
+                {
+                  "id": "dec:dec_m1",
+                  "type": "decision",
+                  "at": "2026-11-17T02:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Yes",
+                  "question": "Merge once checks pass?",
+                  "reason": "Standing permission: merge in this repository once checks pass.",
+                  "decision": "dec_m1"
+                },
+                {
+                  "id": "dec:dec_m2",
+                  "type": "decision",
+                  "at": "2026-11-17T03:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-privacy",
+                      "title": "Privacy page"
+                    }
+                  },
+                  "text": "Yes, under About",
+                  "question": "Link the policy from Settings?",
+                  "decision": "dec_m2"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "results_close_and_recap",
+      "description": "What the work produced: the code change a receipt named (at that receipt, with how the hub last saw it), the work going live, and what it came to (the hub's outcome line, with the first link it named); an earlier change the hub only looked at is the fourth result and is left out. The outcome's decisions and pitfalls are the run's decisions. The done judge accepted the work and closed the to-do (the hub's, both). Since the owner looked, everything counts in the recap but their own answer and the hub's relay of it, which folds under it; the recap points at the round of the first change.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.5 rows 3 and 9, 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Results\" and \"Since you looked\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_n1",
+          "title": "Fix the forecast for the widget",
+          "notes": "",
+          "done_at": "2026-11-18T06:00:01Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-forecast",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Forecast fix",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "released_at": "2026-11-18T06:00:01Z"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app",
+          "done_by": "auto",
+          "seen_at": "2026-11-18T01:00:00Z",
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "accepted",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-18T06:00:00Z",
+                "verdict": "accepted",
+                "by": "judge",
+                "note": "Checks passed and it is live."
+              }
+            ],
+            "updated_at": "2026-11-18T06:00:00Z"
+          },
+          "pr_url": "https://example.com/acme/weather/pull/301",
+          "pr_status": {
+            "url": "https://example.com/acme/weather/pull/301",
+            "state": "merged",
+            "draft": false,
+            "review": "approved",
+            "checks": "passed",
+            "conflicts": false,
+            "checked_at": "2026-11-18T05:00:00Z"
+          },
+          "other_prs": [
+            {
+              "url": "https://example.com/acme/weather/pull/290",
+              "state": "closed",
+              "draft": false,
+              "review": "",
+              "checks": "",
+              "conflicts": false,
+              "checked_at": "2026-11-17T20:00:00Z"
+            }
+          ],
+          "delivery": {
+            "state": "live",
+            "at": "2026-11-18T05:30:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_n1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T00:00:30Z",
+            "kind": "routed",
+            "ref": "todo_n1",
+            "body": {
+              "text": "The widget shows yesterday's forecast."
+            }
+          },
+          {
+            "id": "feed_n1b",
+            "conversation": "conv_main",
+            "at": "2026-11-18T02:00:00Z",
+            "kind": "receipt",
+            "ref": "todo_n1",
+            "body": {
+              "title": "Fix the forecast for the widget",
+              "state": "done",
+              "summary": "Fixed the cache key; the widget refreshes at midnight.",
+              "pr": "https://example.com/acme/weather/pull/301",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-forecast"
+            }
+          },
+          {
+            "id": "feed_n1d",
+            "conversation": "conv_main",
+            "at": "2026-11-18T02:59:59.8Z",
+            "kind": "routed",
+            "ref": "todo_n1",
+            "body": {
+              "text": "The owner chose: Yes, ship it in 1.3.1.",
+              "relay": "answer",
+              "machine_id": "mac-1",
+              "session_id": "s-forecast"
+            }
+          },
+          {
+            "id": "feed_n1c",
+            "conversation": "conv_main",
+            "at": "2026-11-18T06:00:00.4Z",
+            "kind": "review",
+            "ref": "todo_n1",
+            "body": {
+              "title": "Fix the forecast for the widget",
+              "verdict": "accepted",
+              "note": "Checks passed and it is live."
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_n1",
+            "todo_id": "todo_n1",
+            "question": "Ship it in 1.3.1?",
+            "choice": "Yes",
+            "reason": "",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T03:00:00Z"
+          },
+          {
+            "id": "dec_n2",
+            "todo_id": "todo_n1",
+            "question": "Outcome",
+            "choice": "The widget shows today's forecast again.\nhttps://example.com/acme/weather/releases/1.3.1",
+            "reason": "",
+            "source": "outcome",
+            "source_machine": "mac-1",
+            "source_session": "s-forecast",
+            "source_message": "outcome:todo_n1:2026-11-18T06:00:01Z#o",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T06:05:00Z"
+          },
+          {
+            "id": "dec_n3",
+            "todo_id": "todo_n1",
+            "question": "Where the forecast is cached",
+            "choice": "Per day, by city",
+            "reason": "",
+            "source": "outcome",
+            "source_machine": "mac-1",
+            "source_session": "s-forecast",
+            "source_message": "outcome:todo_n1:2026-11-18T06:00:01Z#d1",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T06:05:00.000001Z"
+          },
+          {
+            "id": "dec_n4",
+            "todo_id": "todo_n1",
+            "question": "Pitfall",
+            "choice": "The simulator keeps the old widget until it restarts.",
+            "reason": "",
+            "source": "outcome",
+            "source_machine": "mac-1",
+            "source_session": "s-forecast",
+            "source_message": "outcome:todo_n1:2026-11-18T06:00:01Z#p1",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T06:05:00.000002Z"
+          }
+        ],
+        "sessions": [],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "recap": {
+          "since": "2026-11-18T01:00:00Z",
+          "round": "r:feed:feed_n1a",
+          "counts": {
+            "closed": 1,
+            "decision": 2,
+            "result": 1,
+            "review": 1,
+            "run": 1,
+            "run_ended": 1
+          }
+        },
+        "results": [
+          {
+            "id": "dec:dec_n2",
+            "kind": "report",
+            "at": "2026-11-18T06:05:00Z",
+            "text": "The widget shows today's forecast again.",
+            "url": "https://example.com/acme/weather/releases/1.3.1",
+            "run": {
+              "machine_id": "mac-1",
+              "session_id": "s-forecast",
+              "title": "Forecast fix"
+            }
+          },
+          {
+            "id": "deploy@2026-11-18T05:30:00Z",
+            "kind": "deploy",
+            "at": "2026-11-18T05:30:00Z"
+          },
+          {
+            "id": "change:https://example.com/acme/weather/pull/301",
+            "kind": "change",
+            "at": "2026-11-18T02:00:00Z",
+            "url": "https://example.com/acme/weather/pull/301",
+            "state": "merged",
+            "run": {
+              "machine_id": "mac-1",
+              "session_id": "s-forecast",
+              "title": "Forecast fix"
+            }
+          }
+        ],
+        "timeline": {
+          "rounds": [
+            {
+              "id": "r:feed:feed_n1a",
+              "kind": "owner",
+              "at": "2026-11-17T00:00:30Z",
+              "header": {
+                "id": "feed:feed_n1a",
+                "type": "instruction",
+                "at": "2026-11-17T00:00:30Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "The widget shows yesterday's forecast.",
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-forecast:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-forecast",
+                      "title": "Forecast fix"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Forecast fix"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-forecast",
+                    "title": "Forecast fix"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-forecast@r:feed:feed_n1a",
+                  "type": "run",
+                  "at": "2026-11-18T02:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-forecast",
+                      "title": "Forecast fix"
+                    }
+                  },
+                  "text": "Fixed the cache key; the widget refreshes at midnight.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-forecast",
+                    "title": "Forecast fix"
+                  },
+                  "turns": 1
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_n1",
+              "kind": "owner",
+              "at": "2026-11-18T03:00:00Z",
+              "header": {
+                "id": "dec:dec_n1",
+                "type": "answer",
+                "at": "2026-11-18T03:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Yes",
+                "question": "Ship it in 1.3.1?",
+                "decision": "dec_n1"
+              },
+              "entries": [
+                {
+                  "id": "feed:feed_n1d",
+                  "type": "relay",
+                  "at": "2026-11-18T02:59:59.8Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "The owner chose: Yes, ship it in 1.3.1.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-forecast",
+                    "title": "Forecast fix"
+                  }
+                },
+                {
+                  "id": "feed:feed_n1c",
+                  "type": "review",
+                  "at": "2026-11-18T06:00:00.4Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "Checks passed and it is live.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "verdict": "accepted"
+                    }
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-forecast:ended",
+                  "type": "run_ended",
+                  "at": "2026-11-18T06:00:01Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_ended",
+                    "args": {
+                      "run": "Forecast fix"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-forecast",
+                    "title": "Forecast fix"
+                  }
+                },
+                {
+                  "id": "todo:closed@2026-11-18T06:00:01Z",
+                  "type": "closed",
+                  "at": "2026-11-18T06:00:01Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "judge",
+                      "outcome": "done"
+                    }
+                  }
+                },
+                {
+                  "id": "dec:dec_n2",
+                  "type": "result",
+                  "at": "2026-11-18T06:05:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-forecast",
+                      "title": "Forecast fix"
+                    }
+                  },
+                  "text": "The widget shows today's forecast again.\nhttps://example.com/acme/weather/releases/1.3.1",
+                  "question": "Outcome",
+                  "decision": "dec_n2"
+                },
+                {
+                  "id": "dec:dec_n3",
+                  "type": "decision",
+                  "at": "2026-11-18T06:05:00.000001Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-forecast",
+                      "title": "Forecast fix"
+                    }
+                  },
+                  "text": "Per day, by city",
+                  "question": "Where the forecast is cached",
+                  "decision": "dec_n3"
+                },
+                {
+                  "id": "dec:dec_n4",
+                  "type": "decision",
+                  "at": "2026-11-18T06:05:00.000002Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-forecast",
+                      "title": "Forecast fix"
+                    }
+                  },
+                  "text": "The simulator keeps the old widget until it restarts.",
+                  "question": "Pitfall",
+                  "decision": "dec_n4"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "owner_ticks_it_done",
+      "description": "The owner closed the to-do themselves: the close is theirs. An extension's outcome and one the owner wrote by hand are results too, the extension's and the owner's, newest first. The owner looked once everything had happened, so there is no recap.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\" and \"Results\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_o1",
+          "title": "Pay the ryokan deposit",
+          "notes": "",
+          "done_at": "2026-11-18T09:00:00Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "seen_at": "2026-11-18T09:00:00Z"
+        },
+        "feed": [],
+        "decisions": [
+          {
+            "id": "dec_o1",
+            "todo_id": "todo_o1",
+            "question": "Outcome",
+            "choice": "Deposit of ¥20,000 paid",
+            "reason": "",
+            "source": "outcome",
+            "source_machine": "extension:payments",
+            "source_session": "",
+            "source_message": "pay_1",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T08:00:00Z"
+          },
+          {
+            "id": "dec_o2",
+            "todo_id": "todo_o1",
+            "question": "Outcome",
+            "choice": "Receipt filed under Kyoto trip",
+            "reason": "",
+            "source": "outcome",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-18T08:30:00Z"
+          }
+        ],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "results": [
+          {
+            "id": "dec:dec_o2",
+            "kind": "report",
+            "at": "2026-11-18T08:30:00Z",
+            "text": "Receipt filed under Kyoto trip"
+          },
+          {
+            "id": "dec:dec_o1",
+            "kind": "report",
+            "at": "2026-11-18T08:00:00Z",
+            "text": "Deposit of ¥20,000 paid"
+          }
+        ],
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-18T08:00:00Z",
+              "entries": [
+                {
+                  "id": "dec:dec_o1",
+                  "type": "result",
+                  "at": "2026-11-18T08:00:00Z",
+                  "actor": {
+                    "kind": "extension"
+                  },
+                  "text": "Deposit of ¥20,000 paid",
+                  "question": "Outcome",
+                  "decision": "dec_o1"
+                },
+                {
+                  "id": "dec:dec_o2",
+                  "type": "result",
+                  "at": "2026-11-18T08:30:00Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "Receipt filed under Kyoto trip",
+                  "question": "Outcome",
+                  "decision": "dec_o2"
+                },
+                {
+                  "id": "todo:closed@2026-11-18T09:00:00Z",
+                  "type": "closed",
+                  "at": "2026-11-18T09:00:00Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "owner",
+                      "outcome": "done"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "concern_closed_by_its_report",
+      "description": "A concern closes once the main conversation reported its outcome to the owner: the report is a result of Persona's, and the close says it was reported.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\" and \"Results\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_q1",
+          "title": "Is the hotel near the station?",
+          "notes": "",
+          "done_at": "2026-11-17T02:00:00Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "kind": "concern",
+          "done_by": "reported"
+        },
+        "feed": [],
+        "decisions": [
+          {
+            "id": "dec_q1",
+            "todo_id": "todo_q1",
+            "question": "Is the hotel near the station?",
+            "choice": "Yes: a five-minute walk from Kyoto Station.",
+            "reason": "",
+            "source": "reported",
+            "source_machine": "",
+            "source_session": "conv_main",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T02:00:00Z"
+          }
+        ],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "results": [
+          {
+            "id": "dec:dec_q1",
+            "kind": "report",
+            "at": "2026-11-17T02:00:00Z",
+            "text": "Yes: a five-minute walk from Kyoto Station."
+          }
+        ],
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T02:00:00Z",
+              "entries": [
+                {
+                  "id": "dec:dec_q1",
+                  "type": "result",
+                  "at": "2026-11-17T02:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Yes: a five-minute walk from Kyoto Station.",
+                  "question": "Is the hotel near the station?",
+                  "decision": "dec_q1"
+                },
+                {
+                  "id": "todo:closed@2026-11-17T02:00:00Z",
+                  "type": "closed",
+                  "at": "2026-11-17T02:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "persona",
+                      "outcome": "reported"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope_and_what_it_continues",
+      "description": "A to-do that took the work over from another says so where it began, naming the other; the other's rounds stay on the other. The shared brief's request still heads its start round. Of the brief's log only this to-do's count: a scope change the earlier to-do made is left out, this one's is a scope line, and the overdue mark is supervision nobody asked for.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\" (what a to-do continues)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_h2",
+          "title": "Release Weather App 1.3",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-17T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-release2",
+              "linked_at": "2026-11-17T08:00:30Z",
+              "title": "Release, second try",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app",
+          "brief": {
+            "id": "brief_h",
+            "created_at": "2026-11-16T00:00:00Z",
+            "started_by": "owner",
+            "conversation": "conv_main",
+            "goal": "Ship 1.3 by Friday",
+            "done_when": [],
+            "log": [
+              {
+                "at": "2026-11-16T05:00:00Z",
+                "kind": "scope",
+                "todo_id": "todo_h1",
+                "by": "conv_main",
+                "change": "+ release notes in German"
+              },
+              {
+                "at": "2026-11-16T06:00:00Z",
+                "kind": "scope",
+                "by": "conv_main",
+                "change": "- the iPad layout"
+              },
+              {
+                "at": "2026-11-17T09:00:00Z",
+                "kind": "scope",
+                "todo_id": "todo_h2",
+                "by": "conv_main",
+                "change": "+ home-screen widget in the release notes",
+                "why": "the owner asked for it"
+              },
+              {
+                "at": "2026-11-17T12:00:00Z",
+                "kind": "overdue",
+                "todo_id": "todo_h2"
+              }
+            ],
+            "criteria": [],
+            "clock_at": "2026-11-16T00:00:00Z",
+            "due_at": "2026-11-16T00:00:00Z",
+            "request": {
+              "text": "Ship 1.3 on Friday, no beta this time.",
+              "at": "2026-11-16T00:00:00Z",
+              "conversation": "conv_main"
+            }
+          },
+          "lineage": [
+            {
+              "todo_id": "todo_h1",
+              "title": "Release Weather App 1.3",
+              "started": "2026-11-16T00:01:00Z",
+              "ended": "2026-11-17T07:59:00Z",
+              "why": "The run stopped",
+              "superseded_by": "todo_h2"
+            },
+            {
+              "todo_id": "todo_h2",
+              "title": "Release Weather App 1.3",
+              "started": "2026-11-17T08:00:00Z",
+              "continues": "todo_h1",
+              "current": true
+            }
+          ]
+        },
+        "feed": [],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-release2",
+            "title": "Release, second try",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T10:00:00Z",
+            "updated_at": "2026-11-17T10:00:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-16T00:00:00Z",
+              "header": {
+                "id": "brief:brief_h:request",
+                "type": "instruction",
+                "at": "2026-11-16T00:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Ship 1.3 on Friday, no beta this time.",
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "lineage:todo_h1",
+                  "type": "run_started",
+                  "at": "2026-11-17T08:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "continues",
+                    "args": {
+                      "title": "Release Weather App 1.3",
+                      "todo": "todo_h1"
+                    }
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-release2:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T08:00:30Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-release2",
+                      "title": "Release, second try"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Release, second try"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-release2",
+                    "title": "Release, second try"
+                  }
+                },
+                {
+                  "id": "brief:brief_h:2",
+                  "type": "scope",
+                  "at": "2026-11-17T09:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "scope",
+                    "args": {
+                      "change": "+ home-screen widget in the release notes",
+                      "why": "the owner asked for it"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "bg:2026-11-17",
+              "kind": "background",
+              "at": "2026-11-17T12:00:00Z",
+              "entries": [
+                {
+                  "id": "brief:brief_h:3",
+                  "type": "overdue",
+                  "at": "2026-11-17T12:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "overdue"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "conclusion_says_it_cannot_be_done",
+      "description": "A run's conclusion that the work cannot be done asks the owner with no review to raise it: the ask is an entry of its own, at the time it was asked, under the id the view gives it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R7",
+        "spec/fixtures/todo-view cannot_be_done"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x1",
+          "title": "Get a table at Kikunoi",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-kikunoi",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Restaurant booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "ask": {
+            "outcome": "cannot",
+            "verdict": "Can't be done",
+            "asked_at": "2026-11-17T03:00:00Z",
+            "risk": "safe"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_x1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T02:59:00Z",
+            "kind": "receipt",
+            "ref": "todo_x1",
+            "body": {
+              "title": "Get a table at Kikunoi",
+              "state": "done",
+              "summary": "Kikunoi is fully booked in April; no waiting list.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-kikunoi"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-kikunoi",
+            "title": "Restaurant booking",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T02:59:00Z",
+            "updated_at": "2026-11-17T02:59:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-kikunoi:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-kikunoi",
+                      "title": "Restaurant booking"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Restaurant booking"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-kikunoi",
+                    "title": "Restaurant booking"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-kikunoi@start",
+                  "type": "run",
+                  "at": "2026-11-17T02:59:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-kikunoi",
+                      "title": "Restaurant booking"
+                    }
+                  },
+                  "text": "Kikunoi is fully booked in April; no waiting list.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-kikunoi",
+                    "title": "Restaurant booking"
+                  },
+                  "turns": 1
+                },
+                {
+                  "id": "todo:ask@2026-11-17T03:00:00Z",
+                  "type": "ask",
+                  "at": "2026-11-17T03:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "cannot"
+                  },
+                  "ask": "todo:decision@2026-11-17T03:00:00Z"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "dont_handle_takes_the_ask_id",
+      "description": "The owner chose Don't handle on the decision: the view no longer lists it as an ask, so its entry carries no ask id.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R7"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_y1",
+          "title": "Choose the rental car",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "needs_user",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-17T03:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Compact or hybrid?"
+              }
+            ],
+            "updated_at": "2026-11-17T03:00:00Z"
+          },
+          "ask": {
+            "outcome": "decide",
+            "verdict": "Needs your decision",
+            "asked_at": "2026-11-17T03:00:01Z",
+            "risk": "safe",
+            "question": "Compact or hybrid?"
+          },
+          "decision_review": {
+            "review_at": "2026-11-17T03:00:00Z",
+            "dismissal_id": "dec_y0"
+          }
+        },
+        "feed": [],
+        "decisions": [],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T03:00:00Z",
+              "entries": [
+                {
+                  "id": "review:2026-11-17T03:00:00Z",
+                  "type": "ask",
+                  "at": "2026-11-17T03:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Compact or hybrid?"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "message_that_started_a_new_run",
+      "description": "Every run had stopped, so the owner's message started a new one; the message was written before #10465 and names the run only as the new one. The new run's start, a moment before the message's line, folds under that message's round, not the round before it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_z1",
+          "title": "Fix the login crash for SSO users",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-login1",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Login fix",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "released_at": "2026-11-17T04:00:00Z"
+            },
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-login2",
+              "linked_at": "2026-11-18T01:00:00Z",
+              "title": "Login fix, part 2",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "weather-app"
+        },
+        "feed": [
+          {
+            "id": "feed_z1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T00:00:40Z",
+            "kind": "routed",
+            "ref": "todo_z1",
+            "body": {
+              "text": "Users with SSO crash at login."
+            }
+          },
+          {
+            "id": "feed_z1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T03:59:00Z",
+            "kind": "receipt",
+            "ref": "todo_z1",
+            "body": {
+              "title": "Fix the login crash for SSO users",
+              "state": "done",
+              "summary": "Found it: the token refresh races the login.",
+              "machine": "MacBook"
+            }
+          },
+          {
+            "id": "feed_z1c",
+            "conversation": "conv_main",
+            "at": "2026-11-18T01:00:02Z",
+            "kind": "routed",
+            "ref": "todo_z1",
+            "body": {
+              "text": "Go ahead and fix the race.",
+              "new_agent": "s-login2",
+              "new_agent_machine": "mac-1"
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-login2",
+            "title": "Login fix, part 2",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-18T01:30:00Z",
+            "updated_at": "2026-11-18T01:30:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "r:feed:feed_z1a",
+              "kind": "owner",
+              "at": "2026-11-17T00:00:40Z",
+              "header": {
+                "id": "feed:feed_z1a",
+                "type": "instruction",
+                "at": "2026-11-17T00:00:40Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Users with SSO crash at login.",
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-login1:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-login1",
+                      "title": "Login fix"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Login fix"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-login1",
+                    "title": "Login fix"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-login1@r:feed:feed_z1a",
+                  "type": "run",
+                  "at": "2026-11-17T03:59:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-login1",
+                      "title": "Login fix"
+                    }
+                  },
+                  "text": "Found it: the token refresh races the login.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-login1",
+                    "title": "Login fix"
+                  },
+                  "turns": 1
+                },
+                {
+                  "id": "run:mac-1/s-login1:ended",
+                  "type": "run_ended",
+                  "at": "2026-11-17T04:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_ended",
+                    "args": {
+                      "run": "Login fix"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-login1",
+                    "title": "Login fix"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_z1c",
+              "kind": "owner",
+              "at": "2026-11-18T01:00:02Z",
+              "header": {
+                "id": "feed:feed_z1c",
+                "type": "instruction",
+                "at": "2026-11-18T01:00:02Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Go ahead and fix the race.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-login2",
+                  "title": "Login fix, part 2"
+                },
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-login2:linked",
+                  "type": "run_started",
+                  "at": "2026-11-18T01:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-login2",
+                      "title": "Login fix, part 2"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Login fix, part 2"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-login2",
+                    "title": "Login fix, part 2"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "nothing_happened_yet",
+      "description": "A to-do written by hand that nothing has happened to has no rounds, no results and no recap.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_e1",
+          "title": "Buy a travel adapter",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-18T00:00:00Z",
+          "updated_at": "2026-11-18T00:00:00Z",
+          "spaces": [],
+          "agents": [],
+          "quiet": false
+        },
+        "feed": [],
+        "decisions": [],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "timeline": {
+          "rounds": []
+        }
+      }
+    }
+  ]
+}
