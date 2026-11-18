@@ -1567,6 +1567,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return ok(nil)
+	case proto.MethodStartContinue: // the owner's answer to a start's startup question, then the start again (startcontinue.go)
+		var a proto.StartContinueParams
+		if err := json.Unmarshal(params, &a); err != nil {
+			return nil, err
+		}
+		s, err := n.startContinue(ctx, a.SessionID, a.Choice)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"session": s}, nil
 	case "session.keys":
 		if a, ok := n.agent(p.SessionID); ok {
 			defer n.forgetDialog(a.PaneID) // the dialog it showed may be gone (dialogstatus.go)

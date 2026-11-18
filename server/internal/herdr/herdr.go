@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -558,11 +560,29 @@ type Created struct {
 	} `json:"root_pane"`
 }
 
-func (c *Client) WorkspaceCreate(ctx context.Context, cwd, label string) (*Created, error) {
+// WorkspaceCreate opens a workspace in cwd, named label, without moving the computer's focus. env, when not empty,
+// is set in its first tab's shell as it starts (the API's env, the CLI's --env): only a herdr that takes it may be
+// given one (herdr 0.9.5 does; the caller checks, an older one may refuse the field).
+func (c *Client) WorkspaceCreate(ctx context.Context, cwd, label string, env map[string]string) (*Created, error) {
 	var res Created
-	err := c.call(ctx, "workspace.create", map[string]any{"cwd": cwd, "label": label, "focus": false}, &res,
-		"workspace", "create", "--cwd", cwd, "--label", label, "--no-focus")
+	params := map[string]any{"cwd": cwd, "label": label, "focus": false}
+	cli := []string{"workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"}
+	params, cli = withEnv(params, cli, env)
+	err := c.call(ctx, "workspace.create", params, &res, cli...)
 	return &res, err
+}
+
+// withEnv adds env to a call's params (an object of strings) and to its CLI arguments (--env KEY=VALUE each, in key
+// order); nothing for an empty env.
+func withEnv(params map[string]any, cli []string, env map[string]string) (map[string]any, []string) {
+	if len(env) == 0 {
+		return params, cli
+	}
+	params["env"] = env
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		cli = append(cli, "--env", k+"="+env[k])
+	}
+	return params, cli
 }
 
 // WorktreeCreated is what worktree.create opened: the new workspace (with its first tab and pane) and the checkout.
@@ -603,10 +623,14 @@ func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path st
 	return &res, err
 }
 
-func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string) (*Created, error) {
+// TabCreate opens a tab in workspace, in cwd and named label, without moving the computer's focus; env as for
+// WorkspaceCreate.
+func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string, env map[string]string) (*Created, error) {
 	var res Created
-	err := c.call(ctx, "tab.create", map[string]any{"workspace_id": workspace, "cwd": cwd, "label": label, "focus": false}, &res,
-		"tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus")
+	params := map[string]any{"workspace_id": workspace, "cwd": cwd, "label": label, "focus": false}
+	cli := []string{"tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"}
+	params, cli = withEnv(params, cli, env)
+	err := c.call(ctx, "tab.create", params, &res, cli...)
 	return &res, err
 }
 
@@ -640,8 +664,8 @@ func (c *Client) PaneClose(ctx context.Context, pane string) error {
 }
 
 // PaneSplit splits a pane (direction "right" or "down") without moving the computer's focus, the new pane starting
-// in cwd (the host's choice when empty). It returns the new pane's id.
-func (c *Client) PaneSplit(ctx context.Context, pane, direction, cwd string) (string, error) {
+// in cwd (the host's choice when empty); env as for WorkspaceCreate. It returns the new pane's id.
+func (c *Client) PaneSplit(ctx context.Context, pane, direction, cwd string, env map[string]string) (string, error) {
 	var res struct {
 		Pane struct {
 			ID string `json:"pane_id"`
@@ -653,6 +677,7 @@ func (c *Client) PaneSplit(ctx context.Context, pane, direction, cwd string) (st
 		params["cwd"] = cwd
 		cli = append(cli, "--cwd", cwd)
 	}
+	params, cli = withEnv(params, cli, env)
 	if err := c.call(ctx, "pane.split", params, &res, cli...); err != nil {
 		return "", err
 	}

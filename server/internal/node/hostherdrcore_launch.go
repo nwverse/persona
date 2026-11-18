@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,6 +28,18 @@ const herdrSeenLabel = "herdr.seen"
 
 // hcAppTerminalEnv is the terminal identity the Herdr app gives the shells it opens (its viewer is Ghostty's).
 var hcAppTerminalEnv = map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "TERM_PROGRAM": "ghostty"}
+
+// shellEnv is what a new terminal's shell gets: hcAppTerminalEnv, with a start's environment (host.SpawnEnv) added.
+// terminal.run takes env on every herdr-core, so nothing is probed; the app's own variables are never replaced.
+func shellEnv(ctx context.Context) map[string]string {
+	spawn := host.SpawnEnv(ctx)
+	if len(spawn) == 0 {
+		return hcAppTerminalEnv
+	}
+	env := maps.Clone(spawn)
+	maps.Copy(env, hcAppTerminalEnv)
+	return env
+}
 
 // layoutTries bounds one change of the layout document: each conflict (the app wrote it meanwhile) reads it again.
 const layoutTries = 4
@@ -270,9 +283,10 @@ func (h *herdrCoreHost) createUnplaced(ctx context.Context, cwd string) (*host.C
 }
 
 // openShell records the core's actual shell, which can differ from the node's login shell. An unknown program
-// cannot safely select command syntax, even if a later terminal.get happens to show a shell in front.
+// cannot safely select command syntax, even if a later terminal.get happens to show a shell in front. The shell gets
+// the app's terminal identity and, for a start's tab, the start's environment (host.SpawnEnv: shellEnv).
 func (h *herdrCoreHost) openShell(ctx context.Context, cwd string, labels map[string]string) (*herdrcore.Terminal, error) {
-	t, err := h.c.Run(ctx, herdrcore.RunOpts{Cwd: cwd, Env: hcAppTerminalEnv, Keep: true, NoParent: true, Labels: labels})
+	t, err := h.c.Run(ctx, herdrcore.RunOpts{Cwd: cwd, Env: shellEnv(ctx), Keep: true, NoParent: true, Labels: labels})
 	if err != nil {
 		return nil, hcErr(err)
 	}

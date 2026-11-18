@@ -10,9 +10,14 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 )
 
-// CreateSpace opens the workspace on the own server: pane-less work never goes to a named session.
+// CreateSpace opens the workspace on the own server: pane-less work never goes to a named session. A start's
+// environment for the new shell (host.SpawnEnv) goes with it when this herdr takes one (spawnEnv).
 func (h *herdrHost) CreateSpace(ctx context.Context, cwd, label string) (*host.Created, error) {
-	c, err := h.c.WorkspaceCreate(ctx, cwd, label)
+	env := h.spawnEnv(ctx, "workspace", "create")
+	c, err := h.c.WorkspaceCreate(ctx, cwd, label, env)
+	if envRefused(env, err) {
+		c, err = h.c.WorkspaceCreate(ctx, cwd, label, nil)
+	}
 	return fromHerdrCreated("", c), err
 }
 
@@ -21,8 +26,53 @@ func (h *herdrHost) CreateSlot(ctx context.Context, space, cwd, label string) (*
 	if err != nil {
 		return nil, err
 	}
-	c, err := t.c.TabCreate(ctx, t.id, cwd, label)
+	env := h.spawnEnv(ctx, "tab", "create")
+	c, err := t.c.TabCreate(ctx, t.id, cwd, label, env)
+	if envRefused(env, err) {
+		c, err = t.c.TabCreate(ctx, t.id, cwd, label, nil)
+	}
 	return fromHerdrCreated(t.session, c), err
+}
+
+// envSupport caches, per herdr binary and command, whether the command takes --env (and so the API's env: herdr
+// 0.9.5's tab create and workspace create do).
+var envSupport struct {
+	sync.Mutex
+	takes map[string]bool
+}
+
+// spawnEnv is the environment a start asked for the new shell (host.SpawnEnv) when this herdr's cmd takes one
+// (`herdr <cmd> --help` lists --env, asked once per binary): a herdr from before it may refuse a call with a field it
+// does not know, and every start would fail. Else nil: the shell starts with the server's environment, as before.
+func (h *herdrHost) spawnEnv(ctx context.Context, cmd ...string) map[string]string {
+	env := host.SpawnEnv(ctx)
+	if len(env) == 0 {
+		return nil
+	}
+	key := h.c.Bin + "\x00" + strings.Join(cmd, " ")
+	envSupport.Lock()
+	takes, known := envSupport.takes[key]
+	envSupport.Unlock()
+	if !known {
+		takes = h.helpLists("--env", cmd...)
+		envSupport.Lock()
+		if envSupport.takes == nil {
+			envSupport.takes = map[string]bool{}
+		}
+		envSupport.takes[key] = takes
+		envSupport.Unlock()
+	}
+	if !takes {
+		return nil
+	}
+	return env
+}
+
+// envRefused: herdr refused a create that carried env as a request it cannot read (a server older than the herdr
+// binary the capability was read from): the create is made again without it.
+func envRefused(env map[string]string, err error) bool {
+	var he *herdr.Error
+	return len(env) > 0 && errors.As(err, &he) && he.Code == "invalid_request" && strings.Contains(he.Message, "env")
 }
 
 func (h *herdrHost) Run(ctx context.Context, pane host.PaneRef, command string) error {
@@ -92,7 +142,7 @@ func (h *herdrHost) Split(ctx context.Context, pane host.PaneRef, direction, cwd
 	if err != nil {
 		return host.PaneRef{}, err
 	}
-	id, err := t.c.PaneSplit(ctx, t.id, direction, cwd)
+	id, err := t.c.PaneSplit(ctx, t.id, direction, cwd, nil) // the user's own shell: never a start's environment
 	if err != nil {
 		return host.PaneRef{}, err
 	}

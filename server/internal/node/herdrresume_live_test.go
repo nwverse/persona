@@ -66,7 +66,7 @@ func TestLiveHerdrResumesThroughTheLauncher(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cli("session", "stop", session)
-	ws, err := c.WorkspaceCreate(ctx, cwd, "resume-live")
+	ws, err := c.WorkspaceCreate(ctx, cwd, "resume-live", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestLiveHerdrResumesThroughTheLauncher(t *testing.T) {
 		{name: "settings", pane: ws.RootPane.ID, spec: claudeLaunch{Launcher: "claude", Settings: settings}, profile: configDir},
 		{name: "config-dir", spec: claudeLaunch{Launcher: "claude"}, profile: configDir},
 	}
-	tab, err := c.TabCreate(ctx, ws.Workspace.ID, cwd, "config-dir")
+	tab, err := c.TabCreate(ctx, ws.Workspace.ID, cwd, "config-dir", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

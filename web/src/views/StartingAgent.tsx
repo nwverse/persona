@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { shortPath } from "../lib/format";
 import { deliverLaunch, type AgentLaunch } from "../lib/new-agent";
 import { namedLauncher, providerIdNote, providerLabel, providerTitle, useProviderNames } from "../lib/provider-names";
@@ -10,8 +10,15 @@ import { Button, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 
+// the question the start's terminal tab stopped on, answered from here (#10365): only for such a failure
+const LazyShellQuestion = lazy(() => import("./ShellQuestionCard").then((m) => ({ default: m.SessionShellQuestion })));
+
 export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch; onToggleSidebar?: () => void }) {
   const machine = useStore((s) => s.machines.find((m) => m.id === launch.machineId));
+  // the started session's row says the question as it stands now (a renewed tab); the refusal's own words before it does
+  const row = useStore((s) => launch.session ? s.sessions[launch.machineId]?.find((x) => x.session_id === launch.session!.session_id) : undefined);
+  const question = launch.phase !== "failed" || !launch.session ? undefined
+    : row?.start_error_code === "shell_waiting" ? row.start_error_args : launch.errorCode === "shell_waiting" ? launch.errorArgs : undefined;
   const [text, setText] = useState(launch.text);
   const [launcher, setLauncher] = useState(launch.launcher);
   // the launcher by the provider's display name; the line's tooltip says it with its startup ID (#5029)
@@ -48,6 +55,7 @@ export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch
           </div>}
           {launch.phase === "failed" ? <div role="alert" className="flex flex-col items-start gap-3">
             <p className="text-[13px] text-red">{launch.error}</p>
+            {question && launch.session && <Suspense fallback={null}><LazyShellQuestion className="w-full" mid={launch.machineId} sid={launch.session.session_id} args={question} /></Suspense>}
             <p className="text-[12px] text-ink-3">{launch.uncertain ? t("startingagent.uncertain") : t("startingagent.kept")}</p>
             {editable && <div className="flex w-full flex-col gap-2">
               <label className="text-[12px] text-ink-2">{t("startingagent.launcher_label")}<input value={launcher} onChange={(e) => setLauncher(e.target.value)} className="mt-1 w-full rounded-control bg-inset px-3 py-2 font-mono text-[12px] text-ink shadow-hairline outline-none" /></label>

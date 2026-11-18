@@ -387,8 +387,9 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 }
 
 // newTab opens a tab in workspace ws for cwd, named tabName (or agent-<n>); with no workspace, a new one named after
-// the directory, whose first tab it is. The pane is marked as Persona's (personaTabToken, the session id when it is
-// already known): once its agent exits, the tab stays with the shell, linked to the session (personatab.go).
+// the directory, whose first tab it is. Its shell starts with startShellEnv where the engine takes one (startenv.go).
+// The pane is marked as Persona's (personaTabToken, the session id when it is already known): once its agent exits,
+// the tab stays with the shell, linked to the session (personatab.go).
 func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabName, id string) (*host.Created, error) {
 	if c := adoptedPane(ctx); c != nil { // "Run Agent Here": the pane the user picked, not a new tab (panes_actions.go)
 		return c, nil
@@ -398,8 +399,9 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	}
 	var created *host.Created
 	var err error
+	spawn := withStartShellEnv(ctx) // for the create alone: renames and the rest go with ctx
 	if ws == "" {
-		if created, err = launch.CreateSpace(ctx, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
+		if created, err = launch.CreateSpace(spawn, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
 			var taken map[string]bool
 			if _, ok := launch.(*herdrCoreHost); ok {
 				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder.
@@ -407,7 +409,7 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
 	} else {
-		created, err = launch.CreateSlot(ctx, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+		created, err = launch.CreateSlot(spawn, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
