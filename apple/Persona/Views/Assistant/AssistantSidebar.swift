@@ -1012,8 +1012,7 @@ struct AssistantSidebar: View {
                         .rotationEffect(.degrees(folded.wrappedValue ? 0 : 90))
                     Spacer(minLength: 0)
                 }
-                .padding(.vertical, Theme.Sidebar.rowPadding)
-                .scaledFrame(minHeight: Theme.Sidebar.row)
+                .modifier(SidebarHeadingBox())
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -1025,10 +1024,26 @@ struct AssistantSidebar: View {
             trailing()
         }
         .padding(.leading, Theme.Space.m)
-        .padding(.top, Theme.Space.s)
+        .padding(.top, SidebarHeadingBox.above)
     }
     #endif
 }
+
+#if os(iOS)
+/// The box of a Sidebar layout section heading's name (#6332, #10551): Pages, Persona Chats and Agents all take it, so the
+/// three are as tall and as far apart whatever a heading carries beside its name (Agents' ⋯, Personal Agents and +, in
+/// a box of their own that never sets the row's height). A sidebar row's height and padding, and `above` over it.
+struct SidebarHeadingBox: ViewModifier {
+    /// The room over each heading, inside its row.
+    static let above = Theme.Space.s
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+    }
+}
+#endif
 
 /// Which part of the sidebar an `AssistantSidebar` draws (#6332).
 enum AssistantSidebarPart {

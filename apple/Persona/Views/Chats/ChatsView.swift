@@ -1311,6 +1311,9 @@ private struct AgentsList: View {
             if let sidebarRows {
                 Section { sidebarRows }
                     .listSectionSeparator(.hidden)
+                    // No sections' gap before the Agents heading: it stands as far below Persona's last row as Persona
+                    // Chats below the pages', its own heading's room only (`SidebarHeadingBox`, #10551).
+                    .listSectionSpacing(.custom(Theme.Space.flush))
             }
             // On a phone the filter bar is the list's first row: it scrolls with the list, so the search field can
             // fold away and come back on a pull (a bar pinned in the safe area stayed put under a folded search field,
@@ -1920,9 +1923,16 @@ private struct AgentsList: View {
     /// display, fold all), Personal Agents and New Session, which the Agents page has in its bar.
     private var unifiedAgentsHeading: some View {
         HStack(spacing: Theme.Space.xs) {
-            Text("Agents").font(Theme.Font.captionStrong).foregroundStyle(.secondary).lineLimit(1)
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: Theme.Space.s)
+            // The name in the Persona rows' heading box (`SidebarHeadingBox`, #10551): the row is as tall as Pages' and
+            // Persona Chats', its buttons sit in it, and it stands as far below the row before it.
+            HStack(spacing: Theme.Space.xs) {
+                Text("Agents").font(Theme.Font.captionStrong).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+            }
+            .modifier(SidebarHeadingBox())
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("sidebar-agents-heading")
             AgentsListMenu(actions: menuActions)
             if showsPersonalEntry {
                 Button { openFromList(PersonalAgentsRoute()) } label: {
@@ -1946,8 +1956,7 @@ private struct AgentsList: View {
         // Where the Persona rows' headings start (their row's inset and their own), so the three headings line up.
         .padding(.leading, Theme.Space.s + Theme.Space.m)
         .padding(.trailing, Theme.Space.s)
-        .padding(.top, Theme.Space.s)
-        .scaledFrame(minHeight: Theme.Size.tapTarget)
+        .padding(.top, SidebarHeadingBox.above)
         // The Separate layout's Agents tab has no Pages heading for the head to place its face by (`rowsLeading`): it
         // takes the Persona tab's line (`linedUpWith`, #8596). Before the Persona tab is laid out this heading gives an
         // estimate, its row's start plus the Persona rows' extra inset on an iPad. Without either the face sat
