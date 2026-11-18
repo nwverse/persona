@@ -40,6 +40,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, externalRefusal(ctx, "adapter_purpose_unsupported")
 	}
 	execution := executionOption(options)
+	if resume != "" {
+		if st, ok := n.state.get(resume); ok {
+			execution.TaskInstructions = st.TaskInstructions
+		}
+	}
 	// A start named to a failed start's kept tab holds it from here, sync and async alike: newTab uses it, else it is
 	// kept again when the start returns (startremedy.go).
 	claim, claimErr := n.claimKeptTab(execution.InPane)
@@ -160,6 +165,28 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 	}
 
+	var instructionFile, instructionChannel string
+	if execution.TaskInstructions != "" {
+		switch {
+		case codex && kind != traexAgent && n.taskCodexChannel(ctx, launcher, cwd, argv) && len(codexTaskConfig(execution.TaskInstructions)) < maxResumeArgv-2048:
+			instructionChannel = "codex"
+			argv = codexTaskArgs(argv, execution.TaskInstructions)
+		case !codex && kind == "claude" && n.taskClaudeChannel(ctx, launcher):
+			instructionFile, err = n.taskInstructionFile(execution.TaskInstructions)
+			if err != nil {
+				return nil, err
+			}
+			instructionChannel = "claude"
+		default:
+			previous, _ := n.state.get(resume)
+			prompt, err = taskResumeFallback(ctx, prompt, execution.TaskInstructions, resume != "", previous.TaskInstructionChannel)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	prompt = taskFallback(prompt, execution.TaskAttachments)
+
 	// New sessions start in the host the start named, else the default host.
 	launch, err := n.launcherFor(n.startKind(ctx))
 	if err != nil {
@@ -231,7 +258,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
 	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
-		Plugins: n.claudeLoadsPlugins(ctx)}
+		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
 	shells := n.startPaneShells(ctx, launch, created)
@@ -246,7 +273,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	n.notePaneStart(launcher) // not in the agent sandbox unless a managed launcher (agentsandbox.go)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,
-		PlanThen: planThen}
+		PlanThen: planThen, TaskInstructions: execution.TaskInstructions, TaskInstructionFile: instructionFile, TaskInstructionChannel: instructionChannel}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
 			st.StartedAt = prev.StartedAt
