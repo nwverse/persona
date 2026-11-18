@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -42,22 +43,13 @@ func pinned(fp string, onConn func(net.Conn)) *http.Client {
 	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy: nil,
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			TLSClientConfig: pinnedTLSConfig(fp, ""),
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				raw, err := d.DialContext(ctx, network, addr)
-				if err != nil {
-					return nil, err
-				}
-				host, _, _ := net.SplitHostPort(addr)
-				c := tls.Client(raw, pinnedTLSConfig(fp, host))
-				if err := c.HandshakeContext(ctx); err != nil {
-					raw.Close()
-					return nil, err
-				}
-				if onConn != nil {
+				if err == nil && onConn != nil {
 					onConn(raw)
 				}
-				return c, nil
+				return raw, err
 			},
 			ResponseHeaderTimeout: dialTimeout,
 			MaxIdleConns:          1,
@@ -84,23 +76,13 @@ func systemTrusted(onConn func(net.Conn)) *http.Client {
 	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy: nil,
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}, RootCAs: systemRoots.Load()},
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				raw, err := d.DialContext(ctx, network, addr)
-				if err != nil {
-					return nil, err
-				}
-				host, _, _ := net.SplitHostPort(addr)
-				c := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
-					ServerName: host, RootCAs: systemRoots.Load()})
-				if err := c.HandshakeContext(ctx); err != nil {
-					raw.Close()
-					return nil, err
-				}
-				if onConn != nil {
+				if err == nil && onConn != nil {
 					onConn(raw)
 				}
-				return c, nil
+				return raw, err
 			},
 			ResponseHeaderTimeout: dialTimeout,
 			MaxIdleConns:          1,
@@ -117,6 +99,12 @@ func hubClient(c *Config, onConn func(net.Conn)) *http.Client {
 		return pinned(c.FP, onConn)
 	}
 	return systemTrusted(onConn)
+}
+
+func proxyHubClient(c *Config, p *url.URL, onConn func(net.Conn)) *http.Client {
+	client := hubClient(c, nil)
+	client.Transport.(*http.Transport).DialContext = proxyDial(p, onConn)
+	return client
 }
 
 // trustOf is Status.Trust for c.

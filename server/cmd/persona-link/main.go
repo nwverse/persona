@@ -94,6 +94,8 @@ func main() {
 		err = supervise(e, args)
 	case "ssh":
 		err = sshCmd(e, args)
+	case "proxy":
+		err = proxyCmd(e, args)
 	case "address":
 		err = address(args)
 	case "name":
@@ -145,7 +147,37 @@ var errUsage = errors.New("usage")
 // helpTopics are the subcommands `<sub> -h` answers for (supervise is not for people: its -h shows the whole usage).
 var helpTopics = map[string]bool{"pair": true, "mode": true, "node": true, "discover": true, "install": true,
 	"uninstall": true, "status": true, "reconnect": true, "logs": true, "log": true, "run": true, "supervise": true, "ssh": true,
-	"address": true, "name": true, "plugin": true}
+	"address": true, "name": true, "plugin": true, "proxy": true}
+
+func proxyCmd(e *env, args []string) error {
+	if len(args) > 1 {
+		return errUsage
+	}
+	if len(args) == 1 {
+		raw := args[0]
+		if raw == "--off" {
+			raw = "off"
+		}
+		if err := link.SetProxy(e.configPath(), raw); err != nil {
+			return err
+		}
+		pokeRunning(e.configPath())
+	}
+	value := ""
+	if c, err := link.Read(e.configPath()); err == nil {
+		value = link.RedactedProxy(c.Proxy)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if value == "" {
+		value = terminalText("link-cli.proxy_environment")
+	}
+	if value == "off" {
+		value = terminalText("link-cli.proxy_off")
+	}
+	fmt.Fprintln(e.stdout, terminalText("link-cli.proxy_current", i18n.Args{"proxy": value}))
+	return nil
+}
 
 // wantsHelp says whether args ask for help (-h, -help or --help anywhere).
 func wantsHelp(args []string) bool {

@@ -32,7 +32,8 @@ type report struct {
 	// Endpoints: the candidates in link.json, in the order they are tried.
 	Endpoints []link.Endpoint `json:"endpoints,omitempty"`
 	// SSH: the optional SSH tunnel in link.json.
-	SSH *link.SSH `json:"ssh,omitempty"`
+	SSH   *link.SSH `json:"ssh,omitempty"`
+	Proxy string    `json:"proxy,omitempty"`
 	// Trust: how the hub is checked, "pin" (its key, from the pairing) | "system" (behind an HTTPS reverse proxy:
 	// the system's CAs and the host name).
 	Trust string `json:"trust,omitempty"`
@@ -91,6 +92,7 @@ func gather(e *env) report {
 	}
 	if c, err := link.Read(cfg); err == nil {
 		r.Mode = c.CurrentMode()
+		r.Proxy = link.RedactedProxy(c.Proxy)
 		if r.SSH == nil {
 			r.SSH = c.SSH
 		}
@@ -182,6 +184,13 @@ func (r report) text(now time.Time, user string) string {
 		return b.String()
 	}
 	line("%s", terminalText("link-cli.mode_current", i18n.Args{"mode": modeName(r.Mode)}))
+	if r.Proxy != "" {
+		value := r.Proxy
+		if value == "off" {
+			value = terminalText("link-cli.proxy_off")
+		}
+		line("%s", terminalText("link-cli.proxy_current", i18n.Args{"proxy": value}))
+	}
 	switch {
 	case r.Error != "":
 		line("%s", terminalText("link-cli.credentials_error", i18n.Args{"error": r.credentialsErrorText()}))
@@ -250,7 +259,7 @@ func (r report) text(now time.Time, user string) string {
 			}
 			for _, ep := range r.Endpoints {
 				var notes []string
-				if live && st.State == "connected" && st.Kind != link.KindSSH && st.Address == ep.URL {
+				if live && st.State == "connected" && st.Kind != link.KindSSH && st.Kind != link.KindProxy && st.Address == ep.URL {
 					notes = append(notes, terminalText("link-cli.note_in_use"))
 				}
 				if ep.Manual {
@@ -408,7 +417,7 @@ func (r report) serviceText(line func(string, ...any), user string) {
 }
 
 var kindNames = map[string]string{
-	"lan": "link-errors.kind_lan", "ipv6": "link-errors.kind_ipv6", "name": "link-errors.kind_name", "ipv4": "link-errors.kind_ipv4",
+	"lan": "link-errors.kind_lan", "ipv6": "link-errors.kind_ipv6", "name": "link-errors.kind_name", "ipv4": "link-errors.kind_ipv4", link.KindProxy: "link-errors.kind_proxy",
 }
 
 func kindName(kind string) string {

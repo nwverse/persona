@@ -1,4 +1,7 @@
 {
+  "proxy_current": "プロキシ：{proxy}",
+  "proxy_environment": "環境変数",
+  "proxy_off": "オフ",
   "active_also_paired": "アクティブモードもペアリング済みです（hub 上の「{machine}」）。persona-link mode active で戻せます",
   "address_added": "追加しました：{address}",
   "ago": "{duration}前",

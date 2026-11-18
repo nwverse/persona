@@ -1,4 +1,7 @@
 {
+  "proxy_current": "Proxy: {proxy}",
+  "proxy_environment": "environment",
+  "proxy_off": "disabled",
   "active_also_paired": "Active mode is also paired (machine “{machine}” on the hub): switch back with persona-link mode active",
   "address_added": "Added {address}",
   "ago": "{duration} ago",

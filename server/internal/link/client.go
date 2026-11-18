@@ -283,14 +283,14 @@ func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc
 func runActive(ctx context.Context, o Options, rep *reporter) {
 	rep.switchTo(ModeActive)
 	var b backoff
-	var lastSSH bool
-	var lastToken string
+	var lastSSH, lastProxy bool
+	var lastToken, lastProxyConfig string
 	var lastSSHConfig *SSH
 	for ctx.Err() == nil {
 		was := stampOf(o.Path) // a change from here on (paired again, an address added) cuts the wait below short
 		c, err := Load(o.Path)
 		if err != nil {
-			lastSSH, lastToken, lastSSHConfig = false, "", nil
+			lastSSH, lastProxy, lastToken, lastProxyConfig, lastSSHConfig = false, false, "", "", nil
 			if errors.Is(err, os.ErrNotExist) {
 				rep.set(func(s *Status) { *s = Status{State: "unpaired"} })
 			} else {
@@ -299,8 +299,9 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			o.wait(ctx, time.Hour, was)
 			continue
 		}
-		if c.Token != lastToken || !c.SSH.Equal(lastSSHConfig) {
-			lastSSH = false
+		if c.Token != lastToken || !c.SSH.Equal(lastSSHConfig) || c.Proxy != lastProxyConfig {
+			lastSSH, lastProxy = false, false
+			lastProxyConfig = c.Proxy
 			lastToken = c.Token
 			lastSSHConfig = cloneSSH(c.SSH)
 		}
@@ -308,7 +309,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			*s = Status{State: "connecting", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Trust: trustOf(c),
 				Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 		})
-		l, err := dialActive(ctx, c, o.SSHBin, lastSSH)
+		l, err := dialActiveProxy(ctx, c, o.SSHBin, lastSSH, lastProxy)
 		var end error
 		state := "waiting"
 		if err != nil {
@@ -316,6 +317,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 		} else {
 			for {
 				lastSSH = l.ep.Kind == KindSSH
+				lastProxy = l.ep.Kind == KindProxy
 				start := time.Now()
 				rep.links++
 				l.gen = rep.links
@@ -336,14 +338,14 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 				// Serve the exact socket the SSH probe connected, under the configuration that validated it. A redial
 				// here would both lose that ownership and reintroduce the gap that dropped working SSH links.
 				l, c = handoff.candidate, handoff.config
-				lastSSH = false
+				lastSSH, lastProxy = false, false
 				b = backoff{}
 			}
 			// The link writes link.json itself (the hub's addresses and names): from here only a new credential or tunnel
 			// change, written while the link was up, counts as a change since it was read. The stamp is taken before the
 			// read, so a change written in between still counts.
 			now := stampOf(o.Path)
-			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH)) {
+			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH) && f.Proxy == c.Proxy) {
 				was = now
 			}
 		}
@@ -378,6 +380,74 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 		})
 		o.wait(ctx, wait, was)
 	}
+}
+
+func dialActiveProxy(ctx context.Context, c *Config, sshBin string, preferSSH, preferProxy bool) (*link, error) {
+	if c.SSH != nil && (c.SSH.Always || len(c.Endpoints) == 0) {
+		return dialSSH(ctx, c, sshBin)
+	}
+	available := false
+	for _, ep := range c.Endpoints {
+		p, err := proxyURL(c, ep.URL)
+		if err != nil {
+			return nil, err
+		}
+		available = available || p != nil
+	}
+	if !available {
+		return dialActive(ctx, c, sshBin, preferSSH)
+	}
+	var failures []error
+	try := func(fn func() (*link, error)) *link {
+		l, err := fn()
+		if err != nil {
+			failures = append(failures, err)
+		}
+		return l
+	}
+	proxy := func() (*link, error) { return dialProxy(ctx, c) }
+	direct := func() (*link, error) { return dial(ctx, c) }
+	ssh := func() (*link, error) { return dialSSH(ctx, c, sshBin) }
+	if preferProxy {
+		if l := try(proxy); l != nil {
+			return l, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	if preferSSH && c.SSH != nil {
+		if l := try(ssh); l != nil {
+			return l, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	if l := try(direct); l != nil {
+		return l, nil
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	var he *httpError
+	if c.FP != "" && errors.As(failures[len(failures)-1], &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden) {
+		return nil, failures[len(failures)-1]
+	}
+	if !preferProxy {
+		if l := try(proxy); l != nil {
+			return l, nil
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if c.SSH != nil && !preferSSH {
+		if l := try(ssh); l != nil {
+			return l, nil
+		}
+	}
+	return nil, errors.Join(failures...)
 }
 
 func dialActive(ctx context.Context, c *Config, sshBin string, preferSSH bool) (*link, error) {

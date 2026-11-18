@@ -318,6 +318,14 @@ location /<prefix>/ {
 obtain this computer's link credentials and connect hub streams to its resident node. This is the same as accessing the web app in a browser: better than plaintext, weaker than pinning. The proxy-to-hub hop is plaintext and must be on a trusted network (same machine or LAN).
 Prefer the hub's own TLS and fingerprint when possible; when hub TLS is enabled, pairing links always carry `fp` and won't use system trust.
 
+## Outbound proxy
+
+Active-mode Persona Link can connect through an HTTP or HTTPS CONNECT proxy. Direct hub addresses are tried first; if none works, the proxy is tried, followed by an optional SSH tunnel. An SSH tunnel configured with `--always` remains exclusive. After a proxy or SSH connection succeeds, reconnects try that route first and periodically probe direct addresses, switching back when one works. The control connection and every stream use the same route.
+
+By default the service reads `HTTPS_PROXY`, then `ALL_PROXY` (also their lowercase forms), and respects `NO_PROXY` or `no_proxy` for each hub address. The service must have these variables in its own environment. To configure a proxy independently of that environment, run `persona-link proxy <url>` before pairing or at any time later. `persona-link proxy --off` disables both the configured and environment proxy; `persona-link proxy` displays the current setting. The URL must use `http://` or `https://` and may contain proxy credentials. They are stored in `link.json` with the existing 0600 permissions and omitted from status and logs. `NO_PROXY` still applies to explicit URLs.
+
+HTTPS proxy certificates are checked using system trust. The hub's TLS connection runs inside CONNECT and still checks its paired public-key fingerprint, or system trust and hostname for a reverse-proxy pairing. A proxy cannot replace the hub certificate.
+
 ## SSH tunnel
 
 When a hub machine exposes only SSH (port 22) — its HTTP and TLS ports listen on `127.0.0.1` only, with no open public port or reverse proxy — active-mode Persona Link can reach the hub's TLS port through an SSH tunnel (#3775), matching the apps' SSH tunnel ([network.md](network.md), "Connecting to hub through SSH").

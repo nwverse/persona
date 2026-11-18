@@ -1,4 +1,7 @@
 {
+  "proxy_current": "代理：{proxy}",
+  "proxy_environment": "环境变量",
+  "proxy_off": "已关闭",
   "active_also_paired": "主动模式也配对过（hub 上的「{machine}」）：persona-link mode active 切回去",
   "address_added": "加好了：{address}",
   "ago": "{duration}前",
