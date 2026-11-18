@@ -1189,6 +1189,9 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 	s.fleet.mu.Unlock()
 	s.feishuDetach(ids)
 	for _, id := range ids {
+		if s.endPreparedByID(id, "cancelled", "The computer that owned this approval disconnected; nothing changed.") {
+			continue
+		}
 		s.finishInteraction(id)
 	}
 }

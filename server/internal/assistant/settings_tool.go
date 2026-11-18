@@ -380,7 +380,9 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 				return "", approvalops.ErrStale
 			}
 			if err != nil {
-				return "", err
+				// The setter only rebuilds and validates a fresh operation here;
+				// fresh.apply below is the first possible side effect.
+				return "", fmt.Errorf("%w: validate the approved operation against current state: %v", approvalops.ErrNotApplied, err)
 			}
 			if fresh == nil || fresh.apply == nil || fresh.card(l) != proposal {
 				return "", approvalops.ErrStale

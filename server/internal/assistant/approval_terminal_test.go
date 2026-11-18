@@ -1,0 +1,202 @@
+package assistant
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// snapshotHookHub runs a hook while the card is being announced: the window
+// between registration and the original tool call reaching awaitPrepared.
+type snapshotHookHub struct {
+	*fakeHub
+	onCard func()
+	once   sync.Once
+}
+
+func (h *snapshotHookHub) Tell(event string, params any) error {
+	if event == assistantwire.EventFleetInteraction && h.onCard != nil {
+		h.once.Do(h.onCard)
+	}
+	return h.fakeHub.Tell(event, params)
+}
+
+func TestPreparedSnapshotWaiterCannotStealOriginalResult(t *testing.T) {
+	f := newFakeHub()
+	d := newFleetDevs()
+	d.add("mac", "Mac")
+	h := &snapshotHookHub{fakeHub: f}
+	s := New(Options{Hub: h, Logf: testLogf(t), Devices: d})
+	ft := &fleetTest{t: t, s: s, d: d, f: f}
+	preparedTestConversation(ft)
+	ix := proto.Interaction{ID: "ix_snapshot_first", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)}
+	type waiterResult struct {
+		r   proto.Resolution
+		err error
+	}
+	snapshot := make(chan waiterResult, 1)
+	announced := make(chan struct{})
+	h.onCard = func() {
+		go func() {
+			r, err := s.waitOwnedQuestion(context.Background(), ix)
+			snapshot <- waiterResult{r, err}
+		}()
+		// The original caller is still inside Tell, so only the snapshot waiter can
+		// be waiting here. This is the order that used to consume the one-shot done.
+		time.Sleep(200 * time.Millisecond)
+		close(announced)
+	}
+	var applies atomic.Int32
+	done := startPreparedInteraction(t, ft, ix, approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+		applies.Add(1)
+		return "setting applied", nil
+	}})
+	<-announced
+	allow := true
+	if err := s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	got := awaitPreparedTest(t, done)
+	if got.err != nil || got.out.Clarifying || got.out.Text != "setting applied" {
+		t.Fatalf("original prepared call = %+v, %v", got.out, got.err)
+	}
+	select {
+	case other := <-snapshot:
+		if other.err != nil || other.r.Allow == nil || !*other.r.Allow {
+			t.Fatalf("snapshot waiter result = %+v, %v", other.r, other.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the snapshot waiter did not receive the broadcast result")
+	}
+	if applies.Load() != 1 {
+		t.Fatalf("owner Allow applied %d times", applies.Load())
+	}
+}
+
+func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
+	const rounds = 150
+	for i := 0; i < rounds; i++ {
+		ft := newFleetTestNoStore(t)
+		preparedTestConversation(ft)
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					ft.s.publish(context.Background())
+				}
+			}
+		}()
+		id := fmt.Sprintf("ix_snapshot_round_%d", i)
+		var applies atomic.Int32
+		done := startPreparedInteraction(t, ft, proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+			ToolName: "persona_settings", Summary: "Change the example setting", ExpiresAt: time.Now().Add(time.Hour)},
+			approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+				applies.Add(1)
+				return "setting applied", nil
+			}})
+		time.Sleep(10 * time.Millisecond) // let the original and a snapshot waiter overlap
+		allow := true
+		if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		select {
+		case got := <-done:
+			if got.err != nil || got.out.Text != "setting applied" {
+				t.Fatalf("round %d: original result = %+v, %v", i, got.out, got.err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("round %d: owner Allow applied %d times but the original tool call hung", i, applies.Load())
+		}
+		close(stop)
+		wg.Wait()
+		if applies.Load() != 1 {
+			t.Fatalf("round %d applied %d times", i, applies.Load())
+		}
+	}
+}
+
+type preparedLifecycleEnd struct {
+	name   string
+	status string
+	end    func(*fleetTest, string)
+}
+
+var preparedLifecycleEnds = []preparedLifecycleEnd{
+	{name: "disconnect", status: "cancelled", end: func(ft *fleetTest, _ string) { ft.s.NodeDetached("mac") }},
+	{name: "session close", status: "cancelled", end: func(ft *fleetTest, _ string) { ft.s.endSessionCards("mac", "s1") }},
+	{name: "dismiss", status: "dismissed", end: func(ft *fleetTest, id string) { ft.event("mac", "interaction.dismiss", map[string]any{"id": id}) }},
+	{name: "cancel", status: "cancelled", end: func(ft *fleetTest, id string) { ft.event("mac", "interaction.cancel", map[string]any{"id": id}) }},
+}
+
+func TestPreparedLifecycleEndReleasesOriginalCallExactlyOnce(t *testing.T) {
+	for _, tc := range preparedLifecycleEnds {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := newFleetTest(t)
+			preparedTestConversation(ft)
+			var applies atomic.Int32
+			id := "ix_end_unclarified_" + strings.ReplaceAll(tc.name, " ", "_")
+			done := startPreparedInteraction(t, ft, proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+				ToolName: "persona_settings", ExpiresAt: time.Now().Add(time.Hour)}, approvalops.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+				applies.Add(1)
+				return "unexpected", nil
+			}})
+			tc.end(ft, id)
+			got := awaitPreparedTest(t, done)
+			if got.err != nil || got.out.Text == "" || got.out.Clarifying {
+				t.Fatalf("original tool outcome = %+v, %v", got.out, got.err)
+			}
+			select {
+			case duplicate := <-done:
+				t.Fatalf("original tool returned twice: %+v", duplicate)
+			default:
+			}
+			tc.end(ft, id) // a repeated node event is not another outcome
+			ft.waitPending(0)
+			if applies.Load() != 0 {
+				t.Fatalf("lifecycle ending applied %d times", applies.Load())
+			}
+		})
+	}
+}
+
+func TestClarifiedLifecycleEndReportsOriginalConversationExactlyOnce(t *testing.T) {
+	for _, tc := range preparedLifecycleEnds {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := newFleetTest(t)
+			preparedTestConversation(ft)
+			ft.f.mu.Lock()
+			ft.f.known["s1"] = true // the fake accepts resume_only delivery as a real node does
+			ft.f.mu.Unlock()
+			id := "ix_end_clarified_" + strings.ReplaceAll(tc.name, " ", "_")
+			done := startPreparedTest(t, ft, id, "", nil)
+			if err := ft.s.clarify(context.Background(), id, "Why?", "owner-"+id, nil); err != nil {
+				t.Fatal(err)
+			}
+			awaitPreparedTest(t, done)
+			tc.end(ft, id)
+			ft.waitPending(0)
+			result := waitApprovalResult(t, ft, id)
+			if !strings.Contains(result, tc.status) {
+				t.Fatalf("terminal result = %q, want status %q", result, tc.status)
+			}
+			tc.end(ft, id)
+			ft.s.deliverApprovalResults()
+			waitApprovalResult(t, ft, id) // zero and two deliveries are both failures
+		})
+	}
+}

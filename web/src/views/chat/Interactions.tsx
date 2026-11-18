@@ -1,5 +1,5 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
 import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
@@ -21,7 +21,7 @@ import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
 import { useChildRow } from "../../lib/use-child-sessions";
 import { isSide } from "../../lib/side-fold";
-import { Button, Collapse, cx, EASE, Kbd, Menu, SECRET_INPUT, toast, useMenu } from "../../ui/atoms";
+import { Button, Collapse, cx, EASE, Kbd, Loading, Menu, SECRET_INPUT, toast, useMenu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
@@ -36,6 +36,9 @@ import { t } from "../../i18n";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
+import { ErrorNotice } from "../../ui/ErrorNotice";
+import { reportBoundary } from "../../lib/error-reports";
+import { isChunkError } from "../PageBoundary";
 import { useChatCardTapGuard, useChatTapGuardView } from "./card-tap-guard";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
@@ -540,8 +543,56 @@ function PlanCard({ ix }: { ix: Interaction }) {
 }
 
 // The complete tool-approval card loads with the first permission interaction, keeping its optional clarification UI
-// and permission editor out of the first screen. Until its chunk is in, the card's slot stays empty, as for other cards.
+// and permission editor out of the first screen. Its slot stays identifiable while the chunk loads or cannot load.
 const PermissionCard = lazyPage(() => import("./PermissionCard").then((m) => m.PermissionCard));
+
+export function PermissionCardLoading({ ix }: { ix: Interaction }) {
+  return (
+    <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })} footer={null}>
+      <Loading label={t("chat-interactions.permission_loading")} />
+    </Card>
+  );
+}
+
+/** One failed permission chunk must not blank its card or take down the chat. A retry remounts lazyPage, whose failed
+ *  import is deliberately not cached; a different card also starts without the previous card's failure. */
+export class PermissionCardBoundary extends Component<{ ix: Interaction; children: ReactNode }, { error: unknown; attempt: number }> {
+  state = { error: null as unknown, attempt: 0 };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    reportBoundary(error, "permission_card", isChunkError(error), info.componentStack);
+  }
+
+  componentDidUpdate(prev: { ix: Interaction }) {
+    if (this.state.error && prev.ix.id !== this.props.ix.id) this.setState((s) => ({ error: null, attempt: s.attempt + 1 }));
+  }
+
+  render() {
+    const { ix } = this.props;
+    if (this.state.error) {
+      return (
+        <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })}
+          footer={<Button size="sm" onClick={() => this.setState((s) => ({ error: null, attempt: s.attempt + 1 }))}>{t("chat-interactions.permission_load_retry")}</Button>}>
+          <ErrorNotice role="alert" className="border-0 bg-transparent p-0" message={t("chat-interactions.permission_load_failed")}
+            description={t("chat-interactions.permission_load_hint")} />
+        </Card>
+      );
+    }
+    return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>;
+  }
+}
+
+function PermissionCardSlot({ ix }: { ix: Interaction }) {
+  return (
+    <PermissionCardBoundary ix={ix}>
+      <Suspense fallback={<PermissionCardLoading ix={ix} />}><PermissionCard ix={ix} /></Suspense>
+    </PermissionCardBoundary>
+  );
+}
 
 /** A terminal dialog's words under its question (#6638): at most six lines in view, the rest a scroll inside them. */
 const DETAIL_FOLD = "mb-2 max-h-[6lh] text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2";
@@ -1374,7 +1425,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
-    : ix.kind === "permission" ? <Suspense fallback={null}><PermissionCard ix={ix} /></Suspense>
+    : ix.kind === "permission" ? <PermissionCardSlot ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
