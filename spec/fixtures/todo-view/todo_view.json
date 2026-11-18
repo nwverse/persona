@@ -2704,6 +2704,587 @@
           "rank": 0
         }
       }
+    },
+    {
+      "name": "run_waits_on_agent",
+      "description": "The run's turn ended blocked on another Agent: the hub wakes it when that Agent's turn ends. Waiting for someone else, with the run and what it waits on, since the run came to wait; not Working.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 10",
+        "docs/design/proposals/todos-redesign.md 3.4 \"Waiting\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wa1",
+          "title": "Merge the trip notes into the itinerary",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T08:00:00Z",
+          "updated_at": "2026-11-10T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-merge",
+              "linked_at": "2026-11-10T08:01:00Z",
+              "title": "Itinerary merge",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-merge",
+            "title": "Itinerary merge",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:20:00Z",
+            "updated_at": "2026-11-10T11:20:00Z",
+            "pending_interactions": 0,
+            "last_text": "I'll merge the hotel picks once the hotel search is done",
+            "work": {
+              "phase": "blocked",
+              "on": "agent",
+              "line": "Waiting for the hotel search to finish",
+              "wait": "The hotel search finishes",
+              "then": "Merge its picks into the itinerary",
+              "every_minutes": 60,
+              "wake_at": "2026-11-10T12:20:00Z",
+              "agent": {
+                "machine_id": "m1",
+                "session_id": "s-hotels",
+                "label": "Hotel search"
+              },
+              "turn_at": "2026-11-10T11:20:00Z",
+              "at": "2026-11-10T11:20:20Z",
+              "by": "model"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "waiting",
+          "section": "waiting",
+          "reason": "someone_else",
+          "line": {
+            "key": "run_waits",
+            "args": {
+              "run": "Itinerary merge",
+              "on": "agent"
+            }
+          },
+          "since": "2026-11-10T11:20:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "run_waits_on_external",
+      "description": "The run's turn ended blocked on an outside event (a deploy to finish); the hub wakes it at 12:10 to check. Waiting for someone else, on an outside event. The wake passing changes nothing by itself (the hub's wake is a new fact), so no next_change_at.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 10",
+        "docs/assistant/agent-work.md \"Waiting: scheduled wakeups\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_we1",
+          "title": "Publish the trip site",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T09:00:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-deploy",
+              "linked_at": "2026-11-10T09:01:00Z",
+              "title": "Trip site deploy",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-deploy",
+            "title": "Trip site deploy",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:40:00Z",
+            "updated_at": "2026-11-10T11:40:00Z",
+            "pending_interactions": 0,
+            "last_text": "The deploy is running; I'll check the live site when it is done",
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Waiting for the deploy to finish, then checking the live site",
+              "wait": "The deploy finishes",
+              "then": "Check the live site",
+              "every_minutes": 30,
+              "wake_at": "2026-11-10T12:10:00Z",
+              "max": 6,
+              "turn_at": "2026-11-10T11:40:00Z",
+              "at": "2026-11-10T11:40:15Z",
+              "by": "model"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "waiting",
+          "section": "waiting",
+          "reason": "someone_else",
+          "line": {
+            "key": "run_waits",
+            "args": {
+              "run": "Trip site deploy",
+              "on": "external"
+            }
+          },
+          "since": "2026-11-10T11:40:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "transient_retry_stays_background",
+      "description": "The model service failed for a moment and the hub sends \"Continue\" at 12:00:10 by itself. The session keeps its turn_error meanwhile, but the run is not cut off while the retry is on its way: Working, in the background, not Needs you and not Waiting. Should the retry not go out, the hub drops its wake from the list 5 minutes after it was due and the run reads as cut off, which next_change_at names.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 5",
+        "docs/assistant/agent-work.md \"Transient errors: automatic continuation\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wt1",
+          "title": "Summarize the museum reviews",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T10:00:00Z",
+          "updated_at": "2026-11-10T10:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-reviews",
+              "linked_at": "2026-11-10T10:01:00Z",
+              "title": "Museum reviews",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-reviews",
+            "title": "Museum reviews",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:59:40Z",
+            "updated_at": "2026-11-10T11:59:40Z",
+            "pending_interactions": 0,
+            "last_text": "API Error: 529 overloaded",
+            "turn_error": "API Error: 529 overloaded",
+            "turn_error_kind": "transient",
+            "work": {
+              "phase": "blocked",
+              "on": "transient",
+              "line": "The model service failed for a moment; continuing",
+              "wait": "API Error: 529 overloaded",
+              "wake_at": "2026-11-10T12:00:10Z",
+              "attempts": 1,
+              "max": 5,
+              "turn_at": "2026-11-10T11:59:40Z",
+              "at": "2026-11-10T11:59:40Z",
+              "by": "rule"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "working",
+          "section": "working",
+          "reason": "background",
+          "line": {
+            "key": "background",
+            "args": {
+              "run": "Museum reviews"
+            }
+          },
+          "since": "2026-11-10T11:59:40Z",
+          "next_change_at": "2026-11-10T12:05:10Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "working_and_waiting_runs",
+      "description": "Two runs: the newer one waits for the other to finish, the other works. Working wins (row 5 before row 10), and its line is the working run's, whichever run the list names first.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 5 and 10",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_ww1",
+          "title": "Plan the museum day",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T08:00:00Z",
+          "updated_at": "2026-11-10T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-route",
+              "linked_at": "2026-11-10T09:00:00Z",
+              "title": "Museum route",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            },
+            {
+              "machine_id": "m1",
+              "session_id": "s-hours",
+              "linked_at": "2026-11-10T08:01:00Z",
+              "title": "Opening hours",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-route",
+            "title": "Museum route",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "agent",
+              "line": "Waiting for the opening hours",
+              "wait": "Opening hours finishes",
+              "then": "Order the museums by opening time",
+              "every_minutes": 60,
+              "wake_at": "2026-11-10T12:30:00Z",
+              "agent": {
+                "machine_id": "m1",
+                "session_id": "s-hours",
+                "label": "Opening hours"
+              },
+              "turn_at": "2026-11-10T11:30:00Z",
+              "at": "2026-11-10T11:30:20Z",
+              "by": "model"
+            }
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-hours",
+            "title": "Opening hours",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:55:00Z",
+            "pending_interactions": 0,
+            "activity": "collecting the opening hours",
+            "activity_at": "2026-11-10T11:55:00Z",
+            "work": {
+              "phase": "working"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "working",
+          "section": "working",
+          "reason": "agent_running",
+          "line": {
+            "key": "working",
+            "args": {
+              "run": "Opening hours",
+              "text": "collecting the opening hours"
+            }
+          },
+          "since": "2026-11-10T11:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "usage_limit_before_run_waits",
+      "description": "Two runs: one stopped on a usage limit that resets at 14:00, one waits on an outside event. Both are Waiting; the usage limit comes first, in 6.3's order. Ten minutes past the reset the limited run reads as cut off and the to-do needs the owner, which next_change_at names.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 2 and 10",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wl1",
+          "title": "Book the ferry to the island",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T07:00:00Z",
+          "updated_at": "2026-11-10T07:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-ferry",
+              "linked_at": "2026-11-10T09:00:00Z",
+              "title": "Ferry booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            },
+            {
+              "machine_id": "m1",
+              "session_id": "s-tides",
+              "linked_at": "2026-11-10T07:01:00Z",
+              "title": "Tide table",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-ferry",
+            "title": "Ferry booking",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Waiting for the ferry company to open bookings",
+              "wait": "Bookings open",
+              "then": "Book two seats",
+              "every_minutes": 60,
+              "wake_at": "2026-11-10T12:30:00Z",
+              "max": 6,
+              "turn_at": "2026-11-10T11:30:00Z",
+              "at": "2026-11-10T11:30:15Z",
+              "by": "model"
+            }
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-tides",
+            "title": "Tide table",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "You've hit your usage limit",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-10T14:00:00Z"
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "waiting",
+          "section": "waiting",
+          "reason": "usage_limit",
+          "line": {
+            "key": "usage_limit",
+            "args": {
+              "run": "Tide table",
+              "resets_at": "2026-11-10T14:00:00Z"
+            }
+          },
+          "since": "2026-11-10T11:00:00Z",
+          "next_change_at": "2026-11-10T14:10:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "loop_stays_background",
+      "description": "The run drives a /loop and its turn ended between two ticks. The hub writes that as a wait on an outside event with nothing named (no wait, no agent): one the run ends by itself, so the hub sends nothing. Working, in the background, not Waiting on an outside event.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 5",
+        "docs/assistant/agent-work.md \"Rules first, then the model\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wl1",
+          "title": "Watch the concert ticket release",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T08:00:00Z",
+          "updated_at": "2026-11-10T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-tickets",
+              "linked_at": "2026-11-10T08:01:00Z",
+              "title": "Concert tickets",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-tickets",
+            "title": "Concert tickets",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 0,
+            "last_text": "No tickets yet; I'll look again at 12:30",
+            "loop": {
+              "kind": "wakeup",
+              "prompt": "Check the ticket page",
+              "interval_seconds": 1800,
+              "next_at": "2026-11-10T12:30:00Z",
+              "ticks": 3
+            },
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Loop running on a timer, next at 12:30",
+              "turn_at": "2026-11-10T11:30:00Z",
+              "at": "2026-11-10T11:30:05Z",
+              "by": "rule"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "working",
+          "section": "working",
+          "reason": "background",
+          "line": {
+            "key": "background",
+            "args": {
+              "run": "Concert tickets"
+            }
+          },
+          "since": "2026-11-10T11:30:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "run_waits_unseen_without_wake",
+      "description": "The run's turn ended blocked on a named outside event, but the hub's wake switch is off, so it schedules no wake and leaves the turn unread (only a wait the hub or the run ends by itself makes a turn idle). Unread comes first: Just finished until the owner sees the run, then Waiting for someone else.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 9 and 10",
+        "docs/assistant/agent-work.md \"Switches (requested 2026-11-05: all off by default)\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wu1",
+          "title": "Book the ferry to the islands",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T09:00:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-ferry",
+              "linked_at": "2026-11-10T09:01:00Z",
+              "title": "Ferry booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-ferry",
+            "title": "Ferry booking",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 0,
+            "last_text": "The summer timetable is not out yet; I'll book once it is",
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Waiting for the summer timetable to be published",
+              "wait": "The summer timetable is published",
+              "then": "Book the ferry",
+              "turn_at": "2026-11-10T11:30:00Z",
+              "at": "2026-11-10T11:30:15Z",
+              "by": "model"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "ready",
+          "section": "just_finished",
+          "reason": "finished_unseen",
+          "line": {
+            "key": "finished",
+            "args": {
+              "run": "Ferry booking"
+            }
+          },
+          "since": "2026-11-10T11:30:00Z",
+          "rank": 0
+        }
+      }
     }
   ]
 }

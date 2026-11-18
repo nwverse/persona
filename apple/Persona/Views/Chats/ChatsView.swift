@@ -425,8 +425,8 @@ struct ChatsView: View {
         #if os(iOS) || os(visionOS)
         .overlay {
             if ownsTop, path.isEmpty {
-                AgentsSearchOverlay(header: header, shell: shell != nil, query: $query, focused: riseSearch,
-                                    cancel: endSearch)
+                AgentsSearchOverlay(header: header, shell: shell != nil, query: $query, begin: beginSearch,
+                                    focused: riseSearch, cancel: endSearch)
             }
         }
         #endif
@@ -1009,7 +1009,7 @@ private struct AgentsList: View {
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
     @State private var feed = AgentsFeed()
-    #if DEBUG
+    #if DEBUG && os(iOS)
     @State private var sortShadow = AgentSortShadowObserver()
     #endif
 
@@ -1116,7 +1116,7 @@ private struct AgentsList: View {
 
     @discardableResult
     private func shadowSubmit(active: [SpaceGroup], quiet: [SpaceGroup]) -> Int {
-        #if DEBUG
+        #if DEBUG && os(iOS)
         guard sortShadow.enabled else { return 0 }
         let snapshot = shadowPresentation(active + quiet)
         sortShadow.submit(feed: feed, settings: projectionSettings(), presentation: snapshot)
@@ -1126,7 +1126,7 @@ private struct AgentsList: View {
         #endif
     }
 
-    #if DEBUG
+    #if DEBUG && os(iOS)
     private func shadowPresentation(_ groups: [SpaceGroup]) -> AgentSortPresentation {
         guard sortShadow.enabled else { return .init() }
         var result = AgentSortPresentation(folded: folded, expandedIdle: expandedIdle,
@@ -1545,7 +1545,8 @@ private struct AgentsList: View {
         // takes the title's place: empty while all is well, Connecting… and the like while the hub is out of reach
         // (toolbar(removing: .title) would hide that too).
         .navigationBarTitleDisplayMode(.inline)
-        .modifier(AgentsTop(ownsTop: ownsTop, searchClose: searchClose))
+        .modifier(AgentsTop(ownsTop: ownsTop, searchClose: searchClose,
+                            retainsQuery: AgentsSearchVisibility.retained(query: query)))
         #if (DEBUG || PERF_SIGNPOST) && (os(iOS) || os(visionOS))
         .background { if ScreenProbe.enabled { AgentsScrollProbe(page: shell == nil ? nil : "agents") } }
         #endif
@@ -1628,7 +1629,7 @@ private struct AgentsList: View {
         #endif
         .onChange(of: machineFilter) { _, _ in kept = [] }
         .onAppear {
-            #if DEBUG
+            #if DEBUG && os(iOS)
             sortShadow.enable()
             #endif
             feed.follow(model)
@@ -5238,6 +5239,7 @@ private struct AgentsDestinations: ViewModifier {
 private struct AgentsTop: ViewModifier {
     var ownsTop: Bool
     let searchClose: SearchCloseWatcher
+    var retainsQuery: Bool
     #if os(iOS) || os(visionOS)
     @Environment(AgentsHeader.self) private var header
     #endif
@@ -5247,6 +5249,12 @@ private struct AgentsTop: ViewModifier {
         if ownsTop {
             content
                 .background { AgentsHeaderProbe(header: header) }
+                .onChange(of: retainsQuery, initial: true) { wasRetained, retained in
+                    header.retainsQuery = retained
+                    // A retained drag never settles. Clearing it must finish the ordinary empty-field settle even when
+                    // the finger already lifted and no further scroll-phase callback is coming.
+                    if wasRetained, !retained, !header.floating { DispatchQueue.main.async { header.settle() } }
+                }
                 .onAppear { header.foldOnce() } // the search field starts folded away; a pull shows it
                 // Back in front (its tab picked again, the shell's Agents): folded again too (#740). Not on the way
                 // back from a chat, which keeps the list as it was: that changes the view's appearance, not the tab.
