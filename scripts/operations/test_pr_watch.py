@@ -2312,6 +2312,46 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("PR_WATCH_WEBHOOK_SECRET", env)
         self.assertEqual(env["GRADLE_USER_HOME"], "/trusted-gradle")
         self.assertNotEqual(env["HOME"], "/maintainer-home")
+        self.assertEqual(env["GOFLAGS"], "-gcflags=all=-dwarf=false -ldflags=-w")
+
+    def test_verification_keeps_explicit_go_flags(self):
+        with patch.dict(os.environ, {"GOFLAGS": "-mod=readonly"}):
+            env = pr_watch_common.verification_env()
+        self.assertEqual(env["GOFLAGS"], "-mod=readonly")
+
+    def test_go_vet_clears_unused_linker_flag(self):
+        names = ["server/internal/agents/cache_test.go"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_file = root / names[0]
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text("package agents\n")
+            with patch.object(pr_watch_verify, "checked", return_value=names[0] + "\n"):
+                commands = pr_watch_verify.persona_checks(str(root), pr(title="test: refine relevant tests"), 1, {})
+        self.assertIn(("Changed Go packages vet", ["go", "-C", "server", "vet", "-ldflags=", "./internal/agents"]), commands)
+
+    def test_semantic_only_skips_full_ci_and_discloses_it(self):
+        with patch.object(pr_watch_verify, "persona_checks") as full, \
+                patch.object(pr_watch_verify, "run_check", return_value={"name": "Exact-head privacy scan", "ok": True, "command": []}) as check:
+            results = pr_watch_verify.verify("nwverse/persona", pr(), ".", {"profile": "semantic_only"})
+        full.assert_not_called()
+        self.assertEqual([result["name"] for result in results], ["Exact-head privacy scan"])
+        self.assertIn("--range", check.call_args.args[1])
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        watcher.repositories["example/one"]["verify"]["profile"] = "semantic_only"
+        with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            watcher.success_review("example/one", 7, pr(), results)
+        self.assertIn("no full build/vet", run.call_args.args[0][-1])
+        self.assertNotIn("all tests passed", run.call_args.args[0][-1])
+
+    def test_semantic_only_extensions_keep_repository_guards(self):
+        with patch.object(pr_watch_verify, "run_check", return_value={"name": "Privacy and documentation guards", "ok": True}) as check:
+            results = pr_watch_verify.verify("nwverse/persona-extensions", pr(), ".", {"profile": "semantic_only"})
+        self.assertEqual(len(results), 1)
+        self.assertIn("--repository-guards", check.call_args.args[1])
+
+    def test_verification_policy_version_covers_semantic_only(self):
+        self.assertGreaterEqual(pr_watch.VERIFICATION_POLICY_VERSION, 3)
 
     def test_persona_wrapper_owns_lock_and_expects_reviewed_head(self):
         repo = "nwverse/persona"
