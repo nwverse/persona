@@ -465,3 +465,15 @@ func TestStartTabRefusalsAreWorded(t *testing.T) {
 		}
 	}
 }
+
+// The refusals of an answer to that question from the app (#10365, node/startcontinue.go) read in every language.
+func TestStartContinueRefusalsAreWorded(t *testing.T) {
+	for _, code := range []string{"start_tab_gone", "start_not_waiting", "choice_not_offered", "prompt_changed"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			body := LocalizedBody(http.StatusConflict, code, errors.New("node text"), lang)
+			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" || body["error"] == "node text" {
+				t.Errorf("%s %s: %v", code, lang, body)
+			}
+		}
+	}
+}
