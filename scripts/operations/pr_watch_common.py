@@ -16,7 +16,7 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 PR_FIELDS = (
     "number,title,body,state,isDraft,headRefOid,headRefName,baseRefName,"
-    "baseRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,"
+    "isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,"
     "createdAt,updatedAt"
 )
 STALE_LABEL = "stale"
@@ -97,9 +97,18 @@ def run(argv, cwd=None, timeout=120, environ=None, input_text=None):
     return _run_process(arguments, cwd, timeout, environ, input_text, pass_fds)
 
 
+def _bounded_command(argv):
+    """Use only the maintainer's explicit wrapper, never a host-specific default."""
+    wrapper = os.environ.get("PR_WATCH_PROCESS_WRAPPER", "").strip()
+    if not wrapper:
+        return list(argv)
+    import shlex
+    return shlex.split(wrapper) + list(argv)
+
+
 def _run_process(argv, cwd, timeout, environ, input_text, pass_fds):
     proc = subprocess.Popen(
-        argv, cwd=cwd, env=clean_env(environ), stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        _bounded_command(argv), cwd=cwd, env=clean_env(environ), stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True, pass_fds=pass_fds,
     )
     try:
@@ -228,29 +237,19 @@ def gh_json(argv, timeout=90, environ=None, input_text=None):
 
 
 def pr_snapshot(repo, number, timeout=90, environ=None):
-    argv = ["gh", "pr", "view", str(number), "--repo", repository(repo), "--json", PR_FIELDS]
-    result = run(argv, timeout=timeout, environ=environ)
-    if result.returncode:
-        if "Unknown JSON field: \"baseRefOid\"" not in result.stderr:
-            raise WatchError("gh failed (%s): %s" % (result.returncode, bounded(result.stderr or result.stdout, 1000)))
-        # Older gh releases reject an unknown optional field before returning
-        # the PR. Re-read the supported fields, then use the commits fallback.
-        legacy = PR_FIELDS.replace("baseRefOid,", "")
-        data = gh_json(["pr", "view", str(number), "--repo", repository(repo), "--json", legacy],
-                       timeout=timeout, environ=environ)
-    else:
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
-            raise WatchError("gh returned invalid PR snapshot JSON: %s" % error) from error
+    # Do not ask gh for baseRefOid: GitHub reports the base recorded at the
+    # PR's last synchronization, not the base branch's current tip, and only
+    # some gh releases expose it. Every gate compares against a fresh fetch of
+    # the base branch, so always resolve the live tip (#10568).
+    data = gh_json(["pr", "view", str(number), "--repo", repository(repo), "--json", PR_FIELDS],
+                   timeout=timeout, environ=environ)
     if not isinstance(data, dict) or data.get("number") != number:
         raise WatchError("unexpected PR snapshot")
+    if not isinstance(data.get("baseRefName"), str) or not data["baseRefName"]:
+        raise WatchError("PR snapshot has no valid baseRefName")
+    data["baseRefOid"] = checked(["gh", "api", "repos/%s/commits/%s" % (repo, data["baseRefName"]),
+                                  "--jq", ".sha"], timeout=timeout, environ=environ).strip()
     for field in ("headRefOid", "baseRefOid"):
-        if field == "baseRefOid" and not data.get(field):
-            # gh pr view does not expose baseRefOid on every supported version.
-            # Resolve the actual current base tip, not the PR's original base.
-            data[field] = checked(["gh", "api", "repos/%s/commits/%s" % (repo, data["baseRefName"]),
-                                   "--jq", ".sha"], timeout=timeout, environ=environ).strip()
         if not isinstance(data.get(field), str) or not SHA.fullmatch(data[field]):
             raise WatchError("PR snapshot has no valid %s" % field)
         if field == "baseRefOid" and data[field] == "0" * 40:
@@ -333,6 +332,11 @@ def verification_env():
             for key in ("GOCACHE", "GOMODCACHE", "GOPATH", "GOENV"):
                 if values.get(key):
                     env[key] = values[key]
+    # PR build/test checks do not need debug metadata, but keep compiler
+    # optimizations and every test/vet assertion. go vet is analysis, not a link
+    # step, so it explicitly clears the linker flag. Explicit GOFLAGS wins.
+    if "GOFLAGS" not in env:
+        env["GOFLAGS"] = "-gcflags=all=-dwarf=false -ldflags=-w"
     return env
 
 
