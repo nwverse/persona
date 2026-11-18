@@ -31,6 +31,8 @@ import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
+import { assertDelivered, isKept, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
+import { UndeliveredBubble } from "./UndeliveredBubbles";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, registerOutboxRecheck, relayNotice, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type DeliveryReply } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
@@ -415,6 +417,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // a message Claude queued shows in the queue strip, not as a sending bubble too (ChatView.swift chatScroll)
   const queued = session?.queued ?? [];
   const shownPending = queued.length ? pending.filter((p) => !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
+  // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
+  // (not one this page still draws as sending: the row can come before the send's answer)
+  const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
   // a queued message taken back or deleted (QueueStrip) is not on its way any more: its sending bubble goes with it,
   // rather than showing again until the turn ends (#4342)
   // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words).
@@ -1049,7 +1054,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model });
       try {
         // the bubble stays as sending while a gap (a hub restart) is waited out; the id is the op id too
-        const reply = await inSendOrder(key, () => apiOp<({ session?: Session; waits_on_computer?: boolean } & DeliveryReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
+        const reply = await inSendOrder(key, () => apiOp<({ session?: Session; waits_on_computer?: boolean } & DeliveryReply & KeptReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
           ...flight.request,
           method: "POST",
           opId: id,
@@ -1059,6 +1064,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             apply_switch: !assistant && row?.pending_switch ? true : undefined },
         }));
         if (!flight.current()) return true;
+        assertDelivered(reply); // a bare operation receipt is no delivery: in doubt, with Check (#10194)
+        if (isKept(reply)) {
+          // it did not go in, and the assistant keeps it and sends it by itself: the row's bubble shows it from now on
+          flight.finish("failed");
+          forgetOutgoing(key, id);
+          setPending((ps) => ps.filter((x) => x.id !== id));
+          showKept(mid, sid, reply?.undelivered);
+          return true;
+        }
         flight.finish("delivered");
         const acceptedAt = Date.now();
         acceptOutgoing(key, id, acceptedAt);
@@ -2072,7 +2086,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               <div key={p.id} className="flex flex-col gap-3">
                 <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
               </div>
-            ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> }))]
+            ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
+              ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: <UndeliveredBubble key={`undelivered:${m.id}`} mid={mid} sid={sid} m={m} /> }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
             {(shownPending.some((p) => p.waits) || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (

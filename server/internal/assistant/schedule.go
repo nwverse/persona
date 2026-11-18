@@ -1478,6 +1478,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
 	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
 	go s.searchLoop(ctx)       // the chat search index (search_index.go)
+	go s.undeliveredLoop(ctx)  // the owner's messages that could not go in (undelivered.go)
 	s.scheduleLoop(ctx)
 }
 
