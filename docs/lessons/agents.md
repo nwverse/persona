@@ -19,6 +19,21 @@ unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call`
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
   `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
 
+## Compact unattended delivery from actual context and user activity (#8658)
+
+Supervision and scheduled messages are inputs but are not user activity. Keep their structured source when deciding
+whether the owner has been away; reset the idle clock when the owner's input arrives, before a send lock can wait.
+Claude's `result.usage` and `modelUsage` aggregate requests and cannot stand in for context size. Use the last
+main-model request's input plus cache-read and cache-creation tokens, or `compact_boundary`'s `post_tokens`.
+Wait for the compaction command's result, not just its boundary, before writing the next message: the result still
+ends that command. Persist the attempt latch with the session, and rearm only after user activity or a context drop
+below the threshold followed by another idle interval. Failed compactions must not turn every background wake into
+another summary attempt.
+
+Node-only JSON round trips do not prove this state survives a restart. The manager decodes `state.put` through
+`db.NodeSession`, then writes the `node_model` settings value and projects it back for `state.load`. Carry the opaque
+idle state through every boundary, and test the real manager entry points against Postgres after reopening the store.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
@@ -618,6 +633,8 @@ other engines' panes (Orca) keep their original error.
 - **The model service returns 200 with empty content, and the turn ends silently** (measured 2026-11-05, one gateway upstream account): the transcript contains no assistant item and no `isApiErrorMessage`, error, or `stop_reason`;
   Claude Code inserts an `isMeta` "[Your previous response had no visible output. Please continue…]" and retries once; another empty response ends the turn without terminal error, so there is no `turn_error`.
   Tasks once wrote "completed" receipts, sent done notifications, and auto-closed (#2349). Now inspect the turn's items: no reply, tool call, or image counts as interrupted.
+  A verdict that only reaches the receipt is not enough: the Agent's row still said done, so the task read "done, not seen" on every client, in the snapshot and in `agents_list` (#10187). Everything that counts a task interrupted keys on the row's `turn_error`, so the hub puts its own verdict there (`turn_error_kind` `no_output` / `stopped`, `silent_turns.go`) and keeps Session Triage from treating it as a model error.
+  Persona's own Stop (`stopReporting`'s Esc to a task Agent mid first request) can end a turn with no output and no "[Request interrupted by user]" line, so the transcript alone reads it as a model failure; the hub notes the agents it interrupts and calls such a turn stopped.
 - **Codex writes no reply when interrupted by the model service** (measured 2026-11-05, Codex 0.166, fake service returning 503): rollout has only this turn's `task_complete`, with `last_agent_message`
   `null` and the error in `error` (`{"message":"unexpected status 503 …","codex_error_info":{"http_connection_failed":{"http_status_code":503}}}`);
   app-server reports `turn/completed` with `turn.status: "failed"` + `turn.error` (camelCase `codexErrorInfo`). Last-text-only `turn_error` is always empty for Codex:
@@ -693,6 +710,7 @@ Quota can recover before the reported reset. Skipping every on-demand probe unti
 ## Claude status line (2026-11-05, #1963)
 
 - Working Claude draws `✻ Frosting… (16m 15s · ↓ 22.8k tokens · thinking with xhigh effort)` above the input box: spinner characters change each frame, parenthesized segments may be absent or reordered (`thought for 1s`, `esc to interrupt`), and ↑ means input tokens. An identical line quoted in the conversation isn't a status line; take the last line above the input box (`screen.AboveInputBox`, `node/claudestatus.go`). When a pane is scrolled up, visible content has no status line.
+- A model retry does not use the ordinary `verb… (…)` grammar: 2.1.326 draws `✻ 429 <error> · retrying in 4s · attempt 5/10` (a 500 has the same shape, and an early line can be only `API Error`). Parse the observed error and attempts before the normal spinner pattern, leave the countdown out, and clear on normal work, line removal, turn end and unwatch; elapsed time alone is not error evidence (#887).
 
 ## Changing Codex app-server effort: validate levels yourself; `null` means model default (2026-11-04, #1709)
 
@@ -1205,6 +1223,16 @@ workspace sharing the probe prefix while it still exists.
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
 IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
 explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+
+## A long-running agy acp keeps the account it saw (#10368)
+
+`agy acp` kept the model list it read when the plan lapsed after the user renewed and signed in again: `session/set_model`
+failed with `Unknown model ID` until the process was restarted, and each `session/new` published the stale list over the
+five-minute `agy models` discovery. Treat a discovery that began after the ACP process started as the newer source, and
+compare by process generation rather than wall-clock time. Pending requests do not show who uses the process: a call
+between two requests, or a native read over HTTP, has none. Hold a lease for each call, turn and read, replace only when
+no other lease is held, with no await between that check and the replacement, and make new users wait for it. Retry once,
+and test with a fake whose ACP side reads the account once at startup.
 
 ## Codex speed has separate native metadata (#3865)
 

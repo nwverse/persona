@@ -1450,7 +1450,7 @@ extension AssistantSidebar {
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
                 // Where the places below have their symbol, drawn as theirs (on the Mac's plain list, `macPlace`'s).
-                Image(systemName: Theme.Icon.styled(Theme.Icon.home)).resizable().scaledToFit()
+                Theme.Icon.image(Theme.Icon.home).resizable().scaledToFit() // resizable: an Image, not ThemedIcon
                     .fontWeight(isShell ? .medium : .regular)
                     .foregroundStyle(macPlacesGroup ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.primary))
                     .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
