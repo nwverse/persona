@@ -103,35 +103,50 @@ fun JTile(
             .stableAlpha(if (enabled) 1f else 0.45f),
     ) {
         if (picture != null) Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(palette.sunken), content = picture)
-        Column(Modifier.fillMaxWidth().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs),
-            horizontalAlignment = if (gauge != null) Alignment.CenterHorizontally else Alignment.Start) {
-            if (picture == null && (icon != null || badge != null || trailing != null)) {
-                Row(Modifier.fillMaxWidth().heightIn(min = TileSize.icon), verticalAlignment = Alignment.CenterVertically) {
-                    if (icon != null) Box(
-                        Modifier.size(TileSize.icon).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(Tokens.Radius.badge) else CircleShape)
-                            .background(if (active) colors?.dot ?: palette.accent else colors?.tint ?: palette.surfaceStrong),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        JIcon(icon, null, size = Tokens.Size.iconXS, decorative = true, selected = active,
-                            tint = if (active) colors?.onDot ?: palette.onAccent else colors?.dot ?: palette.ink2)
+        val content: @Composable () -> Unit = {
+            Column(Modifier.fillMaxWidth().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs),
+                horizontalAlignment = if (gauge != null) Alignment.CenterHorizontally else Alignment.Start) {
+                if (gauge == null && picture == null && (icon != null || badge != null || trailing != null)) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = TileSize.icon), verticalAlignment = Alignment.CenterVertically) {
+                        if (icon != null) Box(
+                            Modifier.size(TileSize.icon).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(Tokens.Radius.badge) else CircleShape)
+                                .background(if (active) colors?.dot ?: palette.accent else colors?.tint ?: palette.surfaceStrong),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            JIcon(icon, null, size = Tokens.Size.iconXS, decorative = true, selected = active,
+                                tint = if (active) colors?.onDot ?: palette.onAccent else colors?.dot ?: palette.ink2)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        badge?.invoke()
+                        trailing?.let { Spacer(Modifier.width(Tokens.Space.xs)); it() }
                     }
-                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.size(Tokens.Space.xs))
+                } else if (gauge == null && (badge != null || trailing != null)) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.weight(1f)); badge?.invoke(); trailing?.let { Spacer(Modifier.width(Tokens.Space.xs)); it() }
+                }
+                gauge?.let {
+                    Box(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.xs), contentAlignment = Alignment.Center) { it() }
+                }
+                Text(title, Modifier.fillMaxWidth(), style = type.bodyStrong, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    textAlign = if (gauge != null) TextAlign.Center else null)
+                subtitle?.let { Text(it, Modifier.fillMaxWidth(), style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    textAlign = if (gauge != null) TextAlign.Center else null) }
+                if (gauge == null) value?.let { JChangingText(it, style = type.callout.copy(fontWeight = FontWeight.SemiBold), color = palette.ink) }
+                spark?.let { Spacer(Modifier.size(Tokens.Space.xxs)); JSparkline(it, Modifier.fillMaxWidth().heightIn(min = SparkSize.height).size(SparkSize.width, SparkSize.height)) }
+            }
+        }
+        if (gauge != null && (badge != null || trailing != null)) {
+            // Gauges sit side by side and read as shapes of one size, so their badges and switches float over the tile's top
+            // end instead of taking a row above the ring (as the web and iOS do); every ring then starts at the same height.
+            Box(Modifier.fillMaxWidth()) {
+                content()
+                Row(Modifier.align(Alignment.TopEnd).padding(Tokens.Space.m), verticalAlignment = Alignment.CenterVertically) {
                     badge?.invoke()
                     trailing?.let { Spacer(Modifier.width(Tokens.Space.xs)); it() }
                 }
-                Spacer(Modifier.size(Tokens.Space.xs))
-            } else if (badge != null || trailing != null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.weight(1f)); badge?.invoke(); trailing?.let { Spacer(Modifier.width(Tokens.Space.xs)); it() }
             }
-            gauge?.let {
-                Box(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.xs), contentAlignment = Alignment.Center) { it() }
-            }
-            Text(title, Modifier.fillMaxWidth(), style = type.bodyStrong, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                textAlign = if (gauge != null) TextAlign.Center else null)
-            subtitle?.let { Text(it, Modifier.fillMaxWidth(), style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                textAlign = if (gauge != null) TextAlign.Center else null) }
-            if (gauge == null) value?.let { JChangingText(it, style = type.callout.copy(fontWeight = FontWeight.SemiBold), color = palette.ink) }
-            spark?.let { Spacer(Modifier.size(Tokens.Space.xxs)); JSparkline(it, Modifier.fillMaxWidth().heightIn(min = SparkSize.height).size(SparkSize.width, SparkSize.height)) }
+        } else {
+            content()
         }
     }
 }

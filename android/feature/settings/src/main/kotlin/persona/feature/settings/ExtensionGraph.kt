@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSizeIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -55,6 +56,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
@@ -292,6 +294,11 @@ internal fun ExtensionGraph(
     if (graph.nodes.isEmpty()) return
     val ui = rememberSaveable(graph.key, saver = ExtensionGraphUiState.Saver) { ExtensionGraphUiState() }
     var fullScreen by rememberSaveable(graph.key) { mutableStateOf(false) }
+    // The full screen falls back to the work's first node (the canvas's own layout order), as iOS does, never a bare "Graph".
+    val firstNodeTitle = remember(graph) {
+        ExtensionGraphLayout.layout(graph).order.firstOrNull()?.let { id -> graph.nodes.firstOrNull { it.id == id }?.title }
+            ?.takeIf { it.isNotBlank() }
+    }
     val open = {
         // Pages keep exactly this position; a still preview takes a legal interactive opening view in the dialog.
         ui.touched = !compact
@@ -313,7 +320,7 @@ internal fun ExtensionGraph(
         if (compact) ui.touched = false
     }) {
         Column(Modifier.fillMaxSize().testTag("graph-full-screen")) {
-            JTopBar(item.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_ext_graph), onBack = {
+            JTopBar(item.title?.takeIf { it.isNotBlank() } ?: firstNodeTitle ?: stringResource(R.string.settings_ext_graph), onBack = {
                 fullScreen = false
                 if (compact) ui.touched = false
             })
@@ -664,9 +671,12 @@ private fun GraphFold(
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(visual).clip(CircleShape)
+            // The fixed 48 dp constraints belong to the hit target only. The visible chip keeps its 24 dp minimum and
+            // may widen into a capsule for a folded descendant count instead of being coerced to the target's size.
+            Modifier.requiredSizeIn(minWidth = visual, minHeight = visual).clip(CircleShape)
                 .background(PersonaTheme.palette.surfaceOpaque)
-                .border(Tokens.Size.line, PersonaTheme.palette.line, CircleShape).clearAndSetSemantics {},
+                .border(Tokens.Size.line, PersonaTheme.palette.line, CircleShape)
+                .clearAndSetSemantics { this[SemanticsProperties.TestTag] = "graph-fold-visual-$id" },
             contentAlignment = Alignment.Center,
         ) {
             if (folded) Text("+$hidden", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold),

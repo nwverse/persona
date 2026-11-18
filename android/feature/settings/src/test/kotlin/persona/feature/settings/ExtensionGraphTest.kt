@@ -17,7 +17,9 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -120,9 +122,11 @@ class ExtensionGraphTest {
         rule.onNodeWithContentDescription("Design, Ready, under Plan").assertExists()
             .assertHasNoClickAction()
         val nodeBounds = rule.onNodeWithTag("graph-node-root").fetchSemanticsNode().boundsInRoot
-        val foldTarget = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
-        val visualLeft = foldTarget.center.x - with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
-        assertTrue("fold visual stays outside the node: $nodeBounds / $foldTarget", visualLeft >= nodeBounds.right - 1f)
+        val foldVisual = rule.onNodeWithTag("graph-fold-visual-root", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val visualSize = with(rule.density) { GraphTokens.foldVisual.toPx() }
+        assertEquals("the fold chip is not stretched to its hit target", visualSize, foldVisual.width, 1f)
+        assertEquals("the fold chip is not stretched to its hit target", visualSize, foldVisual.height, 1f)
+        assertTrue("fold visual stays outside the node: $nodeBounds / $foldVisual", foldVisual.left >= nodeBounds.right - 1f)
         val selected = rule.onNodeWithTag("graph-node-design").fetchSemanticsNode().config[SemanticsProperties.Selected]
         assertEquals(true, selected)
         val (view, action) = pressed!!
@@ -157,6 +161,12 @@ class ExtensionGraphTest {
         rule.onNodeWithContentDescription("Back").performClick()
         rule.onNodeWithTag("graph-node-design").assertDoesNotExist()
         rule.onNodeWithContentDescription("Show 2 hidden").assertExists()
+    }
+
+    @Test fun untitledFullScreenIsTitledByItsFirstNode() {
+        mount(item.copy(title = null))
+        rule.onNodeWithTag("graph-open-full").performClick()
+        rule.onNode(hasText("Plan") and isHeading() and hasAnyAncestor(isDialog())).assertIsDisplayed()
     }
 
     @Test fun transformAndFoldsSurviveSavedStateRestoration() {
@@ -277,12 +287,10 @@ class ExtensionGraphTest {
     @Test fun downwardFoldVisualStaysOutsideNodeAndProgress() {
         mount(item.copy(direction = ExtensionGraphDirection.DOWN))
         val node = rule.onNodeWithTag("graph-node-root").fetchSemanticsNode().boundsInRoot
-        val target = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
-        val visualTop = target.center.y - with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
-        val visualBottom = target.center.y + with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val visual = rule.onNodeWithTag("graph-fold-visual-root", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val child = rule.onNodeWithTag("graph-node-design").fetchSemanticsNode().boundsInRoot
-        assertTrue("downward fold stays below the node: $node / $target", visualTop >= node.bottom - 1f)
-        assertTrue("downward fold stays above the next row: $child / $target", visualBottom <= child.top + 1f)
+        assertTrue("downward fold stays below the node: $node / $visual", visual.top >= node.bottom - 1f)
+        assertTrue("downward fold stays above the next row: $child / $visual", visual.bottom <= child.top + 1f)
     }
 
     @Test fun compactPreviewFitsEvenAThirtyNodeChainWithoutAZoomFloor() {
@@ -331,20 +339,18 @@ class ExtensionGraphTest {
     @Test fun downwardFoldClearsGroupCaptionAtMinimumZoom() {
         mount(item.copy(direction = ExtensionGraphDirection.DOWN))
         repeat(10) { rule.onNodeWithTag("graph-zoom-out").performClick() }
-        val target = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
-        val visualBottom = target.center.y + with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val visual = rule.onNodeWithTag("graph-fold-visual-root", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val label = rule.onNodeWithTag("graph-frame-label-0", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        assertTrue("fold visual clears the group caption: $target / $label", visualBottom <= label.top + 1f)
+        assertTrue("fold visual clears the group caption: $visual / $label", visual.bottom <= label.top + 1f)
     }
 
     @Config(qualifiers = "w400dp-h1000dp-mdpi", fontScale = 0.85f)
     @Test fun downwardFoldClearsGroupCaptionWithSmallTextAtMinimumZoom() {
         mount(item.copy(direction = ExtensionGraphDirection.DOWN))
         repeat(10) { rule.onNodeWithTag("graph-zoom-out").performClick() }
-        val target = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
-        val visualBottom = target.center.y + with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val visual = rule.onNodeWithTag("graph-fold-visual-root", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val label = rule.onNodeWithTag("graph-frame-label-0", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        assertTrue("small-text fold visual clears the group caption: $target / $label", visualBottom <= label.top + 1f)
+        assertTrue("small-text fold visual clears the group caption: $visual / $label", visual.bottom <= label.top + 1f)
     }
 
     @Test fun compactFullScreenStartsWithInteractiveOpeningZoom() {
