@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The assistant manages its own conversations (docs/assistant/assistant.md "Managing its own conversations", the user's ask on 2026-11-01):
@@ -26,17 +27,48 @@ import (
 // conversations are archived alike. Messages between conversations are queued by the assistant while the receiver
 // runs and carry where they come from; a chain of them is cut after a few hops and a few per pair in ten minutes, so
 // two conversations can't keep each other going. A hop is a request: its answer adds none (hopLocked, #7391).
+//
+// The main conversation is the owner's dispatch center (#10099): a request from it is never refused for its hop, it
+// goes at the last hop (the receiver may answer, not go further), and what it sends to a leader conversation counts
+// only per pair, not against its per-sender cap. A scheduled run that wakes a conversation starts a new chain, at most
+// once per conversation per relayWindow (scheduledWake). conversation_new has its own budget, and a start that fails
+// gives its place back.
 
 const (
 	archivedKey = "assistant.archived"
 	relayKey    = "assistant.relay"
 
-	relayMaxHops   = 3                // hops from the user's own message; an answer adds none
-	relayPairMax   = 3                // messages from one conversation to another …
-	relayFromMax   = 10               // … and from one conversation to any …
-	relayWindow    = 10 * time.Minute // … in this long
-	relayHopMemory = time.Hour        // a hop count older than this no longer counts (the user has moved on)
+	relayMaxHops    = 3                // hops from the user's own message; an answer adds none
+	relayPairMax    = 3                // messages from one conversation to another …
+	relayFromMax    = 10               // … and from one conversation to any …
+	relayWindow     = 10 * time.Minute // … in this long
+	relayHopMemory  = time.Hour        // a hop count older than this no longer counts (the user has moved on)
+	relayNewMax     = 3                // conversations one conversation opens in relayWindow …
+	relayNewMainMax = relayFromMax     // … and the main conversation, the owner's dispatch center
+	relayNewKey     = "new"            // the (from, relayNewKey) pair counts conversation_new
 )
+
+// relayRetryable: a delivery that failed because the conversation could not take it now and may later: the outcome
+// is in doubt, its computer is away, or its node answered a failure with no code (an assistant process that did not
+// start, #10192). Anything the manager refused itself (a pick, model or connection that is gone or cannot be read) or
+// the node refused with a code is no passing failure: the sender is told, nothing is queued (#10194).
+func relayRetryable(err error) bool {
+	if relayInDoubt(err) {
+		return true
+	}
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	switch re.Code {
+	case "", "internal", CodeMachineOffline, CodeNodeClosed:
+		return !strings.Contains(re.Message, "is gone")
+	}
+	return false
+}
+
+// relayRetryGap is how long a conversation that did not take a message (relayBook.failedAt) waits for the next try.
+var relayRetryGap = 30 * time.Second
 
 type convArchived struct {
 	MachineID string    `json:"machine_id"`
@@ -253,7 +285,12 @@ type relayBook struct {
 	draining map[string]bool
 	holds    map[string]*time.Timer // by conversation: drains its queue again when the hold for the owner ends
 	stuck    map[string]relayMsg    // by conversation: the message that could not go in at the last drain (pickLocked)
-	doubted  map[string]time.Time   // by relayMsgID: when a try that ended in doubt began, its line not found then (relay_once.go)
+	// failedAt: by conversation, when a delivery into it last failed because it did not take the message (it did not
+	// start, its computer was away): that message, when nothing else may go, waits relayRetryGap for its next try, so a
+	// conversation that cannot start is not cold-started again on every session list (#10194). In memory: a restart
+	// tries at once.
+	failedAt map[string]time.Time
+	doubted  map[string]time.Time // by relayMsgID: when a try that ended in doubt began, its line not found then (relay_once.go)
 	// ownerTurns: the conversations whose round the owner is on, in memory only (#6394). While one is set, every
 	// queued message waits, whatever its rank: the owner's own message always goes before the queue. A restart falls
 	// back on the persisted Spoke presence window (relay_presence.go).
@@ -262,6 +299,8 @@ type relayBook struct {
 	// starts going into one, and what would go in straight queues, until what waits for it moved to its replacement or
 	// the replacement did not start.
 	replacing map[string]bool
+	// woke: by conversation, when a scheduled run last started it a new chain (scheduledWake), in memory like sent.
+	woke map[string]time.Time
 }
 
 // ownerTurn is one conversation's owner-turn gate (#6394).
@@ -293,7 +332,9 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	}
 	b.st, b.loaded = rs, true
 	b.sent, b.draining, b.replacing, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]bool{}, map[string]*time.Timer{}
+	b.woke = map[string]time.Time{}
 	b.stuck = map[string]relayMsg{}
+	b.failedAt = map[string]time.Time{}
 	b.ownerTurns = map[string]ownerTurn{}
 	return true
 }
@@ -357,9 +398,32 @@ func (s *Service) userSpoke(id string) {
 	s.saveRelayLocked()
 }
 
+// relayRoute is who is on each end of a message, as the settings name them (#10099): the main conversation and the
+// leader conversations. The zero route is an ordinary message between two other conversations.
+type relayRoute struct {
+	fromMain bool     // from is the main conversation
+	leaders  []string // the leader conversations, counted per pair only when the main conversation writes to them
+}
+
+// relayRouteFor reads the route of a message from self from the settings.
+func (s *Service) relayRouteFor(ctx context.Context, self string) relayRoute {
+	cfg := s.settings(ctx)
+	if cfg.Main == "" || cfg.Main != self {
+		return relayRoute{}
+	}
+	return relayRoute{fromMain: true, leaders: slices.Clone(cfg.Leaders)}
+}
+
 // relayAllowed checks the hop and rate limits for a message from → to and counts it when allowed. It returns the
 // message's hop and whether it is an answer (hopLocked); an answer that goes uses up from's one free answer.
 func (s *Service) relayAllowed(from, to string, now time.Time) (int, bool, error) {
+	return s.relayAllowedOn(relayRoute{}, from, to, now)
+}
+
+// relayAllowedOn is relayAllowed on a route (#10099). The main conversation is never refused for its hop: its request
+// goes at relayMaxHops, so the receiver may answer it but not go further. Its messages to a leader conversation count
+// against the per-pair cap only. to == relayNewKey is a conversation_new, with its own per-sender budget.
+func (s *Service) relayAllowedOn(r relayRoute, from, to string, now time.Time) (int, bool, error) {
 	b := &s.relays
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -368,7 +432,10 @@ func (s *Service) relayAllowed(from, to string, now time.Time) (int, bool, error
 	}
 	hop, answer := b.hopLocked(from, to, now)
 	if hop > relayMaxHops {
-		return 0, false, fmt.Errorf("not sent: this would be hop %d from the user's own message (at most %d). Tell the user what you have instead", hop, relayMaxHops)
+		if !r.fromMain {
+			return 0, false, fmt.Errorf("not sent: this would be hop %d from the user's own message (at most %d). Tell the user what you have instead", hop, relayMaxHops)
+		}
+		hop = relayMaxHops
 	}
 	pair, all := 0, 0
 	for k, ts := range b.sent {
@@ -380,16 +447,26 @@ func (s *Service) relayAllowed(from, to string, now time.Time) (int, bool, error
 		}
 		b.sent[k] = kept
 		if k[0] == from {
-			all += len(kept)
+			if !r.fromMain || !slices.Contains(r.leaders, k[1]) {
+				all += len(kept)
+			}
 			if k[1] == to {
 				pair += len(kept)
 			}
 		}
 	}
-	if pair >= relayPairMax {
+	if to == relayNewKey {
+		limit := relayNewMax
+		if r.fromMain {
+			limit = relayNewMainMax
+		}
+		if pair >= limit {
+			return 0, false, fmt.Errorf("not sent: %d conversations started from this one in the last %d minutes already (at most %d)", pair, int(relayWindow.Minutes()), limit)
+		}
+	} else if pair >= relayPairMax {
 		return 0, false, fmt.Errorf("not sent: %d messages to that conversation in the last %d minutes already (at most %d). Wait for its answer", pair, int(relayWindow.Minutes()), relayPairMax)
 	}
-	if all >= relayFromMax {
+	if all >= relayFromMax && !(r.fromMain && slices.Contains(r.leaders, to)) {
 		return 0, false, fmt.Errorf("not sent: %d messages to other conversations in the last %d minutes already (at most %d)", all, int(relayWindow.Minutes()), relayFromMax)
 	}
 	b.sent[[2]string{from, to}] = append(b.sent[[2]string{from, to}], now)
@@ -400,6 +477,40 @@ func (s *Service) relayAllowed(from, to string, now time.Time) (int, bool, error
 		s.saveRelayLocked()
 	}
 	return hop, answer, nil
+}
+
+// relayRefund gives back the place a message from → to counted at took when it did not go (a conversation_new that
+// did not start, #10099).
+func (s *Service) relayRefund(from, to string, at time.Time) {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	k := [2]string{from, to}
+	if i := slices.Index(b.sent[k], at); i >= 0 {
+		b.sent[k] = slices.Delete(b.sent[k], i, i+1)
+	}
+}
+
+// scheduledWake: a scheduled run (a follow-up or routine) went into conversation id, which starts a new chain, as a
+// routine run in a fresh conversation does (#10099). Only once per conversation per relayWindow: a conversation
+// cut off by the hops can't schedule itself a minute ahead again and again to keep a loop going. The per-pair and
+// per-sender rates hold either way.
+func (s *Service) scheduledWake(id string, now time.Time) {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		return
+	}
+	if _, ok := b.st.Hops[id]; !ok {
+		return // on the user's own chain already
+	}
+	if at, ok := b.woke[id]; ok && now.Sub(at) < relayWindow {
+		return
+	}
+	b.woke[id] = now
+	delete(b.st.Hops, id)
+	s.saveRelayLocked()
 }
 
 // relayText is the message as the receiver gets it (prompts/assistant/relay.md).
@@ -471,20 +582,29 @@ func (msg relayMsg) source() *proto.MessageSource {
 // notice (quiet.go) is its own text, and the work it starts is not a hop of any chain.
 func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg relayMsg) error {
 	text := relayDeliveryText(msg)
-	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
-	if msg.Tool == superviseTool {
-		// Register before dispatch: a fast MCP call can arrive before assistant.send returns.
-		s.holdPushes(ctx, to)
-	}
 	params := map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
 		"once_id": relayMsgID(to, msg)} // every try of it under one id: the node sends it once (relay_once.go)
 	if msg.Interject {
 		params["interject_background"] = true
 	}
-	if pick, ok := s.modelPickOf(ctx, machine, to); ok {
-		s.relayOnPick(ctx, machine, to, params, pick) // the conversation's own pick, as a message typed to it runs on (model_pick.go)
+	pick, kept, err := s.readModelPick(ctx, machine, to)
+	if err != nil {
+		return err // unknown is not permission to use a process that still has an older ordinary connection
+	}
+	if !kept && proto.IsExternalLauncher(pick.Launcher) {
+		return i18n.Err("external-adapter.scope_required") // a kept choice on another machine is not a fallback on this one
+	}
+	if kept {
+		if err := s.relayOnPick(ctx, machine, to, params, pick); err != nil {
+			return err
+		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+	}
+	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
+	if msg.Tool == superviseTool {
+		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
+		s.holdPushes(ctx, to)
 	}
 	// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
 	// and the switch now decide, also for one queued before a restart or a change of the switch, and whatever model runs it.
@@ -564,6 +684,13 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	for _, c := range list {
 		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
 			i, wait := b.pickLocked(c.SessionID, now)
+			if last, stuck := b.stuck[c.SessionID]; stuck && i >= 0 && b.st.Queue[c.SessionID][i] == last {
+				// Only the message it failed to take is left to go: tried again after a gap, not on every list.
+				if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
+					held[c.SessionID] = gap
+					continue
+				}
+			}
 			if i < 0 {
 				held[c.SessionID] = wait
 				continue
@@ -622,6 +749,10 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			b.mu.Lock()
 			delete(b.draining, id)
 			delete(b.stuck, id)
+			delete(b.failedAt, id)
+			if err != nil && !keep && !relayInDoubt(err) && !strings.Contains(err.Error(), "is gone") {
+				b.failedAt[id] = time.Now()
+			}
 			// Delivered, answered just in time, or the conversation is gone for good: off the queue. An unreachable
 			// node or another delivery failure keeps it.
 			taken := false
@@ -944,10 +1075,17 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if err != nil {
 		return "", err
 	}
-	hop, _, err := s.relayAllowed(self, "new", time.Now()) // an opening message is a request, never an answer
+	counted := time.Now()
+	hop, _, err := s.relayAllowedOn(s.relayRouteFor(ctx, self), self, relayNewKey, counted) // an opening message is a request, never an answer
 	if err != nil {
 		return "", err
 	}
+	started := false
+	defer func() {
+		if !started {
+			s.relayRefund(self, relayNewKey, counted) // nothing started: it costs no place (#10099)
+		}
+	}()
 	msg := relayMsg{From: self, FromTitle: from, Tool: "conversation_new", Text: a.Text, Hop: hop, At: time.Now().UTC(), Quote: quote}
 	if quote != nil {
 		s.keepQuote(ctx, self, *quote) // before it starts: its first turn may hand out work at once
@@ -962,6 +1100,7 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if err != nil {
 		return "", err
 	}
+	started = true
 	s.titleNew(c.MachineID, c.SessionID, time.Now())
 	tagNote := quoteNote(quote)
 	if len(tags) > 0 {
@@ -1013,7 +1152,7 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	if err != nil {
 		return "", err
 	}
-	hop, answer, err := s.relayAllowed(self, c.SessionID, time.Now())
+	hop, answer, err := s.relayAllowedOn(s.relayRouteFor(ctx, self), self, c.SessionID, time.Now())
 	if err != nil {
 		return "", err
 	}
@@ -1039,7 +1178,25 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		return fmt.Sprintf("%q has messages waiting, or the user is talking in it: the message is queued (%d waiting) and goes in after them.%s", name, n, back), nil
 	}
 	if err := s.deliverRelay(ctx, c.MachineID, c.SessionID, msg); err != nil {
-		return "", err
+		if !relayRetryable(err) {
+			return "", err // a refusal for good (its model or connection gone, a pick that cannot be read): fail closed
+		}
+		// It could not take the message now (it did not start, its computer is away, the answer did not come): kept
+		// in its queue and tried again, under the same once_id, until it goes in (#10194). Never dropped.
+		b := &s.relays
+		b.mu.Lock()
+		if b.failedAt != nil && !relayInDoubt(err) {
+			b.failedAt[c.SessionID] = time.Now()
+		}
+		b.mu.Unlock()
+		n := s.queueRelay(c.SessionID, msg)
+		if n == 0 {
+			return "", err
+		}
+		s.spawnReported(self, c.SessionID)
+		s.publish(ctx)
+		s.drainAfter(c.MachineID, c.SessionID, relayRetryGap)
+		return fmt.Sprintf("%q could not take the message now (%v): it is queued (%d waiting) and goes in once it can.%s", name, err, n, back), nil
 	}
 	s.spawnReported(self, c.SessionID)
 	return fmt.Sprintf("Sent to 「%s」 (%s).%s", name, c.SessionID, back), nil

@@ -257,10 +257,10 @@ type briefProgress struct{ ID, Title, Stage, StageKind string }
 // briefRun is the facts of one run of a routine, kept until its turn has been mirrored and pushed: they are computed when
 // the run starts and said when it ends, so the card and the push say what the run was given.
 type briefRun struct {
-	facts    *briefFacts
-	label    string // the routine's name
-	mirrored bool   // the card was sent (or sending it was given up)
-	pushed   bool   // the push text was used
+	facts      *briefFacts
+	label      string // the routine's name
+	mirrorTurn string // the turn owning this card, including a pending send or retry
+	pushed     bool   // the push text was used
 }
 
 // briefBook holds the facts of the runs under way: by task from the start of the run, by conversation once it is sent.
@@ -346,21 +346,25 @@ func (s *Service) briefOf(session string) *briefRun {
 	return run
 }
 
-// briefClaim is the facts of the run that conversation session is on, once, for the turn that ended: asked is the message
-// that started it and cut whether it was cut off by an error. Only the turn of the run itself (the ⏰ message of
-// taskPrompt) that ended normally gets the card; a message the owner sends into the conversation later, or a turn that
-// failed (the run is tried again with new facts), is answered as any other. A second turn end of the same run does not
-// make another card (a retry of the mirror is not one).
-func (s *Service) briefClaim(session, asked string, cut bool) *briefRun {
-	run := s.briefOf(session)
+// briefClaim takes the facts for the routine's own successful turn once. The second result says this retained turn
+// already owns its briefing send, so a repeated completion must not fall back to an ordinary mirrored card. Other
+// turns, failed runs and expired unclaimed facts keep the ordinary answer path.
+func (s *Service) briefClaim(session, asked, turn string, cut bool) (*briefRun, bool) {
 	b := &s.brief
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if run == nil || run.mirrored || cut || !strings.HasPrefix(strings.TrimSpace(stripContext(asked)), "⏰") {
-		return nil
+	run := b.bySession[session]
+	if run == nil {
+		return nil, false
 	}
-	run.mirrored = true
-	return run
+	if run.mirrorTurn != "" {
+		return nil, run.mirrorTurn == turn
+	}
+	if cut || time.Since(run.facts.At) > briefKeep || !strings.HasPrefix(strings.TrimSpace(stripContext(asked)), "⏰") {
+		return nil, false
+	}
+	run.mirrorTurn = turn
+	return run, false
 }
 
 // briefMirror sends the card of a routine with facts in place of its answer's cards (feishuMirror): the model's answer on
