@@ -1603,7 +1603,9 @@ class WatcherTests(unittest.TestCase):
         )
         section_source = (
             "from pathlib import Path\n"
+            "import sys\n"
             "import unittest\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
             "ROOT = Path(__file__).resolve().parent\n"
             "KNOWN = Path(__file__).resolve().with_name('doc_sections_known.txt')\n"
             "class BaseGuard(unittest.TestCase):\n"
@@ -1629,10 +1631,13 @@ class WatcherTests(unittest.TestCase):
                 for relative in relatives:
                     (tests / relative).write_text(stale_source)
             (checkout / "base-ok").write_text("")
+            (checkout / "scripts/test/doc_sections_known.txt").write_text("x\ty\tz\n")
             shown = []
 
             def fake_checked(argv, **kwargs):
                 if argv[:2] == ["git", "show"]:
+                    if not argv[2].startswith(SHA_BASE + ":scripts/test/"):
+                        raise AssertionError("guard source did not come from the exact base: " + argv[2])
                     shown.append(argv[2])
                     if argv[2].endswith("doc_sections_known.txt"):
                         return ""
@@ -1641,6 +1646,7 @@ class WatcherTests(unittest.TestCase):
                     return base_source
                 return ""
 
+            original_path = sys.path.copy()
             with patch.dict(sys.modules), \
                     patch.object(pr_watch_test_guards, "ROOT", watcher), \
                     patch.object(pr_watch_test_guards, "privacy_environment", return_value={}), \
@@ -1648,7 +1654,10 @@ class WatcherTests(unittest.TestCase):
                 self.assertEqual(0, pr_watch_test_guards.main([
                     "--base", SHA_BASE, "--head", SHA_A, "--worktree", str(checkout), "--repository-guards",
                 ]))
-            self.assertIn(SHA_BASE + ":scripts/test/test_doc_paths.py", shown)
+            self.assertEqual(original_path, sys.path)
+            expected = {SHA_BASE + ":scripts/test/" + name
+                        for name in relatives + ("doc_sections_known.txt",)}
+            self.assertEqual(expected, set(shown))
 
     def test_documentation_guard_reads_pr_not_watcher_root(self):
         import pr_watch_test_guards

@@ -64,26 +64,32 @@ def privacy_environment(checkout):
 
 def documentation_guard(relative, checkout, base):
     """Run the exact base's trusted tests against the PR's files, never the PR's Python."""
-    with tempfile.TemporaryDirectory(prefix="pr-watch-base-guards-") as directory:
-        source_root = Path(directory)
-        for name in sorted({"test_doc_paths.py", relative}):
-            source = checked(["git", "show", base + ":scripts/test/" + name], cwd=checkout)
-            (source_root / name).write_text(source, encoding="utf-8")
-        if relative == "test_doc_sections.py":
-            known = checked(["git", "show", base + ":scripts/test/doc_sections_known.txt"], cwd=checkout)
-            (source_root / "doc_sections_known.txt").write_text(known, encoding="utf-8")
+    original_path = sys.path.copy()
+    try:
+        with tempfile.TemporaryDirectory(prefix="pr-watch-base-guards-") as directory:
+            source_root = Path(directory)
+            test_root = source_root / "scripts/test"
+            test_root.mkdir(parents=True)
+            for name in sorted({"test_doc_paths.py", relative}):
+                source = checked(["git", "show", base + ":scripts/test/" + name], cwd=checkout)
+                (test_root / name).write_text(source, encoding="utf-8")
+            if relative == "test_doc_sections.py":
+                known = checked(["git", "show", base + ":scripts/test/doc_sections_known.txt"], cwd=checkout)
+                (test_root / "doc_sections_known.txt").write_text(known, encoding="utf-8")
 
-        common = load_guard("test_doc_paths.py", "test_doc_paths", source_root)
-        module = common if relative == "test_doc_paths.py" else load_guard(
-            relative, "pr_watch_doc_" + relative[:-3], source_root)
-        common.ROOT = Path(checkout)
-        module.ROOT = Path(checkout)
-        if relative == "test_doc_sections.py":
-            # The base test formats KNOWN relative to ROOT. Keep that lexical relationship while the path resolves
-            # through .. to the temporary base copy, never to the PR's own data file.
-            module.KNOWN = Path(checkout) / os.path.relpath(source_root / "doc_sections_known.txt", checkout)
-        loader = unittest.TestLoader()
-        result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromModule(module))
+            common = load_guard("scripts/test/test_doc_paths.py", "test_doc_paths", source_root)
+            module = common if relative == "test_doc_paths.py" else load_guard(
+                "scripts/test/" + relative, "pr_watch_doc_" + relative[:-3], source_root)
+            common.ROOT = Path(checkout)
+            module.ROOT = Path(checkout)
+            if relative == "test_doc_sections.py":
+                # The base test formats KNOWN relative to ROOT. Keep that lexical relationship while the path resolves
+                # through .. to the temporary base copy, never to the PR's own data file.
+                module.KNOWN = Path(checkout) / os.path.relpath(test_root / "doc_sections_known.txt", checkout)
+            loader = unittest.TestLoader()
+            result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromModule(module))
+    finally:
+        sys.path[:] = original_path
     if result.testsRun == 0 or not result.wasSuccessful():
         raise WatchError("documentation guard did not pass: " + relative)
 
