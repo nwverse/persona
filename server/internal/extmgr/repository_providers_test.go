@@ -47,7 +47,7 @@ func serveRepositoryProviderExtensionForTest() {
 	last := func(s string) string { return s[strings.LastIndex(s, "/")+1:] }
 	_ = pserve.Serve(context.Background(), os.Stdin, os.Stdout, pserve.Program{ID: "acme-code", Version: "1.0.0",
 		Namespaces: map[string]pserve.Handler{
-			"repo": func(_ context.Context, method string, params json.RawMessage) (any, error) {
+			"repo": func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 				note(method, params)
 				switch method {
 				case "parse":
@@ -90,9 +90,9 @@ func serveRepositoryProviderExtensionForTest() {
 						return nil, &rpc.Error{Code: "refused", Message: "policy\x1b[31m says\x00 no\x1c\x1dmore"}
 					case "gone": // as a version that no longer has the contribution
 						return nil, pserve.NoContribution(p.Contribution)
-					case "slow":
-						time.Sleep(2 * time.Second)
-						return wire.Empty{}, nil
+					case "slow": // answers only when the hub gives up on the call (or the program stops)
+						<-ctx.Done()
+						return nil, ctx.Err()
 					}
 					return nil, errors.New("the source fell over")
 				case "link":
