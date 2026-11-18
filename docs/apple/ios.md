@@ -187,6 +187,11 @@ Chat page:
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
   Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` prefetch into the disk cache only for chats not retained in memory,
   so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3).
+  Only while an Agents list is in sight (#10582; `AgentsCoverWatch` through `.tabActiveTask`: the list not covered by the shell's other page,
+  another tab or a pushed page, the phone's Sidebar drawer out, the iPad's column not folded, its tab in front and the app active): elsewhere
+  it read 7–14 transcripts and rewrote about 0.7 MB of cache a minute on a busy hub. Leaving cancels the pulls on their way (no failure, no
+  `workingGap` hold); coming back pulls what moved meanwhile at once, then the pacing below. A chat opened from elsewhere (a notification, a
+  link) opens from its cache and its subscription replays what came after it. A pull that changes nothing shown leaves the file as it was.
   Retained chats without a subscription owner keep their store and covered sequence unchanged until their next visible subscription replays `since_seq`.
   Eligibility is rechecked when queued work starts; a visible catch-up cannot apply after the last owner leaves or the store is replaced.
   Currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `rev` moved since the

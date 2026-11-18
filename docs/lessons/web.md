@@ -1427,3 +1427,12 @@ entries kept from before), draw an uncertain one as waiting (caution color, no "
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
 
 - Keep delivery receipts on the synchronous send path when deferring optional failure UI. The kept-message renderer and its retry/delete actions can load together, while receipt validation and row reconciliation stay immediate. Put the deferred row under a local error boundary and show the existing user bubble while it loads; verify that a failed import leaves the composer and its draft mounted. Keep words used only by deferred dialogs in the full client catalog: the existing lazy-import wait loads it before rendering. The startup literal-key guard and normal app/public build must still pass without changing the budget or counter.
+
+## A terminal menu must own focus before taking typing keys (#10239)
+
+An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
+N, I and Backspace accelerators safe: a program or a field can regain focus while the menu is still open. The terminal
+toolbar opts into Menu's focus scope, accepts keys only from its own trigger or menu levels, and explicitly focuses the
+trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
+pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
+and lose the busy-Agent warning.
