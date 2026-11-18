@@ -82,10 +82,12 @@ counts a tier alias (`opus`, `sonnet`, `haiku`, `fable`, `best`, `opusplan`, `de
 default model, a tier field, the model asked for or the provider's `env` as unset: the tier's own model, else the default
 model, else nothing, and Claude Code uses its own ID (#10365). A `--model <alias>` the node passes for such a provider
 (`claudeModelArg`: the assistant's start, a terminal Agent and a launcher switch, Test, a typed `/model`) is the model its
-environment gives that tier (`opusplan` the Opus tier's), or is left out so the provider's default runs; `personad
-launch` maps or drops one that reaches it anyway, with a line on stderr. Plain `claude`, shell launchers and providers
-on Anthropic's own API keep the alias (`TestProviderEnvNeverWritesTierAlias`, `TestProviderModelArg`,
-`TestManagedAliasModelArg`).
+environment gives that tier (`opusplan` the Opus tier's), or is left out so the provider's default runs (a typed
+`/model` then types `/model default`, which puts the session back on it); `personad launch` maps or drops one that
+reaches it anyway, with a line on stderr. An alias asked for with `[1m]` keeps it on the model it maps to, as Claude
+Code's own resolution does (`opus[1m]` runs the Opus tier's model with the 1M window, declared or not). Plain `claude`,
+shell launchers and providers on Anthropic's own API keep the alias (`TestProviderEnvNeverWritesTierAlias`,
+`TestProviderModelArg`, `TestManagedAliasModelArg`, `TestHerdrSetModelMapsATierAliasOnAGatewayProvider`).
 
 ## What a gateway reports about a model (tested 2.1.325, #8798)
 
@@ -257,10 +259,13 @@ So Persona decides per start and keeps Claude Code's own rule where it cannot te
   `ToolSearch` (#7317); a known gateway gets `false`; a start that cannot tell where its requests go (a launcher the probe
   did not see) gets nothing, so Claude Code's rule decides, as before #7371; a launcher that sets the variable itself
   keeps its value. A value the node inherited never reaches claude. Where the requests go is read with the compaction
-  policy's layers (`claudeEndpoint`): a managed provider's Base URL; for any other launcher the first of the launcher's
-  `--settings` env, the project's `.claude/settings.local.json` and `settings.json` env, the profile's `settings.json`
-  env, what the launcher exports and the shell's environment that names `ANTHROPIC_BASE_URL` (an empty value is
-  Anthropic's own API).
+  policy's layers (`claudeEndpoint`): a managed provider's Base URL; for any other launcher the first of the
+  administrator's managed settings env (`managed-settings.d/*.json`, the last in alphabetical order first, then
+  `managed-settings.json`, in the system directory of Linux, macOS or Windows: above every other layer, so an
+  `ENABLE_TOOL_SEARCH` there counts as the launcher's own; MDM profiles and the server-policy cache `remote-settings.json`
+  are not read), the launcher's `--settings` env, the project's `.claude/settings.local.json` and `settings.json` env,
+  the profile's `settings.json` env, what the launcher exports and the shell's environment that names
+  `ANTHROPIC_BASE_URL` (an empty value is Anthropic's own API).
 - **A refusal.** A failed turn whose words are a 400, or a gateway's "not representable", that names tool search
   (`assistantwire.ToolSearchRefused`: `ToolSearch is not supported`, `defer_loading`, `tool_reference`, `tool_search`,
   `tool search`) is remembered for its launcher and model, with the endpoint that refused, in the node's memory only (no
@@ -270,10 +275,17 @@ So Persona decides per start and keeps Claude Code's own rule where it cannot te
   same-model and next-model retries stay), with no model-recovery marker. A process started that way and refused again
   ends the turn on the refusal; with background tasks running the restart would kill, the turn ends too and the next
   start loads every tool. Other conversations on that launcher and model restart that way on their next message when
-  idle (a busy one keeps its turn), and a spare warmed before is not adopted.
+  idle (a busy one keeps its turn), and a spare warmed before is not adopted: the next warm replaces it with one that
+  loads every tool. The readiness probe's assistant-turn check (`launchers.check` with `assistant_turn`) takes the same
+  decision, by the model asked for (the one the start remembers a refusal by, before `--model` maps a tier alias), with
+  `false` written over its own `--settings` env too, so "Try it" passes once the chat does.
 - **What is left.** The hub gives such a turn error `turn_error_code: "tool_search_unsupported"` (`assistant/fleet.go`
-  `turnErrorCode`): not `model_route` and not the user's to fix, worded "the gateway refused on-demand tool loading;
-  Persona now sends every tool, try again" (readiness `tool_search_unsupported_*`, action `test_assistant`, not blocking).
+  `turnErrorCode`): not `model_route` and not the user's to fix, worded "the gateway refused on-demand tool loading; try
+  again" (readiness `tool_search_unsupported_*`, action `test_assistant`, not blocking). The node announces all of the
+  above as the capability `assistant_tool_search_fallback`; only for a computer whose node does is the readiness step
+  worded "Persona sends every tool to this gateway from now on, so try again" (`toolSearchWords`,
+  `tool_search_unsupported_fallback_detail`). An older node keeps tool search on, so a retry there meets the same
+  refusal, and the chat's card, which can't tell the node, promises only the retry.
 
 Loading every tool costs a gateway that did carry deferral about 23K tokens per request (#7317's measurement), most of
 it read from the prompt cache; a provider opts back in with its `env`, and its models that refuse are then resent once

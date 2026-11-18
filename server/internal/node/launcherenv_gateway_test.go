@@ -117,6 +117,8 @@ func TestProviderModelArg(t *testing.T) {
 	const gw = "https://gw.example.com"
 	withTiers := proto.ManagedLauncher{Name: "gw", BaseURL: gw, Model: "route/claude-opus-5-5", HaikuModel: "small", OpusModel: "opus"}
 	none := proto.ManagedLauncher{Name: "none", BaseURL: gw, Model: "opus"}
+	marked := proto.ManagedLauncher{Name: "marked", BaseURL: gw, Model: "m1", OpusModel: "route/claude-opus-4-6",
+		Models: []proto.ProviderModel{{ID: "route/claude-opus-4-6", ContextWindow: 1000000}}}
 	anthropic := proto.ManagedLauncher{Name: "a", Kind: "api", APIKey: "sk-test-k"}
 	codex := proto.ManagedLauncher{Name: "cx", Agent: "codex", BaseURL: gw}
 	for _, tc := range []struct {
@@ -124,7 +126,10 @@ func TestProviderModelArg(t *testing.T) {
 		model, want string
 	}{
 		{withTiers, "opus", "route/claude-opus-5-5"},
-		{withTiers, "opus[1m]", "route/claude-opus-5-5"},
+		{withTiers, "opus[1m]", "route/claude-opus-5-5[1m]"}, // the 1M window asked for stays (Claude Code's own resolution)
+		{withTiers, "opusplan[1m]", "route/claude-opus-5-5[1m]"},
+		{marked, "opus[1m]", "route/claude-opus-4-6[1m]"}, // a tier already marked by its declared window: once
+		{marked, "opus", "route/claude-opus-4-6[1m]"},
 		{withTiers, "best", "route/claude-opus-5-5"},
 		{withTiers, "opusplan", "route/claude-opus-5-5"},
 		{withTiers, "haiku", "small"},
@@ -157,6 +162,10 @@ func TestProviderModelArg(t *testing.T) {
 		[]string{"-p", "--model", "small", "--model=route/claude-opus-5-5", "--", "--model", "opus"}) || len(warned) != 0 {
 		t.Errorf("mapped: %q, warned %q", got, warned)
 	}
+	if got := gatewayModelArgs([]string{"--model", "opus[1m]", "--model=opusplan[1m]"}, env, warn); !slices.Equal(got,
+		[]string{"--model", "route/claude-opus-5-5[1m]", "--model=route/claude-opus-5-5[1m]"}) || len(warned) != 0 {
+		t.Errorf("[1m] mapped: %q, warned %q", got, warned)
+	}
 	if got := gatewayModelArgs([]string{"--resume", "x", "--model", "opus", "-p"}, managedEnv(none), warn); !slices.Equal(got,
 		[]string{"--resume", "x", "-p"}) || len(warned) != 1 || !strings.Contains(warned[0], "opus") {
 		t.Errorf("dropped: %q, warned %q", got, warned)
@@ -172,7 +181,7 @@ func TestProviderModelArg(t *testing.T) {
 func TestProviderAliasModel(t *testing.T) {
 	l := proto.ManagedLauncher{Model: "m1", OpusModel: "o1", SonnetModel: "sonnet", HaikuModel: "", SmallModel: "s1", FableModel: "f1"}
 	want := map[string]string{"opus": "o1", "best": "o1", "opusplan": "o1", "sonnet": "m1", "haiku": "s1", "fable": "f1",
-		"default": "m1", "inherit": "m1", "m9": "m9", "": ""}
+		"default": "m1", "inherit": "m1", "m9": "m9", "": "", "opus[1m]": "o1[1m]", "sonnet[1m]": "m1[1m]", "m9[1m]": "m9[1m]"}
 	got := map[string]string{}
 	for m := range want {
 		got[m] = providerAliasModel(l, m)
@@ -182,5 +191,14 @@ func TestProviderAliasModel(t *testing.T) {
 	}
 	if got := providerAliasModel(proto.ManagedLauncher{Model: "opus"}, "sonnet"); got != "" {
 		t.Fatalf("nothing concrete: %q", got)
+	}
+	if got := providerAliasModel(proto.ManagedLauncher{OpusModel: "o1[1m]"}, "opus[1m]"); got != "o1[1m]" {
+		t.Fatalf("a field marked already: %q", got)
+	}
+	// The conversation's model as the process runs it: opus[1m] on a gateway keeps its 1M window though the
+	// provider declares none for the model.
+	l2 := proto.ManagedLauncher{Name: "gw", BaseURL: "https://gw.example.com", Model: "m1", OpusModel: "route/claude-opus-4-6"}
+	if env := providerEnv(l2, "opus[1m]", "", false); env["ANTHROPIC_MODEL"] != "route/claude-opus-4-6[1m]" {
+		t.Fatalf("ANTHROPIC_MODEL=%q", env["ANTHROPIC_MODEL"])
 	}
 }

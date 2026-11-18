@@ -220,11 +220,12 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 
 // claudeEndpoint is where a claude a launcher starts sends its requests (an ANTHROPIC_BASE_URL, "" Anthropic's own
 // API), and whether the launcher sets ENABLE_TOOL_SEARCH itself, read as Claude Code reads them: a settings env wins
-// over the process environment, the launcher's --settings (own) first, then the project's local and shared settings in
-// cwd and the user settings of its config directory; then what the launcher exports (p.Env), then the shell's
-// environment unless the launcher unset it (the node's own when the probe did not see it). The first layer that names
-// the variable counts, an empty value too (Anthropic's own API). A value the shell has only because the node has it is
-// not the launcher's own.
+// over the process environment, the administrator's managed settings first (claudeManagedEnvLayers, above everything),
+// then the launcher's --settings (own), the project's local and shared settings in cwd and the user settings of its
+// config directory; then what the launcher exports (p.Env), then the shell's environment unless the launcher unset it
+// (the node's own when the probe did not see it). The first layer that names the variable counts, an empty value too
+// (Anthropic's own API). A value the shell has only because the node has it is not the launcher's own; a managed one
+// counts as the launcher's (nothing Persona writes would win over it).
 func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string, ownToolSearch bool) {
 	read := func(arg string) map[string]string {
 		if arg == "" {
@@ -241,8 +242,12 @@ func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string,
 		}
 		return out
 	}
-	layers := []map[string]string{read(own), read(filepath.Join(cwd, ".claude", "settings.local.json")),
-		read(filepath.Join(cwd, ".claude", "settings.json")), read(filepath.Join(configDir, "settings.json")), p.Env}
+	var layers []map[string]string
+	for _, f := range claudeManagedEnvLayers() {
+		layers = append(layers, read(f))
+	}
+	layers = append(layers, read(own), read(filepath.Join(cwd, ".claude", "settings.local.json")),
+		read(filepath.Join(cwd, ".claude", "settings.json")), read(filepath.Join(configDir, "settings.json")), p.Env)
 	shell := map[string]string{}
 	if p.Shell == nil {
 		for _, kv := range os.Environ() {

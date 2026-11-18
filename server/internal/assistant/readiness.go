@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -588,9 +589,9 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 			case proto.TurnErrorModelFallbackUnavailable:
 				action = "" // recovery is a new conversation or the TUI's /model, neither is a model-settings action
 			case proto.TurnErrorToolSearchUnsupported:
-				action = "test_assistant" // nothing to set up: the node sends every tool now, so try again
+				action = "test_assistant" // nothing to set up: try again (toolSearchWords)
 			}
-			st := s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action)
+			st := s.toolSearchWords(lang, d, s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action))
 			if code == proto.TurnErrorRateLimited {
 				st.Occurrence = newest.occurrence
 				if st.Occurrence == "" {
@@ -731,9 +732,23 @@ func (s *Service) readinessFirst(ctx context.Context, lang i18n.Lang, d Device, 
 		if main.TurnErrorCode == proto.TurnErrorModelFallbackUnavailable {
 			action = ""
 		}
-		return s.readinessStep(lang, StepFirstMessage, StepProblem, main.TurnErrorCode, d.Name, "", action)
+		return s.toolSearchWords(lang, d, s.readinessStep(lang, StepFirstMessage, StepProblem, main.TurnErrorCode, d.Name, "", action))
 	}
 	return s.readinessStep(lang, StepFirstMessage, StepTodo, codeNeverTried, d.Name, "", "test_assistant")
+}
+
+// toolSearchWords is st, when it is a tool_search_unsupported step of computer d, in the words for what d's node does
+// (#10365): one that announces assistant_tool_search_fallback has resent the turn with every tool loaded and sends
+// every tool to that gateway from now on, which the step says; any other (an older node, which keeps tool search on, or
+// one the manager cannot ask now) keeps the plain advice to try again, which promises nothing.
+func (s *Service) toolSearchWords(lang i18n.Lang, d Device, st ReadinessStep) ReadinessStep {
+	if st.Code != proto.TurnErrorToolSearchUnsupported {
+		return st
+	}
+	if nodes, ok := s.devs.(nodeAnnouncer); ok && nodes.NodeAnnounced(d.ID, nodeproto.AssistantToolSearchFallback) {
+		st.Detail = i18n.T(lang, "assistant-readiness.tool_search_unsupported_fallback_detail")
+	}
+	return st
 }
 
 // readinessStep is a step with its code's words in lang and its action.

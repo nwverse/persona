@@ -342,8 +342,8 @@ What these agents do not do here, and why:
 - **No tier alias behind a gateway** (#10365): Claude Code sends a tier variable's value (`ANTHROPIC_DEFAULT_OPUS_MODEL` …) to the gateway as the model's name, so a provider whose default model or tier
   field held `opus` asked the gateway for "opus" (404). For a provider whose Base URL is not Anthropic's own API, a tier alias (`opus`, `sonnet`, `haiku`, `fable`, `best`, `opusplan`, `default`, `inherit`,
   with or without `[1m]`) in its default model, a tier field or its `env` counts as unset: the tier's own model, else the default model, else nothing (Claude Code's own ID). A `--model <alias>` the node
-  passes (an assistant conversation, a terminal Agent, a launcher switch, Test, a typed `/model`) becomes the model the provider's environment gives that tier, or is left out (the provider's default);
-  `personad launch` does the same to whatever reaches it and says so on stderr when it leaves one out. Plain `claude`, shell launchers and providers on Anthropic's own API keep their aliases.
+  passes (an assistant conversation, a terminal Agent, a launcher switch, Test, a typed `/model`) becomes the model the provider's environment gives that tier, `[1m]` kept, or is left out (the provider's default;
+  a typed `/model` types `/model default`); `personad launch` does the same to whatever reaches it and says so on stderr when it leaves one out. Plain `claude`, shell launchers and providers on Anthropic's own API keep their aliases.
 - **Authentication method** (`auth`, 2026-11-04): which variable receives the key. `api_key` (default, used by existing launchers) sets `ANTHROPIC_API_KEY`; Claude Code sends
   `x-api-key`, the only method accepted by the official API. `bearer` sets `ANTHROPIC_AUTH_TOKEN` and sends `Authorization: Bearer`, for compatible gateways accepting only Bearer
   (common relay gateways accept both, requiring no change). When the manager directly calls the Messages API with a launcher (triage, translation, etc.), it follows this header choice too; Responses already uses Bearer and needs no selection.

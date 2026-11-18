@@ -96,7 +96,7 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 	}
 	turn := assistantCheck{}
 	if o.assistantTurn && agent == "claude" {
-		if turn, err = n.assistantCheckFor(ctx, name, model, o, dir); err != nil {
+		if turn, err = n.assistantCheckFor(ctx, name, o, dir); err != nil {
 			return proto.LauncherCheck{Agent: agent, Error: err.Error()}
 		}
 		defer turn.cleanup()
@@ -111,7 +111,11 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
 			return proto.LauncherCheck{Error: err.Error()}
 		}
-		after += scriptSettingsFlag(n.claudeSettings(ctx, name, ours, dir, turn.profile()...))
+		settings, err := turn.withSettings(n.claudeSettings(ctx, name, ours, dir, turn.profile()...), dir, n.home)
+		if err != nil {
+			return proto.LauncherCheck{Agent: agent, Error: err.Error()}
+		}
+		after += scriptSettingsFlag(settings)
 	}
 	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
 	defer cancel()
