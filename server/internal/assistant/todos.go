@@ -949,6 +949,9 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		bindings, err := parseCreateBindings(in.RepositoryBindings)
+		if err == nil {
+			err = s.resolveCreateBindings(r.Context(), bindings) // before the store, outside todos.writing
+		}
 		if err != nil {
 			taskRepositoriesError(w, err)
 			return

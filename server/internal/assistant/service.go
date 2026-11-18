@@ -69,6 +69,12 @@ type Service struct {
 	repositoriesMu   sync.Mutex
 	repositoryConfig string
 	repositoryCheck  func(context.Context, repository.Identity) error // tests only; production uses the guarded checker
+	// repoExt is the extensions' repository providers (SetExtensions; repository_providers.go); nil: none.
+	repoExt repository.Extensions
+	// repoStarted is closed once repoExt lists its providers (its manager has started); nil: it always does.
+	repoStarted <-chan struct{}
+	// reportedLinks are the reported links a provider is asked about off the event loops (todo_repository_providers.go).
+	reportedLinks reportedLinkBook
 	// build is Options.Build.
 	build string
 	// northStarOn: the north star's recording start is saved (north_star.go).
