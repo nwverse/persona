@@ -149,6 +149,7 @@ leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/repositories
+-                    GET /api/v1/assistant/repositories/providers
 -                    GET /api/v1/assistant/repositories/{id}
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
@@ -596,6 +597,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/sessions/{mid}/{sid}/share-preview
+-                    POST /api/v1/sessions/{mid}/{sid}/start/continue
 -                    POST /api/v1/sessions/{mid}/{sid}/unarchive
 -                    POST /api/v1/skills/import
 -                    POST /api/v1/subscriptions
@@ -617,6 +619,7 @@ todos.write          POST /api/v1/todos
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/retry
+-                    POST /api/v1/todos/{id}/start/answer
 -                    POST /api/v1/translate
 -                    POST /api/v1/translate/mail
 -                    POST /api/v1/workspace-board

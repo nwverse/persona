@@ -75,6 +75,113 @@ func TestRolloutPathMissCached(t *testing.T) {
 	}
 }
 
+// A raw-UUID hit outside the window is reused like a miss: another thread's recent rollout does not invalidate it, but
+// archiving the thread or losing every cached path does.
+func TestRolloutPathHitCached(t *testing.T) {
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	const id = "abababab-abab-4aba-8aba-abababababab"
+	day := time.Now().AddDate(0, 0, -40)
+	writeRollout(t, home, id, "/w", day, day)
+	src := filepath.Join(codex, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"),
+		"rollout-"+day.Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
+	ageDirs(t, codex)
+	perID, _ := countRolloutGlobs(t, codex)
+	if got := rolloutPath(codex, id); got != src {
+		t.Fatalf("first hit = %q, want %q", got, src)
+	}
+	if got := perID.Load(); got != 1 {
+		t.Fatalf("first hit used %d per-ID globs, want 1", got)
+	}
+	if got := rolloutPath(codex, id); got != src {
+		t.Fatalf("cached hit = %q, want %q", got, src)
+	}
+	if got := perID.Load(); got != 1 {
+		t.Fatalf("unchanged hit globbed again: %d per-ID globs", got)
+	}
+
+	writeRollout(t, home, "cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd", "/w", time.Now(), time.Now())
+	if got := rolloutPath(codex, id); got != src {
+		t.Fatalf("hit after another recent rollout = %q, want %q", got, src)
+	}
+	if got := perID.Load(); got != 1 {
+		t.Fatalf("another thread's recent rollout invalidated the hit: %d per-ID globs", got)
+	}
+
+	dst := filepath.Join(codex, "archived_sessions", filepath.Base(src))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	ageDirs(t, codex)
+	if got := rolloutPath(codex, id); got != dst {
+		t.Fatalf("archived hit = %q, want %q", got, dst)
+	}
+	if got := perID.Load(); got != 3 {
+		t.Fatalf("archiving did not rescan sessions and archived_sessions: %d per-ID globs", got)
+	}
+	if got := rolloutPath(codex, id); got != dst {
+		t.Fatalf("cached archived hit = %q, want %q", got, dst)
+	}
+	if got := perID.Load(); got != 3 {
+		t.Fatalf("unchanged archived hit globbed again: %d per-ID globs", got)
+	}
+	if err := os.Remove(dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := rolloutPath(codex, id); got != "" {
+		t.Fatalf("lookup after losing the cached path = %q, want missing", got)
+	}
+	if got := perID.Load(); got != 5 {
+		t.Fatalf("a missing cached path did not force both fresh globs: %d per-ID globs", got)
+	}
+}
+
+// A continuation written beside a cached old rollout changes that directory: the next lookup must select it, not keep
+// returning the older segment until the minute listing.
+func TestRolloutPathHitSeesNewContinuation(t *testing.T) {
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	day := time.Now().AddDate(0, 0, -40)
+	writeRollout(t, home, remoteRaw, "/w", day, day)
+	ageDirs(t, codex)
+	original := rolloutPath(codex, remoteRaw)
+	if original == "" {
+		t.Fatal("the original rollout is missing")
+	}
+	path := strings.TrimSuffix(original, ".jsonl") + "_" + continuationSegment + ".jsonl"
+	continuationFixture(t, path, remoteRaw, "")
+	if err := os.Chtimes(path, day.Add(time.Hour), day.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := rolloutPath(codex, remoteRaw); got != path {
+		t.Fatalf("lookup after a new continuation = %q, want %q", got, path)
+	}
+
+	// A segment in a different old day directory is not covered by those parent stamps. The full older-day listing lets
+	// the hit go, and the next lookup selects this newer segment too.
+	ageDirs(t, codex)
+	if got := rolloutPath(codex, remoteRaw); got != path {
+		t.Fatalf("lookup before the older-day listing = %q, want %q", got, path)
+	}
+	otherDay := day.AddDate(0, 0, 1)
+	otherDir := filepath.Join(codex, "sessions", otherDay.Format("2006"), otherDay.Format("01"), otherDay.Format("02"))
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(otherDir, "rollout-other-"+remoteRaw+"_bbbbbbbb-cccc-dddd-eeee-ffffffffffff.jsonl")
+	continuationFixture(t, other, remoteRaw, "")
+	if err := os.Chtimes(other, otherDay.Add(2*time.Hour), otherDay.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	expireRollouts(codex, true)
+	if got := rolloutPath(codex, remoteRaw); got != other {
+		t.Fatalf("lookup after the older-day listing = %q, want %q", got, other)
+	}
+}
+
 // A rollout archived after a miss (moved out of sessions/) is found at once.
 func TestRolloutPathArchived(t *testing.T) {
 	home := t.TempDir()
@@ -131,6 +238,34 @@ func TestRolloutPathMissRacy(t *testing.T) {
 	}
 	if p := rolloutPath(codex, id); p == "" {
 		t.Fatal("written in the same tick as the miss: not found")
+	}
+}
+
+// BenchmarkRolloutPathHit measures one old raw-UUID hit among 5,000 rollouts. Cached matches still need their file and
+// metadata checks, but must not glob every historical day directory again.
+func BenchmarkRolloutPathHit(b *testing.B) {
+	home := b.TempDir()
+	codex := filepath.Join(home, ".codex")
+	now := time.Now()
+	const id = "abababab-abab-4aba-8aba-abababababab"
+	for i := range 5000 {
+		day := now.AddDate(0, 0, -(20 + i%300))
+		raw := fmt.Sprintf("%08x-0000-4000-8000-%012x", i, i)
+		if i == 0 {
+			raw = id
+		}
+		writeRollout(b, home, raw, "/w", day, day)
+	}
+	ageDirs(b, codex)
+	if got := rolloutPath(codex, id); got == "" {
+		b.Fatal("the benchmark rollout is missing")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if got := rolloutPath(codex, id); got == "" {
+			b.Fatal("the benchmark rollout is missing")
+		}
 	}
 }
 
