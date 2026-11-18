@@ -46,6 +46,8 @@ func TestActivitySaysWhatAToolCallDoes(t *testing.T) {
 		{"sleep", `{"duration":"25s","duration_ms":25000}`, "在等待"},
 		{"wait_agent", `{}`, "在等待"},
 		{"subagent", `{"name":"review_api","event":"started"}`, "在派子任务 review_api"},
+		{"subagent", `{"name":"review_api","event":"interacted"}`, "在联系子任务 review_api"},
+		{"subagent", `{"name":"review_api","event":"completed"}`, "子任务完成 review_api"},
 		{"mcp__persona__phone_calendar_events", `{}`, "在调用 phone_calendar_events"},
 		{"SomethingNew", `{}`, "在调用 SomethingNew"},
 	}

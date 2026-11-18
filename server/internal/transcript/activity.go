@@ -82,7 +82,14 @@ func Activity(name string, input json.RawMessage) string {
 	case "Task", "Agent":
 		s = join("在派子任务", str("description"))
 	case "subagent": // Codex's subagent activity (codex.go)
-		s = join("在派子任务", str("name"))
+		switch str("event") {
+		case "interacted":
+			s = join("在联系子任务", str("name"))
+		case "completed":
+			s = join("子任务完成", str("name"))
+		default:
+			s = join("在派子任务", str("name"))
+		}
 	case "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet":
 		s = "在更新计划"
 	case "Skill":
