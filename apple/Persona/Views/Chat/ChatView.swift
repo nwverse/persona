@@ -232,6 +232,8 @@ struct ChatView: View {
     /// The right-edge navigator while a finger is on it (new conversation layout, `ChatEdgeScrub`).
     @State private var scrub = EdgeScrubState()
     @State private var userInputIndex: (key: SessionKey, index: ChatUserInputIndex)?
+    /// The permission mode changes the hub recorded for an Agent's chat (#10297, `loadModeChanges`), by session.
+    @State private var modeChanges: (key: SessionKey, changes: [APIClient.ModeChange])?
     @State private var navigationJump: EdgeMark?
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
@@ -1066,6 +1068,7 @@ struct ChatView: View {
         let feed = style == .assistant ? ChatLines.drawnFeed(TasksStore.shared.feed(shownKey.sessionID)) : []
         let kids = model.childRows(shownKey)
         scratch.childRows = kids
+        let modes = shownModes(until: frozen == nil ? nil : items[..<cut].last(where: { $0.ts != nil })?.ts ?? .distantPast)
         let childStamp = kids.map { "\($0.sessionID):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0)" }.joined(separator: "|")
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
@@ -1074,7 +1077,7 @@ struct ChatView: View {
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
-                                       closeout: shownCloseout != nil, children: childStamp)
+                                       closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" })
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -1094,6 +1097,11 @@ struct ChatView: View {
         // screen (#4970). Persona's own conversation keeps its boxed answers whole.
         if style == .dev { lines = ChatLines.splitAnswers(lines) }
         #endif
+        // The permission mode changes the hub recorded (#10297), each at the end of the exchange it happened in; while
+        // older history is still to load, one from before the first loaded item waits for it.
+        if !key.modes.isEmpty {
+            lines = ChatLines.mergeModeChanges(lines, modes, earliest: store.hasMore ? items.lazy.compactMap(\.ts).first ?? .distantFuture : nil)
+        }
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
             // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
             // of hiding them as though a full task card still rendered them (#3711).
@@ -1107,6 +1115,14 @@ struct ChatView: View {
         ChatTrace.shared.note(shownKey, ChatTrace.screen(lines, live: store.liveText.count, streaming: key.streaming, running: key.live != nil,
                                                          frozen: frozen != nil, withheld: items.count - cut))
         return lines
+    }
+
+    /// This chat's mode changes (`loadModeChanges`); frozen (the user reading back), only those up to `until`, the time
+    /// of the last item shown: what came after waits with the rest.
+    private func shownModes(until: Date?) -> [APIClient.ModeChange] {
+        guard style == .dev, let m = modeChanges, m.key == shownKey else { return [] }
+        guard let until else { return m.changes }
+        return m.changes.filter { $0.at <= until }
     }
 
     /// The main conversation and the leader conversations fold their background rounds while the hub's switch is on
@@ -1524,7 +1540,7 @@ struct ChatView: View {
 
     /// The Model Not Connected card for the line, when it is the turn's error: the last line, an answer or an API error.
     private func turnErrorCard(_ line: ChatLine, raw: String?) -> ReadinessCard? {
-        guard let fix = turnFix, currentLines().last?.id == line.id else { return nil }
+        guard let fix = turnFix, ChatLines.lastOfChat(currentLines())?.id == line.id else { return nil }
         return ReadinessCard(title: fix.title, detail: fix.detail, tone: .danger,
                              actionTitle: String(localized: "Fix it"),
                              action: { readinessRoute = fix.action == "edit_provider" ? .provider(session?.launcher) : .providerWizard },
@@ -1555,6 +1571,7 @@ struct ChatView: View {
         case .quick(let result): QuickResultCard(result: result)
         case .placeMap(let result): PlaceMapCard(result: result)
         case .day(let date): DayLine(date: date)
+        case .modeChange(_, let change): ModeChangeLine(change: change, session: session)
         case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
             turnErrorCard(line, raw: info.raw)
         case .apiError(let item, let info, let count):
@@ -1565,9 +1582,9 @@ struct ChatView: View {
             // Not when the fallback model is missing (#4489): Continue would go to the same model.
             // The exhausted chain's words go on the last error only; an earlier error in the chat is not what they explain.
             APIErrorCard(info: info, count: count, at: item.ts,
-                         recovery: ModelFallbackText.exhaustedRecovery(session).flatMap { r in currentLines().last?.id == line.id ? r : nil },
+                         recovery: ModelFallbackText.exhaustedRecovery(session).flatMap { r in ChatLines.lastOfChat(currentLines())?.id == line.id ? r : nil },
                          retry: ModelFallbackText.offersRetry(transient: info.transient, session: session)
-                             && !status.isActive && currentLines().last?.id == line.id
+                             && !status.isActive && ChatLines.lastOfChat(currentLines())?.id == line.id
                              && model.session(key)?.turnErrorCode != ModelFallbackText.unavailableCode
                              ? { model.sendNow(key, text: "继续") } : nil) // i18n-ignore
         case .userImages(_, let items):
@@ -2311,6 +2328,9 @@ struct ChatView: View {
                     .tabActiveTask(id: "\(shownKey)|\(store.resets)|\(lastPromptID ?? "")") {
                         await loadUserInputIndex()
                     }
+                    .tabActiveTask(id: "\(shownKey)|\(session?.permissionMode ?? "")") {
+                        await loadModeChanges()
+                    }
                     .tabActiveTask(id: navigationJump) {
                         guard let mark = navigationJump else { return }
                         await jumpToInput(mark)
@@ -2462,6 +2482,22 @@ struct ChatView: View {
                 guard !Task.isCancelled, shownKey == key, attempt < 3 else { return }
                 try? await Task.sleep(for: .seconds(3))
             }
+        }
+    }
+
+    /// An Agent's chat reads its permission mode changes when it opens and when the mode changes, and once more shortly
+    /// after (the manager records a change as the node answers, which can be a moment after the row says the new mode).
+    /// Off the main actor; a failure (an older hub, offline) keeps what there was. Persona's own conversations have none.
+    private func loadModeChanges() async {
+        guard style == .dev, let api = model.api(shownKey.group) else { return }
+        let key = shownKey
+        for wait in [0, 2] {
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard !Task.isCancelled, let changes = try? await api.modeChanges(key), !Task.isCancelled, shownKey == key else { continue }
+            // none (most chats), or the same again: nothing to draw again
+            if changes.isEmpty && modeChanges?.key != key { continue }
+            if modeChanges?.key == key && modeChanges?.changes == changes { continue }
+            modeChanges = (key, changes)
         }
     }
 
@@ -7533,6 +7569,9 @@ struct ChatLine: Identifiable {
         case viewed(id: String, images: [ViewedImage])
         /// A part of a long finished answer, a row of its own (#4970, `AnswerParts`): the first has the answer's id.
         case answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int)
+        /// A permission mode change the hub recorded, at the end of the exchange it happened in (#10297,
+        /// `ChatLines.mergeModeChanges`); `id` from its time and kind.
+        case modeChange(id: String, change: APIClient.ModeChange)
 
         var id: String {
             switch self {
@@ -7554,6 +7593,7 @@ struct ChatLine: Identifiable {
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
+            case .modeChange(let id, _): id
             }
         }
     }
@@ -7596,6 +7636,7 @@ struct ChatLine: Identifiable {
     static func quick(_ result: QuickResult) -> Self { Self(.quick(result)) }
     static func placeMap(_ result: PlaceMapResult) -> Self { Self(.placeMap(result)) }
     static func day(_ date: Date) -> Self { Self(.day(date)) }
+    static func modeChange(id: String, _ change: APIClient.ModeChange) -> Self { Self(.modeChange(id: id, change: change)) }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))
@@ -8439,6 +8480,8 @@ final class ChatScratch {
         var closeout = false
         /// Folded children placed in this chat. A change of row rebuilds the lines.
         var children = ""
+        /// The permission mode changes merged in (#10297): one more is a new line.
+        var modes: [String] = []
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

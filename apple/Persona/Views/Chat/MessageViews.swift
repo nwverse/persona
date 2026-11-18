@@ -799,6 +799,92 @@ struct ThinkingRow: View {
 /// Where Claude Code compacted the context (`Item.compact`): a hairline across the chat, 「以上内容已压缩」 in the middle with
 /// where it came from (Manual / Auto / While idle) and the size before it, when known, as the web and Android write it (#1762).
 /// A tap shows the notes that came with it and when.
+/// The words of a permission mode change line (#10297, `ModeChangeLine`): who changed which mode to which, the modes in
+/// quotes, and what became of a restart into one, with why where the node said (its codes; rows from before them hold
+/// English words, left out). The web's `modeChangeLabel` says the same.
+nonisolated enum ModeChangeWords {
+    /// A mode's name as the session's own menu calls it.
+    static func mode(_ id: String?, session: Session?) -> String {
+        guard let id, !id.isEmpty else { return "" }
+        if session?.listedModes?.contains(id) == true { return SessionModes.listedOption(id).title }
+        return SessionModes.modeLabel(id) ?? id
+    }
+
+    static func who(_ c: APIClient.ModeChange) -> String {
+        if c.actorKind == "hub" { return String(localized: "The hub [mode change]") }
+        let name = c.deviceName?.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? String(localized: "A device [mode change]") : name
+    }
+
+    static func why(_ code: String?) -> String? {
+        switch code {
+        case "replaced": String(localized: "another switch took its place")
+        case "process_exited": String(localized: "the process it was picked for has exited")
+        case "process_replaced": String(localized: "the session runs in another process now")
+        case "process_unknown": String(localized: "it couldn't tell which process to restart")
+        case "expired": String(localized: "it waited over two hours")
+        case "not_stopped": String(localized: "the agent didn't quit")
+        case "start_failed": String(localized: "the new process didn't start, so the session carries on as before")
+        case "stopped": String(localized: "the new process didn't start, and the session has stopped")
+        default: nil
+        }
+    }
+
+    static func label(_ c: APIClient.ModeChange, session: Session?) -> String {
+        let to = mode(c.to, session: session)
+        switch c.kind {
+        case "restart_done":
+            return c.reason == "already_in" ? String(localized: "Already in “\(to)”, no restart needed")
+                : String(localized: "Restarted in “\(to)”")
+        case "restart_failed":
+            if let why = why(c.reason) { return String(localized: "Couldn't restart in “\(to)”: \(why)") }
+            return String(localized: "Couldn't restart in “\(to)”")
+        case "restart_dropped":
+            if let why = why(c.reason) { return String(localized: "Called off, won't restart in “\(to)”: \(why)") }
+            return String(localized: "Called off, won't restart in “\(to)”")
+        default:
+            let who = who(c)
+            if c.applied == "restart" { return String(localized: "\(who) picked “\(to)”: the session restarts in it once this turn ends") }
+            let from = mode(c.from, session: session)
+            return from.isEmpty || from == to ? String(localized: "\(who) changed the permission mode to “\(to)”")
+                : String(localized: "\(who) changed the permission mode from “\(from)” to “\(to)”")
+        }
+    }
+}
+
+/// A permission mode change in an Agent's chat (#10297, `ChatLines.mergeModeChanges`): rules either side of a line of
+/// words, as the compaction divider draws (`CompactDivider`), but not a control. The words wrap rather than cut; the
+/// rules only take the room the words leave, so a line that wraps has none instead of rules off its middle.
+struct ModeChangeLine: View {
+    var change: APIClient.ModeChange
+    var session: Session?
+
+    private var rule: some View {
+        let beautiful = AppStyle.current.usesBeautifulUI
+        return Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator))
+            .frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
+            .frame(maxWidth: .infinity)
+    }
+
+    var body: some View {
+        let label = ModeChangeWords.label(change, session: session)
+        HStack(spacing: Theme.Space.s) {
+            rule
+            Text(label)
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+            rule
+        }
+        .padding(.vertical, Theme.Space.s)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("chat.modeChange")
+    }
+}
+
 struct CompactDivider: View {
     var item: Item
     @State private var open = false
