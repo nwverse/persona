@@ -110,6 +110,10 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
 // the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
+	if s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+		s.tellApps(ix) // Retain the card for explicit inspection without routing it into Assistant context.
+		return
+	}
 	if s.approveStandingInteraction(ix) {
 		return
 	}
@@ -127,6 +131,9 @@ func (s *Service) announce(ix proto.Interaction) {
 // for a quiet task.
 func (s *Service) tell(ix proto.Interaction) {
 	ix = s.tellApps(ix)
+	if s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+		return
+	}
 	if s.quietSession(ix.MachineID, ix.SessionID) {
 		// A quiet task's question is no push, bot card or channel message: the main conversation is told (#1731).
 		go s.InteractionRaised(context.Background(), InteractionRaised{Interaction: ix})
@@ -149,6 +156,9 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 // tellUser rings card ix, already on the apps: the push (push false: one of several going out as one push, ask_route.go)
 // and the topic of the agent's todo unless the agent is muted, and the Feishu bot and the channels.
 func (s *Service) tellUser(ix proto.Interaction, push bool) {
+	if s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+		return
+	}
 	s.recordConfirmationNotification(ix)
 	if push && !s.muted(ix.MachineID, ix.SessionID) {
 		s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
@@ -896,7 +906,8 @@ func (s *Service) finished(p *pending) {
 	s.publishSessions(p.ix.MachineID)
 }
 
-// pendingInteractions are the pending interactions, oldest first, with the task each agent works for.
+// pendingInteractions is the authoritative pending inventory for transport and lifecycle operations.
+// Visibility projections must never remove cards from reconnect snapshots.
 func (s *Service) pendingInteractions() []proto.Interaction {
 	out, _ := s.pendingCards()
 	return out
@@ -919,6 +930,44 @@ func (s *Service) pendingCards() ([]proto.Interaction, map[string]bool) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, told
+}
+
+// visiblePendingCards is the ambient projection, never the authoritative transport inventory.
+func (s *Service) visiblePendingCards() ([]proto.Interaction, map[string]bool) {
+	out, told := s.pendingCards()
+	out = slices.DeleteFunc(out, func(ix proto.Interaction) bool {
+		if !s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+			return false
+		}
+		delete(told, ix.ID)
+		return true
+	})
+	return out, told
+}
+
+func (s *Service) visiblePendingInteractions() []proto.Interaction {
+	out, _ := s.visiblePendingCards()
+	return out
+}
+
+// refreshPendingCards replays actionable state after session visibility changes.
+// It neither marks a card as told nor sends pushes or delegates it again. The cards
+// are read under fleet.mu and told through tellCard after it is released: a write
+// that stalls on the hub's connection must not hold up pendingIx or resolve, and
+// tellCard tells a card that ended meanwhile ended again, so none is resurrected.
+func (s *Service) refreshPendingCards() {
+	s.fleet.mu.Lock()
+	replay := make([]proto.Interaction, 0, len(s.fleet.interactions))
+	for _, p := range s.fleet.interactions {
+		if !p.claimed {
+			replay = append(replay, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	sort.Slice(replay, func(i, j int) bool { return replay[i].CreatedAt.Before(replay[j].CreatedAt) })
+	for _, ix := range replay {
+		s.tellCard(s.withTask(ix))
+	}
 }
 
 // pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and

@@ -408,6 +408,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // lazyOverlay started once something that opens it is on screen) and its assistant-readiness words left the first screen:
 // ja 482,722 B to 481,367 B, en 479,634 B to 478,331 B, zh-Hans 480,477 B to 479,146 B, measured in one environment
 // against main 51eb4b6a47. The budget stays.
+// #8578: directory-hidden Agents leave the lists, counts and attention events (lib/sessions.ts directoryVisible,
+// lib/attention.ts) and the Agents page gets its Hidden sessions button; the inspection dialog is a chunk of its own
+// (views/HiddenAgentSessionsDialog.tsx). Merged with main affb08b4d0 and measured in one
+// environment: ja 482,322 B, en 479,225 B, zh-Hans 480,079 B, 361 B of room. The budget stays.
 // #10358: a conversation an extension opened is marked with that extension's own icon and, while the icon is drawn,
 // named after it. The icon and the installed extensions it is picked from are a lazy chunk (ui/OpenerTile.tsx,
 // lib/opener-icons.ts); the first screen keeps OriginMark's check for an opener, the lazy entry, the opener handed to

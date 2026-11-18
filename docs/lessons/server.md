@@ -2690,6 +2690,15 @@ nothing ran the old build after the new one.
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
 
+## Sparse visibility metadata and single-session allocation budgets
+
+Directory visibility (#8578) needs a wire flag without making every `Session` larger. Keep optional flags in
+existing sparse metadata and update the handwritten encoder and its layout hash together. Check both the
+row size and single-session allocation guards: invoking visibility callbacks from a lower-level list decorator
+made its one-row slice escape even after the row size was restored. Apply the annotation at the final list or
+single-row boundary, before folding/counting, and test archive-only rows too. Read persisted supervision before
+hiding; an unavailable task inventory must preserve possible supervision notifications.
+
 ## A new screenshot is not an old resolved exchange (#9124)
 
 Triage reads `[Image: ...]` as text, not the image's contents. Preserve the newest message separately from the
