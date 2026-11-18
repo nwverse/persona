@@ -91,6 +91,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		defer func() { // this start took the ticket: failed, nothing else may fetch its values (secretenv.go)
 			if startErr != nil {
 				n.handoffs().take(execution.SecretTicket, false)
+				startErr = withoutAnswers(startErr) // nor can an answer start it again with them (start.continue)
 			}
 		}()
 	}
@@ -180,7 +181,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
 		// An inherited effort needs no override, which would leave the shared app-server; the record keeps it all the same.
-		runs := n.codexOwnEffort(ctx, argv, cwd, execution)
+		runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
 		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, runs), execution, prompt, ws, tabName, mode)
 	}
 	if work := workAgentKind(launcher, kind); work != "" { // workagent.go
@@ -224,7 +225,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	planThen := planThenOf(mode, execution.PlanThen)
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
-	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
+	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
+	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
 		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).

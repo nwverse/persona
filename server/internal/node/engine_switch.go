@@ -854,7 +854,7 @@ func (n *Node) codexResumeArgv(ctx context.Context, launcher, mode, cwd string, 
 	if argv, err = n.codexReadonlyArgs(launcher, argv, mode); err != nil {
 		return nil, nil, err
 	}
-	e = n.codexOwnEffort(ctx, argv, cwd, e)
+	e = n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, e)
 	if mode == proto.ModeBypass {
 		argv = n.codexBypassArgv(launcher, argv)
 	}
