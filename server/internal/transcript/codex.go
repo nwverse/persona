@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/tokenuse"
 )
 
 // Codex rollouts (~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl) are a different JSONL: every line is
@@ -45,22 +46,11 @@ type codexPayload struct {
 	} `json:"sandbox_policy"`
 	Effort string `json:"effort"`
 	// event_msg
-	Item   *codexItem      `json:"item"`
-	Goal   json.RawMessage `json:"goal"` // thread_goal_updated (goal.go)
-	Reason string          `json:"reason"`
-	Info   *struct {
-		Total struct {
-			OutputTokens int   `json:"output_tokens"`
-			TotalTokens  int64 `json:"total_tokens"`
-		} `json:"total_token_usage"`
-		Last struct {
-			InputTokens       int   `json:"input_tokens"`
-			CachedInputTokens int64 `json:"cached_input_tokens"`
-			OutputTokens      int64 `json:"output_tokens"`
-		} `json:"last_token_usage"`
-		ModelContextWindow int `json:"model_context_window"`
-	} `json:"info"`
-	RateLimits *codexRateLimits `json:"rate_limits"` // token_count: the account's limits as the last response gave them
+	Item       *codexItem          `json:"item"`
+	Goal       json.RawMessage     `json:"goal"` // thread_goal_updated (goal.go)
+	Reason     string              `json:"reason"`
+	Info       *tokenuse.CodexInfo `json:"info"`        // token_count
+	RateLimits *codexRateLimits    `json:"rate_limits"` // token_count: the account's limits as the last response gave them
 }
 
 // codexRateLimits is a token_count's rate_limits (node/usagewindows.go reads the same for the usage windows).
@@ -301,12 +291,11 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 	switch p.Type {
 	case "token_count":
 		if p.Info != nil {
-			meta.ContextTokens, meta.OutputTokens = p.Info.Last.InputTokens, p.Info.Total.OutputTokens
+			meta.ContextTokens, meta.OutputTokens = int(p.Info.Last.Input), int(p.Info.Total.Output)
 			if p.Info.ModelContextWindow > 0 {
 				meta.ContextWindow = p.Info.ModelContextWindow
 			}
-			last := p.Info.Last
-			meta.codexRequest(p.Info.Total.TotalTokens, int64(last.InputTokens), last.CachedInputTokens, last.OutputTokens)
+			meta.codexRequest(p.Info.Total.Total, p.Info.Last)
 		}
 		if p.RateLimits != nil { // none: the provider gave none this time, the last ones stand
 			if until, ok := p.RateLimits.fullUntil(); ok {
@@ -418,10 +407,25 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		for _, c := range it.Content {
 			switch {
 			case c.Type == "text" && strings.TrimSpace(c.Text) != "":
-				parts = append(parts, codexUserText(c.Text))
+				parts = append(parts, c.Text)
 			case c.Type == "local_image" && c.Path != "":
 				images = append(images, strings.TrimPrefix(c.Path, "file://"))
 			}
+		}
+		// Match the envelope before removing other kinds of input metadata or clipping long prompts.
+		if len(parts) == 1 && len(images) == 0 {
+			if prompt, ok := codexHeartbeatPrompt(strings.TrimSpace(parts[0])); ok {
+				u := mk(0, it.ID, "user", proto.KindText)
+				u.Source = &proto.MessageSource{Kind: proto.SourceScheduledTask}
+				u.Text = clip(prompt)
+				if meta.codexUserID == "" {
+					meta.codexUserID = u.ID
+				}
+				return []proto.Item{u}
+			}
+		}
+		for i := range parts {
+			parts[i] = codexUserText(parts[i])
 		}
 		text := strings.TrimSpace(strings.Join(parts, "\n"))
 		items, paseo := paseoInput(func(n int, role, kind string) proto.Item { return mk(n, it.ID, role, kind) }, 0, text)
@@ -453,7 +457,12 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		for _, c := range it.Content {
 			b.WriteString(c.Text)
 		}
-		text := codexThreadLinks(strings.TrimSpace(b.String()))
+		text := strings.TrimSpace(b.String())
+		quiet := false
+		if it.Phase == "final_answer" {
+			text, quiet = codexHeartbeatAnswer(text)
+		}
+		text = codexThreadLinks(text)
 		if text == "" {
 			return nil
 		}
@@ -464,6 +473,7 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		}
 		a := mk(0, it.ID, "assistant", proto.KindText)
 		a.Narration = it.Phase == "commentary"
+		a.CodexHeartbeatQuiet = quiet
 		a.Text = clip(text)
 		return []proto.Item{a}
 	case "Reasoning":
@@ -701,6 +711,7 @@ func attachImages(items []proto.Item, images []string) bool {
 // codexUserText cleans what Codex records as the user's message: ambient context (and Persona's) goes, and the answer to a question
 // Codex asked (request_user_input, stored as JSON) reads as the answer itself ("question: answer", with a full-width colon, when several).
 func codexUserText(s string) string {
+	s = StripInterject(s)
 	s = legacyLarkAgent(strings.TrimSpace(ContextRe.ReplaceAllString(dropTagged(ViewErrorsRe, "<persona-view-errors", codexAmbientRe.ReplaceAllString(s, "")), "")))
 	return strings.TrimSpace(CodexReplyRe.ReplaceAllStringFunc(s, func(block string) string {
 		var replies []struct {

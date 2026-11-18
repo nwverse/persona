@@ -181,8 +181,10 @@ type Entry struct {
 	Relevance  int       `json:"relevance"`
 	Tags       []string  `json:"tags,omitempty"`
 	Updated    time.Time `json:"updated"`
-	Extra      string    `json:"extra,omitempty"`  // projects: short / long · status; chats: dm / group…
-	Source     string    `json:"source,omitempty"` // chats: the source they came from (lark, mail, wechat, github…)
+	Extra      string    `json:"extra,omitempty"` // projects: short / long · status; chats: dm / group…
+	// Source is where it came from: a chat's source (lark, mail, wechat, github…); a document's, meeting's or event's
+	// connector, so an app can show which app a meeting was imported from (#8872).
+	Source string `json:"source,omitempty"`
 	// RecordingKind is a recording's kind: meeting, note or day (#8731), so a list can mark notes and all-day
 	// recordings among meetings. Absent on other kinds, and from a hub before it.
 	RecordingKind string `json:"recording_kind,omitempty"`

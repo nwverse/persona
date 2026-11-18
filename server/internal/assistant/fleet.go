@@ -63,6 +63,9 @@ type fleetBook struct {
 	// never reads what this one writes (#4554).
 	upgradeEvery, upgradeFor time.Duration
 	upgrades                 sync.WaitGroup // active screen-upgrade loops; database-backed fixtures wait during teardown
+	completionRuns           sync.WaitGroup // delayed turn completions already running when a fixture tears down
+	completionTimers         map[*time.Timer]struct{}
+	completionStopped        bool // test teardown only: no new delayed completion after the drain starts
 	// hooked: Persona's hooks run in the session (a hook event came since the manager started).
 	hooked map[[2]string]bool
 	// stopSig: the signature of the reply each session's latest Stop ended its turn with; pushedSig: the one a
@@ -341,6 +344,10 @@ func turnErrorCode(text string) string {
 		return proto.TurnErrorNotLoggedIn
 	case strings.Contains(t, "There's an issue with the selected model"):
 		return proto.TurnErrorModelRoute
+	case assistantwire.ToolSearchRefused(t):
+		// Before the classes below: a gateway's words for it may say "not supported" next to "model". The node resent
+		// the turn once with every tool loaded and starts the conversation that way from now on (#10365).
+		return proto.TurnErrorToolSearchUnsupported
 	}
 	switch classifyLauncherError(t) { // the launcher health checks' classes (launcher_health.go)
 	case errKindUsageLimit:

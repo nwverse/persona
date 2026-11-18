@@ -22,6 +22,7 @@ import (
 
 type Hub struct {
 	passwordLogin passwordLoginState
+	browserLogin  browserLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 
@@ -132,6 +133,8 @@ type Hub struct {
 
 	// askVia replaces fleet.ask in tests that play the manager (waitInteraction).
 	askVia func(context.Context, proto.Interaction) (proto.Resolution, error)
+	// prepared owns hub-side retained settings handles (prepared_settings.go).
+	prepared preparedSettings
 	// reported is what the manager told of the nodes' interactions and the fleet (fleet_link.go).
 	reported fleetCache
 
