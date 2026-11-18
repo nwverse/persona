@@ -472,6 +472,59 @@ struct PendingBubble: View {
     }
 }
 
+/// One of your messages the assistant keeps after it could not go in (`Session.undelivered`, #10194): your bubble as a
+/// failed one looks (`PendingBubble`), with a line under it. Waiting: why, and that it goes by itself; its mark's menu
+/// offers Delete. Given up: why, with Retry and Delete. Shown on every device, from the chat's row.
+struct UndeliveredBubble: View {
+    var message: UndeliveredMessage
+    var retry: () -> Void
+    var discard: () -> Void
+
+    var body: some View {
+        let parsed = ContextRef.parse(message.text)
+        let shown = AttachedFile.parse(parsed.rest).rest
+        let reason = message.error ?? String(localized: "The assistant could not start")
+        VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+            HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                Spacer(minLength: 40)
+                Menu {
+                    if message.gaveUp {
+                        Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                    }
+                    Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
+                } label: {
+                    if message.gaveUp {
+                        ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                    } else {
+                        ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                            .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                            .contentShape(.rect)
+                    }
+                }
+                .accessibilityLabel(message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
+                .accessibilityAction(named: Text("Delete"), discard)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: shown, comments: [], lead: nil,
+                               fold: BubbleFoldKey(id: "undelivered-" + message.id))
+                    .opacity(0.6)
+            }
+            Group {
+                if message.gaveUp {
+                    Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
+                } else {
+                    Text("Not delivered: \(reason). It will be sent automatically.").foregroundStyle(Theme.cautionText)
+                }
+            }
+            .font(Theme.Font.label)
+            .multilineTextAlignment(.trailing)
+            if let n = message.images, n > 0 {
+                Text("Pictures: \(n)").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .transition(.opacity)
+    }
+}
+
 /// Photos that came with one of your messages (from the transcript): square thumbnails on your side, tap to view.
 struct SentPhotos: View {
     @Environment(\.chatImages) private var chatImages
