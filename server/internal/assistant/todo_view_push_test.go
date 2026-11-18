@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The To-dos view stays fresh (todo_view_push.go, #10226 D8): the apps are told to read the list again
+// The To-dos view stays fresh (todo_view_push.go, #10226): the apps are told to read the list again
 // ({"type":"todos"}) when what a row is filed under changes with no write to its to-do, because one of its runs
 // changed or time alone moved it; never for a working run's every step.
 
@@ -230,6 +231,18 @@ func TestTodoViewWakeBounds(t *testing.T) {
 	if at := arm(nil, time.Time{}); !at.IsZero() {
 		t.Errorf("nothing to change: a check at %v", at)
 	}
+	// One due before the to-dos are loaded is looked at again a minute later, not at once over and over.
+	arm(map[string]time.Time{"a": now.Add(-time.Second)}, time.Time{})
+	b.mu.Lock()
+	seq := b.wakeSeq
+	b.mu.Unlock()
+	e.s.todoViewWake(seq)
+	b.mu.Lock()
+	at := b.wakeAt
+	b.mu.Unlock()
+	if !at.Equal(now.Add(todoViewWakeEvery)) {
+		t.Errorf("one due before the to-dos are loaded: a check at %v, want %v", at, now.Add(todoViewWakeEvery))
+	}
 }
 
 // What a row is filed under follows its section, reason, asks, marks and steps, never its line, since,
@@ -261,5 +274,336 @@ func TestTodoClassLeavesOutTheLine(t *testing.T) {
 		if todoClassOf(v) == todoClassOf(base) {
 			t.Errorf("%s: the row is filed alike", name)
 		}
+	}
+}
+
+// workingRun is a run on its way since began, its latest line activity.
+func workingRun(id string, began time.Time, activity string) proto.Session {
+	return proto.Session{SessionID: id, Title: "Hedge trimming", Status: proto.StatusWorking, State: proto.StateWorking,
+		StateSince: began, UpdatedAt: began, Activity: activity}
+}
+
+// A step's run that comes to ask files the to-do it is a step of under Needs you: the apps are told once.
+func TestTodoViewPushFollowsAStep(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		clock := todoViewClock(e)
+		began := time.Now().UTC().Add(-time.Minute)
+		run := workingRun("s1", began, "measuring the hedge")
+		e.sessions("server", run)
+		parent := e.create("Redo the garden").ID
+		step := e.create("Prune the hedge").ID
+		e.must("PATCH", "/api/v1/todos/"+step, `{"part_of":"`+parent+`"}`)
+		e.must("PUT", "/api/v1/todos/"+step+"/agents/server/s1", "")
+		clock.advance(time.Minute)
+		if v := todoViewsNow(e)[parent]; v.Section != assistantwire.TodoListSectionWorking {
+			t.Fatalf("the parent of a working step: %+v", v)
+		}
+		sent := todosSent(e)
+
+		e.sessions("server", asking(run, began.Add(40*time.Second)))
+		clock.advance(todoViewSettle + todosSettle)
+		if n := todosSent(e); n != sent+1 {
+			t.Fatalf("the step's run asking sent %d todos events, want 1", n-sent)
+		}
+		if v := todoViewsNow(e)[parent]; v.Section != assistantwire.TodoListSectionNeedsYou || len(v.Asks) != 1 {
+			t.Fatalf("the parent after its step's run asks: %+v", v)
+		}
+	})
+}
+
+// The owner looking at a working row marks it seen; the run's next step clears the mark, which tells the apps once,
+// and the steps after it nothing.
+func TestTodoViewSeenThenSteps(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		clock := todoViewClock(e)
+		began := time.Now().UTC().Add(-time.Minute)
+		run := workingRun("s1", began, "measuring the hedge")
+		e.sessions("server", run)
+		id := e.create("Prune the hedge").ID
+		e.must("PUT", "/api/v1/todos/"+id+"/agents/server/s1", "")
+		e.must("PUT", "/api/v1/todos/"+id+"/seen", "")
+		clock.advance(time.Minute)
+		if v := todoViewsNow(e)[id]; !v.Seen || v.Section != assistantwire.TodoListSectionWorking {
+			t.Fatalf("a working row the owner looked at: %+v", v)
+		}
+		sent := todosSent(e)
+
+		for i := range 3 {
+			step := run
+			step.Activity, step.UpdatedAt = fmt.Sprintf("trimming row %d", i+1), time.Now().UTC().Add(time.Duration(i+1)*time.Minute)
+			e.sessions("server", step)
+			clock.advance(todoViewSettle + todosSettle)
+			todoViewsNow(e) // as every app does after a push
+		}
+		if n := todosSent(e); n != sent+1 {
+			t.Fatalf("three steps after the owner looked sent %d todos events, want 1", n-sent)
+		}
+		if v := todoViewsNow(e)[id]; v.Seen || v.Section != assistantwire.TodoListSectionWorking {
+			t.Fatalf("after the steps: %+v", v)
+		}
+	})
+}
+
+// A computer no open to-do has a run on sets nothing going, however its sessions change; one with such a run does.
+func TestTodoViewOnlyComputersWithRuns(t *testing.T) {
+	f := newFakeHub().withMachine()
+	e := &todoEnv{t: t, s: newStorelessService(t, f), f: f}
+	clock := todoViewClock(e)
+	armed := func() bool {
+		b := &e.s.tview
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.armed
+	}
+	began := time.Now().UTC().Add(-time.Minute)
+	run := workingRun("s1", began, "measuring the hedge")
+	e.sessions("server", run)
+	id := e.create("Prune the hedge").ID
+	e.must("PUT", "/api/v1/todos/"+id+"/agents/server/s1", "")
+	clock.advance(time.Minute)
+	todoViewsNow(e)
+	sent := todosSent(e)
+
+	e.sessions("laptop", asking(workingRun("s9", began, ""), began.Add(10*time.Second)))
+	if armed() {
+		t.Fatal("a computer no to-do has a run on set the recheck going")
+	}
+	if ids := e.s.todosOnRuns(map[string]bool{"laptop": true}); len(ids) != 0 {
+		t.Fatalf("to-dos on the laptop's runs: %v", ids)
+	}
+	e.sessions("server", asking(run, began.Add(20*time.Second)))
+	if !armed() {
+		t.Fatal("the computer of a linked run did not set the recheck going")
+	}
+	clock.advance(todoViewSettle + todosSettle)
+	if n := todosSent(e); n != sent+1 {
+		t.Fatalf("the linked run asking sent %d todos events, want 1", n-sent)
+	}
+}
+
+// A failed start among the to-dos a recheck reads holds as superseded as it does over the whole list, though the
+// to-do that finished its work is not read: neither the failed start nor its link makes the recheck read every to-do,
+// and it tells the apps of no change that is none.
+func TestTodoViewFailedStepReadsAsTheList(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		clock := todoViewClock(e)
+		began := time.Now().UTC().Add(-time.Minute)
+		run := workingRun("s1", began, "measuring the hedge")
+		e.sessions("server", run)
+		parent := e.create("Redo the garden").ID
+		step := e.create("Prune the hedge").ID
+		failed := e.create("Repot the fern").ID
+		done := e.create("Repot the fern").ID // the same piece of work, finished another way
+		for _, id := range []string{step, failed} {
+			e.must("PATCH", "/api/v1/todos/"+id, `{"part_of":"`+parent+`"}`)
+		}
+		e.must("PUT", "/api/v1/todos/"+step+"/agents/server/s1", "")
+		e.must("PUT", "/api/v1/todos/"+failed+"/agents/server/s2", "")
+		if err := e.s.failTodo(context.Background(), failed, "the launcher is missing"); err != nil {
+			t.Fatal(err)
+		}
+		e.must("PATCH", "/api/v1/todos/"+done, `{"done":true}`)
+		clock.advance(time.Minute)
+		if v := todoViewsNow(e)[failed]; v.Line == nil || v.Line.Key != "superseded" {
+			t.Fatalf("the failed start in the list: %+v", v)
+		}
+		ids := e.s.todosOnRuns(map[string]bool{"server": true})
+		if len(ids) != 3 || !ids[parent] || !ids[step] || !ids[failed] {
+			t.Fatalf("a change on the server reads %v, want the parent and its two steps", ids)
+		}
+		sent := todosSent(e)
+
+		next := run
+		next.Activity, next.UpdatedAt = "trimming the top", began.Add(30*time.Second)
+		e.sessions("server", next)
+		clock.advance(todoViewSettle + todosSettle)
+		if n := todosSent(e); n != sent {
+			t.Fatalf("a step of the working run sent %d todos events, want none", n-sent)
+		}
+	})
+}
+
+// Views worked out from to-dos read before a push change nothing once it went out: a slow read that started before a
+// to-do closed and ends after the apps' fresh read leaves the clock at the end of its Just finished.
+func TestTodoViewOldReadKeepsTheClock(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		clock := todoViewClock(e)
+		id := e.create("Order compost").ID
+		clock.advance(time.Minute)
+		todoViewsNow(e)
+		ctx := context.Background()
+		gen := e.s.todoViewGen()
+		list, err := e.s.listedTodos(ctx, false) // the slow read: it started while the to-do was open
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := e.s.todoProjectionOf(ctx, list, clock.Now())
+
+		e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
+		clock.advance(todosSettle)
+		v := todoViewsNow(e)[id] // the apps' read after the push
+		if v.Section != assistantwire.TodoListSectionJustFinished || v.NextChangeAt.IsZero() {
+			t.Fatalf("a closed to-do nobody saw: %+v", v)
+		}
+		sent := todosSent(e)
+		if e.s.todoViewsSeen(gen, old, nil) {
+			t.Fatal("views from before the push read as a change")
+		}
+		clock.advance(v.NextChangeAt.Sub(clock.Now()) + todosSettle)
+		if n := todosSent(e); n != sent+1 {
+			t.Fatalf("its 24 hours ending after the old read sent %d todos events, want 1", n-sent)
+		}
+	})
+}
+
+// A difference a list read finds (a run whose change reached no recheck) is told once todoViewSettle passed, as one
+// push; a push before that tells it, and nothing more goes out.
+func TestTodoViewReadFoundWaitsTheSettle(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		clock := todoViewClock(e)
+		began := time.Now().UTC().Add(-time.Minute)
+		run := workingRun("s1", began, "measuring the hedge")
+		run.MachineID = "server"
+		e.sessions("server", run)
+		id := e.create("Prune the hedge").ID
+		other := e.create("Sweep the path").ID
+		e.must("PUT", "/api/v1/todos/"+id+"/agents/server/s1", "")
+		clock.advance(time.Minute)
+		todoViewsNow(e)
+		sent := todosSent(e)
+
+		// The node's list changes with no word to the manager: the next read finds the run asking.
+		e.f.setSessions("server", asking(run, began.Add(40*time.Second)))
+		if v := todoViewsNow(e)[id]; v.Section != assistantwire.TodoListSectionNeedsYou {
+			t.Fatalf("the read after the run asks: %+v", v)
+		}
+		clock.advance(todosSettle)
+		if n := todosSent(e); n != sent {
+			t.Fatalf("%d todos events before the settle", n-sent)
+		}
+		clock.advance(todoViewSettle)
+		if n := todosSent(e); n != sent+1 {
+			t.Fatalf("the difference a read found sent %d todos events, want 1", n-sent)
+		}
+
+		// It works again, and a write goes out before the settle: the write's push is the only one.
+		todoViewsNow(e)
+		e.f.setSessions("server", run)
+		todoViewsNow(e)
+		e.must("PATCH", "/api/v1/todos/"+other, `{"title":"Sweep the whole path"}`)
+		clock.advance(todoViewSettle + todosSettle)
+		if n := todosSent(e); n != sent+2 {
+			t.Fatalf("a difference a write's push told sent %d more todos events, want only the write's", n-sent-1)
+		}
+	})
+}
+
+// On the fleet a card that comes to a linked run reaches its to-do's view through the list the apps get
+// (publishList), with no new list from the node: the apps are told once.
+func TestTodoViewPushFollowsACard(t *testing.T) {
+	for _, store := range []string{"memory", "store"} {
+		t.Run(store, func(t *testing.T) {
+			ft := newFleetTest(t)
+			if store == "store" {
+				ft = newFleetTestOn(t, todoTestDB(t))
+			}
+			e := &todoEnv{t: t, s: ft.s, f: ft.f}
+			clock := todoViewClock(e)
+			began := time.Now().UTC().Add(-time.Minute)
+			run := workingRun("s1", began, "measuring the hedge")
+			run.MachineID = "mac"
+			ft.sessions("mac", run)
+			id := e.create("Prune the hedge").ID
+			e.must("PUT", "/api/v1/todos/"+id+"/agents/mac/s1", "")
+			waitFleetOrder(t, ft.s)
+			clock.advance(time.Minute)
+			todoViewsNow(e)
+			clock.advance(time.Minute) // a started manager's first views tell the apps once
+			if v := todoViewsNow(e)[id]; v.Section != assistantwire.TodoListSectionWorking {
+				t.Fatalf("a working run's to-do: %+v", v)
+			}
+			sent := todosSent(e)
+
+			ix := proto.Interaction{ID: "ix_trim", MachineID: "mac", SessionID: "s1", Kind: proto.IxQuestion,
+				Summary: "Trim the top too?", CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+			ft.hold(ix)
+			ft.s.tellApps(ix)
+			clock.advance(todoViewSettle + todosSettle)
+			if n := todosSent(e); n != sent+1 {
+				t.Fatalf("a card on the linked run sent %d todos events, want 1", n-sent)
+			}
+			if v := todoViewsNow(e)[id]; v.Section != assistantwire.TodoListSectionNeedsYou {
+				t.Fatalf("after the card: %+v", v)
+			}
+		})
+	}
+}
+
+// What the apps were told is the manager's memory alone: the first views worked out after Run starts tell them once,
+// since a run may have come to ask while it was away; later reads tell nothing.
+func TestTodoViewFirstViewsAfterStartTell(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		if database != nil {
+			e.create("Order compost")
+			todosTold(t, e.s)
+			e = &todoEnv{t: t, s: newServiceOn(t, e.f, database), f: e.f} // the manager starts again
+		}
+		clock := todoViewClock(e)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		e.s.running.Store(&ctx)
+		sent := todosSent(e)
+
+		todoViewsNow(e)
+		clock.advance(todoViewSettle + todosSettle)
+		if n := todosSent(e); n != sent+1 {
+			t.Fatalf("the first read after the start sent %d todos events, want 1", n-sent)
+		}
+		todoViewsNow(e)
+		clock.advance(todoViewSettle + todosSettle)
+		if n := todosSent(e); n != sent+1 {
+			t.Fatalf("a later read sent %d more todos events", n-sent-1)
+		}
+	})
+}
+
+// Once Run's context ended neither the recheck nor the clock does anything: no list is read and nothing is told.
+func TestTodoViewStopsWithTheService(t *testing.T) {
+	f := newFakeHub().withMachine()
+	e := &todoEnv{t: t, s: newStorelessService(t, f), f: f}
+	clock := todoViewClock(e)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.s.running.Store(&ctx)
+	began := time.Now().UTC().Add(-time.Minute)
+	run := workingRun("s1", began, "measuring the hedge")
+	e.sessions("server", run)
+	closed := e.create("Order compost").ID
+	linked := e.create("Prune the hedge").ID
+	e.must("PUT", "/api/v1/todos/"+linked+"/agents/server/s1", "")
+	e.must("PATCH", "/api/v1/todos/"+closed, `{"done":true}`)
+	clock.advance(time.Minute)
+	todoViewsNow(e)
+	clock.advance(time.Minute) // the first views' push
+	v := todoViewsNow(e)[closed]
+	if v.NextChangeAt.IsZero() {
+		t.Fatalf("a closed to-do nobody saw: %+v", v)
+	}
+	sent := todosSent(e)
+	clock.advance(v.NextChangeAt.Sub(clock.Now()) - 30*time.Minute) // the clock's next check is at its moment
+
+	e.sessions("server", asking(run, began.Add(40*time.Second))) // waits for the settle
+	todoViewsNow(e)                                              // and so does what this read finds
+	cancel()
+	e.sessions("server", asking(run, began.Add(50*time.Second)))
+	clock.advance(time.Hour)
+	if n := todosSent(e); n != sent {
+		t.Fatalf("%d todos events after the service stopped", n-sent)
+	}
+	b := &e.s.tview
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.woke.IsZero() || b.armed {
+		t.Fatalf("the views were looked at after the service stopped: woke %v, armed %v", b.woke, b.armed)
 	}
 }

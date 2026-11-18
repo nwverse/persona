@@ -28,18 +28,17 @@ type todoProjection struct {
 // to-dos the projection reads as open (a failed start included, whose runs still date its last activity), each
 // computer asked once (todoRunSessions).
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
-	return s.todoProjectionRunsOf(ctx, list, now, nil)
+	facts := s.todoFactsOf(ctx, list)
+	return todoProjection{facts: facts, views: projection.Views(facts, now)}
 }
 
-// todoProjectionRunsOf is todoProjectionOf reading the runs of the to-dos whose ids are in runsOf alone (nil: of every
-// to-do); the others read as if their runs were offline, so a view holds only for a to-do in runsOf whose steps all
-// are in it too (todo_view_push.go reads the rest only for how they relate).
-func (s *Service) todoProjectionRunsOf(ctx context.Context, list []listedTodo, now time.Time,
-	runsOf map[string]bool) todoProjection {
+// todoFactsOf are the rows of list as the projection reads them, with their active runs' sessions (todoProjectionOf;
+// todo_view_push.go works out the views of a part of the list from them).
+func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projection.Facts {
 	want := map[string]map[string]bool{} // by computer, the session ids of the open to-dos' active runs
 	for i := range list {
 		t := &list[i]
-		if t.DoneAt != nil && t.StartError == "" || runsOf != nil && !runsOf[t.ID] {
+		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}
 		for _, a := range t.Agents {
@@ -65,22 +64,21 @@ func (s *Service) todoProjectionRunsOf(ctx context.Context, list []listedTodo, n
 		}
 	}
 	loc := s.location(ctx)
-	p := todoProjection{facts: make([]projection.Facts, len(list))}
+	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
-		p.facts[i] = projectionFacts(*t, sessions, loc)
+		facts[i] = projectionFacts(*t, sessions, loc)
 		// A computer that did not answer lists nothing: its runs read as offline, and the to-do gets no Inactive mark.
 		if t.DoneAt == nil || t.StartError != "" {
 			for _, a := range t.Agents {
 				if a.ReleasedAt == nil && a.DismissedAt == nil && failed[a.MachineID] {
-					p.facts[i].Unreached = true
+					facts[i].Unreached = true
 					break
 				}
 			}
 		}
 	}
-	p.views = projection.Views(p.facts, now)
-	return p
+	return facts
 }
 
 // todoRunSessions are those of machine's sessions whose id is in want, each as the apps get it: the node's rows read

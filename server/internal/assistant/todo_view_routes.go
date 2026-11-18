@@ -89,7 +89,7 @@ func (s *Service) viewed(ctx context.Context, list []listedTodo, now time.Time) 
 
 // todosViewed is every to-do as GET /api/v1/todos lists it, each with its view now (the views' clock,
 // todo_view_push.go), and the list's projection. What each row is filed under is held against what the apps were
-// told, and any that reads differently tells them again (todoViewsSeen).
+// told, and any that reads differently tells them again (todoViewsSeen, todoViewDiffers).
 func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, todoProjection, error) {
 	gen := s.todoViewGen() // before the to-dos are read: a push from then on makes these views old
 	list, err := s.listedTodos(ctx, briefs)
@@ -97,7 +97,9 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 		return nil, todoProjection{}, err
 	}
 	p := s.viewed(ctx, list, s.todoViewNow())
-	s.todoViewsSeen(gen, p, true)
+	if s.todoViewsSeen(gen, p, nil) {
+		s.todoViewDiffers()
+	}
 	return list, p, nil
 }
 
