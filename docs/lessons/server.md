@@ -501,10 +501,13 @@ cost is smaller than a broken image. When something has to be listed by hand in 
 
 ## Sharing frontiers and migration lanes (#3604)
 
-- Migration numbers are global across the hub and manager sets, even though their
-  files live in separate directories. Inventory both sets in every worktree;
-  distinct filenames with the same numeric prefix still collide. Renumber only
-  unpublished migrations, never an applied migration or the guard.
+- Hand-picked migration numbers were global across the hub and manager sets, even
+  though their files live in separate directories: distinct filenames with the same
+  prefix collided. New migrations are named by the UTC second they are written
+  (`docs/lessons/workflow.md`), so nobody picks a number, and two files of one second
+  may be one in each set since each records its own part (one file in both sets is
+  still refused); move only an unpublished migration to another second, never an
+  applied migration or the guard.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen
@@ -2711,6 +2714,17 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Moving an element to the front with `slices.Delete` in the same expression (2026-11-19, #10659)
+
+`append([]T{s[i]}, slices.Delete(s, i, i+1)...)` sometimes reads `s[i]` after `Delete` ran. Go doesn't fix the order
+between an index expression and a call in the same expression, and `Delete` clears the slot it frees, so the moved
+element came out as a zero value (a nil func in `link.dialActive`'s route list, which panicked). Copy the element into a variable
+first, then delete and insert.
+
+`golang.org/x/net/http/httpproxy.FromEnvironment` reads `https_proxy` before `HTTPS_PROXY` (lower case first) in the
+version this repository uses. Older notes and reviews often say upper case first. Check the module's source before
+documenting an order.
 
 ## Switching an ssh computer to Persona Link over ssh (#10662)
 
