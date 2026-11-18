@@ -13,11 +13,8 @@ html:not([data-theme=dark]) [data-variant="V1"] { --ink-2: var(--ink-2-solid); }
 /* ---------- list ---------- */
 [data-variant="V1"] .v1-bar { margin-top: 6px; }
 /* All, the chip To-dos lands on, is pinned after the scrolling chips and before the grouping symbol */
-[data-variant="V1"] .k-sbar-trail .k-sbar-chip { flex: none; }
-[data-variant="V1"] .v1-sbar-sep { flex: none; width: .5px; height: 22px; margin: 0 2px; background: var(--card-stroke); }
-[data-variant="V1"].k-web .v1-sbar-sep { height: 16px; }
 /* the web's 360 column fits every chip at the desktop scale with 6-px chip padding */
-[data-variant="V1"].k-web .k-sbar-chip { padding: 0 6px; }
+[data-variant="V1"].k-web .k-sbar-pill { padding: 0 6px; }
 [data-variant="V1"].k-web .k-sbar-trail { gap: 2px; }
 /* the list's title sits on the content edge when no button leads it */
 [data-variant="V1"] .k-nav.is-leading .k-nav-lead:empty + .k-nav-mid .k-tm-btn { margin-left: -6px; }
@@ -27,10 +24,7 @@ html:not([data-theme=dark]) [data-variant="V1"] { --ink-2: var(--ink-2-solid); }
 [data-variant="V1"] .k-sbar-in.is-scrolled.is-overflowing { -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent); }
 /* CapsuleFilterBar's own metrics: 4 between a chip's name and its count; the grouping symbol inside the capsule's
    trailing end, after a 22-pt hairline (E2) */
-[data-variant="V1"] .k-sbar-chip { gap: 4px; }
-[data-variant="V1"] .k-sbar-trail { padding-right: 0; gap: 4px; }
-[data-variant="V1"] .v1-group { width: 40px; height: 44px; border-radius: 22px; display: grid; place-items: center; color: var(--ink-2-solid); }
-[data-variant="V1"].k-web .v1-group { width: 28px; height: 24px; border-radius: 6px; }
+[data-variant="V1"] .v1-group { cursor: pointer; }
 /* the swipe actions are 74 wide each, as iOS draws them; Someday on indigo, white text at 4.5:1 in both themes */
 [data-variant="V1"] .k-tr-sw.is-later { background: var(--hue-indigo); }
 [data-variant="V1"] .k-tr-swipe { width: calc(148px + var(--page-margin)); }
