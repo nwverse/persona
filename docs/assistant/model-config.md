@@ -159,7 +159,12 @@ final text. Nothing reads, copies or re-serves the login (#4220 is a different t
 - **What is sent**: the manager resolves the purpose as always, then sends one `model.run` call to that computer's node
   (`docs/protocol/protocol.md`, "hub ↔ node RPC") with the launcher, the chosen model and effort (empty: the launcher's
   own), the system prompt and the conversation. A single user turn goes as it is; several are rendered as one transcript
-  (`prompts/tools/launcher_run_input.md`). The answer is the run's final text.
+  (`prompts/tools/launcher_run_input.md`). The answer is the run's final text, with the CLI's token counts when it
+  reports them.
+- **Counting**: these runs leave no transcript on the computer, so the manager logs one `model_usage` line per
+  completed purpose call on any route (`api`, `api_via_node`, `cli`): purpose, operation (Inbox event grouping is
+  `inbox_group`), provider, model, result and input / output / cache read / cache write tokens (#10492). A call that
+  never ran (paused, nothing configured) is not logged.
 - **How it runs**: the node runs the launcher as a start does (`personad launch` for a managed one, the login shell's
   function or alias otherwise, with its environment, settings and default model), in a fresh temporary directory that
   is removed afterwards. Claude Code runs as `-p --output-format json --max-turns 1 --no-session-persistence` with
