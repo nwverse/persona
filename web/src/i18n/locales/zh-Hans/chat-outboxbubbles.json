@@ -2,5 +2,13 @@
   "failed": "没发出去：{error}",
   "clear_and_send": "清空并发送",
   "retry": "重试",
-  "delete": "删除"
+  "check": "核对",
+  "checking": "正在核对…",
+  "delete": "删除",
+  "deleted": "消息已删除",
+  "undo": "撤销",
+  "undelivered_waiting": "未送达：{reason}。恢复后会自动发送。",
+  "undelivered_failed": "未送达：{reason}",
+  "undelivered_images": "图片：{count} 张",
+  "undelivered_action_failed": "没有成功：{error}"
 }

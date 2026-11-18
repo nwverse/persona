@@ -1,7 +1,9 @@
 import Foundation
 import HealthKit
 import Testing
+import UIKit
 @testable import Persona
+import PersonaWire
 
 /// The registry is main-actor isolated (the app target defaults to MainActor),
 /// so every test that touches a tool runs on the main actor.
@@ -53,9 +55,14 @@ struct PhoneToolsTests {
         }
     }
 
+    /// Alarms and timers need AlarmKit (iOS 26): before it they are not offered at all (#6730).
+    private static func offered(_ name: String) -> Bool {
+        AlarmsAccess.isSupported || !(name.hasPrefix("phone_alarm") || name.hasPrefix("phone_timer"))
+    }
+
     @Test func coversEveryDataSource() {
         let covered = Set(PhoneToolRegistry.all.map(\.source))
-        for source in PhoneDataSource.allCases {
+        for source in PhoneDataSource.allCases where source != .alarms || AlarmsAccess.isSupported {
             #expect(covered.contains(source), "no tool for data source \(source.rawValue)")
         }
     }
@@ -75,6 +82,8 @@ struct PhoneToolsTests {
             "phone_location_search",
             "phone_health_summary",
             "phone_health_write_sample",
+            "phone_workouts_recent",
+            "phone_workout_detail",
             "phone_photos_recent",
             "phone_photo_get",
             "phone_device_info",
@@ -88,6 +97,7 @@ struct PhoneToolsTests {
             "phone_contacts_update",
             "phone_maps_search_nearby",
             "phone_maps_navigate",
+            "phone_maps_route",
             "phone_alarms_list",
             "phone_alarm_create",
             "phone_timer_start",
@@ -102,12 +112,14 @@ struct PhoneToolsTests {
             "phone_shortcuts_run",
             "phone_media_play",
             "phone_media_control",
+            "phone_music_create_playlist",
+            "phone_music_snapshot",
             "phone_media_open",
             "phone_home_list",
             "phone_home_control",
             "phone_home_run_scene",
         ]
-        for name in expected {
+        for name in expected where Self.offered(name) {
             #expect(names.contains(name), "missing tool \(name)")
         }
     }
@@ -142,6 +154,96 @@ struct PhoneToolsTests {
         reminders.isEnabled = false
         #expect(!PhoneToolRegistry.enabledSpecs(eventKit: (events: .granted, reminders: .granted)).contains { $0.name.hasPrefix("phone_reminders") })
         #expect(PhoneToolRegistry.enabledSpecs(eventKit: (events: .granted, reminders: .granted)).contains { $0.name == "phone_calendar_events" })
+    }
+
+    // MARK: - Not asked yet (#7659)
+
+    /// A source iOS hasn't asked about is offered while it is on, when its first use asks; Health and the iPhone
+    /// integrations only once allowed; a refused one never; one turned off in Settings never.
+    @Test func aSourceNotAskedYetIsOfferedWhenItsFirstUseAsks() {
+        for source in [PhoneDataSource.contacts, .calendar, .reminders, .location, .photos, .notifications] {
+            #expect(source.asksWhenUsed, "\(source) asks the first time a tool uses it")
+            #expect(source.offered(.notDetermined) && source.offered(.granted))
+            #expect(!source.offered(.denied))
+        }
+        for source in [PhoneDataSource.health, .alarms, .media, .home] {
+            #expect(!source.asksWhenUsed, "\(source) asks only from Settings")
+            #expect(!source.offered(.notDetermined) && source.offered(.granted))
+        }
+        let calendar = PhoneDataSource.calendar, reminders = PhoneDataSource.reminders
+        let before = (calendar.isEnabled, reminders.isEnabled)
+        defer { calendar.isEnabled = before.0; reminders.isEnabled = before.1 }
+        calendar.isEnabled = true
+        reminders.isEnabled = true
+        let notAsked = PhoneToolRegistry.enabledSpecs(eventKit: (events: .notDetermined, reminders: .notDetermined)).map(\.name)
+        #expect(notAsked.contains("phone_reminders_list") && notAsked.contains("phone_calendar_events"))
+        #expect(!PhoneToolRegistry.enabledSpecs(eventKit: (events: .denied, reminders: .denied)).contains { $0.name.hasPrefix("phone_reminders") })
+        reminders.isEnabled = false
+        #expect(!PhoneToolRegistry.enabledSpecs(eventKit: (events: .notDetermined, reminders: .notDetermined))
+            .contains { $0.name.hasPrefix("phone_reminders") }, "turned off in Settings, it is neither offered nor asked")
+    }
+
+    /// Calls to a source iOS hasn't asked about share one dialog; refused, each says where to allow it.
+    @Test func theFirstUseAsksOnceAndARefusalSaysWhereToAllowIt() async {
+        let asked = AskCount()
+        let restore = firstUse(status: .notDetermined, inFront: true, answer: .denied, asked: asked)
+        defer { restore() }
+        let first = Task { await PhoneToolRegistry.call(name: "phone_reminders_list", args: .object([:])) { _ in true } }
+        let second = Task { await PhoneToolRegistry.call(name: "phone_reminders_list", args: .object([:])) { _ in true } }
+        for result in [await first.value, await second.value] {
+            #expect(result.isError)
+            #expect(text(of: result.content).contains("iOS 设置 › Persona"))
+        }
+        #expect(asked.count == 1, "calls that arrive together share one dialog")
+    }
+
+    /// iOS can show its dialog only while Persona is in front: otherwise the call says to open Persona and asks nothing.
+    @Test func theFirstUseOutsidePersonaSaysToOpenIt() async {
+        let asked = AskCount()
+        let restore = firstUse(status: .notDetermined, inFront: false, answer: .granted, asked: asked)
+        defer { restore() }
+        let result = await PhoneToolRegistry.call(name: "phone_reminders_list", args: .object([:])) { _ in true }
+        #expect(result.isError)
+        #expect(text(of: result.content).contains("not open on the iPhone"))
+        #expect(asked.count == 0)
+    }
+
+    /// The dialog comes after a write's card: a write the user turned down never asks iOS.
+    @Test func aDeclinedWriteNeverAsks() async {
+        let asked = AskCount()
+        let restore = firstUse(status: .notDetermined, inFront: true, answer: .granted, asked: asked)
+        defer { restore() }
+        let result = await PhoneToolRegistry.call(
+            name: "phone_calendar_create_event",
+            args: .object([
+                "title": .string("Team sync"),
+                "start": .string("2026-10-24T14:00:00+08:00"),
+                "end": .string("2026-10-24T15:00:00+08:00"),
+            ])
+        ) { _ in false }
+        #expect(result.isError)
+        #expect(asked.count == 0)
+    }
+
+    /// Turns calendar and reminders on and replaces what a first use reads and asks; the result puts everything back.
+    private func firstUse(status: PhoneAuthStatus, inFront: Bool, answer: PhoneAuthStatus, asked: AskCount) -> () -> Void {
+        let calendar = PhoneDataSource.calendar, reminders = PhoneDataSource.reminders
+        let before = (calendar.isEnabled, reminders.isEnabled)
+        let saved = (PhoneToolRegistry.accessStatus, PhoneToolRegistry.inFront, PhoneToolRegistry.askAccess)
+        calendar.isEnabled = true
+        reminders.isEnabled = true
+        PhoneToolRegistry.accessStatus = { _ in status }
+        PhoneToolRegistry.inFront = { inFront }
+        PhoneToolRegistry.askAccess = { _ in
+            asked.count += 1
+            try? await Task.sleep(for: .milliseconds(50)) // the dialog is on screen while a second call arrives
+            return answer
+        }
+        return {
+            calendar.isEnabled = before.0
+            reminders.isEnabled = before.1
+            (PhoneToolRegistry.accessStatus, PhoneToolRegistry.inFront, PhoneToolRegistry.askAccess) = saved
+        }
     }
 
     @Test func disabledSourceMeansError() async {
@@ -273,13 +375,14 @@ struct PhoneToolsTests {
             "phone_alarm_cancel",
             "phone_call_start",
             "phone_shortcuts_register",
+            "phone_music_create_playlist",
             "phone_home_control",
             "phone_home_run_scene",
         ])
         for tool in PhoneToolRegistry.all where tool.confirmation != nil {
             #expect(writes.contains(tool.spec.name), "unexpected confirmation on \(tool.spec.name)")
         }
-        for name in writes {
+        for name in writes where Self.offered(name) {
             let tool = PhoneToolRegistry.all.first { $0.spec.name == name }
             #expect(tool?.confirmation != nil, "\(name) changes data and must ask first")
         }
@@ -295,6 +398,29 @@ struct PhoneToolsTests {
             } else {
                 #expect(!options.contains(.cumulativeSum), "\(metric) is discrete: summing it raises in HealthKit")
             }
+        }
+    }
+
+    @Test func nutritionAndRestingEnergyUseDailyTotalsAndTheirPublicUnits() throws {
+        let energy = HKQuantity(unit: .joule(), doubleValue: 418_400)
+        let nutrients = HKQuantity(unit: .gramUnit(with: .milli), doubleValue: 12_500)
+        let metrics: [(String, HKQuantityTypeIdentifier, HKQuantity, Double)] = [
+            ("dietary_energy", .dietaryEnergyConsumed, energy, 100),
+            ("protein", .dietaryProtein, nutrients, 12.5),
+            ("carbs", .dietaryCarbohydrates, nutrients, 12.5),
+            ("fat", .dietaryFatTotal, nutrients, 12.5),
+            ("resting_energy", .basalEnergyBurned, energy, 100),
+        ]
+        let summary = try #require(HealthTool.tools.first { $0.spec.name == "phone_health_summary" })
+        let advertised = try #require(summary.spec.inputSchema["properties"]?["metrics"]?["items"]?["enum"]?.array)
+        for (metric, identifier, sample, expected) in metrics {
+            let actualIdentifier = try #require(HealthTool.quantityIdentifiers[metric])
+            #expect(actualIdentifier == identifier)
+            let type = HKQuantityType(actualIdentifier)
+            #expect(advertised.contains(.string(metric)), "\(metric) must be callable through the hub")
+            #expect(HealthTool.readTypes.contains(type), "\(metric) needs read permission")
+            #expect(HealthTool.statisticsOptions(for: type, metric: metric) == .cumulativeSum)
+            #expect(abs(sample.doubleValue(for: HealthTool.quantityUnit(for: metric)) - expected) < 0.001)
         }
     }
 
@@ -338,7 +464,105 @@ struct PhoneToolsTests {
         #expect(dict["required"] == .array([.string("a")]))
     }
 
+    // MARK: - Clipboard (#4192)
+
+    /// Persona in front: the write lands and answers ok with its length, and the read gives the text back.
+    @Test func clipboardInFrontCopiesAndReads() throws {
+        let board = FakeClipboard()
+        let set = try ClipboardTool.set(.object(["text": .string("héllo")]), board: board, inFront: true)
+        #expect(text(of: set) == JSONValue.object(["ok": .bool(true), "characters": .number(5)]).pretty)
+        #expect(board.changeCount == 1)
+        let get = try ClipboardTool.get(board: board, inFront: true)
+        #expect(text(of: get) == JSONValue.object(["text": .string("héllo"), "characters": .number(5)]).pretty)
+        // Clearing it is still a write that answers ok, though no string is left.
+        let clear = try ClipboardTool.set(.object(["text": .string("")]), board: board, inFront: true)
+        #expect(text(of: clear) == JSONValue.object(["ok": .bool(true), "characters": .number(0)]).pretty)
+    }
+
+    /// Persona in the background (a silent push woke it, or a connection outlived the app on screen): iOS would drop
+    /// the write and read nothing, so neither tool touches the pasteboard and both ask for Persona to be opened,
+    /// rather than answering ok or "empty".
+    @Test func clipboardInBackgroundRefuses() {
+        let board = FakeClipboard(string: "earlier")
+        let set = failure { try ClipboardTool.set(.object(["text": .string("new")]), board: board, inFront: false) }
+        let get = failure { try ClipboardTool.get(board: board, inFront: false) }
+        for message in [set, get] {
+            #expect(message.contains("Persona is not open on the iPhone"))
+            #expect(message.contains("open Persona and try again"))
+        }
+        #expect(board.changeCount == 0 && board.reads == 0)
+        // Bad arguments still say so first: opening Persona would not fix them.
+        let missing = failure { try ClipboardTool.set(.object([:]), board: board, inFront: false) }
+        #expect(missing.contains("text is required"))
+    }
+
+    /// In front, but the write did not land (the change count did not move, or no string is there): a failure, never ok.
+    @Test func clipboardWriteThatDidNotLandFails() {
+        let secret = "tok-8f3a1c"
+        let dropped = FakeClipboard(string: "earlier")
+        dropped.takesWrites = false
+        let message = failure { try ClipboardTool.set(.object(["text": .string(secret)]), board: dropped, inFront: true) }
+        #expect(message.contains("did not reach the iPhone's clipboard"))
+        #expect(!message.contains(secret), "the refusal never quotes the text (it may be a secret read from a file)")
+
+        let emptied = FakeClipboard()
+        emptied.keepsStrings = false // the count moved, yet no string arrived
+        let noString = failure { try ClipboardTool.set(.object(["text": .string(secret)]), board: emptied, inFront: true) }
+        #expect(noString.contains("did not reach the iPhone's clipboard"))
+    }
+
+    /// The real pasteboard does what the check expects: a write by the app in front (the test host) moves `changeCount`
+    /// at once and leaves a string, so a write that landed is never reported as lost.
+    @Test func clipboardCheckPassesOnTheRealPasteboard() throws {
+        let set = try ClipboardTool.set(.object(["text": .string("Persona clipboard check")]), board: UIPasteboard.general, inFront: true)
+        #expect(text(of: set) == JSONValue.object(["ok": .bool(true), "characters": .number(23)]).pretty)
+    }
+
+    /// The model's text of the error a tool call throws, or "" when it did not throw.
+    private func failure(of call: () throws -> [ToolContent]) -> String {
+        do {
+            _ = try call()
+            Issue.record("the call did not fail")
+            return ""
+        } catch {
+            return ToolErrors.describe(error)
+        }
+    }
+
     private func text(of content: [ToolContent]) -> String {
         content.compactMap(\.text).joined(separator: "\n")
     }
+}
+
+/// How many times a test's first use asked iOS (#7659).
+@MainActor private final class AskCount {
+    var count = 0
+}
+
+/// A pasteboard that takes writes like iOS does for the app in front, or drops them (`takesWrites`) or keeps no string
+/// (`keepsStrings`), and counts reads.
+@MainActor private final class FakeClipboard: ClipboardBoard {
+    var takesWrites = true
+    var keepsStrings = true
+    private(set) var changeCount = 0
+    private(set) var reads = 0
+    private var stored: String?
+
+    init(string: String? = nil) {
+        stored = string
+    }
+
+    var string: String? {
+        get {
+            reads += 1
+            return stored
+        }
+        set {
+            guard takesWrites else { return }
+            changeCount += 1
+            stored = keepsStrings ? newValue : nil
+        }
+    }
+
+    var hasStrings: Bool { !(stored ?? "").isEmpty }
 }

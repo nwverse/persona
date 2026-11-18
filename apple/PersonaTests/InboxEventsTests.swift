@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Inbox phase 1 (docs/assistant/inbox.md): the new item fields as the hub sends them (the phase's fixture, every
 /// state), the sections they put an item in, what a row says, where a chain entry goes, and the suggestion's buttons
@@ -24,6 +25,39 @@ struct InboxEventsTests {
     }
 
     private static let base = #""id":"lark:f1:1","source":"lark","kind":"dm","account":"feishu","account_name":"飞书","title":"t","preview":"p","count":1"#
+
+    // MARK: An assistant row's Markdown (#9041)
+
+    private static let assistant = #""id":"assistant:a1","source":"assistant","kind":"assistant_post","account":"assistant","account_name":"助手","title":"每日早报","count":1"#
+
+    /// A hub that keeps the post's Markdown as `body`: the detail draws it, the row's lines are the hub's plain words.
+    @Test func assistantRowDrawsItsBody() throws {
+        let it = try Self.item("{" + Self.assistant + #","preview":"早报 · 周一 结论：上午一节课…","summary":"早报 · 周一 结论：上午一节课。 今天的课 辅导课 10:30","body":"**早报 · 周一**\n结论：上午一节课。\n\n**今天的课**\n- 辅导课 10:30"}"#)
+        #expect(it.body == "**早报 · 周一**\n结论：上午一节课。\n\n**今天的课**\n- 辅导课 10:30")
+        #expect(it.markdownBody == it.body && !it.markdownInSummary)
+        #expect(it.lineSummary == it.summary && it.linePreview == it.preview)
+        #expect(it.repeatsSummary, "a long summary's preview is its first words with an ellipsis: drawn once")
+        #expect(it.onlyTitleAndSummary("每日早报\n" + (it.body ?? "")), "a context of the title and the body adds nothing")
+    }
+
+    /// A row from a hub before #9041: its summary is the Markdown run into one line, drawn as Markdown in the detail and
+    /// without the marks in the list.
+    @Test func olderAssistantRowLosesItsMarksInLines() throws {
+        let raw = "**早报 · 周一** 结论：上午一节课。 **今天的课** - **辅导课：10:30–12:20** - 有小测，不补…"
+        let it = try Self.item("{" + Self.assistant + #","preview":"**早报 · 周一** 结论：上午一节课。 **今天的课** - **辅导…","summary":""# + raw + #""}"#)
+        #expect(it.markdownInSummary && it.markdownBody == raw)
+        #expect(it.lineSummary == "早报 · 周一 结论：上午一节课。 今天的课 辅导课：10:30–12:20 有小测，不补…")
+        #expect(it.linePreview == "早报 · 周一 结论：上午一节课。 今天的课 辅导…")
+        #expect(it.repeatsSummary)
+        #expect(InboxItem.withoutMarks("今天的课 - **辅导课** 本周要交*…") == "今天的课 辅导课 本周要交…", "a mark the cut left alone goes too")
+    }
+
+    /// Any other row keeps its AI summary as it is, dashes and all, and has no Markdown text.
+    @Test func otherRowsKeepTheirSummary() throws {
+        let it = try Self.item("{" + Self.base + #","summary":"10:00 - 11:00 **评审** 改期"}"#)
+        #expect(it.markdownBody == nil && !it.markdownInSummary)
+        #expect(it.lineSummary == "10:00 - 11:00 **评审** 改期" && it.linePreview == "p")
+    }
 
     // MARK: Decoding and sections
 
@@ -162,6 +196,7 @@ struct InboxEventsTests {
     @Test func aChainConversationIsPushedOverTheItemOnTheShell() {
         let model = AppModel()
         model.selectedTab = .chats
+        model.openChat = nil
         let before = model.assistantCurrent
         let key = SessionKey(machineID: "box", sessionID: "h1")
         var pushed: [InboxChatRoute] = []
@@ -195,7 +230,7 @@ struct InboxEventsTests {
         {\(Self.base),"done_at":"2026-11-05T10:00:00Z","done_by":"manager","chain":[
           {"id":"c1","kind":"done","text":"管理者看完，不用管"}]}
         """)
-        #expect(filed.isDone && InboxEventText.doneBy(filed) == "管理者处理了")
+        #expect(filed.isDone && InboxEventText.doneBy(filed) == "助手处理了")
         #expect(InboxEventText.symbol(filed.chain![0]) == Theme.Icon.done && InboxChainTarget.of(filed.chain![0]) == .nothing)
         let mine = try Self.item("{\(Self.base),\"done_at\":\"2026-11-05T10:00:00Z\",\"done_by\":\"user\"}")
         #expect(InboxEventText.doneBy(mine) == nil)

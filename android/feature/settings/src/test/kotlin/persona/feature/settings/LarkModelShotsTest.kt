@@ -25,7 +25,8 @@ import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import java.io.File
 
-/** Real Compose editor captures with made-up data, every style in light and dark. */
+/** Real Compose editor captures with made-up data, every style in light and dark, for each use of Agents the user can
+ *  set apart (Lark /agent, the AI twin). */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w400dp-h1400dp-xhdpi")
@@ -37,8 +38,9 @@ class LarkModelShotsTest {
         var dark by mutableStateOf(false)
         var separate by mutableStateOf(false)
         var run by mutableIntStateOf(0)
+        var shown by mutableStateOf("lark.agent" to "Lark /agent")
         val providers = listOf(ModelProvider("launcher.demo", "Demo provider", model = "claude-opus-5-5"))
-        fun purpose() = ModelPurpose("lark.agent", "Lark /agent", parent = "agent.new",
+        fun purpose() = ModelPurpose(shown.first, shown.second, parent = "agent.new",
             override = if (separate) ModelBinding("launcher.demo", "claude-opus-5-5", "high") else ModelBinding(),
             effective = ModelBinding("launcher.demo", "claude-opus-5-5", "high"), revision = if (separate) 1 else 2,
             inheritedFrom = if (separate) null else "Agents", fields = listOf("provider", "model", "effort"))
@@ -52,18 +54,19 @@ class LarkModelShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 key(run) {
                     Box(Modifier.testTag("shot").width(400.dp).height(1200.dp).background(PersonaTheme.palette.background)) {
-                        ModelPurposePage(api, "lark.agent", onBack = {})
+                        ModelPurposePage(api, shown.first, onBack = {})
                     }
                 }
             }
         }
         val out = File(System.getProperty("persona.shots") ?: "build/lark-model-shots").also { it.mkdirs() }
-        for (look in AppStyle.entries) for (night in listOf(false, true)) for (override in listOf(false, true)) {
-            style = look; dark = night; separate = override; run++
+        val uses = listOf("lark.agent" to "Lark /agent", "inbox.agent" to "AI twin runs")
+        for (child in uses) for (look in AppStyle.entries) for (night in listOf(false, true)) for (override in listOf(false, true)) {
+            shown = child; style = look; dark = night; separate = override; run++
             rule.waitForIdle()
             assertTrue(rule.onAllNodesWithText(if (override) "Separately configured" else "Follow Agents").fetchSemanticsNodes().isNotEmpty())
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
-            File(out, "lark-${look.name.lowercase()}-${if (night) "dark" else "light"}-${if (override) "separate" else "follow"}.png")
+            File(out, "${child.first.substringBefore('.')}-${look.name.lowercase()}-${if (night) "dark" else "light"}-${if (override) "separate" else "follow"}.png")
                 .outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }

@@ -3,10 +3,12 @@ package assistant
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -16,18 +18,21 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // "Test connection" / "Fetch models" for a provider being added or edited (#2455, docs/integrations/launchers.md): the manager itself talks to the
 // gateway. POST /api/v1/launchers/test sends a short request using the configured protocol;
 // POST /api/v1/launchers/discover reads model pages and fills in metadata from the built-in catalog.
-// Neither ever puts the key or a header value in what it answers.
+// Neither ever puts the key or a header value in what it answers. A probe sends the credential header a launch would
+// send (probeTarget's auth); "auto" finds it and says which one the gateway took (#5329).
 
 // probeTimeout bounds one request to the gateway (a var for the tests).
 var probeTimeout = 30 * time.Second
 
-// probeInput is the provider to talk to: a stored one by name, what the request gives overriding it.
+// probeInput is the provider to talk to: a stored one by name, what the request gives overriding it. Auth is one of
+// the probeAuth* methods; "" leaves the choice to probeTarget.
 type probeInput struct {
 	Name    string  `json:"name"`
 	API     string  `json:"api"`
@@ -36,17 +41,56 @@ type probeInput struct {
 	APIKey  string  `json:"api_key"`
 	Headers *string `json:"headers"`
 	Model   string  `json:"model"`
+	// Nil follows the saved default; an explicit empty string tests clearing it.
+	Effort *string `json:"effort"`
 	// Preset fills in the address and the model left empty (GET /api/v1/launchers/presets), so a key alone is tested.
 	Preset string `json:"preset"`
+	// ViaMachine: the computer the requests go through (models_via.go); nil keeps the stored one, "" this manager.
+	ViaMachine *string `json:"via_machine"`
+	// Agent: the agent the provider runs as the form has it (claude, codex, …; "" for a direct API connection), so
+	// discovery asks a gateway's capability report about the protocol it goes on (capabilityProtocol); nil (an app
+	// that doesn't send it) keeps a stored provider's own.
+	Agent *string `json:"agent"`
+}
+
+// The credential header(s) a probe sends (probeTarget.auth). A request naming none ("") gets the stored provider's
+// method, else the preset's, else both headers (a client from before auth was read).
+const (
+	probeAuthBoth   = ""        // none named: both x-api-key and Authorization: Bearer
+	probeAuthAPIKey = "api_key" // x-api-key only
+	probeAuthBearer = "bearer"  // Authorization: Bearer only
+	probeAuthAuto   = "auto"    // Bearer, then x-api-key when the gateway refuses the key (send)
+)
+
+// launchAuth is the header a provider stored with auth launches with: the predicate personad launch uses
+// (proto.ManagedLauncher.BearerAuth), so a probe sends what a launch sets.
+func launchAuth(auth string) string {
+	if (proto.ManagedLauncher{Auth: auth}).BearerAuth() {
+		return probeAuthBearer
+	}
+	return probeAuthAPIKey
 }
 
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
-	base, key, headers, model, proxy, noProxy, api, kind string
+	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
+	models                                                            []proto.ProviderModel
+	// agent is the agent the request names, else a stored provider's (AgentType); "" for neither.
+	agent string
+	// through sends the requests through via's node (models_via.go).
+	through http.RoundTripper
+	// auth is the credential header(s) the requests send (probeAuth*); send settles auto on the first request.
+	auth string
 }
 
 func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, error) {
 	var t probeTarget
+	switch in.Auth {
+	case probeAuthBoth, probeAuthAPIKey, probeAuthBearer, probeAuthAuto:
+	default:
+		return t, i18n.Err("assistant-models_launchers.err_auth")
+	}
+	auth := in.Auth
 	if in.Name != "" {
 		list := s.storedLaunchers(ctx)
 		i := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == in.Name })
@@ -54,22 +98,35 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 			return t, i18n.Err("assistant-models_probe.err_no_provider", i18n.Args{"name": in.Name})
 		}
 		l := list[i]
-		key, err := s.openKey(l.KeySealed)
+		key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 		if err != nil {
+			if _, ref := s.keyReference(l.KeySealed); ref {
+				return t, err // the provider extension's words
+			}
 			return t, i18n.Err("assistant-models_probe.err_open_key")
 		}
 		headers, err := s.openKey(l.HeadersSealed)
 		if err != nil {
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
-		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind}
+		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine,
+			models: l.Models, agent: l.AgentType()}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
+		}
+		// None named: the stored one. Codex and Antigravity launch with their own key variables (OPENAI_API_KEY,
+		// GEMINI_API_KEY; node managedEnv), which auth does not choose, so they keep both headers whatever a client
+		// names (the iOS and Android editors send the stored auth for every provider).
+		if a := l.AgentType(); a == "codex" || a == "agy" {
+			auth = probeAuthBoth
+		} else if auth == "" {
+			auth = launchAuth(l.Auth)
 		}
 	}
 	if b := strings.TrimSpace(in.BaseURL); b != "" {
 		// The stored key and headers only go to the stored gateway: another address gets just what the request brings.
-		if in.Name != "" && strings.TrimRight(b, "/") != strings.TrimRight(strings.TrimSpace(t.base), "/") {
+		// A trailing /v1 is the same gateway (saving drops it from a Messages base); the host never differs.
+		if in.Name != "" && proto.MessagesBaseURL(b) != proto.MessagesBaseURL(t.base) {
 			t.key, t.headers = "", ""
 		}
 		t.base = b
@@ -80,8 +137,17 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	if in.Headers != nil {
 		t.headers = *in.Headers
 	}
+	if in.ViaMachine != nil {
+		t.via = strings.TrimSpace(*in.ViaMachine)
+	}
 	if m := strings.TrimSpace(in.Model); m != "" {
 		t.model = m
+	}
+	if in.Effort != nil {
+		t.effort = strings.TrimSpace(*in.Effort)
+	}
+	if in.Agent != nil {
+		t.agent = strings.TrimSpace(*in.Agent)
 	}
 	if in.Preset != "" {
 		pr, ok := s.presetByID(ctx, in.Preset)
@@ -103,6 +169,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if t.api == "" {
 			t.api = pr.API
 		}
+		if auth == "" { // none named, nothing stored: the preset's
+			auth = launchAuth(pr.Auth) // saving from the preset without auth stores the preset's (presetFill)
+		}
 	}
 	if in.API != "" {
 		t.api = in.API
@@ -118,8 +187,16 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	if err := checkAPITransport(t.kind, t.api, t.proxy, t.noProxy, strings.TrimSpace(t.headers) != ""); err != nil {
 		return t, err
 	}
-	// Both credential headers go anyway (cindy's buildProbeRequest), so Auth only tidies a pasted "Bearer …".
+	// Responses and Chat Completions calls send Bearer alone (ai.respond, ai.chatCompletions), whatever auth says. A
+	// client naming no method, no stored provider and no preset gets both headers, as before auth was read.
+	t.auth = auth
+	if !messagesAPI(t.api) {
+		t.auth = probeAuthBearer
+	}
 	t.key = strings.TrimSpace(strings.TrimPrefix(t.key, "Bearer "))
+	if t.key == "" && t.auth == probeAuthAuto {
+		t.auth = probeAuthBoth // no key, no header: nothing to find
+	}
 	if err := checkGateway(t.base); err != nil {
 		return t, err
 	}
@@ -127,11 +204,21 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		return t, err
 	}
 	t.base = strings.TrimRight(strings.TrimSpace(t.base), "/")
+	if t.via != "" {
+		t.through = viaNode{s: s, machine: t.via}
+	}
+	if t.api == "chat" {
+		t.effort = chatEffortForModel(t.models, t.model, t.effort)
+	}
 	return t, nil
 }
 
-// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled.
+// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled. A Messages base is read as the node hands it
+// to Claude Code (proto.MessagesBaseURL), so a test passes for the address Agents will call.
 func (t probeTarget) endpoint(path string) string {
+	if messagesAPI(t.api) {
+		return proto.MessagesBaseURL(t.base) + "/v1/" + path
+	}
 	if strings.HasSuffix(t.base, "/v1") {
 		return t.base + "/" + path
 	}
@@ -154,15 +241,65 @@ func (t probeTarget) modelsEndpoint() string {
 	return t.endpoint("models")
 }
 
-// do sends one request with the custom headers first, then the version and both credential headers.
-func (t probeTarget) do(ctx context.Context, method, endpoint string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+// send sends one request under t.auth. Under auto it goes with Bearer and, when the gateway refuses the key, once
+// more with x-api-key (the body is bytes so it can go twice); t then keeps the header of the request answered, so
+// later requests (the next model page) send that one alone. When both are refused, the x-api-key answer stands,
+// except a 401 after Bearer's 403: the gateway knew the Bearer key and only forbade something, which says more than a
+// header it does not read.
+func (t *probeTarget) send(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
+	if t.auth != probeAuthAuto {
+		return t.do(ctx, method, endpoint, body)
+	}
+	t.auth = probeAuthBearer
+	res, err := t.do(ctx, method, endpoint, body)
+	if err != nil || !t.keyRefused(res) {
+		return res, err
+	}
+	first := res // its body already read into memory by keyRefused
+	t.auth = probeAuthAPIKey
+	res, err = t.do(ctx, method, endpoint, body)
+	if err == nil && first.StatusCode == http.StatusForbidden && res.StatusCode == http.StatusUnauthorized {
+		res.Body.Close()
+		t.auth = probeAuthBearer
+		return first, nil
+	}
+	first.Body.Close()
+	return res, err
+}
+
+// credentialRefused: the gateway turned the key down, a 401 or a 403 other than Anthropic's region block (which
+// comes before the key is looked at, so the other header would fare no better). failure calls it code "auth".
+func credentialRefused(status int, raw []byte, anthropic bool) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden && !regionBlocked(raw, anthropic)
+}
+
+// keyRefused: res is credentialRefused. A 401 / 403's body is read to tell (which also lets the retry reuse the
+// connection) and put back for failure.
+func (t probeTarget) keyRefused(res *http.Response) bool {
+	if res.StatusCode != http.StatusUnauthorized && res.StatusCode != http.StatusForbidden {
+		return false
+	}
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	res.Body.Close()
+	res.Body = io.NopCloser(bytes.NewReader(raw))
+	return credentialRefused(res.StatusCode, raw, t.atAnthropic())
+}
+
+// do sends one request with the custom headers first, then the version and the credential header(s) t.auth names
+// (send resolves auto before calling it).
+func (t probeTarget) do(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		return nil, err
 	}
 	for _, hd := range parseHeaders(t.headers) {
 		req.Header.Set(hd[0], hd[1])
 	}
+	modelhttp.SetDefaultUserAgent(req.Header)
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
@@ -173,8 +310,12 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body io.Re
 		}
 	}
 	if t.key != "" {
-		req.Header.Set("x-api-key", t.key)
-		req.Header.Set("authorization", "Bearer "+t.key)
+		if t.auth != probeAuthBearer {
+			req.Header.Set("x-api-key", t.key)
+		}
+		if t.auth != probeAuthAPIKey {
+			req.Header.Set("authorization", "Bearer "+t.key)
+		}
 	}
 	// A redirect is answered as is, never followed: Go keeps x-api-key and the custom headers on a redirect to another
 	// host, and the key must only go to the gateway asked.
@@ -187,6 +328,9 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body io.Re
 			transport.Proxy = http.ProxyURL(u)
 		}
 		client.Transport = transport
+	}
+	if t.through != nil {
+		client.Transport = t.through
 	}
 	return client.Do(req)
 }
@@ -231,7 +375,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	l := i18n.From(ctx)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-			return pt(l, "timeout", i18n.Args{"seconds": int(probeTimeout / time.Second)}), ""
+			return pt(l, "timeout", i18n.Args{"seconds": int(probeTimeout / time.Second)}), "timeout"
 		}
 		var uerr *url.Error
 		if errors.As(err, &uerr) {
@@ -246,23 +390,33 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	}
 	said := gatewayMessage(raw)
 	var head string
-	switch res.StatusCode {
-	case http.StatusUnauthorized:
-		head = pt(l, "status_401")
+	if (res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusNotFound) &&
+		ai.FailureKindFor(res.StatusCode, raw) == ai.FailureModelUnavailable {
+		head = pt(l, "status_model_not_found")
+		code = "model_not_found"
+	} else {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			head = pt(l, "status_401")
+		case http.StatusForbidden:
+			head = pt(l, "status_403")
+		case http.StatusPaymentRequired:
+			head = pt(l, "status_402")
+			code = "quota_exhausted"
+		case http.StatusNotFound:
+			head = pt(l, "status_404")
+			code = "not_found"
+		case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
+			head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
+			code = "wrong_protocol"
+		case http.StatusTooManyRequests:
+			head = pt(l, "status_429")
+		default:
+			head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+		}
+	}
+	if credentialRefused(res.StatusCode, raw, t.atAnthropic()) {
 		code = "auth"
-	case http.StatusForbidden:
-		head = pt(l, "status_403")
-		code = "auth"
-	case http.StatusNotFound:
-		head = pt(l, "status_404")
-		code = "not_found"
-	case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
-		head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
-		code = "wrong_protocol"
-	case http.StatusTooManyRequests:
-		head = pt(l, "status_429")
-	default:
-		head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
 	}
 	if said != "" {
 		head = pt(l, "said", i18n.Args{"head": head, "said": said})
@@ -272,8 +426,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 
 // atAnthropic: the target is Anthropic's own API (not a relay or another vendor).
 func (t probeTarget) atAnthropic() bool {
-	u, err := url.Parse(strings.TrimSpace(t.base))
-	return err == nil && strings.EqualFold(u.Hostname(), "api.anthropic.com")
+	return proto.AnthropicAPI(t.base)
 }
 
 // regionBlocked: a 403 body is Anthropic's region block, {"type":"error","error":{"type":"forbidden","message":
@@ -307,8 +460,9 @@ func regionOpenVendors(l i18n.Lang) string {
 	return strings.Join(names, pt(l, "list_sep"))
 }
 
-// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":"…"}, {"message"}), or
-// the start of the body.
+// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":{"error":{"message"}}},
+// {"error":{"error":"…"}}, {"error":"…"}, {"message"}), or the start of the body. Like the classifier, it reads at most
+// error.error.
 func gatewayMessage(raw []byte) string {
 	var body struct {
 		Error   json.RawMessage `json:"error"`
@@ -316,12 +470,26 @@ func gatewayMessage(raw []byte) string {
 	}
 	if json.Unmarshal(raw, &body) == nil {
 		var e struct {
-			Message string `json:"message"`
+			Message string          `json:"message"`
+			Error   json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(body.Error, &e) == nil {
+			var deeper struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(e.Error, &deeper) == nil && deeper.Message != "" {
+				return deeper.Message
+			}
+			var deeperText string
+			if json.Unmarshal(e.Error, &deeperText) == nil && deeperText != "" {
+				return deeperText
+			}
+			if e.Message != "" {
+				return e.Message
+			}
 		}
 		var s string
 		switch {
-		case json.Unmarshal(body.Error, &e) == nil && e.Message != "":
-			return e.Message
 		case json.Unmarshal(body.Error, &s) == nil && s != "":
 			return s
 		case body.Message != "":
@@ -358,20 +526,50 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
-	body, _ := json.Marshal(payload)
+	if t.api == "chat" && ai.OmitChatEffort(t.base, t.key, t.model, t.via, t.effort) {
+		t.effort = ""
+	}
+	if !ai.ApplyReasoningEffort(payload, t.api, t.model, t.effort) {
+		out["error"] = i18n.T(i18n.From(ctx), "assistant-models.err_effort_unsupported")
+		out["code"] = "unsupported_effort"
+		return out
+	}
 	started := time.Now()
-	res, err := t.do(ctx, http.MethodPost, t.endpoint(path), bytes.NewReader(body))
-	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
+	auto := t.auth == probeAuthAuto
+	var res *http.Response
+	renamedTokens, droppedEffort := false, false
+	// A compatibility attempt changes the rejected request; X-Should-Retry: false only suppresses resending it unchanged.
+	for {
+		body, _ := json.Marshal(payload)
+		res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
+		if err != nil || t.api != "chat" || res.StatusCode != http.StatusBadRequest {
+			break
+		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && ai.ChatRequiresCompletionTokens(raw) {
+		// Recognized machine codes win over compatibility wording and keep their original response for failure().
+		if ai.HasRecognizedErrorCode(raw) {
+			res.Body = io.NopCloser(bytes.NewReader(raw))
+			break
+		}
+		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
+		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
+		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
+			ai.RememberChatEffortRejection(t.base, t.key, t.model, t.via, offValueRejected)
+			droppedEffort = true
+			delete(payload, "reasoning_effort")
+			t.effort = "" // the answer did not verify the requested effort
+			s.logf("assistant: chat connection test: gateway rejected reasoning_effort; retrying once without it")
+			continue
+		}
+		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256
-			body, _ = json.Marshal(payload)
-			res, err = t.do(ctx, http.MethodPost, t.endpoint(path), bytes.NewReader(body))
-		} else {
-			res.Body = io.NopCloser(bytes.NewReader(raw))
+			continue
 		}
+		res.Body = io.NopCloser(bytes.NewReader(raw))
+		break
 	}
 	if err != nil || res.StatusCode/100 != 2 {
 		msg, code := t.failure(ctx, res, err)
@@ -398,6 +596,12 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	}
 	if res != nil {
 		res.Body.Close()
+	}
+	if out["ok"] == true && auto {
+		out["auth"] = t.auth // the header the gateway took
+	}
+	if out["ok"] == true {
+		out["effort"] = t.effort
 	}
 	out["ms"] = int(time.Since(started).Milliseconds())
 	return out
@@ -489,12 +693,17 @@ func chatProbeCompleted(body io.Reader) bool {
 	return hasText && finished
 }
 
-// providerDiscover reads the provider's model-list endpoint, its models filled in from the catalog.
+// providerDiscover reads the provider's model-list endpoint and, when the gateway has one, its capability report
+// (applyCapabilities), its models filled in from the catalog.
 func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[string]any {
 	models := []proto.ProviderModel{}
+	guessed := map[string]bool{} // models whose "no thinking level" is only a guess (guessNoEffort)
 	enriched := func() []proto.ProviderModel {
 		out := make([]proto.ProviderModel, len(models))
 		for i, m := range models {
+			if guessed[m.ID] {
+				m = guessNoEffort(m)
+			}
 			out[i] = enrichDiscoveredModel(m)
 		}
 		return out
@@ -511,6 +720,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		msg, code := t.failure(ctx, res, err)
 		if err == nil && res != nil && res.StatusCode == http.StatusNotFound {
 			msg = pt(i18n.From(ctx), "models_not_found")
+			code = "not_found" // a model-list endpoint is missing, not the model used by a connection test
 		}
 		out := fail(msg)
 		if code != "" {
@@ -528,7 +738,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		if len(query) > 0 {
 			endpoint += "?" + query.Encode()
 		}
-		res, err := t.do(ctx, http.MethodGet, endpoint, nil)
+		res, err := t.send(ctx, http.MethodGet, endpoint, nil)
 		if err != nil || res.StatusCode/100 != 2 {
 			out := failed(res, err)
 			if res != nil {
@@ -541,7 +751,8 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		if err != nil {
 			return failed(nil, err)
 		}
-		listed, ok := parseModelsList(raw)
+		listed, guesses, ok := parseModelsList(raw)
+		maps.Copy(guessed, guesses)
 		if !ok {
 			return fail(pt(i18n.From(ctx), "models_unreadable"))
 		}
@@ -624,6 +835,8 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		case meta.HasMore:
 			return fail(pt(i18n.From(ctx), "models_pagination"))
 		default:
+			models = t.applyCapabilities(ctx, models, guessed)
+			// no auth: a model list may answer without looking at the key, so only the test says what a launch needs
 			return map[string]any{"models": enriched()}
 		}
 		cursor := query.Encode()
@@ -643,12 +856,14 @@ func mergeDiscoveredMetadata(first, next proto.ProviderModel) proto.ProviderMode
 	if first.ContextWindow == 0 {
 		first.ContextWindow = next.ContextWindow
 	}
-	return first
+	return mergeModelMeta(first, next)
 }
 
 // enrichDiscoveredModel prefers an exact catalog window and keeps the server's other metadata.
-// A window inherited from an earlier generation only fills a gap; a window the server reported wins.
+// A window inherited from an earlier generation only fills a gap; a window the server reported wins, and so do the
+// thinking levels it reported (settleDiscoveredEfforts), its output limit and what it takes.
 func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
+	m = settleDiscoveredEfforts(m)
 	if c, ok := catalogModel(m.ID); ok && c.InheritedFrom == "" && c.ContextWindow > 0 {
 		m.ContextWindow = c.ContextWindow
 	}
@@ -656,8 +871,10 @@ func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
 }
 
 // parseModelsList reads the three shapes of a model list (cindy's parseModelsListResponse): {"data":[…]},
-// {"models":[…]} and a bare array, of objects or of id strings; duplicates dropped, order kept.
-func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
+// {"models":[…]} and a bare array, of objects or of id strings; duplicates dropped, order kept, and entries the list
+// marks as no chat model left out. An object's other metadata is read in the gateway's own words (readModelMeta),
+// which enrichDiscoveredModel settles.
+func parseModelsList(raw []byte) (models []proto.ProviderModel, guessed map[string]bool, ok bool) {
 	var list []json.RawMessage
 	if json.Unmarshal(raw, &list) != nil {
 		var wrapped struct {
@@ -665,7 +882,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			Models []json.RawMessage `json:"models"`
 		}
 		if json.Unmarshal(raw, &wrapped) != nil {
-			return nil, false
+			return nil, nil, false
 		}
 		switch {
 		case wrapped.Data != nil:
@@ -673,7 +890,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 		case wrapped.Models != nil:
 			list = wrapped.Models
 		default:
-			return nil, false
+			return nil, nil, false
 		}
 	}
 	var out []proto.ProviderModel
@@ -686,37 +903,25 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			if json.Unmarshal(item, &fields) != nil {
 				continue
 			}
-			str := func(k string) string {
-				var s string
-				_ = json.Unmarshal(fields[k], &s)
-				return strings.TrimSpace(s)
-			}
-			num := func(k string) int {
-				var f float64
-				if json.Unmarshal(fields[k], &f) != nil || f <= 0 || f > 1e9 {
-					return 0
-				}
-				return int(f)
-			}
-			for _, k := range []string{"id", "slug", "key", "model_name", "model_id"} {
-				if id = str(k); id != "" {
-					break
-				}
-			}
+			id = cmp.Or(rawString(fields["id"]), rawString(fields["slug"]), rawString(fields["key"]), rawString(fields["model_name"]),
+				rawString(fields["model_id"]))
 			if id == "" {
 				continue
 			}
-			m.Name = str("display_name")
-			if m.Name == "" {
-				m.Name = str("name")
-			}
-			if m.Name == id {
+			if m.Name = cmp.Or(rawString(fields["display_name"]), rawString(fields["name"])); m.Name == id {
 				m.Name = ""
 			}
-			for _, k := range []string{"max_model_len", "context_length", "context_window", "max_context_length", "max_input_tokens"} {
-				if m.ContextWindow = num(k); m.ContextWindow != 0 {
-					break
+			m.ContextWindow = firstTokens(fields["max_model_len"], fields["context_length"], fields["context_window"],
+				fields["max_context_length"], fields["max_input_tokens"])
+			chat, guess := readModelMeta(fields, &m)
+			if !chat {
+				continue
+			}
+			if guess {
+				if guessed == nil {
+					guessed = map[string]bool{}
 				}
+				guessed[strings.TrimSpace(id)] = true
 			}
 		}
 		id = strings.TrimSpace(id)
@@ -731,7 +936,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 		seen[id] = len(out)
 		out = append(out, m)
 	}
-	return out, true
+	return out, guessed, true
 }
 
 func (s *Service) providerProbeRoutes() {

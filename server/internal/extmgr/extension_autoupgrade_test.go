@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -140,11 +141,19 @@ func editManifest(t *testing.T, dir string, f func(m map[string]any)) {
 
 // upgradeHub is a hub with the market mk registered and example-ui 1.0.0 installed from it.
 func upgradeHub(t *testing.T) (h *Manager, mux http.Handler, phone string, mk *upgradeMarket, dir, mid string) {
+	return upgradeHubWith(t, nil)
+}
+
+// upgradeHubWith is upgradeHub with change made to example-ui's manifest before it is published and installed.
+func upgradeHubWith(t *testing.T, change func(m map[string]any)) (h *Manager, mux http.Handler, phone string, mk *upgradeMarket, dir, mid string) {
 	h, phone, _ = marketDevices(t)
 	mux = h.routes()
 	mk = newUpgradeMarket(t)
 	h.extensions.markets.client = mk.srv.Client()
 	dir = uiPackage(t)
+	if change != nil {
+		editManifest(t, dir, change)
+	}
 	mk.publish(dir)
 	code, out := call(t, mux, "POST", "/api/v1/plugins/-/markets", phone, fmt.Sprintf(`{"spec": %q}`, mk.srv.URL+"/plugins/"))
 	if code != 200 {
@@ -800,7 +809,7 @@ func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
 
 func TestPrintUpgrades(t *testing.T) {
 	var b strings.Builder
-	printUpgrades(&b, upgradesView{Auto: true, Upgrades: []ExtensionUpgrade{
+	printUpgrades(i18n.ZhHans, &b, upgradesView{Auto: true, Upgrades: []ExtensionUpgrade{
 		{ID: "example-a", From: "1.0.0", To: "1.1.0", State: upgradeWaitingIdle, Detail: "扩展正在用"},
 		{ID: "example-b", Market: "m1", From: "0.6.0", To: "0.7.0", State: upgradeNeedsConsent,
 			AddedPermissions: []extension.PermissionLine{{Title: "访问更多网络", Detail: "api.example.com"}}},
@@ -815,17 +824,41 @@ func TestPrintUpgrades(t *testing.T) {
 	}
 	// A rename: the command names the ID its market lists it under, and the line says the ID changes (#2511).
 	b.Reset()
-	printUpgrades(&b, upgradesView{Auto: true, Upgrades: []ExtensionUpgrade{{ID: "old-name", Market: "m1", From: "1.0.0", To: "1.1.0",
+	printUpgrades(i18n.ZhHans, &b, upgradesView{Auto: true, Upgrades: []ExtensionUpgrade{{ID: "old-name", Market: "m1", From: "1.0.0", To: "1.1.0",
 		State: upgradeNeedsConsent, RenameFrom: "old-name", RenameTo: "new-name"}}})
 	out = b.String()
 	if !strings.Contains(out, "market:m1/new-name") || strings.Contains(out, "market:m1/old-name") ||
-		!strings.Contains(out, i18n.T(i18n.Default, "extension-identity.confirmation", i18n.Args{"from": "old-name", "to": "new-name"})) {
+		!strings.Contains(out, i18n.T(i18n.ZhHans, "extension-identity.confirmation", i18n.Args{"from": "old-name", "to": "new-name"})) {
 		t.Fatalf("rename hint:\n%s", out)
 	}
 	b.Reset()
-	printUpgrades(&b, upgradesView{})
+	printUpgrades(i18n.ZhHans, &b, upgradesView{})
 	if !strings.Contains(b.String(), "都是最新的") {
 		t.Fatal(b.String())
+	}
+	// The same list in English, the terminal's language on most hubs (#5520): no Chinese left in it.
+	b.Reset()
+	printUpgrades(i18n.En, &b, upgradesView{Auto: true, Upgrades: []ExtensionUpgrade{
+		{ID: "example-a", From: "1.0.0", To: "1.1.0", State: upgradeWaitingIdle, Detail: "in use"},
+		{ID: "example-b", Market: "m1", From: "0.6.0", To: "0.7.0", State: upgradeNeedsConsent,
+			AddedPermissions: []extension.PermissionLine{{Title: "Access more network hosts", Detail: "api.example.com"}}},
+		{ID: "example-c", From: "2.0.0", To: "2.1.0", State: upgradeSkipped},
+	}})
+	out = b.String()
+	for _, want := range []string{"Extension auto-upgrade: on", "Upgradable:", "waiting until idle: in use",
+		"Waiting for your confirmation:", "Access more network hosts", "(Settings › Extensions in the app, or personad extension install market:m1/example-b)",
+		"Skipped:", "rolled back"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("no %q in:\n%s", want, out)
+		}
+	}
+	if han := regexp.MustCompile(`\p{Han}`); han.MatchString(out) {
+		t.Fatalf("Chinese in the English list:\n%s", out)
+	}
+	b.Reset()
+	printUpgrades(i18n.En, &b, upgradesView{})
+	if got := b.String(); got != "Extension auto-upgrade: off\nExtensions installed from marketplaces are all up to date\n" {
+		t.Fatalf("%q", got)
 	}
 }
 
@@ -871,5 +904,60 @@ func TestExtensionUpgradesConcurrentChanges(t *testing.T) {
 	u.mu.Unlock()
 	if got, _ := json.Marshal(saved); string(got) != string(want) {
 		t.Fatalf("saved %s\nwant %s", got, want)
+	}
+}
+
+// An installed extension's saved config: address is what the market's catalog, the upgrades list (and its note) and
+// the market upgrade's preview name for a newer version that adds the entry, as its settings page does (#8570).
+func TestInstalledConfigAddressInCatalogAndUpgrade(t *testing.T) {
+	h, mux, phone, mk, dir, mid := upgradeHubWith(t, func(m map[string]any) {
+		m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{
+			"base_url": map[string]any{"type": "string", "title": "Gateway", "format": "uri"}}}
+	})
+	ctx := context.Background()
+	if err := h.extensions.reg.SetConfig(ctx, "example-ui", json.RawMessage(`{"base_url":"https://gateway.example.com:8443"}`), "app"); err != nil {
+		t.Fatal(err)
+	}
+	setUIVersion(t, dir, "1.1.0")
+	editManifest(t, dir, func(m map[string]any) {
+		m["permissions"].(map[string]any)["network"] = []any{"config:base_url"}
+	})
+	mk.publish(dir)
+	if _, err := h.marketRead(ctx, mid); err != nil {
+		t.Fatal(err)
+	}
+	const want = "now: gateway.example.com:8443"
+	detail := func(lines []extension.PermissionLine) string {
+		for _, l := range lines {
+			if l.Key == "network_config" {
+				return l.Detail
+			}
+		}
+		return ""
+	}
+	var item *CatalogItem
+	for _, it := range h.catalogIn(i18n.En, "", mid) {
+		if it.ID == "example-ui" {
+			item = &it
+		}
+	}
+	if item == nil || !item.Upgradable || !strings.Contains(detail(item.Permissions), want) {
+		t.Fatalf("catalog: %+v", item)
+	}
+	up, _, _, ok := h.extensionUpgrades().candidateIn(h.extensions.reg.Snapshot("example-ui"), i18n.En)
+	if !ok || up.State != upgradeNeedsConsent || !strings.Contains(detail(up.AddedPermissions), want) {
+		t.Fatalf("upgrades: %+v, found %v", up, ok)
+	}
+	if note := upgradeConsentText(i18n.En, up); !strings.Contains(note, "gateway.example.com:8443") {
+		t.Fatalf("note: %q", note)
+	}
+	code, pv := call(t, mux, "POST", "/api/v1/plugins/-/catalog/preview", phone, fmt.Sprintf(`{"market": %q, "plugin": "example-ui"}`, mid))
+	if code != 200 || pv["upgrade"] != true {
+		t.Fatalf("preview: %d %v", code, pv)
+	}
+	for _, key := range []string{"permissions", "added_permissions"} {
+		if !strings.Contains(fmt.Sprint(pv[key]), "gateway.example.com:8443") {
+			t.Errorf("preview %s: %v", key, pv[key])
+		}
 	}
 }

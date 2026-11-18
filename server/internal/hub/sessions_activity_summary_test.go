@@ -54,3 +54,24 @@ func TestRuntimeSummaryLegacyBackgroundKinds(t *testing.T) {
 		t.Fatalf("legacy work kinds lost: %+v", got)
 	}
 }
+
+// An assistant conversation's model pick stays on its summary row: Android swaps its Persona chats for the list's rows
+// whole, and Apple keeps only the fields it copies back (#5033).
+func TestRuntimeSummaryKeepsTheModelPick(t *testing.T) {
+	got := runtimeSummary(proto.Session{SessionID: "chat", Assistant: true, ModelPick: &proto.ModelPick{Launcher: "cx", Model: "gpt-5"}})
+	b, err := json.Marshal(&got)
+	if err != nil || !strings.Contains(string(b), `"model_pick":{"launcher":"cx","model":"gpt-5"}`) {
+		t.Fatalf("%s %v", b, err)
+	}
+}
+
+// A Just finished row stays one on its summary row (#9751): the apps' lists are mostly summary rows, and the web drops
+// what a summary row leaves out of work.
+func TestRuntimeSummaryKeepsJustFinished(t *testing.T) {
+	got := runtimeSummary(proto.Session{SessionID: "done", State: proto.StateIdle,
+		Work: &proto.WorkState{Phase: proto.WorkDone, Line: "Merged", JustFinished: true}})
+	b, err := json.Marshal(&got)
+	if err != nil || !strings.Contains(string(b), `"just_finished":true`) {
+		t.Fatalf("%s %v", b, err)
+	}
+}

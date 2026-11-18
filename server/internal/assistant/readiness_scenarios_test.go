@@ -55,6 +55,17 @@ var readinessScenarios = []readinessScenario{
 	{name: "no_claude", setup: func(f *fakeHub) { f.doctor[scenarioMachine] = "读不到 claude 的版本" },
 		refusal: startRefusal(proto.CodeClaudeMissing, "claude"), start: true},
 	{name: "not_logged_in", setup: func(f *fakeHub) { scenarioMain(f, "Not logged in · Please run /login") }},
+	// The same signed-out launcher, with other launchers on the machine to switch the main chat to (#4355).
+	{name: "not_logged_in_switch", setup: func(f *fakeHub) {
+		scenarioMain(f, "Not logged in · Please run /login")
+		f.zshrc = map[string][]proto.Launcher{scenarioMachine: {{Name: "cx", Agent: "codex"}, {Name: "cc_max"}}}
+	}},
+	// The same signed-out CLI on a Mac whose Claude desktop app keeps sessions: its launcher runs no main chat, but an
+	// Agent started with it runs in the app on the app's own sign-in (#9366).
+	{name: "not_logged_in_desktop", setup: func(f *fakeHub) {
+		scenarioMain(f, "Not logged in · Please run /login")
+		f.zshrc = map[string][]proto.Launcher{scenarioMachine: {{Name: "claude-desktop", Source: proto.SourceClaudeDesktop, Agent: "claude"}}}
+	}},
 	{name: "bad_key", setup: func(f *fakeHub) { scenarioMain(f, "Invalid API key · Please run /login") }},
 	{name: "full", setup: func(f *fakeHub) { scenarioMain(f, "你好，我是 Persona。") }},
 	{name: "unverified", setup: func(f *fakeHub) {}},
@@ -105,6 +116,12 @@ func TestReadinessScenariosGolden(t *testing.T) {
 					t.Fatal(err)
 				}
 				r["checked_at"] = ""
+				for _, raw := range r["steps"].([]any) {
+					step := raw.(map[string]any)
+					if _, ok := step["occurrence"]; ok {
+						step["occurrence"] = ""
+					}
+				}
 				out[lang] = r
 			}
 			got, err := json.MarshalIndent(out, "", "  ")

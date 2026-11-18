@@ -3,7 +3,6 @@ package persona.core.designsystem
 import android.content.res.Resources
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
@@ -23,7 +22,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -34,7 +32,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.api.HubManager
-import persona.core.contracts.api.ManagerGroup
 import persona.core.contracts.api.ManagerRoster
 import persona.core.contracts.parseTime
 import java.time.Duration
@@ -46,9 +43,15 @@ import java.time.ZoneId
 
 /**
  * The selected hub's roster of managers, as the app last read it; null until read (or from a hub without managers).
- * Pages read [ManagerRoster.groups] / [ManagerRoster.isMulti] from it: with one manager they draw as before.
+ * Pages read the current assistant from it ([currentAssistant]) and [ManagerRoster.isMulti]: with one manager they draw as before.
  */
 val LocalManagerRoster = compositionLocalOf<ManagerRoster?> { null }
+
+/**
+ * What waits for the user at each assistant ([persona.core.contracts.api.waiting], the shell counts it): the switcher's
+ * badges wherever its roster opens (the sidebar's head, Settings' first group).
+ */
+val LocalAssistantWaiting = compositionLocalOf<Map<String, Int>> { emptyMap() }
 
 /** The group ([persona.core.contracts.GroupKeys] namespace; null: the primary) whose hub [LocalManagerRoster] is. */
 val LocalManagerGroup = compositionLocalOf<String?> { null }
@@ -96,33 +99,15 @@ fun managerOfflineNote(res: Resources, roster: persona.core.contracts.api.Manage
 val HubManager.shownName: String get() = name.ifBlank { id }
 
 /**
- * A group's heading on a page grouped by manager: one level above the page's section headings (a bigger name, its
- * status dot in every style, the count), greyed with 「最后同步于 …」 at the end while the manager is offline. A manager
- * the roster does not list reads as its id. Its sides line up with [JSectionHeader]'s.
+ * The one name every assistant surface reads — the switcher, the sidebar's main-conversation row, the top bar and the
+ * composer placeholder (#6401). With several assistants ([ManagerRoster.isMulti]) it is the current manager's
+ * [HubManager.shownName], so those surfaces and the switcher can never disagree. With a single installed assistant the
+ * product keeps its own title ([fallback], the persona pack's name): a lone assistant shows no personal identity; the
+ * same applies before the roster is read or on a hub without the managers API.
  */
-@Composable
-fun JManagerHeader(group: ManagerGroup<*>, modifier: Modifier = Modifier, now: Instant = Instant.now(), count: Int? = null) {
-    val res = LocalResources.current
-    val palette = PersonaTheme.palette
-    val style = PersonaTheme.style
-    val manager = group.manager
-    val online = manager?.online == true
-    val offline = manager?.let { managerOfflineText(res, it, now) }
-    val side = if (style == AppStyle.Brief) 0.dp else Tokens.Space.xs
-    Row(modifier.fillMaxWidth().padding(top = Tokens.Space.xxl, bottom = Tokens.Space.s, start = side, end = side).semantics { heading() },
-        verticalAlignment = Alignment.CenterVertically) {
-        JStatusDot(if (online) Status.Unread else Status.Offline)
-        Spacer(Modifier.width(Tokens.Space.s))
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(manager?.shownName ?: group.id, Modifier.weight(1f, fill = false), style = PersonaTheme.type.headline,
-                color = if (online) palette.ink else palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            count?.let { Spacer(Modifier.width(Tokens.Space.xs)); Text("$it", style = PersonaTheme.type.micro, color = palette.ink3) }
-        }
-        offline?.let {
-            Spacer(Modifier.width(Tokens.Space.s))
-            Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
-        }
-    }
+fun persona.core.contracts.api.ManagerRoster?.assistantDisplayName(shownId: String, fallback: String): String {
+    if (this == null || !isMulti) return fallback
+    return manager(shownId)?.shownName?.takeIf { it.isNotBlank() } ?: fallback
 }
 
 /**
@@ -185,7 +170,7 @@ fun JManagerAvatar(
                         val radius = HomeTokens.assistantPresenceDot.toPx() / 2
                         val ring = HomeTokens.assistantPresenceRing.toPx()
                         val center = androidx.compose.ui.geometry.Offset(this.size.width - radius - ring, this.size.height - radius - ring)
-                        drawCircle(androidx.compose.ui.graphics.Color.Black, radius + ring, center,
+                        drawCircle(androidx.compose.ui.graphics.Color.Transparent, radius + ring, center,
                             blendMode = androidx.compose.ui.graphics.BlendMode.Clear)
                         drawCircle(dot, radius, center)
                     }
@@ -203,11 +188,45 @@ fun JManagerAvatar(
                     color = ink, maxLines = 1)
             }
         }
-        if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
+        if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false) // still, as iOS's `AssistantWaitingDot`
     }
 }
 
-/** An assistant's line under its name (Online · its computer, Offline · last synced …): the dot on its monogram says the state. */
+/** BlendMode.Clear uses only the source alpha; RGB must not become an opaque cutout color. */
+private val AvatarPresenceCutout = Tokens.System.Light.primary.copy(alpha = 0f)
+
+/**
+ * The default assistant's head: the chosen look's face (PersonaFace), not the first-letter monogram, so changing the
+ * look changes this face too — one identity with the main conversation (#6401). The presence and needs-you corner
+ * marks are the same [JManagerAvatar] draws, with the ring cut out of the face's own layer.
+ */
+@Composable
+fun JDefaultManagerFace(
+    manager: HubManager, modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = HomeTokens.assistantAvatar, presence: Boolean = false, alert: Boolean = false,
+) {
+    val dot = if (presence) managerPresenceColor(manager) else null
+    androidx.compose.foundation.layout.Box(modifier.size(size).clearAndSetSemantics {}) {
+        androidx.compose.foundation.layout.Box(
+            Modifier.fillMaxSize()
+                .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    if (dot != null) {
+                        val radius = HomeTokens.assistantPresenceDot.toPx() / 2
+                        val ring = HomeTokens.assistantPresenceRing.toPx()
+                        val center = androidx.compose.ui.geometry.Offset(this.size.width - radius - ring, this.size.height - radius - ring)
+                        drawCircle(AvatarPresenceCutout, radius + ring, center,
+                            blendMode = androidx.compose.ui.graphics.BlendMode.Clear)
+                        drawCircle(dot, radius, center)
+                    }
+                },
+        ) {
+            PersonaFace(PersonaState.Idle, Modifier.fillMaxSize(), size = size)
+        }
+        if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
+    }
+}
 @Composable
 private fun AssistantLine(text: String) =
     Text(text, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -271,7 +290,7 @@ fun JAssistantSwitcherRow(
     JRow(modifier.stableAlpha(if (faded) HomeTokens.assistantOfflineAlpha else 1f).semantics { contentDescription = spoken },
         onClick = onClick, chevron = false,
         selected = current, trailing = if (current || badge > 0) ({
-        if (current) JIcon(persona.core.designsystem.icons.PhIcons.Check, null, size = Tokens.Space.xl, tint = palette.accent, decorative = true)
+        if (current) JIcon(persona.core.designsystem.icons.PhIcons.Check, null, size = Tokens.Size.iconXS, tint = palette.accent, decorative = true)
         else JBadge(badge)
     }) else null) {
         JManagerAvatar(manager, isDefault, size = HomeTokens.assistantAvatarSmall, presence = true)
@@ -288,21 +307,15 @@ fun JAssistantSwitcherRow(
 }
 
 /**
- * The settings pages' own picker: one chip per installed manager (the default first), the shown one selected; an
- * offline one greyed with its dot. Draws nothing with one manager.
+ * The head of Settings' first group, the current assistant's settings (docs/assistant/managers.md "Clients"): its
+ * monogram with the presence dot ([manager]; none: no monogram), "{name}'s settings" ([title]), and Switch
+ * ([onSwitch]), which opens the same roster as the sidebar's head; without [onSwitch] (no roster to switch in) no Switch.
  */
 @Composable
-fun JManagerSwitcher(roster: ManagerRoster?, shown: String, onChoose: (String) -> Unit, modifier: Modifier = Modifier) {
-    if (roster == null || !roster.isMulti) return
-    val label = stringResource(R.string.designsystem_manager_switcher)
-    Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = pagePadding, vertical = Tokens.Space.xs)
-        .semantics { contentDescription = label },
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-        roster.installed.forEach { manager ->
-            val name = manager.shownName
-            val spoken = if (manager.online) name else stringResource(R.string.designsystem_manager_chip_offline, name)
-            JChip(name, Modifier.semantics { contentDescription = spoken }, selected = manager.id == shown, onClick = { onChoose(manager.id) },
-                status = if (manager.online) Status.Unread else Status.Offline, muted = !manager.online)
-        }
-    }
+fun JAssistantSettingsHeader(
+    title: String, manager: HubManager?, isDefault: Boolean, switchLabel: String, onSwitch: (() -> Unit)?, modifier: Modifier = Modifier,
+) {
+    JSectionHeader(title, modifier,
+        leading = manager?.let { { JManagerAvatar(it, isDefault, size = HomeTokens.assistantAvatarHeader, presence = true) } },
+        action = onSwitch?.let { switch -> { JTextButton(switchLabel, switch, Modifier.heightIn(min = Tokens.MinTouch.android)) } })
 }

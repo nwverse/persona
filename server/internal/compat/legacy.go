@@ -52,6 +52,17 @@ func EnvNames(name string) (current, legacy string) {
 func ReservedEnv(name string) bool {
 	return strings.HasPrefix(name, "PERSONA_") || strings.HasPrefix(name, "JARVIS_")
 }
+
+// SecretEnvNameProblem is proto.SecretEnvNameProblem with the old names' prefix reserved too.
+func SecretEnvNameProblem(name string) string {
+	if why := proto.SecretEnvNameProblem(name); why != "" {
+		return why
+	}
+	if ReservedEnv(name) {
+		return "names with the old prefix are Persona's"
+	}
+	return ""
+}
 func StateSubpath(rel string) (string, bool) {
 	for _, root := range []string{".persona", StateDir} {
 		if sub, ok := strings.CutPrefix(rel, root+"/"); ok {
@@ -82,7 +93,7 @@ func LegacyTool(name string) string {
 }
 func Source(name string) string { return proto.CanonicalLauncherSource(name) }
 
-var runtimePackages = [][2]string{{"jarvis-dsh-runtime", "persona-dsh-runtime"}, {"jarvis-pi-runtime", "persona-pi-runtime"}, {"jarvis-paseo-runtime", "persona-paseo-runtime"}, {"jarvis-agent-sdk-runtime", "persona-agent-sdk-runtime"}}
+var runtimePackages = [][2]string{{"jarvis-dsh-runtime", "persona-dsh-runtime"}, {"jarvis-pi-runtime", "persona-pi-runtime"}, {"jarvis-paseo-runtime", "persona-paseo-runtime"}}
 
 func RuntimePackage(name string) string {
 	for _, pair := range runtimePackages {
@@ -137,6 +148,7 @@ func HeaderConflict(h http.Header, name string) bool {
 	return a != "" && b != "" && a != b
 }
 func ContextPattern() string { return `(?:jarvis|persona)-context` }
+func FilePattern() string    { return `(?:jarvis|persona)-file` }
 func ContextNames() []string { return []string{"jarvis-context", "persona-context"} }
 
 // compat is also built on its own, copied without the rest of the server (scripts/test/test_persona_migration_edges.py),

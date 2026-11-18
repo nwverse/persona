@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
@@ -81,6 +82,7 @@ func (rh *RuntimeHost) attach(n *Node) {
 	rh.node = n
 	rh.mu.Unlock()
 	n.runtimes = rh.reg
+	rh.reg.setHostOff(n.engineHostOff)
 	n.runtimeHost = rh
 	rh.reg.resetWatches()
 	rh.notifyHub(true)
@@ -136,11 +138,11 @@ func (rh *RuntimeHost) Listen(ctx context.Context) error {
 
 func (rh *RuntimeHost) listenOnce(ctx context.Context) (net.Listener, error) {
 	_ = os.Remove(rh.path)
-	ln, err := net.Listen("unix", rh.path)
+	ln, err := osproc.Listen("unix", rh.path)
 	if err != nil {
 		return nil, err
 	}
-	ln.(*net.UnixListener).SetUnlinkOnClose(false) // by then the path may belong to a newer node
+	ln.(*osproc.UnixListener).SetUnlinkOnClose(false) // by then the path may belong to a newer node
 	_ = os.Chmod(rh.path, 0o600)
 	go func() {
 		<-ctx.Done()
@@ -233,12 +235,21 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// resume_argv: a session listed offline with resume_argv is resumed in the terminal engine (pi.go).
 		// handover: a send refused with the handover code goes to the runtime that takes the session over (handOver).
 		// transcript: a session listed with a Claude transcript has its content read from it here (runtimetranscript.go).
+		// codex_thread: a session listed with the Codex thread it is has that thread listed once (runtimecodex.go).
+		// unlisted_transcripts: the transcripts a list names as the runtime's own sessions it no longer lists stay among
+		// the sessions not running (runtimeunlisted.go).
 		// launchers: hello's launchers and runtime.launchers are offered; start_params: session.start carries the
 		// launcher picked and the form's model, permission mode, effort and space; modes: session.modes reaches a
 		// runtime with caps.modes; resume: a runtime with caps.resume that is the machine's engine is asked to take
-		// sessions over (runtimecontrol.go).
+		// sessions over (runtimecontrol.go). workspaces: runtime.workspaces is kept and, for a runtime with
+		// caps.workspaces that is the machine's engine, listed as its catalog and asked to make worktrees
+		// (runtimeworkspaces.go).
+		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces"}
+		if !h.isDaemon() {
+			features = append(features, "leader_tools")
+		}
 		res := map[string]any{"protocol": RuntimeProtocol, "node_version": rh.version, "hub": rh.current() != nil,
-			"features": []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume"}}
+			"features": features}
 		if offer := rh.packageOffer(h, hello); offer != nil {
 			res["update"] = offer
 		}
@@ -262,17 +273,30 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// The assistant's tools (ask_user, schedule_followup…) only for a runtime that runs the assistant, with the
 		// command gates' tools among them (assistant_runtime.go).
 		var p struct {
-			Assistant bool `json:"assistant"`
+			Assistant  bool   `json:"assistant"`
+			LeaderOnly bool   `json:"leader_only"`
+			SessionID  string `json:"session_id"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if p.SessionID != "" && !rh.reg.owns(h, p.SessionID) {
+			return map[string]any{"tools": []proto.Tool{}}, nil
+		}
 		assistant := p.Assistant && h.assistant()
 		var res struct {
 			Tools []proto.Tool `json:"tools"`
 		}
-		if err := n.peer.Call(ctx, "mcp.tools", map[string]any{"assistant": assistant}, &res); err != nil {
+		query := map[string]any{"assistant": assistant}
+		if p.SessionID != "" {
+			query["session_id"] = p.SessionID
+			query["guest"] = n.guestOf(p.SessionID) != nil
+		}
+		if p.LeaderOnly {
+			query["leader_only"] = true
+		}
+		if err := n.peer.Call(ctx, "mcp.tools", query, &res); err != nil {
 			return nil, err
 		}
-		if assistant {
+		if assistant && !p.LeaderOnly {
 			res.Tools = append(res.Tools, n.gateTools()...)
 		}
 		if res.Tools == nil {
@@ -298,6 +322,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		// As the assistant only for one of the assistant's conversations that this runtime runs.
 		assistant := p.Assistant && h.assistant() && rh.reg.owns(h, p.SessionID) && n.isAssistantSession(p.SessionID)
+		if !assistant && slices.Contains(callerTools, p.Name) && !rh.reg.owns(h, p.SessionID) {
+			return proto.TextResult("Persona Agent tool requires a session owned by this runtime", true), nil
+		}
 		if p.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
 			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
 		}
@@ -305,7 +332,11 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
 		}
 		var res json.RawMessage
-		err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": p.Name, "args": p.Args, "session_id": p.SessionID, "assistant": assistant}, &res)
+		params := map[string]any{"name": p.Name, "args": p.Args, "session_id": p.SessionID, "assistant": assistant, "guest": n.guestOf(p.SessionID) != nil}
+		if origin := n.assistantOrigin(p.SessionID); origin != "" {
+			params["origin"] = origin
+		}
+		err := n.peer.Call(ctx, "mcp.call", params, &res)
 		return res, err
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
@@ -330,6 +361,15 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		}
 		return
 	}
+	if event == "runtime.workspaces" { // its own workspaces (runtimeworkspaces.go): only from one that keeps them
+		var p struct {
+			Workspaces []runtimeWorkspace `json:"workspaces"`
+		}
+		if h.makesWorkspaces() && json.Unmarshal(params, &p) == nil {
+			h.setWorkspaces(cleanWorkspaces(p.Workspaces))
+		}
+		return
+	}
 	if event == "runtime.sessions" {
 		var p struct {
 			Sessions []proto.Session `json:"sessions"`
@@ -342,27 +382,41 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		}
 		var moved []string
 		if !h.isDaemon() { // a daemon's offline sessions are not resumed in this machine's terminal engine
-			resume, ts := runtimeRowExtras(params)
-			h.setResume(resume)
+			x := runtimeRowExtras(params, len(p.Sessions))
+			h.setResume(x.resume)
 			// …nor read from this machine's transcripts: a daemon names none (runtimetranscript.go).
+			ts := x.transcripts
 			if n != nil {
 				ts = n.foundTranscripts(ts)
 			}
 			moved = h.setTranscripts(ts)
+			h.setCodexThreads(x.threads) // …nor are its Codex threads this machine's (runtimecodex.go)
+			if x.unlistedSaid && rh.reg.setUnlisted(h, x.unlisted) {
+				forgetOfflineScan() // …nor its past sessions' transcripts (runtimeunlisted.go): the next list reads them again
+			}
 		}
 		list := normalizeRuntimeSessions(h, p.Sessions)
 		if cap(list) > 2*len(list)+8 { // the list shrank: keep no array of the old size
 			list = append(make([]proto.Session, 0, len(list)), list...)
 		}
-		rewatch := rh.reg.setSessions(h, list)
+		rewatch, driven := rh.reg.setSessions(h, list)
+		for _, id := range driven { // started for the hub by another runtime: its cards go to the phone first here too
+			if h.peer != nil {
+				_ = h.peer.Notify("runtime.driven", map[string]any{"session_id": id})
+			}
+		}
 		if n == nil {
 			return
 		}
 		for _, id := range moved {
 			n.transcriptMoved(h, id)
 		}
-		for id, since := range rewatch {
-			go n.runtimeWatch(h, id, since)
+		for id, attempt := range rewatch {
+			go func() {
+				if err := n.runtimeWatch(h, id, attempt.since); err != nil {
+					n.runtimes.watchFailed(h, id, attempt.token)
+				}
+			}()
 		}
 		n.publish(n.sessionList(context.Background(), false))
 		return
@@ -372,30 +426,53 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 	}
 }
 
-// runtimeRowExtras is resumeArgvs and runtimeTranscripts of a runtime.sessions push, read in one pass over its rows
-// rather than one each. A push one of the two cannot read (a field of the wrong type) has each read on its own, as
-// before: the other may still read.
-func runtimeRowExtras(params json.RawMessage) (map[string][]string, map[string]string) {
+// rowExtras is what a runtime.sessions push says beyond the rows the apps see.
+type rowExtras struct {
+	resume      map[string][]string // session → resume_argv (resumeArgvs)
+	transcripts map[string]string   // session → the Claude transcript its conversation is (runtimeTranscripts)
+	threads     map[string]string   // session → the Codex thread its conversation is (runtimeCodexThreads)
+	// Claude transcripts of sessions of its own it does not list (unlistedTranscripts), when the push says: one
+	// without the field leaves what the runtime named before.
+	unlisted     map[string]bool
+	unlistedSaid bool
+}
+
+// runtimeRowExtras is resumeArgvs, runtimeTranscripts, runtimeCodexThreads and unlistedTranscripts of a
+// runtime.sessions push, read in one pass rather than one each, its rows into a slice of rows rows (the size the
+// push's sessions were decoded into, so it is not grown row by row). A push one of them cannot read (a field of the
+// wrong type) has each read on its own, as before: the others may still read.
+func runtimeRowExtras(params json.RawMessage, rows int) rowExtras {
+	type extras struct {
+		SessionID   string   `json:"session_id"`
+		ResumeArgv  []string `json:"resume_argv"`
+		Transcript  string   `json:"transcript"`
+		CodexThread string   `json:"codex_thread"`
+	}
 	var p struct {
-		Sessions []struct {
-			SessionID  string   `json:"session_id"`
-			ResumeArgv []string `json:"resume_argv"`
-			Transcript string   `json:"transcript"`
-		} `json:"sessions"`
+		Sessions []extras `json:"sessions"`
+		Unlisted []string `json:"unlisted_transcripts"`
 	}
+	p.Sessions = make([]extras, 0, rows)
 	if json.Unmarshal(params, &p) != nil {
-		return resumeArgvs(params), runtimeTranscripts(params)
+		unlisted, said := unlistedTranscripts(params)
+		return rowExtras{resumeArgvs(params), runtimeTranscripts(params), runtimeCodexThreads(params), unlisted, said}
 	}
-	resume, transcripts := map[string][]string{}, map[string]string{}
+	x := rowExtras{resume: map[string][]string{}, transcripts: map[string]string{}, unlisted: unlistedSet(p.Unlisted), unlistedSaid: p.Unlisted != nil}
 	for _, s := range p.Sessions {
 		if resumable(s.SessionID, s.ResumeArgv) {
-			resume[s.SessionID] = s.ResumeArgv
+			x.resume[s.SessionID] = s.ResumeArgv
 		}
 		if namesTranscript(s.SessionID, s.Transcript) {
-			transcripts[s.SessionID] = s.Transcript
+			x.transcripts[s.SessionID] = s.Transcript
+		}
+		if namesCodexThread(s.SessionID, s.CodexThread) {
+			if x.threads == nil { // few runtimes name one: no map until a row does
+				x.threads = map[string]string{}
+			}
+			x.threads[s.SessionID] = s.CodexThread
 		}
 	}
-	return resume, transcripts
+	return x
 }
 
 // resumeArgvs reads the resume_argv of a runtime.sessions push: how the terminal engine resumes a session the runtime

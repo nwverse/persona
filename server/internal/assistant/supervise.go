@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -20,7 +21,8 @@ import (
 // the main conversation as one supervision message (the quiet tasks' notices are among them), at most every few minutes, and
 // the turn it starts is not pushed unless the assistant pushes (notify_user). The assistant answers with task_review:
 // accepted closes the todo (its agents are closed later, tasks_close.go), rework sends the gaps back to the agent (at
-// most maxReworkRounds times), needs_user waits for the user, cancelled ends it.
+// most maxReworkRounds times), needs_user waits for the user, parked waits for something else until a time
+// (parked.go), cancelled ends it.
 //
 // A supervised todo is never closed by the hub's judge (done.go): a finished stretch of work waits for review instead.
 
@@ -37,15 +39,28 @@ const maxReworkRounds = 2
 
 // Supervision is a supervised task's ledger, as the apps get it on the todo (supervision).
 type Supervision struct {
-	Supervisor    string       `json:"supervisor"` // the conversation that handed it out
-	DoneWhen      []string     `json:"done_when"`
-	ExpectMinutes int          `json:"expect_minutes,omitempty"`
-	State         string       `json:"state"` // "" going on, or one of review*
-	Round         int          `json:"round"` // reworks so far
-	Reviews       []TaskReview `json:"reviews"`
+	Supervisor    string             `json:"supervisor"` // the conversation that handed it out
+	DoneWhen      []string           `json:"done_when"`
+	Criteria      []db.TodoCriterion `json:"criteria"`
+	ExpectMinutes int                `json:"expect_minutes,omitempty"`
+	State         string             `json:"state"` // "" going on, or one of review*
+	// Parked: what a parked task waits for (parked.go); nil unless State is parked. Read off its latest review each time
+	// the ledger is copied, not kept on its own.
+	Parked  *Parked      `json:"parked,omitempty"`
+	Round   int          `json:"round"` // reworks so far
+	Reviews []TaskReview `json:"reviews"`
 	// AutoReview is the latest independent review of its change (supervise_autoreview.go, #2173); nil when none ran.
 	AutoReview *AutoReview `json:"auto_review,omitempty"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// Waits: the done judge found the latest stretch of work stopped on a decision only the owner can make (verdict
+	// needs_user, #1277). While it holds, task_review accepted is refused: closing the task would lose the decision.
+	// Its agent working again, or any review, clears it. nil when the last judgment said otherwise.
+	Waits *OwnerWait `json:"waits,omitempty"`
+	// PendingSince: when the task entered pending_review (updateSupervision keeps it: set on the way in, kept while the
+	// review waits, gone on the way out). The apps list a review younger than an hour with the tasks in progress, as
+	// its supervisor's to do, and an older one under Needs you (docs/assistant/unified-entry.md "Needs you and In
+	// progress"). nil in every other state, and for a task that waited for review before the hub kept the time.
+	PendingSince *time.Time `json:"pending_since,omitempty"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 	// Progress: what its agent last reported to the supervisor (report_to_supervisor, agent_control.go). A live
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
@@ -80,6 +95,49 @@ type TaskReview struct {
 	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
 	// "Please verify" waits for them instead of being passed by the supervisor (acceptance_supervisor.go, #3240).
 	UserCheck bool `json:"user_check,omitempty"`
+	// A needs_user review's decision (#3804, decision.go): why only the owner can decide, what is to be decided, the
+	// option recommended, the options (the recommended first) and what waiting costs.
+	WhyOwner      string           `json:"why_owner,omitempty"`
+	Reason        string           `json:"reason,omitempty"`
+	Recommend     string           `json:"recommend,omitempty"`
+	Options       []DecisionOption `json:"options,omitempty"`
+	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
+	// Deadline and Reversible: the needs_user decision's deadline and whether its recommendation can be undone, as the
+	// supervisor's task_review said them (decision_deadline.go); absent when it gave none, and on reviews from before
+	// they were kept.
+	Deadline   *time.Time `json:"deadline,omitempty"`
+	Reversible *bool      `json:"reversible,omitempty"`
+	// A parked review's (parked.go): until when it waits, what kind of thing it waits on (Reason says what), how many
+	// parks in a row this one is with no agent turn in between, and when a supervision message carried its parked_due.
+	Until     time.Time `json:"until,omitzero"`
+	WaitingOn string    `json:"waiting_on,omitempty"`
+	Parks     int       `json:"parks,omitempty"`
+	DueAt     time.Time `json:"due_at,omitzero"`
+	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
+	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
+	Evidence *ParkEvidence `json:"evidence,omitempty"`
+	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
+	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
+	// DecidedTold: when a supervision message carried that to the supervisor.
+	Decided     string    `json:"decided,omitempty"`
+	DecidedTold time.Time `json:"decided_told,omitzero"`
+	// RestateAt: when the hub handed this needs_user back to its supervisor because the owner could not answer it
+	// (undecidable, or owner_cannot_answer): told once.
+	RestateAt time.Time `json:"restate_at,omitzero"`
+	// OwnerResponse: the fixed answer the owner gave its decision (decide_yourself, not_what_i_asked, explain_first)
+	// and when; HoldReleased: after not_what_i_asked, the supervisor sent the task's agent on again.
+	OwnerResponse   string    `json:"owner_response,omitempty"`
+	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
+	HoldReleased    bool      `json:"hold_released,omitempty"`
+}
+
+// OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
+// when it was judged and the judge's reason.
+type OwnerWait struct {
+	Work   time.Time `json:"work"`
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -94,10 +152,17 @@ func (v *Supervision) clone() *Supervision {
 	}
 	out := *v
 	out.DoneWhen = slices.Clone(v.DoneWhen)
+	out.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
+		out.Reviews[i].Options = slices.Clone(r.Options)
+		out.Reviews[i].Evidence = r.Evidence.clone()
+		if r.Reply != nil {
+			receipt := *r.Reply
+			out.Reviews[i].Reply = &receipt
+		}
 	}
 	if out.DoneWhen == nil {
 		out.DoneWhen = []string{}
@@ -110,12 +175,25 @@ func (v *Supervision) clone() *Supervision {
 		a := *v.AutoReview
 		out.AutoReview = &a
 	}
+	if v.Waits != nil {
+		w := *v.Waits
+		out.Waits = &w
+	}
+	if v.PendingSince != nil {
+		at := *v.PendingSince
+		out.PendingSince = &at
+	}
+	out.Parked = out.parked()
 	return &out
 }
 
-// state is the review state that holds now: an accepted or cancelled task the user reopened goes on again.
+// state is the review state that holds now: an accepted or cancelled task the user reopened goes on again, and a
+// parked one that was closed is no longer parked.
 func (v *Supervision) state(t Todo) string {
 	if v == nil {
+		return ""
+	}
+	if v.State == reviewParked && (t.DoneAt != nil || v.parking() == nil) {
 		return ""
 	}
 	if t.DoneAt == nil && (v.State == reviewAccepted || v.State == reviewCancelled) {
@@ -140,8 +218,8 @@ func (s *Service) supervisionDB() supervisionStore {
 }
 
 func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
-	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
-		UpdatedAt: r.UpdatedAt}
+	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
+		PendingSince: r.PendingSince, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
 	if len(r.AutoReview) > 0 {
 		var a AutoReview
@@ -149,17 +227,26 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 			v.AutoReview = &a
 		}
 	}
+	if len(r.Waits) > 0 {
+		var w OwnerWait
+		if json.Unmarshal(r.Waits, &w) == nil {
+			v.Waits = &w
+		}
+	}
 	return v.clone()
 }
 
 func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	raw, _ := json.Marshal(v.Reviews)
-	var auto json.RawMessage
+	var auto, waits json.RawMessage
 	if v.AutoReview != nil {
 		auto, _ = json.Marshal(v.AutoReview)
 	}
-	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, ExpectMinutes: v.ExpectMinutes,
-		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, UpdatedAt: v.UpdatedAt}
+	if v.Waits != nil {
+		waits, _ = json.Marshal(v.Waits)
+	}
+	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
+		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, UpdatedAt: v.UpdatedAt}
 }
 
 // cleanDoneWhen is a task's criteria as kept: trimmed, no empty or repeated ones, at most 6 of at most 200 characters.
@@ -185,6 +272,20 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	}
 }
 
+// pendingSince is a ledger's PendingSince after a write at now that took its stored state from before to after, given
+// the one it held (since): now on the way into pending_review, unchanged while the review waits (whatever else the write
+// changed: a criterion's report, a new supervisor), nil in every other state. A review that already waited with no
+// time recorded gets none: the apps then keep it under Needs you, where it was.
+func pendingSince(before, after string, since *time.Time, now time.Time) *time.Time {
+	switch {
+	case after != reviewPending:
+		return nil
+	case before != reviewPending:
+		return &now
+	}
+	return since
+}
+
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.
 func (s *Service) updateSupervision(ctx context.Context, id string, change func(*Supervision) bool) (Supervision, bool, error) {
@@ -199,10 +300,13 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 	if v == nil {
 		v = (&Supervision{}).clone()
 	}
+	before := v.State
 	if !change(v) {
 		return *v, false, nil
 	}
+	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	v.UpdatedAt = time.Now().UTC()
+	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err
@@ -257,9 +361,19 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "已验收", 8
 	case reviewCancelled:
 		return "已取消", 8
+	case reviewParked: // waits on purpose (parked.go): below everything that needs the assistant
+		return parkedHealth(v.parked(), now.Location()), 6
+	}
+	if t.DoneAt != nil && t.StartError != "" && !t.Cancelled() {
+		// Its agent never started: stored done (#1077) but nothing was done. Only the supervisor can retry it, so it
+		// heads the list rather than sitting among the finished ones.
+		return "启动失败，待你处理（重试只有你能做）", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	if t.DoneAt != nil {
 		return "", 8
+	}
+	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
+		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	for _, c := range agents {
 		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {

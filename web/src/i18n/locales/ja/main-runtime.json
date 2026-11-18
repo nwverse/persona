@@ -1,0 +1,11 @@
+{
+  "main": "メインチャット",
+  "not_started": "メインチャットはまだ始まっていません",
+  "starting": "メインチャット · 起動中…",
+  "running": "実行中",
+  "proxy": "{name} 経由",
+  "container": "コンテナ {name}",
+  "offline": "メインチャット · オフライン",
+  "stopped": "メインチャット · 停止中",
+  "last_location": "前回の実行場所：{location}"
+}

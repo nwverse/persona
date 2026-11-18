@@ -8,6 +8,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import persona.core.contracts.api.*
+import persona.core.designsystem.JLoadable
 import persona.core.hub.HubError
 import persona.core.hub.HubFailure
 
@@ -54,7 +55,7 @@ class HubUpdateStateTest {
         val api = FakeUpdates(current).apply { fail = HubFailure(HubError.Server, "数据库没连上", 500) }
         val model = HubUpdateModel(api)
         model.load()
-        assertEquals("读不到 hub 的版本：数据库没连上", model.state.value.error?.resolve(res))
+        assertEquals("读不到 Hub 的版本：数据库没连上", model.state.value.error?.resolve(res))
     }
 
     @Test fun startsAndShowsTheHubsRefusal() = runBlocking {
@@ -144,8 +145,8 @@ class HubUpdateStateTest {
 
     @Test fun whatTheUpdateGroupShows() {
         assertEquals(HubUpdateView.Docker, HubUpdateText.view(current.copy(channel = "docker", canUpdate = false), res))
-        assertEquals(HubUpdateView.Cannot("这个 hub 不会自己更新：开发版。"), HubUpdateText.view(current.copy(canUpdate = false, whyNot = "开发版"), res))
-        assertEquals(HubUpdateView.Cannot("这个 hub 不会自己更新。"), HubUpdateText.view(current.copy(canUpdate = false), res))
+        assertEquals(HubUpdateView.Cannot("这个 Hub 不会自己更新：开发版。"), HubUpdateText.view(current.copy(canUpdate = false, whyNot = "开发版"), res))
+        assertEquals(HubUpdateView.Cannot("这个 Hub 不会自己更新。"), HubUpdateText.view(current.copy(canUpdate = false), res))
         assertEquals(HubUpdateView.Newer(false), HubUpdateText.view(newer, res))
         assertEquals(HubUpdateView.Newer(true), HubUpdateText.view(newer.copy(state = "downloading"), res))
         assertEquals(HubUpdateView.Working, HubUpdateText.view(current.copy(state = "restarting"), res))
@@ -196,5 +197,58 @@ class HubUpdateStateTest {
         assertEquals(listOf("ghcr.io/example/persona:1.43.0", HubUpdateText.DockerCommand), pinned.map { it.copy })
         val (_, latestTag) = HubUpdateText.dockerSteps(withNew.copy(image = docker.image!!.copy(tag = "latest", pinned = false)), res)
         assertEquals(listOf(HubUpdateText.DockerCommand), latestTag.map { it.copy })
+    }
+
+    @Test fun theLoadableFollowsStatusErrorAndReading() {
+        assertEquals(JLoadable.Loading, HubUpdateState().loadable(null))
+        assertEquals(JLoadable.Failed("down"), HubUpdateState(error = SettingsUiText.Raw("down")).loadable("down"))
+        // A retry shows the spinner, not the error it is retrying.
+        assertEquals(JLoadable.Loading, HubUpdateState(loading = true, error = SettingsUiText.Raw("down")).loadable("down"))
+        assertEquals(JLoadable.Loaded(current), HubUpdateState(status = current).loadable(null))
+        assertEquals(JLoadable.Loaded(current, refreshing = true), HubUpdateState(status = current, checking = true).loadable(null))
+    }
+
+    @Test fun aFailedReadOverAStatusStaysAsALineOverIt() {
+        assertEquals(JLoadable.Loaded(current, failure = "down"), HubUpdateState(status = current, error = SettingsUiText.Raw("down")).loadable("down"))
+        assertEquals(JLoadable.Loaded(current), HubUpdateState(status = current, loading = true, error = SettingsUiText.Raw("down")).loadable("down"))
+    }
+
+    @Test fun loadingIsOnWhileTheStatusIsReadAndOffAfterAFailure() = runBlocking {
+        lateinit var model: HubUpdateModel
+        val seen = mutableListOf<Boolean>()
+        val api = object : HubUpdates {
+            override suspend fun status(): HubUpdateStatus { seen += model.state.value.loading; throw HubFailure(HubError.Server, "数据库没连上", 500) }
+            override suspend fun check() = current
+            override suspend fun start(now: Boolean) = current
+            override suspend fun settings(auto: Boolean?, noticeSeen: Boolean?) = current
+            override suspend fun history() = emptyList<HubUpdateRecord>()
+        }
+        model = HubUpdateModel(api)
+        model.load()
+        assertEquals(listOf(true), seen)
+        assertFalse(model.state.value.loading)
+        assertEquals(JLoadable.Failed("读不到 Hub 的版本：数据库没连上"), model.state.value.loadable(model.state.value.error?.resolve(res)))
+    }
+
+    @Test fun aRetryThatSucceedsReplacesTheFailureWithTheStatus() = runBlocking {
+        val api = FakeUpdates(newer).apply { fail = HubFailure(HubError.Server, "数据库没连上", 500) }
+        val model = HubUpdateModel(api)
+        model.load()
+        assertNotNull(model.state.value.error)
+        api.fail = null
+        model.load()
+        assertNull(model.state.value.error)
+        assertEquals(JLoadable.Loaded(newer), model.state.value.loadable(null))
+    }
+
+    @Test fun aFailedReloadKeepsTheStatusAlreadyShown() = runBlocking {
+        val api = FakeUpdates(newer)
+        val model = HubUpdateModel(api)
+        model.load()
+        api.fail = HubFailure(HubError.Server, "数据库没连上", 500)
+        model.load()
+        val state = model.state.value
+        assertEquals(newer, state.status)
+        assertEquals(JLoadable.Loaded(newer, failure = "读不到 Hub 的版本：数据库没连上"), state.loadable(state.error?.resolve(res)))
     }
 }

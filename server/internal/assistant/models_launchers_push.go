@@ -4,11 +4,12 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"slices"
+	"maps"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -85,9 +86,13 @@ func (s *Service) nodeLaunchers(stored []storedLauncher) ([]proto.ManagedLaunche
 
 func (s *Service) openStoredLauncher(l storedLauncher) (proto.ManagedLauncher, error) {
 	m := l.ManagedLauncher
+	m.BaseURL = m.LaunchBaseURL() // a node from before it normalized one stored with a trailing /v1 itself (#4886)
 	var err error
 	if m.APIKey, err = s.openKey(l.KeySealed); err != nil {
 		return m, i18n.Err("assistant-models.err_key_decrypt")
+	}
+	if _, ok := extension.ReferenceOf(m.APIKey); ok {
+		m.APIKey = "" // a reference: only openFor resolves it, for the computer that pulls it (launcher_secrets.go)
 	}
 	if m.Headers, err = s.openKey(l.HeadersSealed); err != nil {
 		return m, i18n.Err("assistant-models.err_key_decrypt")
@@ -143,28 +148,131 @@ type zshrcLaunchers struct {
 	ClaudeVersion string
 }
 
+// launcherSyncMetadata is the last persisted answer's shell, rc file and time, before a new answer's state is known.
+func launcherSyncMetadata(d Device, m launcherMeta) LauncherSync {
+	state := LauncherSync{Machine: d.ID, Name: d.Name, Shell: m.Shell, RCFile: cmp.Or(m.RCFile, defaultRCFile)}
+	if at := m.SyncedAt; !at.IsZero() {
+		state.SyncedAt = &at
+	}
+	return state
+}
+
+func zshrcLauncherSnapshot(devices []Device, seen map[string][]proto.Launcher, states map[string]LauncherSync) []zshrcLaunchers {
+	out := make([]zshrcLaunchers, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, zshrcLaunchers{MachineID: d.ID, Launchers: seen[d.ID], Sync: states[d.ID], ClaudeVersion: d.ClaudeVersion})
+	}
+	return out
+}
+
+// zshrcLaunchersLastSeen answers the persisted snapshot without asking a node, and whether one existed. Sync's state
+// stays empty until a refresh has one, while its persisted shell, rc file and time still describe the last answer.
+func (s *Service) zshrcLaunchersLastSeen(ctx context.Context) ([]zshrcLaunchers, bool) {
+	st := &s.models
+	st.zshrcMu.Lock()
+	seen, states := st.zshrc, st.zshrcSync
+	st.zshrcMu.Unlock()
+	cached := seen != nil
+	devices := s.devices(ctx)
+	if seen == nil {
+		seen = map[string][]proto.Launcher{}
+		meta := map[string]launcherMeta{}
+		if store := s.store(); store != nil {
+			found, _ := store.Setting(ctx, launchersZshrcKey, &seen)
+			foundMeta, _ := store.Setting(ctx, launchersMetaKey, &meta)
+			cached = found || foundMeta
+		}
+		states = map[string]LauncherSync{}
+		for _, d := range devices {
+			m, hasMeta := meta[d.ID]
+			if !hasMeta && d.Online {
+				continue
+			}
+			state := LauncherSync{Machine: d.ID, Name: d.Name}
+			if hasMeta {
+				state = launcherSyncMetadata(d, m)
+			}
+			if !d.Online {
+				state.State = "offline"
+			}
+			states[d.ID] = state
+		}
+		st.zshrcMu.Lock()
+		if st.zshrc != nil {
+			seen, states = st.zshrc, st.zshrcSync
+			cached = true
+		} else if cached {
+			st.zshrc, st.zshrcSync = seen, states
+		}
+		st.zshrcMu.Unlock()
+	}
+	return zshrcLauncherSnapshot(devices, seen, states), cached
+}
+
+// refreshZshrcLaunchers runs one bounded refresh behind the request; its result is visible to a later read.
+func (s *Service) refreshZshrcLaunchers(ctx context.Context, only ...string) {
+	st := &s.models
+	st.zshrcMu.Lock()
+	if st.zshrcRefreshing {
+		st.zshrcMu.Unlock()
+		return
+	}
+	st.zshrcRefreshing = true
+	st.zshrcMu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launcherSyncTimeout+5*time.Second)
+		defer cancel()
+		defer func() {
+			st.zshrcMu.Lock()
+			again := st.zshrcRefreshAgain
+			st.zshrcRefreshing, st.zshrcRefreshAgain = false, false
+			st.zshrcMu.Unlock()
+			if again {
+				s.refreshZshrcLaunchers(ctx)
+			}
+		}()
+		s.zshrcLaunchers(ctx, true, only...)
+	}()
+}
+
 // zshrcLaunchers is every machine's rc-file launchers (~/.zshrc, ~/.bashrc) in the machines' order: as last seen (an
 // offline one's from the last time, kept in settings launchers.zshrc), or asked of the online nodes again first
 // (refresh, or nothing seen since the assistant started; the node caches a minute). Each machine gets
 // launcherSyncTimeout, and its Sync says whether its list came in now.
-func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool) []zshrcLaunchers {
+func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool, only ...string) []zshrcLaunchers {
 	st := &s.models
 	st.zshrcMu.Lock()
 	seen, states := st.zshrc, st.zshrcSync
 	st.zshrcMu.Unlock()
 	devices := s.devices(ctx)
+	selected := func(d Device) bool { return len(only) == 0 || only[0] == "" || d.ID == only[0] }
 	if seen == nil || refresh {
+		for _, d := range devices {
+			if selected(d) {
+				s.refreshExternalDirectory(ctx, d, false) // enabled sources do not queue behind a slow login shell
+			}
+		}
 		seen = map[string][]proto.Launcher{}
 		meta := map[string]launcherMeta{}
 		if store := s.store(); store != nil {
 			_, _ = store.Setting(ctx, launchersZshrcKey, &seen)
 			_, _ = store.Setting(ctx, launchersMetaKey, &meta)
 		}
-		states = map[string]LauncherSync{}
+		if len(only) > 0 {
+			states = maps.Clone(states)
+		} else {
+			states = nil
+		}
+		if states == nil {
+			states = map[string]LauncherSync{}
+		}
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		changed := false
 		for _, d := range devices {
+			if !selected(d) {
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -175,21 +283,26 @@ func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool) []zshrcLaunc
 				if err != nil {
 					state.State, state.Error = launcherSyncState(ctx, err)
 				} else {
-					if !slices.Equal(seen[d.ID], res.Launchers) {
-						seen[d.ID] = res.Launchers
-					}
+					seen[d.ID] = mergeLauncherSource(seen[d.ID], res.Launchers, false)
 					meta[d.ID], changed = launcherMeta{Shell: res.Shell, RCFile: res.RCFile, SyncedAt: time.Now()}, true
 				}
 				if m, ok := meta[d.ID]; ok {
-					state.Shell, state.RCFile = m.Shell, cmp.Or(m.RCFile, defaultRCFile)
-					if at := m.SyncedAt; !at.IsZero() {
-						state.SyncedAt = &at
-					}
+					metadata := launcherSyncMetadata(d, m)
+					metadata.State, metadata.Error = state.State, state.Error
+					state = metadata
 				}
 				states[d.ID] = state
 			}()
 		}
 		wg.Wait()
+		st.zshrcWrite.Lock()
+		st.zshrcMu.Lock()
+		for _, d := range devices {
+			if current, ok := st.zshrc[d.ID]; ok {
+				seen[d.ID] = mergeLauncherSource(seen[d.ID], current, true)
+			}
+		}
+		st.zshrcMu.Unlock()
 		if store := s.store(); changed && store != nil {
 			_ = store.PutSetting(ctx, launchersZshrcKey, seen)
 			_ = store.PutSetting(ctx, launchersMetaKey, meta)
@@ -197,10 +310,7 @@ func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool) []zshrcLaunc
 		st.zshrcMu.Lock()
 		st.zshrc, st.zshrcSync = seen, states
 		st.zshrcMu.Unlock()
+		st.zshrcWrite.Unlock()
 	}
-	out := make([]zshrcLaunchers, 0, len(devices))
-	for _, d := range devices {
-		out = append(out, zshrcLaunchers{MachineID: d.ID, Launchers: seen[d.ID], Sync: states[d.ID], ClaudeVersion: d.ClaudeVersion})
-	}
-	return out
+	return zshrcLauncherSnapshot(devices, seen, states)
 }

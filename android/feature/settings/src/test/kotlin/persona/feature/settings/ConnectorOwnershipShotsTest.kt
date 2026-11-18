@@ -61,6 +61,18 @@ class ConnectorOwnershipShotsTest {
             return rows.first { it.id == id && it.manager == owner }.copy(enabled = enabled)
         }
         override suspend fun connectorLogout(id: String) { note("logout:$id") }
+        override suspend fun gitHubAuth(): GitHubAuth {
+            note("auth")
+            return GitHubAuth(source = "device", machines = listOf(GitHubMachine(id = "studio", name = "Studio", state = "signed_in")))
+        }
+        override suspend fun setGitHubAuth(machine: String?): GitHubAuth {
+            note("set-auth:${machine ?: "device"}")
+            return GitHubAuth(
+                source = if (machine == null) "device" else "machine",
+                machine = machine,
+                machines = listOf(GitHubMachine(id = "studio", name = "Studio", state = "signed_in")),
+            )
+        }
     }
 
     @Test fun zeroSingleAndMultipleAccountsKeepTheirIdentities() {
@@ -81,13 +93,18 @@ class ConnectorOwnershipShotsTest {
             rows.map { connectorTitle(it, rows, sameNames) })
     }
 
-    @Test fun settingsDistinguishesOwnersAndClicksKeepTheOwner() {
-        val api = Api(listOf(signedOut, signedOut.copy(manager = "work")))
+    /**
+     * Settings › Connectors is the current assistant's (docs/assistant/managers.md "Clients"): its list is asked for it and
+     * shows its connectors alone (no owner after the name), a click opens its own; another assistant current, that one's.
+     */
+    @Test fun connectorsAreTheCurrentAssistants() {
+        val api = Api(listOf(signedOut, signedOut.copy(manager = "work", account = "work-example", status = "ok")))
         val context = ApplicationProvider.getApplicationContext<Context>()
         val services = demoSettingsServices(context.resources).copy(demo = false, connection = Online(), connectors = api)
         var dark by mutableStateOf(false)
         var style by mutableStateOf(AppStyle.Glass)
         val opened = mutableListOf<ConnectorRoute>()
+        AssistantManagerChoice.choose("hub", null, "assistant")
         rule.setContent {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                 CompositionLocalProvider(LocalManagerRoster provides roster) {
@@ -98,14 +115,24 @@ class ConnectorOwnershipShotsTest {
             }
         }
         rule.waitUntil { api.calls.isNotEmpty() }
-        rule.onNode(hasScrollAction()).performScrollToNode(hasText("GitHub · Work"))
-        rule.onNodeWithText("GitHub · Personal").assertExists().performClick()
-        rule.onNodeWithText("GitHub · Work").assertExists().performClick()
-        assertEquals(listOf(ConnectorRoute("github", "assistant"), ConnectorRoute("github", "work")), opened)
+        rule.waitUntil { rule.onAllNodesWithText("GitHub").fetchSemanticsNodes().isNotEmpty() }
+        // The default assistant's list names no manager (the request the hub always got).
+        assertEquals(listOf<Pair<String, String?>>("list" to null), api.calls.filter { it.first == "list" }.distinct())
+        assertEquals(0, rule.onAllNodesWithText("work-example", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("GitHub · ", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithText("GitHub").performClick()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
-            capture("connectors-owners-${s.key}-${if (d) "dark" else "light"}")
+            capture("connectors-current-${s.key}-${if (d) "dark" else "light"}")
         }
+        style = AppStyle.Glass; dark = false
+        // Work current: its list, asked for it, and its own connector.
+        rule.runOnIdle { AssistantManagerChoice.pick("work") }
+        rule.waitUntil { rule.onAllNodesWithText("work-example", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(api.calls.contains("list" to "work"))
+        rule.onNodeWithText("GitHub").performClick()
+        assertEquals(listOf(ConnectorRoute("github", "assistant"), ConnectorRoute("github", "work")), opened)
+        AssistantManagerChoice.reset()
     }
 
     @Test fun detailLoginAndSettingsStayWithTheClickedOwnerWhenOwnersChange() {
@@ -119,7 +146,9 @@ class ConnectorOwnershipShotsTest {
         rule.waitForIdle()
         rule.onNodeWithText("personal-example").assertDoesNotExist()
         val res = ApplicationProvider.getApplicationContext<Context>().resources
-        rule.onNodeWithText(res.getString(R.string.settings_src_connector_sign_in, "GitHub")).performClick()
+        val signIn = res.getString(R.string.settings_src_connector_sign_in, "GitHub")
+        rule.waitUntil { rule.onAllNodesWithText(signIn).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText(signIn).performClick()
         rule.waitForIdle()
         assertTrue(api.calls.contains("login:github" to "work"))
         rule.onNode(hasSetTextAction()).performTextInput("example-token")
@@ -130,13 +159,44 @@ class ConnectorOwnershipShotsTest {
         rule.waitForIdle()
         assertTrue(api.calls.contains("enable:github" to "work"))
         owner = "assistant"
+        rule.waitUntil { rule.onAllNodesWithText("personal-example").fetchSemanticsNodes().isNotEmpty() }
+        // Signed in on GitHub: the account is the status line. Choosing a computer is what stays with this assistant;
+        // there is no Sign out, because switching source signs out of the previous method.
+        rule.onAllNodesWithText("personal-example").assertCountEquals(1)
+        rule.onNodeWithText(res.getString(R.string.settings_src_connector_sign_out)).assertDoesNotExist()
+        rule.onNodeWithText("Studio").performClick()
         rule.waitForIdle()
-        rule.onAllNodesWithText("personal-example").assertCountEquals(2)
-        rule.onNodeWithText(res.getString(R.string.settings_src_connector_sign_out)).performClick()
-        rule.onAllNodesWithText(res.getString(R.string.settings_src_connector_sign_out)).onLast().performClick()
-        rule.waitForIdle()
-        assertTrue(api.calls.contains("logout:github" to "assistant"))
+        assertTrue(api.calls.contains("set-auth:studio" to "assistant"))
         assertEquals(listOf("work", "assistant"), api.calls.filter { it.first == "list" }.map { it.second }.distinct())
+    }
+
+    /** GitHub has no Sign out. Another connector that still does must log out of the assistant shown after the switch. */
+    @Test fun signOutAfterSwitchingOwnerGoesToTheNewManager() {
+        val slack = signedOut.copy(id = "slack", name = "Slack")
+        val api = Api(listOf(slack.copy(status = "ok", account = "personal-example"), slack.copy(manager = "work")))
+        var owner by mutableStateOf("work")
+        rule.setContent { PersonaTheme(reduceMotion = true) {
+            CompositionLocalProvider(LocalManagerRoster provides roster) {
+                HubConnectorPage(api, "slack", {}, manager = owner)
+            }
+        } }
+        rule.waitForIdle()
+        val res = ApplicationProvider.getApplicationContext<Context>().resources
+        val signIn = res.getString(R.string.settings_src_connector_sign_in, "Slack")
+        rule.waitUntil { rule.onAllNodesWithText(signIn).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText(signIn).performClick()
+        rule.waitForIdle()
+        assertTrue(api.calls.contains("login:slack" to "work"))
+        owner = "assistant"
+        val signOut = res.getString(R.string.settings_src_connector_sign_out)
+        rule.waitUntil { rule.onAllNodesWithText(signOut).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithText("personal-example").fetchSemanticsNodes().isNotEmpty())
+        rule.onNodeWithText(signOut).performClick()
+        rule.waitUntil { rule.onAllNodesWithText(signOut).fetchSemanticsNodes().size >= 2 }
+        rule.onAllNodesWithText(signOut)[1].performClick()
+        rule.waitForIdle()
+        assertTrue(api.calls.contains("logout:slack" to "assistant"))
+        assertFalse(api.calls.any { it.first == "logout:slack" && it.second != "assistant" })
     }
 
     private fun capture(name: String) {

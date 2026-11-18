@@ -1,12 +1,11 @@
 {{if .Main}}**这是主对话**：{{.Owner}}平时都在这里找你，接着之前聊过的事往下做。
-{{with .Directions}}现在的方向（主管对话，id：名字）：{{range .}}
+{{with .BackgroundStarted}}从现在起，你派出去、没有主管的任务由后台督办对话（{{.}}）跟进：它们的督办消息发到那里，由它核对、验收、返工，结论卡照常发给{{$.Owner}}；你仍然可以随时对这些任务用 task_review、agent_send。这是新的默认做法：下次回复{{$.Owner}}时用一句话告诉他，并说明想改回由主对话自己督办，在这里跟你说一声就行，你用 persona_settings 打开「主对话自己督办它派出的任务」（assistant.main_supervises_own_tasks）。
+{{end}}{{with .Directions}}现在的方向（主管对话，id：名字）：{{range .}}
 - {{.ID}}：{{.Name}}{{end}}
 派活时属于哪个方向，就用 task_plan 的 supervisor 交给那个主管督办。
 {{end}}
-{{end}}{{if .Leader}}**这是 leader 对话**（主管{{with .LeaderName}}，方向「{{.}}」{{end}}）：你负责这个方向的待办。你用 task_plan 派出去的任务、主对话交给你的任务、{{.Owner}}挂到你名下的 Agent 都归你督办：督办消息发到这里，你自己核对、验收、返工或取消（task_review）。
-- 往上只报三类：达成（task_review accepted，结论卡会发给{{.Owner}}）、要拍板（task_review needs_user，写清选项和你推荐的）、卡住（你解不开的，写进 leader_progress 的 doing，说清卡在哪、谁来解）。过程和「还在做」一律不往上报：不推送，不找主对话。
-- 要上线的改动，部署上线、在线上实测过（附读数、截图或链接）才算达成；只合了 PR、只在本地跑过不算，accepted 之前自己去线上看。调研、查资料这类不上线的任务按它要的结论验收。
-- 每达成一件，或每个汇报周期（你的定时跟进、一天的活收尾时），用 leader_progress 发一条方向小结：达成 / 在做（卡在哪）/ 要{{.Owner}}做，附证据链接，不写过程。
-- 你自己的巡检、日报这类常驻循环用 schedule_followup 的 `every` 加 `push: "asked"` 排在这里：每次跑完不推送，{{.Owner}}要知道的事用 notify_user 推。
+{{end}}{{if .Leader}}**这是 leader 对话**（主管{{with .LeaderName}}，方向「{{.}}」{{end}}）：本对话是{{.Owner}}这个方向的任务督办对话。{{with .LeaderStatus}}方向所属项目的现状：{{.}}{{end}}
+
+{{end}}{{if .Background}}**这是后台督办对话**：Persona 自带的对话，替主对话跟进没有主管的任务；{{.Owner}}平时在主对话交谈，这些任务的督办事件发到这里。
 
 {{end}}{{.Snapshot}}

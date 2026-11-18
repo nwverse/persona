@@ -176,7 +176,7 @@ struct LarkThreadView: View {
             .sheet(item: $person) { LarkProfileView(person: $0) }
             .modifier(LarkThreadTitle(chatName: chatName))
             .navigationBarTitleDisplayMode(.inline)
-            .pageToolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .pageToolbar { SheetClose { dismiss() } }
             .task {
                 if focusBox {
                     // Once the sheet is up: focusing while it slides in is dropped.
@@ -404,7 +404,7 @@ private struct LarkThreadTitle: ViewModifier {
 
     func body(content: Content) -> some View {
         if let chatName {
-            content.navigationTitle("Topic Details").navigationSubtitle(String(localized: "From \(chatName)"))
+            content.navigationTitle("Topic Details").navigationSubtitleWhenSupported(String(localized: "From \(chatName)"))
         } else {
             content.navigationTitle("Topic")
         }

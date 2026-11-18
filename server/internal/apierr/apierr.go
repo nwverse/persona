@@ -76,6 +76,10 @@ func Body(status int, code string, err error) map[string]any {
 	}
 	body := map[string]any{"error": err.Error(), "code": code}
 	switch code {
+	case "search_changed":
+		body["retryable"] = true
+	case "conversation_deleted", "conversation_protected", "conversation_busy":
+		body["retryable"], body["delivered"] = false, "none"
 	case "invalid_token", "forbidden", "bad_request", "not_found", "method_not_allowed", "gone":
 		body["retryable"] = false
 	case "input_draft", "dialog_open", "prompt_changed":
@@ -134,18 +138,22 @@ func NodeCode(err error) string {
 	return "internal"
 }
 
-// Call writes the error of a call that went to a machine's node (or further): offline is 503, a refusal the node
-// coded is 409 with its details, anything else 502.
+// Call writes the error of a call that went to a machine's node (or further): offline is 503, a session or file the
+// node says is not there (not_found) 404, any other refusal the node coded 409 with its details, anything else 502.
 func Call(w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
 	if errors.Is(err, ErrOffline) {
 		status = http.StatusServiceUnavailable
 	}
-	code := NodeCode(err)
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code != "" {
-		code = re.Code
-		switch code {
+		switch re.Code {
+		case "conversation_deleted":
+			status = http.StatusGone
+		case proto.CodeNotFound: // no such session or file there: the client asked for something that is not (#9551)
+			status = http.StatusNotFound
+		case "conversation_protected":
+			status = http.StatusBadRequest
 		case "internal", "node_unreachable", "timeout":
 			status = http.StatusBadGateway
 		case proto.CodeTerminalNotReady: // the node's new tab would not take the start command; nothing ran
@@ -153,6 +161,17 @@ func Call(w http.ResponseWriter, err error) {
 		default:
 			status = http.StatusConflict
 		}
+	}
+	CallStatus(w, status, err)
+}
+
+// CallStatus writes err, a node call's error, as Call does but with status: for a route whose clients already read
+// Call's status as something else (a to-do's accept, where every app takes a 409 for "already handled", #7343).
+func CallStatus(w http.ResponseWriter, status int, err error) {
+	code := NodeCode(err)
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code != "" {
+		code = re.Code
 	}
 	body := Body(status, code, err)
 	// delivered stays what the node said (sendsafe.go): the iOS app treats "unknown" as "maybe typed" and stops
@@ -187,6 +206,13 @@ func Call(w http.ResponseWriter, err error) {
 		if _, hasDetail := body["detail"]; !hasDetail {
 			body["detail"] = re.Message
 		}
+	} else if l := i18n.OfWriter(w); re != nil && code == proto.CodeNotFound && l != "" {
+		// What the node says is not there (#9551): a summary in the request's language, its words (which session,
+		// which file) the detail. Only here: the hub's own 404s keep the words they wrote.
+		if _, hasDetail := body["detail"]; !hasDetail {
+			body["detail"] = re.Message
+		}
+		body["error"] = i18n.T(l, "http-status.not_found")
 	} else if _, explained := codeActions[code]; !explained {
 		localizeFailure(body, status, err, i18n.OfWriter(w))
 	}
@@ -201,20 +227,40 @@ func LocalizedBody(status int, code string, err error, l i18n.Lang) map[string]a
 }
 
 var rpcFailureKeys = map[string]string{
-	"timeout":                  "rpc-errors.timeout",
-	"node_unreachable":         "rpc-errors.unreachable",
-	"internal":                 "rpc-errors.failed",
-	"input_draft":              "rpc-errors.input_draft",
-	"dialog_open":              "rpc-errors.dialog_open",
+	"rewind_busy":        "rpc-errors.rewind_busy",
+	"rewind_unsupported": "rpc-errors.rewind_unsupported",
+	"rewind_mismatch":    "rpc-errors.rewind_mismatch",
+	"rewind_nothing":     "rpc-errors.rewind_nothing",
+	"rewind_failed":      "rpc-errors.rewind_failed",
+	proto.CodeNotLoaded:  "rpc-errors.not_loaded", // a read that would start an agent its engine let go (Paseo, #8132)
+	"skill_unavailable":  "rpc-errors.skill_unavailable",
+	"timeout":            "rpc-errors.timeout",
+	"node_unreachable":   "rpc-errors.unreachable",
+	"internal":           "rpc-errors.failed",
+	"input_draft":        "rpc-errors.input_draft",
+	"dialog_open":        "rpc-errors.dialog_open",
+	// the first message to a Codex opened with no first message (node/codex_waiting.go, #4961)
+	"codex_not_ready":          "rpc-errors.codex_not_ready",
+	"codex_first_text":         "rpc-errors.codex_first_text",
+	"codex_first_unconfirmed":  "rpc-errors.codex_first_unconfirmed",
+	"codex_waiting":            "rpc-errors.codex_waiting",
+	"codex_no_box":             "rpc-errors.codex_no_box",
+	"codex_no_box_here":        "rpc-errors.codex_no_box_here", // the same in a pane the user picked (#5504)
 	"prompt_changed":           "rpc-errors.prompt_changed",
 	"attach_busy":              "rpc-errors.attach_busy",
 	proto.CodeTerminalNotReady: "rpc-errors.terminal_not_ready",
 	// a start's new tab stopped on its shell (node/shellsettle.go, #2570)
-	proto.CodeShellWaiting:      "rpc-errors.shell_waiting",
-	proto.CodeStartLineRejected: "rpc-errors.start_line_rejected",
-	"node_outdated":             "rpc-errors.node_outdated",
-	"readonly_unsupported":      "rpc-errors.readonly_unsupported",
-	"assistant_in_doubt":        "rpc-errors.in_doubt",
+	proto.CodeShellWaiting:               "rpc-errors.shell_waiting",
+	proto.CodeStartLineRejected:          "rpc-errors.start_line_rejected",
+	"node_outdated":                      "rpc-errors.node_outdated",
+	"assistant_service_tier_start_only":  "rpc-errors.assistant_service_tier_start_only",
+	"assistant_service_tier_unsupported": "rpc-errors.assistant_service_tier_unsupported",
+	"assistant_service_tier_refused":     "rpc-errors.assistant_service_tier_refused",
+	"readonly_unsupported":               "rpc-errors.readonly_unsupported",
+	// a start whose engine runs only its own launchers and has none of the launcher's kind (#8140); the engine's own
+	// words, naming the launcher, stay in detail
+	proto.CodeLauncherKindMissing: "rpc-errors.launcher_kind_missing",
+	"assistant_in_doubt":          "rpc-errors.in_doubt",
 	// queued messages sent now (#6088)
 	"nothing_queued":        "rpc-errors.nothing_queued",
 	"send_now_unsupported":  "rpc-errors.send_now_unsupported",
@@ -226,12 +272,19 @@ var rpcFailureKeys = map[string]string{
 	"worktree_in_use":   "rpc-errors.worktree_in_use",
 	"worktree_dirty":    "rpc-errors.worktree_dirty",
 	"worktree_unmerged": "rpc-errors.worktree_unmerged",
+	// a preview's server with no terminal engine to run in (node/preview_launch.go)
+	"preview_no_terminal": "rpc-errors.preview_no_terminal",
+	// a space to rename that no engine of the computer lists any more (node/rename.go)
+	"space_gone": "rpc-errors.space_gone",
 	// a Claude session outside Persona's terminals, through its peer inbox (node/claudepeer.go)
 	"peer_unsupported": "rpc-errors.peer_unsupported",
 	"peer_unreachable": "rpc-errors.peer_unreachable",
 	"peer_too_long":    "rpc-errors.peer_too_long",
 	"peer_unconfirmed": "rpc-errors.peer_unconfirmed",
+	"peer_held":        "rpc-errors.peer_held", // a bypass permissions session holds it for approval at the computer
 	"peer_command":     "rpc-errors.peer_command",
+	// a desktop app session nothing runs, which the app did not open in time (node/claudedesktop_open.go)
+	"desktop_open_failed": "rpc-errors.desktop_open_failed",
 	// the node menus' Git ▸ Pull / Push / Fetch and the Git pane's Pull (#1888); the *_failed ones carry git's words
 	"no_directory":        "rpc-errors.no_directory",
 	"detached_head":       "rpc-errors.detached_head",
@@ -245,8 +298,38 @@ var rpcFailureKeys = map[string]string{
 	// session.modes (node/modes.go, #1843)
 	proto.CodeModesOnComputer: "rpc-errors.modes_on_computer",
 	proto.CodeModesNotRunning: "rpc-errors.modes_not_running",
+	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
+	"agent_stopped":      "rpc-errors.agent_stopped",
+	"resume_not_allowed": "rpc-errors.resume_not_allowed",
+	"stop_not_saved":     "rpc-errors.stop_not_saved",
+	// a message to an omp session the node cannot resume: one not running with no known file, or a stopped one listed
+	// from omp's session files (node/control.go, node/ompcalls.go)
+	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
 	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
+	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)
+	proto.CodeSwitchStale:           "rpc-errors.switch_stale",
+	proto.CodeSwitchPickModel:       "rpc-errors.switch_pick_model",
+	proto.CodeSwitchUnderWay:        "rpc-errors.switch_under_way",
+	proto.CodeSwitchUnsupported:     "rpc-errors.switch_unsupported",
+	proto.CodeSwitchLauncherMissing: "rpc-errors.switch_launcher_missing",
+	proto.CodeSwitchOtherAgent:      "rpc-errors.switch_other_agent",
+	proto.CodeSwitchModelLocked:     "rpc-errors.switch_model_locked",
+	proto.CodeSwitchConfigDir:       "rpc-errors.switch_config_dir",
+	proto.CodeSwitchNotStopped:      "rpc-errors.switch_not_stopped",
+	proto.CodeSwitchFailed:          "rpc-errors.switch_failed",
+	proto.CodeSwitchFailedStopped:   "rpc-errors.switch_failed_stopped",
+	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
+}
+
+// openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
+// whereOpen). One without a known where (an older node, an Agent runtime's own refusal) keeps its words.
+var openElsewhereKeys = map[string]string{
+	"desktop":     "rpc-errors.open_elsewhere_desktop",
+	"terminal":    "rpc-errors.open_elsewhere_terminal",
+	"program":     "rpc-errors.open_elsewhere_program",
+	"other":       "rpc-errors.open_elsewhere_other",
+	"agents_list": "rpc-errors.open_elsewhere_agents_list",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
@@ -262,6 +345,10 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	}
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
+	if code == "open_elsewhere" {
+		where, _ := body["where"].(string)
+		key = openElsewhereKeys[where]
+	}
 	if errors.Is(err, ErrOffline) {
 		key = "rpc-errors.offline"
 	}
@@ -275,6 +362,11 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	}
 	// a summary that names {reason} carries the original words (git's, for a failed pull or push)
 	body["error"] = i18n.T(l, key, i18n.Args{"reason": original})
+	switch code {
+	case "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused":
+		// The native diagnostic is not a person-facing instruction; the stable, translated refusal says what to do.
+		return
+	}
 	if _, hasDetail := body["detail"]; !hasDetail && original != body["error"] {
 		body["detail"] = original
 	}
@@ -322,6 +414,9 @@ func OnMachine(err error, name string) error {
 	data := map[string]any{}
 	if len(re.Data) > 0 && json.Unmarshal(re.Data, &data) != nil {
 		return err
+	}
+	if data == nil {
+		data = map[string]any{}
 	}
 	if n, _ := data["machine_name"].(string); n != "" {
 		return err

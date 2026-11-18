@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { t } from "../../i18n";
 import { isRelayContext, sourceLabel } from "../../lib/message-source";
 import { parseUserText } from "../../lib/turns";
@@ -15,13 +15,26 @@ import { FileCards } from "./FileCards";
 import { Thumb } from "./Steps";
 import { ContextGroup } from "./ContextGroup";
 
+export type SourceProps = { msg: UserMessage; mid: string; sid: string };
+
+// Keep the scheduled-task disclosure off the startup path for chats without one.
+const ScheduledTaskMessage = lazy(() => import("./ScheduledTaskMessage"));
+
 /** Relayed words and automatic inputs are sources in one chat, never participants or user bubbles. */
-export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string; sid: string }) {
+export function SourceMessage(props: SourceProps) {
+  if (props.msg.source?.kind === "scheduled_task") {
+    return <Suspense fallback={<div className="h-24" aria-hidden="true" />}><ScheduledTaskMessage {...props} /></Suspense>;
+  }
+  return <RelayedSourceMessage {...props} />;
+}
+
+function RelayedSourceMessage({ msg, mid, sid }: SourceProps) {
   const { scope } = useChatContext();
   const [open, setOpen] = useExpanded(`${scope}source:${msg.id}`);
   const [measuredLong, setMeasuredLong] = useState(false);
   const full = useFullText(msg.injected ? undefined : msg.rawInput?.find((item) => item.kind === "text" && item.full_size), mid, sid);
-  const text = msg.injected ? msg.injected.detail || msg.injected.line : full.text ? parseUserText(full.text).text : msg.text;
+  // a scheduled task's prompt stays out of the main conversation while background rounds fold (promptHidden)
+  const text = msg.injected ? (msg.promptHidden ? "" : msg.injected.detail) || msg.injected.line : full.text ? parseUserText(full.text).text : msg.text;
   const long = measuredLong || text.length > 180 || text.split("\n").length > 3;
   useReveal(scope, [msg.id], () => {
     if (open) return;

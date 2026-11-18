@@ -79,6 +79,15 @@ extension AppModel {
         for link in links where !link.isDemo { link.live.renewCredential(from: old, to: token) }
     }
 
+    /// Settings › Devices revoked the watch's credential `id` at `group`'s hub (#1871): the registry forgets it, and the
+    /// watch gets a new one (or, with none issued, the group is missing and the watch drops the revoked one).
+    func watchCredentialRevoked(_ id: String, group: String) async {
+        guard let r = DeviceCredentialTrade.forgettingWatch(registry, id: id, group: group) else { return }
+        registry = r
+        saveRegistry(r)
+        await upgradeCredentials()
+    }
+
     /// Nothing kept about this device's credentials outside the registry any more (the registry goes with `unpair`).
     func forgetDeviceCredentials() {
         UserDefaults.standard.removeObject(forKey: HubStore.legacyDeviceIDKey)
@@ -105,6 +114,16 @@ nonisolated enum DeviceCredentialTrade {
         var out = r
         out.hubs[i].watch = ServerConfig(url: expected.config.url, token: token.token)
         out.hubs[i].watchDeviceID = token.id
+        return out
+    }
+
+    /// The registry once the watch credential `id` of a hub of `group` was revoked: that hub keeps no watch credential,
+    /// so `issueWatchToken` issues a new one; nil when no hub of the group holds it.
+    static func forgettingWatch(_ r: HubRegistry, id: String, group: String) -> HubRegistry? {
+        guard !id.isEmpty, let i = r.hubs.firstIndex(where: { $0.group == group && $0.watchDeviceID == id }) else { return nil }
+        var out = r
+        out.hubs[i].watch = nil
+        out.hubs[i].watchDeviceID = nil
         return out
     }
 
@@ -145,7 +164,6 @@ nonisolated enum DeviceCredentialTrade {
 /// Settings › Devices: every device with its own credential, revocable one by one.
 struct DevicesView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var tokens: [APIClient.DeviceToken] = []
     @State private var current: String?
     /// Per credential, how the hub pushes to its device (#5998); empty from an older hub.
@@ -225,12 +243,9 @@ struct DevicesView: View {
                 }
                 Text(detail(t)).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 if t.revokedAt == nil, let route = push[t.id] { DevicePushLine(route: route) }
-                // At the accessibility text sizes under the words: beside them, a chip and Revoke made the watch's row
-                // wider than its card (#1796).
-                if t.revokedAt == nil, typeSize.isAccessibilitySize { revokeButton(t) }
             }
             Spacer(minLength: 0)
-            if t.revokedAt == nil, !typeSize.isAccessibilitySize { revokeButton(t) }
+            if t.revokedAt == nil { revokeButton(t) }
         }
     }
 
@@ -270,6 +285,7 @@ struct DevicesView: View {
         do {
             try await api.revokeToken(t.id)
             Haptics.success()
+            await model.watchCredentialRevoked(t.id, group: model.hub?.group ?? "")
             await load()
         } catch {
             model.show(error)

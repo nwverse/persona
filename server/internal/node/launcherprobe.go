@@ -16,12 +16,14 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // What a ~/.zshrc launcher really sets, for its page in Settings › Models: reading the function's text misses everything a
 // helper (`_claude_proxy URL TOKEN MODEL WINDOW`) or a local variable does, so the node runs the launcher in a
 // subshell with `claude`, `codex`, `traex`, `command` and `env` stubbed out: instead of starting anything they print
-// the environment and arguments the agent would have got. probeScript is that harness; parseProbe reads its output.
+// the environment and arguments the agent would have got. `command env …` goes to the env stub, not to the real
+// /usr/bin/env, which would start the real agent (#5972). probeScript is that harness; parseProbe reads its output.
 
 const probeMarker = "__PERSONA_LAUNCHER_PROBE__"
 
@@ -62,7 +64,7 @@ function traex { __jp_report traex "$@"; }
 function dsh { __jp_report dsh "$@"; }
 function agy { __jp_report agy "$@"; }
 function omp { __jp_report omp "$@"; }
-function command { case "$1" in claude|codex|traex|dsh|agy|omp) local w=$1; shift; __jp_report $w "$@" ;; *) builtin command "$@" ;; esac; }
+function command { case "$1" in claude|codex|traex|dsh|agy|omp) local w=$1; shift; __jp_report $w "$@" ;; env) shift; env "$@" ;; *) builtin command "$@" ;; esac; }
 function env {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -96,6 +98,8 @@ type Probe struct {
 	// Shell is the shell's environment before the launcher ran (what ~/.zshrc exports for everything); nil when it
 	// was not seen (a wrapper script read from its text).
 	Shell map[string]string
+	// Unset are the variables of Shell the agent did not get (`env -u NAME`, `unset NAME` in the launcher), sorted.
+	Unset []string
 }
 
 func parseProbe(out string) (Probe, bool) {
@@ -110,6 +114,7 @@ func parseProbe(out string) (Probe, bool) {
 			}
 		}
 	}
+	envSeen := false
 	sc := bufio.NewScanner(strings.NewReader(out))
 	sc.Buffer(make([]byte, 1<<20), 8<<20)
 	for sc.Scan() {
@@ -127,9 +132,18 @@ func parseProbe(out string) (Probe, bool) {
 			pairs(strings.TrimPrefix(rest, "base "), base)
 		case strings.HasPrefix(rest, "env "):
 			pairs(strings.TrimPrefix(rest, "env "), p.Env)
+			envSeen = true
 		case strings.HasPrefix(rest, "file "):
 			p.File = strings.TrimPrefix(rest, "file ")
 		}
+	}
+	if envSeen {
+		for k := range base {
+			if _, ok := p.Env[k]; !ok {
+				p.Unset = append(p.Unset, k)
+			}
+		}
+		sort.Strings(p.Unset)
 	}
 	for k, v := range p.Env {
 		if old, ok := base[k]; ok && old == v {
@@ -146,8 +160,12 @@ var probeCache = struct {
 }{at: map[string]time.Time{}, got: map[string]proto.LauncherDetail{}}
 
 // launcherProbeCached probes at most every 10 minutes per launcher: running one may run what it runs first (a script
-// that fetches a token), so opening its page again should not repeat that.
+// that fetches a token), so opening its page again should not repeat that. Past that it reads the kept probe
+// (keptProbe), which a message or a start has usually taken already.
 func (n *Node) launcherProbeCached(ctx context.Context, name string) proto.LauncherDetail {
+	if proto.IsExternalLauncher(name) {
+		return proto.LauncherDetail{Agent: "claude", Error: externalRefusal(ctx, "adapter_probe_unsupported").Error()}
+	}
 	probeCache.Lock()
 	if at, ok := probeCache.at[name]; ok && time.Since(at) < 10*time.Minute {
 		d := probeCache.got[name]
@@ -156,12 +174,15 @@ func (n *Node) launcherProbeCached(ctx context.Context, name string) proto.Launc
 	}
 	probeCache.Unlock()
 	var d proto.LauncherDetail
-	if p, err := n.launcherProbe(ctx, name); err == nil {
+	if p, err := n.keptProbe(ctx, name); err == nil {
 		d = LauncherDetail(p)
 	} else if errors.Is(err, errProbeUnseen) {
 		d = proto.LauncherDetail{Agent: launcherAgentType(name), Error: err.Error()}
 	} else {
 		d = proto.LauncherDetail{Error: err.Error()}
+		if ctx.Err() != nil && err == ctx.Err() {
+			return d // the caller gave up; the probe goes on and is kept for the next one
+		}
 	}
 	probeCache.Lock()
 	probeCache.at[name], probeCache.got[name] = time.Now(), d
@@ -171,7 +192,10 @@ func (n *Node) launcherProbeCached(ctx context.Context, name string) proto.Launc
 
 // launcherProbe runs the probe on this machine (a login shell, so ~/.zshrc defines the launcher).
 func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (Probe, error) {
-	if !nameRe.MatchString(name) {
+	if proto.IsExternalLauncher(name) {
+		return Probe{}, externalRefusal(ctx, "adapter_probe_unsupported")
+	}
+	if !shellcmd.NameRe.MatchString(name) {
 		return Probe{}, fmt.Errorf("invalid launcher %q", name)
 	}
 	if path := n.scriptLauncher(ctx, name); path != "" {
@@ -191,7 +215,7 @@ func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (
 	if p.File != "" { // a file on PATH the list does not have as a wrapper script (yet): read, never run
 		sp, err := scriptProbe(p.File, args)
 		if err != nil {
-			return Probe{}, err
+			return p, err
 		}
 		return withSettingsEnv(sp, n.home), nil
 	}

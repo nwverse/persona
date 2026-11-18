@@ -21,9 +21,10 @@ vi.hoisted(() => {
   })) as typeof window.matchMedia;
 });
 
+const api = vi.hoisted(() => vi.fn(async (_path: string): Promise<unknown> => ({})));
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
-  api: async () => ({}),
+  api,
 }));
 
 const renders = vi.hoisted(() => new Map<string, number>());
@@ -38,8 +39,9 @@ vi.mock("./assistant/Supervision", async (orig) => {
   };
 });
 
-const { getState, upsertSession } = await import("../lib/store");
+const { getState, putTodo, upsertSession, refreshTodos } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
+const { t } = await import("../i18n");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -56,6 +58,8 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(async () => {
+  api.mockReset();
+  api.mockResolvedValue({});
   seed({
     todos: [todo("ta", "整理发布清单", "s1"), todo("tb", "修登录页", "s2")],
     todosLoaded: true,
@@ -78,6 +82,44 @@ afterEach(async () => {
 });
 
 describe("todo rows on a sessions push", () => {
+  it("renders a fresh waiting PR in its own section with link and blocker details", async () => {
+    const url = "https://example.com/repo/pull/91";
+    await act(async () => putTodo({ ...getState().todos[0], id: "ta", title: "Waiting PR", agents: [], pr_url: url, delivery: { state: "pr" }, pr_status: { url, state: "open", draft: false, review: "required", checks: "failure", conflicts: false, checked_at: new Date(Date.now() - 30_000).toISOString() } }));
+    const section = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="parked"]');
+    expect(section?.textContent).toContain("Waiting PR");
+    const link = section?.querySelector<HTMLAnchorElement>('[data-testid="todo-pr-line"] a');
+    expect(link?.href).toBe(url);
+    expect(section?.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
+    expect(section?.textContent).toContain(t("assistant-tasks.pr_blocker_checks_failed"));
+  });
+
+  it("refreshes N/M, evidence and reporter from a to-do update without waiting for a review", async () => {
+    const list = getState().todos.map((td) => ({ ...td, supervision: {
+      supervisor: "main", done_when: ["Tests pass", "PR opened"],
+      criteria: [{ criterion: "Tests pass", state: "pending" as const }, { criterion: "PR opened", state: "pending" as const }],
+    } }));
+    api.mockImplementation(async (path) => path === "/todos" ? { todos: list } : {});
+    await act(async () => { await refreshTodos(); });
+    const row = () => [...host.querySelectorAll<HTMLElement>("[role=button]")].find((el) => el.textContent?.includes("修登录页"))!;
+    expect(row().querySelector('[data-testid="review-badge"]')?.textContent).toContain("0/2");
+    const updated = list.map((td) => td.id !== "tb" ? td : { ...td, supervision: { ...td.supervision, criteria: [
+      { criterion: "Tests pass", state: "met" as const, evidence: "go test: PASS", at: now, by: "agent:m1/s2" },
+      { criterion: "PR opened", state: "pending" as const },
+    ] } });
+    api.mockImplementation(async (path) => path === "/todos" ? { todos: updated } : {});
+    await act(async () => { await refreshTodos(); });
+    expect(row().querySelector('[data-testid="review-badge"]')?.textContent).toContain("1/2");
+    expect(row().querySelector('[data-testid="criteria-summary"], details, summary, time')).toBeNull();
+    expect(row().textContent).not.toContain("go test: PASS");
+    expect(row().textContent).not.toContain("Agent · m1/s2");
+    expect(host.querySelector('[aria-current="true"]')?.textContent).toContain("整理发布清单");
+    // The existing task navigation opens the existing review checklist; the row adds no criterion UI.
+    await act(async () => { row().click(); });
+    const detail = host.querySelector('[data-testid="review-checklist"]')!;
+    expect(detail.textContent).toContain("go test: PASS");
+    expect(detail.textContent).toContain("agent:m1/s2");
+    expect(detail.querySelector("time")?.dateTime).toBe(now);
+  });
   it("keeps the selected Needs you detail neutral while working retains its orange tint", async () => {
     const { TODO_STATUS_INFO } = await import("../lib/todos");
     expect(host.querySelector(".bg-orange-tint.text-orange")?.textContent).toContain(TODO_STATUS_INFO.working.label);
@@ -104,5 +146,21 @@ describe("todo rows on a sessions push", () => {
     expect(renders.get("ta")).toBeUndefined();
     const titles = [...host.querySelectorAll("[role=button] .truncate.font-semibold")].map((el) => el.textContent);
     expect(titles).toEqual(["修登录页", "整理发布清单"]);
+  });
+
+  it("labels open and closed concerns, not ordinary to-dos", async () => {
+    const list = [
+      { ...todo("ta", "Working concern", "s1"), kind: "concern" },
+      todo("tb", "Ordinary task", "s2"),
+      { ...todo("tc", "Reported concern", "s3"), kind: "concern", done_at: now, done_by: "reported", agents: [] },
+      { ...todo("td", "Open concern", "s4"), kind: "concern", agents: [] },
+    ];
+    api.mockImplementation(async (path) => path === "/todos" ? { todos: list } : {});
+    await act(async () => { await refreshTodos(); });
+    const tag = (id: string) => host.querySelector(`[data-todo="${id}"] [data-testid="todo-concern"]`);
+    expect(tag("ta")?.textContent).toBe(t("todos.concern"));
+    expect(tag("tc")?.textContent).toBe(t("todos.concern"));
+    expect(tag("td")?.textContent).toBe(t("todos.concern"));
+    expect(tag("tb")).toBeNull();
   });
 });

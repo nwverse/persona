@@ -16,8 +16,7 @@
 //   trae      SI `trae.svg`; source trae.ai (TRAE, ByteDance's coding agent; not TRAEX, which keeps its letter)
 // viewBoxes of opencode, cursor and trae are cropped to the glyph (CLAUDE.md: assets carry no padding); nothing else is changed.
 import { t } from "../i18n";
-import { agentId, agentLetter, agentName, isMarked, sessionAgent, type AgentSurface, type MarkedAgent } from "../lib/agent-kind";
-import type { Session } from "../lib/types";
+import { agentLetter, agentName, isMarked, markId, sessionAgent, type AgentSurface, type MarkedAgent } from "../lib/agent-kind";
 import { cx } from "./atoms";
 import claudeMark from "./brands/claude.svg";
 import codexMark from "./brands/codex.svg";
@@ -41,17 +40,23 @@ const MARKS: Record<MarkedAgent, { src: string; template?: boolean; fit: number 
 
 /**
  * `agent` is what the node reports ("" is Claude Code); `label` the runtime's own name for an agent the app does not
- * know; `surface` the client it runs in (#6390): the command line's mark carries a </> badge on its lower right, the
- * desktop app's none. `size` is the box. The mark says what it is (role=img, "Claude Code, command line");
- * `decorative` for a place that names the agent in text right beside it.
+ * know, whose mark is drawn when it names an agent that has one (a Paseo provider named "Cursor", markId); `surface`
+ * the client it runs in (#6390): the command line's mark carries a </> badge on its lower right, the desktop app's
+ * none. `size` is the box. The mark says what it is (role=img, "Claude Code, command line"); `decorative` for a place
+ * that names the agent in text right beside it.
  */
-export function AgentMark({ agent, label, surface, size = 14, decorative, className }: { agent?: string; label?: string; surface?: AgentSurface; size?: number; decorative?: boolean; className?: string }) {
-  const id = agentId(agent);
+export function AgentMark({ agent, label, surface, size = 14, decorative, className, remote }: { agent?: string; label?: string; surface?: AgentSurface; size?: number; decorative?: boolean; className?: string; /** It runs on another computer: a signal arc at the mark's upper right (RemoteSignal). */ remote?: boolean }) {
+  const id = markId(agent, label);
   const agentNamed = agentName(agent, label);
-  const name = surface ? t("agent-mark.with_surface", { agent: agentNamed, surface: t(`agent-mark.surface_${surface}`) }) : agentNamed;
+  const name = markName(agent, label, surface);
   const a11y = decorative ? { "aria-hidden": true as const } : { role: "img" as const, "aria-label": name };
   const box = cx("relative inline-flex shrink-0 items-center justify-center", className ?? "text-ink-2");
-  const badge = surface === "cli" && <CliBadge size={size} />;
+  const badge = (
+    <>
+      {surface === "cli" && <CliBadge size={size} />}
+      {remote && <RemoteSignal size={size} />}
+    </>
+  );
   if (!isMarked(id)) {
     return (
       <span {...a11y} data-agent-mark="letter" data-agent-surface={surface} className={box} style={{ width: size, height: size }}>
@@ -102,7 +107,48 @@ function CliBadge({ size }: { size: number }) {
   );
 }
 
+/**
+ * "On another computer" (#5421, cindy's RemoteSignalOverlay, the same mark its header and sidebar draw for an Agent that
+ * runs elsewhere): one arc and a dot off the mark's upper right corner, in the mark's text color. It overhangs the box
+ * without taking room, so a mark with it lines up with one without. Drawn on a 16-unit canvas whose lower-left 12.5 units
+ * are the mark's box.
+ */
+function RemoteSignal({ size }: { size: number }) {
+  const unit = size / 12.5;
+  const band = 3.5 * unit;
+  return (
+    <svg
+      aria-hidden
+      data-agent-remote
+      viewBox="0 0 16 16"
+      width={16 * unit}
+      height={16 * unit}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      className="pointer-events-none absolute"
+      style={{ right: 0.1 * size - band, top: 0.1 * size - band }}
+    >
+      <path d="M12 1.4A2.6 2.6 0 0 1 14.6 4" />
+      <circle cx="12.6" cy="3.4" r="0.95" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** What a mark says it is: the agent's name, with the client it runs in ("Codex, command line"). */
+function markName(agent?: string, label?: string, surface?: AgentSurface): string {
+  const named = agentName(agent, label);
+  return surface ? t("agent-mark.with_surface", { agent: named, surface: t(`agent-mark.surface_${surface}`) }) : named;
+}
+
+/** What a session's mark says it is (SessionMark's accessible name), for a place that names it along with more. */
+export function sessionMarkName(s: Parameters<typeof sessionAgent>[0]): string {
+  const { agent, label, surface } = sessionAgent(s);
+  return markName(agent, label, surface);
+}
+
 /** The mark of a session's agent. */
-export function SessionMark({ s, ...rest }: { s: Pick<Session, "agent" | "agent_label" | "source_kind" | "agent_surface"> } & Omit<Parameters<typeof AgentMark>[0], "agent" | "label" | "surface">) {
+export function SessionMark({ s, ...rest }: { s: Parameters<typeof sessionAgent>[0] } & Omit<Parameters<typeof AgentMark>[0], "agent" | "label" | "surface">) {
   return <AgentMark {...sessionAgent(s)} {...rest} />;
 }

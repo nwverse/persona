@@ -48,7 +48,8 @@ type rolloutMeta struct {
 type rolloutCache struct {
 	at       time.Time
 	rollouts []codexRollout
-	older    []rolloutFile // rollouts in day directories before the window and archived ones, listed once a minute
+	segments []codexRollout // every file of rollouts', a continued thread's older segments too (rolloutSegments)
+	older    []rolloutFile  // rollouts in day directories before the window and archived ones, listed once a minute
 	olderAt  time.Time
 	// misses are the ids rolloutPath globbed for and found nowhere, with missStamp then: a thread with no rollout (an
 	// app-server thread that never wrote one) was globbed across all of history every second. A miss holds while the
@@ -56,6 +57,7 @@ type rolloutCache struct {
 	misses   map[string][]int64
 	metas    map[string]rolloutMeta // path → its session_meta (never changes once written); gone paths leave it once a minute
 	titles   map[string]string
+	former   map[string][]string // id → the names session_index.jsonl gave the thread before its latest (a rename)
 	titlesAt time.Time
 }
 
@@ -210,6 +212,7 @@ func rollouts(home string) []codexRollout {
 	})
 	// A continuation is another physical rollout for the same logical thread. As with resumed
 	// transcript copies, follow its newest file; do not advertise each segment as a new session.
+	c.segments = slices.Clone(out)
 	seen := map[string]bool{}
 	unique := out[:0]
 	for _, r := range out {
@@ -221,6 +224,24 @@ func rollouts(home string) []codexRollout {
 	out = unique
 	c.rollouts, c.at = out, now
 	return out
+}
+
+// rolloutSegments is every rollout file rollouts lists (written in the last two weeks), each segment of a continued
+// thread too, newest first: the token usage meter reads them all (usage_adapters.go), the session list a thread's
+// newest.
+func rolloutSegments(home string) []codexRollout {
+	rollouts(home)
+	rolloutCaches.Lock()
+	defer rolloutCaches.Unlock()
+	return slices.Clone(cacheFor(home).segments)
+}
+
+// allRolloutPaths is every rollout file of a home on disk, whenever it was written, archived ones too: what a token
+// usage backfill reaching further back than rollouts' two weeks reads.
+func allRolloutPaths(home string) []string {
+	paths, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
+	archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl"))
+	return append(paths, archived...)
 }
 
 // pruneMetas keeps the session_meta of the rollouts just listed (recent and older), so a deleted or moved rollout
@@ -406,24 +427,35 @@ func (n *Node) codexSession(a host.Agent, taken map[string]host.Agent) string {
 	return ""
 }
 
-// codexByTitle finds the thread a Codex pane shows by the name in its title ("<name> | <directory>"; either part may
-// be cut short with "..."). Of several threads with that name it keeps prefer (what herdr or a start said), else takes
-// the most recently written one not taken. "" when the title carries no name (a new thread) or no thread has it.
-func (n *Node) codexByTitle(a host.Agent, prefer string, taken map[string]host.Agent) string {
-	i := strings.LastIndex(a.Title, " | ")
+// codexTitleName is the thread's name in a Codex pane's title ("<name> | <directory>"; either part may be cut short
+// with "..."), and a test for a name in the index that it could be. ok is false when the title carries no name.
+func codexTitleName(title string) (name string, match func(string) bool, ok bool) {
+	i := strings.LastIndex(title, " | ")
 	if i <= 0 {
-		return ""
+		return "", nil, false
 	}
-	name := strings.TrimSpace(a.Title[:i])
+	name = strings.TrimSpace(title[:i])
 	// Codex adds this state prefix while a question is open; it is not part of the thread's name.
 	name = strings.TrimPrefix(name, "[ . ] Action Required | ")
 	name = strings.TrimPrefix(name, "[ ! ] Action Required | ")
 	cut := strings.TrimSuffix(strings.TrimSuffix(name, "..."), "…")
+	return name, func(t string) bool { return t == name || (cut != name && strings.HasPrefix(t, cut)) }, true
+}
+
+// codexByTitle finds the thread a Codex pane shows by the name in its title (codexTitleName). Of several threads with
+// that name it keeps prefer (what herdr or a start said), else takes the most recently written one not taken. claimed
+// says at least one matching thread already belongs to another pane, so the caller must not keep a stale fallback.
+func (n *Node) codexByTitle(a host.Agent, prefer string, taken map[string]host.Agent) (bestID string, claimed bool) {
+	_, match, ok := codexTitleName(a.Title)
+	if !ok {
+		return "", false
+	}
 	home := n.codexPaneHome(a.PaneID)
 	var best string
 	var bestAt time.Time
-	for _, id := range threadsNamed(home, func(t string) bool { return t == name || (cut != name && strings.HasPrefix(t, cut)) }) {
+	for _, id := range threadsNamed(home, match) {
 		if _, used := taken[n.codexPublicID(home, id)]; used {
+			claimed = true
 			continue
 		}
 		p := rolloutPath(home, id)
@@ -431,7 +463,7 @@ func (n *Node) codexByTitle(a host.Agent, prefer string, taken map[string]host.A
 			continue // a pane shows its conversation, never a subagent's thread
 		}
 		if id == prefer {
-			return id
+			return id, claimed
 		}
 		if p == "" {
 			continue
@@ -440,7 +472,7 @@ func (n *Node) codexByTitle(a host.Agent, prefer string, taken map[string]host.A
 			best, bestAt = id, st.ModTime()
 		}
 	}
-	return best
+	return best, claimed
 }
 
 // threadTitle is the name the agent gave the thread (<home>/session_index.jsonl, last entry wins); re-read on change.
@@ -448,6 +480,22 @@ func threadTitle(home, id string) string {
 	rolloutCaches.Lock()
 	defer rolloutCaches.Unlock()
 	return threadTitles(home)[id]
+}
+
+// threadFormerlyNamed says whether session_index.jsonl gave thread id a name that passes match before its latest one:
+// the thread was renamed, and a title that still shows the earlier name is that same thread's.
+func threadFormerlyNamed(home, id string, match func(string) bool) bool {
+	rolloutCaches.Lock()
+	defer rolloutCaches.Unlock()
+	if threadTitles(home) == nil {
+		return false // no index (any more): what it said before is no evidence now
+	}
+	for _, t := range cacheFor(home).former[id] {
+		if match(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // threadsNamed lists the threads whose name passes match.
@@ -472,7 +520,7 @@ func threadTitles(home string) map[string]string {
 	}
 	c := cacheFor(home)
 	if c.titles == nil || st.ModTime().After(c.titlesAt) {
-		titles := map[string]string{}
+		titles, former := map[string]string{}, map[string][]string{}
 		if f, err := os.Open(path); err == nil {
 			sc := bufio.NewScanner(f)
 			sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -482,12 +530,16 @@ func threadTitles(home string) map[string]string {
 					Name string `json:"thread_name"`
 				}
 				if json.Unmarshal(sc.Bytes(), &e) == nil && e.ID != "" && strings.TrimSpace(e.Name) != "" {
-					titles[e.ID] = strings.TrimSpace(e.Name)
+					name := strings.TrimSpace(e.Name)
+					if last, ok := titles[e.ID]; ok && last != name {
+						former[e.ID] = append(former[e.ID], last)
+					}
+					titles[e.ID] = name
 				}
 			}
 			f.Close()
 		}
-		c.titles, c.titlesAt = titles, st.ModTime()
+		c.titles, c.former, c.titlesAt = titles, former, st.ModTime()
 	}
 	return c.titles
 }

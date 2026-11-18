@@ -45,9 +45,13 @@ type Mail interface {
 	Call(ctx context.Context, name string, args json.RawMessage, approve func(ctx context.Context, summary string, input json.RawMessage) bool) proto.ToolResult
 	// CallRef is Call that also says the Message-ID of the mail mail_send handed to the transport ("" for anything else).
 	CallRef(ctx context.Context, name string, args json.RawMessage, approve func(ctx context.Context, summary string, input json.RawMessage) bool) (proto.ToolResult, string)
+	// CallJSON is a read tool's answer as JSON for subscriptions (connector.ReadJSON); ok is false for a tool without one.
+	CallJSON(ctx context.Context, name string, args json.RawMessage) (out json.RawMessage, ok bool, err error)
 	ListAccounts() ([]mail.MailAccount, error)
 	ListMessages(ctx context.Context, opts mail.ListOptions) (*mail.ListResult, error)
 	GetMessage(ctx context.Context, accountID string, uid uint32, mailbox string) (*mail.MailMessage, error)
+	// SeenFlags is, for each of uids still in mailbox, whether it is seen; one it no longer has is not in the map.
+	SeenFlags(ctx context.Context, accountID, mailbox string, uids []uint32) (map[uint32]bool, error)
 	Send(ctx context.Context, req mail.SendRequest) error
 	// FetchAttachment is one attachment's bytes for mail_save_attachment (the node's mail.attachment), at most max.
 	FetchAttachment(ctx context.Context, accountID string, uid uint32, mailbox, id string, max int64) (mail.Attachment, []byte, error)

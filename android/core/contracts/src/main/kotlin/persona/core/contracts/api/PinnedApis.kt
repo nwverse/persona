@@ -22,6 +22,7 @@ fun MailTransport.pinned(pins: ManagerPins?): MailTransport =
 private class PinnedExtensionManagement(val source: ExtensionManagement, private val pins: ManagerPins) :
     ExtensionManagement by source {
     override suspend fun extensions() = withContext(pins) { source.extensions() }
+    override suspend fun subscriptionSummary() = withContext(pins) { source.subscriptionSummary() }
     override suspend fun listing() = withContext(pins) { source.listing() }
     override suspend fun extension(id: String) = withContext(pins) { source.extension(id) }
     override suspend fun setEnabled(id: String, enabled: Boolean, cascade: Boolean) = withContext(pins) { source.setEnabled(id, enabled, cascade) }
@@ -46,6 +47,8 @@ private class PinnedExtensionManagement(val source: ExtensionManagement, private
         values: Map<String, String>?) = withContext(pins) { source.uiAction(extension, ui, action, context, state, values) }
     override suspend fun uiImage(path: String) = withContext(pins) { source.uiImage(path) }
 
+    override fun iconPath(value: String) = source.iconPath(value)
+    override suspend fun icon(path: String) = withContext(pins) { source.icon(path) }
     override suspend fun markets() = withContext(pins) { source.markets() }
     override suspend fun addMarket(spec: String, token: String?) = withContext(pins) { source.addMarket(spec, token) }
     override suspend fun removeMarket(id: String) = withContext(pins) { source.removeMarket(id) }
@@ -55,13 +58,13 @@ private class PinnedExtensionManagement(val source: ExtensionManagement, private
     override suspend fun previewFromMarket(market: String, extension: String) = withContext(pins) { source.previewFromMarket(market, extension) }
     override suspend fun install(preview: ExtensionPreview) = withContext(pins) { source.install(preview) }
     override suspend fun upgrade(id: String, preview: ExtensionPreview) = withContext(pins) { source.upgrade(id, preview) }
-    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean) = withContext(pins) { source.uninstall(id, keepData, cascade) }
+    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean) = withContext(pins) { source.uninstall(id, keepData, cascade, members) }
     override suspend fun autoUpgrades() = withContext(pins) { source.autoUpgrades() }
     override suspend fun setAutoUpgrades(auto: Boolean) = withContext(pins) { source.setAutoUpgrades(auto) }
     override suspend fun startFromMarket(market: String, extension: String) = withContext(pins) { source.startFromMarket(market, extension) }
     override suspend fun agree(preview: ExtensionPreview, upgradeOf: String?) = withContext(pins) { source.agree(preview, upgradeOf) }
-    override suspend fun startUninstall(id: String, keepData: Boolean, cascade: Boolean) =
-        withContext(pins) { source.startUninstall(id, keepData, cascade) }
+    override suspend fun startUninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean) =
+        withContext(pins) { source.startUninstall(id, keepData, cascade, members) }
     override suspend fun operations() = withContext(pins) { source.operations() }
     override suspend fun operation(id: String) = withContext(pins) { source.operation(id) }
     override suspend fun retryOperation(id: String) = withContext(pins) { source.retryOperation(id) }

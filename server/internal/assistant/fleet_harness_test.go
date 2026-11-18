@@ -36,12 +36,17 @@ type fleetDevs struct {
 	// Notification Center (confirm; LinkRang).
 	linkDesktop bool
 	confirmed   map[string]bool
+	// watched: the sessions an app has open (Watched), by machine and session.
+	watched map[[2]string]bool
 }
 
 type fleetNode struct {
 	name, home, trust string
 	sessions          []proto.Session
+	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
+	// away: its node is not connected (Summary and List say not reachable); its sessions stay as last listed.
+	away bool
 	// call answers the node's methods (nil: {}); calls are the ones it got.
 	call  func(method string, params json.RawMessage) (any, error)
 	calls []fleetCall
@@ -126,7 +131,7 @@ func (d *fleetDevs) List() []devices.Summary {
 	var out []devices.Summary
 	for _, id := range d.order {
 		n := d.machines[id]
-		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: true, Reachable: true})
+		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: !n.away, Reachable: !n.away})
 	}
 	return out
 }
@@ -137,6 +142,17 @@ func (d *fleetDevs) MachineResources(string) (*proto.Machine, *proto.MetricSampl
 
 func (d *fleetDevs) Canonical(id string) string { return id }
 
+// Summary is List's entry for id, found without the others as the devices do.
+func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil || !slices.Contains(d.order, id) {
+		return devices.Summary{}, false
+	}
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: !n.away, Reachable: !n.away}, true
+}
+
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -144,7 +160,19 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	if n == nil {
 		return nil, false
 	}
+	n.lists++
 	return append([]proto.Session(nil), n.sessions...), true
+}
+
+// AppendSessions copies the list into dst's array, as the devices do.
+func (d *fleetDevs) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil {
+		return dst, false
+	}
+	return append(dst, n.sessions...), true
 }
 
 // SessionsWhere copies out only what keep accepts, as the devices do: a benchmark of a view then counts no copy of the
@@ -287,6 +315,20 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	return nil
 }
 
+func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool, error) {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.status[id] != "pending" {
+		return false, nil
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id {
+			m.recs[i].Interaction.Resumable = true
+		}
+	}
+	return true, nil
+}
+
 func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *proto.Resolution) error {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
@@ -317,6 +359,40 @@ func (m *fleetMem) Interactions(_ context.Context, machine, session string, _ in
 		}
 	}
 	return out, nil
+}
+
+// InteractionsPage is db.InteractionsPage over the kept records, by their interaction's CreatedAt.
+func (m *fleetMem) InteractionsPage(_ context.Context, q db.InteractionQuery) (db.InteractionPage, error) {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 100
+	}
+	var all []db.InteractionRecord
+	for _, r := range m.recs {
+		ix := r.Interaction
+		if q.Machine != "" && ix.MachineID != q.Machine || q.Session != "" && ix.SessionID != q.Session || q.Kind != "" && ix.Kind != q.Kind ||
+			!q.Since.IsZero() && ix.CreatedAt.Before(q.Since) {
+			continue
+		}
+		if !q.Before.IsZero() && !(ix.CreatedAt.Before(q.Before) || q.BeforeID != "" && ix.CreatedAt.Equal(q.Before) && ix.ID < q.BeforeID) {
+			continue
+		}
+		all = append(all, r)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		a, b := all[i].Interaction, all[j].Interaction
+		if a.CreatedAt.Equal(b.CreatedAt) {
+			return a.ID > b.ID
+		}
+		return a.CreatedAt.After(b.CreatedAt)
+	})
+	page := db.InteractionPage{Records: all[:min(len(all), q.Limit)]}
+	if len(all) >= q.Limit {
+		last := all[q.Limit-1].Interaction
+		page.NextBefore, page.NextBeforeID = &last.CreatedAt, last.ID
+	}
+	return page, nil
 }
 
 func (m *fleetMem) AllowAlways(_ context.Context, session, _ string, keys []string) error {
@@ -363,11 +439,12 @@ var _ fleetStore = (*fleetMem)(nil)
 
 // fleetTest is a manager with the fleet on: s, its devices d, its hub f, its store st.
 type fleetTest struct {
-	t  *testing.T
-	s  *Service
-	d  *fleetDevs
-	f  *fakeHub
-	st *fleetMem
+	t      *testing.T
+	s      *Service
+	d      *fleetDevs
+	f      *fakeHub
+	st     *fleetMem
+	cancel context.CancelFunc
 }
 
 // newFleetTest is a manager carrying the machine "mac" (named "Mac") with a store, on a fake hub.
@@ -479,3 +556,19 @@ var errNode = errors.New("the node refused")
 func init() { _ = apierr.ErrOffline }
 
 func (d *fleetDevs) Follow(context.Context, string, string, bool) error { return nil }
+
+func (d *fleetDevs) Watched(id, session string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.watched[[2]string{id, session}]
+}
+
+// watch has an app open machine id's session (on) or close it.
+func (d *fleetDevs) watch(id, session string, on bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.watched == nil {
+		d.watched = map[[2]string]bool{}
+	}
+	d.watched[[2]string{id, session}] = on
+}

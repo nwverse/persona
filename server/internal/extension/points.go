@@ -33,6 +33,13 @@ type Point struct {
 
 var connectorID = lazyre.New(`^[a-z][a-z0-9]*$`)
 
+// schemePattern is a secret_providers scheme (op), reservedSchemes the ones no provider may claim: addresses and the
+// app's own links, which a secret field never holds as a reference.
+var (
+	schemePattern   = lazyre.New(`^[a-z][a-z0-9+.-]{0,15}$`)
+	reservedSchemes = []string{"http", "https", "file", "data", "persona", "about", "javascript"}
+)
+
 // ConnectorItem is a contribution to connectors: the connector protocol's manifest (docs/protocol/connector-protocol.md), known
 // before the program ever runs.
 type ConnectorItem struct {
@@ -69,6 +76,22 @@ const metaDescriptionMost = 4000
 
 // VoiceItem is a contribution to voice: the voice conversation's contract (docs/extensions/extensions.md "Voice").
 type VoiceItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// TranscriptionItem is a contribution to transcription: transcribing a meeting's audio on the hub for the manager
+// (docs/assistant/meeting-minutes.md "The `transcription` extension point"). Only the manager dials it, over the
+// extension's own socket under /transcription/<id>/ (extwire.TranscriptionProtocol); the apps' forward never reaches it.
+type TranscriptionItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// SpeechItem is a contribution to speech: reading a text aloud for the apps (docs/extensions/extensions.md "Speech"), over
+// the extension's own socket under /speech/<id>/ with the voice extension's read-aloud contract (a meeting answer the
+// iPhone says aloud).
+type SpeechItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
 }
@@ -588,6 +611,9 @@ var Points = map[string]Point{
 		if u.Icon != "" && (u.Placement != "nav_page" || !slices.Contains(UIIcons, u.Icon)) {
 			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon, one of %s", u.ID, strings.Join(UIIcons, ", "))
 		}
+		if g := u.Group; g != nil && (u.Placement != "nav_page" || !uiGroupID.MatchString(g.ID) || g.Title == "" || utf8.RuneCountInString(g.Title) > 40) {
+			return u.ID, fmt.Errorf("ui %s: only a nav_page names a group, its id a-z0-9- (at most 32) and its title 1 to 40 characters", u.ID)
+		}
 		if u.Opens != "" && u.Placement != "overview_card" && u.Placement != "capsule_card" && u.Placement != "widget" {
 			return u.ID, fmt.Errorf("ui %s: only an overview_card, capsule_card or widget opens a page", u.ID)
 		}
@@ -679,6 +705,33 @@ var Points = map[string]Point{
 		}
 		return a.ID, nil
 	}},
+	// secret_providers: values for references of its schemes (op://…), resolved when a setting holding one is used or
+	// the user approves handing one to an Agent run (secrets.describe / secrets.resolve, docs/extensions/secret-providers.md).
+	"secret_providers": {Name: "secret_providers", Namespace: "secrets", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var p SecretProviderItem
+		if err := strict(raw, &p); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(p.ID) {
+			return p.ID, fmt.Errorf("secret_providers id %q: a-z0-9_-", p.ID)
+		}
+		if strings.TrimSpace(p.Name) == "" || utf8.RuneCountInString(p.Name) > 80 {
+			return p.ID, fmt.Errorf("secret_providers %s: a name of 1 to 80 characters", p.ID)
+		}
+		if len(p.Schemes) == 0 || len(p.Schemes) > 4 {
+			return p.ID, fmt.Errorf("secret_providers %s: 1 to 4 schemes", p.ID)
+		}
+		for i, s := range p.Schemes {
+			if !schemePattern.MatchString(s) || slices.Contains(reservedSchemes, s) {
+				return p.ID, fmt.Errorf("secret_providers %s: scheme %q: a-z0-9+.- starting with a letter, at most 16, not %s", p.ID, s,
+					strings.Join(reservedSchemes, ", "))
+			}
+			if slices.Contains(p.Schemes[:i], s) {
+				return p.ID, fmt.Errorf("secret_providers %s: scheme %q twice", p.ID, s)
+			}
+		}
+		return p.ID, nil
+	}},
 	"voice": {Name: "voice", Namespace: "voice", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
 		var v VoiceItem
 		if err := strict(raw, &v); err != nil {
@@ -686,6 +739,30 @@ var Points = map[string]Point{
 		}
 		if !idPattern.MatchString(v.ID) {
 			return v.ID, fmt.Errorf("voice id %q: a-z0-9_-", v.ID)
+		}
+		return v.ID, nil
+	}},
+	// transcription: a meeting's audio to text, for the manager only (TranscriptionItem); served over the program's
+	// HTTP socket like voice.
+	"transcription": {Name: "transcription", Namespace: "transcription", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
+		var v TranscriptionItem
+		if err := strict(raw, &v); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(v.ID) {
+			return v.ID, fmt.Errorf("transcription id %q: a-z0-9_-", v.ID)
+		}
+		return v.ID, nil
+	}},
+	// speech: a text read aloud for the apps (SpeechItem); served over the program's HTTP socket, reached through the
+	// apps' forward to the extension.
+	"speech": {Name: "speech", Namespace: "speech", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
+		var v SpeechItem
+		if err := strict(raw, &v); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(v.ID) {
+			return v.ID, fmt.Errorf("speech id %q: a-z0-9_-", v.ID)
 		}
 		return v.ID, nil
 	}},
@@ -715,6 +792,18 @@ var Points = map[string]Point{
 			return "", err
 		}
 		return s.ID, checkShortcut(s)
+	}},
+	// iphone: operating the iPhones paired with the user's Macs over RemotePairing (only the built-in iphone,
+	// docs/extensions/iphone.md); the same contribution as computer's: an id and a name.
+	"iphone": {Name: "iphone", Namespace: "iphone", Version: 1, Item: func(raw json.RawMessage) (string, error) {
+		var c ComputerItem
+		if err := strict(raw, &c); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(c.ID) {
+			return c.ID, fmt.Errorf("iphone id %q: a-z0-9_-", c.ID)
+		}
+		return c.ID, nil
 	}},
 	"computer": {Name: "computer", Namespace: "computer", Version: 1, Item: func(raw json.RawMessage) (string, error) {
 		var c ComputerItem

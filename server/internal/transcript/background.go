@@ -26,9 +26,13 @@ var (
 	wfNameRe   = lazyre.New("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
 	expiresRe  = lazyre.New(`expires in (\d+)(ms|s|m|h)\b`)
 	wakeInRe   = lazyre.New(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
-	bgMovedRe  = lazyre.New(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
-	// a foreground command backgrounded by hand: "Command was manually backgrounded by user with ID: bmk9rnfdz. Output is being written to: …"
-	bgManualRe = lazyre.New(`manually backgrounded by user with ID:?\s*([A-Za-z0-9_-]+)`)
+	// A foreground command moved to the background, timed out ("Command did not complete within its 120s timeout and
+	// was moved to the background (ID: b1). …") or by hand ("Command was manually backgrounded by user with ID:
+	// bmk9rnfdz. Output is being written to: …"). Claude Code starts a line with the notice, alone or after the output
+	// so far; the same words inside a line are the output quoting them (grep hits, a numbered Read, a test table), and
+	// taking those for a launch kept a finished session Working for a day (#9091).
+	bgMovedRe  = lazyre.New(`(?m)^Command\b[^\n]*?moved to the background \(ID: ([A-Za-z0-9_-]+)\)`)
+	bgManualRe = lazyre.New(`(?m)^Command\b[^\n]*?manually backgrounded by user with ID:?[ \t]*([A-Za-z0-9_-]+)`)
 	bgOutputRe = lazyre.New(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
 )
 
@@ -111,6 +115,22 @@ func manualBackground(result string) []string {
 	return bgManualRe.FindStringSubmatch(result)
 }
 
+// LaunchedBackgroundID is the id of the background task a tool result says its call started (a backgrounded command,
+// an async agent, a workflow, a Monitor, a command moved or sent to the background), "" for any other result. The id is
+// read whole, so "bash_1" is not the id of a result that started "bash_12".
+func LaunchedBackgroundID(result string) string {
+	if mm := manualBackground(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgIDRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgMovedRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	return ""
+}
+
 // onceCron reports a cron expression pinned to one date ("33 17 21 10 *": day of month and month both fixed).
 func onceCron(expr string) bool {
 	f := strings.Fields(expr)
@@ -162,6 +182,12 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	}
 	delete(m.fgBash, toolUseID)
 	t, ok := m.bgPending[toolUseID]
+	if !ok && !isError && workflowLaunch(result) {
+		// A workflow's launch whose call was not read: the node's background scan skips lines over 64 KiB
+		// (node/bgscan.go), and a call with its script inline is as long as the script (#6003). The result names the
+		// task, the run and the script file, whose meta block has the name and phases.
+		t, ok = proto.BackgroundTask{Kind: "workflow"}, true
+	}
 	if !ok {
 		if mv := bgMovedRe.FindStringSubmatch(result); mv != nil && !isError {
 			m.removeBackground(mv[1])
@@ -193,6 +219,15 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	}
 	m.removeBackground(t.ID)
 	m.Background = append(m.Background, t)
+}
+
+// wfLaunched starts the Workflow tool's result.
+const wfLaunched = "Workflow launched in background. Task ID:"
+
+// workflowLaunch reports a Workflow tool's result: its first words, and the run it names. A result that only quotes
+// one (a command printing a transcript, a search) does not start with them.
+func workflowLaunch(result string) bool {
+	return strings.HasPrefix(result, wfLaunched) && (wfRunRe.MatchString(result) || wfDirRe.MatchString(result))
 }
 
 // workflowsKept: how many workflow runs a session's Meta remembers.

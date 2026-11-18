@@ -160,7 +160,7 @@ func (r *Registry) SetFeed(id string, f Feed, on bool) error {
 	if !ok {
 		return fmt.Errorf("no feed %q", f)
 	}
-	if !c.Manifest().Has(cp) {
+	if !c.Manifest().Has(cp) && !(f == FeedInbox && c.Manifest().InboxSwitch) {
 		return fmt.Errorf("%s has no %s", c.Name(), cp)
 	}
 	r.mu.Lock()
@@ -282,6 +282,14 @@ func (r *Registry) Offers(name string) bool {
 	return c != nil && slices.Contains(ToolNames(c), name)
 }
 
+// ReadOnly says whether name is one of its connector's declared ReadTools. Actions are never read-only, including
+// actions added after a caller's policy was written.
+func (r *Registry) ReadOnly(name string) bool {
+	c := r.Owner(name)
+	t, ok := As[ReadTools](c)
+	return ok && has(t.Tools(), name)
+}
+
 // ForAgents says whether the tool name is a connector's that the coding agents get too (Manifest.AgentTools).
 func (r *Registry) ForAgents(name string) bool {
 	c := r.Owner(name)
@@ -366,6 +374,13 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 		return proto.ErrorResult(kind, fmt.Sprintf("%s is not available: %s", c.Name(), why), 0)
 	}
 	if t, ok := As[ReadTools](c); ok && has(t.Tools(), name) {
+		if it, ok := t.(ImageTools); ok { // its answer may carry pictures for the model (#8484)
+			a, err := it.CallImages(ctx, name, args)
+			if err != nil {
+				return result(a.Text, err)
+			}
+			return ToolResult(a)
+		}
 		return result(t.Call(ctx, name, args))
 	}
 	a, ok := As[Actions](c)
@@ -411,17 +426,19 @@ func result(text string, err error) proto.ToolResult {
 
 // Info is one connector as GET /api/v1/connectors lists it.
 type Info struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Status       string     `json:"status"`
-	Account      string     `json:"account,omitempty"`
-	Via          string     `json:"via,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	Guide        []string   `json:"guide,omitempty"`
-	LastSync     *time.Time `json:"last_sync,omitempty"`
-	LastEvent    *time.Time `json:"last_event,omitempty"`
-	Capabilities []string   `json:"capabilities"`
-	Hosts        []string   `json:"hosts,omitempty"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Status        string     `json:"status"`
+	Account       string     `json:"account,omitempty"`
+	Via           string     `json:"via,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	Guide         []string   `json:"guide,omitempty"`
+	GuideURL      string     `json:"guide_url,omitempty"`
+	MissingScopes []string   `json:"missing_scopes,omitempty"`
+	LastSync      *time.Time `json:"last_sync,omitempty"`
+	LastEvent     *time.Time `json:"last_event,omitempty"`
+	Capabilities  []string   `json:"capabilities"`
+	Hosts         []string   `json:"hosts,omitempty"`
 	// Enabled: switched on (SetEnabled); off, Status is "disabled".
 	Enabled bool `json:"enabled"`
 	// Archive and Inbox: its feeds are on (SetFeed); only there when it has an archive, an inbox.
@@ -445,7 +462,7 @@ func (r *Registry) Infos(ctx context.Context) []Info {
 	out := []Info{}
 	for _, c := range r.All() {
 		st := StatusOf(ctx, c)
-		info := Info{ID: c.ID(), Name: c.Name(), Status: st.State, Account: st.Account, Via: st.Via, Error: st.Error, Guide: st.Guide,
+		info := Info{ID: c.ID(), Name: DisplayName(ctx, c), Status: st.State, Account: st.Account, Via: st.Via, Error: st.Error, Guide: st.Guide, GuideURL: st.GuideURL, MissingScopes: st.MissingScopes,
 			LastSync: when(st.LastSync), LastEvent: when(st.LastEvent), Capabilities: Capabilities(c), Enabled: r.Enabled(c.ID())}
 		if hosts := c.Manifest().Hosts; len(hosts) > 0 {
 			info.Hosts = hosts
@@ -456,7 +473,7 @@ func (r *Registry) Infos(ctx context.Context) []Info {
 		if c.Manifest().Has(CapArchive) {
 			info.Archive = new(r.Feeds(c.ID(), FeedArchive))
 		}
-		if c.Manifest().Has(CapInbox) {
+		if m := c.Manifest(); m.Has(CapInbox) || m.InboxSwitch {
 			info.Inbox = new(r.Feeds(c.ID(), FeedInbox))
 		}
 		out = append(out, info)
@@ -469,4 +486,20 @@ func when(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// Named is a connector whose display name follows the reader's language. ID and Name stay stable for logs and errors;
+// what people read (the settings list, the switch, an Inbox item's source) comes from DisplayName.
+type Named interface {
+	DisplayName(ctx context.Context) string
+}
+
+// DisplayName is the connector's name for people reading in ctx's language: its own when it is Named, else Name.
+func DisplayName(ctx context.Context, c Connector) string {
+	if n, ok := c.(Named); ok {
+		if name := n.DisplayName(ctx); name != "" {
+			return name
+		}
+	}
+	return c.Name()
 }

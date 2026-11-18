@@ -1,9 +1,44 @@
 @import "tailwindcss";
+/* Tailwind writes a utility for every class-like word in the files it scans. Tests and browser scripts are not the
+   page: their assertions and fixtures (`not.toContain("outline-white")`, `[typed:zzz]`) cost every page's first
+   screen about 0.2 KB (#7418). The admin UI and the showcase import this file too, so their sources stay in. */
+@source not "../**/*.test.{ts,tsx}";
+@source not "../e2e";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Assistant trays share the dock's bounded height; count meters use the small line token. */
-.assistant-action-tray { max-height: var(--assistant-tray-max); }
+/* Shared by every sidebar grouping, below the measured Persona row. */
+.sidebar-group-heading {
+  position: sticky;
+  z-index: 20;
+  background: var(--sidebar-group-bg, var(--page));
+}
+/* Pinned over its rows (SidebarGroup sets data-edge on the innermost pinned heading): the Persona row's divider under
+   it, so a row half under the heading reads as scrolled beneath it, not as text run into it (audit item 51). */
+.sidebar-group-heading[data-edge]::after {
+  content: "";
+  position: absolute;
+  inset-inline: calc(var(--spacing) * 2);
+  bottom: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+[data-sidebar-rows] {
+  --sidebar-group-bg: var(--canvas);
+  scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
+}
+
+/* Assistant trays (#4656): an open one lets the dock (ChatView's DOCK_MAX) take most of what is visible, the chat above
+   giving up the room, and fills only what it needs; expanded, it fills the chat column and the chat steps aside. Count
+   meters use the small line token. */
+[data-chat-dock]:has(.assistant-action-tray) { max-height: var(--assistant-dock-open-max); }
+[data-chat-dock]:has(.assistant-action-tray[data-expanded]) { height: var(--kb-h); max-height: none; min-height: 0; }
+[data-chat-dock]:has(.assistant-action-tray[data-expanded]) > [data-chat-dock-above],
+[data-assistant-actionbar]:has(> .assistant-action-tray[data-expanded]),
+.assistant-action-tray[data-expanded] { flex-grow: 1; }
+/* a plan card's Start row, stuck to the tray's bottom edge, keeps a hairline over what scrolls under it */
+.assistant-action-tray [data-plan-actions] { box-shadow: 0 -1px 0 var(--line); }
 .task-count-meter { height: var(--task-count-meter-height); }
 @media (forced-colors: active) {
   .task-count-meter { border: 1px solid CanvasText; }
@@ -12,9 +47,12 @@
 
 /* Design tokens, keyframes and component grammar from Beautiful UI (https://www.beautifului.dev/, MIT,
  * Copyright (c) 2026 Shane Levine; see THIRD_PARTY_NOTICES.md). Every view reads colors through these.
- * Text tokens (--ink, --ink-2, --ink-3, --accent-ink) keep WCAG AA 4.5:1 on every background token (#2804, theme-contrast.test.ts). */
-:root {
-  --assistant-tray-max: min(20rem, 40dvh);
+ * Text tokens (--ink, --ink-2, --ink-3, --accent-ink) keep WCAG AA 4.5:1 on every background token (#2804, theme-contrast.test.ts).
+ * [data-terminal-scheme] gives an element one scheme's values whatever the page's: the terminal's Appearance
+ * (lib/terminal-appearance.ts). It goes before the page's selector, which the token readers (page-tokens.ts, the
+ * contrast tests) find by a regular expression that ends at the opening brace. */
+[data-terminal-scheme="light"], :root {
+  --assistant-dock-open-max: calc(var(--kb-h) * 0.82);
   --task-count-meter-height: 0.25rem;
   --page: #fafafb;
   --canvas: #f1f2f3;
@@ -64,6 +102,9 @@
   --mark-green: #34c759;
   --mark-blue: #007aff;
   --mark-white: #fff;
+  /* Public package artwork may contain a transparent black mark: keep its backing light in both schemes. */
+  --extension-logo-backing: var(--mark-white);
+  --extension-meta-size: 11px;
   --mark-black: #000;
   --shadow-hairline: 0 0 0 1px var(--line);
   --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #1018280d;
@@ -79,7 +120,7 @@
   --shadow-knob: 0 2px 4px #00000026, 0 1px 1px #0000000f;
 }
 
-.dark {
+[data-terminal-scheme="dark"], .dark {
   --page: #17181a;
   --canvas: #1c1d1f;
   --surface: #232427;
@@ -160,6 +201,8 @@
 /* Phones under 340 px wide (iPhone SE first generation, small Android phones): `max-xs:` is below 340 px, where the composer's mode chips turn into
    an icon and a short word (#4316). */
 @theme { --breakpoint-xs: 340px; }
+/* The task cards' type scale by role (docs/design/task-cards.md §4.1): the card and row title, the meta line, the chip / label, and secondary meta. The sizes the cards already used, now named; iOS Theme.Font bodyStrong / caption / label. */
+@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-label: 12px; --text-submeta: 11.5px; }
 @theme inline {
   --color-page: var(--page);
   --color-canvas: var(--canvas);
@@ -184,6 +227,7 @@
   --color-orange-tint: var(--orange-tint);
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
+  --color-danger-wash: var(--danger-wash);
   --color-attention: var(--attention);
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
@@ -216,7 +260,7 @@
   --sidebar-fold-close-ease: ease-in;
 
   --font-sans: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font-mono: "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
 body {
@@ -242,8 +286,8 @@ body {
 
 
 /* ── Persona additions ──────────────────────────────────── */
-:root { --status-needs: var(--attention); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #f0f1f3; --term-magenta: #a347ba; --term-cyan: #0f8a9c; }
-.dark { --user-bubble: #1d3557; --neutral-bubble: #2c2d31; --term-magenta: #c678dd; --term-cyan: #4fb6c4; }
+[data-terminal-scheme="light"], :root { --status-needs: var(--attention); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #f0f1f3; --term-magenta: #a347ba; --term-cyan: #0f8a9c; }
+[data-terminal-scheme="dark"], .dark { --user-bubble: #1d3557; --neutral-bubble: #2c2d31; --term-magenta: #c678dd; --term-cyan: #4fb6c4; }
 /* The chat's trace (aligned with cindy's defaults, #1963): tool rows and their chevrons, the work group's rail, thought
    text, diff counts and the running status bar's accent. */
 :root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --status-accent: #ea6b17; --tool-hover: #ececec; }
@@ -255,7 +299,8 @@ body {
 /* Sidebar rows (#1647): a minimum height and a fixed line, not the text's own height, so a row is as tall in every
    language and script. 32px is the desktop sidebar row (macOS medium 28 + the web's larger 13px text); fingers get 44
    (touch-hit / min-h-11). */
-:root { --sidebar-row: 32px; --sidebar-row-pad: 4px; }
+:root { --sidebar-row: 32px; --sidebar-row-pad: 4px; --sidebar-indent: 12px; }
+@utility sidebar-indent { padding-inline-start: var(--sidebar-indent); }
 @utility sidebar-row { min-height: var(--sidebar-row); padding-block: var(--sidebar-row-pad); line-height: 18px; }
 /* The machine page's load chart (iOS MetricColor.load): its own hue, apart from CPU / memory / network. */
 :root { --chart-load: #e87ba4; }
@@ -281,6 +326,10 @@ body {
 @keyframes nudge-x{0%,to{transform:none}20%{transform:translateX(-3px)}40%{transform:translateX(3px)}60%{transform:translateX(-2px)}80%{transform:translateX(1px)}}
 [data-search-hit] { outline: 2px solid transparent; outline-offset: -2px; border-radius: var(--radius-control); animation: search-hit 3s ease-out both; }
 @media (prefers-reduced-motion: reduce) { [data-search-hit] { animation: none; outline-color: var(--accent); } }
+/* a reply rings at its own width, on the left, as a bubble rings at its own (#6426); one holding a code block, a table or a
+   card keeps the column's, so nothing in it moves while the ring shows */
+[data-answer][data-search-hit] { outline-offset: 6px; } /* text has no padding of its own: the ring sits just outside it */
+[data-answer][data-search-hit]:not(:has(pre, table, .card-ui)) { width: fit-content; max-width: 100%; }
 
 html, body, #root { height: 100%; }
 /* Pulling down at the top of a scroller must not reload the app. Vertical only: the drawer's sideways drags are unaffected. */
@@ -298,6 +347,21 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 @layer base { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
 /* A row that scrolls sideways without a bar (still by wheel, trackpad and touch); WebKit before 18.2 needs the pseudo. */
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+/* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
+   Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */
+:root { --chat-scrollbar-fade: 220ms; }
+@media (forced-colors: none) {
+  [data-chat-scroll][data-chat-scrollbar="native"] {
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color var(--chat-scrollbar-fade) ease-out;
+  }
+  [data-chat-scroll][data-scrollbar-visible="true"] { scrollbar-color: var(--ink-3) transparent; }
+}
+/* The navigator's measured clearance grows only where the centered column's existing margin is insufficient. */
+[data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 5), var(--chat-nav-clearance, 0px)); }
+@media (min-width: 640px) {
+  [data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 8), var(--chat-nav-clearance, 0px)); }
+}
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
 /* Blue bubbles need stronger muted text in dark mode and a readable focus indicator in both schemes.
    Keep this local: page text and extension accent colors are unchanged. */
@@ -337,13 +401,23 @@ button:disabled { cursor: default; }
 .prose-j blockquote > div > :first-child { margin-top: 0; }
 .prose-j blockquote > div > :last-child { margin-bottom: 0; }
 .prose-j hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
-.prose-j code { font-family: var(--font-mono); font-size: .86em; background: var(--field); border-radius: 5px; padding: .12em .36em; box-shadow: var(--shadow-hairline); }
+/* Inline code's face (#9477): the system's monospaced one, then the body's CJK faces before the generic one, which would
+   draw Chinese in a serif (NSimSun on Windows; Linux falls back to Noto CJK on its own). The monospaced faces come first:
+   a CJK face has proportional Latin letters. Its ink is a step quieter than --ink, a long way from --ink-2 (iOS
+   Theme.Reply.codeInk; theme-contrast.test.ts keeps it readable). */
+.prose-j code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace; font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
 .prose-j pre { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
-.prose-j pre code { background: none; box-shadow: none; padding: 0; font-size: inherit; }
+.prose-j pre code { font-family: var(--font-mono); font-size: inherit; }
 /* A code block with its title bar (#2984, CodeBar): the box is the wrap's, the pre sits in it. */
 .prose-j .code-block { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); overflow: hidden; }
 .prose-j .code-block > pre { margin: 0; background: none; border-radius: 0; box-shadow: none; }
-/* Inline code a click copies (#2984): the body's color on its gray; in a link (a path that opens) the link's. */
+/* Inline code (#2984, #9477): no background, border or padding; 0.94 em, where the monospaced letters sit as large as the
+   words beside them. In a link (a path that opens, a written link) it is the link's color. A little room where it meets a
+   CJK letter, none beside a space or CJK punctuation (ReplyBlocks.tsx rehypeLinkedCode marks the sides). A click copies it:
+   a pale wash shows that while the pointer is on it. */
+.prose-j :is(a, pre) code { color: inherit; }
+.prose-j code[data-gap*=s] { margin-left: .12em; }
+.prose-j code[data-gap*=e] { margin-right: .12em; }
 .prose-j code[data-copy-code] { cursor: pointer; }
 .prose-j code[data-copy-code]:hover { background: var(--hover-2); }
 .prose-j table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: separate; border-spacing: 0; margin: .8em 0; font-size: 13px; border-radius: 10px; box-shadow: var(--shadow-hairline); }
@@ -351,8 +425,19 @@ button:disabled { cursor: default; }
    adds no margin, padding or border; the table keeps its own box, scroll and margin collapse. */
 .prose-j > .md-table:first-child > table { margin-top: 0; }
 .prose-j > .md-table:last-child > table { margin-bottom: 0; }
-.prose-j th, .prose-j td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; min-width: 7em; max-width: 18em; overflow-wrap: anywhere; word-break: normal; }
+/* A cell wraps at a reading length, not a phone's (#9146): a wide column lets a table take the room it needs, up to the
+   column (the table's max-width), and a long sentence still wraps at about 40em. */
+.prose-j th, .prose-j td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; max-width: 40em; overflow-wrap: anywhere; word-break: normal; }
+/* A column is as narrow as its words (audit item 77): a header never wraps, and only a cell long enough to wrap keeps
+   7em, so a squeezed table doesn't stack a sentence a word per line; a short one (a number, a name: Markdown.tsx
+   cellFits) stays on one line and takes what it needs. */
+.prose-j td { min-width: 7em; }
+.prose-j td[data-fit] { min-width: 0; white-space: nowrap; }
+/* A short code chip in a cell (ReplyBlocks.tsx rehypeLinkedCode) is never broken across lines; a long one may wrap anywhere. */
+.prose-j td code[data-chip] { white-space: nowrap; }
 .prose-j th { font-weight: 600; color: var(--ink-2); background: var(--inset); white-space: nowrap; }
+/* The copy button's room in the header row (Markdown.tsx TableBlock): its 24px, its inset and a gap. */
+.prose-j .md-table th:last-child { padding-right: 2.25rem; }
 .prose-j tr:last-child td { border-bottom: 0; }
 .prose-j input[type=checkbox] { margin-right: .4em; accent-color: var(--ink); }
 .prose-j img { max-width: 100%; border-radius: 8px; }
@@ -390,6 +475,36 @@ button:disabled { cursor: default; }
  * Each reads on the surface in its theme (3:1 at least, as an icon); a tile that is on lays it at 14% under the ink. */
 :root { --hue-red: #e3474c; --hue-orange: #e2680a; --hue-amber: #b57a00; --hue-yellow: #9c8500; --hue-green: #189a4d; --hue-teal: #0f8a9c; --hue-blue: #0285ff; --hue-indigo: #5b5bd6; --hue-purple: #9a4fd0; --hue-pink: #d6407f; --hue-gray: #7c8087; }
 .dark { --hue-red: #ee5c61; --hue-orange: #f68f3c; --hue-amber: #f0b429; --hue-yellow: #e8d04a; --hue-green: #3dbb72; --hue-teal: #3fb8c8; --hue-blue: #3d9aff; --hue-indigo: #8b8ef0; --hue-purple: #c08af0; --hue-pink: #ef7aa8; --hue-gray: #9a9ea5; }
+
+/* A permission mode's tone (#3956; iOS Theme.ModeTone, Android ModeTone, docs/design/DESIGN_SYSTEM.md): how much a
+ * mode lets an agent do without asking, on the header's mode button. None is an agent state's color (blue, orange, green).
+ * Ask First (and a mode not reported yet) is the quiet ink on the chip fill; the others wash their capsule at 12%. */
+:root { --danger-wash: color-mix(in srgb, var(--red) 12%, transparent); } /* iOS Theme.danger at 12%: the failed and interrupted conclusion cards and the failed Needs you row (#5569). Reds are 4.78:1 on the tray's surface and 4.31:1 on the light canvas, so every word on the wash is --ink (12:1 and up) and --red only colours icons (theme-contrast.test.ts). --red-tint stays neutral (selection and error fills of the other pages). */
+:root { --mode-plans: #0e7c86; --mode-acts: var(--hue-purple); --mode-allows: var(--red); }
+.dark { --mode-plans: #4fd1c5; }
+:root { --mode-plans-tint: color-mix(in srgb, var(--mode-plans) 12%, transparent); --mode-acts-tint: color-mix(in srgb, var(--mode-acts) 12%, transparent); --mode-allows-tint: color-mix(in srgb, var(--mode-allows) 12%, transparent); }
+@theme inline { --color-mode-plans: var(--mode-plans); --color-mode-acts: var(--mode-acts); --color-mode-allows: var(--mode-allows); --color-mode-plans-tint: var(--mode-plans-tint); --color-mode-acts-tint: var(--mode-acts-tint); --color-mode-allows-tint: var(--mode-allows-tint); }
+
+/* The unified model panel (#5032, after Cindy's model selector; ui/model-panel). An effort level's color says how
+ * strong the level is, not how light the page is, so it is the same in light and dark, taken by the level itself
+ * (lib/model-panel.ts effortColor): a model whose top is High ends blue, and purple is only the true top (Codex's Ultra
+ * takes Max's). Fast's blue shows only in the setup flyout (rows and the pill draw Fast in their own ink); the star
+ * turns gold under the pointer and once saved. The panel opens out of the pill (--model-panel-morph, the design system's
+ * ease) and its content fades in after it; its rows' hover glides between them. */
+:root {
+  --effort-minimal: #2aae5b; --effort-low: #2aae5b; --effort-medium: #14b8a6; --effort-high: #3b82f6; --effort-xhigh: #4f46e5; --effort-max: #8b5cf6;
+  --fast: #3b9eff; --fast-tint: color-mix(in srgb, var(--fast) 16%, transparent);
+  --favorite-star: #d99a06;
+  --model-panel-morph: 220ms; --model-panel-fade: 140ms; --model-panel-fade-delay: 50ms; --model-panel-glide: 80ms; --model-panel-ease: var(--ease-out-strong);
+  --effort-move: 200ms; --effort-resize: 150ms; --effort-ease: var(--ease-link);
+}
+.dark { --favorite-star: #e8b425; }
+@theme inline { --color-fast: var(--fast); --color-fast-tint: var(--fast-tint); --color-favorite-star: var(--favorite-star); }
+/* From the pill's shape (--model-panel-from, set where it opens) to the panel; the clip ends past the panel's edges so
+   its shadow is whole, and goes when the animation does. */
+@keyframes model-panel-morph{0%{clip-path:var(--model-panel-from);transform:translateY(var(--model-panel-shift,0px))}to{clip-path:inset(-32px round 44px);transform:none}}
+@keyframes model-panel-content{0%{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce) { :root { --model-panel-fade-delay: 0ms; } }
 
 /* ── Phones (#1996) ─────────────────────────────────────── */
 /* The chat's reading sizes: 15 / 14 on wide screens, 16 / 15 on a phone (the user's call: iOS reads at 17, but tool rows

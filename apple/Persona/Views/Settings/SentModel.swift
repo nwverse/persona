@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // Settings › Sent as You (#5278, docs/extensions/connectors.md "Sent as the user"): what Persona wrote in the user's name through the
 // connectors, newest first, from GET /api/v1/connectors/sent. The words and rules follow the web page (web/src/lib/sent.ts,
@@ -494,7 +495,10 @@ enum SentText {
 @Observable final class SentModel {
     struct Deps {
         var api: () -> APIClient?
-        static var live: Deps { .init(api: { AppModel.shared.api }) }
+        static var live: Deps {
+            let scope = AssistantSettingsRequestScope(AppModel.shared)
+            return .init(api: { scope.api(AppModel.shared) })
+        }
     }
 
     /// Nil until the first page came in.

@@ -2,5 +2,13 @@
   "failed": "送信できませんでした：{error}",
   "clear_and_send": "クリアして送信",
   "retry": "再試行",
-  "delete": "削除"
+  "check": "確認",
+  "checking": "確認中…",
+  "delete": "削除",
+  "deleted": "メッセージを削除しました",
+  "undo": "元に戻す",
+  "undelivered_waiting": "未送信：{reason}。復旧すると自動で送信されます。",
+  "undelivered_failed": "未送信：{reason}",
+  "undelivered_images": "画像：{count} 枚",
+  "undelivered_action_failed": "うまくいきませんでした：{error}"
 }

@@ -349,7 +349,7 @@ func TestKBCollectsItemsThroughTheHub(t *testing.T) {
 	e := kbEng(t, s)
 	st := e.Store
 	_ = st.PutItem(&kb.Item{Kind: kb.KindDoc, ID: "d1", Source: "example", URL: "https://docs.example.com/d1"})
-	s.kbCollectItems(context.Background(), e)
+	s.kbCollectItems(context.Background(), e, false)
 	if it, ok := st.Item(kb.KindMeeting, "m1"); !ok || it.Title != "周会" || it.Source != "example" {
 		t.Fatalf("meeting %+v", it)
 	}

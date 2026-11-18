@@ -9,6 +9,10 @@ set -eu
 here=$(cd "$(dirname "$0")/../.." && pwd)
 dest=${1:?usage: scripts/gen/sync-sdk.sh <extension repository> [go|ts|all]}
 what=${2:-all}
+case "$what" in
+go | ts | all) ;;
+*) echo "usage: scripts/gen/sync-sdk.sh <extension repository> [go|ts|all]" >&2; exit 2 ;;
+esac
 [ -d "$dest" ] || { echo "no such directory: $dest" >&2; exit 1; }
 commit=$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)
 dirty=$(git -C "$here" status --porcelain -- sdk 2>/dev/null | head -1)
@@ -27,7 +31,7 @@ if [ "$what" = all ] || [ "$what" = ts ]; then
   mkdir -p "$dest/sdk/ts"
   # Keep the declared development commands usable; never copy installed dependencies or build output.
   cp -R "$here/sdk/ts/src" "$here/sdk/ts/scripts" "$here/sdk/ts/typechecks" "$dest/sdk/ts/"
-  cp "$here/sdk/ts/package.json" "$here/sdk/ts/package-lock.json" "$here/sdk/ts/README.md" "$here"/sdk/ts/tsconfig*.json "$dest/sdk/ts/"
+  cp "$here/sdk/ts/package.json" "$here/sdk/ts/package-lock.json" "$here/sdk/ts/README.md" "$here/sdk/ts/.gitignore" "$here"/sdk/ts/tsconfig*.json "$dest/sdk/ts/"
   # Tests use package-local canonical fixtures; do not overwrite the destination repository's schema.
   mkdir -p "$dest/sdk/ts/fixtures"
   cp "$here"/schema/extension/examples/UIStream*.json "$here/schema/extension/examples/Manifest.custom-contributions.json" "$dest/sdk/ts/fixtures/"

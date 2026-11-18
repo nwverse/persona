@@ -23,6 +23,16 @@ export function formatTokens(n: number): string {
   }
 }
 
+/** A count of tokens on one line (a subagent card's "23.4k tokens", #5030): under 1,000 the number itself, then one
+ *  decimal with k, M or B, moving up a unit where rounding would reach 1,000 (999,960 → 1.0M, not 1000.0k). */
+export function compactTokens(n: number): string {
+  const v = Math.max(0, Math.round(n));
+  if (v < 1000) return String(v);
+  const units: [number, string][] = [[1e3, "k"], [1e6, "M"], [1e9, "B"]];
+  for (const [div, unit] of units) if (v / div < 999.95 || unit === "B") return `${(v / div).toFixed(1)}${unit}`;
+  return String(v);
+}
+
 export type UsageKind = "in" | "out" | "cache_write" | "cache_read";
 /** The kinds in the order a stacked chart puts them from the bottom. */
 export const USAGE_KINDS: UsageKind[] = ["in", "out", "cache_write", "cache_read"];
@@ -64,6 +74,8 @@ export interface MachineUsage {
   launchers: UsageShare[];
   launchers_known: boolean;
   stored?: boolean;
+  /** Client only: this device's clock (Unix seconds) when the report arrived, the end of the step under way (#9205). */
+  at?: number;
 }
 
 /** A machine's tokens on its card (GET /api/v1/metrics). */
@@ -98,24 +110,6 @@ export function addTokens(a: UsageTokens, b: UsageTokens): UsageTokens {
     out: (a.out ?? 0) + (b.out ?? 0),
     req: (a.req ?? 0) + (b.req ?? 0),
   };
-}
-
-/** A step's sum per minute. */
-export function perMinute(n: number, step: number): number {
-  return Math.round(n / Math.max(step / 60, 1));
-}
-
-/** The stacked chart's layers: for each kind shown, every step's bottom and top (per minute), bottom up. */
-export function stackLayers(u: MachineUsage, kinds: UsageKind[]): { kind: UsageKind; points: { t: number; y0: number; y1: number }[] }[] {
-  const base = u.points.map(() => 0);
-  return kinds.map((kind) => ({
-    kind,
-    points: u.points.map((p, i) => {
-      const y0 = base[i];
-      base[i] += perMinute(p[kind] ?? 0, u.step);
-      return { t: p.t, y0, y1: base[i] };
-    }),
-  }));
 }
 
 /** The runs of offline steps, from the first's start to the last's end. */

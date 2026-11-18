@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.imageLoader
@@ -91,7 +92,7 @@ internal fun LarkMomentsCard(
     val card = preview?.card
     JCard(modifier.fillMaxWidth().clickable(onClick = onClick), padding = Tokens.Space.m) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            Icon(PhIcons.ChatsCircle.regular, contentDescription = stringResource(R.string.inbox_moments), tint = PersonaTheme.palette.accent, modifier = Modifier.size(Tokens.Space.xl))
+            Icon(PhIcons.ChatsCircle.regular, contentDescription = stringResource(R.string.inbox_moments), tint = PersonaTheme.palette.accent, modifier = Modifier.size(Tokens.Size.iconXS))
             Text(preview?.title ?: stringResource(R.string.inbox_moments_post), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
         }
         card?.author?.let { author ->
@@ -432,7 +433,7 @@ private fun MomentsCommentRow(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
         ) {
-            JAvatar(comment.userName.orEmpty(), size = Tokens.Space.xxxl)
+            JAvatar(comment.userName.orEmpty(), size = Tokens.Space.xxl)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(comment.userName.orEmpty(), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
@@ -452,12 +453,15 @@ private fun MomentsCommentRow(
     }
 }
 
+/** A post's pictures; each says a tap opens it full screen, like a chat picture (`LarkPart.Image`, #4172). */
 @Composable
-private fun MomentsImagesLayout(
+internal fun MomentsImagesLayout(
     images: List<LarkMomentsImage>,
     onOpenImage: (List<ViewerImage>, Int) -> Unit,
 ) {
     val context = LocalContext.current
+    val imageLabel = stringResource(R.string.inbox_image)
+    val viewLabel = stringResource(R.string.inbox_lark_view_image)
     val viewerImages = images.mapIndexed { idx, img ->
         ViewerImage(
             key = img.url ?: "$idx",
@@ -483,12 +487,12 @@ private fun MomentsImagesLayout(
         val shape = RoundedCornerShape(Tokens.Space.s)
         AsyncImage(
             model = img.url,
-            contentDescription = stringResource(R.string.inbox_image),
+            contentDescription = imageLabel,
             modifier = Modifier
                 .fillMaxWidth(0.7f)
                 .aspectRatio(1.2f)
                 .clip(shape)
-                .clickable { onOpenImage(viewerImages, 0) }
+                .clickable(role = Role.Image, onClickLabel = viewLabel) { onOpenImage(viewerImages, 0) }
         )
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
@@ -496,15 +500,15 @@ private fun MomentsImagesLayout(
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                     row.forEachIndexed { colIndex, img ->
                         val index = rowIndex * 3 + colIndex
-                        val shape = RoundedCornerShape(ContentTokens.tightGap)
+                        val shape = RoundedCornerShape(Tokens.Space.sm)
                         AsyncImage(
                             model = img.url,
-                            contentDescription = stringResource(R.string.inbox_image),
+                            contentDescription = imageLabel,
                             modifier = Modifier
                                 .weight(1f)
                                 .aspectRatio(1f)
                                 .clip(shape)
-                                .clickable { onOpenImage(viewerImages, index) }
+                                .clickable(role = Role.Image, onClickLabel = viewLabel) { onOpenImage(viewerImages, index) }
                         )
                     }
                     repeat(3 - row.size) {

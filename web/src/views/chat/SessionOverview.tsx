@@ -1,31 +1,33 @@
 // The session overview's scrollable contents, loaded when the user turns it on.
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
-import { formatTokens } from "../../lib/compaction";
-import { contextHeaderLabel, contextShown, contextTier, contextUsage, useContextAsUsed } from "../../lib/context-usage";
+import { formatTokens } from "../../lib/tokens";
+import { contextLabel, contextTier, contextTooltip, contextUsage } from "../../lib/context-usage";
 import { sessionTitle, shortPath, stateOf } from "../../lib/format";
+import { openBackgroundPanel } from "../../lib/background-panel";
+import { credentialOwner } from "../../lib/api";
 import { openPanel } from "../../lib/panel";
-import { useStore } from "../../lib/store";
-import { subagentTitle, subagentTree, type FinishedTask } from "../../lib/tasks";
+import { getSession, useStore } from "../../lib/store";
+import { subagentTitle, subagentTree, taskLabel, taskPill, type FinishedTask } from "../../lib/tasks";
 import type { Session, Subagent } from "../../lib/types";
 import { cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
-import { SessionActivity } from "./Activity";
+import { BackgroundList } from "./BackgroundPanel";
 import { SessionInfoDialog } from "./SessionDialogs";
 
 interface OverviewProps {
   session: Session;
   machineName: string;
   finished: readonly FinishedTask[];
-  onStopLoop: () => void;
+  children: readonly Session[];
   onJumpToCall?: (call: string) => void;
 }
 
-export function SessionOverview({ session, machineName, finished, onStopLoop, onJumpToCall }: OverviewProps) {
+export function SessionOverview({ session, machineName, finished, children, onJumpToCall }: OverviewProps) {
   const [infoOpen, setInfoOpen] = useState(false);
   // Codex child threads are standalone sessions. Use the known rows from this machine and manager.
-  const children = useStore((s) => (s.sessions[session.machine_id] ?? []).filter((row) =>
+  const listed = useStore((s) => (s.sessions[session.machine_id] ?? []).filter((row) =>
     row.session_id !== session.session_id && row.manager === session.manager && (
       row.parent_session_id === session.session_id || row.root_session_id === session.session_id ||
       (!row.parent_session_id && session.source_thread_id && row.parent_thread_id === session.source_thread_id)
@@ -34,17 +36,28 @@ export function SessionOverview({ session, machineName, finished, onStopLoop, on
   const agents = useMemo(() => {
     const embedded = session.subagents ?? [];
     const ids = new Set(embedded.map((a) => a.session_id));
-    const threads = children.filter((child) => !ids.has(child.session_id)).map((child): Subagent => ({
+    const rows = new Map(listed.map((child) => [child.session_id, child]));
+    for (const child of children) {
+      if (!child.folded_as && (child.is_subagent || child.parent_session_id || child.parent_thread_id)) rows.set(child.session_id, child);
+    }
+    const threads = [...rows.values()].filter((child) => !ids.has(child.session_id)).map((child): Subagent => ({
       id: child.session_id,
       session_id: child.session_id,
       parent_id: child.parent_session_id,
       description: sessionTitle(child),
       running: stateOf(child) === "working" || stateOf(child) === "needs_you" || Boolean(child.background_working),
-      started_at: child.updated_at,
+      started_at: child.started_at ?? child.updated_at,
     }));
     return [...embedded, ...threads];
-  }, [children, session.subagents]);
+  }, [children, listed, session.subagents]);
   const running = agents.filter((a) => a.running).length;
+  const mid = session.machine_id;
+  const sid = session.session_id;
+  const owner = credentialOwner();
+  const current = () => {
+    const live = getSession(mid, sid);
+    return owner === credentialOwner() && live && live.manager === session.manager;
+  };
 
   return (
     <>
@@ -52,9 +65,18 @@ export function SessionOverview({ session, machineName, finished, onStopLoop, on
         <Environment session={session} machineName={machineName} onInfo={() => setInfoOpen(true)} />
         <OverviewContext session={session} />
         {agents.length > 0 && <Subagents agents={agents} running={running} open={(agent) => {
-          openPanel({ kind: "agent", mid: session.machine_id, sid: agent.session_id });
+          if (current()) openPanel({ kind: "agent", mid, sid: agent.session_id });
         }} />}
-        <SessionActivity session={session} finished={finished} onStopLoop={onStopLoop} onJumpToCall={onJumpToCall} />
+        <div className="border-t border-line">
+          <BackgroundList session={session} mid={mid} sid={sid} inOverview
+            onOpenRun={(task) => { if (current()) openBackgroundPanel(mid, sid, task); }}
+            onOpenTask={(task) => { if (current()) openPanel({ kind: "background", mid, sid, task: task.id }); }}
+          />
+          <FinishedTasks finished={finished} session={session}
+            onOpenOutput={(path) => { if (current()) openPanel({ kind: "file", mid, path, cwd: session.cwd }); }}
+            onJumpToCall={onJumpToCall}
+          />
+        </div>
       </div>
       <SessionInfoDialog session={session} machineName={machineName} open={infoOpen} onClose={() => setInfoOpen(false)} />
     </>
@@ -65,9 +87,9 @@ function Environment({ session, machineName, onInfo }: Pick<OverviewProps, "sess
   const worktree = Boolean(session.worktree && session.repo_root && session.worktree !== session.repo_root);
   const worktreePath = worktree && (session.worktree !== session.cwd || !session.branch);
   const rows: { label: string; icon: IconName; value: string | undefined; badge?: string }[] = [
-    { label: t("chat-sessiondialogs.machine"), icon: "monitor", value: machineName },
+    { label: t("chat-sessioninfo.machine"), icon: "monitor", value: machineName },
     { label: t("chat-sessiondialogs.folder"), icon: "folder", value: shortPath(session.cwd) },
-    { label: t("chat-sessiondialogs.branch"), icon: "git", value: session.branch, badge: worktree && !worktreePath ? t("chat-sessionoverview.worktree") : undefined },
+    { label: t("chat-sessioninfo.branch"), icon: "git", value: session.branch, badge: worktree && !worktreePath ? t("chat-sessionoverview.worktree") : undefined },
   ];
   if (worktreePath) {
     rows.push({ label: t("chat-sessionoverview.worktree"), icon: "folder", value: shortPath(session.worktree) });
@@ -76,7 +98,7 @@ function Environment({ session, machineName, onInfo }: Pick<OverviewProps, "sess
     <section className="py-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-ink-2">{t("chat-sessionoverview.environment")}</h3>
-        <button type="button" onClick={onInfo} className="text-xs text-accent-ink hover:underline">{t("chat-sessiondialogs.info_title")}</button>
+        <button type="button" onClick={onInfo} className="text-xs text-accent-ink hover:underline">{t("chat-sessioninfo.info_title")}</button>
       </div>
       <dl className="mt-2 flex flex-col gap-1.5">
         {rows.filter((row) => row.value).map(({ label, icon, value, badge }) => (
@@ -95,20 +117,19 @@ function Environment({ session, machineName, onInfo }: Pick<OverviewProps, "sess
 }
 
 function OverviewContext({ session }: { session: Session }) {
-  const asUsed = useContextAsUsed();
   const usage = contextUsage(session);
   if (!usage) return null;
-  const label = contextHeaderLabel(usage, asUsed);
-  const percent = contextShown(usage, asUsed);
+  const label = contextLabel(usage);
+  const percent = usage.used;
   const nearFull = contextTier(usage) !== "ok";
   return (
     <section className="flex flex-col gap-2 border-t border-line py-3">
-      <h3 className="text-xs font-semibold text-ink-2">{t("chat-sessiondialogs.context")}</h3>
+      <h3 className="text-xs font-semibold text-ink-2">{t("chat-sessioninfo.context")}</h3>
       <div className="flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs tabular-nums">
         <span className={nearFull ? "text-orange" : "text-ink"}>{label}</span>
         <span className="text-ink-3">{t("context.tokens", { used: formatTokens(usage.tokens), window: formatTokens(usage.window) })}</span>
       </div>
-      <div role="progressbar" aria-label={label} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} className="h-1.5 overflow-hidden rounded-full bg-hover-2">
+      <div role="progressbar" aria-label={contextTooltip(usage)} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} className="h-1.5 overflow-hidden rounded-full bg-hover-2">
         <div className={cx("h-full rounded-full", nearFull ? "bg-orange" : "bg-accent")} style={{ width: `${percent}%` }} />
       </div>
     </section>
@@ -146,6 +167,50 @@ function Subagents({ agents, running, open }: { agents: Subagent[]; running: num
                   <span className="shrink-0 whitespace-nowrap text-ink-3">{t(agent.running ? "chat-subagentcard.status_running" : "chat-subagentcard.ended")}</span>
                   <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" />
                 </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function FinishedTasks({ finished, session, onOpenOutput, onJumpToCall }: Pick<OverviewProps, "finished" | "session" | "onJumpToCall"> & {
+  onOpenOutput: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const list = useRef<HTMLUListElement>(null);
+  const active = new Set(session.background?.map((task) => task.id));
+  const ended = finished.filter((task) => !active.has(task.id));
+  useLayoutEffect(() => {
+    if (open) list.current?.firstElementChild?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+  if (!ended.length) return null;
+  return (
+    <section className="pb-3">
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="flex min-h-9 w-full items-center gap-2 rounded-control px-2 text-left text-xs text-ink-2 hover:bg-hover">
+        <Icon name="check" size={14} className="text-green" />
+        <span className="flex-1">{t("chat-sessionoverview.finished_count", { count: ended.length })}</span>
+        <Icon name="chevron" size={13} className={cx("text-ink-3", open && "rotate-180")} />
+      </button>
+      {open && (
+        <ul ref={list} className="divide-y divide-line rounded-control border border-line">
+          {ended.map(({ id, task, title, call, at, startedAt }) => {
+            const pill = taskPill(task, startedAt, at);
+            return (
+              <li key={id} className="flex min-w-0 flex-col gap-1 px-2.5 py-2 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="min-w-0 break-words text-ink">{title || taskLabel(task)}</span>
+                  <span className={cx("shrink-0 whitespace-nowrap", pill?.tone === "red" ? "text-red" : "text-ink-3")}>{pill?.text}</span>
+                </div>
+                {(task.output_file || (onJumpToCall && call)) && (
+                  <div className="flex flex-wrap gap-2 text-accent-ink">
+                    {task.output_file && <button type="button" onClick={() => onOpenOutput(task.output_file!)} className="hover:underline">{t("chat-activity.open_output_file")}</button>}
+                    {onJumpToCall && call && <button type="button" onClick={() => onJumpToCall(call)} className="hover:underline">{t("chat-sessionoverview.show_in_chat")}</button>}
+                  </div>
+                )}
               </li>
             );
           })}

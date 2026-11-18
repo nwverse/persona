@@ -4,6 +4,7 @@ import persona.core.contracts.Interaction
 import persona.core.contracts.Question
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentPreferences
 import org.junit.Assert.assertEquals
@@ -12,6 +13,20 @@ import org.junit.Test
 
 /** "Needs you now" on the Persona home (the old app's ShellNeedsYou, iOS's). */
 class NeedsYouTest {
+    @Test fun foldedChildRequestsHaveOneParentRowAndUseItsMuteAndTitle() {
+        val parent = Session("m", "p", title = "Plan the release")
+        val cards = listOf(request("one", "child", title = "Review").copy(foldedUnder = "p"),
+            request("two", "other", title = "Test").copy(foldedUnder = "p"), request("own", "p"))
+        val result = needsYou(cards, listOf(parent), AgentPreferences(), emptyList())
+        assertEquals(1, result.total)
+        val line = result.lines.single() as NeedsYouLine.Agent
+        assertEquals(parent.key, line.session)
+        assertEquals(parent.title, line.who)
+        assertEquals("one", line.requestId)
+        assertEquals("child", cards.first().sessionId)
+        assertTrue(needsYou(cards, listOf(parent), AgentPreferences(sessions = listOf("m/p")), emptyList()).isEmpty)
+    }
+
     private fun request(id: String, session: String, kind: String = "plan", title: String? = null, cwd: String? = null) =
         Interaction(id, machineId = "m", sessionId = session, sessionTitle = title, cwd = cwd, kind = kind)
 
@@ -81,11 +96,22 @@ class NeedsYouTest {
             listOf(message("m1", "2026-11-02T08:00:00Z", title = "", summary = "要你\n回复", lark = false)),
             shown = 4,
         )
-        // A mail without a title or sender has no name of its own: the row reads "Mail" (needsYouWho).
-        assertEquals(listOf("博客迁移", "weather", "Agent", ""), needs.lines.map { it.who })
+        // An agent without a title or folder, and a mail without a title or sender, have no name of their own:
+        // the row reads "Agent" or "Mail" in the app's language (needsYouWho).
+        assertEquals(listOf("博客迁移", "weather", "", ""), needs.lines.map { it.who })
         assertEquals("先迁移 哪一篇？", needs.lines[0].what)
         assertEquals("计划等你审批", needs.lines[1].what)
         assertEquals("要你 回复", needs.lines[3].what)
+    }
+
+    @Test fun permissionTextUsesTheHubTitleWithoutChangingTheToolType() {
+        val request = request("r", "s", kind = "permission").copy(
+            toolName = "Bash", toolTitle = "Run a safe command", summary = "ls",
+        )
+        val line = needsYou(listOf(request), emptyList(), AgentPreferences(), emptyList()).lines.single()
+        assertEquals("请求使用 Run a safe command：ls", line.what)
+        assertEquals("Bash", (line as NeedsYouLine.Agent).toolName)
+        assertEquals(PhIcons.Terminal, needsYouIcon(line))
     }
 
     @Test fun nothingNeedsTheUser() {

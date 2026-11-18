@@ -10,12 +10,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extension/egress"
+	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -26,6 +33,9 @@ var (
 	// settingsChecksMost checks of one extension per settingsCheckWindow; more are refused before reaching it.
 	settingsChecksMost  = 6
 	settingsCheckWindow = time.Minute
+	// settingsCheckProxyGrace: a check's proxy credential (checkProxy) stops working by itself this long after the
+	// check's time limit, should it not be revoked when the check answers.
+	settingsCheckProxyGrace = 5 * time.Second
 )
 
 // settingsCheckMessageMost is the most of an extension's refusal that goes back to the user (runes).
@@ -42,11 +52,14 @@ type settingsCheckLimited struct{ error }
 
 func (e settingsCheckLimited) Unwrap() error { return e.error }
 
-// checkLimiter counts each extension's checks in the current window.
+// checkLimiter counts each extension's checks (or, with most and window set, any calls) in the current window.
 type checkLimiter struct {
 	mu   sync.Mutex
 	seen map[string][]time.Time
 	now  func() time.Time
+	// most per window; zero is a settings check's (settingsChecksMost per settingsCheckWindow).
+	most   int
+	window time.Duration
 }
 
 func (l *checkLimiter) allow(id string) bool {
@@ -59,13 +72,17 @@ func (l *checkLimiter) allow(id string) bool {
 	if l.seen == nil {
 		l.seen = map[string][]time.Time{}
 	}
+	most, window := l.most, l.window
+	if most == 0 {
+		most, window = settingsChecksMost, settingsCheckWindow
+	}
 	keep := l.seen[id][:0]
 	for _, t := range l.seen[id] {
-		if now.Sub(t) < settingsCheckWindow {
+		if now.Sub(t) < window {
 			keep = append(keep, t)
 		}
 	}
-	if len(keep) >= settingsChecksMost {
+	if len(keep) >= most {
 		l.seen[id] = keep
 		return false
 	}
@@ -90,30 +107,72 @@ func (ps *extensions) settingsCheck(ctx context.Context, p *extension.Extension,
 	if !p.Record.Enabled || hp == nil || hp.proc == nil {
 		return settingsCheckFailed{i18n.T(lang, "hub-extension_settings.check_not_running")}
 	}
+	// A reference among them is checked as the value it stands for (saving one is the owner's approval).
+	secrets, err := ps.resolveStored(ctx, id, secrets)
+	if err != nil {
+		return settingsCheckFailed{secretRefError(err, lang)}
+	}
+	params := wire.SettingsCheckParams{Config: config, Secrets: secrets}
+	scrub := secrets
+	if proxy, cred, revoke := ps.checkProxy(p, config); revoke != nil {
+		defer revoke() // the check's way to the proposed address ends with it, however it ends
+		params.Proxy = proxy
+		scrub = maps.Clone(secrets)
+		if scrub == nil {
+			scrub = map[string]string{}
+		}
+		scrub["\x00proxy"] = cred // a refusal that quotes the proxy URL gives back no credential
+	}
 	cctx, cancel := context.WithTimeout(ctx, settingsCheckTimeout)
 	defer cancel()
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	err := hp.proc.Call(cctx, "settings.check", map[string]any{"config": config, "secrets": secrets}, &out)
+	var out wire.SettingsCheckResult
+	err = hp.proc.Call(cctx, "settings.check", params, &out)
 	switch {
 	case cctx.Err() != nil && ctx.Err() == nil:
 		return settingsCheckFailed{i18n.T(lang, "hub-extension_settings.check_timeout", i18n.Args{"seconds": int(settingsCheckTimeout / time.Second)})}
 	case err != nil:
 		var re *rpc.Error
 		if errors.As(err, &re) && re.Message != "" {
-			return settingsCheckFailed{scrubSecrets(re.Message, secrets)}
+			return settingsCheckFailed{scrubSecrets(re.Message, scrub)}
 		}
 		return settingsCheckFailed{i18n.T(lang, "hub-extension_settings.check_failed_plain")}
-	case !out.OK:
-		msg := scrubSecrets(out.Error, secrets)
+	case !out.Ok:
+		msg := scrubSecrets(out.Error, scrub)
 		if strings.TrimSpace(msg) == "" {
 			msg = i18n.T(lang, "hub-extension_settings.check_failed_plain")
 		}
 		return settingsCheckFailed{msg}
 	}
 	return nil
+}
+
+// checkProxy is the egress proxy URL settings.check gives p's program (#8459): a credential of this check's own,
+// whose requests reach the addresses config would name, in place of the saved ones, until revoke or the check's time
+// is up; the program's ordinary requests keep the saved ones (#1180). cred is the credential, to keep it out of a
+// refusal. Nothing (revoke nil) when the program is not held to the proxy, or no config: entry of its granted
+// permissions.network names an address; nor for a source runtime, whose fetches go through its broker (#1180).
+func (ps *extensions) checkProxy(p *extension.Extension, config json.RawMessage) (proxy, cred string, revoke func()) {
+	if p.Manifest.Runtime.IsDeno() {
+		return "", "", nil
+	}
+	granted := &extension.Manifest{Permissions: extension.Permissions{Network: p.Record.Granted.Network}}
+	if len(granted.Permissions.ConfiguredNetworks()) == 0 {
+		return "", "", nil
+	}
+	px := ps.sandboxes.proxyIfStarted()
+	if px == nil {
+		return "", "", nil
+	}
+	id := p.Record.ID
+	cred, revoke, ok := px.Check(id, extension.ConfiguredTargets(granted, config), settingsCheckTimeout+settingsCheckProxyGrace)
+	if !ok {
+		return "", "", nil // not registered: its sandbox is off, so nothing holds it to the proxy
+	}
+	addr := px.Addr()
+	if px.Socketed(id) { // Linux's sandbox: its own loopback leads to its socket (sandbox.Linux)
+		addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(sandbox.ProxyPort))
+	}
+	return (&url.URL{Scheme: "http", User: url.UserPassword(egress.User, cred), Host: addr}).String(), cred, revoke
 }
 
 // scrubFragmentMin: a prefix or suffix of a secret this long or longer is taken out of a refusal too (shorter ones are

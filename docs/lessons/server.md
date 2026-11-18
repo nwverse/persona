@@ -1,5 +1,501 @@
 # Lessons: hub / node and networking
 
+## Empty assistant creation must not become a model turn
+
+Android allocates an assistant conversation before sending its queued message. The manager passed an empty prompt
+correctly, but the node appended its live snapshot and delivered a context-only turn. Check for text or images before
+requesting context or submitting model input, and keep the new conversation idle. Preserve deferred runtime instructions
+in the session record until the first successful delivery. A manager test with a fake node cannot catch this: exercise
+the real node against a recording CLI and runtime, including prewarmed sessions, whitespace, images and node restart.
+
+## Journal recovery before changing live update files (#6921)
+
+A fence saying an update started cannot restore a Web directory renamed before `pending.json`
+was saved. Save all program preimages first, then sync a complete recovery journal before
+replacing programs, and save the Web rename intent before moving it. Recovery must tolerate
+an intent whose rename never ran and a Web directory already restored by an earlier attempt.
+Restore first; only successful restoration permits deleting markers or staging. Startup pruning
+must honor retained recovery ownership too. Exercise abrupt process exits between the actual
+renames and pending publication, not only returned installation errors.
+Propagate restoration and exec failures through both Hub startup entry points: a boolean
+"update pending" cannot block a failed recovery when no pending marker exists. Keep the
+adoption journal and staging until the restored executable runs, so a failed exec can retry.
+The Edge callback must distinguish no matching update from failed restoration: returning only
+"not restored" can make activation fall back to the partially restored binary path. Propagate
+an error through slot/control activation and confirmation timeout, stop the Edge, and keep
+both journals/staging for repair. Test actual file failures and every callback consumer.
+
+Interruption consent belongs to the accepted operation. A manual request delayed in service
+discovery must not set `now` on a later attempt that overtook it; reject it after discovery,
+while preserving explicit confirmation of the currently accepted waiting attempt.
+
+Cancellation cleanup needs its own time budget: first signal the whole child group with SIGINT,
+escalate within bounded waits, and defer repeated cancellation while resuming paused writers.
+A failed resume keeps its coordination marker; successful resume does not make an interrupted
+snapshot publishable.
+
+`pg_dump` does not expand a connection URI stored in `PGDATABASE`: real libpq treats it
+as the database name. Parse URI or keyword connections with `PQconninfoParse` and pass
+explicit fields through their documented environment bindings; reject unsupported fields
+before pausing writers. A fake dump cannot prove this works. Use an owned PostgreSQL cluster,
+restore its synthetic dump, and inspect the actual child command line for credential leaks.
+
+Recovery metadata is editable input even when the snapshot has an ownership marker.
+Validate its complete schema and exact artifact mapping before reading payloads, then check
+the staged native hash independently. History verification and extraction must share the
+same canonical path and link rules; a checksum alone cannot make an unsafe tar safe.
+
+Run recovery on the oldest supported interpreter, not just the current Python. Early 3.9/3.11
+patch releases lack `extractall(filter=...)`; later security backports make the minor version
+alone an unreliable capability test. Recovery uses a single restricted writer on Python 3.9+:
+validate the complete inventory, create private directories and exclusive regular files, then
+create links last, without archive ownership or unsafe modes. Python 3.9 also needs `Z` UTC
+timestamps normalized to an explicit offset before `fromisoformat`. Exercise actual interpreter
+versions, legal recovery and hostile archives; a newer Python or mocked signature cannot prove
+that an older operator environment can recover its data.
+
+## Validate the APNs signing curve before a push (#9438)
+
+ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
+
+## A transport made for one request opens a connection for one request (2026-11-16, #9202)
+
+The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
+but each new relay stream is `extensions.accept` on the bus plus the manager's WebSocket back to the hub, about four round trips. Between a
+hub and a manager on a 142 ms link every relayed request took about a second, while the hub's own answers took a millisecond. The manager
+side had served many requests per stream all along; only the hub threw the stream away.
+
+- On a hop between machines, keep the transport, and with it the pool, for as long as what it dials through. Here that is the manager's
+  bus connection: a new connection gets a new transport, and the old one's idle streams are closed when that connection ends.
+- A pooled connection over a long link can die without a sound (a stalled tunnel, a NAT that forgot it). Ping the idle ones, so the next
+  request does not wait for an answer that is not coming.
+- net/http keeps upgrades apart: a request with `Upgrade` has its own pool key, so a WebSocket never takes a pooled stream and its stream
+  is never pooled after it. A request whose context ends closes its connection instead of pooling it, so revoking a caller still closes
+  the stream its request was on.
+- `httptrace`'s `PutIdleConn` runs after the connection is already back in the pool, so the next request may have taken it by then.
+  Count the uses (`GotConn`) and compare them, rather than setting an idle flag.
+
+## A command on the hub's machine does not come from loopback because it runs there (2026-11-16, #9182)
+
+The hub's own commands (`hub pair`, `hub admin`, `hub peer`, `hub setup`, `hub doctor`, `personad extension`) dialled
+`127.0.0.1:<listen port>`. A hub whose `listen` names one address (`<LAN address>:18660`) does not answer there, so each of
+them said the hub was not running while it served the LAN. Dialling the LAN address instead is only half the fix: the
+connection then comes from that address, and the hub's checks for the master token over loopback (pairing codes, admin,
+peers, extension installs) refuse it with 403. `managerconf.CLIHubURL` picks the address (listen's only when it is loopback
+or one of this machine's, never a name or an address the machine no longer has, so the token stays on the machine) and
+`managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
+A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
+the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
+## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
+
+The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
+account changed. So account A's review request stayed in the inbox, and a reply to it posted a comment with B's token. Fixing it at the place
+the user switches was not enough, because the login changes in ways nobody chooses:
+
+- A poll that gets a 401 asks the computer for its token again and retries. If `gh` was switched there, the retry is another account's request
+  carrying the first one's `If-Modified-Since`, and its answer is merged into the first one's inbox.
+- `/user` answers arrive in any order. A check of the old token that GitHub answers late wrote the old login back over the new one.
+- A read in flight when the account changes writes its answer into whatever is there afterwards: a cache that was just emptied (or a nil map).
+- A thing can be older than its keep time when the account changes (things are forgotten only when a poll reads the list), so a marker kept
+  by the thing's age is dropped by the next poll, before the hub closed the item.
+- Both accounts can have the same thread unread at the same time: the thread, and even the move's timestamp, do not tell their items apart.
+
+What holds: one owner of the identity (`account.go`). A new token reads or answers nothing that belongs to an account until GitHub named its
+account; every credential has a number and an answer to an older one is dropped; a different login moves an epoch, and the same step that
+adopts it retires and resets everything read under the old one. State and requests carry the epoch they began under (in the context), a
+request for an older epoch is refused before it is sent, and write-backs check the epoch under the state's own lock. Lock order is the
+connector's lock, then the state's; a state lock never takes the connector's. The tests hold a request at the fake GitHub on a channel and
+change the account while it waits (`account_switch_test.go`).
+
+The first version of the fix still failed an independent review, on what the hub keeps rather than on what the connector does:
+
+- The hub holds items longer than the connector's process lives and hands back only a thread and the move the item holds. Anything the
+  connector decides from what it has in memory (a marker per retired thing, "is this thread held") is wrong after a restart, for items it
+  has forgotten (older than its keep time), and for items it considers done while the hub keeps them open (answered through Persona).
+  So the account and its epoch are kept across restarts, every move read after a change carries the epoch (the reply check needs no
+  memory), and the hub's leftovers are closed by exclusion: whatever the account in use holds no thing of.
+- A mark put only where a collision was noticed (the retired thing's last move) misses the collisions nobody remembered: the hub's item
+  one move behind, or a third account meeting the first one's move. Mark every move, or none.
+- A step done once and then recorded has two wrong orders. "Tell the hub, then save that it is done" closes the wrong items after a
+  failed save and a restart; "save, then tell" at worst leaves old items open. Pick the order whose failure is the harmless one, and
+  say which it is. The same review found the record forgotten after `Reload` (whoever held the id had saved over it) and a secret that
+  no longer opens taking a computer's sign-in down: a record added to an existing store inherits every way that store is rewritten or fails.
+- Closing by thread meets the hub's own rule, which starts an item only for a move later than the thread's closed one: a round trip to
+  another account and back does not bring the first inbox back. That is a limit, written down in `docs/assistant/inbox.md`, not a bug to
+  work around by moving a thing's time.
+
+## A new connection reports nothing the hub keeps for it until the hub has handed it over (2026-11-15, #8275)
+
+Every node connection is a new `Node` with empty state, and the hub hands back what it keeps for the computer (the
+Codex inventory: homes, app-servers, joined threads) only in the `node.configure` that follows `devices.connected`.
+The engine is settled earlier (`engine.use` is the first call of the handshake), and the manager passes a node's events
+on before it calls `devices.connected`, so a report made "once the engine is ready" reached the hub first and the hub
+stored the empty registry over what it kept. A node's report of state the hub keeps waits for the hub's part of the
+connection (`codexHanded`); the hub keeps such a report only from a connection it has done that part for
+(`codexInventoryHanded`: `hookedAt` equal to the manager's `ConnectedAt`), which also covers older nodes. Write a test
+of the sequence, not only of each side's storage.
+
+## On macOS a process holds inheritable sockets nobody meant to hand on (2026-11-14, #7489)
+
+Sealing what a process was handed (`osproc.SealInherited`, `claimInherited` in `server/internal/hub/listen.go`) does not cover what it makes later, and on macOS two kinds of socket are inheritable without anyone clearing close-on-exec. Go's `accept` there makes the new connection close-on-exec only after the call returns, without `syscall.ForkLock` (`src/internal/poll/sys_cloexec.go` in Go; Linux uses `accept4` with `SOCK_CLOEXEC`): a child started at that moment holds the connection too, and sealing it there keeps it open. The first lookup through the system resolver, Go's default on macOS, leaves a `com.apple.netsrc` kernel control socket open for the life of the process, never close-on-exec: every child started afterwards holds it (`lsof` shows `[ctl com.apple.netsrc …]`).
+
+A test process that has run other tests holds the servers and connections they left, so a test of what a child inherits must not depend on what that process holds: have the process that starts the child seal first, as the real one does, and hand it a stray descriptor of its own to show that it does. `TestPassedSocketsReachNoChild`'s exec helper took only the listeners before its exec and failed now and then in a full `go test ./internal/hub/` on a Mac (`a child got sockets [26]`); with a server accepting in a loop beside it, about one run in 1,500.
+
+## An empty list sent as null means "no change" to an optional field (2026-11-14)
+
+The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
+Go marshals a nil slice as `null`, so lifting the last blocked pattern stored none on the hub but left the node blocking
+the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
+empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
+
+## Nothing on a handshake path may wait on system_profiler (2026-11-13, #6028)
+
+`sysmon.ReadSystem` ran `system_profiler SPHardwareDataType` for the Mac's model name, under a 10 s timeout, on the
+assumption that it takes half a second. On a Mac whose Activation Lock check does not answer (macOS 26.6.2) it prints
+"Timed out waiting for the Activation Lock Capable check" and returns after 10.2-11 s, using 0.2 s of CPU: it waits,
+so load does not explain it and a faster machine does not help. It was killed just before it answered, every time,
+and `node.info` paid the 10 s on each hub connection, since a resident node makes a new `Node` per connection and the
+hub shows the computer online only after `node.info`. Per-`Node` caches (`sync.Once` on the Node) start over with each
+connection: anything slow a handshake needs must be cached per process, or not be on the handshake at all.
+
+On Apple silicon the IORegistry's `product` entry has the same name in about 20 ms (`ioreg -p IODeviceTree -rd1 -n
+product`); system_profiler remains for Intel Macs, run in the background, and a read waits only a second for it.
+A per-process cache must not also keep a failure: the first version cached an empty result with `sync.Once`, so one
+system_profiler that failed or was cut off (a machine busy right after login) left the identifier until the node
+restarted, where the per-connection read had at least tried again. Keep only a found name; let a later read retry an
+empty one after a backoff (five minutes), so a Mac where it always fails does not run it on every connection. Its
+output, like ioreg's, holds serial numbers: read only the one line. Tests fake both commands (`newModelLookup` takes
+the runner) and use `synctest`; a node-level test puts hanging fakes first on `PATH`.
+
+## A node binary's name does not prove its platform (2026-11-14, #7206)
+
+The local node package lookup trusted `personad-<os>-<arch>` and `persona-node-<os>-<arch>` filenames without reading the executable, so one misnamed Hub build could be sent to every node of that named platform. Check the Go build info before selecting a local or bundled candidate and ignore a mismatch, allowing the normal release lookup to supply the right build; do not run a cross-platform binary on the Hub. The install path needs its own failure boundary too: verify `.new` before renaming it over the active binary, through direct and nested SSH, and remove it when the check fails. A test that only checks an error message misses whether the old executable survived.
+
+## An update waits only for what its restart interrupts (2026-11-13, #6364)
+
+A node update counted every session on the computer as busy: working, background tasks, running subagents, questions on the phone. On a computer whose terminal Agents always run a background workflow it never went through, and the queued update survived hub restarts. The resident node restarts by exec in place and stops only its own headless conversations (`ResidentReload.Prepare`); terminal Agents are other processes and keep running. Before adding a wait in front of a restart, list what that restart actually stops and wait for that, as the hub self-update's `updateBusy` does. When the rule lives on both sides of a connection, gate the new rule on a capability: the hub's lighter wait in front of an old node's strict commit check would re-send the whole build on every refusal. And let the side that enforces the rule report its verdict rather than have the other side rebuild it from rows: the hub first rebuilt the node's check from `sessions.list` rows, but a node never marks its headless rows `Assistant` (the hub's assistant manager adds that later), so the hub saw a busy main chat as idle and re-sent the build until it settled. The node now answers `update_busy`.
+
+## A saved position that fails must be able to expire (2026-11-13, #6310)
+
+Paginated source subscriptions (#5990) commit the next page's cursor with each page, and a failed run kept it, so every
+retry asked for the same page. A page token that expired between pages (a manager restart, a connector outage, a long
+backoff) is refused every time: the subscription failed for days while a call without the cursor answered fine, and
+only editing the recipe got it out. Before pagination a failed run simply pulled again. Any resumable position (a
+cursor, an offset, an upload id) needs a way back to a fresh start that does not depend on the user: here a page
+that fails in two runs in a row is dropped and the pull starts again from the window's start, the dedup keys holding
+back what was delivered, while one transient failure still resumes. Test a position that goes bad between runs, not
+only one that stays good across a restart.
+
+## A name taken from a counter of attempts is not a free name (2026-11-13, #6024)
+
+The hub edge named each new slot by alternating on a counter of slots started (`'a' + slots%2`), assuming every
+start replaces the slot before it. A failed standby does not: after one, the next standby got the serving slot's own
+name and so its socket paths (`slot-<name>-<port>.sock`), and when that standby failed too, the edge's clean-up of
+"its" sockets deleted the serving slot's. The old hub kept running, the edge could no longer dial it, and every
+connection waited `HoldMax` and was closed, with nothing exiting for the service manager to restart. Self-update
+retries a version that failed in standby at the next hourly check, so two failed attempts were enough. Name a
+resource after what is in use now (the slot that served last), not after how many attempts were made, and let a
+process's clean-up remove only what it made: the edge notes any socket file already at a slot's path when it starts
+it and leaves that file alone. A test of one failed switch passed for this reason; test failures in a row.
+
+## An index over files answers only for the files it read, and is measured on text that varies (2026-11-13, #1273)
+
+The knowledge base's search index (`server/internal/kb/search_index.go`) is kept beside files that people, Agents and
+the import all write, so "is the index current?" has no single answer. What made it safe was asking it a smaller
+question: it may rule a file out only when the file's path, mtime and size are exactly the ones it read, and
+everything else is read by the scan that existed before. Then a missing, half-built, stale or damaged index can only
+cost time, and the tests compare results with the scan instead of trusting an invalidation scheme. Three things went
+wrong on the way. The first benchmark archive repeated one line four million times: its index was 22 MB and built in
+13 s, while text with a long tail of rare characters and words gave 155 MB and 30 s, and the first design, which kept
+every segment's key table in memory, peaked at 1.1 GB on it against a 1 GB target (the keys now stay on disk in
+blocks, with one entry per block in memory). An index that outlives the process also outlives what a cache forgave:
+a writer whose index directory is removed under it, a reader in another process after the writer merged, and entries
+of deleted text that no search uses but that stay on disk until something rewrites them each needed their own rule
+and test. And a lane that runs on every round runs on every kick: one `stat` per file is cheap once and not every five
+seconds.
+
+## Checksums inside a file do not say it is the file you read before (2026-11-13, #1273)
+
+The search index's segments were named from a counter kept in the manifest, and every part of a segment was under a
+checksum. A reader keeps a segment's file table in memory and opens the file by name for each query. Review found the
+hole between the two: remove `.search`, rename one day file, and the rebuild writes a second `seg-000001.idx` of the
+same size with its files numbered differently; a read-only store that still held the first one's table read the new
+lists through it, every checksum passed, and a search lost a result. A checksum stored in a file proves the file agrees
+with itself, not with what a reader remembers of an earlier file under that name. Two rules came out of it: a name is
+never given to other content (64 random bits in each file name; a counter starts again whenever the thing it counts
+does), and whoever keeps part of a file in memory checks on every open that the file is still that one (a random id in
+the footer, compared with the footer it read). The same review found a data race that no test had shown, because only
+an opt-in harness ran a search, an update and the removal of the directory at once: what the doc calls safe to do at
+any time needs a default test that does it at that time, under `-race`. And the new tests took 70 s on Linux and
+968 s on a shared Mac, at 20% CPU: their cost was file opens (2.4 million of them), which one machine does in
+microseconds and another in most of a millisecond. Count the system calls of a test that walks directories
+(`strace -f -c -e trace=%file,%desc`) instead of trusting its seconds on the machine it was written on.
+
+## A stat and a read are two moments, and a path is not a file (2026-11-14, #1273)
+
+The search index's update looked at every file (`stat`), then read the ones it had to, and kept each file's keys
+under the mtime and size the look had seen, checking only that the bytes read were of that size. Review found what
+lies between: the file is replaced by other text of the same size after the look, the update reads that, and the first
+text comes back under its own mtime later (moved back, or restored by a sync or backup tool). The index then held the
+second text's keys under the first one's mtime and size, the entry matched the file exactly, and searches passed over
+it for words it holds, in every later run and every new process. Nobody had set an mtime or made two versions with one
+mtime and size: the index had invented the pair itself, and on a first build the window was the whole run. What an
+entry says has to be true when it is written: these bytes had this mtime and size. So the file is opened once, asked
+through the handle before the first byte and after the last, read through the same handle, and kept only when both
+answers are the look's. Each of the three parts is needed, and each has a test that fails without it: without the
+first look a file written back in place after the read passes; without the second, one written in place before it;
+and a second `stat` of the path, instead of the handle, is answered by whatever file is there by then. A test of
+this needs a hook at the moment, not a sleep (`searchIndex.hook`). The same review found two more of the kind
+"decided once, true for ever": a flag set after the state it described had been replaced (a read-only store marked
+broken with nothing left to compare, for good; set such a flag under the lock and only if the state is still the one
+it is about), and an error class matched by type (`*json.SyntaxError`, `*json.UnmarshalTypeError`) that missed a
+third kind of decode error, so every run failed the same way and nothing was ever rebuilt (say "this file is not
+valid" where it is decoded, and match that).
+
+## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
+
+Search reads every `.md` and `.json` file of the data dir it is not told to skip, profile files before any message
+day, and every file under a `messages/` directory as a day. Live ingestion's receipts (`chats/<id>/.receipts.json`,
+the source and every message id and time on one line) were documented as "not searched" but never added to
+`searchable` (`server/internal/kb/find.go`), nor were the ingestion intent (`.ingest.json`) and a chat's zone marker
+(`messages/.zone`). A query of digits, a date or the source's name matched the receipts of every chat and filled the
+limit before any message was read; Chinese queries looked fine, so nobody noticed. Whoever writes a new bookkeeping
+file into the data dir adds it to `searchable` in the same change and checks it with a search over real ingested
+chats that asks for digits and ASCII words, not only with a fixture line that names the file.
+
+## An app connection's read loop must not wait for a node (2026-11-13, #5915)
+
+`subscribe` and `unsubscribe` called the node (`session.watch` / `session.unwatch`, up to 10 s each) from the app
+connection's only read loop, and the cleanup after a disconnect did the same for each session in turn. While such a
+call waited, nothing else the app sent was read: its `ping`, a phone tool's `tool_result`, terminal keys, and the pong
+of the hub's own protocol ping, so the hub closed a healthy app with `pong_timeout`. No faulty component is needed:
+for 30 s after a manager restart a call for a computer still shown online waits for its node to come back
+(`waitWarm`), and that is when every app subscribes again. One open with a ping behind it took 9.51 s; an open and a
+leave across the hub's ping closed the socket 37 s after it connected.
+
+In the read loop, change only what the hub keeps (the subscription and its count), in the order the messages came,
+and call the node from a goroutine. That is safe because the call is decided by state, not by the message:
+`syncWatch` takes the session's turn (`watchLock`) and looks at the subscriber count when its turn comes, so the
+goroutines may run in any order. The count cannot move to the goroutine too: a leave that ran ahead of its join would
+find nothing to take away, and the join would stay counted for good. What must keep its order with the app's other
+messages (terminal keys) is a one-way `notify` written in place, never a call.
+
+Test it by keeping the node's answer back, waiting until the call is at the node, and then checking that a message
+sent behind it is taken: the fix is told apart by whether the hub reads, not by how long something took. Run the
+scenario through the manager as well, where the wait is the manager's own
+(`server/internal/hub/subscribe_readloop_test.go`).
+
+`fs_watch` needed the same treatment (#6786), with one addition: replacing a set is not the same as counting joins
+and leaves. Record the browser's set in its read loop, then use one worker per machine with one coalesced trailing
+request. The worker reads the union when its turn comes, so a burst makes at most the call in flight and one latest
+call. Disconnect cleanup and reconnect resends use that queue too. A reconnect sets a forced-resend flag rather than
+only `fswSent`: an earlier empty call can clear `fswSent` before the trailing reconnect runs, and the new node still
+needs that empty set. A failed forced resend leaves `fswSent` set, so the next empty set retries it as before
+(`server/internal/hub/fswatch_report_readloop_test.go`).
+
+A manager bus read loop has the same rule for its store. `extensions.report` keeps its in-memory report and broadcasts
+in bus order, but one worker persists only the latest pending report, with a bounded context for each write. A failed
+write is logged and left for the next report, never retried in a tight loop. Both kinds of worker join the hub's
+`nodeWorkers`, whose shutdown wait is bounded. Tests hold the node or `PutSetting`, prove a later message or bus event
+is still handled, then release the dependency and join the workers before checking the final value and call count.
+
+## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
+
+`client_hello` and `register_phone` also waited in the app connection's read loop: `hub.client_apps` did a settings
+load and save, the device and user locales did up to two of each, and every phone registration waited for
+`ReplacePhoneTools`. A slow store therefore delayed the hello ack and every later frame just as a slow node did for
+subscriptions. Record connection-local metadata in place, so the next reply and direct phone routing use the new
+language and tools at once, but move persistence to one ordered consumer per setting group. Client-app and locale
+changes are history-dependent: apply every change in message order and coalesce only the final snapshot writes. Phone
+registrations are complete replacements, so pending ones can coalesce to the newest per device. The consumers have
+their own lifetime, not `deployCtx`'s: `runHub` stops them in a bounded shutdown step only after `serveHTTP` has closed
+and joined the app socket handlers, then joins `nodeWorkers`, and closes the database last. Deploy cancellation alone
+must not strand a report read while those connections are closing. Starting and stopping the consumers is serialized,
+so a stop racing the first report is safe. A report that arrives after the stop is not written; the app sends it again
+on reconnect.
+
+Each pending set is capped at 1,024 entries; phone capacity counts distinct pending devices, so replacing one already
+queued takes no new slot. If two producers race for the same new device, the one that becomes a replacement returns
+its now-redundant admission token immediately. Normally admission is a nonblocking semaphore send. At the cap, only
+the producing read loop waits, for at most the existing Store timeout; it then drops that report and logs once for the
+affected queue rather than once per dropped report. Consumers return capacity as soon as they detach a batch, not when
+its Store write ends. Tests use a separate idle condition (pending empty and no flush in flight), so they still wait
+for the final save.
+
+A failed load is not an empty setting. `loadClientAppsLocked` used to clear the map and its caller still saved it, so
+one transient read error could drop every other device. Load into temporary state, publish it only after a complete
+successful read, and otherwise apply and save nothing; the next message retries. The same rule covers both locale
+settings together: in particular, an absent `user_locale` plus a failed `hub.device_locales` read must not publish or
+save a first device's language.
+
+## A Go file named after a platform builds only there (#5563)
+
+Go reads a file name's last `_<word>` (before `_test`) as a build constraint when the word is a GOOS or GOARCH:
+`selfupdate_android_test.go` compiled only for `GOOS=android`, so `go test ./internal/hub/` passed without running its
+tests. Name feature files so they do not end in `_android`, `_ios`, `_linux`, `_darwin`, `_windows`, `_js`, `_wasm`
+and the like (`selfupdate_androidsync_test.go`; `android.go` alone is fine), and check a new test file with
+`go test -list <name>` or `-v`: "no tests to run" for a test you just wrote means it was never compiled.
+
+## Resident exec must drain replies before closing transport (#5277)
+
+Stopping idle assistant processes after Attach closes spends the node's reconnect grace on SIGTERM/SIGKILL waits.
+Drain and reap them while the old transport still serves, then retain the Unix listener and run-lock descriptors across exec.
+The listener keeps the socket inode and accept backlog, not the active RPC connection or process-local assistant keeper.
+A same-PID descriptor ticket must be consumed before children start; protect the close-on-exec change with the fork lock.
+
+A handler returning is not proof its reply reached the manager. Hold admission through the reply write, announce reload,
+suspend new outgoing manager calls, and acknowledge an ordered state.load barrier only after preceding pending replies drain.
+Retry only explicit before-execution refusals and known-unsent calls; never replay an ambiguous dropped write.
+A failed barrier must resume calls and clear its reload window, and an old peer must not change a new peer's state.
+Context cancellation cannot interrupt an arbitrary writer already in progress: close an unconfirmed announcement's physical peer so a late event cannot
+suspend a surviving manager. Publish a received reply before removing its pending entry, and prefer it over a simultaneous close.
+Legacy images cannot consume a retained run lock: require their explicit handover support before install/ordinary reload; startup rollback releases both fds.
+Measure actual RPC waiting separately from signal-to-readiness: preflight and idle-process drain can take time while requests
+still succeed. Online flags and successful retries alone do not prove uninterrupted blue-green transport.
+
+## A preference clients report is not "the last one wins" (#5238)
+
+The user language was whatever full-role client sent `client_hello.locale` last. An English test simulator paired with
+a real hub, or simply an English Mac next to a Chinese iPhone, flipped it at every reconnect, and with it the Inbox
+summaries, folder names, the assistant's answers and pushes. Connecting is not choosing: remember what each device
+last reported and take only a device's own change (`server/internal/hub/locale.go`, `docs/protocol/i18n.md` "Protocol:
+telling hub the language"). Apply the same rule to any hub-wide value inferred from what several devices report.
+
+## Extension feature strings are not transport authority (#5258)
+
+Old hubs merge extension reports into `hello.features`. A new client cannot trust a newly reserved receipt type merely
+because that array contains its name: an older manager can declare both the feature and an unreserved event. Reserve the
+hub's event against manager broadcasts, and advertise its transport version in a dedicated hub-owned hello field that
+old report merging cannot manufacture. Bind trust to the current authenticated connection and clear it on reconnect or
+credential changes; cached UI capabilities are not live socket proof. Test both old feature injection and old-socket frames.
+
+## Authority handover must include the trusted keeper roster (#5228)
+
+A machine its manager keeps has moved out of hub.json, but its hub-owned keeper
+record still authorizes routing. Building sharing authority from cfgEntries alone
+leaves that manager's authority map empty while per-request routing produces a
+valid authority: creation skips as authority_stale and persists no receipt.
+Use knownEntries for this authority handover, retain entryOwner and database
+routing checks, and leave the separate machine-config handover alone. A manager's
+report is not a keeper record. Test a kept machine through the real handover, not
+only by injecting a matching authority map into both sides of a fixture.
+
+## A creation reply is not a durable receipt (#5215)
+
+A successful runtime reply and `ownership_unbound` do not reveal whether the
+manager prepared an intent, the node emitted its receipt, or the database accepted
+its state. Trace each boundary with bounded session IDs and fixed outcome codes;
+compare prepared/returned identities in memory without logging them. A one-way
+notification's successful write is not a database acknowledgement. Log its failure
+without raw error text, which may contain private input, and preserve existing
+reconnect handling. Missing diagnostics from an old node or inaccessible stream
+are not evidence of a missing receipt. Keep the actual-node callback regression
+separate from the HTTP/manager/stub-node durable integration test.
+
+## Virtual-file sizes and EOF (#4425)
+
+Some Linux sysfs attributes report a stable page-sized length even when their readable contents are shorter. A short
+read must end pagination only after a real EOF, filesystem identification on the opened descriptor, and checks that
+the opened object and guarded path still have the same identity and metadata. An ordinary file truncated during a read
+and a non-EOF I/O failure must remain errors; a zero-byte device must not be read as an open-ended virtual file. The
+size and modification-time revision cannot detect virtual values that change without metadata changing, or a writer
+that restores metadata, so these checks do not make pages from separate requests an atomic snapshot.
+
+## A shared package that imports a manager's drags it into the hub (2026-11-11, #4371, #4446)
+
+`persona-hub` links every package a shared one (`depguard.Shared`) imports, so one import of a manager-side package in
+a shared package, even for a small pure function, puts that package in the hub's program and
+`TestPersonaHubDoesNotLinkTheManager` fails. `transcript.AskOf` called `closeout.WaitsOnNobody` that way. A rule that
+only the node and the manager apply goes in their package, which imports the shared one (`closeout.AskOf` over
+`transcript.AskOf`), not the other way round. Listing the manager's package in `depguard.Shared` (as #4395 did for a
+while) only hides it. A new package the hub links and the manager does not, such as what the hub and a helper of its
+own say to each other (`relayproto` with the push relay, `shareproof` with the sharing ingress, #4446), goes in
+`depguard.HubOwn`, which also keeps it out of the manager; `Shared` is for what both programs link. After adding an
+import to a shared package or a new package the hub links, run `go test ./cmd/persona-hub` (a few seconds).
+
+## Receipt integration fixtures need independent identities (#4433)
+
+A registered manager bus connection is not the same as its normal device-state
+readiness report. Run that report through the fixture's actual RPC path before
+starting a session; do not relax the production readiness check. A state.load RPC
+on the same stream fences the preceding durable state.put without a fixed sleep.
+
+Creation IDs are immutable once stored. Reusing one machine/session across wrong
+and matching receipt cases can make the matching load retain the earlier identity,
+creating a false production-defect report. Give every case its own credential,
+machine and persistent record; keep exact creation/incarnation equality assertions.
+A local authenticated HTTP/manager/node-state round trip proves those boundaries,
+not a real runtime reply or production ownership: retain the separate live evidence.
+
+## A list read before a locked write must not undo it (2026-11-11, #4372)
+
+The manager's agent archive restores a session when its node's list shows new activity (busy, or a newer update time). Readers decorated the node's list first and only then took the archive's lock, so a reader that read the list while an agent still waited on the user, and got the lock after a cancelled task's agent was closed and archived, took that old busy row for new activity and restored the archive for good. The log still said "closed and archived". It showed up as `TestCancelStopsAndArchivesAgents` failing about 1 run in 100, and only with `-cpu` above 1, once the fake answered `session.close` with the session already offline (#3184): the archive then followed the close at once while the test kept reading the list. Weigh a snapshot only against the state that was already there when it was read: `archivedSessions` takes the archive's write count from before its list was read (`archiveMark`), and a record written after that ignores what the list shows (`agentArchive.active`). A counter, not a time: two reads in one clock tick, or a clock stepped back, must not decide it. The web's card snapshots had the same shape (`refresh()` restoring just-resolved cards, `docs/lessons/web.md`).
+
+## Sharing peer budgets need an authenticated local ingress (#4391)
+
+Keeping X-Forwarded-For untrusted is necessary, but a loopback reverse proxy then
+collapses every anonymous reader into one upstream IP budget. One reader can crowd
+out unrelated readers even with different capability tokens. Bind the actual TCP
+peer and exact anonymous GET to a short-lived sharing-only MAC; accept it only on
+literal loopback and keep the original capability/ownership checks. Verify the
+upstream's acknowledgement before opening, strip the proof/acknowledgement from
+public responses, and fail closed when authentication is lost. Never use this key
+or header as general proxy trust, a login credential or a management authorization.
+
+## Public sharing ingress needs a fixed authority (#4358)
+
+An independent browser port does not constrain an HTTP client's Host header. A
+plain TCP forward or unrestricted reverse proxy can turn the sharing listener
+into an application entry point when a client sends the application's Host.
+Reject nonpublic paths before proxying and pin the upstream sharing authority;
+strip credentials in both directions and protect local gateway errors too.
+Changing `sharing.public_origin` on disk does not hot-reload the running hub.
+Use its normal release/configuration lifecycle, not an unrelated reload endpoint.
+A loopback proxy also shares the upstream's aggregate IP budget unless a separately
+reviewed trusted-address protocol is in place; do not silently trust X-Forwarded-For.
+
+## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
+
+The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a
+`.dockerignore` exception and a `COPY` into the web stage at the same relative path. A native build sees the
+whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
+shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
+
+Checking was not enough (2026-11-12, #5197): PRs run no hosted CI, so #4968 merged a test reading
+`spec/fixtures/forward/` with neither line, and every image build from `main` failed, the fourth time after #2666,
+#2517 and #4260. The image now carries all of `spec/fixtures/` (about 2 MB, web stage only) with one exception and one
+`COPY`, and the guard checks that no per-folder lines come back. A fixture-only change now rebuilds the web stage; that
+cost is smaller than a broken image. When something has to be listed by hand in two files, prefer a rule that needs no list.
+
+## Sharing frontiers and migration lanes (#3604)
+
+- Migration numbers are global across the hub and manager sets, even though their
+  files live in separate directories. Inventory both sets in every worktree;
+  distinct filenames with the same numeric prefix still collide. Renumber only
+  unpublished migrations, never an applied migration or the guard.
+- Future publication needs an immutable enable-window frontier **and** a moving
+  verified scan checkpoint. Using the previous scan's EOF as the window boundary
+  drops a new pending turn when it completes on a later scan. Preserve first-seen
+  eligibility and partial-record EOF evidence while advancing the checkpoint.
+- A raw asynchronous start registration is not successful prompt delivery. Keep
+  the sanitized submission unknown until authoritative evidence resolves it; never
+  publish the original app input as delivered solely because a session ID returned.
+- A database-backed fence does not make nested pool queries safe. Waiting
+  transactions can occupy every connection while the lock holder asks for one more;
+  read ownership through the transaction's connection. Keep node RPCs outside the
+  fence and reject stale results with revision, content-version and frontier CAS.
+  Check creation receipts before fresh RPCs, and do not recapture an unchanged live
+  future setting when applying offline narrowing.
+- A per-publication body limit does not bound an owner list. Never collect all
+  retained sealed bodies to count quotas or render metadata: 1,000 individually
+  valid large rows can exceed process memory. Persist a bounded prepared header
+  and active scalar with the body, count scalars and list headers, and keep the
+  current ownership check on that path.
+- Numeric credentials are still credentials. Exempt only explicit count/flag keys
+  from redaction; `password=123456` is not the same as `max_tokens=4096`. Preserve
+  string quoting when sanitizing serialized arguments.
+
 ## Bubblewrap masks are mount views, not path-denial rules (#2977)
 
 A default-allow agent profile cannot reuse the extension sandbox's whitelist: bind the host root read-write, add
@@ -110,6 +606,9 @@ Successful checks may refresh release metadata and failed checks may advance the
 last-check time, but neither may replace an active update's state, progress or error.
 Apply the guard in the shared check path used by manual, startup and hourly checks,
 and keep automatic installation and held-release recording out of confirmation.
+The install script's separate checksum refresh needs the same protection: load the saved
+channel before fetching, recheck it after the response, and mutate availability under the
+install-state mutex. A result from the old channel must not replace a new selection.
 Regression tests must observe the state while the request is blocked as well as
 after success or failure; checking only the final state misses a transient
 `checking` event that already hid the progress in every client.
@@ -125,6 +624,16 @@ run `scripts/ci/guards.sh` as well as the server build and race checks.
 A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
 
 A working inference base need not expose model discovery beneath it: DeepSeek documents Messages under `/anthropic/v1/messages` but discovery at the same origin's `/models`. Keep endpoint selection separate without rewriting the saved inference base, stripping unknown gateway prefixes or forwarding credentials to another authority. A discovery 404 needs its own explanation and a manual-model fallback, not advice to change a working Messages address.
+
+## Gateway model metadata: read shapes, keep "none" apart from "unknown" (#8778)
+
+- **One gateway, several list shapes.** A gateway may answer `GET /v1/models` in Anthropic's paginated envelope whenever the request carries any `anthropic-*` header (discovery always sends `anthropic-version`), a Codex manifest when asked with `?client_version=`, and its own flat list otherwise. The envelope carries no thinking levels, so levels for such a gateway come only from its separate capability report. Read every field by shape and test each shape with synthetic fixtures; never branch on which gateway answered.
+- **An empty list is an answer.** `reasoning_levels: []`, `reasoning: false` or a capability status `unsupported` say the model takes no level, while a missing field says nothing. `efforts` alone cannot carry that difference (empty there has always meant "unknown, offer every level", and older clients still read it so), hence `no_effort`. Catalog enrichment must check it before filling levels, and a catalog default must be one of the levels the gateway reported, or saving refuses the model.
+- **`max_tokens` is not an output limit everywhere.** Some lists use it for the whole context; one that pairs it with `max_input_tokens` may fill both with stand-ins for a model it doesn't know, which the list can't tell apart from real values. Read only names that mean one thing (`max_output_tokens`, `max_completion_tokens`, `limit.output`).
+- **An extra request breaks request-counting tests.** Adding the capability report changed the calls and headers several existing tests counted or asserted per path; route the new path explicitly in fixtures instead of loosening the counts.
+- **`null` decodes into a Go `bool` without an error** (#8796). `json.Unmarshal([]byte("null"), &b)` leaves `b` false and returns nil, so a field a gateway left empty read as an explicit `false`: models became "no thinking level" and "no images". Decode into `*bool` and treat nil as unsaid. The same goes for lists: a list read only in part (an entry of an unknown shape skipped) must say nothing rather than less, and an empty list is a statement only where the gateway means it (`reasoning_levels: []`, `protocols: []`), not where it is just unfilled (`supported_parameters: []`).
+- **Guesses must lose to knowledge when the consumers act on them.** "No reasoning parameter listed" is a guess; once the launch paths skip `--effort` and pi's reasoning for `no_effort`, a wrong guess costs more than "unknown". Take it only from a whole parameter list, settle it after every other source (repeated entries, the capability report) and let the catalog's known levels win over it: applied while parsing one entry, it beat real levels that came later.
+- **Tell a client that omits a field from one that never knew it by the key, not the value.** Restoring stored metadata for any model sent without it kept the web from ever clearing a stale report; decode the request's keys (present even as `false` / `null`) to keep stored values only for older apps, and have the new client name a key for every model.
 
 ## Battery investigations need attributed transport counts (#1633)
 
@@ -193,15 +702,92 @@ fleet, preferences, foreground state and tokens, and recheck after a slow claim.
 Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
 reconstructs its deadline from the durable budget and the current manager snapshot.
 
+## A push-start the phone has not answered is an activity the hub cannot reach (#7641)
+
+A push-to-start reaches the phone through APNs even while the phone cannot reach the hub. The activity starts, its
+update token never comes back, and the hub can neither update nor end it: it goes stale and stays. "No token" is not
+"no activity": starting again each round, and after each restart, only added cards (15 starts in 22 hours, not one
+update or end). Hold the next start until the phone answers (a reported update token, its app connecting) or for as
+long as an activity can run, and keep the hold with the start budget so a restart or the other slot sees it. Put the
+hold on before sending, so an answer that follows at once is what lifts it; a claimed start that was not sent keeps
+only the cooldown. Hold only what may be on screen: a start APNs or the relay refused (any status but 200) put up
+nothing, so lift the hold when that answer comes, or the phone that cannot reach the hub goes 8 hours without an
+activity; only a start with no answer at all is in doubt and keeps it. Keep the send's outcome typed (refused, not
+sent, no answer) rather than a log line, since the transport's retries already blur "failed" into one error. A test
+that never reports a token models this case, not the usual one: have the phone answer where the test is about the
+cooldown. The hub's update and end paths were fine all along; check them with a token before
+looking for a lost push.
+
+The hold and its lift were first written against "the device's current start", on the reasoning that a refusal comes
+within the send's retries, well inside the cooldown. That is a guess about timing, not a guarantee: a slow send, a
+slow store or the slot that is leaving can deliver the write after the next start was claimed, where a late lift
+drops that start's hold and a late hold keeps a refused one back for 8 hours. A write that follows from an event
+says which event: the time the start was claimed at, or the time the phone answered, and the store applies it only
+to a start claimed up to then (`claimed_at <= asOf`, one statement under the row lock). That needs the claim time to
+name one claim, so a claim is refused unless it is later than the last one, whatever the deadline says.
+
+The hub then kept the deadline the store last told it, so as not to ask each round, and dropped it when its own lift
+moved the store's. Two slots share the store through a blue-green switch, and a lift is whichever slot's the phone
+reaches or the refusal comes back to: the other one held on for up to 8 hours on a deadline nobody had any more.
+State another process can move is read where it is kept, each time it decides something; a copy needs a way to hear
+of every writer, and "this process's own writes" is not that. Test it with two hubs over one store, not with a
+restart, which starts from nothing remembered. What the hub still keeps per device is only the last deferral it
+logged, so hours of rounds are one line.
+
+The app connecting lifted the hold by the `device_id` in `register_phone`, and an older app sends none. The id that
+registration falls back to (the connection's credential, then `legacy`) names the phone's tools, not its pushes:
+starts are claimed under the push id, so a lift by the fallback id changes no row and looks done. An id has a
+namespace; resolve the fallback into the ids of the table being written (the devices that credential registered, as
+`wakeDevices` does for the same registrations) and assert on the store's row for a registration without the id.
+
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
+
+## A backup's runtime-file filter is not for the owner's files (2026-11-14, #5951)
+
+The whole-install backup skipped `*.log`, `*.lock`, `*.pid`, `*.sock` and `.tmp-` names in every directory it copied,
+the knowledge base included: a `meeting.log` or `yarn.lock` there was left out, the manifest listed only what was
+copied, so verification passed, and a restore replaced the directory with one missing them. Skip runtime artifacts
+only in directories the product itself writes (and sockets, by type, anywhere); copy the knowledge base, skills and
+extensions in full, and never filter on the restore side. The same review found two more gaps where a missing value
+read as "anything goes": a `password=` query parameter dropped before `pg_dump` (take the password from
+`pgx.ParseConfig`, as the connection does), and a manager database with no `sealing_key` row accepting any key
+(prove the bundled key opens its sealed values). A relative path from a manifest is checked against its root
+(`../victim` is clean but outside).
+
+libpq expands a connection URI only when it is the explicit `dbname` argument, never from `PGDATABASE`: the backup's
+`PGDATABASE=postgres://…` made `pg_dump` ignore host, port and user and try the default socket, and PostgreSQL 18's
+`pg_restore` without `-d` refuses to run at all. Fake clients in unit tests accepted both, so only a real server
+showed it. Pass `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE=<name>` and the ssl* variables, the password in `PGPASSWORD`,
+and `--dbname=<plain name>` to `pg_restore`.
 
 ## A failed swap must not look like a new install
 
 `update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.
 A failing step reports what it actually changed: `copyFile` writes `.new` and renames, so a failed swap changed nothing (the zero `Swapped`, which `RestoreAll` skips) or only wrote `.prev` (putting that back is harmless).
 Don't add a `pending.json` field for it: older edges and watchdogs read the same file and know only `Prev == ""`.
+
+## Test a staged node before stopping the resident one (#5097)
+
+A completed gzip stream and `chmod 755` prove that bytes arrived, not that the target machine can execute them. The SSH deploy therefore runs the staged binary's `version` command before the atomic rename and before `pkill`: an `exec format error` or another failed self-test removes `.new`, preserves the installed binary, and leaves the working node running. Package selection still validates GOOS / GOARCH through Go build info; the remote self-test is the final target-side guard, not a duplicate package check. Exercise this boundary through the real login-shell deploy script with an isolated HOME and a fake `pkill`, never by replacing or stopping a development machine's resident node.
+
+## A release archive's checksum does not verify its version (#8338)
+
+A correctly hashed Windows ZIP can contain programs reporting another version while sharing the manifest's build number.
+Run the bundled version and node self-check commands on the target architecture, before installation or publication.
+Bind the successful results to both the ZIP and executable hashes, and reject missing or stale verification at the upload boundary.
+Cross-platform build metadata and a version-shaped string somewhere in a binary are not substitutes for those command results.
+
+## Migrating a long-poll channel without duplicate consumers (#2020)
+
+A connector switch alone does not free a built-in extension ID for installation: the registry must explicitly
+opt into `Registry.Yields` for the approved handoff. Keep sealed connector state under the unchanged connector
+ID and finish stopping the old process before starting the replacement; two long-pollers with the same token
+can consume each other's messages. Publish the extension and signed catalog, verify an isolated hub with
+synthetic state, and approve the production handoff before removing the built-in. Never copy production
+tokens into a test hub. Retired artifact-name parsers may remain for old releases, but a new manifest must
+not republish a retired program merely because its old artifact was left in the build directory.
 
 ## Extension public identity is not storage or token authority (#1493)
 
@@ -296,9 +882,17 @@ For embedded signatures, retain the complete envelope and verify the exact decod
 
 Sockets passed by socket activation (`LISTEN_FDS`, descriptors 3 and up) are not close-on-exec, and Go's `os/exec` does not close what is not: every process started before the hub marks them is handed the hub's listening port, and hands it on to everything it starts in turn. The hub without its edge marked them only when it first listened, and it could start the built-in manager before that; the manager, the local node, extension programs and the agents the node started then all held the hub's listening socket (several pids on `ss -tlnp` for the hub's port). Take what a process was handed first thing, before anything can start a child (`claimInherited`, `osproc.SealInherited`); hand a child a descriptor only through `exec.Cmd.ExtraFiles`. Never seal in `main` of a binary whose helper commands hand descriptors on by exec (the sandbox's launcher passes its mount data to bwrap that way).
 
+## On macOS a connection a process accepts reaches whatever it starts at that moment (2026-11-14, #7765)
+
+Go's `accept` on macOS makes the new connection close-on-exec in a second call, outside `syscall.ForkLock` (`src/internal/poll/sys_cloexec.go` in Go; Linux's `accept4` does both at once), so a process `os/exec` starts in between inherits the connection and keeps it open for as long as it lives: the other end never sees the parent close it. Sealing at startup (`osproc.SealInherited`) cannot reach a connection accepted later. Every listener in `server/` therefore comes from `osproc.Listen` or `osproc.FileListener`, which on macOS accept with the lock held for reading, as Go does when it makes a socket or a pipe; archguard's `TestListenersComeFromOsproc` fails on any other. When touching them: a listener's own `SyscallConn` cannot wait for a connection (its `Read` returns `EINVAL`), so the acceptor waits and accepts on an `*os.File` copy of the socket. `Fd` on any copy puts the socket, which every copy shares, in blocking mode, and a blocking `accept` would hold the lock, and every process start with it, until the next connection (Go's reason for leaving the lock out); the acceptor sets non-blocking mode again before each accept, so only an `Fd` landing between the two gets through: never call `Fd` on a copy of a listener that is still accepting (the resident node's handover calls it once its listener is closed), read the number with `SyscallConn().Control`. osproc's listener types keep net's to themselves, so nothing accepts around the acceptor; an assertion to `*net.UnixListener` or `*net.TCPListener` would never match, and the guard rejects those names too.
+
 ## A process that execs itself inherits its own children (2026-11-10, #2978)
 
 `syscall.Exec` keeps the pid, so every child of the old image (the update watchdog, the herdr server, bridges, the hub's manager) is the new image's child, and no `exec.Cmd` there knows it. Once one exits it stays a zombie until the process ends; `init: true` in Docker does not help, since the zombie's parent is personad, not init. The resident node, the hub and a manager all replace themselves this way, so each calls `osproc.ReapInherited` next to `osproc.SealInherited`, before it starts any child: it waits for each pid listed as its child then, never for -1, which could take a child an `exec.Cmd` waits for.
+
+## macOS's resolver opens a control socket after the startup seal (2026-11-15, #7813)
+
+On macOS the first lookup through libSystem opens `com.apple.netsrc`, an `AF_SYSTEM` kernel control socket without close-on-exec, and keeps reusing it; the separate Unix socket to mDNSResponder is close-on-exec. A startup seal before any lookup therefore misses the one socket that every later child inherits. `osproc.SealInherited` makes one `localhost` lookup through `net.DefaultResolver` with a 50 ms deadline immediately before its descriptor scan on Darwin. This leaves `GODEBUG=netdns` untouched (`netdns=go` opens no control socket), ignores resolver errors and costs each caller only one local lookup, including the short-lived stdio commands. If the deadline passes, the system lookup may finish and open the socket after the scan, retaining the old inheritance behavior rather than delaying startup further. Keep the warm-up inside `osproc` so no present or future caller can forget it. A test can identify the socket without `lsof` through `CTLIOCGINFO`: Darwin has no `SO_DOMAIN` option, and `getsockname` is unsupported on this control socket.
 
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
@@ -324,7 +918,8 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 ## Rolling-upgrade identity contracts (#6223)
 
 - Treat a rename as an ABI change wherever a byte reaches another process, persisted state, a cryptographic domain or an operating-system registration. Use an explicit authenticated feature, an old-safe default and exact aliases; display names and build strings do not prove compatibility. Push-to-start needs a persisted registration capability, independent of the socket's XML capability.
-- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare; established conversations retain their configuration. Shared generated MCP files also serve automatic resumes and cannot be narrowed using only the current hub capability.
+- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare. With a capable hub, assistant resumes can also use only `persona`: a real Claude Code 2.1.322 transcript containing a legacy tool call accepted the next request after the alias was removed. Ordinary Agents' shared generated MCP files still serve automatic resumes without a per-session decision and cannot be narrowed using only the current hub capability.
+- Measure a headless assistant with its actual environment and registered conversation identity (#4238). `system/init` under ToolSearch, or a manually spawned MCP process whose session was not discovered as the assistant, exposes a smaller tool set than the real request. Compare the request's `api-request-shape` and first assistant usage together; an init tool count or a standalone `tools/list` alone is not the fixed-context baseline.
 - A deterministic receipt or thread seed, HPKE info or grant AAD is an invariant, not copy. Keep the original output bytes; decoding can accept both explicitly known domains. A dual-key JSON payload cannot repair encryption the old receiver cannot open. Never rotate a key, token or database to hide incompatibility.
 - Normalize typed protocol fields only. Generic recursive replacements can change unrelated event sources, user text and large opaque JSON numbers. Preserve field presence (including false and null), use exact aliases, and project detached manifest validation values without rewriting signed package bytes. Both copies of forwarded headers must be removed together, or the legacy copy can resurrect a forwarding loop.
 - Keep custom JSON methods off an anonymously embedded DTO. A method promoted from the embedded launcher swallowed its surrounding health and agent-type fields on both encode and decode. Use an explicit root transport envelope and test that embedding the plain DTO preserves sibling fields.
@@ -404,6 +999,12 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 - The node writes `initialize` to `lcu`'s stdin right after starting it. If the process has already ended, the write fails with "broken pipe", or with "file already closed" once `cmd.Wait` has closed the pipe. That can happen before the goroutine that waits for the process reports the exit. So the caller got a raw pipe error or "the process ended", depending on which came first. `TestLCUProcessThatDiesOnStartFailsAtOnce` failed this way in 16 of 500 runs with `-race`.
 - Classify the write error instead of waiting for the exit (`writeFailed`). A closed pipe (`EPIPE`, `os.ErrClosed`, `io.ErrClosedPipe`) is the process's end: mark the session failed, so the next call starts a new process, and return the end at once, wrapping the write's error. Any other write error stays itself.
 - Waiting for the exit is a trap. A child of `lcu` can keep its stdout open, so the exit isn't seen for as long as the child runs. A first version that waited up to 2 s held the call lock that long and still returned the raw error, and never restarted `lcu`. The tests now cover that case and a write error that isn't a closed pipe. Tests compare with `errors.Is`, so an error that always says "ended" can't pass them.
+
+## LCU release layout is part of its integrity check (#4435)
+
+- A release bundle records regular-file modes and symbolic-link targets as well as hashes. Creating every file as 0644 or omitting links breaks that layout; even a restrictive process umask must not change the recorded executable modes. One valid release link is initially dangling and becomes usable only when its in-tree target exists.
+- Create ordinary files before links in an empty private staging directory, then validate the complete relative-link graph against the staging filesystem after creating links. A lexical check of each target alone misses an escape through another link followed by `..`, and a case-sensitive map misses aliases on a case-insensitive filesystem. Reject collisions, cycles, privileged permission bits, group- or other-writable files and unsupported archive entry types. Link mode bits do not grant file write permission. A synthetic manifest and a read-only comparison with the public archive exercise the layout without running its installer.
+- A shell wrapper may forward the runtime-only argument to an adjacent installer without containing that literal itself. The supported wrapper is pinned to its reviewed v0.13.6 bytes; its adjacent regular installer is checked for the expected tokenized runtime-only option, argument binding and return before setup, so some unrelated target changes do not require a new hash. The bounded token check ignores comments and string contents and fails closed on slash operators, including division and regular-expression literals. It cannot prove arbitrary JavaScript control flow or the behavior of imports. The fixed invocation still supplies runtime-only and yes, but a same-origin release checksum is not an independent signature, and the legacy direct-script marker is a heuristic too. Verify both forms with synthetic, unexecuted installers and compare the public wrapper and target without invoking them.
 
 ## Separately bundled component pages and callback results (#6129)
 
@@ -514,6 +1115,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 
 - Merging managers' to-do links must resolve each machine/session pair by `sessionOwner` before falling back to the built-in assistant (2026-11-06, #5829). A session belongs to its machine's owner (#5556), which may not be the built-in assistant. Go map iteration has no guaranteed order, so looking up the owner's and built-in assistant's entries directly prevents a later-visited fallback from overwriting the owner. Test both report arrival orders and nil versus empty reports: a failed read retains links, while a successful empty report withdraws them.
 
+- The hub half of `TestBroadcastTypes` scans every non-test `.go` file in the `hub` package for message types: any `Type: "text"` struct literal, `"type": "x"` map key, `x.Type = "x"` assignment, or in-string `"type":"x"` is treated as an app message type and must be listed in `hubMessageTypes` (2026-11-14, #7677). Code that merely builds `proto.Content` (e.g. prepending a note to a phone tool result) trips it. Build such content with the `proto.TextResult(...)` helper instead of a `proto.Content{Type: ...}` literal, so the literal lives in the `proto` package, which the scanner does not parse.
+
 - To-do Agent linking and removal must lock rows in the same order (2026-11-05, #2660): acquire a session transaction lock, then lock the target and other active to-do parent rows by id, then update Agent rows, preventing concurrent link/removal deadlocks and duplicate active links. Auto-link first confirms the target isn't an existing row or dismissed marker, releases old active links, then inserts; `todo_agents_active` is an immediate unique index, so inserting before release raises 23505. Preserve soft unlink and roll back the whole transaction on unexpected conflicts. Regressions observe real lock waits and use `FOR UPDATE NOWAIT` to check order, not added sleeps or retries.
 
 - Workspace ownership transactions and publication need one ordering boundary (#1479). A store can commit A, return B first, then return A: serializing only the in-memory map still leaves two task lists and a stale automatic-routing index. Order link, unlink, rename and task deletion with their live publication. Release the write lock for session-list RPCs, then recheck the exact link before fanout; background automatic membership writes must also verify their still-current record before persisting. Test committed-store barriers and delayed session RPCs through HTTP handlers, including reload, failure/retry and preservation of manual/spawned links.
@@ -542,6 +1145,7 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 
 - Connector mode watching mustn't record only startup mtime and wait for a later change before checking mode (2026-11-03, #748): the run loop picks active/passive then starts its watcher asynchronously; if the user switches before the watcher goroutine begins, new config becomes the initial snapshot and the first switch is missed forever. Sample initial time, then immediately compare actual mode and cancel the old mode if different. Bidirectional regressions directly simulate "config changed before watcher starts", not longer waits; observing initial state doesn't mean the watcher is ready.
 
+- Optional Chat Completions parameters need error-shape-specific compatibility retries, not a generic "400 mentions the field" rule. `reasoning_effort` can appear in an unsupported-parameter response (safe to remove and retry once), but also in an invalid-level or operator-ceiling response (must be returned unchanged). Off is the one exception to value rejection: because Information screening defaults to `off` without a user choice, a gateway rejecting `none` as a value must also get one without-field retry, or existing Chat providers regress; explicit non-off values still fail unchanged. Keep independent per-field retry flags so existing token/usage fallbacks still compose, log every without-effort downgrade, and make a degraded connection test return an empty effort that it did not verify. A retry alone still makes every later loop call fail first, so share a one-hour, hard-bounded cache by Base URL + credential + route computer + model between probes and real calls, distinguishing whole-field rejection from none-only rejection; an explicit no-retry response neither retries nor populates it (#8779, #8822). Empty provider-model effort lists still mean unknown, while `no_effort` is explicit and `all_efforts` carries the direct API's complete levels; keep that capability suppression in one helper shared by probes and runtime resolution so their wire behavior cannot split.
 - Collapsing purpose models into category defaults needs more than hiding lists or making the resolver ignore old records (2026-11-03, #697): starting a task, resuming its own session, or returning to the source session may reintroduce old `Launcher/Model/Effort` execution parameters, which `applyModel` treats as explicit choices. Stop passing these old purpose parameters at execution entry points; compare only category results when deciding launcher changes on resume. Regressions check real RPC arguments for all three paths, unchanged permissions, rejected old-purpose PATCH, and preserved original records.
 - Sending into an existing assistant chat (phone messages, scheduled follow-ups returning to the source) mustn't choose launchers independently (2026-11-04, #1518): follow-ups resolved the Agents category, defaulting to bare Claude Code,
   and at the scheduled time `--resume`d the main chat into a logged-out claude on the hub machine. Main-chat sends then inherited the "currently running" launcher, so they never switched back and every message reported
@@ -754,6 +1358,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - Gateways return `HTTP 429 account_quota_exhausted` for exhausted quota and `HTTP 503 account_concurrency_full` for full concurrency. Previously each caller treated these as ordinary failures: knowledge processing and Inbox sorting retried item by item, producing 429 requests and log lines in 15 minutes; Inbox items were marked sorted "by rules" and weren't reprocessed after quota recovery.
   Handle rate limits per connection in the shared client (`ai/limit.go`, `docs/assistant/model-config.md` ("Upstream rate limits")): while paused, return `ai.PausedError` without sending; callers seeing `ai.IsPaused` stop the round, don't log, and don't mark items processed. New model-calling loops must do the same.
+- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`, as a string or number; decode fields independently so a malformed field cannot erase a valid message or type. A recognized code wins over wording, while an unknown code keeps the previous fallback. `X-Should-Retry: false` makes the original response non-transient, not the gate: only a 429 with a positive, valid `Retry-After` is the quota-reset exception. Zero, malformed or absent cooldown keeps the existing busy gate. A bounded compatibility request with a rejected field changed is not a same-request retry and remains allowed. Keep model-unavailable, missing-endpoint and excess-context classifications separate: Anthropic's 404 `not_found_error` with a `model:` message is a missing model, but overload wording such as `model service unavailable` is not. `model_unavailable` on model.complete means no configured/callable model, never an upstream model failure; use `model_failed` for the latter (#8833).
 - Thinking models (e.g. `claude-haiku-5-5` thinks by default) count thinking tokens toward `max_tokens` too (2026-11-03, #1000): a project profile of about 2000 Chinese characters needs 3.7–4.7K,
   so `kb.project`'s old 4000 cap often truncated into thinking plus half a JSON object, reported as "unterminated JSON object", retrying every 2 minutes.
   Inspect Messages `stop_reason`: if `ai.JSONMax` lacks a complete object and stopped on `max_tokens`, double the cap and retry once; if still truncated, return `ai.ErrTruncated`.
@@ -786,8 +1391,25 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- An ascending GitHub search cursor cannot use `updated_at` alone when a page ends inside one second (#4461). Keep the
+  completed thread identities at that boundary, resume an unfinished thread across restarts, and rescan a tied boundary
+  instead of trusting a page number across reordered results. Checkpoint matching-generation scans across quota windows,
+  verify every ID again immediately before moving on, and retry a changing search. More than 1,000 threads in one second,
+  or repeatedly lacking enough quota for that final check, is an explicit retryable limit. Search has no atomic snapshot:
+  a result indexed only after the final check cannot be guaranteed. Test the actual connector against synthetic HTTP,
+  including insertions, reordering, cancellation, repeated limited quota windows and retries.
+
+- A Messages ROWID can be associated with more than one chat (#4440). Deduplicate by canonical conversation and ROWID,
+  before page and search limits, and count unread messages by that same identity. A numeric changes cursor can only
+  advance after every selected ROWID's associations are read; select the boundary and expand it in one SQLite snapshot,
+  bound the expansion, and fail without returning a cursor when it cannot fit. A previously advanced cursor cannot
+  reconstruct associations already skipped by older code.
+- Forever is a sentinel, not zero days (#3780, #3862). Preserve `minutes_days: 0` before applying the transcript-retention floor, calculating an expiry date or confirming an echoed setting. A trimmed recording's metadata proves it has retained minutes even if `minutes.json` cannot be read; a parse failure must not turn forever retention into deletion. Test repeated sweeps, unreadable trimmed minutes, switching back to finite retention and explicit user deletion.
+- A meeting answer may be spoken in front of others (#3862). Until private meetings can be marked, gate earlier minutes, their linked projects and action-item states together before retrieval; a prompt warning cannot hide material already sent to the model. Keep opt-in retrieval tests as well as a default-off test that checks the model input and returned citations.
+
 - Deleting a connector is broader than deleting an archive namespace (#1836): include its alternate chat sources, posts and items, plus indexes and project references. Record the connector at ingestion, separately from a chat's namespace, and stamp item ownership before the unchanged-item fast path. Never infer legacy ownership from an item ID, title or a shared archive alias; use explicit provenance or a known source chat, leaving ambiguous records intact. Deletion tests need another connector's records, shared aliases and unowned legacy data, not only a single source.
 - A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
+- An archive switch must fence the commit as well as the source read (#4500). A response can already have crossed the manager boundary when the user turns the source off. Admit each page under a source generation, reserve the write and cursor together, retire the generation on off, and wait for already reserved commits before reporting success. A failed write can leave a journal that publishes data during recovery: settle it before releasing the reservation. Treat a lost reservation acknowledgement and an unreadable reservation record as uncertain, preserve them across source-manager restart, and test off/on, failure, cancellation, multiple pages and both local and bus adapters. The assistant also needs its own durable begin/settle/end journal with the token, generation and exact source/chat pairs: a replacement must recover it before new reads, never clear unrelated reservations, and fail closed when it cannot be loaded (#4732). The guarantee needs one authoritative source manager and cannot cover legacy work that never used the protocol.
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
 - A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
   Preserve stable message IDs scoped by exact source and chat, including IDs such as `body` reused across threads. Formatted-text matching loses distinct messages;
@@ -886,7 +1508,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 - **Headers must travel the whole chain**: nginx `proxy_protocol on;` without headers from the preceding tunnel writes the tunnel client's `127.0.0.1` as source, still appearing local to hub.
   Hub logs once when "loopback upstream claims loopback source"; make the preceding layer send headers too, using nginx `listen … proxy_protocol` + `set_real_ip_from`.
 - **Don't read headers in Accept**: one silent connection stalls all connections. Read in the connection's goroutine on first Read / Write / RemoteAddr
-  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Preserve any earlier caller read deadline and restore it afterward, never overwrite or clear it permanently.
+  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Apply caller deadline changes to a pending header read using the earlier of the caller's deadline and the fixed header limit, then restore the caller's current deadline on success. A header timeout still refuses and closes that connection; extending it later cannot retry the header (#9445).
 - **Don't enable it for loopback on plaintext ports**: `hub pair`, `hub admin`, and plugins connect over loopback plaintext without headers. If `from` includes loopback and `listeners` includes `http`, refuse startup.
 - **Tests mustn't assume Accept returns their own connection**: other developer-machine processes scan loopback ports (a test once accepted an unfamiliar connection starting `GET`, causing intermittent failures).
   Identify the dialed connection by its socket peer address.
@@ -981,6 +1603,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - **JPEG pixels are stored before EXIF orientation** (#1303): apply all eight primary-image orientations, including mirrors, before sizing a thumbnail; re-encoding alone drops the orientation metadata. Keep metadata scans bounded and separate from nested/thumbnail IFDs. A derived thumbnail's ETag also needs a processing version, but clients must reach that validator: revalidate persisted disk thumbnails once per launch even when a listing's size/time match, and give browser thumbnail URLs a new page-load identity. Test both upgrade orders with a seeded old image; a new client may see an old node first. Unupdated clients can retain their private caches until they refresh or upgrade.
 - **Go `mime.TypeByExtension` varies by machine**: it reads `/etc/mime.types` and other system files; docx / xlsx / ipynb / heic may be known on one machine and empty on another, making MIME-selected viewers differ for the same file. Keep a fixed preview-type table in node (`node/filemime.go`); outside it, consult the system, then sniff initial bytes.
+- **An extension can name two formats** (#7974): `.ts` is TypeScript and MPEG transport stream, `.mts` TypeScript and AVCHD video. The system tables pick one (a Mac's `/etc/apache2/mime.types` says `video/mp2t`, Linux shared-mime-info lists `text/vnd.qt.linguist` first), so a fixed table entry would be wrong half the time too: such names are typed by their first bytes (`proto.ScriptOrStream`: sync byte `0x47` every 188 bytes, binary; else text). Older nodes keep answering by the name until their computer updates, so the hub's `file.read` relay re-checks a streamed `video/mp2t` through `file.chunk`; a type fix that lives only in the node reaches nobody whose files are on another computer.
 - **`qlmanage -t` hangs on locked Macs** (still running after 30 seconds measured), without errors. System thumbnail tools need timeouts, cooldown after a timeout, and one concurrent execution: a file list may request dozens, otherwise node fills with stuck processes waiting on every thumbnail.
 - **Hub and web share an origin; isolate inline files**: standalone `Content-Disposition: inline` SVG / HTML scripts run as the web app and can read localStorage tokens. Inline only images, audio/video, PDF, with `Content-Security-Policy: sandbox`; PDF is exempt because Chrome won't display sandboxed PDFs.
 
@@ -1093,6 +1716,7 @@ and add that directory to image workflow PR paths.
 
 - `-race` always flagged devices and connector: tests only `defer cancel()` without waiting for `Machine.run` / `watchOne`, so the next test changed `reconnectGrace` / `watchBackoffFirst` while old goroutines read them (even already-finished reads race without synchronization). devices tests use `runMachine(t, m)` (Cleanup cancels, then waits with timeout for `run`); connector `Start` reads backoff parameters once and passes them to watchers.
 - Waiting for `run` exposed another bug: a tailcat connection stuck writing in `configureNode` (peer not reading) outlived ctx, while `watchTailcat` exited without closing it; `run` never returned and hub `workers.Wait()` hung at shutdown. `serve` now closes tailcat on ctx end (`context.AfterFunc`). Cancel-without-wait tests hid the hang.
+- A goroutine stopped before it starts still reads what it reads when it does start (2026-11-11, #3942). `TestPlanThenWatchStopsWhenTheCardAnswers` cancels the plan-then watch at once, and the goroutine read `planThenEvery` after `fastPlanThen`'s cleanup had put it back; `planThenAfterTerminal` now reads it before `go`. The same holds for fields: `setCatalog` prefetches a pushed entry in a goroutine that reads `n.peer`, so a test gives the node its hub before `setCatalog`, never after.
 
 
 ## Knowledge corrections and extension permissions (#1908)
@@ -1217,6 +1841,20 @@ allowing concurrent "set key" to pair a key with an unintended address; and only
 checking/deleting under the same operation lock in `SetConfig` / `SetSecret`. Address changes delete unconditionally (idempotent); `SecretsSet` only decides response wording.
 For future safety-driven delete/reject decisions, don't rely on error-swallowing read APIs or split check-then-write in handlers.
 
+## One large message on the bus holds up everything behind it (2026-11-13, #6574)
+
+- The bus between the hub and a manager is one WebSocket: `rpc.Peer` writes one message at a time, coder/websocket writes a message as one frame (it even compresses the whole message into a buffer first), and the reader decodes a whole line before it looks at the next. A 22 MB attachment inside `http.request` became a 30 MB line, and every other call to that manager (cards, to-dos, session lists, phone tools) waited until it was written. Compression makes the blocker smaller, not shorter-lived, and photos, PDFs and audio barely compress anyway.
+- On a slow link the same frame breaks the connection: the keepalive's ping waits at most 5 s for the frame lock (`writeControl`, hard-coded), so a frame that takes longer to drain drops the bus with every call on it, the upload included ("Heartbeat timeouts on slow links" below).
+- Move the bytes, not the request: `http.request_streamed` keeps the whole envelope (auth, caller, receipts, the answer) on the bus and sends only a large body on a relay of its own, in 256 KiB messages, read whole before the route runs. Nothing about the request's meaning changes, so there is nothing to keep in step but the body. A stream that fails is refused before anything ran, so the hub can send the request inline after it without running it twice.
+- Separate HTTP requests were never ordered by the bus (the hub reads each body before calling, the manager runs each call in its own goroutine), so a side stream breaks no order anyone relied on: a flow that needs one request after another waits for the first's answer.
+- Prove a stall with a control: `TestLargeBodyDoesNotHoldUpTheBus` throttles the manager's reads and measures a small call during a large upload both ways (3 ms streamed, 2.5 s inline). Without the inline run failing its own bound, a too-fast test link would pass for a fix.
+
+## Rows nobody sees still cost every push (2026-11-14, #6836)
+
+- A machine's list told the hub carried a row for every archive record, kept without expiry, and the hub dropped all of them (`Hub.shown`) before anything reached an app. At 8,000 records and 200 live sessions, one session changing cost the manager 23 ms and 110 MB, the bus a 5.9 MB message, and the hub 4.4 ms and 27 MB. A list that is filtered at the far end grows with what it filters: send what the far end shows, and what it only looks up by id on its own, when it changes.
+- Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
+- A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -1339,6 +1977,10 @@ Some apps still recognize a timeout by the summary's words, not its code: iOS `A
 - Socket reads on the local node get a deadline (`launchNodeWait`, 10 s for `launch`): a node that accepts and never answers (restarting, stuck, a stale socket held by another process) otherwise blocks forever. Say which socket timed out and point at `personad node doctor`.
 - Test a signal while the child is actually waiting: signal only after the fake node has read the request, not after a fixed sleep. A child inherits an ignored SIGINT (tests run in the background), so skip when `signal.Ignored` reports it (`cmd/personad/launch_test.go`).
 
+## Deadline cancellation can still exit zero (#2841)
+
+A shell may handle SIGTERM and exit 0. Keep the recorded cancellation when classifying its timeout so the command list stops, while ordinary success before cancellation remains successful. A public `secret.run` regression can block on a FIFO, observe ready/TERM markers and check that no next command runs, without sleeps or busy waiting.
+
 ## An empty Git file list is still authoritative (#6056)
 
 A successful `git ls-files` can return no files when the requested directory contains only ignored output. Falling back to a filesystem walk on an empty result discards Git's ignore rules and lists that output. Use the result's availability, not its length, to choose the fallback; test an ignored directory that actually contains a file.
@@ -1355,6 +1997,8 @@ Compare the original CSV decimal with the exact decimal written by the 15-signif
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
 
+Cached spreadsheet formula ranges can expand millions of absent cells from a tiny input. Bound both each range and the aggregate work across a workbook, check coordinates before arithmetic, and leave the formula uncached for Excel to recalculate when the budget is exceeded. Test the generated file and normal aggregate results as well as the bound.
+
 ## Decimal rounding scales can overflow before the result does (#1335)
 
 `ROUND` can have a finite result even when its power of ten or scaled intermediate overflows. Bound places by the float64 range, split large positive scales for tiny inputs, and retain numbers whose rounding place is already below their precision. Only a genuinely overflowing rounded result becomes `#NUM!`. Test emitted XLSX caches, including subnormal values, large finite results, 15-digit ties and `IFERROR`.
@@ -1370,6 +2014,8 @@ When a `httputil.ReverseProxy` has to read what it forwards (the sent-as-user le
 ## Notification success needs a selected recipient (#1910)
 
 Calling both notification channels does not mean either selected a recipient: a saved device may have no usable APNs or relay route, and a connected client may not support `ws_notify`. Return selected and reachable counts from the same recipient walk, before and after its preference filters, so the API can distinguish `no_device` from `filtered` without a separate readiness check racing that selection. Preserve the earlier session-level `muted` result and count both channels: a WebSocket notification can still go out without any push credentials. These counts are not asynchronous APNs / relay acceptance or proof that a phone displayed anything.
+
+The same holds on every path that reports a push, not only the API that was fixed. `POST /api/v1/notify` learned to say `no_device` in #1910, but the assistant's `notify.request` kept dropping the counts, so `notify_user` answered "Notification sent." for days in which no device was paired, and the north star counted each of those notices as an interruption (#8138). When a function returns selected and reachable counts, carry them up to every caller that reports success, and count a browser's Web Push and an offline device's kept copy apart from "nothing".
 
 ## A push's nil "wants" means "asked for explicitly" (2026-11-06, per-manager push switches)
 
@@ -1457,8 +2103,9 @@ A connector that folds several notifications into one thread (GitHub CI failures
 ## Hot paths: re-reading every row of a list that barely changed, a catalog tried end to end (2026-11-09, #1986)
 
 - A list decorated again on every publish re-read every row's question (`transcript.AskOf` on the last words of each of 8,200 sessions). Keep the answer per machine and session with the text it was read from, and read again only when the text differs (`asksMemo`); a complete list drops the rows it no longer carries, a subset keeps them. Prove it with a table of lists that change between calls, each decorated warm and fresh.
-- To find out whether a list changed since it was last sent, compare its bytes as they are encoded (`changedWriter`), not after encoding them into a new slice: an unchanged list then costs no copy.
+- To find out whether a list changed since it was last sent, do not keep a copy of each list sent: keep its length and digest and encode into one reused buffer (`sentList`; #3197, "A digest instead of the last bytes, a mirror without the lists" below).
 - An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
+- The race detector's instrumentation allocates too: under `-race` a decorated copy of 8,200 sessions measured about 89 MB against its 13.7 MB bound. Every such test starts with `if raceEnabled { t.Skip("race instrumentation allocates") }`, before `isolated`, so the parent skips without starting a child (`raceEnabled` comes from `assistant/race_test.go`). Two budgets written without it kept `go test -race ./internal/assistant/` red, and no CI lane runs `-race` to notice (#4582).
 - A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
 - Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
 - The paged index rebuilt every row's item (a summary marshalled, the full row and search text joined) on each list update and `sessions.revs`, for one changed row: 2.65 MB for 150 rows. The index's own item is the memo: when its stored full row is the row's new encoding with the same suffix, its summary is the row's too, since the summary is cut from the fields that encoding holds (`indexedRow`, 0.10 MB). Text read from the row itself is still compared, because the encoding folds every invalid UTF-8 byte into the same escape. The keys must line up: a list with two rows under one id pairs one row's summary with the other's bytes, so after such a list, and for the list after it, compute every row. Prove it with the full computation run beside it on changing lists, step for step (`TestIndexRowReuseMatchesFullPath`), and let `Replace` keep a payload that is the stored slice itself without walking it by reflection (`sessionlist.sameItem`).
@@ -1501,6 +2148,20 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - Over a real network the takeover is still not worth it (#3506): Persona Link streams kept the same 0.85 MB per end to send a sixth fewer bytes. All four stream ends now ask for no context takeover (`link.StreamCompression`): a replay of 180 s of 10 computers' node traffic took 2.64 MB on the wire instead of 2.18 MB at the same CPU, and an idle pair keeps about 40 KiB instead of 1.7 MiB. Either end asking for no context takeover decides it (RFC 7692, and coder/websocket honours it as acceptor and as dialer), so an old end paired with a new one saves on both; check every old/new pairing, not only new with new (`TestStreamCompressionInterop`). That mode leaves messages under 512 B uncompressed, so measure the wire bytes of a link that carries mostly small messages (the remote bus, mesh peers) before switching it.
 - A smaller first buffer sends the lines just past it through growth on every read (#3506): with `rpc.lineReader` at 16 KiB, a computer's session list of a few dozen rows (16-64 KiB) grew 16 -> 32 -> 64 KiB each time, and reading captured node traffic took 10% longer than with the 64 KiB start. Growing out of the first buffer straight to 64 KiB and not searching the bytes already searched for a newline (`seen`) read it as fast, and an idle connection keeps 18 KiB instead of 68 KiB. Measure the line lengths a reader really gets before choosing its sizes.
 
+## A large upload on its way: read by doubling, encoded three times, decoded twice, kept for minutes (2026-11-12, #3199)
+
+- One 22.4 MB request body relayed to the manager cost the slot 107 MiB of allocation and the manager's route 85 MiB to decode; the slot went from 45 to 180 MB resident and the manager from 56 to 192 MB, and an idle pair still held it all a minute later. `io.ReadAll` grows its buffers by half again and copies them into a final one (49 MiB): with the Content-Length known and within the limit, read into a buffer of exactly that size through the same `MaxBytesReader` (21 MiB), and give anything that differs (more bytes, fewer, an error) the results `io.ReadAll` gives, compared case by case (`TestReadRelayedIsReadAll`).
+- An encoder given a struct with a `[]byte` field writes the base64 into a pooled buffer and copies it out; the envelope's encoder then checks and copies it again, and json keeps the grown buffer in its pool until the second collection (30 MB in the slot). When the large field is the struct's last and has nothing to escape, encode the rest without it, drop the closing brace and append the field straight into the line (`rpc.Appended`, `httpParams`: 58 to 28 MiB and a third of the time per call), sized up front so the frame budget is checked before anything is built. Pin the field order with a test of its own (`TestHTTPRequestBodyIsLast`).
+- A line built by hand must come from the encoder the value would go through, and its oracle must be the code that writes the line today. The first version made the head with `json.Marshal` and one test compared with `json.Marshal` too; meanwhile #2907 had stopped `Call` from escaping `< > &`, so every query with an `&` would have gone out as other bytes, and only the test that compares with a real `Call` of the whole value saw it (`TestHTTPParamsAreJSONMarshals`). `rpc.Marshal` is that encoder; a copy of the old code as oracle proves what the code was, not what it is.
+- In Go 1.27 `encoding/json`'s `Decoder` is jsontext underneath but hides a `*bytes.Buffer` from it, so a body already in memory is read again through growing buffers (85 MiB for 22.4 MB). Decoding the bytes where they are takes what `Decode` does by hand: `jsontext.NewDecoder(bytes.NewBuffer(b), json.DefaultOptionsV1()).ReadValue()` then `jsonv2.Unmarshal` with the same options (21 MiB: the decoded strings). Its errors are not always the Decoder's words, so on any error put the value back to zero and decode the same bytes the old way (`decodeLargeBody`); without `DefaultOptionsV1` field names stop matching case-insensitively, duplicate keys and invalid UTF-8 are refused, which the equivalence table catches (`TestDecodeLargeBodyIsDecodeBody`).
+- After the request nothing allocates in an idle process, so no collection runs (`GODEBUG=gctrace=1` shows none in the minute after) and the pages stay. `debug.FreeOSMemory` a second after a body of 8 MiB or more returns them (`memtrim`); the second lets the request's own buffers become garbage first. A rate limit the first body claims leaves a second upload inside the window with nothing: schedule instead. Each body asks for a trim a second after it, trims run 30 s apart at the closest, and one asked for inside the window gets the next turn (`TestEveryLargeBodyGetsATrim`, on a clock moved by hand).
+- Fewer bytes allocated is not a lower peak. The manager's route allocates 64 MiB less, and its peak stayed (192 to 188 MB): what sets it comes before the route, the bus line read by doubling (64 MiB for a 30 MB line) and the envelope's `json.RawMessage` copying the params once more (30 MB), and the last collection before the peak runs at the same heap size either way. Measure the process end to end (`scripts/diag/relay_body_rss.py`), beside the function's benchmark.
+- RSS means different things per system. On Linux the runtime returns pages with `MADV_DONTNEED` and RSS falls at once. On macOS it marks them reusable: the physical footprint (Activity Monitor's Memory, `proc_pid_rusage`) falls at once, RSS only when the kernel takes the pages; and when the Mac is short of memory it compresses an idle process's pages, so RSS falls though nothing was given back (an unchanged build went from 192 to 70 MB by itself in one round of three). Compare builds by RSS and `VmHWM` on Linux and by the footprint on macOS.
+- Run the baseline again before fixing what an older measurement found (2026-11-15). Three days after the note above, the same post took the manager to 110 MB, not 193: #6574 had moved a body of 1 MiB or more off the bus line onto a stream read into one buffer of its size, so the line that note blames was no longer on that path. It still is on others: a manager that takes no body stream (an older one, a stream turned down), a large answer, and the 1 MiB chunks of a file to or from a computer (1.4 MiB lines). To measure the line end to end, compare builds whose manager leaves `http_body_stream` out of its hello (`docs/operations/testing.md`, "A relayed upload's memory"): 199 to 167 MB at the manager's peak (Linux, median of three, measured twice). The pieces are garbage once the line is put together, so the peak falls another 20 MB when a collection takes them back before the route decodes the body: two of three runs of an earlier set did, none of the last six. The bytes allocated are the same in every run (92 to 58 MiB to read the line); where the peak lands follows when the collector runs.
+- A line of unknown length read by doubling costs more than twice its size in buffers (64 MiB for a 30 MB line), each one copied into the next. Past the largest pooled buffer (1 MiB), read on in pieces of that size and put them together once in a buffer of the line's size (`lineReader.line`; `bytes.Join` makes that buffer without clearing it first): the pieces and the line, twice the line whatever its length, and lines up to 1 MiB are read exactly as before (the same bytes allocated with the GC off). Leave a long line's pieces to the GC, its first and last too: a `sync.Pool` keeps what it is given until the second collection, so two 1 MiB buffers given back at the line's end stayed through `memtrim`'s one collection (2.3 MB held after it, 0.2 MB on main, where the same buffer went back early and was gone by then). Only a line of two pieces (a file's 1 MiB chunk is a 1.4 MiB line, and they come one after another) takes both from the pool and gives both back, so each costs its own buffer and no more. A heap bound cannot see one pooled megabyte among megabytes of slack: drain the pool before the line and count what is in it after (`TestLineReaderLeavesNoPiecePooled`). The limit is now a sum over pieces, so take `bufio.Scanner` as the oracle at the limit and one byte either side, with Serve's own 64 MiB too (`TestLineReaderInPiecesIsAScanner`, `TestLineReaderLimitIsServes`), and let the fuzz pick the piece size.
+- `json.RawMessage` copies its value because the input may not stay. A line the reader gave away stays, so its params can be a part of it: a field type with `UnmarshalJSONFrom` keeps what `ReadValue` handed it and `InputOffset`, and afterwards the value's first byte must be the line's own byte at that offset (compare the addresses, not the bytes) or the line is read the old way. `json.Unmarshal` hands the decoder the caller's bytes and never writes to them; nothing documents that the value is a part of them, hence the check. Compare with `json.Unmarshal` into the old struct over a table and a fuzz (null, a key twice, a key in other letters, lines that are not messages), cap the slice so an append cannot write into the line, copy a value that is a small part of its line (whoever keeps it would keep the megabytes around it), and take only lines the reader does not reuse: a test must fail when every line is taken that way (`TestServeHandsOnLongLines` keeps short and medium params until the end).
+- Break each change on purpose and see a test fail. Nine breaks found two holes: nothing failed when short lines' params were left in the reader's buffer, because the test kept only long ones, and a test that read an expected number of results from a channel hung for the package's ten minutes instead of failing when the broken code lost one. Wait on a channel with a bound and say how many came.
+
 ## Hot paths: a node list copied three times, a list marshalled only to be compared (2026-11-10, #2826)
 
 - A `proto.Session` is 1,520 bytes, so every copy of a node's list is a megabyte-scale allocation and slices grown by
@@ -1537,6 +2198,19 @@ A connector that folds several notifications into one thread (GitHub CI failures
   when nothing in it can need escaping: a plain ASCII event name, non-empty params. Compare the line with
   `json.Marshal`'s for HTML characters, U+2028, control characters and invalid UTF-8 (`TestNotifyMarshaledIsTheSameLine`).
   Give the type a `MarshalJSON`, or a `[]byte` passed anywhere else is written as base64.
+
+## HTML characters escaped at the first hop stay escaped on every later one (2026-11-10, #2907)
+
+- `json.Marshal` and a default `json.NewEncoder` write `<`, `>` and `&` as six bytes each, and an encoder keeps escapes
+  it finds in a `json.RawMessage` even with `SetEscapeHTML(false)`. A tool input of HTML went from the transcript's clip
+  through the node's rpc line to the hub's page and push: 61,011 bytes as Claude wrote them, 160,011 on the wire. Turning
+  escaping off at one hop changes nothing while an earlier one still escapes, so the clip (`transcript.marshalPlain`,
+  which `jsonLen` measures with too), every rpc line (`rpc.marshal`, `encodeLine`) and the hub's item bodies and pushes
+  (`marshalItems`, `writeItemsJSON`) leave them as they are. U+2028 and U+2029 are still escaped, as encoding/json does.
+- Prove it end to end, not per encoder: parse a line, send it over real rpc lines, read the page, the full item, the
+  push and a subscribe's backlog, and check that `tool_input` is no longer than it was written and holds the same value
+  (`TestItemsKeepHTMLCharactersOnTheWire`). A call's params carry no items and are pinned in the rpc package
+  (`TestCallKeepsHTMLCharacters`). Putting back any one escaping hop fails one of the two.
 
 ## Transport source is not pane origin (#994)
 
@@ -1666,15 +2340,324 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 
 ## Embedded code: stored raw, copied per package, read whole on first use (2026-11-10, #3455)
 
-- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it the Agent SDK bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
+- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it one package's bundled bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
 - Keep generated archives byte-for-byte reproducible: no name or time in the gzip header, mode 0644, time 0 and no owner in tar entries, a fixed level, entries in path order (`TestGenerate` runs it twice and compares).
-- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held the 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
+- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held that 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
 - Compressed code is noise to a strings scan. `check_bundle_privacy.py --whole-short` inflates every gzip member it finds in a binary and scans that text as well; a test hides a private word in a member inside binary bytes, after another member and in a member cut short.
 
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
 
 On TestFlight 224 an extension's **Review** spun for two minutes and then failed. The operations list (`GET /api/v1/extensions/-/operations`) told the story the access log could not: the settings page's synchronous `catalog/preview` was downloading a 13 MB package at about 33 KB/s from the hub machine; the app's 120 s request timeout closed the request, the hub's relay to the manager closed with it, and the preview's context (the request's) took the download down at 4.5 MB (`context canceled`). Tapping again on the reopened page started a second download of the same package beside the first, which got nothing for 30 s (`download_stalled`, `400 invalid_plugin`). A read-only preview with no client timeout then showed the deeper problem: the download kept moving and was cut at 10.1 MB by `Download`'s fixed five-minute budget, so on that link it could never succeed, synchronous or not.
-- A long download must not belong to one request. The manager now has one download per package at a time (by cache and sha256, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for.
+- A long download must not belong to one request. The manager now has one download per package at a time (by cache, sha256 and declared size, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for. Keep size in the sharing key: equal digests with conflicting declared sizes must be validated independently, regardless of which request arrived first (#9400).
 - Bound trickles by size, not by a constant: the stall rule catches a dead link, and the total budget is 30 minutes or the time 16 KiB/s needs. Tell our own budget from the caller's with `context.WithTimeoutCause` and a sentinel cause, or a caller's deadline reads as "too slow".
 - When the client of a synchronous call leaves, the operation it started should say so in words (`client_left`), not `context canceled`.
 - Progress is reported at most every 200 ms: a test that waits for an exact byte count can wait forever; wait for "some bytes" and prove there was no restart by counting requests.
+
+## macOS `ps` prints `nobody` as UID -2 (2026-11-10, #3687)
+
+- `uid_t` is unsigned, but macOS `ps -o uid` prints it signed: `nobody` (4294967294) shows as `-2`. Linux prints 65534, so hosted CI (Ubuntu) never sees a negative owner. `parseProcessTable` treated one as a corrupt row and failed the whole table, so `personad manager maintenance prepare|observe` broke on any Mac running a `nobody` process (`dhcp6d`, the DHCPv6 client, once a network uses DHCPv6).
+- When a check covers every row of a system table, validate the format (a number), not a range taken from one platform; keep the real constraint (the target is the current user's) on the row it is about.
+
+## A field that pushes a row past its size class (2026-11-11, #3937)
+
+- `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
+- When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
+- Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
+- The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`). A later sparse to-do id rode in that same optional pointer rather than taking `Item` past the class again (#7200); `TestItemBatchFitsItsSizeClass` now checks the 150-row batch beside the type, with no architecture-specific struct size.
+
+- A small list on every runtime row (2026-11-15, #8261). `proto.Session` had no byte left (1,528 of 1,528), so a row's
+  permission modes went into `SessionCapabilities`, which the node allocates for every runtime row. As a `[]string` it
+  took that struct from 64 to 88 bytes, the 96-byte class: a push of 300 rows allocated 9,600 B more and
+  `TestRuntimeSessionsPushAllocatesOneList` failed. It also made `proto.Launcher` uncomparable, and the manager compares
+  launcher lists (`slices.Equal` in `models_launchers_push.go`), so the build broke there and in three tests. A set of
+  at most eight known ids fits one byte: `proto.PermissionModeSet`, sent as the same JSON list, sits in the padding after
+  the six bools, so neither struct grew nor stopped being comparable. Read leniently: anything that is not a list of
+  strings is an empty set, never an error that would lose the rest of the row.
+
+## A fact about a directory does not go on every row in it (2026-11-13, #994)
+
+- #4637 put a project identity on each session (`inventory` on `proto.Session`, more attributes on `sessionlist.Item`) so the paged list could group a repository across computers. `Item` went from 200 to 328 bytes, a 150-row reindex allocated 17% more, two allocation guards failed, and it was reverted the same day (#4744). `proto.Session` is at 1,528 bytes with one spare byte, so a new string there costs every row copied anywhere 256 bytes.
+- A repository's remote is the same for every row in a directory and changes about never. The catalog (`server/internal/hub/sessions_catalog.go`) keeps it per directory instead: the index counts the filtered rows by machine and project in one scan when a client asks, and the hub asks each directory's computer what it holds (`git.status` with `identity_only`, which the nodes already answer), remembering the answer for 30 minutes. No row, item, push or page changed, and the allocation guards did not move.
+- Before adding a per-row attribute, ask what it is a fact about. If many rows share it through something they already carry (a directory, a machine, a space), keep it beside that key and look it up where it is shown.
+
+## What the port relay costs, hop by hop (2026-11-10, #3067)
+
+`server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
+(client, hub, manager, its own node) a small message's round trip is 1.6 ms, 0.8 ms more than a WebSocket ping to the
+hub, and a download runs at 88 MB/s: the hub, the bus, the manager and the stream mux are not where a live screen's
+latency goes. The hub → node leg (`ssh -T` over Tailscale on the LAN) is where it varies; plain `ssh host cat` shows the
+same spread, and the Mac's `sshd-session` already has TCP_NODELAY (lsof `-T f`: TF flag 0x4), so it is not Nagle.
+## A list of a few entries built the whole catalog to find them (2026-11-12, #3197)
+
+- `marketChannels` called `catalog("", "")` to list the channels the markets offer: every entry of every market with its
+  translations parsed, its permission lines written, every contribution decoded and its install problems checked, to
+  keep the one entry in 83 that contributes a channel. The assistant asks for the channel list every few seconds while
+  agents end turns: 3.6% of the manager's allocation and 4% of its CPU in a soak of 10 computers x 50 sessions, and
+  1.29 ms and 691 KB a call on a synthetic market of that size.
+- Test the cheap condition on the raw entry first (`len(e.Parsed.Contributes["channel"])`, then its items), and build
+  the ones that pass with the function the full list uses (`catalogItem`): 43 µs and 22 KB. Sharing the builder is what
+  keeps the two from drifting; a second, slimmer builder would have to track every later change to names, problems
+  and install state. It happened while this was in review: the catalog began to list the official market's entries
+  most downloaded first (#4909), and the channel list had to keep that order. The comparison with the old path caught
+  it once the test had an official market; the order is a named function both use (`officialCatalogOrder`), a total
+  order, so sorting only the entries kept gives the order the whole catalog has.
+- No cache, so nothing to invalidate when a market is refreshed, an extension installed or the language changed. A
+  cache would have saved the remaining 43 µs and cost a stale channel list on any missed invalidation.
+- Prove it against the old path kept in the test, over every kind of entry the filter tells apart (installed, no
+  package for the platform, a newer hub needed, a refused signature, an empty, null or malformed channel list, an id
+  another entry or the list already has), in every language (`TestMarketChannelsAreTheCatalogs`), and pin what the
+  table holds so that two empty lists do not pass.
+
+## A child in its own process group outlives a node killed by `exec.CommandContext` (2026-11-11, #4259)
+
+- The manager ran the hub machine's node (`node --stdio`) with `exec.CommandContext` and the default `Cancel`, a SIGKILL. The node puts each assistant process in its own group (`Setpgid`, so `stop()` can end its background tasks), and nothing ties that group to the node: a SIGKILLed node leaves its conversations running. Before blue-green switching, the systemd restart's cgroup kill hid this; a switch keeps the unit, so the old Claude processes went on beside the ones the next node resumed for the same conversations, and the next node rightly refused them the assistant's tools.
+- A child that must not outlive its parent needs the parent to stop it, and the parent needs time to: end such a process the way its peer going away ends it (EOF on stdin) with a bounded grace before the kill (`cmd.Cancel`, `cmd.WaitDelay`), and have it stop its own children and wait for them before it exits. Stopping them in a goroutine is not enough: `Serve` returned and the process exited before the goroutine's SIGKILL fallback ran (`stopAndWait`).
+- A test that kills the parent and looks for the child catches both halves; one that only checks the parent's exit status does not.
+
+## Killing ssh must include its ProxyCommand (2026-11-13, #6251)
+
+- `exec.CommandContext`'s default `Cancel` kills only ssh. Its ProxyCommand stays alive and is adopted by the service manager; when that command holds a relay connection, it can compete with the replacement ssh connection for replies. `WaitDelay` only bounds pipe draining and does not kill the surviving child.
+- Start ssh in its own process group (`osproc.GroupAttr`) and override `cmd.Cancel` to stop its descendants, not only its own pid. On Unix stop the process group and, after `Wait` reaps ssh, call `osproc.SweepGroup` so a child forked concurrently with the signal cannot survive. On Windows `taskkill /T` loses the tree once its root has exited, so walk the remaining descendants in a process snapshot instead. Do not apply this to the hub machine's local node: that one still needs stdin EOF and its graceful-stop grace period. The regression test abandons a real `Machine.connect` handshake with ssh both running and already exited, and checks the ProxyCommand child's pid, not just ssh's exit.
+
+## A field in `proto.Session` is paid on every copy (#4342)
+
+The hub copies sessions by value (decorated lists, readers that keep rows), and its allocation budgets
+(`internal/assistant` `TestSessionReadersCopyNoList`, `TestAssistantViewCopiesOnlyItsConversations`) measure bytes per call.
+One `int` took a 1,528-byte `Session` to 1,536, and those readers went 5 to 12% over. Small fields fit in the padding instead
+(between the bools and the next 8-byte field): check the layout with `reflect` field offsets and keep the size unchanged.
+A new field type also needs wire samples in `session_wire_test.go`.
+
+## Fleet events: bytes checked again on the bus, every machine built to read one (2026-11-12, #3197)
+
+Measured with the fleet soak (`docs/operations/testing.md` "Fleet soak": 10 computers x 50 sessions, a change per
+computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a minute; the shares below are of those.
+
+- `publishList` and `tellLive` handed `Tell` the bytes `json.Marshal` had just written as `json.RawMessage`, so the
+  bus's envelope encoder checked, compacted and copied each list again: 9.6% of the manager's CPU. Bytes that are
+  `json.Marshal`'s go as `rpc.Marshaled`. Prove the wire, not the type: write every told value both ways and compare
+  the lines (`TestFleetEventsGoOutAsTheSameLine`), with HTML characters, U+2028, control characters and invalid UTF-8
+  in the rows, and a list that does not encode (a time past the year 9999), which still goes out as `null`.
+- An allocation ceiling taken with the GC off cannot see a copy that lands in a pooled buffer. Told either way, a
+  200-session list allocated the same 663 KB once json's encoder had grown its `sync.Pool` buffers; in a busy manager
+  a GC empties those pools every few lists. Take such a bound cold: two `runtime.GC()` calls before each run (the pool
+  has two generations) and none during it. The two ways are then 708,868 and 1,224,668 bytes, to the byte
+  (`toldAllocation`), and a second test keeps the old way failing the same limit.
+- A lookup that builds the collection pays for every element's derived fields. `fleetMachine(id)` built every
+  machine's summary (`Devices.List`: each one's trust from all its paths, whether it is reachable) to read one, several
+  times for each list a node sends: 5.2% of the manager's allocation. Ask the owner for the one (`Devices.Summary`,
+  8 bytes where the list of ten was 4,080), build it with the function the list uses, and compare the two in every
+  state the list can be in: before the first regroup, with absorbed and derived machines, and while the entries and
+  the listed order disagree (`TestSummaryIsListsEntry`).
+- The micro benchmarks did not show either share: the fake hub writes no bus line and the fake devices' list is free.
+  A benchmark of a path has to end where production ends (`lineHub` writes the line as `BusHub.Tell` does), and the
+  shares come from profiles of the real programs: the soak lays a sampler over `cmd/personad` at build time
+  (`go build -overlay`), so nothing in the shipped program changes to measure it.
+- CPU time per minute moved by a factor of two and more with the machine's state (an Apple Silicon Mac moves a
+  process between fast and slow cores; a whole run on the slow ones used 3.5 s a minute for the work that took 1.7 s
+  on a quiet minute before), while bytes allocated per minute stayed within 1.5% and repeated within 0.1% between
+  runs. Soaks run one after the other said -3%, +68% and +30% for three changes that each save CPU; even the same
+  function's samples cannot be compared across runs, since code that copies memory slowed 2.3 times where a `write`
+  slowed 1.06. Dividing by the hub's CPU time in the same minute helped, and was still 3 points apart between two
+  sessions. What worked was running the trees at the same time, each with its own hub, manager and database: every
+  minute is then the same machine for all of them, and the head's CPU time over the base's in the same minute came
+  out at 0.943 with every one of the 20 minutes below 1, the unchanged hub's at 0.983 (`pairedCPU`). Measure a noisy
+  quantity against a reference that sees the same noise at the same moment.
+- The largest share was not in the event path at all: `liveLoop` builds the fleet again up to ten times a second
+  while it changes, and each round took a new copy of every machine's list to decorate, 54% of what the manager
+  allocated. A loop that reads the same lists again and again keeps its arrays: `Devices.AppendSessions` copies a
+  machine's rows over the list the last round kept (`fleetInputsInto`), 78 KB a round where new copies were 886 KB.
+  What makes that safe is stated in the code and pinned by tests: every row is overwritten whole before it is
+  decorated, so no decoration carries over; rows a shorter list leaves behind are cleared; one goroutine owns the
+  arrays; and nothing built from a round keeps a row (`TestLiveRoundsOverKeptListsAreFreshRounds` runs every round
+  both ways and marshals each round's results again after the arrays were rewritten). Give the arrays back on the
+  slow tick, or a fleet gone quiet holds a second copy of its lists for good.
+
+## The manager read its own session lists through their JSON (2026-11-13, #3197)
+
+- With the fleet in the manager, `sessions.list` is answered in the same process (`localFleetDeviceCall`), but the
+  manager's own readers (`Service.sessions`, `workView.sessions`) still called it like a remote method: decorate the
+  machine's whole list, `json.Marshal` it, `json.Unmarshal` it again, often to read one row. Encoding and decoding was
+  75-87% of a read. Readers in the same process take the decorated rows themselves (`localSessions`); the rows share
+  their slices and pointers with the devices' list, which is safe only because nothing writes into a row's slices or
+  pointees (`localizeSession` copies before it writes; `Session.Hierarchy` is replaced, never written). Check that
+  before handing out rows in place, and prove the rows equal the answer's encoded (`TestInProcessSessionsAreTheListsRows`).
+- The list carries a row for every archive record of the machine the node no longer lists, and the records are never
+  removed, so a whole-list read grows for months even on a quiet machine. A reader of one row (a turn end, a wake, a
+  done task's agent) reads it alone (`decoratedSession`, `listedSession`; an archived row from its record by key,
+  `archivedRow`), and a pass over what runs reads only the node's rows (`listedSessions`): the archive's rows are
+  offline, and those passes skip offline rows. Prove each against the whole list's row with `reflect.DeepEqual`, folds
+  and archive rows included, and keep the apps' list pinned to the bytes the old code wrote
+  (`TestAppsSessionListUnchanged`, golden written on the base commit with `-update-session-reads`).
+- A subset never stores a fold (`foldInventory`): the fold depends on the archive's rows, so a list without them would
+  fold differently and the rows decorated alone (`foldSubset`) would pick it up. Only a complete list refreshes it.
+- A per-minute pass that walks finished tasks pays for every task ever finished, since their agent links are kept: look
+  each agent's row up (a missing row is a map lookup) rather than listing its machine.
+
+## A digest instead of the last bytes, a mirror without the lists (2026-11-13, #3197)
+
+- To tell a list only when it changed, `publishList` kept each machine's last `fleet.sessions` bytes for as long as the
+  manager ran: 3.6 MB of 36 MB live at 20 computers of 200 sessions. Keep the length and SHA-256 of the JSON instead
+  (`sentList`), encode every list into one buffer reused under the lock that orders the sends (`sentMu`), and copy out
+  only a list that is told: bytes handed to `Tell` must never be written again, and a test that keeps what the hub was
+  told catches a reused buffer at once. Prove it against a model of the old way step for step, with a list that does
+  not encode (a time past year 9999) and a reconnect (`TestSentDigestsTellWhatTheBytesDid`).
+- A mirror refreshed on every lookup pays for all it copies on every lookup: the extensions manager looks a computer
+  up for each port stream data, ack and close, and each lookup copied every computer's sessions out of
+  `Devices.Views` (6.3 MB at 20 x 200). Keep in a mirror only what most readers need, and let the rare readers ask the
+  owner (`Devices.FindSession`: a callback over the listed machine's rows in place, under its lock, no copy). Look the
+  machine up the way the mirror's ids were made (`listed`, the first in `machinesNow` with the id), not through
+  `machineByID`, which also resolves absorbed entries.
+- A field a refresh rewrites under a lock its readers do not take is a data race even when the value is the same:
+  the race detector flags the write. `extmgr.machinesNow` rewrote `Machine.cfg` under `m.mu` on every lookup while
+  about a hundred callers read `m.cfg.ID` and `m.cfg.Name` without it. Write identity fields once when the object is
+  made, and put the rare change (a rename) behind an `atomic.Pointer` read through accessors (`name()`, `sshHost()`).
+- To benchmark another package over the real type, export a fixture in `export_test.go` (seen only by the package's
+  tests) and write the benchmark in the external `_test` package, which may import a package that imports this one
+  (`devices_test` importing `extmgr`: `BenchmarkExtensionsPortStreamEvent`).
+
+## `http.DefaultTransport` drops a push connection after 90 s idle (2026-11-11, #4800)
+
+- The hub's relay client and `apns.Client` were `&http.Client{Timeout: …}` with no transport, so they ran on
+  `http.DefaultTransport`, whose `IdleConnTimeout` is 90 s. Two thirds of one hub's pushes came more than 90 s after the
+  previous one and paid a new TCP + TLS handshake (0.2-0.3 s to the relay; APNs wants one long-lived HTTP/2 connection).
+  Both now use `apns.NewTransport`: their own clone of the default transport with a one-hour idle timeout and HTTP/2
+  health pings (`http.HTTP2Config.SendPingTimeout` / `PingTimeout`).
+- A client that talks to one service often gets its own transport with the idle timeout chosen for that service. The
+  default one is shared with every other client in the process, and its 90 s fits none of them in particular.
+- Test connection reuse with `testing/synctest`: serve TLS on an in-memory `net.Pipe` listener (loopback sockets do not
+  let the bubble go idle), dial it from a clone of the client's real transport, count `http.StateNew` in the server's
+  `ConnState`, and move the gaps with `synctest.Sleep`. The transport's idle timer and pings then run on the fake clock
+  (`TestRelayPushesKeepOneConnection`, `TestSendsKeepOneConnection`). Register the server's and transport's shutdown
+  with `t.Cleanup`, or a failed assertion ends in a synctest deadlock panic.
+
+## `exec.CommandContext` cancels only while the process runs (2026-11-11, #4363)
+
+- `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
+- Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
+- A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+
+## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
+
+- The node sent an assistant chat's messages to its agent runtime under a `client_msg_id` of its own, new on every call. The runtime protocol lets a runtime put the id it was sent with on the message's item, and the node forwards an item a runtime tied as it is (`echo.go`). So the line carried an id no app had, the app's pending bubble stayed beside it, and the message showed twice: the same failure as #5200, in another place.
+- Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
+- In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).
+
+## The hub tree's GOMAXPROCS: the hub's own children start capped (2026-11-12, #3533)
+
+- The edge, the slot and the built-in manager each kept a P per core: 25 to 30 threads each on a 64-core host, although they are I/O-bound like the node, which caps itself at 4 (#2590 above). A cap set with `runtime.GOMAXPROCS` at a process's entry comes too late for what its start-up already did with every P: the edge, capped at its entry, keeps 25 to 28 threads and about 10 MB anonymous, against 10 threads and 8 MB when it starts with `GOMAXPROCS=4`. Only a process started with the variable gets the whole saving.
+- So the edge caps itself in place (it holds the ports and is never run again) and starts the slot with `GOMAXPROCS=4` and a marker, `PERSONA_GOMAXPROCS_CAP=4`; the slot starts the manager the same way (`procs.ChildEnv`, `server/internal/procs/procs.go`). The marker says the variable is the hub's, not the user's: `procs.AtStart` takes both out, so the node, Agents and tools they start keep their own default, and keeps the cap for its own `ChildEnv`. A `GOMAXPROCS` the user sets has no marker: it wins and passes on unchanged.
+- Measured on a 64-core host, a fresh hub with one local node, 5 alternating rounds against main, paired differences (median [min..max]): tree anonymous memory -8,396 kB [-9,552..-7,620] (slot -3,628, manager -4,396, edge and node within noise), threads -33 [-36..-26] (slot 27 to 11, manager 28 to 11).
+- `/proc/<pid>/environ` is the environment a process started with, not what `os.Unsetenv` left: the slot and the manager still show the cap there. Check what a process hands on in its children's environ (the node's has neither variable).
+
+## A wait for a person takes its deadline from the card, not from the bus default (2026-11-13, #5907)
+
+- `callBus` gives up after two minutes when its context has no deadline. That suits a call a program answers. A call
+  that waits for a person is different, and nothing upstream of the hub gives a tool call a deadline: the MCP
+  process's own timeout is not carried over the socket, so `app.call` arrives without `timeout_ms`. A
+  `persona_settings` card good for 15 minutes was withdrawn after 2.
+- It was worse where the wait is relayed. For the manager's own settings the hub calls `extensions.hub_call`, which
+  was not in the hub peer's `Cancels`. The hub's deadline failed the tool call, the manager never heard of it, its
+  card stayed on the phone, and a later approval made the change after the assistant had been told it failed.
+- A call that waits for a card takes its deadline from the card: its `ExpiresAt` plus a margin when the card is the
+  caller's (`waitInteraction`), none of its own when the card is the other side's (`callBusAsIs`, as
+  `managerSettingsTool` does for a change). The margin lets the side that holds the card end it and say how.
+- Whoever may stop waiting on a call that holds a card says so (`Peer.Cancels`), and the side that holds the card
+  makes no change once its caller is gone: check `ctx.Err()` before a change that does not take the context (adding
+  a mail account). The answer and the caller's end can cross, and the queue still hands back an answer it had taken.
+- What the caller is told and what becomes of the card are one assertion: test both ends together. `protocol.md`
+  already said `extensions.hub_call` sent `rpc.cancel`; no test held the code to it.
+- The hub's real bus endpoint runs inside a `testing/synctest` bubble over a `net.Pipe` (`playManager` in
+  `server/internal/hub/settings_card_wait_test.go`), so fifteen minutes pass at once. Give the hub's end a loopback
+  address (the bus refuses plaintext from an address it cannot place), and let what the hub does after a hang-up
+  (`devicesGone` waits half a second) pass in a cleanup: the bubble's clock stops when the test's goroutine is done.
+
+## "A run after I asked" is not "the run I asked for" (2026-11-14, #7116)
+
+- `subscription_run` took a clock reading, recorded its request, and returned the first run whose time was not
+  before the reading. A scheduled run that started between the reading and the request passed for the requested one:
+  the caller got another run's counts and items, and when the scheduled run found the items first, the requested run
+  found none. Tell a requested run by what marks it as requested (its trigger), not by when it happened.
+- A request flag is taken by the run that honours it, never by whichever run comes next: the scheduled run cleared
+  the flag it had read as unset a moment earlier, and a "run now" made in between was lost without a trace.
+- It showed up as a test that failed 21 times in 200 under load, and the first reading was "the test's ordering".
+  Before making such a test deterministic, make the losing order happen on purpose (a store that runs the other
+  side inside the read) and look at what the caller gets.
+
+## A seal anywhere in the server is counted by the key rotation guard (2026-11-15, #7984)
+
+`internal/assistant`'s `TestPlacesThatSealAreKnown` (`keyrotate_guard_test.go`) counts every `.Seal(`, `sealKey(`,
+`.encrypt(`, `SealWith(` and `secretkey.New` per file under `internal/` and `cmd/`, so nothing new seals with the
+manager's `secret.key` without the key rotation re-sealing it. It counts AEADs with keys of their own too, in packages
+that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/screenlink`, its
+tests and its importers passed, and the hub deploy failed on this guard. When code under `internal/` or `cmd/` seals,
+run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
+with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
+any other key, under "other keys" with where the key comes from. Never loosen the guard.
+
+## A setting moved into a table stays readable by the build before it (2026-11-15, #8257)
+
+Moving `hub.push_sent` (one list, rewritten whole by every push) into the `hub_push_sent` table first deleted the
+setting once its entries were in the table. A switch back to the build from before (`personad hub switch`, a
+self-update going back) then started with no delivered history: that build reads only the setting, its daily counts
+began again at zero, and the pushes the new build had recorded were not there for it. The forward tests all passed;
+nothing ran the old build after the new one.
+
+- Keep the old record for the build before, and say when it can go. Write it back off the hot path: where the hub
+  stops (`Hub.closeDatabaseAfterWorkers`, before the database closes) and on the updater's way back before it runs the
+  old binary, since an exec skips the cleanup; while running only at a bounded rate (hourly here), or the move saves
+  nothing. A handoff in `hub switch` alone is not enough: the command, the edge and a watchdog may each be another
+  build, and a killed hub runs none of them.
+- Going forward again merges, never replaces. The old build writes the list back without the table's ids, so match
+  entry and row by content (time to the precision the table keeps, and the other fields), count equal entries as
+  separate pushes, and skip what the table's sweep would remove, or every start adds expired entries again.
+- Do not write the old record from a start that failed to read it: its list may be shorter than what is stored.
+- Test the round trip with the old build's reader: upgrade, deliver, old build (reads only the old record), deliver,
+  upgrade again, the same counts at each step (`TestPushSentSurvivesSwitchBackAndForward`).
+
+## A 409 from start options is not always "confirm this computer" (2026-11-14, #7425)
+
+- New work session's `start-options` answers 409 for two different reasons: the manager's `machine_pending` (the hub
+  keeps the computer out of its list) and every refusal the node's strict work-session check makes
+  (`work_launcher_unavailable`, `apierr.Call` maps a coded node error to 409). The hub's log line is the same; the web
+  dialog tells them apart (its "This launcher cannot start a session…" line is only the node's). Read that code before
+  tracing trust or ownership. A fast answer says nothing either: the node refuses from its cached launcher list
+  before any login shell runs.
+- A list the manager shows is not the node's own list: the pickers add plain `claude` back on a computer whose shell
+  has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
+  and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
+  `knownLauncher` does.
+
+## On a Mac with a resident node, the hub's node deploy doesn't reach it (2026-11-16, #8859)
+
+- On a computer where Persona Link installed the resident node (`com.persona.node` → `~/.persona/bin/persona-node node
+  --attach`), the `personad node --stdio` the hub starts over ssh only relays to it. A hub deploy replaces `personad`
+  on that computer, but the program that answers is still the resident one. `scripts/app/mac-link.sh install` installs
+  that resident node once (a Mac without one gets it: "Installed and started the resident node service") and leaves it
+  alone after that ("already installed … leaving it unchanged", `docs/operations/node-update.md`).
+- So a node change can look deployed and still not run. The live screen's x264 probe (#8883) never reported on such a
+  Mac: its resident node predated the probe. A first guess blamed a cached failed probe and changed the probe (#8989:
+  its own deadline, a failure retried after a minute, each outcome logged), which is sound but wasn't the cause.
+- Before debugging a node's behaviour, read the version the hub has for it: `node_version` / `node_mismatch` in `GET
+  /api/v1/machines`, or the hub's connect line "[<machine>] node <version> is not build <hub's>: an update is offered".
+- **Redeploy** (`POST /api/v1/machines/{mid}/deploy`) and automatic node updates send the hub's own node packages,
+  `$PERSONA_HOME/bin/nodes` on the hub machine. `scripts/deploy/deploy.sh`'s hub step refreshes them (`personad-<plat>`,
+  `persona-node-<plat>` and its `.version`). A deploy that skips that step leaves them at an older build, and Redeploy
+  then installs that older build: here it moved a resident node back five days, to a build without the live screen's
+  video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
+  `node_mismatch`.
+
+## A fence keyed to the first credential keeps a re-paired phone under its old one (2026-11-17, #9611)
+
+- A push registration is keyed by the app's own `device_id` and fenced to the credential that first registered it.
+  Pairing the phone again issues a new credential but keeps the `device_id`, and the fence answered every registration
+  from the new credential with 409: pushes kept working through the old row, so nobody noticed for days. The old
+  credential then looked unused (Settings › Devices: not seen since the re-pair), and revoking it retired the push
+  registration of the phone still in use. Afterwards its settings and Live Activity writes hit the fence too and came
+  back as 500 / 503, which the app just retried.
+- Fix (migration 0541): an authenticated registration moves the row to its new credential when it proves the same
+  installation (topic, environment, push key or APNs token, the proof 0435 already took after a revocation) and the
+  old credential has not been seen since the new one was created; fenced writes answer 409
+  `push_registration_required`.
+- Lesson: a 409 the client swallows hides a broken ownership model until something else (here a cleanup) depends on
+  it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
+  and check what a "looks unused" revocation still owns before treating it as cleanup.

@@ -5,7 +5,8 @@
 Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`) →
 the app queries/writes locally → `tool_result` returns along the same route.
 
-Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools").
+Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools"). `personad mcp` adds `file` and `trim` to `phone_clipboard_set` (see "Copying a file to the clipboard").
+A conversation lists its tools once (`personad mcp` says `listChanged: false`): when the manager can't reach the hub for the phone's tools then, it asks again briefly, then lists the ones the hub last gave, so a hub restart does not leave a conversation without them (#6422).
 Descriptions and parameters for tools with the same name must match exactly on both platforms (the hub merges tools from all phones by name; `PhoneToolCatalogTest` compares against the catalog exported by iOS).
 
 Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without going through the phone; see "Mail tools (mail_*)" below.
@@ -15,7 +16,7 @@ Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without 
 | Entry | Purpose |
 | --- | --- |
 | `PhoneToolRegistry.all` | All tools (ignoring toggles), used by tests and settings |
-| `PhoneToolRegistry.enabledSpecs()` | Only user-enabled data sources; sent in `register_phone` after connecting to the hub |
+| `PhoneToolRegistry.enabledSpecs()` | Only data sources that are on and allowed, or on and not asked yet where the first use asks (`PhoneDataSource.offered`); sent in `register_phone` after connecting to the hub and after a call asked iOS |
 | `PhoneToolRegistry.call(name:args:confirm:)` | Executes one call, never throws: failure becomes `isError=true` + explanation |
 | `PhoneToolRegistry.authorizationStatus(_:)` / `requestAccess(_:)` | Displays status and requests permission in settings |
 
@@ -23,11 +24,20 @@ Each data source (contacts / calendar / reminders / location / health / photos /
 integrations alarms / messages / calls / shortcuts / media / home) can be disabled individually in settings. Disabled sources
 no longer appear in `enabledSpecs()`, so the model cannot see their tools, and calls are rejected too (preventing old sessions from continuing to call them).
 The iPhone integrations act outside Persona, so they start **off** (`PhoneDataSource.iPhoneOnly`): the user turns each one on; the older sources start on.
+A source that is on but refused is not offered either. One that iOS hasn't asked about yet is offered when its first use asks
+(see "Permissions"), so the switch in Settings shows it on: the switch always says what the hub is offered.
 
 The table above is for iOS (Mac uses the same code). **Android** uses `PhoneToolRegistry.kt` in `android/platform/phonetools/`, also with `all`, `enabledSpecs()`, and `call(…)`; all calls pass through this single gate:
 
 - **Toggles** are under Settings › Phone data (Android has no "Connectors" group), one per data source (contacts / calendar / location / health / photos / clipboard / device information / notifications, no reminders). All default to off and are stored separately per pairing (`PhoneToolSettings`).
 - **Foreground restrictions** are declared in the tool catalog: `PhoneToolCatalog.kt` marks `phone_location_current` and the two clipboard tools with `foreground = true`. When the app is not in the foreground, `enabledSpecs()` omits them and calls are rejected, telling the model to ask the user to open Persona and retry. Moving to the background during execution also interrupts the call.
+  - **iOS** has the same rule for the two clipboard tools (#4192): iOS gives an app in the background no clipboard, so a write
+    woken by a silent push was dropped while the tool answered ok, and a read came back empty. `ClipboardTool` refuses both
+    while Persona is not the active app, with the "open Persona and try again" answer of the other tools that need it on screen
+    (`Foreground`), and answers a write ok only once the pasteboard shows it landed (`changeCount` moved and `hasStrings` is true,
+    or the text was empty). iOS keeps both registered, since a suspended app cannot withdraw them, so the hub sends no silent push
+    for them (`phoneOnScreenTools` in `hub.go`): with no connected phone offering one it answers "open Persona" at once, as it ends
+    up doing for an Android phone that stopped offering them. A phone still connected in the background gets the call and refuses it.
 - **Hub registration** is handled by `PhoneToolsRuntime.kt`: send `register_phone` after connecting. When toggles, foreground/background state, or the persistent service change (permissions are also rechecked on every return to the foreground), recalculate `enabledSpecs()` and resend only if it changed. Send an empty list on disconnect or unpairing. Tools are offered only while the app is in the foreground or the persistent service is enabled; with neither, none are offered.
 - Before execution, check toggles, permissions, foreground state, and online status in order; writes requiring confirmation (only event creation) recheck after the user taps Allow. Duplicate delivery of the same `call_id` returns the previous result without executing again.
 
@@ -53,13 +63,16 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_location_search {query, limit?}` | Location | No | Finds a place by name or address (MapKit): name, address, latitude, longitude, up to 10 |
 | `phone_maps_search_nearby {query, latitude?, longitude?, radius_meters?, limit?}` | Location | No | Places around the current fix (or the given point), nearest first: name, address, coordinates, distance, category, phone, website and the source (#2281). MapKit gives apps no opening hours; the result says so |
 | `phone_maps_navigate {latitude, longitude, name?, mode?}` | None (foreground) | No | Opens directions in Apple Maps (`driving` / `walking` / `transit`) and returns `opened: maps`: navigation runs in Maps, not in Persona |
-| `phone_health_summary {metrics?, days?}` | Health (read) | No | Defaults to steps over the last 7 days; metrics steps / distance / active_energy / heart_rate / resting_heart_rate / sleep / weight |
+| `phone_maps_route {latitude, longitude, name?, mode?, from_latitude?, from_longitude?}` | Location | No | Works out a route with `MKDirections` and opens nothing (#5544): from Maps' own idea of where the phone is (`MKMapItem.forCurrentLocation()`) or the start given, to the destination, by `driving` / `walking` / `transit`. Returns the distance in meters, the expected time in seconds, the route's name and its line simplified to at most 48 points (`RouteLine`, Douglas–Peucker); transit has the time and distance only, as Apple Maps gives apps no transit line. The prompt asks for it on "how far / how long" and keeps `phone_maps_navigate` for when the user wants to go |
+| `phone_health_summary {metrics?, days?}` | Health (read) | No | Defaults to steps over the last 7 days; steps / distance (m) / active_energy, resting_energy, dietary_energy (kcal) / protein, carbs, fat (g) / heart_rate, resting_heart_rate (bpm) / sleep (hours) / weight (kg). Energy and nutrients are daily sums; today is partial. See "Daily health summaries" below |
 | `phone_health_write_sample {metric, value?, start, end?}` | Health (write) | **Yes** | Writes one sample: steps (integer) / distance (meters) / active_energy (kilocalories) / weight (kilograms, one instant) / sleep (an asleep interval, no value); intervals at most 24 hours, not in the future; one sample at a time, no bulk import or deletion |
+| `phone_workouts_recent {days?, activity?, limit?}` | Health (read) | No | iPhone (and Vision Pro). Recent workouts from Apple Health, newest first (default 30 days, max 365; default 20, max 50), of one activity if given. Each row has the id, activity, source app, start and end, duration, distance, active energy, elevation gain, average and maximum heart rate, and pace for runs, walks, hikes and rides. See "Workouts" below |
+| `phone_workout_detail {id}` | Health (read) | No | One workout by id: the same row plus per-kilometre splits (pauses left out) and minute-average heart rate |
 | `phone_photos_recent {limit?, days?, screenshots_only?}` | Photos (read) | No | Recent photo/video metadata: local id, time, type, dimensions, screenshot/favorite flags, duration, latitude/longitude |
 | `phone_photo_get {id, max_size?}` | Photos (read) | No | Returns the JPEG image itself (default longest edge 1280, quality 0.7) + metadata |
 | `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`; the app carries no commit) |
-| `phone_clipboard_get {}` | None (system paste prompt) | No | Reads clipboard text |
-| `phone_clipboard_set {text}` | None | No | Replaces clipboard text |
+| `phone_clipboard_get {}` | None (foreground; system paste prompt) | No | Reads clipboard text |
+| `phone_clipboard_set {text}` or `{file, trim?}` | None (foreground) | No | Replaces clipboard text; `file` copies a text file from the agent's computer without the model reading it (see "Copying a file to the clipboard") |
 | `phone_notify {title, body, delay_seconds?}` | Notifications | No | Local notification, optionally delayed up to 24 hours |
 | `phone_alarms_list {}` | Alarms (AlarmKit) | No | Persona's own alarms and timers (#2278): id, label, state, time / repeat days, timer length. The Clock app's alarms are invisible to apps |
 | `phone_alarm_create {time, repeat?, label?}` | Alarms | **Yes** | `time` is `HH:mm` (next occurrence, or weekly on `repeat` days) or one ISO 8601 moment; rings through silent mode and Focus |
@@ -72,11 +85,64 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_shortcuts_run {name, input?}` | None (foreground) | No | Only an allowed shortcut; `shortcuts://x-callback-url/run-shortcut` with `x-success` / `x-cancel` / `x-error` back to `persona://shortcut-callback/…` (`ShortcutCallbacks`, handled first in `onOpenURL`). Waits 90 s for the callback, then says no answer came |
 | `phone_media_play {query, kind?}` | Apple Music (MusicKit) | No | Searches the catalog and plays the best song / album / playlist in the Music app (`SystemMusicPlayer`, #2284); without a subscription that can play the catalog it says so |
 | `phone_media_control {action}` | Apple Music | No | play / pause / next / previous / status of the Music app's player; other apps cannot be controlled |
+| `phone_music_create_playlist {name, songs, description?, play?}` | Apple Music (MusicKit) | **Yes** | Searches the catalog for each song (one search per entry), creates the playlist in the user's library (`MusicLibrary.createPlaylist`, iOS 16+) and, unless `play` is false, plays it with `SystemMusicPlayer`; returns the playlist, the songs added and the searches that found nothing; needs a subscription that can play the catalog |
+| `phone_music_snapshot {recent_limit?, playlist_limit?}` | Apple Music (MusicKit) | No | Returns one JSON object with now playing, recently played songs and library playlists, for the Music extension's `applemusic_iphone_sync`; reads only, never changes the library or playback |
 | `phone_media_open {service, query}` | None (foreground) | No | Opens a Spotify or YouTube search (their universal links); the result says `playing: false` |
 | `phone_home_list {}` | Home (HomeKit) | No | Homes, rooms, accessories (reachable, security-sensitive, controls with last known values) and scenes (#2285) |
 | `phone_home_control {accessory_id, control, value}` | Home | **Yes** | power / brightness / target_temperature / lock / door, one change per call; locks, garage doors, security systems, doors and windows get a warning line on the card; an unreachable accessory fails without writing |
 | `phone_home_run_scene {scene_id}` | Home | **Yes** | Runs a scene; the card says when it touches a security accessory |
 | `phone_notifications_list {limit?}` | None | No | **Android only**: Persona's own currently displayed notifications (id, title, body, time), newest first, default 50, maximum 100; excludes confirmation-card notifications and cannot see other apps' notifications |
+
+In the Persona chat on iPhone, the results of `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` are also drawn as a map card under the turn's work line, with numbered pins and Directions to Apple Maps (#5543), a route `phone_maps_route` worked out as its line with the mode, time and distance and a labeled Start in Maps (#5544, #6177), and directions `phone_maps_navigate` opened in Maps as the destination's card with its mode and a button that opens them again (#5545; instant result cards in `docs/assistant/unified-entry.md`). The tool calls stay folded.
+
+Coordinates are WGS-84 everywhere, mainland China included: Core Location, MapKit's search (`MKLocalSearch`, `CLGeocoder`), `MKMapSnapshotter` and `MKDirections` take and give WGS-84, and MapKit shifts the mainland map (GCJ-02) itself. Nothing in Persona converts, so a place found by search, the phone's own fix and a saved place agree, and a reminder's circle is where the user meant (`docs/lessons/ios.md`, "MapKit speaks WGS-84 in mainland China too").
+
+### Reminders imported as to-dos (#4009)
+
+Under Settings › Phone data, once Reminders is on, **Import into To-dos** (off by default) sends the incomplete
+reminders of the lists the user leaves on (all of them at first) to the hub, which makes to-dos of them, one way
+(`RemindersImport`, `RemindersImporter`; `docs/assistant/todos.md`, "Imported from Reminders"). It runs on launch, on
+return to the foreground and when the Reminders database changes while the app is in front, and sends nothing when the
+batch is the same as the last one the hub took.
+
+### Workouts
+
+`phone_workouts_recent` and `phone_workout_detail` (#2526) read workouts that the Workout app or any other app saved to Apple Health.
+They let a workout report compare a workout with recent ones of the same activity (`docs/assistant/health.md`, "Automatic workout
+reports (iOS)"), and let later questions ("how was last week's run?") use the same data. `WorkoutReader` holds the queries that the
+reports share.
+
+- **What is read**: the workout itself and its heart rate, distance (on foot or by bike) and active energy samples. No route or
+  location is read.
+- **Activity names**: a report's activity names (`Running`, `Strength training`, …), lowercased with `_` for spaces, are the
+  tool's `activity` values. Other HealthKit activities are listed but cannot be filtered on.
+- **Splits**: whole kilometres in order (`WorkoutSplits`). Each distance sample's meters are spread evenly over its own interval.
+  The pauses from the workout's events (the user's own, and the Watch's automatic ones) are left out, as the Workout app does.
+  The last part kilometre is dropped. Samples that cannot give a sensible split (a kilometre in no time, a sample outside the
+  workout) give no splits at all, since the hub refuses a whole report over one bad split. Swimming and other activities have
+  none.
+- **Elevation gain** comes from the workout's `HKMetadataKeyElevationAscended`. The average and maximum heart rate come from the
+  workout's own statistics. Values outside sensible bounds are left out.
+- **Pace** is the duration over the distance, for a run, walk, hike or ride of at least 500 m.
+- **Permission**: workouts and cycling distance join `HealthTool.readTypes`. Someone who allowed Health before these types
+  existed is asked again by the tools and the reports, through `statusForAuthorizationRequest`. That happens only while Persona
+  is in front, where the Health sheet can show. Health never says what was allowed, so a refused type reads as no data.
+
+### Daily health summaries
+
+`phone_health_summary` reads the requested metrics and returns one row per phone-local day; `days: 1` starts at midnight today and ends at the query time. The default is `metrics: ["steps"]`, `days: 7`; the maximum is 90 days. Days or metrics without data are omitted, never filled with zero.
+
+- `dietary_energy` is energy consumed (kcal); `protein`, `carbs`, and `fat` are grams consumed. Each is summed over the day. The result contains daily totals, not foods or meals.
+- `resting_energy` is resting energy burned (kcal), summed over the day; `active_energy` remains the separate activity-energy total (kcal).
+- iOS reads `.dietaryEnergyConsumed`, `.dietaryProtein`, `.dietaryCarbohydrates`, `.dietaryFatTotal`, and `.basalEnergyBurned` through `HealthTool.quantityIdentifiers`. These join `HealthTool.readTypes`, so the Health authorization request includes them. People who allowed Health before these types were added must also grant the new read permissions.
+- The hub advertises the app's registered description and metric enum. Open/reconnect the updated phone app so its new catalog reaches the hub; a hub update alone cannot add metrics to an older phone app.
+- HealthKit does not reveal read authorization status: an empty result can mean no source data or denied read access. Check that the source app wrote today's entries and that Persona may read those categories.
+- **Locked phone (#7677)**: while the iPhone is locked, HealthKit's database is closed and every query fails with `HKError.errorDatabaseInaccessible`. The app then never starts a query: it answers from a snapshot of every metric over 90 days, written to Application Support with `completeFileProtectionUntilFirstUserAuthentication` while the app was in the foreground (refreshed on foreground and after successful live reads, throttled to 15 minutes).
+  - Both the `health-snapshot` directory and its `summary.json` file set `isExcludedFromBackup` on every save, keeping the 90 days of health data out of iCloud/iTunes backups. The flags are reapplied to files written by older builds too.
+  - A snapshot is valid for at most 48 hours after `as_of`. An older snapshot is treated as absent: the tool fails with the same bilingual `device_locked` message as when no snapshot exists, instead of putting the English HealthKit error into the day fields.
+  - A snapshot answer keeps every field of the live answer and adds `"source": "snapshot"` plus `"as_of"`; the hub prepends a plain-text note with the same `as_of`. Both `start` and `end` are computed from the snapshot time, with `end` equal to `as_of`, rather than the time of the locked-phone request. The save-time timezone is persisted too, so travel cannot move the day window or its partial marker onto a different row. The row for the snapshot's own day has `"partial": true` because it contains only the data collected before `as_of`; earlier rows omit `partial`.
+
+For the iPhone acceptance steps using 薄荷健康, see `docs/assistant/health.md` ("How to verify").
 
 ### Reminders by place (#6564)
 
@@ -90,10 +156,16 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 
 ### Saved places (#1598)
 
-The places reminders by place go off at belong to the user, not to the assistant's memory: **Settings › Assistant › Saved Places** lists them and lets the user add, change and delete them (`SavedPlacesView`, `SavedPlacesModel`). A place is a name (what the user calls it in a chat), an address, coordinates and the reminder's radius (150 m by default, 100–2000). In the editor it is found by searching an address or a name (MapKit, `LocationTool.find`, the same search as `phone_location_search`) or from the current location, and a map shows the circle.
+The places reminders by place go off at belong to the user, not to the assistant's memory: **Settings › Assistant › Saved Places** lists them and lets the user add, change and delete them (`SavedPlacesView`, `SavedPlacesModel`). A place is a name (what the user calls it in a chat), an address, coordinates and the reminder's radius (150 m by default, 100–2000). The editor (#4248) puts a map first, there from the start: a saved place opens centered on it, and a new one on the user when location access is already allowed (the editor never asks by itself; Use Current Location does), else wherever MapKit opens. The place is set in three ways:
+
+- **Search**: suggestions follow what is typed (`MKLocalSearchCompleter`, addresses and places, favoring the area the map shows); picking one looks up its coordinates and address (`LocationTool.find(_:)` for a suggestion). The keyboard's Search key runs a full search (`LocationTool.find(_:limit:near:)`, the same search as `phone_location_search`, which passes no region so its answers are unchanged). MapKit's "nothing there" says no places were found; any other failure says the search couldn't run.
+- **Use Current Location**, which asks for When In Use access once.
+- **A tap on the map** moves the place there and looks up its address. The map pans and zooms; a tap on a far-out map (much more than the place's own span) zooms in on the place, otherwise the user's zoom stays.
+
+The circle on the map follows the reminder's radius. Delete from the list (swipe or context menu) asks first, like the editor's Delete, and a full swipe does nothing.
 
 - **Kept by the manager** in its settings (`assistant.places`, `server/internal/assistant/places.go`), per manager. `GET/POST /api/v1/assistant/places`, `PUT/DELETE /api/v1/assistant/places/{id}` (`docs/protocol/protocol.md`); names are unique (case aside), writes need full credentials.
-- **The assistant** reads them with `list_places` before a reminder by place. When a place is missing, it finds it with the user (`phone_location_current` there, or `phone_location_search` and the user's pick) and keeps it with `save_place`, which adds the place or changes the one of the same name; so whatever it uses, the user sees and can correct.
+- **The assistant** reads them with `list_places` before a reminder by place, and before a route or directions to or from a place the user names ("how long to get home", "directions to the office": the saved place's coordinates go to `phone_maps_route` or `phone_maps_navigate`, #6386) instead of searching Apple Maps for "home". When a place is missing, it finds it with the user (`phone_location_current` there, or `phone_location_search` and the user's pick) and keeps it with `save_place`, which adds the place or changes the one of the same name; so whatever it uses, the user sees and can correct.
 - Changing a saved place does not move the reminders already set: each reminder keeps the coordinates it was made with.
 
 Tools by platform:
@@ -123,8 +195,10 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
   requests fail and the tool reports it.
 - **Home** needs the HomeKit capability on the App ID and the `com.apple.developer.homekit` entitlement, a signing change for the owner of the
   developer account. Until a build sets both and `PERSONA_HOMEKIT=YES` (Info.plist `PersonaHomeKit`, `HomeAccess.isBuilt`), the Home source is not
-  shown and its tools are never offered. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
-- **Share Extension** (#2282): files and choosing the conversation are #1460; nothing changed here.
+  shown and its tools are never offered. Both come from one switch: config.json `app.homekit: true` makes `scripts/persona_config.py xcconfig` add
+  the entitlement to the generated `apple/PersonaOptIn.entitlements` and write `PERSONA_HOMEKIT = YES` (`docs/operations/config.md`); turn the
+  capability on for the App ID first. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
+- **Share Extension** (#2282): Share › Persona from any app (Safari pages as title and link, Photos pictures, Files and other apps' files, text) is a separate path from these tools and from the composer's photo, camera and file pickers; it is described in `docs/apple/ios.md` ("Share to Persona (#4586, #1460)").
 
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.
@@ -206,6 +280,32 @@ The authenticated hub API exposes the same list and cancellation operations at `
 list and use `pending_count` for a pending-write badge. The iOS / Android queue screen and badge are not implemented;
 existing apps continue to show the usual per-write confirmation cards.
 
+## Copying a file to the clipboard
+
+`phone_clipboard_set` takes either `text` or `file` (#3947). `file` is the absolute path of a text file on the computer
+the agent runs on; for the assistant, that is the hub machine. It is for secrets (API keys, tokens, passwords): the model
+sends only the path and never sees the text, so the text stays out of its context, its transcript and Claude Code's
+safety checks. `trim` (default true) removes line breaks at both ends, since key files usually end with one.
+
+- **Who reads it**: `personad mcp` (`server/internal/mcpserver/clipboard_file.go`), the process Claude Code starts for
+  the agent. It runs as the agent's user, inside the agent's sandbox when there is one (`docs/server/agent-sandbox.md`),
+  so it reads only what the agent could read itself. It sends the phone an ordinary `{text}` call, so the iOS and
+  Android apps and the protocol are unchanged. Not the node: it is not sandboxed, so a sandboxed agent could have it
+  copy `hub.json` to the clipboard and read it back with `phone_clipboard_get`. Not the hub: it may run in a container
+  or on another machine than the agent.
+- **What it accepts**: an absolute path (`~` is not expanded) that resolves, after symlinks, inside the user's home
+  directory. The file must be a regular file the same user owns (not checked on Windows), at most 64 KiB, and UTF-8
+  text with no NUL or other control characters except tab, LF and CR. A leading byte order mark is dropped. The last
+  part of the path is opened without following symlinks, and the opened file is checked again. A guest conversation's
+  server neither lists `file` nor reads one. These rules keep the argument to its purpose. They are not a wall against
+  the agent, which runs as the same user anyway.
+- **What comes back**: `Copied the text of <path> to the phone's clipboard: N bytes, M characters, ending in "wxyz".`
+  The last 4 characters are shown only for text of 16 characters or more. Refusals name the path and the rule, never
+  the content. A phone answer that quotes the text is replaced. Nothing on the way (node, manager, hub) logs a call's
+  arguments; the phone gets the text, as it does with `text`.
+- `personad mcp` alone lists the two arguments (in `tools/list`); runtimes that reach phone tools another way
+  (`docs/integrations/runtimes.md`) see the phone's own schema with `text` only.
+
 ## Mail tools (mail_*)
 
 Mail tools are supplied by the hub's mail connector (`mailConnector` in `server/internal/extmgr/mail_connector.go`, with descriptions and parameters in `server/internal/prompts/mcp/mail/`). They connect to IMAP / SMTP on the hub, without going through the phone.
@@ -224,10 +324,24 @@ If no rule matches, the default is confirm: the hub sends an approval card to th
 
 ## Permissions
 
-System permissions are requested at two points: when the user taps "Authorize" in settings (`PhoneToolRegistry.requestAccess`), or on the first actual use of a tool.
-Notifications are an exception: `phone_notify` displays its own permission prompt on the first call. Other tools encountering "Not requested" only return an error and tell the model to ask the user to authorize;
-they do not show system dialogs mid-execution (health only requests read permission again after a grant, to add newly introduced types). Previously denied permissions can only
-be changed in iOS Settings.
+System permissions are requested at two points: when the user turns a source on in Settings (`PhoneToolRegistry.requestAccess`), or on the first
+actual use of a tool (#7659).
+
+- **First use asks** for contacts, calendar, reminders, location, photos and notifications (`PhoneDataSource.asksWhenUsed`, iOS only). Their
+  tools are offered while the source is on and iOS hasn't asked yet, so "remind me to buy milk when I get home" works for someone who never
+  opened Settings. Before 2026-11-14 they were offered only once allowed: the model never saw them and could only guess that something was off.
+  - `PhoneToolRegistry.call` checks the switch, then shows a write's confirmation card, then iOS's own permission dialog
+    (`askOnFirstUse`), then runs the tool. A write the user turned down never asks iOS.
+  - Allowed, the call goes on. Refused, it fails with where to allow it ("Permission denied … iOS Settings › Persona").
+  - iOS shows the dialog only for the app in front. While Persona is not, the call fails with "open Persona on the iPhone and try again"
+    and nothing is asked.
+  - Calls that arrive together wait for one dialog.
+  - Either answer posts `phoneAccessAnswered`, and `AppModel` registers again, so a refused source leaves the hub's list.
+- **Settings only** for Health and the iPhone integrations. Health's sheet lists every type, and iOS never says which reads were allowed
+  (see below). The integrations act outside Persona and start off. Health only requests read permission again after a grant, to add newly
+  introduced types. Their tools that meet "Not requested" return an error and tell the model to ask the user to turn them on.
+- The Mac app (frozen) and Vision Pro keep asking from Settings only. Android has its own rules (above).
+- Previously denied permissions can only be changed in iOS Settings.
 
 | Data source | Info.plist key | Authorization |
 | --- | --- | --- |
@@ -270,7 +384,7 @@ Health Connect is built into Android 14 and later; on 8–13 it must be installe
 - **No API to read Notes, WeChat, or other apps' data**. The only routes are "screenshot + `phone_photo_get` to inspect the image" or the user manually pasting into the clipboard.
 - **The app must be connected to the hub**: the hub can send `tool_call` only to a phone that has sent `register_phone`. In the foreground or just after entering the background, the WebSocket
   remains available to receive calls; when iOS suspends the iPhone app, the hub first sends a silent push to wake it in the background and waits up to 20 seconds for connection (`hub.go`, `wakePhone`). Only the most recently registered device is woken; if it was woken within 30 seconds, skip the push but still wait 20 seconds. Hub push configuration is required; Android is not woken.
-  If waking fails, return an error asking the model to have the user open Persona and retry. A call waits at most 2 minutes for the phone (a confirmed write 30 minutes, see "Confirmation flow"); timeout also returns an error.
+  If waking fails, return an error asking the model to have the user open Persona and retry. The clipboard tools are never woken for: they answer that at once ("Foreground restrictions"). A call waits at most 2 minutes for the phone (a confirmed write 30 minutes, see "Confirmation flow"); timeout also returns an error.
 - **Background location is unavailable**: only "While Using" permission is requested, so location fails outside the foreground.
 - **Clipboard reads trigger a system prompt**: when reading content copied in another app, iOS asks "Allow Paste?" and the user must allow it.
 - **Health data is aggregated by day only**: no individual-record queries; steps/energy are totals, heart rate is daily average/minimum/maximum, and sleep is daily time asleep

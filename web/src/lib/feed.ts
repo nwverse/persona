@@ -1,3 +1,4 @@
+import { conversationDeletionScope, deletedConversationID, onConversationDeleted } from "./conversation-deleted";
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, iOS TasksStore / Shared/Tasks.swift): the plans,
 // each conversation's feed (what the hub inserted into it), where those go among the chat's lines, the day lines and
 // the quick results. A task is a todo whose `origin` is the conversation; its state is the todo's (lib/todos.ts).
@@ -9,19 +10,26 @@ import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./stor
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
+import type { TaskBrief } from "./brief";
+import type { RuleSuggestion } from "./rule-suggestion";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
-import { conversationManager, itemHeaders } from "./manager-choice";
 import { closePanel, getPanel } from "./panel";
+import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
+
+export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
+export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
 
 export interface PlanTask {
   title: string;
   prompt: string;
   machine: string;
   cwd: string;
+  workspace?: TaskWorkspace;
+  workspace_resolved?: TaskWorkspaceResolved;
   launcher?: string;
   model?: string;
   /** An Agent preset (#2225): a tier of the model profile in use, resolved when the task starts. */
@@ -31,11 +39,20 @@ export interface PlanTask {
   ultracode?: boolean;
   readonly?: boolean;
   why?: string;
+  /** The reasoning effort the assistant chose for its Agent (task_plan's `effort`); absent: the launcher's default. */
+  effort?: string;
   todo_id?: string;
   error?: string;
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
   error_args?: Record<string, string>;
+  /** The brief the task will be held to (#3822, lib/brief.ts): the card shows it, and "Start" confirms it. Absent from
+   *  a hub before briefs and on a plan made before them. */
+  brief?: TaskBrief;
+  /** The scheduled task whose own run planned this (#8045), and its name: the card can then offer to let it start this
+   *  kind of task by itself next time. Every task of such a plan carries the same; absent everywhere else. */
+  schedule?: string;
+  schedule_title?: string;
 }
 
 export interface TaskPlan {
@@ -44,9 +61,12 @@ export interface TaskPlan {
   tasks: PlanTask[];
   state: "open" | "started" | "dismissed";
   created_at?: string;
+  /** On an open plan: the rule the hub suggests once the owner started this kind of task three times (#4929,
+   *  lib/rule-suggestion.ts). Filled in where the plan is read, never stored with it; absent from an older hub. */
+  suggestion?: RuleSuggestion;
 }
 
-export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief";
+export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief" | "inbox_suggestion" | "urgent_call";
 
 export interface FeedItem {
   id: string;
@@ -89,6 +109,36 @@ export interface BriefRow {
   /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
   outcome?: TodoAsk["outcome"];
   recommend?: string;
+}
+
+/** What a `BriefRow` field says when it is text: the value if it is a string, nothing otherwise. The rows come off the
+ *  wire and out of to-dos whose own `ask.from` is an object (`TodoAsk["from"]`), so a field typed `string` is not
+ *  proof the value is one: drawn into a line it would read `[object Object]`. */
+function text(v: unknown): string | undefined {
+  return typeof v === "string" && v ? v : undefined;
+}
+
+/** A row as drawn: only the fields it has, each of the type it is declared with. A field of another type is dropped. */
+export function briefRow(raw: unknown): BriefRow | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const id = text(r.id);
+  if (!id) return undefined;
+  const row: BriefRow = { id, title: text(r.title) ?? "", waited_s: typeof r.waited_s === "number" && Number.isFinite(r.waited_s) ? r.waited_s : 0 };
+  for (const key of ["detail", "from", "link", "asked_at", "verdict", "recommend"] as const) {
+    const v = text(r[key]);
+    if (v) row[key] = v;
+  }
+  if (r.nudged === true) row.nudged = true;
+  const outcome = text(r.outcome);
+  if (outcome) row.outcome = outcome;
+  return row;
+}
+
+/** The accept row of a to-do's open ask, as its Needs you card draws it. Built field by field, never from the ask
+ *  itself: `ask.from` is an object (where the task came from), `BriefRow.from` is the name of who asked. */
+export function askRow(todo: Pick<Todo, "id" | "title">, ask: TodoAsk, now = Date.now()): BriefRow {
+  return { id: todo.id, title: todo.title, waited_s: Math.max(0, (now - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at };
 }
 
 export interface BriefFailed {
@@ -147,6 +197,25 @@ export interface BriefBody {
   later_total: number;
   progress: { id: string; title: string; stage?: string; stage_kind?: Todo["stage_kind"] }[];
   progress_total: number;
+  /** The recommended-setup block (#5085), on the first briefing of a week when it names something: which mechanism
+   *  that is off would have removed how many of the last 7 days' asks or background rounds. The hub counted and worded
+   *  each line; nothing is turned on from here. A hub that does not know it leaves the list out. */
+  setup: BriefSetup[];
+}
+
+/** One mechanism of a `brief` item's `setup`: `text` is the whole line (count, cost, where it is turned on). */
+export interface BriefSetup {
+  id: string;
+  count: number;
+  text: string;
+}
+
+/** The settings page a recommended mechanism is turned on at, for those that have one in this app: Session triage, the
+ *  standing authorizations and the remembered kinds of task are on the assistant's own page; a lower tier for the
+ *  background supervisor (#5805) is its purpose's page of Model settings. */
+export function briefSetupPage(id: string): string | undefined {
+  if (id === "supervisor_tier") return "/settings?tab=models&purpose=assistant.supervise";
+  return ["triage_decide", "triage_auto_continue", "triage_wake", "standing_authorizations", "task_trust"].includes(id) ? "/settings?tab=persona" : undefined;
 }
 
 /** A `brief` item's body, every list a list (a hub that left one out, or an item that is not one, gives nothing to draw). */
@@ -154,9 +223,10 @@ export function briefBody(it: FeedItem): BriefBody | undefined {
   const b = it.kind === "brief" ? it.body : undefined;
   if (!b || typeof b !== "object") return undefined;
   const list = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
-  const waiting = list<BriefRow>(b.waiting);
-  const accept = list<BriefRow>(b.accept);
-  const later = list<BriefRow>(b.later);
+  const rows = (v: unknown): BriefRow[] => list<unknown>(v).map(briefRow).filter((row): row is BriefRow => !!row);
+  const waiting = rows(b.waiting);
+  const accept = rows(b.accept);
+  const later = rows(b.later);
   const failed = list<BriefFailed>(b.failed);
   const done = list<BriefBody["done"][number]>(b.done);
   const progress = list<BriefBody["progress"][number]>(b.progress);
@@ -176,6 +246,7 @@ export function briefBody(it: FeedItem): BriefBody | undefined {
     later_total: num(b.later_total, later.length),
     progress,
     progress_total: num(b.progress_total, progress.length),
+    setup: list<BriefSetup>(b.setup).filter((x) => x && typeof x.id === "string" && typeof x.text === "string" && x.text !== ""),
   };
 }
 
@@ -228,6 +299,14 @@ export function shownFeed(feed: FeedItem[], now = new Date()): FeedItem[] {
   return hidden.size === 0 ? feed : feed.filter((it) => !hidden.has(it.id));
 }
 
+/** What a Persona conversation draws of its feed (#8237, docs/assistant/unified-entry.md "Receipts"): a task's card comes
+ *  once, when it is handed out, and updates in place; how it goes on (a receipt for each stretch of work, its Agent's
+ *  reports, its reviews) is its row in Needs you / In progress, never another card. The hub keeps writing them all: the
+ *  trays read them, and a hub-side reader (the "Today" card) still does. */
+export function drawnFeed(feed: FeedItem[]): FeedItem[] {
+  return feed.filter((it) => it.kind !== "receipt" && it.kind !== "report" && it.kind !== "review");
+}
+
 /** Persona's messages to task `todoId`, oldest first: what its card lists. */
 export function sentTo(feed: FeedItem[], todoId: string): FeedItem[] {
   return feed
@@ -250,6 +329,50 @@ export function receiptState(it: FeedItem): "done" | "failed" | "interrupted" {
   const st = field(it, "state");
   if (st === "failed" || st === "interrupted") return st;
   return parseAPIError(field(it, "summary")) ? "interrupted" : "done";
+}
+
+/** How an interrupted receipt's task was dealt with, as the hub worked it out (#3834): pending until it was. */
+export type InterruptResolution = "pending" | "cancelled" | "rerouted" | "resumed" | "accepted" | "done";
+
+/** One task of a batch of interruptions (`batch.tasks`). */
+export interface InterruptBatchTask {
+  receipt: string;
+  todo_id: string;
+  title: string;
+  resolution: InterruptResolution;
+  at: string;
+}
+
+/** What a batch's head says of the batch: interruptions with the same cause in one chat within ten minutes. */
+export interface InterruptBatch {
+  cause: string;
+  machine?: string;
+  total: number;
+  pending: number;
+  resolved: number;
+  tasks: InterruptBatchTask[];
+}
+
+/** How the chat draws an interrupted receipt, from what the hub sent (#3834): `hidden` inside its batch's head, `batch`
+ *  the head of several, `resolved` one dealt with (a grey line), `pending` still to deal with. undefined: a hub from before
+ *  it (no `resolution`), drawn as ever. */
+export type InterruptLook =
+  | { kind: "hidden" }
+  | { kind: "batch"; batch: InterruptBatch }
+  | { kind: "resolved"; resolution: Exclude<InterruptResolution, "pending"> }
+  | { kind: "pending" };
+
+const RESOLUTIONS: ReadonlySet<string> = new Set(["pending", "cancelled", "rerouted", "resumed", "accepted", "done"]);
+
+export function interruptLook(it: FeedItem): InterruptLook | undefined {
+  if (it.kind !== "receipt" || field(it, "state") !== "interrupted") return undefined;
+  const resolution = field(it, "resolution");
+  if (!resolution || !RESOLUTIONS.has(resolution)) return undefined;
+  const group = field(it, "group");
+  if (group && group !== it.id) return { kind: "hidden" };
+  const batch = it.body?.batch as InterruptBatch | undefined;
+  if (batch && Array.isArray(batch.tasks) && batch.tasks.length > 1) return { kind: "batch", batch };
+  return resolution === "pending" ? { kind: "pending" } : { kind: "resolved", resolution: resolution as Exclude<InterruptResolution, "pending"> };
 }
 
 /** One question of an answered card and what the user answered. */
@@ -283,13 +406,18 @@ interface FeedState {
   plans: Record<string, TaskPlan>;
   taskCards: Record<string, TaskCardMetadata[]>;
   /** Conversation → the task the next message goes to ("Tell "xx""). */
-  routes: Record<string, string>;
+  routes: Record<string, string | { todoId: string; askedAt: string }>;
   busy: Record<string, boolean>;
   /** Message cards put off with "Later". */
   later: Record<string, boolean>;
 }
 
 let st: FeedState = { feeds: {}, plans: {}, taskCards: {}, routes: {}, busy: {}, later: {} };
+let feedRevision = 0;
+const itemRevisions = new Map<string, number>();
+const draftOwners = new WeakMap<FeedItem, string>();
+const feedKey = (item: FeedItem) => `${item.conversation}/${item.id}`;
+const currentCard = (card: FeedItem) => st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
 const listeners = new Set<() => void>();
 function set(patch: Partial<FeedState>) {
   st = { ...st, ...patch };
@@ -336,16 +464,30 @@ export function cardFiled(it: FeedItem): { at: string } | undefined {
   return at && !field(it, "sent_at") ? { at } : undefined;
 }
 
+/** The user dismissed this exact draft, without sending it or completing its task. */
+export function cardDismissed(it: FeedItem): { at: string; id: string } | undefined {
+  const at = field(it, "dismissed_at");
+  const id = field(it, "dismissal_id");
+  return at && !cardSent(it) ? { at, id: id ?? "" } : undefined;
+}
+
 /** A blank a draft leaves to fill in (a phrase in full-width lenticular brackets, {{link}}): it would go out as it is. */
 export function draftPlaceholder(text: string): string | undefined {
   return /【[^】\n]*】|\{\{[^}\n]*\}\}/.exec(text)?.[0];
 }
 
 function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
+  items = items.filter((it) => !deletedConversationID(it.conversation));
   const feeds = { ...st.feeds };
   // one merge per conversation: merging item by item re-sorted the whole feed once per item of a 500-item page
   const byConversation = new Map<string, Map<string, FeedItem>>();
   for (const it of items) {
+    if (it.kind === "message") {
+      const before = feeds[it.conversation]?.find((old) => old.id === it.id);
+      const owner = draftOwners.get(it);
+      if (before && owner) draftOwners.set(before, owner);
+      if (!before || JSON.stringify(before.body) !== JSON.stringify(it.body)) itemRevisions.set(feedKey(it), ++feedRevision);
+    }
     const group = byConversation.get(it.conversation) ?? new Map<string, FeedItem>();
     group.set(it.id, it); // a later copy of an id wins, as merging one by one did
     byConversation.set(it.conversation, group);
@@ -368,6 +510,7 @@ const FEED_PAGES = 40;
 /** A conversation's feed: what came since the newest item it has. A read asked for while one is out runs once more
  *  after it (a reconnect's hello during the first read on open was dropped, and what was pushed meanwhile stayed missing). */
 export async function loadFeed(conversation: string) {
+  if (deletedConversationID(conversation)) return;
   if (loading.has(conversation)) {
     again.add(conversation);
     return;
@@ -386,21 +529,39 @@ export async function loadFeed(conversation: string) {
   }
 }
 
-/** One pass of loadFeed: the pages since the newest item the feed has now. */
+/** One bounded feed traversal. New hubs return a snapshot cursor; older hubs retain the timestamp fallback. */
 async function readFeedPages(conversation: string) {
+  const scope = conversationDeletionScope();
   let last = st.feeds[conversation]?.at(-1)?.at;
+  let cursor: string | undefined;
+  const endpoint = `/assistant/conversations/${enc(conversation)}/feed`;
+  // Capture an authoritative owner, when known, for the whole traversal. An unknown conversation can still be
+  // routed by the hub itself; never stamp a guessed default onto cards arriving before their session metadata.
+  const owner = conversationManager(conversation)
+    ?? Object.values(getState().sessions).flat().find((s) => s.session_id === conversation)?.manager
+    ?? managerHeaderFor(endpoint);
+  // the default's conversation names none (itemHeaders): one manager gets the requests it always did
+  const headers = itemHeaders(owner);
   for (let n = 0; n < FEED_PAGES; n++) {
-    const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
-      `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
-    );
+    const readingAt = feedRevision;
+    const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
+    const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
+    if (scope !== conversationDeletionScope() || deletedConversationID(conversation)) return;
     if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
     const items = res.items ?? [];
-    received(items, res.plans ?? undefined);
+    if (owner) for (const it of items) draftOwners.set(it, owner);
+    // A write or push accepted after this read started wins over the captured response.
+    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ?? undefined);
     if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
     // the cards' snapshot comes whole with every page: what an event missed comes back here
     applySnapshot(conversation, res);
+    if (typeof res.next_cursor === "string") {
+      if (!res.next_cursor || res.next_cursor === cursor || !items.length) break;
+      cursor = res.next_cursor;
+      continue;
+    }
     const newest = items.at(-1)?.at;
-    // the next page starts after this one's newest; one that did not move on would come back the same
+    // Compatibility: a hub without cursors advances by its last original timestamp.
     if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
     last = newest;
   }
@@ -421,7 +582,10 @@ export async function loadToday(conversation: string) {
 
 onHubEvent("assistant_feed", (m) => {
   const it = m.item as FeedItem | undefined;
-  if (it) received([it]);
+  if (it) {
+    draftOwners.set(it, typeof m.manager === "string" ? m.manager : BUILTIN_MANAGER);
+    received([it]);
+  }
 });
 // A connection that did not resume missed events: the conversations open here read their feed (and cards) again.
 onHubEvent("hello", (m) => {
@@ -430,13 +594,13 @@ onHubEvent("hello", (m) => {
 });
 onHubEvent("task_plan", (m) => {
   const p = m.plan as TaskPlan | undefined;
-  if (p) set({ plans: { ...st.plans, [p.id]: p } });
+  if (p && !deletedConversationID(p.conversation)) set({ plans: { ...st.plans, [p.id]: p } });
 });
 
 // ── actions ──
 
 /** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt" | "workspace"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const;
 
@@ -451,12 +615,13 @@ export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): Pla
     permission: t.permission || "default",
     prompt: t.prompt,
     ultracode: ultracode?.[i] ?? t.ultracode === true,
+    ...(t.workspace !== undefined ? { workspace: t.workspace } : {}),
   }));
 }
 
 /** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
 export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
-  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
+  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => JSON.stringify(e[k] ?? "") !== JSON.stringify(before[i]?.[k] ?? "")));
 }
 
 /** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
@@ -495,7 +660,7 @@ export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[
  * The header naming the manager of conversation, for what its feed offers (a plan, a briefing's question): the routes
  * name no conversation, so the hub would take them to the default manager (docs/protocol/protocol.md "Per-manager
  * routing"), whichever assistant the conversation is (another made current, or another's conversation opened here).
- * The manager a page noted for it, else the one the hub's sessions list has it under; none for the default's.
+ * The manager a page noted for it, else the one the hub's sessions list has it under, else the one its address named; none for the default's.
  */
 export function conversationHeaders(conversation: string): Record<string, string> | undefined {
   const noted = conversationManager(conversation);
@@ -504,14 +669,18 @@ export function conversationHeaders(conversation: string): Record<string, string
     const s = list.find((x) => x.session_id === conversation);
     if (s) return itemHeaders(s.manager);
   }
-  return undefined;
+  const routed = routedConversationManager(conversation);
+  return routed ? itemHeaders(routed) : undefined;
 }
 
-export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
+/** Starts an open plan. `scheduleGrant` (#8045): the owner lets the scheduled task whose run planned it start this kind
+ *  of task by itself from now on; sent only when ticked, so a hub before it never sees the key. */
+export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[], scheduleGrant = false) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json: { tasks: edits, remember }, headers: conversationHeaders(plan.conversation) });
+    const json = { tasks: edits, remember, ...(scheduleGrant ? { schedule_grant: true } : {}) };
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json, headers: conversationHeaders(plan.conversation) });
     set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
     void refreshTodos();
   } finally {
@@ -552,17 +721,24 @@ export async function retryTask(todo: Todo) {
   }
 }
 
-/** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified). Any other failure throws. */
-export async function acceptBrief(todoId: string, askedAt: string): Promise<"accepted" | "handled"> {
+/** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
+ *  of the fixed responses that say the owner cannot answer it as asked. */
+export type AskAnswer = { option: string } | { response: string };
+
+/** The Accept button of a `brief` item's task to verify: "accepted" when the hub took it, "recorded" when no Agent could
+ *  receive the decision and the supervisor has it, or "handled" when that round is already over (409). Any other failure
+ *  throws, since nothing was taken: the Agent's node refusing it (dialog_open: a dialog has its terminal, #7343) is 423
+ *  with that code, or a 409 with it from a hub built between the two.
+ *  `answer`: a decision's option or fixed response instead of its recommendation. */
+export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "recorded" | "handled"> {
   try {
-    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt } });
+    const res = await api<{ delivered?: string }>(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
+    void refreshTodos();
+    return res.delivered === "none" ? "recorded" : "accepted";
   } catch (e) {
-    if (e instanceof ApiError && e.status === 409) return "handled";
+    if (e instanceof ApiError && e.status === 409 && (!e.code || e.code === "conflict")) return "handled";
     throw e;
   }
-  void refreshTodos();
-  return "accepted";
 }
 
 /** The Handled button of a question in a `brief` item's `later` list: "marked", or "handled" when the hub says it is not in
@@ -588,6 +764,17 @@ export function startFailure(todo: Todo, plans: Record<string, TaskPlan>): strin
 }
 
 /**
+ * Whether an Agent is being started for a to-do with none up yet (#7552): a plan made it (`plan_id`), or a plan that is
+ * not dismissed holds it as a task (a to-do a plan takes over keeps no `plan_id`), and that start has not failed.
+ * A to-do nobody dispatched (`todo_create`, a leader's piece, one made by hand) is not starting: it is "Not started".
+ */
+export function startInFlight(todo: Todo, plans: Record<string, TaskPlan>): boolean {
+  if (todo.done_at || startFailure(todo, plans)) return false;
+  if (todo.plan_id) return true;
+  return Object.values(plans).some((p) => p.state !== "dismissed" && p.tasks.some((t) => t.todo_id === todo.id && !t.error));
+}
+
+/**
  * Removes a task that does not run: its todo goes (its agents and their chats stay on the Agents page), and with it
  * its card, pill and panel. One whose agents ran asks first; one whose agent never started goes at once. Answers
  * whether it went.
@@ -596,7 +783,7 @@ export async function removeTask(todo: Todo, ask: (message: string) => boolean =
   if ((todo.agents ?? []).length > 0 && !ask(t("lib-feed.remove_confirm", { title: todo.title }))) return false;
   await deleteTodo(todo.id);
   const routes = { ...st.routes };
-  for (const [c, id] of Object.entries(routes)) if (id === todo.id) delete routes[c];
+  for (const [c, route] of Object.entries(routes)) if (routeTodoId(route) === todo.id) delete routes[c];
   set({ routes });
   const panel = getPanel();
   if (panel?.kind === "task" && panel.todo === todo.id) closePanel();
@@ -604,16 +791,21 @@ export async function removeTask(todo: Todo, ask: (message: string) => boolean =
   return true;
 }
 
-export function setRoute(conversation: string, todoId: string | null) {
+export function routeTodoId(route: FeedState["routes"][string] | undefined): string | undefined {
+  return typeof route === "string" ? route : route?.todoId;
+}
+
+export function setRoute(conversation: string, todoId: string | null, askedAt?: string) {
   const routes = { ...st.routes };
-  if (todoId) routes[conversation] = todoId;
+  if (todoId) routes[conversation] = askedAt ? { todoId, askedAt } : todoId;
   else delete routes[conversation];
   set({ routes });
 }
 
 /** Sends text straight to the task the conversation is routed to; false when none (send it to Persona as usual). */
 export async function sendRouted(conversation: string, text: string): Promise<boolean> {
-  const todoId = st.routes[conversation];
+  const route = st.routes[conversation];
+  const todoId = routeTodoId(route);
   if (!todoId) return false;
   // A failed send keeps the route for the retry, so a task gone elsewhere (its chip no longer drawn) must not hold it.
   const { todos, todosLoaded } = getState();
@@ -621,9 +813,11 @@ export async function sendRouted(conversation: string, text: string): Promise<bo
     setRoute(conversation, null);
     return false;
   }
-  const res = await api<{ item: FeedItem }>(`/assistant/conversations/${enc(conversation)}/route`, { method: "POST", json: { todo_id: todoId, text } });
-  if (st.routes[conversation] === todoId) setRoute(conversation, null);
+  const askedAt = typeof route === "object" ? route.askedAt : undefined;
+  const res = await api<{ item: FeedItem }>(`/assistant/conversations/${enc(conversation)}/route`, { method: "POST", json: { todo_id: todoId, text, ...(askedAt ? { asked_at: askedAt } : {}) } });
+  if (st.routes[conversation] === route) setRoute(conversation, null);
   if (res.item) received([res.item]);
+  if (askedAt) void refreshTodos();
   return true;
 }
 
@@ -636,7 +830,7 @@ export async function sendMessage(card: FeedItem, text: string) {
   const itemId = card.ref;
   const latest = () => st.feeds[card.conversation]?.find((i) => i.id === card.id) ?? card;
   // Handled elsewhere (#5095): the hub would refuse it, so nothing goes out.
-  if (!itemId || st.busy[card.id] || cardSent(latest()) || cardFiled(latest())) return;
+  if (!itemId || st.busy[card.id] || cardSent(latest()) || cardFiled(latest()) || cardDismissed(latest())) return;
   const blank = draftPlaceholder(text);
   if (blank) throw new Error(t("lib-feed.draft_blank", { blank }));
   set({ busy: { ...st.busy, [card.id]: true } });
@@ -645,17 +839,67 @@ export async function sendMessage(card: FeedItem, text: string) {
     // whose list has that id (docs/assistant/managers.md "Clients"); none: the default's
     const listed = getInbox().items.filter((it) => it.id === itemId);
     const manager = conversationManager(card.conversation) ?? (listed.length === 1 ? listed[0].manager : undefined);
-    await api(`${itemPath(itemId)}/reply`, { method: "POST", json: { text, card: card.id }, headers: itemHeaders(manager) });
+    await api(`${itemPath(itemId)}/reply`, { method: "POST", json: { text, card: card.id }, headers: draftHeaders(card, manager) });
     // The hub's assistant_feed event brings the card as it recorded it; this draws it sent without waiting.
     const now = latest();
     if (!cardSent(now)) received([{ ...now, body: { ...now.body, sent_at: new Date().toISOString(), sent: text } }]);
+    return true;
   } finally {
     set({ busy: { ...st.busy, [card.id]: false } });
   }
 }
 
-export function later(itemId: string) {
-  set({ later: { ...st.later, [itemId]: true } });
+function draftHeaders(card: FeedItem, fallback?: string): Record<string, string> {
+  const owner = draftOwners.get(currentCard(card)) ?? draftOwners.get(card) ?? conversationManager(card.conversation)
+    ?? Object.values(getState().sessions).flat().find((s) => s.session_id === card.conversation)?.manager ?? fallback ?? defaultManager();
+  // Include the default explicitly: otherwise api() inserts a later assistant selection.
+  return { [MANAGER_HEADER]: owner };
+}
+
+function applyDraftReceipt(card: FeedItem, beforeBody: string | undefined, item: FeedItem, owner: string) {
+  if (JSON.stringify(currentCard(card).body) !== beforeBody) return;
+  draftOwners.set(item, owner);
+  received([item]);
+}
+
+/** Resolve only this draft on the hub. Send and dismiss share a synchronous admission guard. */
+export async function dismissMessage(card: FeedItem): Promise<string | undefined> {
+  const latest = st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
+  if (card.kind !== "message" || st.busy[card.id] || cardSent(latest) || cardFiled(latest) || cardDismissed(latest)) return;
+  const headers = draftHeaders(card);
+  const beforeBody = JSON.stringify(currentCard(card).body);
+  set({ busy: { ...st.busy, [card.id]: true } });
+  try {
+    const result = await api<{ item: FeedItem; dismissal_id: string }>(`/assistant/feed/${enc(card.id)}/dismiss`, {
+      method: "POST", json: { draft: field(card, "draft") ?? "" }, headers,
+    });
+    applyDraftReceipt(card, beforeBody, result.item, headers[MANAGER_HEADER]);
+    return result.dismissal_id;
+  } finally {
+    set({ busy: { ...st.busy, [card.id]: false } });
+  }
+}
+
+/** Undo names the dismissal receipt, so a newer draft or decision cannot be overwritten. */
+export async function undoDismissMessage(card: FeedItem, dismissalId: string): Promise<boolean> {
+  if (!dismissalId || st.busy[card.id]) return false;
+  const headers = draftHeaders(card);
+  const beforeBody = JSON.stringify(currentCard(card).body);
+  set({ busy: { ...st.busy, [card.id]: true } });
+  try {
+    const result = await api<{ item: FeedItem }>(`/assistant/feed/${enc(card.id)}/undo-dismiss`, {
+      method: "POST", json: { dismissal_id: dismissalId }, headers,
+    });
+    applyDraftReceipt(card, beforeBody, result.item, headers[MANAGER_HEADER]);
+    const now = currentCard(card);
+    return !cardDismissed(now) && !cardSent(now) && !cardFiled(now);
+  } finally {
+    set({ busy: { ...st.busy, [card.id]: false } });
+  }
+}
+
+export function later(itemId: string, deferred = true) {
+  set({ later: { ...st.later, [itemId]: deferred } });
 }
 
 // ── the conversation's lines ──
@@ -714,11 +958,23 @@ export function quickResult(use: Item, result?: Item): QuickResult | undefined {
   }
 }
 
+/** When the oldest loaded transcript item happened (displayLines `from`); undefined when none says. */
+export function loadedFrom(items: Item[]): number | undefined {
+  for (const it of items) {
+    const at = Date.parse(it.ts ?? "");
+    if (!Number.isNaN(at)) return at;
+  }
+  return undefined;
+}
+
 /** The chat's lines with the feed among them (each item at the end of the exchange it happened in), each exchange's
- *  quick results after it, and a day line over the first line of each day. */
-export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] {
-  // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
-  const feed = shownFeed(all);
+ *  quick results after it, and a day line over the first line of each day. `from`: while older transcript pages are
+ *  not loaded yet, the time of the oldest loaded item. The feed always holds the whole history, so its older items would
+ *  stack on top of the newest page, with their day lines, and read as the conversation's start with its messages gone;
+ *  they wait for the page that covers them. */
+export function displayLines(lines: ChatLine[], all: FeedItem[], from?: number): DisplayLine[] {
+  // the hand-offs the task cards take in are drawn there, not among the lines (#1542); how a task goes on is its row (#8237)
+  const feed = drawnFeed(shownFeed(all)).filter((it) => from === undefined || !(Date.parse(it.at) < from));
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {
@@ -787,3 +1043,11 @@ export function dayLabel(date: Date, now = new Date()): string {
 export function isToday(iso: string, now = new Date()): boolean {
   return new Date(iso).toDateString() === now.toDateString();
 }
+
+onConversationDeleted((_mid, sid) => {
+  const feeds = { ...st.feeds }, taskCards = { ...st.taskCards }, routes = { ...st.routes };
+  delete feeds[sid]; delete taskCards[sid]; delete routes[sid];
+  again.delete(sid); todayAsked.delete(sid);
+  const plans = Object.fromEntries(Object.entries(st.plans).filter(([, plan]) => plan.conversation !== sid));
+  set({ feeds, taskCards, routes, plans });
+});

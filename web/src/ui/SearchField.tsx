@@ -3,6 +3,7 @@
 // showed only a caret (to-dos, Terminal, Agents), so a new search box takes this one.
 import type { KeyboardEvent } from "react";
 import { t } from "../i18n";
+import { composing } from "../lib/send-history";
 import { cx, IconButton } from "./atoms";
 import { Icon } from "./icons";
 
@@ -27,6 +28,7 @@ export function SearchField({
   icon = true,
   onKeyDown,
   className,
+  autoFocus,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -40,6 +42,7 @@ export function SearchField({
   onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
   /** Placement only (margins, shrink); the look is the tone's. */
   className?: string;
+  autoFocus?: boolean;
 }) {
   return (
     <label className={cx("flex items-center gap-2 rounded-control", size === "sm" ? "h-8 px-2.5" : "h-9 px-3", TONE[tone], SEARCH_FOCUS, className)}>
@@ -47,7 +50,16 @@ export function SearchField({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
+        onKeyDown={(e) => {
+          onKeyDown?.(e);
+          // Esc empties a field with something in it, as search fields do, and is spent on that: a Dialog or a panel around
+          // it stays open. In an empty field it is theirs as before (the Dialog closes). Not the input method's Esc.
+          if (e.key !== "Escape" || !value || e.defaultPrevented || composing(e.nativeEvent)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onChange("");
+        }}
+        autoFocus={autoFocus}
         placeholder={placeholder}
         aria-label={label ?? placeholder}
         className={cx("min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-ink-3", size === "sm" ? "text-[12.5px]" : "text-[13px]")}

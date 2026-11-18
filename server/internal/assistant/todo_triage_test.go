@@ -71,7 +71,7 @@ func TestTriageFollowsTheSharedCases(t *testing.T) {
 			if err := json.Unmarshal(c.Input.Todo, &td); err != nil {
 				t.Fatal(err)
 			}
-			got := triageTodo(td, lookupOf(c.Input.Sessions), c.Input.Now, c.Input.RestoredAt, time.UTC)
+			got := triageTodo(td, lookupOf(c.Input.Sessions), c.Input.Now, c.Input.RestoredAt, time.UTC, false)
 			if got.Section != c.Expected.Section || got.Rule != c.Expected.Rule {
 				t.Fatalf("got %s / %s, want %s / %s", got.Section, got.Rule, c.Expected.Section, c.Expected.Rule)
 			}
@@ -145,9 +145,85 @@ func TestTriageLeavesDismissedAgentsOut(t *testing.T) {
 	td := listedTodo{Todo: Todo{ID: "t", CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-time.Hour), Origin: "c",
 		Agents: []TodoAgent{{MachineID: "m", SessionID: "ask", DismissedAt: &gone}}}}
 	look := lookupOf([]proto.Session{{MachineID: "m", SessionID: "ask", State: proto.StateNeedsYou, UpdatedAt: now}})
-	if got := triageTodo(td, look, now, time.Time{}, time.UTC); got.Rule != ruleRest {
+	if got := triageTodo(td, look, now, time.Time{}, time.UTC, false); got.Rule != ruleRest {
 		t.Fatalf("got %+v", got)
 	}
+}
+
+func TestTriageWaitingForMergeUsesFreshMatchingPRFacts(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	url := "https://example.com/repo/pull/42"
+	facts := func() *TodoPRStatus {
+		return &TodoPRStatus{URL: url, State: "open", Review: "approved", Checks: "success", CheckedAt: now}
+	}
+	base := listedTodo{Todo: Todo{ID: "pr", Title: "PR task", CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute), Origin: "main", PRURL: url}}
+	withFacts := func() listedTodo {
+		td := base
+		td.PRStatus = facts()
+		return td
+	}
+	assertNotPR := func(name string, td listedTodo, look triageLookup) {
+		t.Helper()
+		if got := triageTodo(td, look, now, time.Time{}, time.UTC, false); got.Rule == rulePROpen || got.Section == triagePR {
+			t.Errorf("%s incorrectly waits for merge: %+v", name, got)
+		}
+	}
+
+	// Current observations outweigh stage hints while the task is still open.
+	open := withFacts()
+	open.Stage = "deploy"
+	if got := triageTodo(open, nil, now, time.Time{}, time.UTC, false); got.Section != triagePR || got.Rule != rulePROpen {
+		t.Fatalf("fresh open PR facts lost to the stage: %+v", got)
+	}
+	// Accepted or deployed work stays finished and out of the open count, whatever its PR facts say (#7614 review).
+	live := withFacts()
+	live.Delivery = &TodoDelivery{State: deliveryLive, At: now}
+	accepted := withFacts()
+	accepted.Supervision = &Supervision{Supervisor: "main", State: reviewAccepted, Reviews: []TaskReview{{At: now.Add(-time.Minute), Verdict: reviewAccepted}}}
+	for name, td := range map[string]listedTodo{"deployed": live, "accepted": accepted} {
+		got := triageTodo(td, nil, now, time.Time{}, time.UTC, false)
+		if got.Rule != name || triageCountsAsOpen(td.Todo, got) {
+			t.Errorf("%s task with a fresh open PR: %+v (counts as open: %v)", name, got, triageCountsAsOpen(td.Todo, got))
+		}
+	}
+
+	stale := withFacts()
+	stale.PRStatus.CheckedAt = now.Add(-16 * time.Minute)
+	stale.Delivery = &TodoDelivery{State: deliveryPR}
+	assertNotPR("stale", stale, nil)
+
+	mismatch := withFacts()
+	mismatch.PRStatus.URL = "https://example.com/repo/pull/43"
+	assertNotPR("mismatched URL", mismatch, nil)
+
+	draft := withFacts()
+	draft.PRStatus.Draft = true
+	assertNotPR("draft", draft, nil)
+
+	for _, state := range []string{"merged", "closed"} {
+		terminal := withFacts()
+		terminal.PRStatus.State = state
+		terminal.Delivery = &TodoDelivery{State: deliveryPR}
+		assertNotPR(state, terminal, nil)
+	}
+	completed := withFacts()
+	doneAt := now.Add(-time.Minute)
+	completed.DoneAt = &doneAt
+	assertNotPR("completed todo", completed, nil)
+
+	for _, state := range []string{proto.StateWorking, proto.StateNeedsYou} {
+		active := withFacts()
+		active.Agents = []TodoAgent{{MachineID: "m", SessionID: state}}
+		look := lookupOf([]proto.Session{{MachineID: "m", SessionID: state, State: state, Status: proto.StatusWorking, UpdatedAt: now}})
+		assertNotPR("active "+state, active, look)
+	}
+
+	decision := withFacts()
+	decision.Supervision = &Supervision{State: reviewNeedsUser}
+	assertNotPR("owner review", decision, nil)
+	decision = withFacts()
+	decision.Ask = &todoAsk{Outcome: outcomeDecide}
+	assertNotPR("owner ask", decision, nil)
 }
 
 // An open concern is never shelved (#3582): quiet for days it stays in Other open; while an agent of it runs it is in
@@ -160,16 +236,16 @@ func TestTriageNeverShelvesAConcern(t *testing.T) {
 	task := concern
 	task.ID, task.Kind = "t", ""
 	none := lookupOf(nil)
-	if got := triageTodo(listedTodo{Todo: task}, none, now, time.Time{}, time.UTC); got.Section != triageShelved {
+	if got := triageTodo(listedTodo{Todo: task}, none, now, time.Time{}, time.UTC, false); got.Section != triageShelved {
 		t.Fatalf("a quiet task: %+v", got)
 	}
-	if got := triageTodo(listedTodo{Todo: concern}, none, now, time.Time{}, time.UTC); got.Section != triageOther || got.Rule != ruleRest {
+	if got := triageTodo(listedTodo{Todo: concern}, none, now, time.Time{}, time.UTC, false); got.Section != triageOther || got.Rule != ruleRest {
 		t.Fatalf("a quiet concern: %+v", got)
 	}
 	running := concern
 	running.Agents = []TodoAgent{{MachineID: "m", SessionID: "s"}}
 	look := lookupOf([]proto.Session{{MachineID: "m", SessionID: "s", State: proto.StateWorking, Status: proto.StatusWorking, UpdatedAt: now}})
-	if got := triageTodo(listedTodo{Todo: running}, look, now, time.Time{}, time.UTC); got.Section != triageWorking {
+	if got := triageTodo(listedTodo{Todo: running}, look, now, time.Time{}, time.UTC, false); got.Section != triageWorking {
 		t.Fatalf("a concern with an agent working: %+v", got)
 	}
 	res := triageTodos([]listedTodo{{Todo: concern}, {Todo: task}}, none, now, time.UTC, false)
@@ -179,7 +255,7 @@ func TestTriageNeverShelvesAConcern(t *testing.T) {
 	// A failed start long ago, an accepted review or a live delivery file a task with the finished ones, never a concern.
 	failed := concern
 	failed.StartError = "no launcher"
-	if got := triageTodo(listedTodo{Todo: failed}, none, now, time.Time{}, time.UTC); got.Section != triageOther {
+	if got := triageTodo(listedTodo{Todo: failed}, none, now, time.Time{}, time.UTC, false); got.Section != triageOther {
 		t.Fatalf("a concern whose agent failed to start days ago: %+v", got)
 	}
 	accepted := concern
@@ -187,14 +263,56 @@ func TestTriageNeverShelvesAConcern(t *testing.T) {
 	live := concern
 	live.Delivery = &TodoDelivery{State: deliveryLive, At: old}
 	for name, c := range map[string]Todo{"accepted": accepted, "deployed": live} {
-		if got := triageTodo(listedTodo{Todo: c}, none, now, time.Time{}, time.UTC); got.Section != triageOther {
+		if got := triageTodo(listedTodo{Todo: c}, none, now, time.Time{}, time.UTC, false); got.Section != triageOther {
 			t.Fatalf("a %s concern: %+v", name, got)
 		}
 	}
 	reported := concern
 	at := now.Add(-time.Minute)
 	reported.DoneAt = &at
-	if got := triageTodo(listedTodo{Todo: reported}, none, now, time.Time{}, time.UTC); got.Section != triageJustDone {
+	if got := triageTodo(listedTodo{Todo: reported}, none, now, time.Time{}, time.UTC, false); got.Section != triageJustDone {
 		t.Fatalf("a reported concern: %+v", got)
+	}
+}
+
+func TestPRFactsCannotReopenCompletedTasks(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-time.Hour)
+	const pr = "https://github.com/nwverse/persona/pull/123"
+	for _, tc := range []struct {
+		name, review, delivery, kind string
+		closed                       bool
+		rule                         string
+		open                         bool
+	}{
+		{"accepted", reviewAccepted, deliveryPR, "", false, ruleAccepted, false},
+		{"deployed", "", deliveryLive, "", false, ruleDeployed, false},
+		{"closed", "", deliveryPR, "", true, ruleClosed, false},
+		{"unfinished PR", "", deliveryPR, "", false, rulePROpen, true},
+		{"accepted concern", reviewAccepted, deliveryPR, db.KindConcern, false, "", true},
+		{"deployed concern", "", deliveryLive, db.KindConcern, false, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			td := Todo{ID: "pr-task", Kind: tc.kind, Origin: "main", CreatedAt: old, UpdatedAt: old,
+				PRURL: pr, Stage: "review",
+				PRStatus: &TodoPRStatus{URL: pr, State: "open", CheckedAt: now},
+				Delivery: &TodoDelivery{State: tc.delivery, At: old}}
+			if tc.review != "" {
+				td.Supervision = &Supervision{State: tc.review, Reviews: []TaskReview{{Verdict: tc.review, At: old}}}
+			}
+			if tc.closed {
+				td.DoneAt = &old
+			}
+			look := lookupOf(nil)
+			got := triageTodo(listedTodo{Todo: td}, look, now, time.Time{}, time.UTC, false)
+			if tc.rule != "" && got.Rule != tc.rule || triageCountsAsOpen(td, got) != tc.open {
+				t.Fatalf("fresh open PR facts changed completion: triage=%+v, open=%v; want rule=%s open=%v",
+					got, triageCountsAsOpen(td, got), tc.rule, tc.open)
+			}
+			list := triageTodos([]listedTodo{{Todo: td}}, look, now, time.UTC, false)
+			if (list.Open == 1) != tc.open {
+				t.Fatalf("header open count=%d, want open=%v", list.Open, tc.open)
+			}
+		})
 	}
 }

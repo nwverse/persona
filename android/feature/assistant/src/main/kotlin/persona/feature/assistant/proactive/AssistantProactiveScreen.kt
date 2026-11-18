@@ -2,13 +2,6 @@ package persona.feature.assistant.proactive
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
@@ -17,7 +10,10 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.parseTime
@@ -66,7 +62,11 @@ fun AssistantProactiveScreen(
     val hostScope = LocalAssistantHost.current?.coroutineScope
     val pageScope = rememberCoroutineScope()
     val say = rememberProactiveText()
-    val store = remember(management, hostScope, say) { ProactiveStore(management.proactive(), hostScope ?: pageScope, say) }
+    // The shell's notice outlives the page: a write that fails after the page is left is still said.
+    val feedback = LocalAppFeedback.current
+    val store = remember(management, hostScope, say, feedback) {
+        ProactiveStore(management.proactive(), hostScope ?: pageScope, say, unheard = { feedback?.notice(it) })
+    }
     ProactiveScreen(store, onBack, onOpenConversation, modifier, machines, initialPage, onModelConfiguration)
 }
 
@@ -120,6 +120,12 @@ internal fun ProactiveScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(store) { store.refresh() }
     LaunchedEffect(store, feedback) { store.messages.collect { message -> if (feedback?.notice(message) != true) notice = message } }
+    // A run the user started opens its conversation only while this page is started, not after it was left (#3835).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val openRun by rememberUpdatedState(onOpenConversation)
+    LaunchedEffect(store, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { store.runsToOpen.collect { openRun(it) } }
+    }
     LaunchedEffect(notice) { if (notice != null) { delay(5_000); notice = null } }
     // Relative times ("in 25 min") stay true while the page is open.
     val now by produceState(Instant.now()) { while (true) { delay(30_000); value = Instant.now() } }
@@ -145,7 +151,7 @@ internal fun ProactiveScreen(
     }
     BackHandler(enabled = pages.size > 1) { pop() }
 
-    val runTask: (String) -> Unit = { id -> store.launch { run(id).onSuccess(onOpenConversation) } }
+    val runTask: (String) -> Unit = { id -> store.runNow(id) }
     var templates by remember { mutableStateOf(false) }
     var taskMenu by remember { mutableStateOf<ScheduledTask?>(null) }
     var deleting by remember { mutableStateOf<ScheduledTask?>(null) }
@@ -160,37 +166,33 @@ internal fun ProactiveScreen(
         allRuns = { push(ProactivePage.RunList(it)) },
     )
 
-    val reduceMotion = PersonaTheme.reduceMotion
+    val pageTransitions = rememberPageTransitions()
     Box(modifier.fillMaxSize()) {
-        // The same slide as the app's own pages: in from the right over the page below, back out to the right.
+        // The same slide as the app's own pages, including RTL and reduced motion.
         AnimatedContent(
             pages, Modifier.fillMaxSize(), label = "proactive-pages", contentKey = { it.last().key },
             transitionSpec = {
-                when {
-                    reduceMotion -> ContentTransform(EnterTransition.None, ExitTransition.None, sizeTransform = null)
-                    targetState.size >= initialState.size -> ContentTransform(
-                        slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
-                        slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }, sizeTransform = null)
-                    else -> ContentTransform(
-                        slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
-                        slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width },
-                        targetContentZIndex = -1f, sizeTransform = null)
-                }
+                if (targetState.size >= initialState.size) pageTransitions.push else pageTransitions.pop
             },
         ) { stack ->
-            val page = stack.last()
-            holder.SaveableStateProvider(page.key) {
-                when (page) {
-                    ProactivePage.Overview -> OverviewPage(state, machines, now, zone, ::pop, actions)
-                    is ProactivePage.EditRoutine -> TaskEditorPage(page.id, null, state, store, now, zone, ::pop, onOpenConversation,
-                        onAllRuns = { push(ProactivePage.RunList(it)) }, onRunNow = runTask, onModelConfiguration = onModelConfiguration)
-                    is ProactivePage.AddRoutine -> TaskEditorPage(null, RoutineTemplates.getOrNull(page.template)?.draft(say) ?: BlankTask,
-                        state, store, now, zone, ::pop, onOpenConversation, onAllRuns = { push(ProactivePage.RunList(it)) }, onRunNow = runTask,
-                        onModelConfiguration = onModelConfiguration)
-                    ProactivePage.FollowupList -> FollowupsPage(state, machines, now, zone, ::pop, actions)
-                    is ProactivePage.RunList -> RunsPage(state, page.ref, now, zone, ::pop, actions)
+            val pageBody: @Composable () -> Unit = {
+                val page = stack.last()
+                holder.SaveableStateProvider(page.key) {
+                    when (page) {
+                        ProactivePage.Overview -> OverviewPage(state, machines, now, zone, ::pop, actions)
+                        is ProactivePage.EditRoutine -> TaskEditorPage(page.id, null, state, store, now, zone, ::pop, onOpenConversation,
+                            onAllRuns = { push(ProactivePage.RunList(it)) }, onRunNow = runTask, onModelConfiguration = onModelConfiguration)
+                        is ProactivePage.AddRoutine -> TaskEditorPage(null, RoutineTemplates.getOrNull(page.template)?.draft(say) ?: BlankTask,
+                            state, store, now, zone, ::pop, onOpenConversation, onAllRuns = { push(ProactivePage.RunList(it)) }, onRunNow = runTask,
+                            onModelConfiguration = onModelConfiguration)
+                        ProactivePage.FollowupList -> FollowupsPage(state, machines, now, zone, ::pop, actions)
+                        is ProactivePage.RunList -> RunsPage(state, page.ref, now, zone, ::pop, actions)
+                    }
                 }
             }
+            // Always wrapped. This page is already inside Root's chrome; the inner modifier sees that and does not
+            // dim a second time. Outside Glass the modifier is identity, and the Box keeps editor state across a style change.
+            Box(Modifier.fillMaxSize().glassPageChrome()) { pageBody() }
         }
         notice?.let { message ->
             JNotice(message, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = pagePadding, vertical = Tokens.Space.l),

@@ -11,13 +11,16 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/office"
 	"github.com/nwverse/persona/server/internal/osproc"
+	"github.com/nwverse/persona/server/internal/procs"
 	"github.com/nwverse/persona/server/internal/scriptcli"
 	"github.com/nwverse/persona/server/internal/toolcli"
 )
@@ -37,21 +40,25 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad notify "title" [body] [--silent] [--error] [--strict]
                            one notification to the phone; exit 0 whatever happens unless --strict (docs/integrations/script-cli.md)
   personad tool <tool> [<json args> | -] | --cli <connector> [--format json|text] <words…>
-                           a connector's tools and command line from the assistant's shell, through the hub
+                           a connector's tools from the assistant's shell, or task_spawn from a supervised Agent's pane
                            (docs/protocol/connector-protocol.md "Command line"; personad tool --help)
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
                            one (the office skill): personad office --help
+  personad claude-plugin status|install|uninstall|on|off
+                           the Persona plugin for Claude Code on this computer, as JSON (persona-link plugin says it in
+                           words; docs/operations/link.md "Claude Code plugin")
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)`
+                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
+` + iphone.Usage
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
                            every 10 s), with what they cost`
 
 // LaunchUsage is `launch`'s line in the usage text.
-const LaunchUsage = `  personad launch <name> …   run claude with a launcher kept in 设置 › 模型 (from the local node)`
+const LaunchUsage = `  personad launch <name> …   run claude with a launcher kept in Settings › Models (from the local node)`
 
 // Run runs args (args[0] is the command) when it is a device command, and says whether it was. stop undoes the caller's
 // signal handling (launch execs claude and leaves signals as they came). A command that has an exit code of its own
@@ -67,10 +74,12 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "hook":
 		nodeclient.RunHook(ctx, rest, os.Stdin, os.Stdout)
 	case "launch": // a launcher kept in Settings › Models: its settings from the local node, then claude (docs/integrations/launchers.md)
-		if len(rest) < 1 {
-			return true, UsageError("usage: " + CommandName() + " launch <launcher> [claude args…]")
+		ticket, rest, err := launchTicket(rest) // --ticket: a hand-off's values too (node/secretenv.go)
+		if err != nil || len(rest) < 1 {
+			return true, UsageError("usage: " + CommandName() + " launch [--ticket <ticket>] <launcher> [claude args…]\n       " +
+				CommandName() + " launch --ticket <ticket> -- claude [claude args…]")
 		}
-		return true, runLaunch(stop, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
+		return true, runLaunch(stop, ticket, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
@@ -85,6 +94,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
+	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
+		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
+	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
+		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
 		n, err := sysmonCount(rest)
 		if err != nil {
@@ -92,7 +105,7 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		}
 		runSysmon(ctx, n)
 	case "node-update-check":
-		return true, json.NewEncoder(os.Stdout).Encode(nodeupdate.Check{Version: b.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Program: b.Program})
+		return true, json.NewEncoder(os.Stdout).Encode(nodeupdate.Check{Version: b.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Program: b.Program, ResidentHandover: node.ResidentHandoverSupported})
 	case "node-update-watch":
 		return true, runNodeUpdateWatch(ctx, rest)
 	default:
@@ -119,7 +132,7 @@ func runNode(ctx context.Context, args []string, b Build) error {
 			// runResident replaces itself on a restart or update (syscall.Exec): what the previous image started (the
 			// update watchdog, the herdr server, bridges) is this one's child now, and only this reaps it.
 			osproc.ReapInherited()
-			capProcs()
+			procs.AtStart()
 			return runResident(ctx, b, supervised)
 		case "tailcat":
 			return runNodeTailcat(ctx, args[1:])
@@ -142,7 +155,7 @@ func runNode(ctx context.Context, args []string, b Build) error {
 	// What a parent left inheritable (an older hub's listening socket, through its manager) stops here, not in every
 	// agent and program the node starts. Here, not in main: other commands of this binary hand descriptors on by exec.
 	osproc.SealInherited()
-	capProcs() // the resident node's too, above
+	procs.AtStart() // the resident node's too, above
 	relayed, err := node.Relay(ctx, os.Stdin, os.Stdout)
 	if relayed {
 		if errors.Is(err, io.EOF) {
@@ -161,5 +174,8 @@ func runNode(ctx context.Context, args []string, b Build) error {
 	if err = n.ServeStdio(ctx); errors.Is(err, io.EOF) {
 		err = nil
 	}
+	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	n.StopUnusedHerdr(stop) // a herdr it started and nobody used does not outlive it (#10114)
 	return err
 }

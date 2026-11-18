@@ -137,6 +137,10 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 	if in != nil {
 		payload, _ = json.Marshal(in)
 	}
+	return c.callBody(ctx, op, method, path, payload, "application/json; charset=utf-8", out, idempotent)
+}
+
+func (c *Client) callBody(ctx context.Context, op, method, path string, payload []byte, contentType string, out any, idempotent bool) error {
 	var lastErr error
 	giveUp := func() error {
 		if e := ctx.Err(); e != nil {
@@ -167,7 +171,7 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 		if payload != nil {
-			req.Header.Set("Content-Type", "application/json; charset=utf-8")
+			req.Header.Set("Content-Type", contentType)
 		}
 		retry, after := false, time.Duration(0)
 		resp, err := c.http.Do(req)
@@ -308,11 +312,13 @@ func (c *Client) BotInfo(ctx context.Context) (BotInfo, error) {
 const (
 	TypeText        = "text"
 	TypePost        = "post"
+	TypeFile        = "file"
 	TypeInteractive = "interactive"
 )
 
 type sent struct {
 	MessageID string `json:"message_id"`
+	ChatID    string `json:"chat_id"`
 }
 
 // Send posts a message to a user (idType "open_id") or into a chat ("chat_id"); uuid (≤ 50 chars, may be "") makes
@@ -326,6 +332,18 @@ func (c *Client) Send(ctx context.Context, idType, id, msgType, content, uuid st
 	// uuid makes a retried send land once: with it, transient failures are retried; without it, a POST is not.
 	err := c.callRetry(ctx, "send", http.MethodPost, "/open-apis/im/v1/messages?receive_id_type="+url.QueryEscape(idType), in, &out, uuid != "")
 	return out.MessageID, err
+}
+
+// SendUser posts a message to a user by open id, and gives the chat it landed in: the bot's private chat with them,
+// which the platform makes on the first message.
+func (c *Client) SendUser(ctx context.Context, openID, msgType, content, uuid string) (messageID, chatID string, err error) {
+	var out sent
+	in := map[string]any{"receive_id": openID, "msg_type": msgType, "content": content}
+	if uuid != "" {
+		in["uuid"] = uuid
+	}
+	err = c.callRetry(ctx, "send", http.MethodPost, "/open-apis/im/v1/messages?receive_id_type=open_id", in, &out, uuid != "")
+	return out.MessageID, out.ChatID, err
 }
 
 // Reply answers a message (quoting it); inThread puts the answer in the message's thread.

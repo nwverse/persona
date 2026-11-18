@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The first heading line of an agent's plan: the first non-empty line without Markdown markers
 /// ("### Plan" -> "Plan"), what every card and the Mac menu bar title shows. An empty plan is Plan.
@@ -22,6 +23,47 @@ nonisolated enum SecretRun {
 nonisolated extension Interaction {
     /// The password card. Its raw tool name is never shown: its title names it, its summary says what it runs.
     var isSecretRun: Bool { kind == .permission && toolName == SecretRun.tool }
+    /// The hand-off card (`SecretHandoff`): approved on the card only, never from a quick path.
+    var isSecretHandoff: Bool { kind == .permission && toolName == SecretHandoff.tool }
+}
+
+/// The hand-off card (`secret_handoff`, docs/extensions/secret-providers.md "Who may approve a hand-off"): secret values
+/// a provider holds, handed to one Agent run once the user approves on the card. Its approval says so on its own request
+/// (`feature`), the hub's condition for letting it through; every quick path is off (`Interaction.requiresInput`).
+nonisolated enum SecretHandoff {
+    static let tool = "secret_handoff"
+    /// What the card's own approval declares (`X-Persona-Features`), and nothing else does.
+    static let feature = "secret_handoff"
+}
+
+/// What a hand-off card hands over and where (its `tool_input`): never a reference or a value.
+nonisolated struct SecretHandoffRequest: Sendable {
+    nonisolated struct Variable: Sendable, Identifiable {
+        var name: String
+        /// The item as its provider describes it, after the provider's name ("1Password › GitHub token").
+        var item: String
+        var id: String { name }
+    }
+    var variables: [Variable]
+    var agent: String
+    var machine: String
+    var cwd: String
+    var prompt: String
+
+    init(_ input: JSONValue?) {
+        func text(_ v: JSONValue?) -> String { v?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+        variables = (input?["variables"]?.array ?? []).compactMap { v in
+            let name = text(v["name"])
+            guard !name.isEmpty else { return nil }
+            let provider = text(v["provider_name"]).isEmpty ? text(v["provider"]) : text(v["provider_name"])
+            let title = text(v["title"])
+            return Variable(name: name, item: title.isEmpty ? provider : provider + " › " + title)
+        }
+        agent = text(input?["agent"])
+        machine = text(input?["machine_name"])
+        cwd = text(input?["cwd"])
+        prompt = text(input?["prompt"])
+    }
 }
 
 nonisolated extension Interaction {
@@ -48,6 +90,8 @@ nonisolated extension Interaction {
             if let t = toolName?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, !isSecretRun { return t }
             return nil
         case .screen:
+            // A command's permission prompt: the agent's words for it, else the command (#5266), not "Do you want to proceed?".
+            if let ask = screenDialog?.commandAsk { return ask.description ?? ask.command }
             return screenDialog?.question
         case .elicitation:
             // An MCP form's or link's message ("Please choose"); its title says which it is.
@@ -102,14 +146,44 @@ nonisolated extension Interaction {
     }
 }
 
+/// Why the app can't answer a card on a session (`Interaction.answerBlock`, #6868).
+nonisolated enum AnswerBlock: Equatable, Sendable {
+    /// Its session can be attached live (a Codex thread on a shared app-server not joined yet): joined, the app answers it.
+    case attach
+    /// Its session's source doesn't let the app answer at all: only the computer can.
+    case computer
+}
+
 nonisolated extension Interaction {
     /// A card on no session (#4059): `personad ask` run outside herdr, or before the pane's agent hooked in, has no
     /// session the node could tie it to (docs/integrations/script-cli.md「Attribution」).
     var isSessionless: Bool { sessionID.isEmpty }
 
     /// Whether the app may answer it: a sessionless card always (no session source says no); else as its session's source
-    /// allows (`canApprove`; a read-only Codex history does not), and not while that session is unknown.
-    func canAnswer(session: Session?) -> Bool { isSessionless || session?.canApprove == true }
+    /// allows (`canApprove`; a read-only Codex history does not). A folded child's card is not blocked while its row
+    /// is still loading. Any other card whose session is unknown stays blocked.
+    func canAnswer(session: Session?) -> Bool {
+        if let session { return isSessionless || session.canApprove }
+        if let under = foldedUnder, !under.isEmpty, under != sessionID { return true }
+        return isSessionless
+    }
+
+    /// Why the app can't answer it, for the line under its greyed card (#6868; Android `approvalBlockedReason`, the
+    /// watch's `blockedReason`): nil where it can (`canAnswer`).
+    func answerBlock(session: Session?) -> AnswerBlock? {
+        guard !canAnswer(session: session) else { return nil }
+        return session?.canAttach == true ? .attach : .computer
+    }
+
+    /// The words a list row shows for this card: the question, else the summary, else the tool.
+    var askPreview: String? {
+        if let question = questions?.first?.question.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty {
+            return Fmt.plain(question)
+        }
+        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty { return Fmt.plain(summary) }
+        if let tool = toolName?.trimmingCharacters(in: .whitespacesAndNewlines), !tool.isEmpty { return tool }
+        return nil
+    }
 
     /// Where a sessionless card comes from, for its list row: the title the node gave it, else its directory's name.
     var sessionlessPlace: String? {

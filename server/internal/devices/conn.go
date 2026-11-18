@@ -2,10 +2,12 @@ package devices
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -23,13 +25,17 @@ var errSwitched = errors.New("moved to a better path")
 
 // nodeConn is one connection to the node, its node.info answered.
 type nodeConn struct {
-	path   *nodePath
-	via    string // the transport it took: local | ssh | tailcat | link | service | hub
-	pipe   *nodePipe
-	peer   *rpc.Peer
-	info   proto.NodeInfo
-	served chan error
-	cancel context.CancelFunc
+	path       *nodePath
+	via        string // the transport it took: local | ssh | tailcat | link | service | hub
+	pipe       *nodePipe
+	peer       *rpc.Peer
+	info       proto.NodeInfo
+	served     chan error
+	cancel     context.CancelFunc
+	restarting atomic.Bool // the resident announced exec before ending this connection
+	// trigger is why this connection was made, for its "connected" line: the first, a reconnect (after how long and
+	// why the last one ended) or a planned switch of path.
+	trigger string
 }
 
 func (c *nodeConn) close() {
@@ -41,6 +47,7 @@ func (c *nodeConn) close() {
 // run keeps the machine connected through its best path until ctx ends.
 func (m *Machine) run(ctx context.Context) {
 	var conn *nodeConn
+	var dropped lastDrop // how the last connection ended, for the next one's "connected" line
 	for ctx.Err() == nil {
 		if conn == nil {
 			if why := m.d.parkReason(m); why != "" {
@@ -75,14 +82,24 @@ func (m *Machine) run(ctx context.Context) {
 				continue
 			}
 			conn = c
+			conn.trigger = dropped.trigger(time.Now())
 		}
 		start := time.Now()
 		err := m.serve(ctx, conn)
 		next := m.takeNext()
 		planned := next != nil
-		m.d.pathEnded(conn.path, true, err, time.Since(start), planned)
+		lasted := time.Since(start)
+		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q", m.cfg.ID, conn.via,
+			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err))
+		m.d.pathEnded(conn.path, true, err, lasted, planned || conn.restarting.Load())
 		conn.close()
+		m.eventRetire.Lock()
 		m.detach(err, planned)
+		m.eventRetire.Unlock()
+		dropped = lastDrop{at: time.Now(), reason: dropReason(err), via: conn.via}
+		if next != nil {
+			next.trigger = fmt.Sprintf("switch from %s", conn.via)
+		}
 		conn = next
 	}
 	if conn != nil {
@@ -195,6 +212,28 @@ func (m *Machine) establish(ctx context.Context, p *nodePath) (*nodeConn, error)
 }
 
 func (m *Machine) establishVia(ctx context.Context, p *nodePath, via string) (*nodeConn, error) {
+	deadline := time.Now().Add(40 * time.Second)
+	for {
+		c, err := m.establishViaOnce(ctx, p, via, time.Until(deadline))
+		if err == nil || !handshakeInterrupted(err) {
+			return c, err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Until(deadline) <= 0 {
+			return nil, context.DeadlineExceeded
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(min(100*time.Millisecond, time.Until(deadline))):
+		}
+	}
+}
+
+// Repeating this pre-operation handshake is safe: only engine selection and node.info have been sent.
+func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string, wait time.Duration) (*nodeConn, error) {
 	cctx, cancel := context.WithCancel(ctx)
 	var l *nodePipe
 	var err error
@@ -211,16 +250,65 @@ func (m *Machine) establishVia(ctx context.Context, p *nodePath, via string) (*n
 		return nil, err
 	}
 	peer := rpc.New("h", l.w)
+	// Stop these operations on the node when the manager stops waiting (an older node ignores it).
+	peer.Cancels = map[string]bool{
+		proto.MethodModelHTTP:    true,
+		proto.MethodModelRun:     true,
+		proto.MethodRoutineCheck: true,
+		"file.copy":              true,
+		"file.zip":               true,
+	}
 	// Every event goes on to the hub, the forwarded ports' bytes among them (the hub is their end, ports.go there).
-	peer.OnEvent = m.onEvent
-	peer.OnRequest = m.onRequest
 	c := &nodeConn{path: p, via: via, pipe: l, peer: peer, served: make(chan error, 1), cancel: cancel}
+	peer.OnClose = func(err error, inflight []string) { m.logCutOff(via, err, inflight) }
+	peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if method == "state.load" {
+			var barrier struct {
+				RestartBarrier *bool `json:"restart_barrier"`
+			}
+			if json.Unmarshal(params, &barrier) == nil && barrier.RestartBarrier != nil {
+				if !*barrier.RestartBarrier {
+					c.restarting.Store(false)
+				}
+				return m.residentRestartBarrier(ctx, peer, *barrier.RestartBarrier)
+			}
+		}
+		return m.onRequest(ctx, method, params)
+	}
+	peer.OnEvent = func(event string, params json.RawMessage) {
+		if event == nodeproto.EventRestarting {
+			c.restarting.Store(true)
+			m.mu.Lock()
+			if m.peer == peer {
+				m.reloadUntil = time.Now().Add(m.reconnectGrace)
+				peer.SuspendCalls()
+			}
+			m.mu.Unlock()
+			return
+		}
+		// Close does not wait for an admitted callback: finish it before detach, or drop it when it arrives after.
+		select {
+		case <-peer.Done():
+			return
+		default:
+		}
+		m.eventRetire.Lock()
+		defer m.eventRetire.Unlock()
+		select {
+		case <-peer.Done():
+			return
+		default:
+		}
+		m.onEvent(event, params)
+	}
 	go func() { c.served <- peer.Serve(cctx, l.r) }()
 
-	ictx, icancel := context.WithTimeout(cctx, 40*time.Second)
-	// The engine first, before anything else the node is asked: it then never lists or watches the wrong one.
-	m.useEngine(ictx, peer)
-	err = peer.Call(ictx, "node.info", map[string]any{}, &c.info)
+	ictx, icancel := context.WithTimeout(cctx, wait)
+	// The engine first. An explicit reload refusal or closed handshake is retried; old nodes keep their fallback.
+	err = m.useEngine(ictx, peer)
+	if !handshakeInterrupted(err) {
+		err = peer.Call(ictx, "node.info", map[string]any{}, &c.info)
+	}
 	icancel()
 	if err != nil {
 		c.close()
@@ -228,7 +316,10 @@ func (m *Machine) establishVia(ctx context.Context, p *nodePath, via string) (*n
 			p.src.tailcatReset()
 		}
 		if msg := l.lastErr(); msg != "" {
-			return nil, fmt.Errorf("%s", msg)
+			if restartingError(err) {
+				return nil, fmt.Errorf("%s: %w", msg, err)
+			}
+			return nil, errors.New(msg) // SSH/authentication/startup diagnostics are real failures, not an exec handshake
 		}
 		return nil, err
 	}
@@ -239,8 +330,12 @@ func (m *Machine) establishVia(ctx context.Context, p *nodePath, via string) (*n
 func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	p := c.path
 	m.d.pathConnected(p)
+	listed := make(chan struct{})
 	m.mu.Lock()
 	m.peer, m.info, m.online, m.err, m.lastSeen = c.peer, c.info, true, "", time.Now().UTC()
+	m.sessionsListed = false
+	m.sessionsReady = listed
+	m.reloadUntil = time.Time{}
 	m.connectedAt = m.lastSeen
 	m.forgetOpenedLocked()     // a new connection has nothing of the hub's open yet
 	m.herdrAsked = time.Time{} // node.info just said; this node may answer herdr.server.status where the last did not
@@ -252,7 +347,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	}
 	onlineAt := time.Now()
 	rewatch := map[string]int{}
-	updates := false // listed: a queued update and a build check follow (below)
+	updates := false // a queued update and a build check follow a list, or an incompatible node's update-only connection
 	for id := range m.watched {
 		rewatch[id] = m.lastSeq[id]
 	}
@@ -277,7 +372,11 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	if c.via == viaHub {
 		where = "hub " + m.d.hubNameOf(p.hub)
 	}
-	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion)
+	trigger := c.trigger
+	if trigger == "" {
+		trigger = "first"
+	}
+	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s (trigger: %s)", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion, trigger)
 	m.tellLinks(true, "")
 	compat := compatOf(info)
 	if compat.Incompatible != "" {
@@ -312,15 +411,16 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 		var list struct {
 			Sessions []proto.Session `json:"sessions"`
 		}
-		revision := m.sessionsRevision()
+		snapshot := &sessionSnapshot{peer: c.peer, revision: m.sessionsRevision()}
 		if err := c.peer.Call(ctx, "sessions.list", map[string]any{}, &list); err == nil {
-			m.setInitialSessions(c.peer, revision, list.Sessions)
-			m.d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+			m.acceptSessionsList(snapshot, list.Sessions, true)
 			updates = true
 		}
 	} else {
 		rewatch = nil
+		updates = true // node.update.* stays available so this node can become compatible again
 	}
+	close(listed)
 	m.firstTried() // configured and listed: the calls that waited for it go now
 	if updates {
 		// A queued update goes on, and a node back on another build is given the one it should run (deploy_rpc.go,
@@ -684,19 +784,26 @@ func (m *Machine) unavailableWhy() string {
 }
 
 // claudeVersionRetry is how long the hub waits before asking a node again for its Claude version while node.info came
-// back without one; the last wait repeats until the connection ends.
-var claudeVersionRetry = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 30 * time.Minute, time.Hour}
+// back without one; the last wait repeats until the connection ends. Atomic: a test shortens it while another
+// test's connection may still be waiting.
+var claudeVersionRetry = func() *atomic.Pointer[[]time.Duration] {
+	var p atomic.Pointer[[]time.Duration]
+	waits := []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 30 * time.Minute, time.Hour}
+	p.Store(&waits)
+	return &p
+}()
 
 // retryClaudeVersion asks the node for node.info again until it reports a Claude version, then shows it (#542). The
 // node finds the version by running `claude --version` in a login shell, which fails now and then on connecting (the
 // machine just woke, a slow ~/.zshrc, Claude updating itself); asked only then, the machine showed no version until it
 // reconnected. A machine without Claude is asked again every hour while it stays connected.
 func (m *Machine) retryClaudeVersion(ctx context.Context, peer *rpc.Peer) {
+	waits := *claudeVersionRetry.Load()
 	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(claudeVersionRetry[min(i, len(claudeVersionRetry)-1)]):
+		case <-time.After(waits[min(i, len(waits)-1)]):
 		}
 		var info proto.NodeInfo
 		cctx, cancel := context.WithTimeout(ctx, 40*time.Second)
@@ -717,4 +824,27 @@ func (m *Machine) retryClaudeVersion(ctx context.Context, peer *rpc.Peer) {
 		}
 		return
 	}
+}
+
+// lastDrop is how a machine's last connection ended; zero before its first.
+type lastDrop struct {
+	at     time.Time
+	reason string
+	via    string
+}
+
+// trigger says why a connection made at now was made: the first, or a reconnect after the last one ended.
+func (d lastDrop) trigger(now time.Time) string {
+	if d.at.IsZero() {
+		return "first"
+	}
+	return fmt.Sprintf("reconnect after %s down; the %s connection ended: %s", now.Sub(d.at).Round(time.Second), d.via, d.reason)
+}
+
+// dropReason is why a connection ended, on one line.
+func dropReason(err error) string {
+	if err == nil {
+		return "ended"
+	}
+	return oneLineErr(err)
 }

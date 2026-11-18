@@ -11,7 +11,7 @@ Lifecycle writes use the extension's owning manager and extension ID together. T
 ## Sections, in order
 
 1. **Enabled** — the first control, before setup and configuration.
-2. **Extension configuration** — setup/sign-in, declared settings, secrets and capability-specific controls, followed by that configuration's Save action. If there are no configurable fields, show **No configuration required**.
+2. **Extension configuration** — setup/sign-in, declared settings, secrets and capability-specific controls, followed by that configuration's Save action. If there are no configurable fields, show **No configuration required** under the section's heading. Otherwise every group in it (Pages, Settings, a form's own groups, Secrets) has a heading of its own and the section's heading is not shown; the section keeps its name for assistive technology (#8853).
 3. **Information** — a read-only identity and provenance summary.
 4. **Updates** — update availability, manual checks/review, automatic upgrades and rollback history.
 5. **Danger zone** — uninstall, last on the page, with explicit confirmation.
@@ -34,7 +34,8 @@ Canonical English wording is listed below; each client localizes it through its 
 
 ### Extension configuration
 
-- Label: **Extension configuration**.
+- Label: **Extension configuration**, shown only over **No configuration required** (see above). The form's ungrouped fields are headed **Settings**.
+- The header's **Still needs** line opens the secret it names: the first one not set that is required or whose title the line contains (the hub writes a missing secret's own title into `needs_setup`). Anything else it names (a dependency, a configuration an upgrade no longer takes) stays plain text, as does the line where the page offers no secrets to set (a read-only extension) (#8853).
 - Authentication, a connection test, choosing a computer and additional module-specific controls belong here. These are not lifecycle controls.
 - Save applies only configuration; toggling Enabled or Auto-upgrade must not submit a dirty configuration form.
 - Never return a stored secret to the client. Show its saved state, provide an empty replacement input and preserve it when left unchanged. Configuration validation and authentication errors stay inside this section.
@@ -94,7 +95,7 @@ Both iOS and macOS route extension details through `apple/Persona/Views/Settings
 
 The shared route covers built-in, market-installed, locally installed, configured, development and attached extensions, including extensions added later. Connector/channel/bot business settings and market installation/consent pages are not substitute extension settings pages; their own business switches are unchanged.
 
-`ExtensionSettingsLifecycle` and `ExtensionSettingsPolicy` use existing manager-bound APIs. Checking refreshes only the selected market, validates that the market and extension are still available, and retains configuration drafts. Upgrade opens the existing permissions/dependency preview and requires final user confirmation. Global pause and the persisted per-extension automatic-upgrade preference are distinct. The Apple DTO now decodes the existing `attached` and `sandbox` payloads; an inactive requested sandbox remains visible. The hub's `kind` is a contribution category, not an execution runtime, so the Runtime row shows Not provided rather than relabeling that category. Local paths and arbitrary source URLs are not displayed as provenance.
+`ExtensionSettingsLifecycle` and `ExtensionSettingsPolicy` use existing manager-bound APIs. Checking refreshes only the selected market, validates that the market and extension are still available, and retains configuration drafts. Upgrade opens the existing permissions/dependency preview and requires final user confirmation. On a hub with `extension_operations`, **Review** previews as an operation, as the market page does (#3692): the request answers at once, the market page's operation card (`ExtensionOperationSection`) follows the download and checks right after Updates, with Cancel while it downloads and the reason plus Retry when it fails, Review stays disabled while it runs, and the Update sheet opens when the operation waits for consent; **Update** goes on with the same operation (the sheet closes at once and the card shows the install), closing the sheet without it cancels the operation. Every request names the extension's manager. A hub without operations still answers the preview synchronously, with a spinner until it does. Before this, a slow package download held one request until the phone's 120-second timeout, under a bare spinner. Global pause and the persisted per-extension automatic-upgrade preference are distinct. The Apple DTO now decodes the existing `attached` and `sandbox` payloads; an inactive requested sandbox remains visible. The hub's `kind` is a contribution category, not an execution runtime, so the Runtime row shows Not provided rather than relabeling that category. Local paths and arbitrary source URLs are not displayed as provenance.
 
 ### Existing API gaps (no server changes)
 

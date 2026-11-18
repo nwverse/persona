@@ -61,11 +61,13 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 	}
 	got := read("assistant")
 	for _, name := range got {
-		if !slices.Contains(p.ProviderIDs, "launcher."+name) {
+		// A machine-local configured wrapper is not in the global provider catalog; its setting is checked against
+		// the same current picker below and by TestAssistantLauncherSwitchUsesDefault.
+		if name != "configured-only" && !slices.Contains(p.ProviderIDs, "launcher."+name) {
 			t.Errorf("assistant picker offers %q without a compatible provider: %v", name, p.ProviderIDs)
 		}
 	}
-	for _, name := range []string{"claude", "fast", "codex", "direct-messages"} {
+	for _, name := range []string{"claude", "fast", "codex", "configured-only", "direct-messages"} {
 		if !slices.Contains(got, name) {
 			t.Errorf("supported launcher %q missing from %v", name, got)
 		}
@@ -82,7 +84,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 		t.Fatalf("get launcher: %+v", r)
 	}
 	text := r.Content[0].Text
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "direct-responses", "traex"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "direct-responses", "traex"} {
 		if strings.Contains(text, "- "+name+" ") {
 			t.Errorf("settings offers unsupported launcher %q: %s", name, text)
 		}
@@ -95,7 +97,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 }
 
 func TestAssistantLauncherRejectsUnsupported(t *testing.T) {
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "traex"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "traex"} {
 		t.Run(name, func(t *testing.T) {
 			s := assistantLauncherFixture(t)
 			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "old-model", Effort: "high"})
@@ -121,10 +123,10 @@ func TestAssistantLauncherRejectsUnsupported(t *testing.T) {
 }
 
 func TestAssistantLauncherSwitchUsesDefault(t *testing.T) {
-	for _, tc := range []struct{ name, model string }{{"fast", "fast-default"}, {"direct-messages", "direct-default"}} {
+	for _, tc := range []struct{ name, model string }{{"fast", "fast-default"}, {"configured-only", ""}, {"direct-messages", "direct-default"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := assistantLauncherFixture(t)
-			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "old-model", Effort: "high", Runtime: proto.AssistantRuntimeAgentSDK})
+			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "old-model", Effort: "high", ConfigDir: assistantConfigDirLegacy})
 			raw, _ := json.Marshal(tc.name)
 			change, err := s.setLauncher(context.Background(), raw)
 			if err != nil {
@@ -136,12 +138,12 @@ func TestAssistantLauncherSwitchUsesDefault(t *testing.T) {
 			if _, err := change.apply(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			want := ModelBinding{Provider: "launcher." + tc.name, Runtime: proto.AssistantRuntimeAgentSDK}
+			want := ModelBinding{Provider: "launcher." + tc.name, ConfigDir: assistantConfigDirLegacy}
 			if got := modelRecordOf(t, s, "assistant").Binding; got != want {
 				t.Errorf("launcher switch retained the old model or effort: got=%+v want=%+v", got, want)
 			}
 			p := purposeOf(t, s, "assistant")
-			if p.Effective.Provider != "launcher."+tc.name || p.Effective.Model != tc.model || p.Effective.Effort != "" || p.Effective.Runtime != proto.AssistantRuntimeAgentSDK {
+			if p.Effective.Provider != "launcher."+tc.name || p.Effective.Model != tc.model || p.Effective.Effort != "" || p.Effective.ConfigDir != assistantConfigDirLegacy {
 				t.Fatalf("purpose after launcher switch: %+v", p)
 			}
 			t.Logf("GET model-config/purposes/assistant: override=%+v effective=%+v", p.Override, p.Effective)
@@ -149,7 +151,7 @@ func TestAssistantLauncherSwitchUsesDefault(t *testing.T) {
 			if err := s.applyModel(context.Background(), "assistant", params); err != nil {
 				t.Fatal(err)
 			}
-			if params["launcher"] != tc.name || params["model"] != nil || params["effort"] != nil || params["runtime"] != proto.AssistantRuntimeAgentSDK {
+			if params["launcher"] != tc.name || params["model"] != nil || params["effort"] != nil || params["runtime"] != nil {
 				t.Fatalf("start parameters did not use the new launcher's defaults: %v", params)
 			}
 		})

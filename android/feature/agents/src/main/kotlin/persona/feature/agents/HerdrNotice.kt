@@ -11,11 +11,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
@@ -32,9 +30,11 @@ import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.HubGroups
 import persona.core.contracts.api.MachineManagement
 import persona.core.contracts.api.SessionsRepository
+import persona.core.domain.engines.Engines
 import persona.core.designsystem.JNotice
 import persona.core.designsystem.Status
 import persona.core.designsystem.failureReasonText
+import persona.core.designsystem.rememberCopy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -45,8 +45,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** The machine's engine is herdr as chosen: a machine with no terminal engine (empty host set) keeps `engine` herdr and is not. */
+internal val Machine.usesHerdr: Boolean get() = Engines.judged(this) in setOf("herdr", "herdr-both")
+
 internal fun Machine.herdrStopped(state: HerdrState?): Boolean =
-    online && engine in setOf("herdr", "herdr-both") && state?.known == true && !state.running
+    online && usesHerdr && state?.known == true && !state.running
 
 /**
  * Why a start failed, kept on the row until the next start (iOS `HerdrFailure`): [text] in words, [detail] the hub's own
@@ -106,7 +109,7 @@ internal class HerdrStarter(
 
     suspend fun refresh() {
         val before = generation
-        val machines = repository.machines.value.filter { it.online && it.engine in setOf("herdr", "herdr-both") && reachable(it.id) }
+        val machines = repository.machines.value.filter { it.online && it.usesHerdr && reachable(it.id) }
         val results = coroutineScope {
             machines.map { machine -> async {
                 try { machine.id to api.herdr(machine.id) }
@@ -161,7 +164,7 @@ internal fun HerdrNotice(machineName: String, starting: Boolean, onStart: () -> 
         )
         // "Didn't start: <why>" stays on the row until the next start (iOS HerdrNoticeRow); long press copies the hub's own words.
         if (!starting && failure != null) {
-            val clipboard = LocalClipboardManager.current
+            val copy = rememberCopy()
             var menu by remember { mutableStateOf(false) }
             val copyLabel = stringResource(R.string.agents_herdr_copy_detail)
             Text(stringResource(R.string.agents_herdr_failure, failure.text.resolve()), style = PersonaTheme.type.caption,
@@ -170,7 +173,7 @@ internal fun HerdrNotice(machineName: String, starting: Boolean, onStart: () -> 
                     .combinedClickable(onClick = {}, onLongClick = { menu = true }, onLongClickLabel = copyLabel)
                     .semantics { onLongClick(copyLabel) { menu = true; true } })
             if (menu) JActionSheet(listOf(JAction(copyLabel, icon = PhIcons.Copy, onClick = {
-                clipboard.setText(AnnotatedString(failure.detail))
+                copy(failure.detail, null)
             })), { menu = false })
         }
     }

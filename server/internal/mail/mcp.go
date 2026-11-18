@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -44,7 +45,7 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 			return proto.TextResult(err.Error(), true)
 		}
 		if len(accounts) == 0 {
-			return proto.TextResult("No mail accounts are configured. Ask the user to add one in the Persona app.", true)
+			return proto.TextResult(noAccounts, true)
 		}
 		var b strings.Builder
 		for _, a := range accounts {
@@ -53,23 +54,12 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 		return proto.TextResult(strings.TrimSpace(b.String()), false)
 
 	case ToolSearch:
-		var req struct {
-			AccountID string `json:"account_id"`
-			Mailbox   string `json:"mailbox"`
-			Query     string `json:"query"`
-			Limit     int    `json:"limit"`
-			BeforeUID uint32 `json:"before_uid"`
-		}
-		if err := json.Unmarshal(args, &req); err != nil {
-			return proto.TextResult("invalid arguments: "+err.Error(), true)
-		}
-		if req.Limit == 0 {
-			req.Limit = 20
-		}
-		res, err := s.ListMessages(ctx, ListOptions{
-			AccountID: req.AccountID, Mailbox: req.Mailbox, Query: req.Query, Limit: req.Limit, BeforeUID: req.BeforeUID,
-		})
+		res, err := s.search(ctx, args)
 		if err != nil {
+			var incomplete *IncompleteSearchError
+			if errors.As(err, &incomplete) {
+				return proto.TextResult(i18n.Localize(incomplete, i18n.From(ctx)), true)
+			}
 			return proto.TextResult(err.Error(), true)
 		}
 		var b strings.Builder
@@ -154,6 +144,29 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 		return res
 	}
 	return proto.TextResult("unknown tool "+name, true)
+}
+
+// noAccounts is mail_accounts' answer without an account.
+const noAccounts = "No mail accounts are configured. Ask the user to add one in the Persona app."
+
+// search runs mail_search: its arguments, at most 20 messages unless they say otherwise.
+func (s *Service) search(ctx context.Context, args json.RawMessage) (*ListResult, error) {
+	var req struct {
+		AccountID string `json:"account_id"`
+		Mailbox   string `json:"mailbox"`
+		Query     string `json:"query"`
+		Limit     int    `json:"limit"`
+		BeforeUID uint32 `json:"before_uid"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.Limit == 0 {
+		req.Limit = 20
+	}
+	return s.ListMessages(ctx, ListOptions{
+		AccountID: req.AccountID, Mailbox: req.Mailbox, Query: req.Query, Limit: req.Limit, BeforeUID: req.BeforeUID,
+	})
 }
 
 // CallRef is Call that also says the Message-ID of the mail mail_send handed to the transport (SendMessage, without the

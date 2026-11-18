@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -406,6 +407,9 @@ func (h *Hub) addComputer(ctx context.Context, mc *MachineConfig, owner, by stri
 // revokeComputer revokes every Persona Link credential of computer id and its pairing codes not used yet, closing what
 // they have open; how many credentials it revoked. A store that keeps no credentials has none to revoke.
 func (h *Hub) revokeComputer(ctx context.Context, id string) (int, error) {
+	if err := h.retireShareMachine(ctx, id); err != nil {
+		return 0, err
+	}
 	cr, _ := h.store.(credentialRevoker)
 	if cr == nil {
 		return 0, nil
@@ -421,9 +425,9 @@ func (h *Hub) revokeComputer(ctx context.Context, id string) (int, error) {
 }
 
 // siteURL is where this hub's build was published (the site serving install.sh: the config's publish.site_url, the
-// build's update URL without its dl/); "" when it was not (a local or Docker build).
+// update source without its dl/: the build's, or hub.json's update.url); "" when it was not (a local or Docker build).
 func (h *Hub) siteURL() string {
-	raw := strings.TrimRight(h.build.UpdateURL, "/")
+	raw := h.updateURL()
 	if raw == "" {
 		return ""
 	}
@@ -457,6 +461,9 @@ func (h *Hub) notifyComputerCode(by principal, machine string) {
 		h.logf("device %q (%s) made a pairing code for computer %q (push unavailable)", by.Name, by.ID, machine)
 		return
 	}
+	// This receipt goes through sendBuilt on purpose (no preference or push grading), so the daily counts record it
+	// explicitly: the hub's own pairing alerts are P0 and manager "".
+	h.push.recordSent(pushPolicy{level: assistantwire.LevelP0}, assistantwire.LevelP0, h.push.now())
 	h.push.sendBuilt(func(l i18n.Lang) map[string]any {
 		device := by.Name
 		if device == "" { // never the credential id: ids only go in `pair`

@@ -39,6 +39,11 @@ data class ExtensionManifest(
     val publisher: String? = null,
     val homepage: String? = null,
     /**
+     * Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+     * from packaged and runtime manifests for compatibility.
+     */
+    val icon: String? = null,
+    /**
      * What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
      * indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries
      * them instead.
@@ -83,6 +88,20 @@ data class ExtensionManifest(
      */
     val tools: List<ExtensionToolSpec>? = null,
     val auth: ExtensionAuthSpec? = null,
+    /**
+     * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+     * executable; writes and arbitrary command lines are not part of this contract.
+     */
+    @SerialName("host_integrations") val hostIntegrations: List<ExtensionHostIntegrationSpec>? = null,
+)
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+@Serializable
+data class ExtensionHostIntegrationSpec(
+    val id: String = "",
+    val version: String = "",
 )
 
 /**
@@ -371,8 +390,11 @@ data class ExtensionStoragePermission(
 data class ExtensionContributes(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
+    val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
@@ -392,6 +414,7 @@ data class ExtensionContributes(
     val tunnels: List<ExtensionTunnelItem>? = null,
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
+    @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
     /** Extra keys stay at this object's level on the wire; declared fields always win. */
     val additionalProperties: Map<String, JsonElement> = emptyMap(),
@@ -401,8 +424,11 @@ data class ExtensionContributes(
 private data class ExtensionContributesKnown(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
+    val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
@@ -422,12 +448,13 @@ private data class ExtensionContributesKnown(
     val tunnels: List<ExtensionTunnelItem>? = null,
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
+    @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
 )
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -438,8 +465,11 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
         return ExtensionContributes(
             connectors = fields.connectors,
             voice = fields.voice,
+            transcription = fields.transcription,
+            speech = fields.speech,
             computer = fields.computer,
             browser = fields.browser,
+            iphone = fields.iphone,
             quota = fields.quota,
             providers = fields.providers,
             api = fields.api,
@@ -459,6 +489,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             tunnels = fields.tunnels,
             errorReports = fields.errorReports,
             authRelay = fields.authRelay,
+            secretProviders = fields.secretProviders,
             messaging = fields.messaging,
             additionalProperties = obj.filterKeys { it !in keys },
         )
@@ -469,8 +500,11 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
         val fields = ExtensionContributesKnown(
             connectors = value.connectors,
             voice = value.voice,
+            transcription = value.transcription,
+            speech = value.speech,
             computer = value.computer,
             browser = value.browser,
+            iphone = value.iphone,
             quota = value.quota,
             providers = value.providers,
             api = value.api,
@@ -490,6 +524,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             tunnels = value.tunnels,
             errorReports = value.errorReports,
             authRelay = value.authRelay,
+            secretProviders = value.secretProviders,
             messaging = value.messaging,
         )
         val obj = output.json.encodeToJsonElement(known, fields) as JsonObject
@@ -499,16 +534,29 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 @Serializable
 data class ExtensionSkillItem(
     val id: String = "",
     /**
-     * The directory, relative to the package.
+     * The directory, relative to the package (or to the data directory with source data).
      */
     val dir: String = "",
+    val source: String? = null,
 )
+
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+object ExtensionContentSource {
+    const val PACKAGE = "package"
+    const val DATA = "data"
+    val ALL = listOf("package", "data")
+}
 
 /**
  * Values of PromptKind.
@@ -516,21 +564,36 @@ data class ExtensionSkillItem(
 object ExtensionPromptKind {
     const val INSTRUCTIONS = "instructions"
     const val QUICK = "quick"
-    val ALL = listOf("instructions", "quick")
+    const val PROJECT_CONTEXT = "project_context"
+    const val INBOX_CONTEXT = "inbox_context"
+    val ALL = listOf("instructions", "quick", "project_context", "inbox_context")
 }
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 @Serializable
 data class ExtensionPromptItem(
     val id: String = "",
     val kind: String = "",
+    val source: String? = null,
     /**
-     * instructions: the .md file.
+     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+     * file (1 KB used).
      */
     val file: String? = null,
+    /**
+     * project_context: the directory of <project slug>.md files (1.5 KB of each used).
+     */
+    val dir: String? = null,
+    /**
+     * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+     * checked, never in a prompt.
+     */
+    @SerialName("never_quote") val neverQuote: String? = null,
     /**
      * quick: what the apps show.
      */
@@ -745,6 +808,24 @@ data class ExtensionAuthRelayItem(
 )
 
 /**
+ * Secret values it supplies for references of its schemes (op://vault/item/field): the manager calls secrets.describe
+ * and secrets.resolve when a setting holds such a reference or the user approves handing one to an Agent run. Needs
+ * the program to speak the protocol. A scheme another installed extension claims fails the install.
+ */
+@Serializable
+data class ExtensionSecretProviderItem(
+    val id: String = "",
+    /**
+     * Whose secrets these are, in a few words (1Password): the settings say From <name>.
+     */
+    val name: String = "",
+    /**
+     * The reference schemes it resolves, without :// (op).
+     */
+    val schemes: List<String> = emptyList(),
+)
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -831,7 +912,7 @@ data class ExtensionConnectorItem(
 )
 
 /**
- * A contribution with only an id and a name: voice, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 @Serializable
 data class ExtensionNamedItem(
@@ -958,6 +1039,20 @@ data class ExtensionUIItem(
      * widget only: how often the widget is drawn again on its own (30 when not said).
      */
     @SerialName("refresh_minutes") val refreshMinutes: Int? = null,
+    /**
+     * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+     * l10n's groups.
+     */
+    val group: ExtensionUIGroup? = null,
+)
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+@Serializable
+data class ExtensionUIGroup(
+    val id: String = "",
+    val title: String = "",
 )
 
 @Serializable
@@ -1158,6 +1253,36 @@ data class ExtensionAuthPrompt(
 )
 
 /**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+@Serializable
+data class ExtensionSettingsCheckParams(
+    /**
+     * The whole configuration as it would be saved, the schema's defaults filled in.
+     */
+    val config: JsonElement = JsonNull,
+    val secrets: Map<String, String> = emptyMap(),
+    /**
+     * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+     * permissions.network names an address: requests sent through it reach the addresses this configuration names,
+     * its ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+     * ordinary proxy (an older hub sends none).
+     */
+    val proxy: String? = null,
+)
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+@Serializable
+data class ExtensionSettingsCheckResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+)
+
+/**
  * Values of HubRole.
  */
 object ExtensionHubRole {
@@ -1171,7 +1296,9 @@ object ExtensionHubRole {
  */
 object ExtensionHubCapability {
     const val INBOX_GROUP = "inbox_group"
-    val ALL = listOf("inbox_group")
+    const val INBOX_GROUP_STATE = "inbox_group_state"
+    const val TOOL_IMAGES = "tool_images"
+    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images")
 }
 
 /**
@@ -1403,6 +1530,10 @@ data class ExtensionUIPlace(
     val opens: String? = null,
     val badge: ExtensionBadge? = null,
     val connector: String? = null,
+    /**
+     * A nav_page's sidebar group, its title in the request's language (#9071).
+     */
+    val group: ExtensionUIGroup? = null,
 )
 
 @Serializable
@@ -1734,6 +1865,72 @@ data class ExtensionAuthRelayResult(
 )
 
 /**
+ * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
+ * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
+ * user approved it on the phone, id the variable's name, machine and session the Agent's).
+ */
+@Serializable
+data class ExtensionSecretPurpose(
+    val kind: String = "",
+    val id: String = "",
+    val machine: String? = null,
+    val session: String? = null,
+)
+
+/**
+ * secrets.describe's parameters: a reference of one of the contribution's schemes.
+ */
+@Serializable
+data class ExtensionSecretsDescribeParams(
+    val contribution: String = "",
+    val reference: String = "",
+)
+
+/**
+ * What secrets.describe answers: words for people (the item and field), never a value.
+ */
+@Serializable
+data class ExtensionSecretsDescribeResult(
+    val title: String = "",
+    val detail: String? = null,
+)
+
+/**
+ * secrets.resolve's parameters: the reference and what it is resolved for. Only the manager calls it.
+ */
+@Serializable
+data class ExtensionSecretsResolveParams(
+    val contribution: String = "",
+    val reference: String = "",
+    val purpose: ExtensionSecretPurpose = ExtensionSecretPurpose(),
+)
+
+/**
+ * What secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in, rate_limited
+ * (data.retry_after), refused.
+ */
+@Serializable
+data class ExtensionSecretsResolveResult(
+    val value: String = "",
+)
+
+/**
+ * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
+ * page shows. Never the value.
+ */
+@Serializable
+data class ExtensionSecretsUsedEvent(
+    val contribution: String = "",
+    val reference: String = "",
+    val purpose: ExtensionSecretPurpose = ExtensionSecretPurpose(),
+    val at: String = "",
+    /**
+     * settings (a reference saved in Settings), rule (an Always rule) or the approving device's id.
+     */
+    @SerialName("approved_by") val approvedBy: String? = null,
+)
+
+/**
  * extension_notification in an extension's alert push: whose it is, the page a tap opens (ui with state) and its
  * buttons (category ext.<extension>.<hash of the action ids>, registered by the app as it meets it).
  */
@@ -1767,6 +1964,15 @@ object ExtensionTextStyle {
     const val TITLE = "title"
     const val HEADLINE = "headline"
     val ALL = listOf("body", "secondary", "caption", "code", "title", "headline")
+}
+
+/**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+object ExtensionProgressStyle {
+    const val BAR = "bar"
+    const val RING = "ring"
+    val ALL = listOf("bar", "ring")
 }
 
 /**
@@ -1900,8 +2106,9 @@ object ExtensionPlatform {
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 object ExtensionNavIcon {
     const val PLUGIN = "plugin"
@@ -1948,6 +2155,7 @@ object ExtensionNavIcon {
     const val PAUSE = "pause"
     const val STOP = "stop"
     const val SPEAKER = "speaker"
+    const val MUSIC = "music"
     const val TV = "tv"
     const val PLUG = "plug"
     const val BATTERY = "battery"
@@ -1976,7 +2184,7 @@ object ExtensionNavIcon {
     const val REFRESH = "refresh"
     const val SHARE = "share"
     const val INFO = "info"
-    val ALL = listOf("plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info")
+    val ALL = listOf("plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info")
 }
 
 @Serializable
@@ -2018,6 +2226,18 @@ data class ExtensionSection(
     val items: List<ExtensionComponent> = emptyList(),
     val more: ExtensionMore? = null,
     val pane: String? = null,
+    val span: String? = null,
+    /**
+     * Drawn before the title.
+     */
+    val icon: String? = null,
+    @SerialName("icon_color") val iconColor: String? = null,
+    val link: ExtensionSectionLink? = null,
+    /**
+     * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a
+     * narrow screen and when absent. Other components keep the whole width.
+     */
+    val columns: Int? = null,
 )
 
 /**
@@ -2144,7 +2364,7 @@ data class ExtensionMetricComponent(
 ) : ExtensionComponent
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 @Serializable
 data class ExtensionProgressComponent(
@@ -2152,6 +2372,12 @@ data class ExtensionProgressComponent(
     val key: String? = null,
     val label: String = "",
     val ratio: Double = 0.0,
+    /**
+     * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring;
+     * other surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not
+     * accept this field.
+     */
+    val style: String? = null,
     val detail: String? = null,
     val tone: String? = null,
 ) : ExtensionComponent
@@ -2701,17 +2927,43 @@ data class ExtensionTile(
     val control: ExtensionRowControl? = null,
     val actions: List<ExtensionRowAction>? = null,
     val action: ExtensionAction? = null,
+    /**
+     * Draws the tile as a ring (UI version 9): never with an image or a spark.
+     */
+    val gauge: ExtensionGauge? = null,
+)
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+@Serializable
+data class ExtensionGauge(
+    /**
+     * How full the ring is, 0 to 1.
+     */
+    val ratio: Double = 0.0,
+    /**
+     * A short word under the value (USD, GB, h), as a control's unit.
+     */
+    val unit: String? = null,
+    val color: String? = null,
 )
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
 object ExtensionLayout {
     const val STACK = "stack"
     const val SPLIT = "split"
-    val ALL = listOf("stack", "split")
+    const val COLUMNS = "columns"
+    val ALL = listOf("stack", "split", "columns")
 }
 
 /**
@@ -2722,6 +2974,26 @@ object ExtensionPane {
     const val SIDE = "side"
     val ALL = listOf("main", "side")
 }
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+object ExtensionSectionSpan {
+    const val FULL = "full"
+    val ALL = listOf("full")
+}
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+@Serializable
+data class ExtensionSectionLink(
+    val title: String = "",
+    val action: ExtensionAction = ExtensionAction(),
+)
 
 /**
  * Values of FileStatus.

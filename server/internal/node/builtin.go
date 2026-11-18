@@ -15,23 +15,26 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/node/iphone"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // builtinPrograms are the built-in programs' ids (node.info's builtin_programs) and the prefix of their old method
 // names that legacyBuiltinCall answers ("" for imessage: its old names, connector.*, have a case of their own in
-// handle, and its methods keep those names over plugin.node.call, as the connector protocol has them).
-var builtinPrograms = map[string]string{"cua": "computer.", "ego": "browser.", "imessage": ""}
+// handle, and its methods keep those names over plugin.node.call, as the connector protocol has them; "" for iphone too:
+// it came after builtin_programs, so a node that has it is never asked by an old name).
+var builtinPrograms = map[string]string{"cua": "computer.", "ego": "browser.", "imessage": "", "iphone": ""}
 
 // builtinProgramIDs is builtin_programs, in a fixed order.
-var builtinProgramIDs = []string{"cua", "ego", "imessage"}
+var builtinProgramIDs = []string{"cua", "ego", "imessage", "iphone"}
 
 // errNoBuiltinMethod is a method the built-in program does not have.
 var errNoBuiltinMethod = errors.New("no such method")
 
 // builtinCall answers method of the built-in program id (cua: status, call, install, grant, cancel, clipboard, cursor,
-// nolock, lock; ego: status, install, open, cancel, call, cookies.list, cookies.import, cookies.clear).
+// nolock, lock; ego: status, install, open, cancel, call, cookies.list, cookies.import, cookies.clear; iphone: status,
+// call, pair, forget, cancel).
 // lcuCaller runs one computer.call on LCU, with the node's elicitations going to Persona's confirmation cards (lcu_mcp.go).
 type lcuCaller func(ctx context.Context, params json.RawMessage) (*proto.ComputerResult, error)
 
@@ -104,6 +107,20 @@ func builtinCall(ctx context.Context, id, method string, params json.RawMessage,
 			return browserCall(ctx, params)
 		case "cookies.list", "cookies.import", "cookies.clear": // sign-ins in ego's profile (browser_cookies.go)
 			return browserCookies(ctx, "browser."+method, params)
+		}
+	case "iphone":
+		switch method {
+		case "status": // the iPhones this computer reaches, asked only while the user has the extension on (iphone/)
+			return iphone.Status(ctx), nil
+		case "call":
+			return iphone.Call(ctx, params)
+		case "pair", "forget", "prepare": // background jobs; their state comes back with status
+			return iphone.Pair(ctx, method, params)
+		case "install": // the bridge itself, from the release's build the manager found (#8199)
+			return iphone.Install(ctx, params)
+		case "cancel":
+			iphone.Cancel()
+			return iphone.Status(ctx), nil
 		}
 	case "imessage":
 		switch method {

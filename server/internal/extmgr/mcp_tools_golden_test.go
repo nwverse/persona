@@ -11,6 +11,8 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/mail"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 // golden compares got with testdata/prompts/<name>.golden (UPDATE_GOLDEN=1 writes it; docs/assistant/prompts.md).
@@ -35,8 +37,8 @@ func golden(t *testing.T, name, got string) {
 	}
 }
 
-// The MCP tools of the manager's the hub offers (hubConnectorTools: the connectors', Cua's and ego's), as
-// they go over the wire (the golden is indented for reading). The hub lists them with its own (its mcp_tools golden):
+// The MCP tools of the manager's the hub offers (hubConnectorTools: the connectors', Cua's, ego's and the
+// subscriptions'), as they go over the wire (the golden is indented for reading). The hub lists them with its own (its mcp_tools golden):
 // tools for every agent, assistant_tools after the assistant's own.
 func TestGoldenConnectorTools(t *testing.T) {
 	h := newTestManager(t)
@@ -50,10 +52,20 @@ func TestGoldenConnectorTools(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var wire struct {
+			Tools          []proto.Tool `json:"tools"`
+			AssistantTools []proto.Tool `json:"assistant_tools"`
+		}
+		if err := json.Unmarshal(b, &wire); err != nil {
+			t.Fatal(err)
+		}
+		assertNoEmptyToolEnums(t, append(wire.Tools, wire.AssistantTools...))
 		return string(b) + "\n"
 	}
 	h.mail = (*mail.Service)(nil) // Tools() reads nothing from the service
-	register := func() {          // the connectors as the manager registers them (mail's and Feishu's tools come from them)
+	// Subscriptions run in every manager: their tools are the assistant's (subscription_tools.go).
+	h.subs = subscriptions.New(subscriptions.Options{Store: subscriptions.NewMemStore(), Connectors: subscriptionConnectors{h}})
+	register := func() { // the connectors as the manager registers them (mail's and Feishu's tools come from them)
 		h.connectors = connector.NewRegistry(nil)
 		h.registerConnectors()
 	}
@@ -97,4 +109,57 @@ type signedInGitHub struct{ *github.Connector }
 
 func (signedInGitHub) Status(context.Context) connector.Status {
 	return connector.Status{State: connector.StateOK}
+}
+
+func assertNoEmptyToolEnums(t *testing.T, tools []proto.Tool) {
+	t.Helper()
+	var walk func(node any, path string)
+	walk = func(node any, path string) {
+		obj, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		if raw, has := obj["enum"]; has {
+			vals, ok := raw.([]any)
+			if !ok || len(vals) == 0 {
+				t.Errorf("%s.enum must be a non-empty array, got %#v", path, raw)
+			}
+			for _, v := range vals {
+				if s, ok := v.(string); ok && s == "" {
+					t.Errorf(`%s.enum contains an empty string ""`, path)
+				}
+			}
+		}
+		for k, v := range obj {
+			switch k {
+			case "enum":
+				continue
+			case "properties", "$defs", "definitions", "patternProperties":
+				if m, ok := v.(map[string]any); ok {
+					for ck, cv := range m {
+						walk(cv, path+"."+k+"."+ck)
+					}
+				}
+			default:
+				switch x := v.(type) {
+				case map[string]any:
+					walk(x, path+"."+k)
+				case []any:
+					for _, item := range x {
+						walk(item, path+"."+k+"[]")
+					}
+				}
+			}
+		}
+	}
+	for _, tl := range tools {
+		if len(tl.InputSchema) == 0 {
+			continue
+		}
+		var schema any
+		if err := json.Unmarshal(tl.InputSchema, &schema); err != nil {
+			t.Fatalf("%s: invalid input_schema: %v", tl.Name, err)
+		}
+		walk(schema, tl.Name)
+	}
 }

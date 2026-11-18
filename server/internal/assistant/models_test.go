@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -204,15 +205,19 @@ func TestModelConfigurationPreservesLegacyBaselines(t *testing.T) {
 			t.Errorf("%s: %+v %v", id, b, err)
 		}
 	}
-	if err := s.putSetting(ctx, modelKey(purposeLarkAgent), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.claude" {
-		t.Fatal("deprecated use override still applied")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if err := s.putSetting(ctx, modelKey(id), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.claude" {
+			t.Fatalf("%s: deprecated use override still applied", id)
+		}
 	}
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.new"})
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.new" {
-		t.Fatal("category selection did not reach the slash agent")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.new" {
+			t.Fatalf("%s: category selection did not reach it", id)
+		}
 	}
 	// manager.json's inbox.agent.machine (the hub has it) is where the AI twin runs.
 	f.hello.Models.InboxAgentMachine = "server"
@@ -490,16 +495,25 @@ func TestFourModelCategoriesCatalog(t *testing.T) {
 	ids := []string{}
 	for _, p := range catalog.Purposes {
 		ids = append(ids, p.ID)
-		if p.ID == purposeLarkAgent {
+		if agentsOverride(p.ID) {
 			if p.CategoryID != "agent.new" || p.Parent != "agent.new" || len(p.Fields) == 0 {
-				t.Fatalf("Lark /agent missing independent editor: %+v", p)
+				t.Fatalf("%s missing independent editor: %+v", p.ID, p)
+			}
+		} else if p.ID == purposeSupervise || p.ID == purposeMeetingRoom {
+			if p.CategoryID != "assistant" || p.Parent != "assistant" || p.Launch != "headless" || len(p.Uses) != 0 || len(p.Fields) == 0 {
+				t.Fatalf("%s missing independent editor: %+v", p.ID, p)
+			}
+		} else if p.ID == purposeMeetingMinutes {
+			if p.CategoryID != "kb" || p.Parent != "kb" || p.Launch != "" || len(p.Uses) != 0 || len(p.Fields) == 0 {
+				t.Fatalf("%s missing independent editor: %+v", p.ID, p)
 			}
 		} else if p.CategoryID != p.ID || len(p.Uses) == 0 || len(p.Fields) == 0 {
 			t.Fatalf("category missing scope or editor: %+v", p)
 		}
 	}
-	if !reflect.DeepEqual(ids, modelConfigIDs) {
-		t.Fatalf("catalog is not the ordered categories and Lark /agent: %v", ids)
+	want := []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate", purposeAgent, purposeLarkAgent, purposeSupervise, purposeMeetingRoom, purposeMeetingMinutes}
+	if !reflect.DeepEqual(ids, want) || !reflect.DeepEqual(ids, modelConfigIDs) {
+		t.Fatalf("catalog is not the ordered categories, the AI twin, Lark /agent, the background supervisor and the two meeting purposes: %v", ids)
 	}
 }
 
@@ -511,14 +525,14 @@ func TestModelUsesAreReadOnlyAndIgnoreDeprecatedOverrides(t *testing.T) {
 		"assistant":    {Provider: "launcher.conversation", Model: "conversation", Effort: "high"},
 		"agent.new":    {Provider: "launcher.agent", Model: "agent", Effort: "xhigh"},
 		"kb":           {Provider: "legacy.kb", Model: "processing"},
-		"inbox.triage": {Provider: "legacy.triage", Model: "screening"},
+		"inbox.triage": {Provider: "legacy.triage", Model: "screening", Effort: "off"},
 	}
 	for id, binding := range bindings {
 		setModel(t, s, id, binding)
 	}
 	ids := []string{}
 	for _, p := range modelPurposes {
-		if p.Parent != "" && p.ID != purposeLarkAgent {
+		if p.Parent != "" && !ownModelRecord(p.ID) { // the uses with a record of their own are set apart on purpose
 			ids = append(ids, p.ID)
 		}
 	}
@@ -790,7 +804,7 @@ func TestLaunchersListHideRestoreDelete(t *testing.T) {
 	}
 	picker, _ := s.machineLaunchers(ctx, "laptop")
 	if fmt.Sprint(picker) != fmt.Sprint([]proto.Launcher{{Name: "work", Source: "zshrc"}, {Name: "claude-demo", BaseURL: "https://gw2.example.com", Source: "path"},
-		{Name: "mine", BaseURL: "https://gw.example.com", Model: "m", Source: "persona"}}) {
+		{Name: "mine", BaseURL: "https://gw.example.com", Model: "m", Source: "persona", Pi: true}}) {
 		t.Fatalf("picker: %+v", picker)
 	}
 	if rec := request(s, "POST", "/api/v1/launchers/alpha/restore", ""); rec.Code != 200 || slicesContain(s.hiddenLaunchers(ctx), "alpha") {
@@ -809,6 +823,59 @@ func TestLaunchersListHideRestoreDelete(t *testing.T) {
 	f.mu.Unlock()
 	if given == nil || len(given) != 0 {
 		t.Fatalf("the nodes are told it went: %+v", given)
+	}
+}
+
+// Automatic selection is not a user's assignment: deleting its provider leaves the next automatic pick, while an
+// explicit choice still protects the provider underneath it (#3198).
+func TestAutomaticProviderDeletionDoesNotCountAsExplicitUse(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "first", Kind: "api", BaseURL: "https://api.example.com", Model: "first-model"}, KeySealed: key},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "second", Kind: "api", BaseURL: "https://api.example.com", Model: "second-model"}, KeySealed: key})
+	ctx := context.Background()
+	for _, id := range []string{"kb", "inbox.triage", "agent.delegate"} {
+		p := purposeOf(t, s, id)
+		if p.Override != (ModelBinding{}) || p.Effective.Provider != "launcher.first" {
+			t.Fatalf("%s did not start on the automatic provider: %+v", id, p)
+		}
+	}
+	if rec := request(s, http.MethodDelete, "/api/v1/launchers/first", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"deleted":true`) {
+		t.Fatalf("automatic selection blocked deletion: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{"kb", "inbox.triage", "agent.delegate"} {
+		if b, err := s.resolveModel(ctx, id); err != nil || b.Provider != "launcher.second" {
+			t.Fatalf("%s did not move to the next automatic provider: %+v %v", id, b, err)
+		}
+	}
+	setModel(t, s, "kb", ModelBinding{Provider: "launcher.second"})
+	use := purposeOf(t, s, "kb").Name
+	if rec := request(s, http.MethodDelete, "/api/v1/launchers/second", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), use) {
+		t.Fatalf("an explicit provider was not protected: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// When only one provider is eligible, deleting it leaves automatic API categories with no model, so deletion is
+// still refused with 409 Conflict naming the affected purposes.
+func TestDeletingLastAutomaticProviderStillProtectsBuiltinPurposes(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "only", Kind: "api", BaseURL: "https://api.example.com", Model: "only-model"}, KeySealed: key})
+	p := purposeOf(t, s, "kb")
+	if p.Effective.Provider != "launcher.only" {
+		t.Fatalf("kb did not start on the automatic provider: %+v", p)
+	}
+	rec := request(s, http.MethodDelete, "/api/v1/launchers/only", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), p.Name) {
+		t.Fatalf("deleting the last automatic provider was not protected: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -839,7 +906,9 @@ func TestANodeThatReconnectsGetsTheManagedLaunchers(t *testing.T) {
 func TestLauncherHTTPSendsWithTheKey(t *testing.T) {
 	s, _, _ := modelService(t)
 	ctx := context.Background()
+	var gotAgent, gotProviderHeader string
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAgent, gotProviderHeader = r.UserAgent(), r.Header.Get("X-Provider")
 		if r.Header.Get("Authorization") != "Bearer sk-gw" {
 			http.Error(w, "bad key", http.StatusUnauthorized)
 			return
@@ -848,7 +917,8 @@ func TestLauncherHTTPSendsWithTheKey(t *testing.T) {
 	}))
 	defer gw.Close()
 	key, _ := s.sealKey("sk-gw")
-	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: gw.URL, Model: "m"}, KeySealed: key})
+	headers, _ := s.sealKey("User-Agent: provider/1\nX-Provider: private")
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: gw.URL, Model: "m"}, KeySealed: key, HeadersSealed: headers})
 	out, err := s.launcherHTTP(ctx, "gw", "", nil)
 	if err != nil || fmt.Sprint(out) != "map[base_url:"+gw.URL+" machine:]" {
 		t.Fatalf("%v %v", out, err)
@@ -857,6 +927,13 @@ func TestLauncherHTTPSendsWithTheKey(t *testing.T) {
 	resp, _ := out.(quota.Response)
 	if err != nil || resp.Status != 200 || strings.Contains(resp.Body, "sk-gw") || !strings.Contains(resp.Body, quota.KeyPlaceholder) {
 		t.Fatalf("%+v %v", out, err)
+	}
+	if gotAgent != modelhttp.UserAgent() || gotProviderHeader != "" {
+		t.Fatalf("quota inherited provider headers: User-Agent %q, X-Provider %q", gotAgent, gotProviderHeader)
+	}
+	_, err = s.launcherHTTP(ctx, "gw", "", &quota.Request{URL: "/me", Headers: map[string]string{"Authorization": "Bearer " + quota.KeyPlaceholder, "User-Agent": "plugin/1"}})
+	if err != nil || gotAgent != "plugin/1" || gotProviderHeader != "" {
+		t.Fatalf("quota plugin headers: User-Agent %q, X-Provider %q, error %v", gotAgent, gotProviderHeader, err)
 	}
 	var re *rpc.Error
 	if _, err := s.launcherHTTP(ctx, "zshrc-one", "", nil); !errors.As(err, &re) || re.Code != assistantwire.CodeNoLauncher {
@@ -1062,6 +1139,30 @@ func mustManagedForNodes(t *testing.T, s *Service, ctx context.Context) []proto.
 	return list
 }
 
+func TestAskLauncherModelsAddsOnlyExactCatalogPrices(t *testing.T) {
+	s, f, _ := modelService(t)
+	own := &proto.ModelPrice{Input: 9, Output: 99}
+	f.agentModels = map[string][]proto.AgentModel{"relay": {
+		{ID: "opus", Resolved: "claude-opus-5-5"},
+		{ID: "other-alias", Resolved: "claude-opus-5-5", Price: own},
+		{ID: "claude-opus-5-6", Price: own},
+		{ID: "private-model", Price: &proto.ModelPrice{Input: 4}},
+	}}
+	res, err := s.askLauncherModels(context.Background(), "server", "relay", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Models) != 4 || res.Models[0].Price == nil || res.Models[0].Price.Input != 4 || res.Models[0].Price.Output != 20 {
+		t.Fatalf("exact model price: %+v", res.Models)
+	}
+	if got := res.Models[1].Price; got == own || got == nil || got.Input != 4 || got.Output != 20 {
+		t.Fatalf("an external price survived or replaced the exact reference price: %+v", res.Models)
+	}
+	if res.Models[2].Price != nil || res.Models[3].Price != nil {
+		t.Fatalf("an inherited or unknown model kept or gained a non-catalog price: %+v", res.Models)
+	}
+}
+
 // A managed provider's own models are listed after Claude Code's /model entries (which already resolve to some of them)
 // and count for a send's check: one picked in "New Agent" is not dropped.
 func TestProviderModelsListedAndCountForTheSendCheck(t *testing.T) {
@@ -1088,5 +1189,63 @@ func TestProviderModelsListedAndCountForTheSendCheck(t *testing.T) {
 	}
 	if s.launcherHasModel(context.Background(), "server", "relay", "gw/gone") {
 		t.Fatal("a model in no list")
+	}
+}
+
+func TestTriageDefaultEffortIsOffAndHonoursMessagesAPI(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+
+	b, err := s.resolveModel(ctx, "inbox.triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Effort != "off" {
+		t.Fatalf("expected triage default effort off, got %q", b.Effort)
+	}
+
+	key, err := s.sealKey("test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "anthropic", Kind: "api", API: "messages", BaseURL: "https://api.anthropic.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		},
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "other", Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		})
+
+	p := purposeOf(t, s, "inbox.triage")
+	if !slices.Contains(p.Fields, "effort") {
+		t.Fatalf("expected Fields to include effort, got %v", p.Fields)
+	}
+
+	r := modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"provider":"launcher.other"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("select Messages provider: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Provider != "launcher.other" || b.Effort != "off" {
+		t.Fatalf("provider-only selection must keep triage's default off: %+v, %v", b, err)
+	}
+	cfg, err := s.apiConfig(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReasoningEffort != "off" {
+		t.Fatalf("expected apiConfig ReasoningEffort to be off, got %q", cfg.ReasoningEffort)
+	}
+
+	p = purposeOf(t, s, "inbox.triage")
+	r = modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"effort":"low"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("save Messages effort: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Effort != "low" {
+		t.Fatalf("explicit Messages effort was not preserved: %+v, %v", b, err)
 	}
 }

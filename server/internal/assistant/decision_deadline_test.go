@@ -171,13 +171,19 @@ func TestTaskReviewDeadlineArguments(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{map[string]any{"verdict": "needs_user", "recommend": "A", "deadline": "2h"}, "reversible"},
-		{map[string]any{"verdict": "needs_user", "deadline": "2h", "reversible": true}, "recommend"},
+		{map[string]any{"verdict": "needs_user", "reason": "A 还是 B", "recommend": "A", "deadline": "2h"}, "reversible"},
+		{map[string]any{"verdict": "needs_user", "reason": "A 还是 B", "deadline": "2h", "reversible": true}, "recommend"},
 		{map[string]any{"verdict": "accepted", "deadline": "2h", "reversible": true}, "needs_user only"},
-		{map[string]any{"verdict": "needs_user", "recommend": "A", "deadline": "soon", "reversible": true}, "duration"},
-		{map[string]any{"verdict": "needs_user", "recommend": "A", "deadline": "10s", "reversible": true}, "between"},
+		{map[string]any{"verdict": "needs_user", "reason": "A 还是 B", "recommend": "A", "deadline": "soon", "reversible": true}, "duration"},
+		{map[string]any{"verdict": "needs_user", "reason": "A 还是 B", "recommend": "A", "deadline": "10s", "reversible": true}, "between"},
+		// One that cannot be undone, or that others will see, is never taken by default (#3804).
+		{map[string]any{"verdict": "needs_user", "reason": "A 还是 B", "recommend": "A", "deadline": "2h", "reversible": true,
+			"why_owner": "irreversible"}, "never taken by default"},
+		{map[string]any{"verdict": "needs_user", "reason": "A 还是 B", "recommend": "A", "deadline": "2h", "reversible": true,
+			"why_owner": "visible_to_others"}, "never taken by default"},
 	} {
 		tc.args["todo_id"] = todo.ID
+		asDecision(tc.args)
 		raw, _ := json.Marshal(tc.args)
 		if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: error %v, want one about %q", tc.args, err, tc.want)
@@ -355,6 +361,12 @@ func TestIrreversibleAskUserIsOnlyReminded(t *testing.T) {
 	}
 	if n := pushes() - before; n != 1 {
 		t.Fatalf("%d reminders, want 1", n)
+	}
+	e.f.mu.Lock()
+	last := e.f.pushes[len(e.f.pushes)-1]
+	e.f.mu.Unlock()
+	if last.Level != "P0" || !strings.HasPrefix(last.RelatedKey, "ask-overdue:") {
+		t.Fatalf("an overdue decision of the owner's is P0: level %q key %q", last.Level, last.RelatedKey)
 	}
 	e.s.sweepDecisionDeadlines(time.Now().Add(48 * time.Hour))
 	if n := pushes() - before; n != 1 {

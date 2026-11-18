@@ -22,9 +22,7 @@ vi.mock("../../../lib/panel", async (importOriginal) => ({ ...await importOrigin
 vi.mock("../../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }), PersonaAvatar: () => null }));
 vi.mock("../../assistant/AssistantChat", () => ({
   AssistantFace: () => null,
-  AssistantLauncherChip: () => null,
   CompactionStrip: () => null,
-  StarterLauncherChip: () => null,
   useAssistantMenu: () => ({ items: [], dialogs: null }),
 }));
 // The new-conversation page's setup checks: ready, as a hub without readiness reports it. A refused start still shows
@@ -40,7 +38,7 @@ vi.mock("../../assistant/Tasks", () => ({
   FeedLineView: () => null,
   QuickResultCard: () => null,
   RouteChip: () => null,
-  AssistantActionBar: ({ ownPending }: { ownPending?: import("react").ReactNode }) => ownPending,
+  AssistantActionBar: () => null,
   TaskDock: () => null,
   TaskQuestions: () => null,
 }));
@@ -53,6 +51,8 @@ const { PersonaAssistant } = await import("../../PersonaAssistant");
 const { navigate, useRoute } = await import("../../../lib/router");
 const { resetOutboxClaimsForTests } = await import("../../../lib/outbox");
 const { resetStalePullsForTests } = await import("../useTranscript");
+const { loadPages } = await import("../../../lib/lazy-page");
+await loadPages();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtures/sync/*.json", { eager: true, import: "default" });

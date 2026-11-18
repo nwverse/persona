@@ -17,12 +17,14 @@ import (
 func TestProviderProtocolProbe(t *testing.T) {
 	for _, api := range []string{"messages", "responses", "chat"} {
 		t.Run(api, func(t *testing.T) {
-			var gotPath string
+			var gotPath, gotKey string
 			var payload map[string]any
 			gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotPath = r.URL.Path
-				if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer "+fakeKey {
-					t.Errorf("method or auth: %s %q", r.Method, r.Header.Get("Authorization"))
+				gotPath, gotKey = r.URL.Path, r.Header.Get("x-api-key")
+				// Responses and Chat Completions send Bearer alone; a Messages probe's header depends on its auth.
+				if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/messages") &&
+					(r.Header.Get("Authorization") != "Bearer "+fakeKey || gotKey != "") {
+					t.Errorf("method or auth: %s %q %q", r.Method, r.Header.Get("Authorization"), gotKey)
 				}
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Error(err)
@@ -75,8 +77,9 @@ func TestProviderProtocolProbe(t *testing.T) {
 				if out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{Name: "resp"}); out["ok"] != true || gotPath != "/team/v1/responses" {
 					t.Fatalf("stored: %v %s %s", out, gotPath, body)
 				}
-				if out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{Name: "resp", API: "messages"}); out["ok"] != true || gotPath != "/team/v1/messages" {
-					t.Fatalf("override: %v %s", out, gotPath)
+				// Tested as Messages it sends what the stored method (empty: x-api-key) would launch with.
+				if out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{Name: "resp", API: "messages"}); out["ok"] != true || gotPath != "/team/v1/messages" || gotKey != fakeKey {
+					t.Fatalf("override: %v %s %q", out, gotPath, gotKey)
 				}
 			}
 		})
@@ -164,6 +167,10 @@ func TestProviderDiscoveryPaginationAndWindows(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			calls := 0
 			gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/prefix/v1/model-capabilities" { // asked once the list is read; none here
+					http.NotFound(w, r)
+					return
+				}
 				calls++
 				if r.URL.Path != "/prefix/v1/models" {
 					t.Errorf("path: %s", r.URL.Path)
@@ -338,7 +345,13 @@ func TestChatLauncherValidation(t *testing.T) {
 }
 
 func TestChatProviderDiscovery(t *testing.T) {
+	var report string
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/prefix/v1/model-capabilities" { // the report about the protocol the provider speaks
+			report = r.URL.RawQuery + "|" + r.Header.Get("Authorization")
+			http.NotFound(w, r)
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/prefix/v1/models" || r.Header.Get("Authorization") != "Bearer "+fakeKey {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -350,5 +363,8 @@ func TestChatProviderDiscovery(t *testing.T) {
 	models, ok := out["models"].([]proto.ProviderModel)
 	if !ok || out["error"] != nil || len(models) != 1 || models[0].ID != "local-model" || models[0].ContextWindow != 32000 {
 		t.Fatalf("%v", out)
+	}
+	if report != "protocol=chat_completions|Bearer "+fakeKey {
+		t.Fatalf("capability report asked as %q", report)
 	}
 }

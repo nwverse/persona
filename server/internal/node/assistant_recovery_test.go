@@ -15,19 +15,20 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A provider refusal after assistant.send returned must not end the conversation without the one bounded same-model
-// retry the owner asked for (#3204). The fake CLI is the real node process/stream-json seam, not a model call.
-func TestAssistantRefusalRetriesOnceOnTheSameModel(t *testing.T) {
-	f := sdkTest(t)
-	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+// A transient model failure after assistant.send returned must not end the conversation without the one bounded
+// same-model retry the owner asked for (#3204); a Claude safeguards refusal skips it (#4283,
+// TestAssistantClaudeRefusalSwitchesAtOnce). The fake CLI is the real node process/stream-json seam, not a model call.
+func TestAssistantTransientErrorRetriesOnceOnTheSameModel(t *testing.T) {
+	f := cliTest(t)
+	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
   case "$line" in *'"type":"user"'*)
-    printf '%s\n' "$line" >> "$SDK_FAKE_DIR/user.jsonl"
-    count=$(cat "$SDK_FAKE_DIR/refusals" 2>/dev/null || echo 0)
+    printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
+    count=$(cat "$CLI_FAKE_DIR/refusals" 2>/dev/null || echo 0)
     if [ "$count" -eq 0 ]; then
-      echo 1 > "$SDK_FAKE_DIR/refusals"
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+      echo 1 > "$CLI_FAKE_DIR/refusals"
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
     else
       echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
       echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered"}},"parent_tool_use_id":null}'
@@ -43,7 +44,7 @@ done
 	if err != nil {
 		t.Fatal(err)
 	}
-	sdkWait(t, "the same conversation to retry after its refusal", func() bool {
+	cliWait(t, "the same conversation to retry after its refusal", func() bool {
 		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 2
 	})
 	if got := f.file("user.jsonl"); strings.Count(got, "original request") != 1 {
@@ -55,9 +56,80 @@ done
 	}
 }
 
-func TestAssistantRefusalThenUsesTheNextLauncherModel(t *testing.T) {
-	f := sdkTest(t)
-	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+// The user's model is not automatically a bad configuration: a gateway can call a model that answered moments ago
+// missing. The real process/stream-json seam retries it once, without repeating the owner's message (#5234).
+func TestAssistantTransientErrorRetriesAModelThatJustAnswered(t *testing.T) {
+	f := cliTest(t)
+	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+echo '{"type":"system","subtype":"init"}'
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*)
+    printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
+    count=$(cat "$CLI_FAKE_DIR/failures" 2>/dev/null || echo 0)
+    if [ "$count" -eq 0 ]; then
+      echo 1 > "$CLI_FAKE_DIR/failures"
+      echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+      echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"first answer"}},"parent_tool_use_id":null}'
+      printf '{"type":"assistant","uuid":"first","timestamp":"2026-11-10T00:00:00Z","message":{"role":"assistant","model":"primary-model","content":[{"type":"text","text":"first answer"}]}}\n' >> "$CLI_FAKE_DIR/transcript.jsonl"
+      echo '{"type":"result","subtype":"success","is_error":false,"result":"first answer"}'
+    elif [ "$count" -eq 1 ]; then
+      echo 2 > "$CLI_FAKE_DIR/failures"
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"There is an issue with the selected model (primary-model). It may not exist or you may not have access to it."}'
+    else
+      echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+      echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"recovered answer"}},"parent_tool_use_id":null}'
+      printf '{"type":"assistant","uuid":"recovered","timestamp":"2026-11-10T00:01:00Z","message":{"role":"assistant","model":"primary-model","content":[{"type":"text","text":"recovered answer"}]}}\n' >> "$CLI_FAKE_DIR/transcript.jsonl"
+      echo '{"type":"result","subtype":"success","is_error":false,"result":"recovered answer"}'
+    fi ;;
+  esac
+done
+`
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\n"+script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "original request", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	f.n.setPath(id, filepath.Join(f.dir, "transcript.jsonl"))
+	if _, err := f.n.assistantSend(context.Background(), id, t.TempDir(), "claude", "next request", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	got := f.file("user.jsonl")
+	if strings.Count(got, "next request") != 1 {
+		t.Fatalf("the owner's message was not sent exactly once: %s", got)
+	}
+	var retryText string
+	for _, raw := range strings.Split(strings.TrimSpace(got), "\n") {
+		var line struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range line.Message.Content {
+			if strings.Contains(block.Text, "因模型服务的一次临时错误中断") {
+				retryText = block.Text
+			}
+		}
+	}
+	if retryText != prompts.RenderModelRetry() {
+		t.Fatalf("a transient model route did not use the retry prompt: %s", got)
+	}
+	if p := f.proc(id); p == nil || p.replyModel != "primary-model" || p.repliedAt.IsZero() {
+		t.Fatalf("the recovered model did not answer: %+v", p)
+	}
+}
+
+func TestAssistantFailureThenUsesTheNextLauncherModel(t *testing.T) {
+	f := cliTest(t)
+	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
 echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
 model=primary-model
@@ -67,18 +139,18 @@ while IFS= read -r line; do
     *'"subtype":"initialize"'*)
       echo '{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[{"value":"default","displayName":"Default"},{"value":"primary-model","resolvedModel":"primary-model","displayName":"Primary"},{"value":"fallback-model","resolvedModel":"fallback-model","displayName":"Fallback"}]}}}' ;;
     *'"type":"user"'*)
-      printf '%s\n' "$line" >> "$SDK_FAKE_DIR/user.jsonl"
-      count=$(cat "$SDK_FAKE_DIR/attempts" 2>/dev/null || echo 0)
+      printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
+      count=$(cat "$CLI_FAKE_DIR/attempts" 2>/dev/null || echo 0)
       count=$((count+1))
-      echo "$count" > "$SDK_FAKE_DIR/attempts"
+      echo "$count" > "$CLI_FAKE_DIR/attempts"
       if [ "$count" -le 2 ]; then
         if [ "$count" -eq 2 ]; then
           echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
         fi
-        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
       else
         printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
-        printf '{"type":"assistant","uuid":"final","timestamp":"2026-11-10T00:00:00Z","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"answered by fallback"}]}}\n' "$model" >> "$SDK_FAKE_DIR/transcript.jsonl"
+        printf '{"type":"assistant","uuid":"final","timestamp":"2026-11-10T00:00:00Z","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"answered by fallback"}]}}\n' "$model" >> "$CLI_FAKE_DIR/transcript.jsonl"
         echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
         echo '{"type":"result","subtype":"success","is_error":false,"result":"answered by fallback"}'
       fi ;;
@@ -95,7 +167,7 @@ done
 	f.n.mu.Lock()
 	f.n.paths[id] = filepath.Join(f.dir, "transcript.jsonl")
 	f.n.mu.Unlock()
-	sdkWait(t, "the second refusal to resume on the next launcher model", func() bool {
+	cliWait(t, "the second refusal to resume on the next launcher model", func() bool {
 		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 3
 	})
 	f.idle(t, id)
@@ -110,6 +182,93 @@ done
 	}
 	if got := f.file("user.jsonl"); strings.Count(got, "original request") != 1 {
 		t.Fatalf("the original user message was repeated: %s", got)
+	}
+}
+
+// A recovery resend is the node continuing the failed turn, not a message the user sent while it answered. The recovery
+// holds the failed turn busy, but neither its same-model retry to the running process nor the resend to the next
+// model's new process carries the mid-turn note, and neither moves foreground work to the background, even when the
+// conversation's messages carry interject_background (the setting on) and its Claude Code takes background_tasks
+// (#10178). The fake CLI is the real node process/stream-json seam, not a model call.
+func TestAssistantRecoveryResendIsNoInterjection(t *testing.T) {
+	f := cliTest(t)
+	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+echo '{"type":"system","subtype":"init","claude_code_version":"2.1.322"}'
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
+model=primary-model
+case "$*" in *'--model fallback-model'*) model=fallback-model ;; esac
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CLI_FAKE_DIR/stdin.jsonl"
+  case "$line" in
+    *'"subtype":"initialize"'*)
+      echo '{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[{"value":"default","displayName":"Default"},{"value":"primary-model","resolvedModel":"primary-model","displayName":"Primary"},{"value":"fallback-model","resolvedModel":"fallback-model","displayName":"Fallback"}]}}}' ;;
+    *'"type":"control_request"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+      printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s"}}\n' "$id" ;;
+    *'"type":"user"'*)
+      printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
+      count=$(cat "$CLI_FAKE_DIR/attempts" 2>/dev/null || echo 0)
+      count=$((count+1))
+      echo "$count" > "$CLI_FAKE_DIR/attempts"
+      if [ "$count" -eq 1 ]; then
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+      elif [ "$count" -eq 2 ]; then
+        # The same-model retry fails a moment later: any control the node writes after it is in reaches this process.
+        echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+        (sleep 0.5; echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}') &
+      else
+        printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
+        echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
+        echo '{"type":"result","subtype":"success","is_error":false,"result":"answered by fallback"}'
+      fi ;;
+  esac
+done
+`
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\n"+script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The manager sends every message of a conversation with interject_background while the setting is on.
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "original request", nil, "", "", modelExecution{Fingerprint: "fp", Interject: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliWait(t, "the same-model retry, then the next launcher model's resend", func() bool {
+		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 3
+	})
+	f.idle(t, id)
+	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" {
+		t.Fatalf("the next model did not answer: %+v", p)
+	}
+	notes := map[string]bool{
+		prompts.RenderInterject(prompts.Interject{}):                 true,
+		prompts.RenderInterject(prompts.Interject{Background: true}): true,
+	}
+	lines := strings.Split(strings.TrimSpace(f.file("user.jsonl")), "\n")
+	for i, raw := range lines {
+		var line struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatal(err)
+		}
+		retry, note := false, false
+		for _, block := range line.Message.Content {
+			retry = retry || block.Text == prompts.RenderModelRetry()
+			note = note || notes[block.Text]
+		}
+		if i > 0 && !retry {
+			t.Fatalf("resend %d is not the model retry prompt: %s", i, raw)
+		}
+		if note {
+			t.Errorf("resend %d (%s) carries the mid-turn interjection note: %s", i, map[int]string{0: "the owner's message", 1: "same-model retry", 2: "next model"}[i], raw)
+		}
+	}
+	if got := f.file("stdin.jsonl"); strings.Contains(got, `"subtype":"background_tasks"`) {
+		t.Errorf("a recovery resend moved foreground work to the background:\n%s", got)
 	}
 }
 
@@ -192,7 +351,7 @@ func TestAssistantRecoverableErrorClasses(t *testing.T) {
 		{"successful result mentioning an error", "API Error: 503", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := assistantRecoverableError(tc.failed, tc.result); got != tc.want {
+			if got := assistantRecoverableError(tc.failed, tc.result, true); got != tc.want {
 				t.Fatalf("assistantRecoverableError(%v, %q) = %v, want %v", tc.failed, tc.result, got, tc.want)
 			}
 		})
@@ -206,20 +365,25 @@ func TestNextAssistantModelFollowsLauncherOrderOnce(t *testing.T) {
 		{ID: "fallback", Resolved: "resolved-fallback"},
 		{ID: "third"},
 	}}
-	if got, ok := nextAssistantModel(list, "resolved-primary", map[string]bool{"resolved-primary": true, "primary": true}); !ok || got != "fallback" {
+	if got, ok := nextAssistantModel(list, "resolved-primary", map[string]bool{"resolved-primary": true, "primary": true}, assistantFit{}); !ok || got != "fallback" {
 		t.Fatalf("next after a resolved alias = %q %v", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "fallback", map[string]bool{"fallback": true}); !ok || got != "third" {
+	if got, ok := nextAssistantModel(list, "fallback", map[string]bool{"fallback": true}, assistantFit{}); !ok || got != "third" {
 		t.Fatalf("next after fallback = %q %v", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "custom", map[string]bool{"custom": true}); !ok || got != "primary" {
+	if got, ok := nextAssistantModel(list, "custom", map[string]bool{"custom": true}, assistantFit{}); !ok || got != "primary" {
 		t.Fatalf("a custom current model starts with the first concrete entry = %q %v", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "third", map[string]bool{"third": true}); ok || got != "" {
+	// Past the last entry the list goes on from the top (#10277); it is exhausted once every entry was tried.
+	if got, ok := nextAssistantModel(list, "third", map[string]bool{"third": true}, assistantFit{}); !ok || got != "primary" {
+		t.Fatalf("next after the last entry = %q %v, want primary", got, ok)
+	}
+	tried := map[string]bool{"third": true, "primary": true, "fallback": true}
+	if got, ok := nextAssistantModel(list, "third", tried, assistantFit{}); ok || got != "" {
 		t.Fatalf("the exhausted list selected %q", got)
 	}
 	list.Locked = "the launcher fixes its model"
-	if got, ok := nextAssistantModel(list, "primary", nil); ok || got != "" {
+	if got, ok := nextAssistantModel(list, "primary", nil, assistantFit{}); ok || got != "" {
 		t.Fatalf("a locked launcher selected %q", got)
 	}
 }
@@ -230,14 +394,14 @@ func TestNextAssistantModelResolvesAnUnreportedDefault(t *testing.T) {
 		{ID: "primary-model"},
 		{ID: "fallback-model"},
 	}}
-	if got, ok := nextAssistantModel(list, "", map[string]bool{}); !ok || got != "fallback-model" {
+	if got, ok := nextAssistantModel(list, "", map[string]bool{}, assistantFit{}); !ok || got != "fallback-model" {
 		t.Fatalf("an unreported default selected %q %v, want the genuinely different fallback-model", got, ok)
 	}
 	codex := proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model", Default: true}, {ID: "fallback-model"}}}
-	if got, ok := nextAssistantModel(codex, "", nil); !ok || got != "fallback-model" {
+	if got, ok := nextAssistantModel(codex, "", nil, assistantFit{}); !ok || got != "fallback-model" {
 		t.Fatalf("a native default model selected %q %v, want fallback-model", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "default", nil); !ok || got != "fallback-model" {
+	if got, ok := nextAssistantModel(list, "default", nil, assistantFit{}); !ok || got != "fallback-model" {
 		t.Fatalf("the literal default alias selected %q %v, want fallback-model", got, ok)
 	}
 }
@@ -296,7 +460,7 @@ func TestAssistantFallbackEffortFollowsTheNextModel(t *testing.T) {
 }
 
 func TestAssistantRecoveryStopsAfterBothModelsAndTheirRetries(t *testing.T) {
-	f := sdkTest(t)
+	f := cliTest(t)
 	script := `echo '{"type":"system","subtype":"init"}'
 echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
 model=primary-model
@@ -306,7 +470,7 @@ while IFS= read -r line; do
     *'"subtype":"initialize"'*)
       echo '{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[{"value":"default"},{"value":"primary-model","resolvedModel":"primary-model"},{"value":"fallback-model","resolvedModel":"fallback-model"}]}}}' ;;
     *'"type":"user"'*)
-      printf '%s\n' "$line" >> "$SDK_FAKE_DIR/user.jsonl"
+      printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
       echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream"}' ;;
   esac
@@ -325,6 +489,35 @@ done
 	}
 	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" || p.replyModel != "fallback-model" || p.busy {
 		t.Fatalf("the exhausted recovery did not retain the final model and error state: %+v", p)
+	}
+}
+
+// The model switch registers its replacement before it marks it busy and sends it the retry. The fixture's wait for
+// the end of a turn must not take that gap for it, as the node does not (#3815): waiting on busy alone counted the
+// requests while the fallback model had not been asked yet.
+func TestCLIFixtureIdleWaitsOutTheModelSwitch(t *testing.T) {
+	n := assistantNode(t)
+	f := &cliFixture{n: n}
+	const id = "11111111-2222-3333-4444-555555555555"
+	replacement := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}, tasksObserved: true}
+	n.procs[id] = replacement
+	n.recoveries = map[string]*assistantTurnRecovery{id: {
+		retried: map[string]bool{"primary-model": true},
+		used:    map[string]bool{"primary-model": true, "fallback-model": true},
+		proc:    replacement,
+		running: true,
+	}}
+	if f.turnOver(id) {
+		t.Fatal("the registered replacement, not yet busy, ended a turn its recovery still holds")
+	}
+	if sessions := n.assistantSessions(); len(sessions) != 1 || sessions[0].Status != proto.StatusWorking {
+		t.Fatalf("the node publishes the model switch as %+v, want working", sessions)
+	}
+	n.mu.Lock()
+	delete(n.recoveries, id) // finishAssistantRecovery ends the recovery before it clears busy
+	n.mu.Unlock()
+	if !f.turnOver(id) {
+		t.Fatal("an idle process with no recovery did not end the turn")
 	}
 }
 
@@ -375,17 +568,17 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 }
 
 func TestAssistantProcessExitClearsItsRecovery(t *testing.T) {
-	f := sdkTest(t)
-	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+	f := cliTest(t)
+	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
   case "$line" in *'"type":"user"'*)
-    printf '%s\n' "$line" >> "$SDK_FAKE_DIR/user.jsonl"
-    count=$(cat "$SDK_FAKE_DIR/attempts" 2>/dev/null || echo 0)
+    printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
+    count=$(cat "$CLI_FAKE_DIR/attempts" 2>/dev/null || echo 0)
     count=$((count+1))
-    echo "$count" > "$SDK_FAKE_DIR/attempts"
+    echo "$count" > "$CLI_FAKE_DIR/attempts"
     if [ "$count" -eq 1 ]; then
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
     else
       exit 0 # the recovered turn ends without any result event
     fi ;;
@@ -399,7 +592,7 @@ done
 	if err != nil {
 		t.Fatal(err)
 	}
-	sdkWait(t, "the exited recovery process to publish its final state", func() bool {
+	cliWait(t, "the exited recovery process to publish its final state", func() bool {
 		f.n.mu.Lock()
 		defer f.n.mu.Unlock()
 		return f.n.procs[id] == nil && f.n.recoveries[id] == nil && strings.Count(f.file("user.jsonl"), `"type":"user"`) >= 2
@@ -433,7 +626,7 @@ func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !n.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !n.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -484,11 +677,11 @@ func TestAssistantRecoveryIgnoresAReplacedProcessCleanup(t *testing.T) {
 	old, current := &assistantProc{id: id}, &assistantProc{id: id}
 	n.procs[id] = current
 	n.recoveries = map[string]*assistantTurnRecovery{id: {running: true}}
-	n.clearAssistantRecovery(old)
+	n.clearAssistantRecovery(old, true)
 	if n.recoveries[id] == nil {
 		t.Fatal("a replaced process cleared its replacement's recovery")
 	}
-	n.clearAssistantRecovery(current)
+	n.clearAssistantRecovery(current, true)
 	if n.recoveries[id] != nil {
 		t.Fatal("the current process did not clear its completed recovery")
 	}
@@ -593,7 +786,7 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 	a.handOverAssistants()
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("a result in the handover gap was published instead of queued")
 	}
 
@@ -640,7 +833,7 @@ func TestAssistantSuccessBeforeAdoptionDoesNotMigrateRecovery(t *testing.T) {
 	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 	a.handOverAssistants()
-	a.clearAssistantRecovery(p) // success is recorded, but the result handler has not cleared busy yet
+	a.clearAssistantRecovery(p, true) // success is recorded, but the result handler has not cleared busy yet
 	if adopted := k.adopt(b); len(adopted) != 1 {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
@@ -665,7 +858,7 @@ func TestAssistantSuccessOnTheOldNodeClearsTheAdoptedRecovery(t *testing.T) {
 	if adopted := k.adopt(b); len(adopted) != 1 {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
-	a.clearAssistantRecovery(p) // the result handler read the old owner before adoption
+	a.clearAssistantRecovery(p, true) // the result handler read the old owner before adoption
 	p.mu.Lock()
 	p.busy = false
 	p.mu.Unlock()
@@ -699,7 +892,7 @@ func TestAssistantResultOnTheOldNodeForwardsAfterAdoption(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("a result that read the old owner was not forwarded after adoption")
 	}
 	select {
@@ -738,7 +931,7 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoverySend = send })
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -799,7 +992,7 @@ func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
 			n.procs[p.id] = replacement
 			n.mu.Unlock()
 			// The replacement's first result arrives before its recovery send has returned.
-			n.recoverAssistantResult(replacement, true, "API Error: safeguards flagged this message")
+			n.recoverAssistantResult(replacement, true, "API Error: 503 no eligible upstream account is currently available")
 		}
 		return nil
 	}

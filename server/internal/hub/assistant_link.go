@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -64,6 +65,10 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			api.HandleFunc(pattern, h.forwardAgentArchives)
 			continue
 		}
+		if pattern == "POST /api/v1/sessions/{mid}/{sid}/autoname" { // a full device, a capable owner (agent_autoname.go)
+			api.HandleFunc(pattern, h.forwardAgentAutoname)
+			continue
+		}
 		if key, ok := mergedLists[pattern]; ok { // the todos: every manager's
 			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardHTTP) })
 			continue
@@ -76,14 +81,27 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		switch {
 		case strings.Contains(pattern, "/machines/{mid}/"):
 			by = h.byMachine
-		case strings.Contains(pattern, "/assistant/conversations/{id}/"):
+		case strings.Contains(pattern, "/assistant/conversations/{id}"):
 			by = h.byConversation
 		case strings.Contains(pattern, "/todos/{id}"):
 			by = h.byTodo
 		}
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
+		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
+			next := relay
+			relay = h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
+				if h.machineUntrusted(m.cfg.ID) {
+					writeErrCode(w, http.StatusConflict, "machine_pending", errors.New("Confirm this computer before starting a session."))
+					return
+				}
+				next(w, r)
+			})
+		}
 		if slices.Contains(storedTerminalTexts, pattern) {
 			relay = h.withoutTerminalControls(relay)
+		}
+		if kind, ok := meetingReceiptRoutes[pattern]; ok {
+			relay = h.withBodyIDReceipt(kind, relay) // meeting_receipts.go
 		}
 		api.HandleFunc(pattern, relay)
 	}
@@ -115,9 +133,12 @@ func (h *Hub) startConversationOnce() http.HandlerFunc {
 		if !ok {
 			return
 		}
-		r = withManager(r, id)
+		r = withManager(withHumanStart(r), id) // a person's own app: its first message is theirs (secret_handoff.go)
 		if h.busConnOf(id) == nil {
 			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
+			return
+		}
+		if !h.checkAssistantStartServiceTier(w, r, id) {
 			return
 		}
 		receipt(w, r)
@@ -134,7 +155,11 @@ type assistantLink struct{ h *Hub }
 // "manager.json").
 func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	h := l.h
-	out := assistantwire.Hello{Locale: string(h.userLang())}
+	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
+	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
+	// QuietPush: this hub's push tiering switch, which the managers follow for what is not a hub push (cards they
+	// post, cards they hand up); a change sends manager.updated.
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, QuietPush: h.push.lnModeOn()}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
@@ -148,7 +173,7 @@ func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 			out.Assistant.WorkMachines = append(out.Assistant.WorkMachines, id)
 		}
 	}
-	out.PersonaView, out.HTMLViews = h.assistantCards()
+	out.PersonaView, out.HTMLViews = true, true // for a manager from before #5509, which still reads them
 	out.DoneDelayMS = taskSettleDelay(h.cfg.Notify).Milliseconds()
 	// The finished push's timings: the manager's to apply (fleet_push.go there).
 	out.Notify = assistantwire.NotifyTimings{DoneDelayMS: taskSettleDelay(h.cfg.Notify).Milliseconds(),
@@ -175,8 +200,9 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				online, info := m.online, m.info
 				m.mu.Unlock()
 				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: info.Home,
-					DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
-					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion})
+					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
+					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
+					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})
 			}
 			d := &h.devices
 			d.mu.Lock()
@@ -251,7 +277,7 @@ func (l assistantLink) appCallFrom(ctx context.Context, from string, p assistant
 	if out, ok, err := h.extAppCall(ctx, from, p); ok { // what the manager's extensions ask of the hub (extensions_link.go)
 		return out, err
 	}
-	if out, ok, err := h.fleetAppCall(ctx, p); ok { // what the hub still runs for the nodes (fleet_link.go)
+	if out, ok, err := h.fleetAppCall(ctx, from, p); ok { // what the hub still runs for the nodes (fleet_link.go)
 		return out, err
 	}
 	if p.Method == assistantwire.AppTool {
@@ -268,10 +294,13 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 		Arguments json.RawMessage `json:"arguments"`
 		MachineID string          `json:"machine_id"`
 		SessionID string          `json:"session_id"`
+		CallID    json.RawMessage `json:"call_id"`
 	}
 	if err := json.Unmarshal(params, &a); err != nil {
 		return nil, err
 	}
+	var callID string
+	_ = json.Unmarshal(a.CallID, &callID)
 	if len(a.Arguments) == 0 {
 		a.Arguments = json.RawMessage(`{}`)
 	}
@@ -283,7 +312,7 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 		if m == nil {
 			return nil, fmt.Errorf("%w %q", assistantwire.ErrNoDevice, a.MachineID)
 		}
-		res, err = h.toolPersonaSettings(ctx, from, m, a.SessionID, a.Arguments)
+		res, err = h.toolPersonaSettings(ctx, from, m, a.SessionID, a.Arguments, h.mcpWaitReporter(from, a.MachineID, callID))
 	default:
 		return nil, fmt.Errorf("app %s has no tool %s", app, a.Name)
 	}
@@ -358,16 +387,17 @@ func init() {
 		}
 		from, id := c.managerID(), p.Notification.ID
 		if id != "" && !h.firstHandOver(ctx, from, id) {
-			return map[string]bool{"ok": true}, nil // delivered already: it came again (outbox_relay.go)
+			return map[string]any{"ok": true}, nil // delivered already: it came again (outbox_relay.go)
 		}
 		// Only about its own machines, sessions and cards (fleet_link.go deliverPushFrom).
-		if err := h.deliverPushFrom(from, p.Notification); err != nil {
+		out, err := h.deliverPushFrom(from, p.Notification)
+		if err != nil {
 			if id != "" {
 				h.forgetHandOver(from, id)
 			}
 			return nil, busCodedError(err)
 		}
-		return map[string]bool{"ok": true}, nil
+		return notifyAnswer(out), nil
 	})
 	handleBus(assistantwire.MethodSnapshot, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
 		var s assistantwire.Snapshot
@@ -378,6 +408,29 @@ func init() {
 		return res, busCodedError(err)
 	})
 	// ws.broadcast is relayBroadcastFrom's (bus_forward.go).
+}
+
+// notifyAnswer is notify.request's answer for a push that went where out says (nil: not reported). held/reason let
+// the assistant's notify_user tell the model the notice went to the briefing, not the phone; devices (always there when
+// out is) the devices it was handed to, and with none, reason "no_device" or "filtered" as POST /api/v1/notify; kept the
+// offline devices that get it when they connect again. A hub before devices answered only ok and held.
+func notifyAnswer(out *pushOutcome) map[string]any {
+	res := map[string]any{"ok": true}
+	if out == nil {
+		return res
+	}
+	res["devices"] = out.devices
+	if out.kept > 0 {
+		res["kept"] = out.kept
+	}
+	switch {
+	case out.held != "":
+		res["held"] = true
+		res["reason"] = out.held
+	case out.devices == 0:
+		res["reason"] = out.reason()
+	}
+	return res
 }
 
 // busCodedError puts what the assistant's code tells errors apart by on the wire as a code: a machine the hub does
@@ -527,14 +580,14 @@ func (h *Hub) assistantConnected() {
 	}
 	h.managerConnected() // agents_link.go
 	h.fleetConnected()   // what of the apps it needs (fleet_link.go)
-	generation := h.assistantToolsGeneration()
 	if err := h.callBus(ctx, assistantwire.AssistantID, assistantwire.MethodTools, nil, &res); err != nil {
 		h.logf("assistant: tools: %v", err)
 		return
 	}
-	if !h.storeAssistantTools(generation, res.Tools) {
-		return
-	}
+	a := &h.assistant
+	a.toolsMu.Lock()
+	a.tools = res.Tools
+	a.toolsMu.Unlock()
 }
 
 // ---- on the bus: what the hub asks of the assistant ----
@@ -565,7 +618,17 @@ func (a assistantRemote) to(ctx context.Context) string {
 var errAssistantOffline = i18n.Err("hub-assistant_link.offline")
 
 func (a assistantRemote) call(ctx context.Context, method string, params, out any) error {
-	err := a.h.callBus(ctx, a.to(ctx), method, params, out)
+	return assistantOffline(a.h.callBus(ctx, a.to(ctx), method, params, out))
+}
+
+// callAsIs is call with ctx's own deadline, or none (callBusAsIs): a card is waited for as long as it lives
+// (waitInteraction).
+func (a assistantRemote) callAsIs(ctx context.Context, method string, params, out any) error {
+	return assistantOffline(a.h.callBusAsIs(ctx, a.to(ctx), method, params, out))
+}
+
+// assistantOffline is a bus call's error as the assistant's callers get it: assistant_offline while it is not connected.
+func assistantOffline(err error) error {
 	if errors.Is(err, errBusOffline) {
 		return &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: errAssistantOffline.Error()}
 	}
@@ -627,8 +690,12 @@ func (a assistantRemote) Action(ctx context.Context, act assistantwire.Action) (
 	return res, err
 }
 
-func (a assistantRemote) UserSpoke(_ context.Context, r assistantwire.SessionRef) {
-	a.notify(assistantwire.EventUserSpoke, r)
+func (a assistantRemote) UserSpoke(ctx context.Context, r assistantwire.SessionRef) {
+	a.userSpoke(ctx, assistantwire.UserSpokeParams{SessionRef: r})
+}
+
+func (a assistantRemote) userSpoke(_ context.Context, p assistantwire.UserSpokeParams) {
+	a.notify(assistantwire.EventUserSpoke, p)
 }
 
 func (a assistantRemote) UserStopped(_ context.Context, r assistantwire.SessionRef) {

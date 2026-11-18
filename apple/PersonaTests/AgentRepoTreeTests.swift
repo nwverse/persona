@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// By Repository (`RepoPlace`, `RepoTree`): the repository and working tree a working directory names, and the machines →
 /// repositories → working trees the Agents list draws. The path rules are the web's (`web/src/lib/agent-repos.test.ts`).
@@ -232,10 +233,203 @@ struct AgentRepoTreeTests {
         #expect(RepoPlace.git(session("old", "/code/app")) == nil)
     }
 
+    // MARK: A linked worktree named by its host workspace's title (#4768; the web's and Android's cases, #4497)
+
+    private let appRepo = "/home/me/code/app"
+    private let fox = "/home/me/.paseo/worktrees/abc123/brave-fox"
+
+    private func placed(_ id: String, _ cwd: String, _ fields: [String: Any]) -> Session {
+        var all: [String: Any] = ["machine_id": "machine-a", "session_id": id, "title": id, "cwd": cwd, "status": "idle", "state": "idle"]
+        all.merge(fields) { _, new in new }
+        do { return try JSON.decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: all)) }
+        catch { fatalError("bad fixture: \(error)") }
+    }
+
+    /// An agent Paseo placed: the node's git place and branch, its workspace's title in `slot_name`, no `slot_id`.
+    /// `without`: the fields it does not send.
+    private func paseo(_ id: String, _ worktree: String, _ patch: [String: Any] = [:], without: Set<String> = []) -> Session {
+        var fields: [String: Any] = ["host": "paseo", "space_kind": "paseo", "repo_root": appRepo, "worktree": worktree,
+                                     "branch": "fix/login", "slot_name": "Fix the login flow"]
+        fields.merge(patch) { _, new in new }
+        for key in without { fields[key] = nil }
+        return placed(id, worktree, fields)
+    }
+
+    private func mainCheckout(_ id: String, _ patch: [String: Any] = [:]) -> Session {
+        var fields: [String: Any] = ["repo_root": appRepo, "worktree": appRepo, "branch": "main"]
+        fields.merge(patch) { _, new in new }
+        return placed(id, appRepo, fields)
+    }
+
+    private func linked(_ all: [Session]) throws -> RepoTree.Worktree {
+        try #require(RepoTree.build(all, machines: machines).first?.repos.first?.worktrees.first { !$0.main })
+    }
+
+    @Test func aLinkedWorktreeTakesTheTitleItsSessionsShareAndKeepsItsBranch() throws {
+        let repo = try #require(RepoTree.build([mainCheckout("main"), paseo("a", fox), paseo("b", fox)], machines: machines).first?.repos.first)
+        #expect(repo.worktrees.map(\.name) == ["main", "Fix the login flow"])
+        #expect(repo.worktrees.map(\.branch) == ["main", "fix/login"])
+        #expect(repo.worktrees.map(\.main) == [true, false])
+        #expect(repo.worktrees[1].sessions.map(\.sessionID).sorted() == ["a", "b"])
+    }
+
+    @Test func aSessionOfAnotherSourceWithNoTitleNeitherVotesNorBlocks() throws {
+        let tree = try linked([paseo("a", fox), paseo("b", fox),
+                               placed("cli", fox, ["repo_root": appRepo, "worktree": fox, "branch": "fix/login"])])
+        #expect(tree.name == "Fix the login flow" && tree.branch == "fix/login" && tree.sessions.count == 3)
+    }
+
+    @Test func twoDifferentTitlesKeepTheBranch() throws {
+        let tree = try linked([paseo("a", fox), paseo("b", fox, ["slot_name": "Speed up the importer"])])
+        #expect(tree.name == "fix/login" && tree.branch == "fix/login")
+    }
+
+    /// White space around a title is not part of it (the web's `trim()`): the same title, and shown without it.
+    @Test func whiteSpaceAroundATitleIsNotPartOfIt() throws {
+        let tree = try linked([paseo("a", fox, ["slot_name": " Fix the login flow"]), paseo("b", fox, ["slot_name": "Fix the login flow\n"])])
+        #expect(tree.name == "Fix the login flow")
+    }
+
+    /// A `slot_name` beside a `slot_id` is a tab's label (herdr), not a place.
+    @Test func aTabsLabelKeepsTheBranch() throws {
+        let tree = try linked([paseo("tab", fox, ["host": "herdr", "space_kind": "herdr", "slot_id": "w1:t2"])])
+        #expect(tree.name == "fix/login" && tree.branch == "fix/login")
+    }
+
+    @Test func theMainCheckoutKeepsItsName() throws {
+        let named = try #require(RepoTree.build([mainCheckout("main", ["slot_name": "Triage"])], machines: machines).first?.repos.first)
+        #expect(named.worktrees.map(\.name) == ["main"] && named.worktrees.map(\.main) == [true])
+        // An older node sends no git place: the main checkout is named after its repository.
+        let older = try #require(RepoTree.build([placed("old", appRepo, ["repo_root": appRepo, "slot_name": "Triage"])],
+                                                machines: machines).first?.repos.first)
+        #expect(older.worktrees.map(\.name) == ["app"] && older.worktrees.map(\.main) == [true])
+    }
+
+    @Test func aTreeWithoutABranchTakesItsTitleElseItsFolder() throws {
+        #expect(try linked([paseo("a", fox, without: ["branch"])]).name == "Fix the login flow")
+        #expect(try linked([paseo("a", fox, without: ["branch", "slot_name"])]).name == "brave-fox")
+        #expect(try linked([paseo("a", fox, ["slot_name": "  "], without: ["branch"])]).name == "brave-fox")
+        // An older node: the tree is the working directory under the repository the host names (#2840).
+        #expect(try linked([paseo("a", fox, without: ["branch", "worktree"])]).name == "Fix the login flow")
+    }
+
+    @Test func aTreeKeepsItsIdWithAndWithoutTheTitle() throws {
+        let titled = try linked([paseo("a", fox)])
+        let plain = try linked([paseo("a", fox, without: ["slot_name"])])
+        #expect(titled.name == "Fix the login flow" && plain.name == "fix/login")
+        #expect(titled.id == plain.id && titled.path == plain.path)
+    }
+
+    @Test func linkedTreesSortByTheNamesTheyShowAfterTheMainCheckout() throws {
+        let repo = try #require(RepoTree.build([
+            paseo("readme", "/home/me/.paseo/worktrees/abc123/wise-owl", ["branch": "docs/readme", "slot_name": "Update the README"]),
+            paseo("import", "/home/me/.paseo/worktrees/abc123/calm-otter", ["branch": "perf/importer", "slot_name": "Speed up the importer"]),
+            paseo("login", fox),
+            mainCheckout("main"),
+        ], machines: machines).first?.repos.first)
+        #expect(repo.worktrees.map { $0.name + ($0.main ? "*" : "") } == ["main*", "Fix the login flow", "Speed up the importer", "Update the README"])
+    }
+
+    @Test func twoTreesWithOneTitleKeepTheirOrderWhicheverSessionComesFirst() {
+        let owl = "/home/me/.paseo/worktrees/abc123/wise-owl"
+        let twins = [paseo("fox", fox), paseo("owl", owl, ["branch": "fix/login-2"])]
+        let trees = { (all: [Session]) in RepoTree.build(all, machines: self.machines)[0].repos[0].worktrees.map { $0.name + " " + $0.path } }
+        #expect(trees(twins) == ["Fix the login flow " + fox, "Fix the login flow " + owl])
+        #expect(trees(Array(twins.reversed())) == trees(twins))
+    }
+
+    @Test func anOrcaWorktreeKeepsOrcasNaming() throws {
+        let orcaTree = "/home/me/orca/workspaces/app/fix-login"
+        let orca = placed("orca", orcaTree, ["repo_root": appRepo, "worktree": orcaTree, "branch": "fix/login", "space_kind": "orca",
+                                             "space_id": "fix-login", "slot_id": "tab1", "slot_name": "tab tab1"])
+        let placedByOrca = try #require(RepoTree.build([orca, paseo("paseo", orcaTree)], machines: machines).first?.repos)
+        #expect(placedByOrca.count == 1)
+        #expect(placedByOrca[0].worktrees.map(\.name) == ["fix/login"])
+        #expect(placedByOrca[0].worktrees[0].sessions.map(\.sessionID).sorted() == ["orca", "paseo"])
+        // An Orca agent the host did not place (no space id) still leaves its tree to Orca's naming.
+        var loose = orca
+        loose.spaceID = nil
+        #expect(try linked([loose, paseo("paseo", orcaTree)]).name == "fix/login")
+    }
+
+    @Test func aLoneLinkedTreeItNamesKeepsItsLevel() throws {
+        let branched = try #require(RepoTree.build([paseo("a", fox)], machines: machines).first?.repos.first)
+        let unbranched = try #require(RepoTree.build([paseo("a", fox, without: ["branch"])], machines: machines).first?.repos.first)
+        #expect(!branched.flat && !unbranched.flat)
+    }
+
+    /// The same name whatever the list asks for: a quick filter (`includeEmpty`) or a search.
+    @Test func theTreeIsNamedTheSameWayWhateverTheListAsksFor() {
+        let all = [mainCheckout("main"), paseo("a", fox)]
+        for tree in [RepoTree.build(all, machines: machines, workspaces: [], includeEmpty: false),
+                     RepoTree.build(all, machines: machines, workspaces: [], includeEmpty: true, search: "login")] {
+            #expect(tree.first?.repos.first?.worktrees.map(\.name) == ["main", "Fix the login flow"])
+        }
+    }
+
     private func workspace(_ id: String, parent: String? = nil, machine: String = "machine-a", group: String = "",
                            path: String? = nil) -> HostWorkspace {
         HostWorkspace(machineID: machine, source: "orca", sourceID: id, title: id, cwd: path ?? "/work/" + id,
                       parentSourceID: parent, index: 1, group: group)
+    }
+
+    private func paseoWorkspace(_ id: String, project: String = "app", pin: TimeInterval? = nil) -> HostWorkspace {
+        HostWorkspace(machineID: "machine-a", source: "paseo", sourceID: id, title: id, cwd: "/code/" + id,
+                      projectID: project, projectName: project, projectPath: "/code/" + project, isMain: false,
+                      pinnedAt: pin.map { Date(timeIntervalSince1970: $0) })
+    }
+
+    @Test func paseoPinsLeadWithinAndAcrossProjectsAndUnpinRestoresTheOrder() throws {
+        var main = paseoWorkspace("main", project: "zeta"), old = paseoWorkspace("old", project: "zeta", pin: 10)
+        var newest = paseoWorkspace("newest", project: "zeta", pin: 20)
+        main.isMain = true
+        let alpha = paseoWorkspace("alpha", project: "alpha")
+        let before = RepoTree.build([], machines: machines, workspaces: [old, alpha, main, newest])[0].repos
+        #expect(before.map(\.name) == ["zeta", "alpha"], "the project containing the newest pin is reachable first")
+        #expect(before[0].worktrees.map(\.name) == ["newest", "old", "main"])
+        #expect(before[0].sessions.isEmpty, "empty pinned workspaces keep a container, without inventing sessions")
+        #expect(before[0].worktrees[2].workspace?.pinnedAt == nil, "pinning one task does not pin the project's main checkout")
+        let ids = Set(before.flatMap(\.worktrees).map(\.id))
+        old.pinnedAt = nil; newest.pinnedAt = nil
+        let after = RepoTree.build([], machines: machines, workspaces: [newest, main, alpha, old])[0].repos
+        #expect(after.map(\.name) == ["alpha", "zeta"])
+        #expect(after[1].worktrees.map(\.name) == ["main", "newest", "old"])
+        #expect(Set(after.flatMap(\.worktrees).map(\.id)) == ids, "a pin never changes navigation identity")
+    }
+
+    @Test func paseoPinsKeepSameFolderTasksAndSourceMachineAndHubIdentitiesIndependent() throws {
+        var a = paseoWorkspace("a", pin: 10), b = paseoWorkspace("b", pin: 10)
+        a.cwd = "/same"; b.cwd = "/same"; a.title = "Task"; b.title = "Task"
+        var otherSource = a, otherMachine = a, otherHub = a
+        otherSource.source = "orca"; otherSource.pinnedAt = nil
+        otherMachine.machineID = "machine-b"; otherMachine.pinnedAt = nil
+        otherHub.group = "work"; otherHub.pinnedAt = nil
+        let sessions = [placed("for-b", "/same", ["space_kind": "paseo", "workspace_id": "b", "space_id": "app"]),
+                        placed("for-a", "/same", ["space_kind": "paseo", "workspace_id": "a", "space_id": "app"])]
+        let tree = RepoTree.build(sessions, machines: machines, workspaces: [b, otherHub, otherSource, otherMachine, a])
+        let repos = tree.flatMap(\.repos)
+        #expect(repos.count == 4, "the same project ID in another engine, computer or hub is another project")
+        let own = try #require(repos.first { $0.worktrees.contains { $0.workspace?.key == a.key } })
+        #expect(own.worktrees.map(\.workspace?.key) == [a.key, b.key], "equal pins use full identity, even with the same title and path")
+        #expect(own.worktrees.map { $0.sessions.map(\.sessionID) } == [["for-a"], ["for-b"]])
+        #expect(repos.filter { $0.id != own.id }.allSatisfy { $0.latestPinnedAt == nil && $0.sessions.isEmpty })
+        let reversed = RepoTree.build(Array(sessions.reversed()), machines: machines, workspaces: [a, otherMachine, otherSource, otherHub, b])
+        #expect(reversed.flatMap(\.repos).flatMap(\.worktrees).map(\.id) == tree.flatMap(\.repos).flatMap(\.worktrees).map(\.id))
+    }
+
+    @Test func aNestedNativePinLiftsOnlyItsAncestorPathAndStillHonorsFilters() {
+        let alpha = paseoWorkspace("alpha", project: "alpha")
+        let root = paseoWorkspace("root", project: "zeta")
+        var child = paseoWorkspace("child", project: "nested", pin: 20)
+        child.parentSourceID = root.sourceID
+        let tree = RepoTree.build([], machines: machines, workspaces: [alpha, child, root])
+        #expect(tree[0].repos.map(\.name) == ["zeta", "alpha"])
+        let top = tree[0].repos[0].worktrees[0]
+        #expect(top.latestPinnedAt == child.pinnedAt)
+        #expect(top.workspace?.pinnedAt == nil, "only the pinned workspace gets the pin badge")
+        #expect(top.children.map(\.workspace?.key) == [child.key])
+        #expect(RepoTree.build([], machines: machines, workspaces: [alpha, child, root], includeEmpty: false).isEmpty)
+        #expect(RepoTree.build([], machines: machines, workspaces: [alpha, child, root], search: "missing").isEmpty)
     }
 
     @Test func catalogRetainsExistingEmptyAncestorsAndIndependentEmptyWorkspaces() throws {
@@ -377,6 +571,35 @@ struct AgentRepoTreeTests {
         #expect(badge(child, parent: parent, inheritedName: "app") == nil)
         #expect(badge(child, parent: parent, inheritedName: "other") == "app")
         #expect(badge(child, parent: nil) == nil, "A grouped root already has its repository heading")
+    }
+
+    // MARK: One folder in two repositories
+
+    /// A Codex App chat names its project's folder (`repo_root` ~/work) while git places its working tree in the
+    /// repository inside it, the main checkout of that repository's own agents. Each repository lists its own agents: the
+    /// two trees' ids differ, so the list's rows and quiet state for one are not the other's (2026-11-12: "14 agents"
+    /// over the other repository's one agent).
+    @Test func aFolderTwoRepositoriesClaimKeepsEachOnesAgents() throws {
+        let inner = "/home/me/work/code/app"
+        let own = (1...3).map { placed("own\($0)", inner, ["repo_root": inner, "worktree": inner, "branch": "feat/x"]) }
+        let codex = placed("codex", inner, ["repo_root": "/home/me/work", "worktree": inner, "branch": "feat/x",
+                                            "state": "unread", "status": "done"])
+        let all = own + [codex]
+        let repos = try #require(RepoTree.build(all, machines: machines).first?.repos)
+        let app = try #require(repos.first { $0.path == inner })
+        let work = try #require(repos.first { $0.path == "/home/me/work" })
+        #expect(app.worktrees.map(\.id) == ["tree/machine-a/" + inner], "the main checkout keeps the path's id")
+        #expect(work.worktrees.count == 1 && work.worktrees[0].id != app.worktrees[0].id)
+        #expect(app.worktrees[0].sessions.map(\.sessionID).sorted() == ["own1", "own2", "own3"])
+        #expect(work.worktrees[0].sessions.map(\.sessionID) == ["codex"])
+
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        let projection = AgentListProjection.build(.init(sessions: all, machines: [], settings: settings))
+        let rows = try #require(projection.rows[app.worktrees[0].id])
+        #expect(rows.all.flatMap(\.sessions).map(\.sessionID).sorted() == ["own1", "own2", "own3"])
+        #expect(projection.quietWorktrees[app.worktrees[0].id] == true, "its agents are all idle")
+        #expect(projection.rows[work.worktrees[0].id]?.all.flatMap(\.sessions).map(\.sessionID) == ["codex"])
     }
 
 }

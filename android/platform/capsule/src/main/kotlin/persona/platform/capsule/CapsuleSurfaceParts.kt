@@ -17,6 +17,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -177,7 +178,7 @@ internal fun CapsuleInboxList(content: CapsuleContent, pending: Boolean, onSelec
                 JRow(entry.title, Modifier.fillMaxWidth().testTag("capsule.entry.${entry.id}"), subtitle = entry.summary,
                     subtitleLines = 2, leading = { if (entry.unread) CapsuleUnreadDot("capsule.entry.${entry.id}.unread") },
                     trailing = {
-                        entry.unreadCount?.takeIf { it > 0 }?.let { count -> Text(stringResource(R.string.capsule_message_count, count),
+                        entry.unreadCount?.takeIf { it > 0 }?.let { count -> Text(pluralStringResource(R.plurals.capsule_message_count, count, count),
                             style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2) }
                     }, onClick = { onSelect(entry) })
             }
@@ -206,7 +207,7 @@ internal fun CapsuleInboxList(content: CapsuleContent, pending: Boolean, onSelec
                         subtitleLines = 2, leading = {
                             if (entry.unread) CapsuleUnreadDot("capsule.entry.${entry.id}.unread")
                         }, trailing = {
-                            entry.unreadCount?.takeIf { it > 0 }?.let { count -> Text(stringResource(R.string.capsule_message_count, count),
+                            entry.unreadCount?.takeIf { it > 0 }?.let { count -> Text(pluralStringResource(R.plurals.capsule_message_count, count, count),
                                 style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2) }
                         }, onClick = { onSelect(entry) })
                 }

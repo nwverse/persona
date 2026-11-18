@@ -20,13 +20,17 @@ func writeGz(t *testing.T, path string, content []byte) {
 	}
 }
 
-// A program released with personad (personad-wechat-<os>-<arch>.gz) is listed under its name, not taken for a
-// personad platform ("wechat-linux-amd64").
+// A program released with personad (persona-examplechat-<os>-<arch>.gz) is listed under its name, not taken for a
+// personad platform ("examplechat-linux-amd64").
 func TestBuildManifestPrograms(t *testing.T) {
+	programs, split := ProgramNames, SplitPrograms
+	ProgramNames = append(append([]string(nil), programs...), "persona-examplechat")
+	SplitPrograms = append(append([]string(nil), split...), "persona-examplechat")
+	t.Cleanup(func() { ProgramNames, SplitPrograms = programs, split })
 	dir := t.TempDir()
 	writeGz(t, filepath.Join(dir, "personad-linux-amd64.gz"), []byte("personad"))
-	writeGz(t, filepath.Join(dir, "personad-wechat-linux-amd64.gz"), []byte("personad-wechat"))
-	writeGz(t, filepath.Join(dir, "personad-wechat-darwin-arm64.gz"), []byte("personad-wechat for a Mac"))
+	writeGz(t, filepath.Join(dir, "persona-examplechat-linux-amd64.gz"), []byte("persona-examplechat"))
+	writeGz(t, filepath.Join(dir, "persona-examplechat-darwin-arm64.gz"), []byte("persona-examplechat for a Mac"))
 	writeGz(t, filepath.Join(dir, "persona-hub-linux-amd64.gz"), []byte("persona-hub"))
 	writeGz(t, filepath.Join(dir, "persona-manager-linux-amd64.gz"), []byte("persona-manager"))
 	writeGz(t, filepath.Join(dir, "persona-node-linux-amd64.gz"), []byte("not released with the hub"))
@@ -37,8 +41,8 @@ func TestBuildManifestPrograms(t *testing.T) {
 	if len(m.Files) != 1 || m.Files["linux-amd64"].Name != "personad-linux-amd64.gz" {
 		t.Fatalf("files %+v", m.Files)
 	}
-	tg := m.Programs["personad-wechat"]
-	if len(tg) != 2 || tg["linux-amd64"].Name != "personad-wechat-linux-amd64.gz" || tg["darwin-arm64"].BinarySHA256 == "" {
+	chat := m.Programs["persona-examplechat"]
+	if len(chat) != 2 || chat["linux-amd64"].Name != "persona-examplechat-linux-amd64.gz" || chat["darwin-arm64"].BinarySHA256 == "" {
 		t.Fatalf("programs %+v", m.Programs)
 	}
 	// the hub's and the manager's programs: listed under their names; persona-node is not released with the hub
@@ -52,7 +56,7 @@ func TestBuildManifestPrograms(t *testing.T) {
 	}
 	// Only programs, no personad: not a release.
 	only := t.TempDir()
-	writeGz(t, filepath.Join(only, "personad-wechat-linux-amd64.gz"), []byte("x"))
+	writeGz(t, filepath.Join(only, "persona-examplechat-linux-amd64.gz"), []byte("x"))
 	if _, err := BuildManifest(only, Manifest{Version: "v1", Build: 1}); err == nil {
 		t.Fatal("a release without personad")
 	}
@@ -91,6 +95,37 @@ func TestBuildManifestNodes(t *testing.T) {
 	b, _ := json.Marshal(m)
 	back, err := ParseManifest(b)
 	if err != nil || back.NodeProtocol != 2 || back.NodeProtocolMin != 1 || len(back.NodeCapabilities) != 1 || len(back.Nodes) != 1 {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+}
+
+// The independent connector is indexed separately from the programs a hub swaps. Windows Link downloads keep .exe
+// before .gz, while their manifest key stays <os>-<arch>; neither one becomes a hub platform.
+func TestBuildManifestLinks(t *testing.T) {
+	dir := t.TempDir()
+	writeGz(t, filepath.Join(dir, "personad-linux-amd64.gz"), []byte("personad"))
+	writeGz(t, filepath.Join(dir, "persona-link-linux-amd64.gz"), []byte("Linux connector"))
+	writeGz(t, filepath.Join(dir, "persona-link-windows-amd64.exe.gz"), []byte("Windows amd64 connector"))
+	writeGz(t, filepath.Join(dir, "persona-link-windows-arm64.exe.gz"), []byte("Windows arm64 connector"))
+	m, err := BuildManifest(dir, Manifest{Version: "v1", Build: 202611030000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Files) != 1 || len(m.Programs) != 0 || len(m.Nodes) != 0 {
+		t.Fatalf("connector leaked into an update group: %+v", m)
+	}
+	for _, platform := range []string{"linux-amd64", "windows-amd64", "windows-arm64"} {
+		suffix := ""
+		if platform != "linux-amd64" {
+			suffix = ".exe"
+		}
+		if got := m.Links[platform].Name; got != "persona-link-"+platform+suffix+".gz" || m.Links[platform].BinarySHA256 == "" {
+			t.Errorf("%s: %+v", platform, m.Links)
+		}
+	}
+	b, _ := json.Marshal(m)
+	back, err := ParseManifest(b)
+	if err != nil || len(back.Links) != 3 {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
 }

@@ -22,6 +22,22 @@ import persona.feature.inbox.InboxRecord
  * button when another assistant than the current one has something waiting.
  */
 class ShellCountsTest {
+    @Test fun foldedChildrenCountOnceEvenBeforeTheParentPageHasLoaded() {
+        val parent = Session("box", "p", state = "idle", children = persona.core.contracts.SessionChildren(2, needsYou = 2))
+        val child = Session("box", "child", state = "needs_you", foldedUnder = "p")
+        val cards = listOf(Interaction("first", "box", "child", foldedUnder = "p"),
+            Interaction("second", "box", "other", foldedUnder = "p"))
+        for (rows in listOf(listOf(parent, child), listOf(child), emptyList())) {
+            val counts = ShellCounts(on(null), rows, AgentPreferences())
+            assertEquals(1, counts.agentsWaiting(cards))
+            assertEquals(1, counts.waiting(roster, cards)["assistant"])
+        }
+        val muted = ShellCounts(on(null), listOf(parent, child), AgentPreferences(sessions = listOf("box/p")))
+        assertEquals(0, muted.agentsWaiting(cards))
+        assertFalse("assistant" in muted.waiting(roster, cards))
+        assertEquals("child", cards.first().sessionId)
+    }
+
     private val roster = ManagerRoster(listOf(
         HubManager("assistant", "助手", online = true, isDefault = true, builtin = true),
         HubManager("m-2", "工作", online = true, inboxNeedsYou = 2),
@@ -79,6 +95,28 @@ class ShellCountsTest {
         assertEquals(1, default.agentsWaiting(cards.filter(default::owned)))
         // A card on no session counts by itself.
         assertEquals(3, work.agentsWaiting(mine + Interaction("c6", "mac", "")))
+    }
+
+    /**
+     * The blank page's Needs you on Glass (#4339 C17) lists the sessions the badge counts: the same number, each waiting
+     * agent once (two cards or none), quiet and muted ones left out, a card on no session by itself; the inbox after them.
+     */
+    @Test fun theBlankPagesNeedsYouListsWhatTheAgentsBadgeCounts() {
+        val inbox = listOf(persona.feature.assistant.NeedsYouMessage(InboxItem("i1", title = "Invoice", tier = "action"), lark = false))
+        for (current in listOf(on(null), on("m-2"))) {
+            val counts = ShellCounts(current, sessions, mutes)
+            val mine = cards.filter(counts::owned) + Interaction("c6", "mac", "")
+            val lines = persona.feature.assistant.needsYouBySession(counts.agentRows(mine), sessions, inbox)
+            val agents = lines.filterIsInstance<persona.feature.assistant.NeedsYouLine.Agent>()
+            assertEquals(counts.agentsWaiting(mine), agents.size)
+            assertEquals(agents.size + 1, lines.size)
+        }
+        val work = ShellCounts(on("m-2"), sessions, mutes)
+        val lines = persona.feature.assistant.needsYouBySession(work.agentRows(cards.filter(work::owned)), sessions, emptyList())
+        // s2 once for its two cards (its older one), s3 waiting in its terminal; the muted s5 not.
+        assertEquals(listOf("agent:mac/s2", "agent:mac/s3"), lines.map { it.key })
+        assertEquals("c2", (lines[0] as persona.feature.assistant.NeedsYouLine.Agent).requestId)
+        assertTrue((lines[1] as persona.feature.assistant.NeedsYouLine.Agent).terminal)
     }
 
     @Test fun theBadgesCountEachAgentOnceAndTheDotIsAnotherAssistantsBadge() {

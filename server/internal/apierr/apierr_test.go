@@ -23,6 +23,31 @@ type langWriter struct {
 
 func (w langWriter) Lang() i18n.Lang { return w.lang }
 
+// A session or file the node says is not there is 404 not_found, never the 502 internal of a failed call: a request
+// for a session id its machine has no transcript for (#9551) is the client's, and nothing is retried. The summary is
+// in the request's language, the node's words the detail; with no language they stay the error.
+func TestCallNotFoundIs404(t *testing.T) {
+	const words = "transcript for session 11111111-2222-3333-4444-555555555555 not found"
+	rec := httptest.NewRecorder()
+	body := call(t, rec, rec, &rpc.Error{Code: proto.CodeNotFound, Message: words})
+	if rec.Code != http.StatusNotFound || body["code"] != "not_found" || body["retryable"] != false || body["error"] != words {
+		t.Errorf("no language: %d %v", rec.Code, body)
+	}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, lang}, rec, fmt.Errorf("session.items: %w", &rpc.Error{Code: proto.CodeNotFound, Message: words}))
+		if rec.Code != http.StatusNotFound || body["code"] != "not_found" || body["retryable"] != false ||
+			body["error"] != i18n.T(lang, "http-status.not_found") || body["detail"] != words {
+			t.Errorf("%s: %d %v", lang, rec.Code, body)
+		}
+	}
+	// An uncoded failure is still the hub's 502.
+	rec = httptest.NewRecorder()
+	if body := call(t, rec, rec, errors.New("boom")); rec.Code != http.StatusBadGateway || body["code"] != "internal" {
+		t.Errorf("plain error: %d %v", rec.Code, body)
+	}
+}
+
 // A start the node refused on its request, with nothing to name: a launcher that cannot be read-only, a directory whose
 // name cannot be typed into a terminal. The hub words both, for a session's start_error and an HTTP answer.
 func TestPlainStartRefusalLocalization(t *testing.T) {
@@ -246,6 +271,7 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"peer long", &rpc.Error{Code: "peer_too_long", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_too_long"},
 		{"peer command", &rpc.Error{Code: "peer_command", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_command"},
 		{"peer unconfirmed", &rpc.Error{Code: "peer_unconfirmed", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_unconfirmed"},
+		{"peer held", &rpc.Error{Code: "peer_held", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_held"},
 		// a mode change the node cannot make (#1843): change it on the computer, or resume the session first
 		{"modes outside", &rpc.Error{Code: proto.CodeModesOnComputer, Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.modes_on_computer"},
 		{"modes not running", &rpc.Error{Code: proto.CodeModesNotRunning, Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.modes_not_running"},
@@ -253,6 +279,10 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"send now unsupported", &rpc.Error{Code: "send_now_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unsupported"},
 		{"send now unrecognized", &rpc.Error{Code: "send_now_unrecognized", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unrecognized"},
 		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
+		// a send to an omp the node cannot resume (node/control.go, node/ompcalls.go)
+		{"omp not resumable", &rpc.Error{Code: "omp_resume_unknown", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.omp_resume_unknown"},
+		// a read of an agent its engine let go, which only an open chat starts (Paseo, #8132)
+		{"not loaded", &rpc.Error{Code: proto.CodeNotLoaded, Message: "the runtime's own words"}, "rpc-errors.not_loaded"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -282,6 +312,56 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 	rec = httptest.NewRecorder()
 	if body := call(t, langWriter{rec, i18n.Ja}, rec, typed); body["error"] != i18n.T(i18n.Ja, "inbox-errors.no_item") {
 		t.Fatal("typed summary overwritten")
+	}
+}
+
+// The node's open_elsewhere refusal (#6803) is said in the request's language by where the session is open, with the
+// node's words as the detail and its fields kept; one without a known where (an older node, an Agent runtime's own
+// refusal) keeps its words.
+func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
+	const words = "node's own words"
+	for _, where := range []string{"desktop", "terminal", "program", "other", "agents_list"} {
+		err := &rpc.Error{Code: "open_elsewhere", Message: words, Data: json.RawMessage(`{"delivered":"none","pid":42,"where":"` + where + `"}`)}
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			body := call(t, langWriter{rec, lang}, rec, err)
+			want := i18n.T(lang, "rpc-errors.open_elsewhere_"+where)
+			if want == "rpc-errors.open_elsewhere_"+where || body["error"] != want {
+				t.Fatalf("%s %s: %v", where, lang, body)
+			}
+			if rec.Code != http.StatusConflict || body["code"] != "open_elsewhere" || body["delivered"] != "none" || body["where"] != where || body["detail"] != words {
+				t.Fatalf("%s %s: %d %v", where, lang, rec.Code, body)
+			}
+			if lang == i18n.ZhHans && strings.Contains(want, "手机") {
+				t.Fatalf("%s names the phone: %s", where, want)
+			}
+		}
+	}
+	for _, data := range []string{`{"delivered":"none","pid":42}`, `{"delivered":"none","where":"elsewhere"}`} {
+		err := &rpc.Error{Code: "open_elsewhere", Message: words, Data: json.RawMessage(data)}
+		rec := httptest.NewRecorder()
+		if body := call(t, langWriter{rec, i18n.En}, rec, err); body["error"] != words {
+			t.Fatalf("%s: %v", data, body)
+		}
+	}
+}
+
+func TestAssistantServiceTierFailuresWithholdNativeDiagnostics(t *testing.T) {
+	for _, code := range []string{"assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			raw := &rpc.Error{Code: code, Message: "native English diagnostic", Data: json.RawMessage(`{"delivered":"none","retryable":false}`)}
+			body := call(t, langWriter{rec, lang}, rec, raw)
+			if rec.Code != http.StatusConflict || body["code"] != code || body["error"] != i18n.T(lang, "rpc-errors."+code) {
+				t.Fatalf("%s %s: %d %v", code, lang, rec.Code, body)
+			}
+			if _, exists := body["detail"]; exists {
+				t.Fatalf("%s %s exposed the native diagnostic: %v", code, lang, body)
+			}
+			if body["delivered"] != "none" || body["retryable"] != false {
+				t.Fatalf("%s %s changed delivery: %v", code, lang, body)
+			}
+		}
 	}
 }
 

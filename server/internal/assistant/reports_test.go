@@ -62,7 +62,7 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
 	card := posts()[0]
 	for _, want := range []string{"修登录崩溃", "✅开发", "🔵**合入**", "⚪部署", "已合并",
-		"https://hub.example.com/todos?id=" + todo.ID, "https://github.com/o/r/pull/901", "https://hub.example.com/s/box/s1"} {
+		"https://hub.example.com/todos/" + todo.ID, "https://github.com/o/r/pull/901", "https://hub.example.com/s/box/s1"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card lacks %q:\n%s", want, card)
 		}
@@ -73,6 +73,27 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	time.Sleep(4 * testReportDelay)
 	if n := len(posts()); n != 1 {
 		t.Fatalf("%d posts", n)
+	}
+}
+
+// A chart in the Agent's answer (persona-card, #3140) is drawn on the report card as its numbers, never cut down to
+// the title alone: the owner reads this card in Lark (#4093).
+func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
+	s, f, posts := reportService(t, true)
+	startedTask(t, s, f)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "睡眠这一周\n\n```persona-card\n"+
+		`{"type":"line","title":"Sleep this week","unit":"h","points":[{"label":"Mon","value":7.2},{"label":"Tue","value":6.5}]}`+
+		"\n```\n\n睡得比上周多点。", 0)
+	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
+	card := posts()[0]
+	for _, want := range []string{"Sleep this week", "Mon", "7.2", "Tue", "6.5", "睡得比上周多点"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the chart is not drawn as numbers: the card lacks %q:\n%s", want, card)
+		}
+	}
+	if strings.Contains(card, "persona-card") || strings.Contains(card, `\"type\"`) {
+		t.Errorf("the chart block is left on the card as it was written:\n%s", card)
 	}
 }
 

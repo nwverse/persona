@@ -39,7 +39,7 @@ nonisolated enum IntentText {
             return String(localized: "A plan is waiting for your approval")
         case .permission:
             if let s = ix.summary, !s.isEmpty { return s }
-            if let tool = ix.toolName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
+            if let tool = ix.toolDisplayName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
             return String(localized: "A permission request is waiting for you")
         case .screen:
             return String(localized: "The terminal is waiting for your input")
@@ -180,11 +180,18 @@ nonisolated enum IntentSupport {
         return out
     }
 
-    /// Every group's sessions, or one group's.
+    /// Every group's sessions, or one group's, as the Agents list has them: a side session folded into its parent's
+    /// chat (`folded`).
     static func sessions(group: String? = nil) async throws -> [Session] {
         var out: [Session] = []
         for api in try clients() where group == nil || api.group == group { out += try await api.sessions() }
-        return out
+        return folded(out)
+    }
+
+    /// A side session lives in its parent's chat (#7944, `SideFold`): Siri and Shortcuts list, count and send to the
+    /// parent, in its folded state, never the side. By what each hub's last hello said (intents read no hello).
+    static func folded(_ sessions: [Session]) -> [Session] {
+        SideFold.fold(sessions, groups: SideFold.rememberedGroups(Set(sessions.map(\.group)))).listed
     }
 
     /// Every group's pending interactions.

@@ -5,6 +5,7 @@ import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
@@ -15,9 +16,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -69,7 +72,8 @@ fun ChatLinkHost(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val pool = remember(context) { ChatWebViewPool(context) }
+    val webFeatures = LocalChatWebFeatures.current
+    val pool = remember(context, webFeatures) { ChatWebViewPool(context, webFeatures) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateAsState()
@@ -130,7 +134,7 @@ fun ChatLinkHost(
             if (event == Lifecycle.Event.ON_START) pool.resume()
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); pool.destroy() }
+        onDispose { lifecycle.removeObserver(observer) }
     }
     // Memory pressure (the app in the background, or the system asks): pages not on screen go; each is a renderer.
     DisposableEffect(pool, context) {
@@ -164,25 +168,45 @@ fun ChatLinkHost(
     // A web page is over the page: the page's glass goes opaque and the dock makes way (LocalWebSheets).
     WebSheetShown(url != null)
     // A conversation embedded under its host's bar (Persona's page) has the card start below that bar, not under it.
+    // Standalone hosts use the safe top instead; the larger value avoids counting an inset already in the host's bar twice.
     val hostBar = LocalChromeInsets.current.top
+    var hostTop by remember { mutableFloatStateOf(0f) }
+    // The host's height, in pixels: it shrinks on every frame the keyboard slides up (the page's imePadding), so it is read
+    // in layout and effects, and in composition only while a card is open; a BoxWithConstraints here composed the whole
+    // conversation again on each of those frames.
+    var hostHeight by remember { mutableIntStateOf(-1) }
     CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalChatLinkOpening provides opening) {
-        BoxWithConstraints(modifier.fillMaxSize()) {
-            val height = maxHeight
+        Box(modifier.fillMaxSize().onGloballyPositioned { hostTop = it.positionInWindow().y }.onSizeChanged { hostHeight = it.height }) {
+            // safeDrawing includes the keyboard: read it in a derived state, whose value (the top) does not move with it.
+            val safeDrawing = WindowInsets.safeDrawing
             val density = LocalDensity.current
-            val pixels = with(density) { height.toPx() }
-            val above = with(density) { hostBar.toPx() }.coerceIn(0f, pixels)
+            // Until the host is measured (its first frame) the window's height stands in.
+            val windowHeight = LocalWindowInfo.current.containerSize.height
+            val geometryState = remember(safeDrawing, density, hostBar, windowHeight) {
+                derivedStateOf {
+                    val pixels = (if (hostHeight >= 0) hostHeight else windowHeight).toFloat()
+                    // Window insets use window coordinates; this host may already start below its page bar or a sheet's safe top.
+                    val remainingSafeTop = (safeDrawing.getTop(density) - hostTop).coerceAtLeast(0f)
+                    LinkGeometry(pixels, maxOf(with(density) { hostBar.toPx() }, remainingSafeTop).coerceIn(0f, pixels))
+                }
+            }
+            val geometry by geometryState
             val drag = remember { AnchoredDraggableState(LinkDetent.Hidden) }
-            SideEffect {
-                drag.updateAnchors(DraggableAnchors {
-                    LinkDetent.Full at above
-                    LinkDetent.Peek at above + (pixels - above) * 0.4f
-                    LinkDetent.Hidden at pixels
-                })
+            // Keyed on the derived state itself: one made anew for a new bar, inset or window (now and then, never per
+            // keyboard frame) restarts the collector, which would otherwise keep the old one's anchors.
+            LaunchedEffect(drag, geometryState) {
+                snapshotFlow { geometryState.value }.collect { (pixels, above) ->
+                    drag.updateAnchors(DraggableAnchors {
+                        LinkDetent.Full at above
+                        LinkDetent.Peek at above + (pixels - above) * 0.4f
+                        LinkDetent.Hidden at pixels
+                    })
+                }
             }
             LaunchedEffect(opening) { if (url != null) drag.animateTo(LinkDetent.Full) }
             LaunchedEffect(closeRequest) { if (closeRequest > 0 && url != null) drag.animateTo(LinkDetent.Hidden) }
             LaunchedEffect(drag.settledValue) { if (drag.settledValue == LinkDetent.Hidden && !drag.isAnimationRunning) { url = null; forwarded = null } }
-            content(if (url != null && drag.currentValue == LinkDetent.Peek) (height - hostBar.coerceAtMost(height)) * 0.6f else 0.dp)
+            content(if (url != null && drag.currentValue == LinkDetent.Peek) with(density) { (geometry.pixels - geometry.above).toDp() } * 0.6f else 0.dp)
             url?.let { target ->
                 // A page whose renderer went away is loaded anew (a new view) when the user asks.
                 var generation by remember(target) { mutableIntStateOf(0) }
@@ -223,26 +247,34 @@ fun ChatLinkHost(
                         }
                     }, onWebpage = { nativeWebpage = it }) { title, whole -> nativeTitle = title; nativeWhole = whole }
                 }
-                if (view != null) DisposableEffect(view, picks) {
-                    view.picks = picks
-                    view.onPick = picked
-                    view.onExternal = { external = it }
-                    onDispose { pool.release(view) }
+                if (view != null) {
+                    // Only a committed composition activates the view; acquires from abandoned compositions stay evictable.
+                    SideEffect { view.picks = picks; pool.activate(view) }
+                    // Only the view going away releases it: a change of picks must not destroy the page being shown.
+                    DisposableEffect(view) {
+                        view.onPick = picked
+                        view.onExternal = { external = it }
+                        onDispose { pool.release(view) }
+                    }
                 }
                 fun close() { scope.launch { drag.animateTo(LinkDetent.Hidden) } }
                 fun back() { if (view != null && !view.gone && view.canGoBack()) view.goBack() else close() }
                 BackHandler { back() }
+                val pixels = geometry.pixels
                 val offset = drag.offset.takeIf { it.isFinite() } ?: pixels
                 val panelHeight = with(density) { (pixels - offset).coerceIn(0f, pixels).toDp() }
                 val palette = PersonaTheme.palette
                 val shape = PersonaTheme.shapes.sheetShape
                 // No glass inside the card either: its page would put the WebView in a glass source (LocalWebSheets).
-                // The card sits below the host's bar and over the dock, so its page keeps no room for them.
+                // The card sits below the host's bar and system top, and over the dock, so its page keeps no room for them.
+                // Its background reaches the side cutouts; only the controls and page content move inside them.
                 CompositionLocalProvider(LocalGlassLevel provides GlassLevel.Solid, LocalChromeInsets provides ChromeInsets()) {
-                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(panelHeight)
-                    .shadow(Tokens.Space.s, shape).clip(shape).background(palette.surfaceOpaque)) {
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(panelHeight).testTag("chat_link_card")
+                    .shadow(Tokens.Space.s, shape).clip(shape).background(palette.surfaceOpaque)
+                    .windowInsetsPadding(safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .consumeWindowInsets(safeDrawing.only(WindowInsetsSides.Top))) {
                     Column(Modifier.fillMaxWidth().anchoredDraggable(drag, Orientation.Vertical)) {
-                        Box(Modifier.align(Alignment.CenterHorizontally).padding(top = Tokens.Space.s).size(Tokens.Space.xxxl, Tokens.Space.xs)
+                        Box(Modifier.align(Alignment.CenterHorizontally).padding(top = Tokens.Space.s).size(Tokens.Space.Standard.xxl, Tokens.Space.Standard.xs)
                             .clip(PersonaTheme.shapes.controlShape).background(palette.ink3))
                         Row(Modifier.fillMaxWidth().padding(end = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
                             JIconButton(PhIcons.CaretLeft, stringResource(R.string.chat_link_back), { back() })
@@ -263,7 +295,7 @@ fun ChatLinkHost(
                                 stringResource(if (drag.currentValue == LinkDetent.Full) R.string.chat_link_peek else R.string.chat_link_full),
                                 { scope.launch { drag.animateTo(if (drag.currentValue == LinkDetent.Full) LinkDetent.Peek else LinkDetent.Full) } })
                             Box {
-                                val clipboard = LocalClipboardManager.current
+                                val copy = rememberCopy()
                                 val page = { view?.currentUrl?.let { ChatLinks.webUrl(it) } ?: target }
                                 JIconButton(PhIcons.DotsThree, stringResource(R.string.chat_link_actions), { menu = true })
                                 val copied = stringResource(R.string.chat_link_copied)
@@ -271,7 +303,7 @@ fun ChatLinkHost(
                                 // A forwarded port's address is the phone's own loopback: no other app could open it.
                                 JMenu(menu, { menu = false }, listOfNotNull(
                                     JAction(stringResource(R.string.chat_link_copy), PhIcons.LinkSimple) {
-                                        clipboard.setText(AnnotatedString(page())); feedback?.notice(copied)
+                                        copy(page(), copied)
                                     }.takeIf { forwarded == null },
                                     JAction(stringResource(R.string.chat_link_reload), PhIcons.ArrowClockwise, enabled = nativeShown || view?.gone == false) {
                                         if (nativeShown) nativeRefresh++ else view?.reload()
@@ -304,9 +336,7 @@ fun ChatLinkHost(
                         // Feishu documents and Moments posts in their native views while the hub has them (#1530); each can
                         // still switch to the page, which takes the WebView then (a crashed one is gone: "Reopen" above).
                         val page: @Composable () -> Unit = {
-                            if (view != null && !view.gone) key(view) {
-                                AndroidView(factory = { view }, modifier = Modifier.fillMaxSize(), onRelease = { pool.release(it) })
-                            }
+                            if (view != null && !view.gone) key(view) { ChatLinkWebSlot(view, Modifier.fillMaxSize()) }
                         }
                         val read = linkManager ?: manager
                         // A link inside it (another document, a post) opens as the manager it is read as.
@@ -322,9 +352,7 @@ fun ChatLinkHost(
                         }
                     } else if (view != null && !view.gone) key(view) {
                         JPage(title = stringResource(R.string.chat_link_page), modifier = Modifier.fillMaxWidth().weight(1f), topBar = {}) { padding ->
-                            AndroidView(factory = { view },
-                                modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = pagePadding),
-                                onRelease = { pool.release(it) })
+                            ChatLinkWebSlot(view, Modifier.fillMaxSize().padding(padding).padding(horizontal = pagePadding))
                         }
                     } else Spacer(Modifier.fillMaxWidth().weight(1f))
                 }
@@ -355,8 +383,23 @@ fun ChatLinkHost(
                 if (!openExternal(context, link)) feedback?.notice(noApp)
             })
         }
+        // Declared after the card's own effects, which Compose forgets in reverse order: when the host goes, the pool closes first,
+        // so the page's release only destroys it instead of building a replacement for a pool that is about to be destroyed.
+        DisposableEffect(pool) { onDispose { pool.destroy() } }
     }
 }
+
+/**
+ * The page's slot in the card. Leaving composition only detaches the view; destroying it is [ChatWebViewPool.release], which the
+ * host's `DisposableEffect(view)` calls once, when the page stops showing. A slot that comes back with the same view gets it alive.
+ */
+@Composable
+internal fun ChatLinkWebSlot(view: ChatSelectionWebView, modifier: Modifier = Modifier) {
+    AndroidView(factory = { (view.parent as? ViewGroup)?.removeView(view); view }, modifier = modifier)
+}
+
+/** Which WebView features the host's pool may use; the platform's answers unless a test fixes them. */
+internal val LocalChatWebFeatures = staticCompositionLocalOf { ChatWebFeatures.Platform }
 
 /**
  * The machine a conversation runs on, for its port links (docs/operations/ports.md "Recognizing links in replies"): its id and name, the names
@@ -374,3 +417,6 @@ internal data class ChatPorts(
 )
 
 internal val LocalChatPorts = androidx.compose.runtime.compositionLocalOf<ChatPorts?> { null }
+
+/** The link card's room in the host, in pixels: its height and where the card's top stops. */
+private data class LinkGeometry(val pixels: Float, val above: Float)

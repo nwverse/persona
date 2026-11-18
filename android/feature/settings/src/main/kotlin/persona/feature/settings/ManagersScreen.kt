@@ -1,7 +1,5 @@
 package persona.feature.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -13,7 +11,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -121,7 +118,8 @@ private enum class ManagerAsk { Rename, Move, Delete }
 
 /**
  * Settings › Managers › one: its status, where it runs, its version and when it was last connected; Rename, Set as default, Install elsewhere
- * (New installation code while installing) and Delete (Cancel installation), each only where the hub would take it.
+ * (New installation code while installing) and Delete (Cancel installation), each only where the hub would take it. The hub's own
+ * assistant also has Show in the switcher.
  */
 @Composable
 internal fun ManagerPage(
@@ -152,7 +150,10 @@ internal fun ManagerPage(
         // An installing manager's new code moves nothing: no warning.
         onMove = { if (manager?.isInstalling == true) scope.launch { model.newCode(managerId) } else asking = ManagerAsk.Move },
         onDelete = { asking = ManagerAsk.Delete },
-        push = push, onPush = pushModel?.let { m -> { on: Boolean -> scope.launch { m.set(managerId, on) }; Unit } })
+        push = push, onPush = pushModel?.let { m -> { on: Boolean -> scope.launch { m.set(managerId, on) }; Unit } },
+        // Its computers on this hub (another group's carry the same manager ids): the switcher shows it while it has one.
+        computers = LocalManagerGroup.current.let { group -> machines.count { it.manager == managerId && persona.core.contracts.GroupKeys.namespaceOf(it.id) == group } },
+        onShowInSwitcher = { show -> scope.launch { model.showInSwitcher(managerId, show) } })
     val name = manager?.name?.ifBlank { manager.id }.orEmpty()
     when (asking) {
         ManagerAsk.Rename -> NameDialog(
@@ -180,6 +181,10 @@ internal fun ManagerContent(
     onRename: () -> Unit, onDefault: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit,
     /** 推送通知 for this device; null (or a hub without `muted_managers`): no switch. */
     push: ManagerPushState? = null, onPush: ((Boolean) -> Unit)? = null,
+    /** How many computers it has: while it has one (or is the default) the switcher shows it, and the switch cannot turn off. */
+    computers: Int = 0,
+    /** Show in the switcher, on the hub's own assistant's page: true shows it there, false keeps it out while it is not used. */
+    onShowInSwitcher: (Boolean) -> Unit = {},
 ) {
     val res = LocalResources.current
     val manager = state.manager(managerId)
@@ -229,6 +234,21 @@ internal fun ManagerContent(
                 }
                 ManagerNote(stringResource(R.string.settings_managers_push_note))
                 push.failure?.let { JInlineStatus(it.text(), Modifier.padding(top = Tokens.Space.xs), tone = InlineTone.Failed) }
+            }
+        }
+        // Show in the switcher (the hub's own assistant, #9055; as the web's): on is the hub's `hide` turned around.
+        // While it is in use (the default, or it has a computer) the hub would refuse to hide it, so the switch cannot
+        // turn off and the note says why; turning it on always goes. A refusal all the same (a computer the page has
+        // not heard of yet) is said under the actions, as every change's is.
+        if (manager.builtin && !installing) item("switcher") {
+            val on = !manager.hide
+            val inUse = manager.isDefault || computers > 0
+            Column(Modifier.padding(top = Tokens.Space.l)) {
+                JGroupItem(GroupPosition.Single) {
+                    JSwitchRow(stringResource(R.string.settings_managers_show_in_switcher), on, onShowInSwitcher,
+                        enabled = !state.busy && !(on && inUse))
+                }
+                ManagerNote(stringResource(if (inUse) R.string.settings_managers_switcher_in_use else R.string.settings_managers_switcher_note))
             }
         }
         val actions = buildList<@Composable () -> Unit> {
@@ -340,16 +360,11 @@ internal fun ColumnScope.ManagerCodeBody(sheet: ManagerCodeSheet, now: Instant, 
 /** A label with Copy on its right, over the text in the code face. */
 @Composable
 private fun CopyBlock(label: String, text: String, small: Boolean = false) {
-    val context = LocalContext.current
-    val res = LocalResources.current
-    val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             Text(label, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            JButton(stringResource(R.string.settings_managers_copy), {
-                context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText(label, text))
-                feedback?.notice(res.getString(R.string.settings_src_copied))
-            }, kind = JButtonKind.Quiet, size = JButtonSize.Small, icon = PhIcons.Copy, enabled = text.isNotEmpty())
+            JButton(stringResource(R.string.settings_managers_copy), { copy(text, null) }, kind = JButtonKind.Quiet, size = JButtonSize.Small, icon = PhIcons.Copy, enabled = text.isNotEmpty())
         }
         JCodeBlock(text, Modifier.fillMaxWidth(), small = small)
     }

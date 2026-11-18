@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -12,7 +13,7 @@ import (
 // A session started in plan mode goes on in one mode once its plan is approved, whichever surface approves it
 // (#3784): the mode its start named (session.start's plan_then, sessionState.PlanThen). Approved on Persona's card,
 // the hook's answer sets it (hooks.go). Approved in the terminal's own dialog, Claude Code applies the option picked
-// there; the node then looks at the footer and moves the session to the recorded mode when it differs.
+// there; the node watches the footer from the moment the card is raised and moves the session to the recorded mode when it differs.
 
 // planThenOf is the mode to record for a start in mode with the asked-for plan_then: only for a plan-mode start, a
 // mode Persona knows, and not plan itself.
@@ -41,28 +42,40 @@ func (n *Node) planThen(id string) string {
 	return ""
 }
 
-// How long, and how often, the node looks at the terminal after a plan card ended without an answer.
+// How long, and how often, the node looks at the terminal while a plan waits to be decided. Long: a plan approved in
+// the terminal with "manually approve" is followed at once by a permission dialog, which hides the footer until it is
+// answered.
 var (
-	planThenWatch = 90 * time.Second
-	planThenEvery = 2 * time.Second
+	planThenWatch = 10 * time.Minute
+	planThenEvery = 3 * time.Second
 )
 
 // planThenSet bounds pressing the session over to its mode (tuiSetMode: a read and a key per step of the cycle).
 const planThenSet = 20 * time.Second
 
-// planThenAfterTerminal follows a plan the terminal is deciding: once the footer shows a mode other than plan, the
-// plan was approved there, and the session is moved to its recorded mode when the dialog picked another. A plan sent
-// back (the footer stays on plan), a dialog still open (no footer) and a session with no recorded mode are left alone.
-func (n *Node) planThenAfterTerminal(id string) {
+// terminalDecided marks an ask whose question the terminal's own dialog answered: its card is withdrawn as dismissed
+// (decided on the computer), where a hook that merely went away is cancelled.
+type terminalDecided struct{ atomic.Bool }
+
+type terminalDecidedKey struct{}
+
+// planAfterTerminal follows a plan from the moment its card is raised. The plan dialog hides the TUI's footer; once
+// the footer is back, the terminal decided the plan (approved, or sent back), and decidedHere is called once so the
+// card that still waits is withdrawn. When the footer then shows a mode other than plan, the plan was approved there,
+// and a session whose start recorded a mode (planThen) is moved to it when the dialog picked another. A dialog still
+// in front (no footer) is waited out: a plan approved with "manually approve" is followed at once by a permission
+// dialog. The returned stop ends the watch: the card was answered, and its answer set the mode.
+func (n *Node) planAfterTerminal(id string, decidedHere func()) (stop func()) {
 	want := n.planThen(id)
-	if want == "" {
-		return
-	}
+	// Both read here, not in the goroutine: a test shortens them (fastPlanThen) and puts them back when it ends, which
+	// can come before a watch it stopped at once has even started (#3942).
+	ctx, cancel := context.WithTimeout(context.Background(), planThenWatch)
+	every := planThenEvery
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), planThenWatch)
 		defer cancel()
-		t := time.NewTicker(planThenEvery)
+		t := time.NewTicker(every)
 		defer t.Stop()
+		told := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -77,10 +90,18 @@ func (n *Node) planThenAfterTerminal(id string) {
 			if err != nil {
 				return
 			}
-			switch cur := tuiMode(screen); cur {
-			case "", "plan":
-				continue // the dialog is still up, or the plan was sent back
-			case want:
+			cur := tuiMode(screen)
+			if cur == "" {
+				continue // a dialog is up
+			}
+			if !told && decidedHere != nil {
+				told = true
+				decidedHere()
+			}
+			switch {
+			case cur == "plan":
+				return // sent back in the terminal: it plans again, and its next plan is a new card
+			case want == "" || cur == want:
 				return
 			default:
 				// Its own time: the watch may be nearly over when the approval is seen.
@@ -98,4 +119,5 @@ func (n *Node) planThenAfterTerminal(id string) {
 			}
 		}
 	}()
+	return cancel
 }

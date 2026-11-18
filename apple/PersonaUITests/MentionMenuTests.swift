@@ -1,9 +1,9 @@
 import XCTest
 
-/// Typing "@" in the composer opens the list of files, folders and sessions over it, as on the web (#2319): the chat's
-/// files, the session folder's entries (a slash browses a folder), then other agents' sessions. A file is typed as
-/// `@path `, a folder keeps browsing, a session goes over the box as a quote and with the message; the + menu types the
-/// "@". Against `MOCK_MENTIONS=1 scripts/mock/mock_hub.py` (PERSONA_MOCK_HUB): the review agent's tools read two files of
+/// Typing "@" in the composer opens the list of files, folders, workspaces and sessions over it, as on the web (#2319,
+/// #2599): the chat's files, the session folder's entries (a slash browses a folder), Persona's workspaces, then other
+/// agents' sessions. A file is typed as `@path `, a folder keeps browsing, a workspace or session goes over the box as
+/// context and with the message; the + menu types the "@". Against `MOCK_MENTIONS=1 scripts/mock/mock_hub.py` (PERSONA_MOCK_HUB): the review agent's tools read two files of
 /// its folder (/Users/me/code/weather, the mock's file tree). Without the flag the chat's files are missing and the first
 /// test fails; the others pass. TEST_RUNNER_PERSONA_SHOTS=<dir> keeps screenshots (TEST_RUNNER_PERSONA_SHOTS_APPEARANCE
 /// names them).
@@ -12,6 +12,9 @@ final class MentionMenuTests: XCTestCase {
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001" // the weather agent, working
     private static let review = "macbook/a1f3c2d4-0000-4000-8000-000000000006" // the PR review agent, idle
     private static let blog = "studio/a1f3c2d4-0000-4000-8000-000000000003" // the blog migration agent, 「博客迁移到 Astro」 in the mock
+    private static let main = "server/b2e4d6f8-0000-4000-8000-000000000001"
+    private static let nonMain = "server/b2e4d6f8-0000-4000-8000-000000000002"
+    private static let workspace = "mention-menu.workspace:macbook/herdr:1:/Users/me/code/weather-app" // weather-app, main, in the mock catalog
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -37,6 +40,8 @@ final class MentionMenuTests: XCTestCase {
         field.typeText("@")
         let menu = app.descendants(matching: .any)["mention-menu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "no @ list:\n\(app.debugDescription)")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'mention-menu.workspace:'")).firstMatch.exists,
+                       "an Agent chat offered workspaces")
         // The chat's files first, the session folder's entries once read, then the other sessions.
         let provider = app.buttons["mention-menu.used:/Users/me/code/weather/WeatherWidget/Provider.swift"]
         XCTAssertTrue(provider.waitForExistence(timeout: 5), "the chat's files are missing (MOCK_MENTIONS=1?):\n\(app.debugDescription)")
@@ -120,14 +125,53 @@ final class MentionMenuTests: XCTestCase {
         XCTAssertTrue(sent?.contains("博客迁移到 Astro") == true, "the quote's title is missing: \(sent ?? "")")
     }
 
+    /// Persona's main and ordinary conversations and a new conversation all send the picked workspace's raw location.
+    @MainActor func testAWorkspaceGoesAsContextInPersonaAndANewConversation() {
+        let openings = [
+            ["-tab", "assistant", "-openAssistant", Self.main],
+            ["-tab", "assistant", "-openAssistant", Self.nonMain],
+            ["-tab", "assistant", "-newAssistant", "YES"],
+        ]
+        for (index, extra) in openings.enumerated() {
+            let app = launch(extra)
+            let field = composer(app)
+            clearQuotes(app)
+            field.tap()
+            clear(field)
+            field.typeText("@weather")
+            let row = app.buttons[Self.workspace]
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "no weather-app workspace:\n\(app.debugDescription)")
+            shot(app, "workspace-\(index)")
+            row.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["composer.quotes"].firstMatch.waitForExistence(timeout: 5),
+                          "the workspace was not added over the box")
+            XCTAssertTrue(waitEmpty(field), "the @ token stayed: \(String(describing: field.value))")
+            XCTAssertFalse(app.descendants(matching: .any)["mention-menu"].firstMatch.exists, "the list stayed open")
+            let marker = "workspace \(UUID().uuidString.prefix(6))"
+            field.typeText(marker)
+            app.buttons["shell-composer-send"].tap()
+            let sent = waitSentText(marker)
+            XCTAssertNotNil(sent, "the workspace message did not reach the hub")
+            let contextTag = sent?.range(of: #"^<[a-z-]+-context kind="workspace""#, options: .regularExpression) != nil
+            XCTAssertTrue(contextTag, "not a leading workspace: \(sent ?? "")")
+            XCTAssertTrue(sent?.contains("machine=\"macbook\"") == true, "the machine is missing: \(sent ?? "")")
+            XCTAssertTrue(sent?.contains("cwd=\"/Users/me/code/weather-app\"") == true, "the raw folder is missing: \(sent ?? "")")
+            XCTAssertTrue(sent?.contains("branch=\"main\"") == true, "the branch is missing: \(sent ?? "")")
+            XCTAssertTrue(sent?.contains(marker) == true)
+        }
+    }
+
     @MainActor func testThePlusMenuTypesAnAt() {
         let app = launch(["-tab", "dev", "-openSession", Self.widget])
         let field = composer(app)
         field.tap()
         clear(field)
         field.typeText("look at")
-        app.buttons["shell-composer-add"].firstMatch.tap()
-        let item = app.buttons["composer-menu-mention"]
+        // The iPhone's tap opens the photo / file panel; its touch and hold, the menu (#3225).
+        let plus = app.buttons["shell-composer-add"].firstMatch
+        if UIDevice.current.userInterfaceIdiom == .pad { plus.tap() } else { plus.press(forDuration: 1.0) }
+        // By its title too, where UIKit's menu drops the identifier.
+        let item = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "composer-menu-mention", "提及文件或会话")).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no Mention item in +:\n\(app.debugDescription)")
         item.tap()
         XCTAssertTrue(wait(field, "look at @"), "the item did not type @: \(String(describing: field.value))")
@@ -135,15 +179,19 @@ final class MentionMenuTests: XCTestCase {
         clear(field)
     }
 
-    /// A new conversation offers the sessions (it has no files or folder yet).
+    /// A new conversation offers Persona's workspaces before the sessions (it has no files or folder yet).
     @MainActor func testANewConversationOffersSessions() {
         let app = launch(["-tab", "assistant", "-newAssistant", "YES"])
         let field = composer(app)
+        clearQuotes(app)
         field.tap()
         clear(field)
         field.typeText("@")
+        let workspace = app.buttons[Self.workspace]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10), "no workspace row:\n\(app.debugDescription)")
         let row = app.buttons["mention-menu.session:\(Self.blog)"]
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no session row:\n\(app.debugDescription)")
+        XCTAssertLessThan(workspace.frame.minY, row.frame.minY, "workspaces are not before sessions")
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'mention-menu.top:'")).firstMatch.exists)
         shot(app, "new")
         row.tap()
@@ -151,6 +199,16 @@ final class MentionMenuTests: XCTestCase {
         // Unsent, the quote would stay for the next test.
         app.buttons["取消引用"].firstMatch.tap()
         clear(field)
+    }
+
+    /// Draft quotes survive relaunching: remove them so this pick, not an earlier run, supplies the sent context.
+    @MainActor private func clearQuotes(_ app: XCUIApplication) {
+        for _ in 0..<6 {
+            let remove = app.buttons["取消引用"].firstMatch
+            guard remove.exists else { return }
+            remove.tap()
+        }
+        XCTAssertFalse(app.buttons["取消引用"].firstMatch.exists, "an earlier draft quote remained")
     }
 
     @MainActor private func composer(_ app: XCUIApplication) -> XCUIElement {
@@ -199,6 +257,13 @@ final class MentionMenuTests: XCTestCase {
             sleep(1)
         }
         return nil
+    }
+
+    /// The raw text of the send the hub got with `marker`, without JSON escaping around the context tag's attributes.
+    private func waitSentText(_ marker: String) -> String? {
+        guard let entry = waitSent(marker), let data = entry.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["text"] as? String
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {

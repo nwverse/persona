@@ -2,18 +2,20 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // start does the handshake and opens the thread: thread/start for a new conversation (Codex picks the id),
 // thread/resume for an existing one.
-func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) error {
+func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, startupMode ...string) error {
 	n := c.p.ownerOr(c.n)
 	var init struct {
 		CodexHome string `json:"codexHome"`
@@ -32,6 +34,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		n.logger.Printf("assistant codex: skills root: %v", err)
 	}
 	mode := n.codexPermissionMode(id)
+	if len(startupMode) > 0 && startupMode[0] != "" {
+		mode = startupMode[0]
+	}
 	params := map[string]any{"cwd": cwd}
 	if mode != "" {
 		approval, sandbox := codexPolicy(mode)
@@ -41,9 +46,11 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		params["model"] = c.p.model.Model
 	}
 	// The same on every start of the thread, apart from the memory index: the live snapshot goes with each message.
-	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir))
+	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir), c.p.model.SupervisionInstructions)
 	var res struct {
-		Thread struct {
+		Model       string          `json:"model"`
+		ServiceTier json.RawMessage `json:"serviceTier"`
+		Thread      struct {
 			ID   string `json:"id"`
 			Path string `json:"path"`
 		} `json:"thread"`
@@ -62,6 +69,8 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	}
 	c.mu.Lock()
 	c.threadID = res.Thread.ID
+	c.speedModel = res.Model
+	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
 	c.p.id = res.Thread.ID
@@ -73,6 +82,7 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		n.pathsAt[res.Thread.ID] = time.Now()
 	}
 	n.mu.Unlock()
+	c.loadSpeedModels(ctx)
 	if c.nameGates != nil { // larkCheck records what it confirmed under this id (p.id): the addresses stand for it from now on
 		c.nameGates(res.Thread.ID)
 	}
@@ -131,9 +141,12 @@ func codexSandboxPolicy(mode, memDir string) map[string]any {
 
 // deliver hands a user message to the thread: a new turn when idle, steered into the running turn otherwise. live is
 // the <persona-context> block it starts with ("" for none; assistant_context.go).
-func (c *codexConn) deliver(ctx context.Context, live, text string, images []proto.Image) error {
+func (c *codexConn) deliver(ctx context.Context, live, text string, images []proto.Image, skills ...assistantskills.Entry) error {
 	n := c.p.ownerOr(c.n)
 	input := []map[string]any{}
+	for _, skill := range skills {
+		input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
+	}
 	if live != "" {
 		input = append(input, map[string]any{"type": "text", "text": live, "text_elements": []any{}})
 	}
@@ -229,6 +242,7 @@ func (c *codexConn) compacted() {
 	manual := c.p.manual
 	c.p.manual, c.p.compacting = false, false
 	c.p.mu.Unlock()
+	c.compactedInTurn(manual) // whether it made room, the next request says (assistant_codex_compaction_loop.go)
 	if manual {
 		c.p.ownerOr(c.n).compactionEnded(c.p.id, "")
 	}

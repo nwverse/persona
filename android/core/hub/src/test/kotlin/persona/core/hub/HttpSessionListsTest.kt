@@ -57,6 +57,19 @@ class HttpSessionListsTest {
         }
     }
 
+    @Test fun completeMembershipReadsCompleteRowsInLargePages() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody(page))
+            transport(server).sessionPage(SessionListFilter(requiresCompleteMembership = true), since = "checkpoint")
+            val url = server.takeRequest().requestUrl!!
+            assertEquals("0", url.queryParameter("summary"))
+            assertEquals("200", url.queryParameter("limit"))
+            assertEquals("checkpoint", url.queryParameter("since"))
+            assertNull(url.queryParameter("state"))
+            assertNull(url.queryParameter("q"))
+        }
+    }
+
     @Test fun countsRetainAllSuppliedFiltersWithoutFetchingRows() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody(counts))

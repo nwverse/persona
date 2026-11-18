@@ -74,9 +74,10 @@ class NodeArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name) / 'runtime'
+        base = Path(self.temporary.name).resolve()  # on macOS the temp directory is under a symlink
+        self.root = base / 'runtime'
         (self.root / 'bin').mkdir(parents=True)
-        self.staged = Path(self.temporary.name) / 'staged'
+        self.staged = base / 'staged'
         self.manifest = release(self.staged)
         self.hub = copy.deepcopy(self.manifest)
         self.hub['files'] = {'linux-amd64': self.hub['files']['linux-amd64']}
@@ -180,6 +181,24 @@ class NodeArtifactTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 artifacts.publish_nodes(self.root, self.staged, self.manifest, health(self.manifest))
         self.assertEqual(self.pointer.resolve(), old)
+
+    def test_native_self_check_accepts_capabilities_beside_its_identity(self):
+        announced = json.loads(native_result(self.manifest))
+        announced['resident_handover'] = True  # nodeupdate.Self capabilities grow from release to release
+        with patch.object(artifacts.subprocess, 'check_output', return_value=json.dumps(announced).encode()):
+            destination = artifacts.publish_nodes(self.root, self.staged, self.manifest, health(self.manifest))
+        self.assertEqual(self.pointer.resolve(), destination)
+
+    def test_native_self_check_still_refuses_any_identity_difference(self):
+        right = json.loads(native_result(self.manifest))
+        answers = [dict(right, os='darwin'), dict(right, arch='arm64'), dict(right, program='persona-node'),
+                   {key: value for key, value in right.items() if key != 'version'}, [right]]
+        for answer in answers:
+            with self.subTest(answer=answer), \
+                    patch.object(artifacts.subprocess, 'check_output', return_value=json.dumps(answer).encode()):
+                with self.assertRaisesRegex(ValueError, 'self-check differs'):
+                    artifacts.publish_nodes(self.root, self.staged, self.manifest, health(self.manifest))
+            self.assertFalse(self.pointer.exists())
 
     def test_immutable_manifest_binary_and_version_cannot_change(self):
         destination = self.publish()

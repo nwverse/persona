@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -21,7 +23,8 @@ import (
 // dayLayout is how a due day is written (the API's due_date, the tools' due).
 const dayLayout = "2006-01-02"
 
-// setPlan takes the plan of row (a stored todo, or one made in memory), and the project it is in (todo_project.go).
+// setPlan takes the plan of row (a stored todo, or one made in memory), the project it is in (todo_project.go), when
+// the owner last saw it (todo_seen.go) and their restore and Someday (todo_marks.go).
 func (t *Todo) setPlan(row db.TodoRow) {
 	t.DueAt, t.DueDate = row.DueAt, ""
 	if row.DueDate != nil {
@@ -30,9 +33,14 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.RemindAt, t.RemindedAt, t.Priority = row.RemindAt, row.RemindedAt, row.Priority
 	t.Project = row.Project
 	t.Kind = row.Kind
+	t.SeenAt = row.SeenAt
+	t.RestoredAt, t.SomedayUntil = row.RestoredAt, row.SomedayUntil
+	t.InboxItem = row.InboxItem
+	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
 }
 
-// keepPlan writes t's plan and project into row: a row made in memory for a change that is not to them keeps them.
+// keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
+// change that is not to them keeps them.
 func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.DueAt, row.DueDate = t.DueAt, nil
 	if d, err := time.Parse(dayLayout, t.DueDate); err == nil {
@@ -41,6 +49,10 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.RemindAt, row.RemindedAt, row.Priority = t.RemindAt, t.RemindedAt, t.Priority
 	row.Project = t.Project
 	row.Kind = t.Kind
+	row.SeenAt = t.SeenAt
+	row.RestoredAt, row.SomedayUntil = t.RestoredAt, t.SomedayUntil
+	row.InboxItem = t.InboxItem
+	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -164,12 +176,51 @@ func todoPriority(p string) (string, error) {
 
 // createPlainTodo makes a todo of the user's (no conversation, no plan of tasks) with plan's due date, reminder and
 // priority, and tells the apps.
-func (s *Service) createPlainTodo(ctx context.Context, title, notes string, plan db.TodoEdit) (Todo, error) {
+func (s *Service) createPlainTodo(ctx context.Context, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFrom(ctx, title, notes, "", plan, bindings...)
+}
+
+// createTodoFrom is createPlainTodo for a to-do made from an Inbox row (#6480): inboxItem is that row's id, "" for none.
+func (s *Service) createTodoFrom(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
-	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now}
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem}
 	plan.Title, plan.Notes, plan.Done = nil, nil, nil
 	plan.Apply(&row, now)
-	return s.insertTodo(ctx, row)
+	return s.insertTodo(ctx, row, bindings...)
+}
+
+// createDirectionTodo makes a piece of leader's direction (#5846): a todo with plan's due date, reminder, priority and
+// project, opened by the leader and supervised by it, with no agent and no done_when, as a Lark topic opens one
+// (feishu_thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
+// it, direction_tree.go), and task_plan's todo_id can run an agent on it later instead of opening a second todo.
+func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	now := time.Now().UTC()
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
+		Origin: leader, Quiet: s.quietTask(ctx, leader)}
+	plan.Title, plan.Notes, plan.Done = nil, nil, nil
+	plan.Apply(&row, now)
+	t, err := s.insertTodo(ctx, row, bindings...)
+	if err != nil {
+		return Todo{}, err
+	}
+	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if cur, ok := s.todoNow(t.ID); ok {
+		t = cur
+	}
+	return t, nil
+}
+
+// createPieceTodo makes a piece of a request that conversation will hand out itself (todo_pieces.go): a to-do with
+// plan's links, opened by that conversation, with no agent, so that its task_plan's todo_id can run an Agent on it when
+// its turn comes (reusableTodo) instead of opening a second to-do. Unlike a leader's piece (createDirectionTodo) it is
+// not supervised until an Agent works on it: the plan that starts it sets that up.
+func (s *Service) createPieceTodo(ctx context.Context, conversation, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	now := time.Now().UTC()
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
+		Origin: conversation, Quiet: s.quietTask(ctx, conversation)}
+	plan.Title, plan.Notes, plan.Done = nil, nil, nil
+	plan.Apply(&row, now)
+	return s.insertTodo(ctx, row, bindings...)
 }
 
 // editTodo makes edit e to todo id as the user's PATCH does: stored, put into memory, the apps and the hub told; a
@@ -183,7 +234,24 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
 	}
+	links := e.PartOf != nil || e.After != nil
+	if f := s.pieceWriteHook; links && f != nil {
+		f(id)
+	}
+	if f := s.editWriteHook; f != nil {
+		f(id)
+	}
 	s.todos.writing.Lock()
+	if links {
+		// Checked again with the graph held still: a write since the caller's check may have changed the request
+		// (todo_pieces.go). A *pieceError when it no longer holds.
+		l, err := s.recheckPieces(id, e)
+		if err != nil {
+			s.todos.writing.Unlock()
+			return Todo{}, err
+		}
+		e.PartOf, e.After = l.PartOf, l.After
+	}
 	now := time.Now().UTC()
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
@@ -193,7 +261,14 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 			return Todo{}, err
 		}
 	} else {
-		r := todoRowOf(cur)
+		// as the writes before this one left it, not as it was before the lock; deleted since: not there (never made
+		// again from the copy read before the lock)
+		base, ok := s.todoNow(id)
+		if !ok {
+			s.todos.writing.Unlock()
+			return Todo{}, db.ErrTodoNotFound
+		}
+		r := todoRowOf(base)
 		e.Apply(&r, now)
 		row = &r
 	}
@@ -328,8 +403,11 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 	}
 	title, body := s.reminderText(ctx, todo, at, now)
 	set := s.settings(ctx)
+	// A reminder the owner set for themself: theirs to act on, so P0 even in the hub's low-distraction mode, keyed by
+	// to-do and due time (each due time rings once).
 	s.push(ctx, Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
-		SessionID: set.Main, Title: title, Body: body})
+		SessionID: set.Main, Title: title, Body: body, Level: assistantwire.LevelP0,
+		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
 	s.channelsPushed(set.MachineID, set.Main, title, body) // the Feishu bot and the channels with pushes on, as notify_user
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }

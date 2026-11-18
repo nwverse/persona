@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -20,7 +21,7 @@ func TestFixedTaskPreviewKeepsTheRequestedMachine(t *testing.T) {
 	s, _ := launcherHealthHubOn(t, newStorelessService)
 	ctx := context.Background()
 	s.healthRound(ctx, true)
-	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"Inspect files","prompt":"Inspect files without writing","machine":"l4","cwd":"~/code/app","launcher":"work","why":"Files are local"}]}`))
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"Inspect files","permission":"bypassPermissions","prompt":"Inspect files without writing","machine":"l4","cwd":"~/code/app","launcher":"work","why":"Files are local"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,7 @@ func taskStartMachines(f *fakeHub) []string {
 func TestFixedTaskHealthChangesBetweenPreviewDispatchAndRetry(t *testing.T) {
 	s, f := launcherHealthHubOn(t, newStorelessService)
 	ctx := context.Background()
-	args := json.RawMessage(`{"tasks":[{"title":"Inspect files","prompt":"Inspect local files","machine":"l4","cwd":"~/code/app","launcher":"work","permission":"acceptEdits"}]}`)
+	args := json.RawMessage(`{"tasks":[{"title":"Inspect files","prompt":"Inspect local files","machine":"l4","cwd":"~/code/app","launcher":"work","permission":"bypassPermissions"}]}`)
 	res, err := s.toolTaskPlan(ctx, "conv9", args)
 	if err != nil {
 		t.Fatal(err)
@@ -90,9 +91,7 @@ func TestFixedTaskHealthChangesBetweenPreviewDispatchAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "retry failure", func() bool {
-		s.tasks.mu.Lock()
-		busy := s.tasks.retrying[todoID]
-		s.tasks.mu.Unlock()
+		busy := s.taskStartOnWay(todoID)
 		return !busy && todoNow(s, todoID).StartError != ""
 	})
 	if starts := taskStartMachines(f); len(starts) != 0 {
@@ -110,7 +109,7 @@ func TestFixedTaskHealthChangesBetweenPreviewDispatchAndRetry(t *testing.T) {
 	f.mu.Lock()
 	start := f.starts[0]
 	f.mu.Unlock()
-	if start["cwd"] != "/home/me/code/app" || start["permission_mode"] != "acceptEdits" || !strings.Contains(start["prompt"].(string), "Inspect local files") {
+	if start["cwd"] != "/home/me/code/app" || start["permission_mode"] != "bypassPermissions" || !strings.Contains(start["prompt"].(string), "Inspect local files") {
 		t.Fatalf("retry changed task inputs: %v", start)
 	}
 }
@@ -154,7 +153,7 @@ func TestFixedTaskAsyncAuthenticationFailureIsNotMoved(t *testing.T) {
 
 func TestFixedTaskRejectsUnknownPoliciesAndPreservesEdits(t *testing.T) {
 	s, _ := newTaskService(t)
-	if _, err := s.toolTaskPlan(context.Background(), "conv1", json.RawMessage(`{"tasks":[{"title":"Inspect","prompt":"Inspect","machine":"box","cwd":"/work","machine_policy":"anywhere"}]}`)); err == nil {
+	if _, err := s.toolTaskPlan(context.Background(), "conv1", json.RawMessage(`{"tasks":[{"title":"Inspect","permission":"bypassPermissions","prompt":"Inspect","machine":"box","cwd":"/work","machine_policy":"anywhere"}]}`)); err == nil {
 		t.Fatal("unknown policy accepted")
 	}
 	task := PlanTask{Machine: "l4", MachinePolicy: machineFixed}
@@ -282,14 +281,16 @@ func TestTaskPlanReportsQueuedDispatchBeforeAnAgentExists(t *testing.T) {
 	}
 }
 
-func TestTaskPlanUnsetPermissionDefaultsToExplicitDefaultMode(t *testing.T) {
+// A writable task says bypassPermissions itself (the tool refuses any other), so the manager's default mode and Claude
+// Code's own never change what it starts with, and neither is read for it.
+func TestTaskPlanKeepsTheExplicitBypassWhateverTheDefaultsSay(t *testing.T) {
 	// claude: permissions.defaultMode in Claude Code's settings on box ("" none; "-" a node that can't tell, #3026).
 	for _, tc := range []struct{ name, configured, claude, explicit, want string }{
-		{"unset", "", "", "", "default"},
-		{"node cannot tell", "", "-", "", "default"},
-		{"claude settings", "", "auto", "", "auto"},
-		{"claude settings, a mode Persona does not know", "", "dontAsk", "", "default"},
-		{"configured", "acceptEdits", "auto", "", "acceptEdits"},
+		{"unset", "", "", "bypassPermissions", "bypassPermissions"},
+		{"node cannot tell", "", "-", "bypassPermissions", "bypassPermissions"},
+		{"claude settings", "", "auto", "bypassPermissions", "bypassPermissions"},
+		{"claude settings, a mode Persona does not know", "", "dontAsk", "bypassPermissions", "bypassPermissions"},
+		{"configured", "acceptEdits", "auto", "bypassPermissions", "bypassPermissions"},
 		{"explicit", "acceptEdits", "auto", "bypassPermissions", "bypassPermissions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -368,36 +369,63 @@ func TestTaskPlanUnsetPermissionDefaultsToExplicitDefaultMode(t *testing.T) {
 	}
 }
 
-// A plan saved with no permission (before task_plan settled it) is settled at the start, on the computer it starts on.
-func TestTaskStartSettlesAnUnsetPermission(t *testing.T) {
+// A saved writable plan starts without a permission, with another mode, or with a card edit that took it away: no
+// permission is required. A read-only task still starts in plan mode.
+func TestStartTakesASavedWritablePlanWithoutPermission(t *testing.T) {
 	s, f := newTaskService(t)
 	ctx := context.Background()
-	f.answerNode(assistantwire.DeviceClaudeSettings, func(string, json.RawMessage) (any, error) {
-		return map[string]any{"settings": []map[string]any{{"key": proto.ClaudeDefaultModeSetting, "value": "acceptEdits"}}}, nil
-	})
-	res, err := s.toolTaskPlan(ctx, "conv1", json.RawMessage(`{"tasks":[{"title":"Fix","prompt":"Fix it","machine":"box","cwd":"/code/app"}]}`))
-	if err != nil {
-		t.Fatal(err)
+	for _, saved := range []string{"", "default", "acceptEdits"} {
+		res, err := s.toolTaskPlan(ctx, "conv1", json.RawMessage(`{"tasks":[{"title":"Fix","permission":"bypassPermissions","prompt":"Fix it","machine":"box","cwd":"/code/app"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := s.loadPlan(ctx, regexp.MustCompile(`plan_[0-9a-f]+`).FindString(res))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan.Tasks[0].Permission = saved
+		if err := s.savePlan(ctx, plan); err != nil {
+			t.Fatal(err)
+		}
+		want := len(f.started()) + 1
+		if _, err := s.startPlan(ctx, plan.ID, []PlanTask{{Permission: ""}}, false); err != nil {
+			t.Fatalf("saved permission %q: %v", saved, err)
+		}
+		waitFor(t, "the start with permission "+saved, func() bool { return len(f.started()) == want })
 	}
-	plan, err := s.loadPlan(ctx, regexp.MustCompile(`plan_[0-9a-f]+`).FindString(res))
-	if err != nil {
-		t.Fatal(err)
+}
+
+// A fixed task's machine has a failing record (left by a start that never got an answer, periodic checks off): the
+// start probes it once on the spot, as a detour does, and starts there when the launcher works. A probe that still
+// fails refuses as before, without starting anything.
+func TestFixedTaskRechecksAStaleRecordBeforeRefusing(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newStorelessService)
+	ctx := context.Background()
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "context deadline exceeded", source: healthSourceStart})
+	if r := healthState(s, "l4", "work"); !r.unusable() {
+		t.Fatalf("seed record: %+v", r)
 	}
-	plan.Tasks[0].Permission = ""
-	if err := s.savePlan(ctx, plan); err != nil {
-		t.Fatal(err)
+	_, _, err := s.startTaskAgent(ctx, &PlanTask{Machine: "l4", Cwd: "/work", Launcher: "work", MachinePolicy: machineFixed}, false)
+	var msg *i18n.Message
+	if !errors.As(err, &msg) || msg.Key != "assistant-tasks.fixed_launcher_unhealthy" {
+		t.Fatalf("a probe that still fails did not refuse: %v", err)
 	}
-	if _, err := s.startPlan(ctx, plan.ID, nil, false); err != nil {
-		t.Fatal(err)
+	if starts := taskStartMachines(f); len(starts) != 0 || len(f.checked) != 1 || f.checked[0] != "l4/work" {
+		t.Fatalf("refusal: starts %v, probes %v", starts, f.checked)
 	}
-	waitFor(t, "task started", func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return len(f.starts) == 1
-	})
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if got := f.starts[0]["permission_mode"]; got != "acceptEdits" {
-		t.Fatalf("started permission = %v, want the computer's Claude Code default", got)
+
+	delete(f.checks, "l4/work") // the launcher works now; the record is what is stale
+	s.health.mu.Lock()
+	delete(s.health.recheckAt, healthKey("l4", "work"))
+	s.health.mu.Unlock()
+	mid, _, err := s.startTaskAgent(ctx, &PlanTask{Machine: "l4", Cwd: "/work", Launcher: "work", MachinePolicy: machineFixed}, false)
+	if err != nil || mid != "l4" {
+		t.Fatalf("stale record refused the start: %s, %v", mid, err)
+	}
+	if starts := taskStartMachines(f); len(starts) != 1 || starts[0] != "l4" || len(f.checked) != 2 {
+		t.Fatalf("recovered start: starts %v, probes %v", starts, f.checked)
+	}
+	if r := healthState(s, "l4", "work"); r.State != healthOK || r.Source != healthSourceCheck {
+		t.Fatalf("the passing probe did not clear the record: %+v", r)
 	}
 }

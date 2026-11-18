@@ -1,12 +1,17 @@
 {
+  "conversation_tasks": "Conversation tasks",
+  "conversation_tasks_empty": "No tasks from this conversation yet.",
   "resize_label": "Drag to resize the panel",
   "resize_title": "Drag to resize",
   "files": "Files",
-  "task": "Task",
-  "agent": "Agent",
   "link": "Link",
   "close": "Close panel",
-  "plan": "Plan",
   "preview": "Preview",
-  "review": "Review"
+  "review": "Review",
+  "changes": "Changes",
+  "team": "Team",
+  "background": "Background tasks",
+  "task": "Task",
+  "agent": "Agent",
+  "sides": "Side sessions"
 }

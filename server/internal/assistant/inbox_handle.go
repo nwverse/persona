@@ -2,16 +2,11 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
+	"crypto/rand"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -28,14 +23,21 @@ type inboxNote struct {
 	Name    string `json:"name"`
 	Text    string `json:"text,omitempty"`
 	Edited  bool   `json:"edited,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
 	Context string `json:"context,omitempty"`
 	Machine string `json:"machine,omitempty"`
 	Session string `json:"session,omitempty"`
+	Who     string `json:"who,omitempty"`
+	Next    string `json:"next,omitempty"`
+	Checks  int    `json:"checks,omitempty"`
+	// Deferred holds this programmatic wake out of every direct delivery path until the unified scheduler admits it.
+	// Pending is persisted but never listed, so this is durable internal bookkeeping rather than client wire state.
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 func renderNote(n inboxNote, owner string) string {
-	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited,
-		Context: n.Context, Machine: n.Machine, Session: n.Session})
+	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited, Failed: n.Failed,
+		Context: n.Context, Machine: n.Machine, Session: n.Session, Who: n.Who, Next: n.Next, Checks: n.Checks})
 }
 
 // chainLine is a chain entry as the conversation reads it, its time in loc (the user's zone).
@@ -58,6 +60,12 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	if !wake {
 		return
 	}
+	b.wakeInboxConversation(it, now)
+}
+
+// wakeInboxConversation applies tell's wake bookkeeping without adding another note. Under b.mu.
+func (b *inboxBook) wakeInboxConversation(it *InboxItem, now time.Time) {
+	a := it.Agent
 	a.Wake = true
 	if h := it.Handling; h != nil && h.State != HandlingLooking {
 		a.Back = h.State
@@ -67,6 +75,139 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	if a.SessionID == "" {
 		a.State, a.Attempts, a.RetryAfter, a.Error = AgentQueued, 0, nil, ""
 	}
+}
+
+// queueInboxWake records a capped source notification immediately. An item already occupying a processing slot reuses
+// it; otherwise the note is held at the item's original first-deferred time until admitInboxSourceWake. Under b.mu.
+func (b *inboxBook) queueInboxWake(it *InboxItem, n inboxNote, reuseSlot bool, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	n.Deferred = true
+	a.queueNote(n)
+	if reuseSlot || inboxConversationRunning(it) {
+		b.admitInboxSourceWake(it, now)
+		return
+	}
+	if a.DeferredAt == nil {
+		t := now.UTC()
+		a.DeferredAt = &t
+	}
+}
+
+// admitInboxSourceWake releases every held note on one item in its original order and applies the same handling and
+// restoration transitions as the former immediate paths. The caller has already reserved a slot, or the item is
+// reusing its own active slot. Under b.mu.
+func (b *inboxBook) admitInboxSourceWake(it *InboxItem, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	for i := range a.Pending {
+		if !a.Pending[i].Deferred {
+			continue
+		}
+		n := a.Pending[i]
+		switch n.Name {
+		case prompts.NoteAgentStopped:
+			// Only a current Agent's stop is a capped wake. Older stops remain non-waking informational notes.
+			if inboxCurrentAgentStopNote(it, n) {
+				if it.Handling != nil {
+					switch it.Handling.State {
+					case HandlingAgent:
+						if a.Back == HandlingAgent {
+							a.Back = ""
+						}
+						b.setHandling(it, HandlingLooking, "", now)
+					case HandlingWaiting:
+						a.Back = HandlingWaiting
+						b.setHandling(it, HandlingLooking, "", now)
+					}
+				}
+				b.wakeInboxConversation(it, now)
+			}
+		case prompts.NoteSelfReplied:
+			if it.Handling != nil && it.Handling.State == HandlingAgent {
+				// The current Agent keeps its state and timeout clock. Back remembers a pre-existing wait exactly as
+				// the existing immediate path did; WakeSlot below accounts for this otherwise invisible processing turn.
+				restoreWaiting := a.Back == HandlingWaiting
+				startedAt := a.StartedAt
+				b.wakeInboxConversation(it, now)
+				if restoreWaiting {
+					a.Back = HandlingWaiting
+				}
+				a.StartedAt = startedAt
+			} else {
+				// The immediate path records a reply outside Agent work as waiting before waking. Reproduce that transition
+				// here even when an earlier held stop or read already moved this replay through looking.
+				b.setHandling(it, HandlingWaiting, "", now)
+				b.wakeInboxConversation(it, now)
+				b.setHandling(it, HandlingLooking, "", now)
+			}
+		case prompts.NoteSelfRead:
+			b.wakeInboxConversation(it, now)
+			b.setHandling(it, HandlingLooking, "", now)
+		default:
+			b.wakeInboxConversation(it, now)
+		}
+		a.Pending[i].Deferred = false
+	}
+	a.DeferredAt = nil
+	// HandlingAgent does not belong in the ordinary processing-conversation count. Keep an explicit reservation
+	// until a turn outcome changes handling and setHandling releases it.
+	a.WakeSlot = a.Wake && !inboxOrdinaryRunning(it)
+}
+
+// flushInboxWakes is the uncapped user/new-counterpart-message path: replay every held source transition in order,
+// then let the caller's own waking note establish the combined turn's restoration point. No programmatic reservation
+// survives this uncapped path. Under b.mu.
+func (b *inboxBook) flushInboxWakes(it *InboxItem, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	b.admitInboxSourceWake(it, now)
+	a.DeferredAt, a.WakeSlot = nil, false
+}
+
+// inboxCurrentAgentStopNote reports whether a stop belongs to the latest Agent link, rather than an older Agent whose
+// result is informational only. Under b.mu.
+func inboxCurrentAgentStopNote(it *InboxItem, n inboxNote) bool {
+	latest := inboxLatestAgentLink(it)
+	return latest != nil && latest.MachineID == n.Machine && latest.SessionID == n.Session
+}
+
+// inboxDeferredAgentStop reports a settled current-Agent result whose notification is still held for capacity. Only
+// current stops enter the deferred queue; an older Agent's stop is informational and is queued by tell instead.
+// Under b.mu.
+func inboxDeferredAgentStop(it *InboxItem) bool {
+	if it.Agent == nil {
+		return false
+	}
+	for _, n := range it.Agent.Pending {
+		if n.Deferred && n.Name == prompts.NoteAgentStopped && inboxCurrentAgentStopNote(it, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropInboxWakes discards held work when handling fails or closes; informational notes already eligible for delivery
+// keep their existing behavior. Under b.mu.
+func (b *inboxBook) dropInboxWakes(it *InboxItem) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	kept := a.Pending[:0]
+	for _, n := range a.Pending {
+		if !n.Deferred {
+			kept = append(kept, n)
+		}
+	}
+	a.Pending = kept
+	a.DeferredAt, a.WakeSlot = nil, false
 }
 
 // setHandling moves the event's processing state, and mirrors it on Agent for the apps from before (an Agent's
@@ -85,6 +226,9 @@ func (b *inboxBook) setHandling(it *InboxItem, state, errText string, now time.T
 	a := it.Agent
 	if a == nil {
 		return
+	}
+	if state != HandlingAgent {
+		a.WakeSlot = false
 	}
 	h.MachineID, h.SessionID = a.MachineID, a.SessionID
 	if g := it.Suggestion; g != nil && g.Kind == SuggestReply && !g.Handback {
@@ -113,6 +257,7 @@ func (b *inboxBook) failHandling(it *InboxItem, reason string, now time.Time) {
 	if it.Agent != nil {
 		it.Agent.Wake = false
 	}
+	b.dropInboxWakes(it)
 	b.setHandling(it, HandlingFailed, reason, now)
 	b.chainAdd(it, InboxChainEntry{Kind: ChainFailed, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.failed"), Detail: reason})
 }
@@ -128,6 +273,7 @@ func (b *inboxBook) closeHandling(it *InboxItem, why string, now time.Time) bool
 	active := it.handled() && !(it.Suggestion != nil && it.Suggestion.Kind == SuggestConclusion && it.Handling.State == HandlingDone)
 	it.Suggestion = nil
 	a.Wake, a.Pending = false, nil
+	a.DeferredAt, a.WakeSlot = nil, false
 	b.setHandling(it, HandlingDone, "", now)
 	if !active || a.SessionID == "" {
 		return false
@@ -136,11 +282,12 @@ func (b *inboxBook) closeHandling(it *InboxItem, why string, now time.Time) bool
 	return true
 }
 
-// ownSend: the source says the newest message of the item is the user's, and it is the reply Persona sent for a
-// confirmed suggestion (nothing came in since): not the user's own reply. Under b.mu.
+// ownSend: the source says the newest message of the item is the user's, and it is a reply Persona sent (nothing came
+// in since): not a separate reply the user made in the source. SentOf still proves this after a due check or another
+// wake has temporarily moved handling out of waiting. Under b.mu.
 func ownSend(it *InboxItem, last string) bool {
-	a, h := it.Agent, it.Handling
-	return a != nil && h != nil && h.State == HandlingWaiting && a.SentOf != "" && a.SentOf == it.Last && (last == "" || last == it.Last)
+	a := it.Agent
+	return a != nil && it.Handling != nil && a.SentOf != "" && a.SentOf == it.Last && (last == "" || last == it.Last)
 }
 
 // escalate hands the manager its work, under b.mu: a newly triaged Needs you event (recent) gets a processing
@@ -157,19 +304,25 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 		}
 		handled := it.handled()
 		twin := b.policyTwin(it) // the user's policy (inbox_policies.go): first takes what is not Needs you too
-		if !handled && (twin == TwinNever || it.Tier != TierAction && twin != TwinFirst || it.TriagedAt != it.Last) {
+		if !handled && (twin == TwinNever || it.Tier != TierAction && twin != TwinFirst || !it.tiered()) {
+			continue
+		}
+		// A URL-only link has an Agent record but has never asked the twin to work. It follows the same age
+		// limit as an unlinked item; an established conversation can still receive its later messages.
+		if (a == nil || a.Of == "" && a.StartedAt == nil && a.SessionID == "") && !it.UpdatedAt.After(since) {
 			continue
 		}
 		w := beginWrite(it)
+		if it.Follow != nil {
+			it.Follow.Checks, it.Follow.Due = 0, false
+		}
 		if a == nil {
-			if !it.UpdatedAt.After(since) {
-				continue
-			}
 			a = &InboxAgent{State: AgentQueued}
 			it.Agent = a
 		}
 		a.Of, a.Task, a.Reason = it.Last, it.Summary, it.Reason
 		// (a first message has the item's content: startInboxAgents leaves this one out of it)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteNewMessages, Context: it.Context}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 		b.settle(w)
@@ -212,6 +365,15 @@ func (s *Service) deliverPending(ctx context.Context) {
 	}
 }
 
+// inboxProcessingPrompt adds the write precondition to each new processing prompt.
+func inboxProcessingPrompt(turn, text string) string {
+	if turn == "" {
+		return text
+	}
+	return text + "\n\n[Persona Inbox processing turn: include processing_turn: \"" + turn +
+		"\" in inbox_suggest or inbox_draft calls for this prompt. If superseded, end this turn.]"
+}
+
 // deliverNotes sends what waits for the event's conversation into it. A conversation found gone is dropped: a note
 // that asks for work then queues a new one (carrying the recap and the chain); a send that failed otherwise is tried
 // again on the next pass.
@@ -246,8 +408,26 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		b.mu.Unlock()
 		return
 	}
-	machine, sid, wake, told := a.MachineID, a.SessionID, a.Wake, a.told
-	notes := append([]inboxNote(nil), a.Pending...)
+	machine, sid, wake := a.MachineID, a.SessionID, a.Wake
+	pending := append([]inboxNote(nil), a.Pending...)
+	base := a.told - len(pending)
+	delivered := map[int]bool{}
+	notes := make([]inboxNote, 0, len(pending))
+	for i, n := range pending {
+		if !n.Deferred {
+			delivered[base+i+1] = true
+			notes = append(notes, n)
+		}
+	}
+	if len(notes) == 0 {
+		b.mu.Unlock()
+		return
+	}
+	turn := ""
+	if it.open() {
+		turn = rand.Text()
+		a.ProcessingTurn = turn
+	}
 	b.mu.Unlock()
 	if s.isWorkMachine(machine) {
 		b.mu.Lock()
@@ -262,7 +442,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	for i, n := range notes {
 		texts[i] = renderNote(n, owner)
 	}
-	err := s.sendToSession(ctx, machine, sid, strings.Join(texts, "\n\n---\n\n"))
+	err := s.sendToSession(ctx, machine, sid, inboxProcessingPrompt(turn, strings.Join(texts, "\n\n---\n\n")))
 	gone := false
 	if err != nil {
 		// Gone only when its machine answers without it (an offline machine is tried again later).
@@ -273,23 +453,33 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		s.logf("inbox: tell the conversation of %s: %v (gone: %v)", it.ID, err, gone)
 	}
 	now := time.Now()
+	queueRecovery := false
 	b.mu.Lock()
 	if it.Agent == a && a.SessionID == sid {
 		switch {
 		case err == nil:
-			a.keepToldSince(told) // the notes told while it was sent go next time
+			a.keepToldOthers(delivered) // notes queued while it was sent, including held ones, go next time
 			if wake {
-				t := now.UTC()
-				a.Wake, a.StartedAt = false, &t
+				a.Wake = false
+				if it.Handling == nil || it.Handling.State != HandlingAgent {
+					t := now.UTC()
+					a.StartedAt = &t
+				}
 			}
 		case gone:
+			held := a.DeferredAt != nil
+			queueRecovery = wake || held
 			a.Lost = append(a.Lost, sid)
 			a.MachineID, a.SessionID = "", ""
-			if a.Wake {
+			if queueRecovery {
+				// A held wake still needs the replacement conversation. startInboxAgents admits it only after reserving
+				// capacity, so the first message carries both ready and formerly deferred notes in their original order.
 				a.State, a.Attempts, a.RetryAfter = AgentQueued, 0, nil
+				a.Wake = true
 			} else {
 				a.Pending = nil
 			}
+			a.WakeSlot = false
 			if it.Handling != nil {
 				it.Handling.MachineID, it.Handling.SessionID = "", ""
 			}
@@ -299,7 +489,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	if err == nil || gone {
 		s.saveInbox(ctx, []*InboxItem{it})
 	}
-	if gone && wake {
+	if gone && queueRecovery {
 		s.handInbox(ctx)
 	}
 }
@@ -311,229 +501,6 @@ func (s *Service) tellSoon(ctx context.Context, it *InboxItem) {
 		s.deliverNotes(ctx, it)
 		s.handInbox(ctx) // one without a conversation is started
 	}()
-}
-
-// ---- the suggestion tool (inbox_suggest; inbox_draft is its older name for a reply) ----
-
-type suggestIn struct {
-	Kind     string      `json:"kind"`
-	Text     string      `json:"text"`
-	Note     string      `json:"note"`
-	Handback bool        `json:"handback"`
-	Outcome  string      `json:"outcome"`
-	Recap    string      `json:"recap"`
-	Machine  string      `json:"machine"`
-	Cwd      string      `json:"cwd"`
-	Related  []string    `json:"related"`
-	Changes  []DocChange `json:"changes"`
-	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
-	Item string `json:"item"`
-}
-
-var errNotProcessing = i18n.ErrEnglish("inbox-errors.not_processing")
-
-// errSuggestion is a suggestion the tool refuses, said so the model can hand in a better one.
-type errSuggestion struct{ msg string }
-
-func (e errSuggestion) Error() string { return e.msg }
-
-// check holds a suggestion to the rules before anything is kept.
-func (in *suggestIn) check() error {
-	in.Kind, in.Text, in.Outcome = strings.TrimSpace(in.Kind), strings.TrimSpace(in.Text), strings.TrimSpace(in.Outcome)
-	switch in.Kind {
-	case "":
-		if strings.TrimSpace(in.Recap) == "" {
-			return errSuggestion{"give kind (reply, agent or conclusion) with text, or at least recap"}
-		}
-		return nil
-	case SuggestReply, SuggestAgent, SuggestConclusion:
-	default:
-		return errSuggestion{fmt.Sprintf("kind %q: one of reply, agent, conclusion", in.Kind)}
-	}
-	if in.Text == "" {
-		return errSuggestion{"text is required"}
-	}
-	if in.Kind == SuggestReply && !in.Handback {
-		// The user sends it with one tap: a blank left to fill in (<expected completion time>) would go out as it is.
-		if p := draftPlaceholder(in.Text); p != "" {
-			return errSuggestion{fmt.Sprintf("the reply leaves %s to fill in, and it goes out as it is: leave out what you could not find (say so in note) and submit again", p)}
-		}
-	}
-	if in.Kind != SuggestReply && len(in.Changes) > 0 {
-		return errSuggestion{"changes go with a reply only"}
-	}
-	if in.Kind == SuggestConclusion {
-		switch in.Outcome {
-		case "":
-			in.Outcome = TierFYI
-		case TierFYI, "done":
-		default:
-			return errSuggestion{fmt.Sprintf("outcome %q: fyi or done", in.Outcome)}
-		}
-	}
-	return nil
-}
-
-// suggest keeps the suggestion of the conversation sessionID on its event: the item's id, or a change the item does
-// not offer (nothing kept then); errNotProcessing when no event's conversation runs there.
-func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (string, *DocChange, error) {
-	id, refused, _, err := s.suggestFrom(ctx, sessionID, in)
-	return id, refused, err
-}
-
-// suggestFrom is suggest, also naming the conversation the event was handed to when the suggestion came from one
-// (in.Item; nil for the event's processing conversation).
-func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestIn) (string, *DocChange, *SessionRef, error) {
-	if err := in.check(); err != nil {
-		return "", nil, nil, err
-	}
-	if s.inboxReady(ctx) != nil {
-		return "", nil, nil, errInboxUnavailable
-	}
-	b := &s.inbox
-	b.mu.Lock()
-	var it *InboxItem
-	var from *SessionRef
-	if item := strings.TrimSpace(in.Item); item != "" {
-		var err error
-		if it, from, err = b.handedItem(item, sessionID); err != nil {
-			b.mu.Unlock()
-			return "", nil, nil, err
-		}
-	} else {
-		it = b.itemOfAgent(sessionID)
-		// A conversation that answers before its start returned (an agent runtime already running starts a turn at
-		// once): its item learns the conversation's id a moment later.
-		for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
-			b.mu.Unlock()
-			time.Sleep(100 * time.Millisecond)
-			b.mu.Lock()
-			it = b.itemOfAgent(sessionID)
-		}
-		if it == nil {
-			b.mu.Unlock()
-			return "", nil, nil, errNotProcessing
-		}
-	}
-	for _, ch := range in.Changes {
-		if it.Doc == nil || !docOffers(*it.Doc, ch) {
-			b.mu.Unlock()
-			return it.ID, &ch, nil, nil
-		}
-	}
-	now := time.Now().UTC()
-	w := beginWrite(it)
-	if r := strings.TrimSpace(in.Recap); r != "" {
-		it.Recap = clip(r, recapMax)
-	}
-	for _, id := range in.Related {
-		relate(it, b.items[strings.TrimSpace(id)])
-	}
-	var card *MessageCard
-	stop := false
-	if from == nil && in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
-		// Only the recap: this turn changes nothing else, the event goes back to where it was.
-		back := it.Agent.Back
-		if it.Suggestion != nil || back == "" || back == HandlingLooking || back == HandlingFailed {
-			back = HandlingDone
-		}
-		it.Agent.Wake = false
-		b.setHandling(it, back, "", now)
-	}
-	if in.Kind != "" && it.open() {
-		if legacySuggestion(it) != nil {
-			it.SuggestSeq = max(it.SuggestSeq, 1)
-		}
-		it.SuggestSeq++
-		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
-			Handback: in.Handback, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
-		if in.Kind == SuggestAgent {
-			if m, ok := s.machineByName(ctx, strings.TrimSpace(in.Machine)); ok {
-				g.MachineID = m.ID
-			}
-		}
-		it.Suggestion = g
-		var link *InboxChainLink
-		if from == nil {
-			it.Agent.Wake, it.Agent.Back = false, ""
-			b.setHandling(it, HandlingDone, "", now)
-			link = &InboxChainLink{Type: LinkSession, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
-		} else {
-			clearDraft(it)
-			link = &InboxChainLink{Type: LinkSession, MachineID: from.MachineID, SessionID: from.SessionID}
-		}
-		l := b.userLang()
-		switch {
-		case in.Kind == SuggestConclusion:
-			b.chainAdd(it, InboxChainEntry{Kind: ChainConcluded, At: now, Text: i18n.T(l, "assistant-inbox_chain.concluded"), Detail: in.Text})
-			if in.Outcome == "done" {
-				it.Suggestion = nil
-				b.file(it, now, doneByManager)
-				if from != nil {
-					stop = b.closeHandling(it, "read", now) // a processing conversation still on it stops
-				}
-			} else {
-				it.Tier = TierFYI
-			}
-		default:
-			key := "suggested_reply"
-			if in.Handback {
-				key = "suggested_handback"
-			} else if in.Kind == SuggestAgent {
-				key = "suggested_agent"
-			}
-			b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: i18n.T(l, "assistant-inbox_chain."+key), Detail: clip(in.Text, 600), Link: link})
-		}
-		if in.Kind == SuggestReply && from == nil {
-			card = messageCardOf(it)
-		}
-	}
-	id := it.ID
-	b.settle(w)
-	b.mu.Unlock()
-	// An undone suggestion gets no card, and the conversation hears it failed: the inbox must not promise what a
-	// restart would lose. Undone, the event is back where the turn found it, so handing it in again works. One that
-	// something else moved meanwhile stays (that move's save writes the row) and goes on as kept.
-	if s.saveWrites(ctx, []*inboxWrite{w}, "its suggestion"); w.undone {
-		return id, nil, from, errInboxNotPersisted
-	}
-	if card != nil {
-		s.messageCard(ctx, id, *card)
-	}
-	if stop {
-		s.tellSoon(ctx, it)
-	}
-	return id, nil, from, nil
-}
-
-// inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
-func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange) (string, *DocChange, error) {
-	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) {
-		return "", nil, nil
-	}
-	return id, refused, err
-}
-
-func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.RawMessage) (string, error) {
-	var in suggestIn
-	if err := json.Unmarshal(args, &in); err != nil {
-		return "", fmt.Errorf("arguments: %v", err)
-	}
-	_, refused, from, err := s.suggestFrom(ctx, self, in)
-	if err != nil {
-		return "", err
-	}
-	if refused != nil {
-		return "", fmt.Errorf("change %+v is not one the item lists (ref, field and one of its values)", *refused)
-	}
-	if in.Kind == "" {
-		return "The recap is updated.", nil
-	}
-	if from != nil {
-		return "The suggestion is in the user's inbox; nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
-	}
-	return "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here.", nil
 }
 
 // inboxAgentStarted records the Agent an event's conversation started (agent_start from it): the chain links that
@@ -566,316 +533,70 @@ func (s *Service) inboxAgentStarted(ctx context.Context, self, machine, session,
 	s.saveInbox(ctx, []*InboxItem{it})
 }
 
-// legacySuggestion is an AI twin draft stored before suggestions, as a reply suggestion (version 1); nil for none.
-func legacySuggestion(it *InboxItem) *InboxSuggestion {
-	a := it.Agent
-	if it.Suggestion != nil || it.Handling != nil || a == nil || a.State != AgentDrafted || strings.TrimSpace(a.Draft) == "" {
-		return nil
-	}
-	g := &InboxSuggestion{Version: 1, Kind: SuggestReply, Text: a.Draft, Note: a.Note, Changes: a.Changes}
-	g.At = it.UpdatedAt.UTC()
-	if a.DraftedAt != nil {
-		g.At = a.DraftedAt.UTC()
-	}
-	return g
-}
-
-// currentSuggestion is the item's suggestion as listed (an old draft's too).
-func currentSuggestion(it *InboxItem) *InboxSuggestion {
-	if it.Suggestion != nil {
-		return it.Suggestion
-	}
-	return legacySuggestion(it)
-}
-
-// ---- POST /api/v1/inbox/{id}/suggestion ----
-
-// Actions on a suggestion.
-const (
-	suggestConfirm  = "confirm"
-	suggestReject   = "reject"
-	suggestInstruct = "instruct"
-)
-
-type suggestionReq struct {
-	Version  int     `json:"version"`
-	Action   string  `json:"action"`
-	Text     *string `json:"text"`
-	ClientID string  `json:"client_id"`
-}
-
-var (
-	errSuggestionStale = i18n.ErrEnglish("inbox-errors.suggestion_stale")
-	errAnswerOnly      = i18n.ErrEnglish("inbox-errors.answer_only")
-)
-
-func (s *Service) inboxSuggestionRoutes() {
-	s.handle("POST /api/v1/inbox/{id}/suggestion", func(w http.ResponseWriter, r *http.Request) {
-		if !s.inboxUp(w, r) {
-			return
-		}
-		var in suggestionReq
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-		switch in.Action {
-		case suggestConfirm, suggestReject:
-		case suggestInstruct:
-			if in.Text == nil || strings.TrimSpace(*in.Text) == "" {
-				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.text_required"))
-				return
-			}
-		default:
-			apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.suggestion_action"))
-			return
-		}
-		it, err := s.actOnSuggestion(r.Context(), r.PathValue("id"), in, fullRole(r))
-		l := i18n.OfWriter(w)
-		switch {
-		case errors.Is(err, errNoInboxItem):
-			apierr.Write(w, http.StatusNotFound, err)
-		case errors.Is(err, errSuggestionStale):
-			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "suggestion_stale", "error": i18n.T(l, "assistant-inbox.suggestion_stale"), "item": it})
-		case errors.Is(err, errInboxItemDone):
-			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "inbox_item_done", "error": i18n.T(l, "assistant-inbox.item_done"), "retryable": false, "delivered": "none"})
-		case errors.Is(err, errAnswerOnly):
-			apierr.Write(w, http.StatusForbidden, err)
-		case errors.Is(err, errMailReplyTargetChanged):
-			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(l, "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none"})
-		case replyInDoubt(err):
-			body := apierr.LocalizedBody(http.StatusBadGateway, assistantwire.CodeAssistantInDoubt, err, i18n.OfWriter(w))
-			body["delivered"], body["retryable"] = "unknown", false
-			apierr.WriteBody(w, http.StatusBadGateway, body)
-		case err != nil:
-			apierr.Write(w, http.StatusBadGateway, err)
-		default:
-			apierr.WriteJSON(w, it)
-		}
-	})
-}
-
-// actOnSuggestion confirms, rejects or answers the item's current suggestion, at the version the user saw. full is
-// false for an answer-only device (the watch): it may only confirm a reply or a conclusion, as text.
-func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionReq, full bool) (InboxItem, error) {
-	enabled := s.inboxConfig(ctx).Agent.Enabled
-	b := &s.inbox
-	b.mu.Lock()
-	it := b.items[id]
-	if it == nil {
-		b.mu.Unlock()
-		return InboxItem{}, errNoInboxItem
-	}
-	g := currentSuggestion(it)
-	switch {
-	case !it.open():
-		b.mu.Unlock()
-		return InboxItem{}, errInboxItemDone
-	case g == nil || g.Version != in.Version:
-		out := it.listed()
-		b.mu.Unlock()
-		return out, errSuggestionStale
-	}
-	text := g.Text
-	if in.Text != nil && strings.TrimSpace(*in.Text) != "" {
-		text = strings.TrimSpace(*in.Text)
-	}
-	if !full && (in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
-		b.mu.Unlock()
-		return InboxItem{}, errAnswerOnly
-	}
-	if g.Conversation != nil {
-		return s.actOnHandedSuggestion(ctx, it, g, in, text) // it lets b.mu go
-	}
-	w := beginWrite(it)
-	if it.Agent == nil { // an old draft's item: its conversation's bookkeeping starts here
-		it.Agent = &InboxAgent{State: AgentSkipped}
-	}
-	now := time.Now()
-	l := b.userLang()
-	edited := text != g.Text
-	// The suggestion is taken now, under the lock: a second confirmation of it (another device, a retry) is stale.
-	it.Suggestion = nil
-	if it.Agent.State == AgentDrafted {
-		it.Agent.State = AgentSkipped
-	}
-	execute := in.Action == suggestConfirm && !g.Handback
-	switch {
-	case in.Action == suggestReject:
-		b.chainAdd(it, rejectedEntry(l, g.Text, now))
-		b.setHandling(it, HandlingLooking, "", now)
-		b.tell(it, inboxNote{Name: prompts.NoteRejected, Text: g.Text}, true, now)
-	case in.Action == suggestInstruct:
-		words := strings.TrimSpace(*in.Text)
-		b.chainAdd(it, instructedEntry(l, words, now))
-		b.setHandling(it, HandlingLooking, "", now)
-		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
-	case !execute: // handback: the conversation does it
-		b.chainAdd(it, confirmedEntry(l, text, edited, now))
-		b.setHandling(it, HandlingLooking, "", now)
-		b.tell(it, inboxNote{Name: prompts.NoteHandback, Text: text, Edited: edited}, true, now)
-	case g.Kind == SuggestConclusion:
-		b.chainAdd(it, confirmedEntry(l, text, false, now))
-		b.setHandling(it, HandlingDone, "", now)
-		b.file(it, now, "user")
-	default:
-		b.chainAdd(it, confirmedEntry(l, text, edited, now))
-	}
-	if !enabled && !execute {
-		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now)
-		b.settle(w)
-	}
-	last := it.Last
-	b.mu.Unlock()
-	if !execute || g.Kind == SuggestConclusion {
-		if !enabled && !execute {
-			if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its suggestion response"); failed[it.ID] {
-				return InboxItem{}, errInboxNotPersisted
-			}
-		} else {
-			s.saveInbox(ctx, []*InboxItem{it})
-		}
-		if enabled && it.Agent != nil && len(it.Agent.Pending) > 0 {
-			s.tellSoon(ctx, it)
-		}
-		b.mu.Lock()
-		out := it.listed()
-		b.mu.Unlock()
-		return out, nil
-	}
-	if g.Kind == SuggestAgent {
-		return s.confirmAgent(ctx, it, g, text, edited)
-	}
-	return s.confirmReply(ctx, it, g, text, edited, last, in.ClientID)
-}
-
-func confirmedEntry(l i18n.Lang, text string, edited bool, now time.Time) InboxChainEntry {
-	key := "assistant-inbox_chain.confirmed"
-	if edited {
-		key = "assistant-inbox_chain.confirmed_edited"
-	}
-	return InboxChainEntry{Kind: ChainConfirmed, At: now.UTC(), Text: i18n.T(l, key), Detail: text, Edited: edited}
-}
-
-func rejectedEntry(l i18n.Lang, text string, now time.Time) InboxChainEntry {
-	return InboxChainEntry{Kind: ChainRejected, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.rejected"), Detail: clip(text, 600)}
-}
-
-func instructedEntry(l i18n.Lang, words string, now time.Time) InboxChainEntry {
-	return InboxChainEntry{Kind: ChainInstructed, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.instructed",
-		i18n.Args{"text": clip(oneLine(words), 40)}), Detail: words}
-}
-
-// confirmReply sends the confirmed reply as shown (or as the user edited it) through the same once-only path as
-// /reply, but keeps the event open: it waits for the other side (handling waiting), and the conversation is told.
-// A send that fails leaves the event Needs you without a suggestion.
-func (s *Service) confirmReply(ctx context.Context, it *InboxItem, g *InboxSuggestion, text string, edited bool, last, clientID string) (InboxItem, error) {
-	if !validClientID(clientID) { // the same suggestion confirmed again is the same send
-		clientID = namedClientID(fmt.Sprintf("suggestion\n%s\n%d", it.ID, g.Version))
-	}
-	_, err := s.replyInboxDo(ctx, it.ID, text, clientID, false, false, g.Changes...)
-	b := &s.inbox
-	now := time.Now()
-	b.mu.Lock()
-	if err != nil {
-		b.failHandling(it, i18n.T(b.userLang(), "assistant-inbox_chain.failed_send"), now)
-	} else {
-		it.Agent.SentOf = last
-		b.setHandling(it, HandlingWaiting, "", now)
-		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text, Edited: edited}, false, now)
-	}
-	out := it.listed()
-	b.mu.Unlock()
-	s.saveInbox(ctx, []*InboxItem{it})
-	if err == nil {
-		s.tellSoon(ctx, it)
-	}
-	return out, err
-}
-
-// confirmAgent starts the Agent with the confirmed instruction, as the event's conversation would (agent_start from
-// it: the chain links the sub-session, the conversation is told when it is done).
-func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSuggestion, text string, edited bool) (InboxItem, error) {
-	b := &s.inbox
-	b.mu.Lock()
-	self := it.Agent.SessionID
-	b.mu.Unlock()
-	machine := g.MachineID
-	if machine == "" {
-		machine = s.settings(ctx).MachineID
-	}
-	cwd := g.Cwd
-	if cwd == "" {
-		cwd = "~"
-	}
-	args, _ := json.Marshal(map[string]string{"machine": machine, "cwd": cwd, "prompt": text})
-	res, err := s.runTool(ctx, s.settings(ctx).MachineID, self, "agent_start", args)
-	enabled := s.inboxConfig(ctx).Agent.Enabled
-	now := time.Now()
-	b.mu.Lock()
-	if err != nil {
-		b.failHandling(it, i18n.T(b.userLang(), "assistant-inbox_chain.failed_agent"), now)
-	} else {
-		session := ""
-		for _, e := range it.Chain {
-			if e.Kind == ChainAgent && e.Link != nil {
-				session = e.Link.SessionID
-			}
-		}
-		if self == "" { // no conversation recorded the start: the chain still links it
-			b.chainAdd(it, InboxChainEntry{Kind: ChainAgent, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.agent",
-				i18n.Args{"title": clip(oneLine(text), 40)})})
-		}
-		b.setHandling(it, HandlingAgent, "", now)
-		b.tell(it, inboxNote{Name: prompts.NoteAgentStarted, Text: text, Edited: edited, Machine: machine, Session: session}, false, now)
-		_ = res
-	}
-	if !enabled {
-		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now)
-	}
-	out := it.listed()
-	b.mu.Unlock()
-	s.saveInbox(ctx, []*InboxItem{it})
-	if err == nil {
-		s.tellSoon(ctx, it)
-	}
-	return out, err
-}
-
 // linkTaskFor asks the judge (model 2) which of the user's tasks going on the event is about
 // (docs/assistant/unified-entry.md): the conversation is told that task's progress, and its reply suggestion puts a card
 // in the task's conversation. Since phase 1 every Needs you event goes to the manager whatever the judge says of
 // handling it; a model that fails leaves the event unlinked. w is the item's write not saved yet (nil: none): the link
 // joins that write while the item still holds it (a concurrent move keeps the write from being undone over it).
 func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask, w *inboxWrite) bool {
-	b := &s.inbox
-	b.mu.Lock()
-	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
-	b.mu.Unlock()
-	system := prompts.RenderInboxJudge(prompts.InboxJudge{Owner: s.owner(ctx), Rules: s.inboxConfig(ctx).AgentRules})
-	var out struct {
-		TaskID string `json:"task_id"`
-	}
-	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	err := s.inboxModelJSON(cctx, purposeJudge, system, input, 0, &out)
-	cancel()
+	id, err := s.judgeInboxTask(ctx, it, tasks)
 	if err != nil {
 		if paused, _ := modelPaused(err); ctx.Err() == nil && !paused {
 			s.logf("inbox: link %s to a task: %v", it.ID, err)
 		}
 		return false
 	}
+	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, t := range tasks { // only a task it was shown
-		if it.Agent != nil && t.ID == strings.TrimSpace(out.TaskID) {
-			held := w != nil && b.holds(w)
-			it.Agent.TodoID = t.ID
-			if held {
-				b.settle(w)
-			}
-			return true
+	if it.Agent != nil && id != "" && inboxTaskLinkEligible(it) {
+		held := w != nil && b.holds(w)
+		it.Agent.TodoID = id
+		if held {
+			b.settle(w)
 		}
+		return true
 	}
 	return false
+}
+
+// judgeInboxTask is the task the judge links item it to, among tasks (inbox_task_scope.go): only the tasks the item's
+// repository or thread allows are offered (none: no model call), and an answer counts only when it is a task it was
+// shown and quotes that task's title or notes as its evidence. "" for none. Callers apply and save the result.
+func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask) (string, error) {
+	b := &s.inbox
+	b.mu.Lock()
+	if !inboxTaskLinkEligible(it) {
+		b.mu.Unlock()
+		return "", nil
+	}
+	sc := inboxScopeOf(it)
+	b.mu.Unlock()
+	if tasks = s.scopeInboxTasks(sc, tasks); len(tasks) == 0 {
+		return "", nil
+	}
+	b.mu.Lock()
+	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
+	b.mu.Unlock()
+	system := prompts.RenderInboxJudge(prompts.InboxJudge{Owner: s.owner(ctx), Rules: s.inboxConfig(ctx).AgentRules})
+	var out struct {
+		TaskID   string `json:"task_id"`
+		Evidence string `json:"evidence"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	err := s.inboxModelJSON(cctx, purposeJudge, system, input, 0, &out)
+	cancel()
+	if err != nil {
+		return "", err
+	}
+	for _, t := range tasks { // only a task it was shown, with a line copied from it
+		if t.ID == strings.TrimSpace(out.TaskID) {
+			if !judgeEvidence(t, out.Evidence) {
+				s.logf("inbox: %s: the judge named task %s without evidence from it (%q): not linked", it.ID, t.ID, clip(oneLine(out.Evidence), 80))
+				return "", nil
+			}
+			return t.ID, nil
+		}
+	}
+	return "", nil
 }

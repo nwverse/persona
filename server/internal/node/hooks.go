@@ -17,9 +17,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -81,12 +84,12 @@ func (n *Node) sockGone() string {
 func (n *Node) listenOnce(ctx context.Context) (net.Listener, error) {
 	path := nodeclient.SocketPath()
 	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := osproc.Listen("unix", path)
 	if err != nil {
 		return nil, err
 	}
 	// Never unlink on close: by then the path may belong to a newer node.
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.(*osproc.UnixListener).SetUnlinkOnClose(false)
 	_ = os.Chmod(path, 0o600)
 	if _, err := ensureLaunchKey(nodeclient.LaunchKeyPath()); err != nil { // before any personad launch reads it
 		n.logf("launch key: %v", err)
@@ -112,6 +115,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	r := bufio.NewReader(c)
 	line, err := r.ReadBytes('\n')
 	if err != nil {
+		return
+	}
+	if isHTTPRequestLine(line) { // Persona's Claude Code plugin (ccplugin.go)
+		n.serveCCPluginHTTP(ctx, c, line, r)
 		return
 	}
 	var req sockRequest
@@ -158,6 +165,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}
 
 	var resp any
+	var waitID string
+	var wait *pendingMCPWait
 	switch req.Kind {
 	case "hook":
 		out, err := n.handleHook(ctx, req)
@@ -173,6 +182,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			n.decided.decide(in, time.Now())
 		}
 		resp = map[string]any{"ok": true}
+	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
+		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
 		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
 	case "update.inventory":
@@ -185,24 +196,39 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			resp = inventory
 		}
 	case "preflight": // personad node doctor's path-access check, read with this node's permissions (preflight.go)
-		resp = n.preflight(ctx)
+		resp = n.preflightIn(ctx, i18n.Resolve(req.Locale).Or(i18n.Default))
 	case "ask": // personad ask (scriptcli.go)
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
 		resp = n.handleNotify(ctx, req)
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
+	case "launcher.pi": // pi's Persona extension: the providers pi can use here (pi_providers.go)
+		resp = n.piProvidersFor(ctx, req)
+	case "secret.env": // personad launch --ticket (secretenv.go)
+		resp = n.secretEnvFor(req)
 	case "mcp.tools":
-		var res struct {
-			Tools []proto.Tool `json:"tools"`
-		}
+		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant := n.mcpSession(c, req)
+		if session == "" && !assistant {
+			session = n.paneCaller(req.Pane) // an agent's: the hub tells a task leader's tools from any other's by it
+		}
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
-		if err := n.peer.Call(ctx, "mcp.tools", map[string]any{"assistant": assistant, "session_id": session, "guest": guest}, &res); err != nil {
+		params := mcpToolsParams(req.Input, session, assistant, guest)
+		// A supervision round's process asks for its narrower set (assistant_round.go); a manager that does not know
+		// it gives the whole list.
+		if req.ToolSet != "" {
+			params["tool_set"] = req.ToolSet
+		}
+		if err := n.peer.Call(ctx, "mcp.tools", params, &res); err != nil {
 			resp = map[string]any{"tools": []proto.Tool{}, "error": err.Error()}
 		} else {
+			if res == nil {
+				res = map[string]any{}
+			}
+			res["session"] = session
 			resp = res
 		}
 	case "cli.call": // personad tg: the node, not the caller, says whether it is the assistant (clicall.go)
@@ -215,13 +241,27 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, req.Guest || n.guestOf(sid) != nil)
 			break
 		}
-		if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
-			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}, &res); err != nil {
+		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
+			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}
+		if origin := n.assistantOrigin(sid); origin != "" {
+			params["origin"] = origin
+		}
+		if req.WaitUpdates {
+			waitID, wait = n.beginMCPWait(c)
+			if wait != nil {
+				params["wait_updates"], params["call_id"] = true, waitID
+			}
+		}
+		if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)
 		}
 		resp = res
 	default:
 		resp = map[string]any{"error": "unknown kind"}
+	}
+	if wait != nil {
+		n.finishMCPWait(waitID, wait, resp)
+		return
 	}
 	b, _ := json.Marshal(resp)
 	_, _ = c.Write(append(b, '\n'))
@@ -322,6 +362,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	if json.Unmarshal(req.Input, &in) != nil {
 		return nil, nil
 	}
+	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
 	if req.ReportOnly && !n.takesReport(in) {
 		return nil, nil // before the counters: a session the plugin reports for would count each prompt twice
 	}
@@ -358,6 +399,12 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	n.rememberTranscript(in)
 	if !req.Resume { // the event was reported on the first attempt
 		n.notifyHookEvent(in, stopSig, false)
+	}
+	// Every Bash call of every agent waits on this hook. Only the assistant's go to larkGate, and another agent's
+	// needs only the cua-driver check below: one that does not name cua-driver goes on here, before the card's
+	// title is looked up (a re-read of the transcript's tail) and its claude is watched (#2474).
+	if in.HookEventName == "PreToolUse" && in.ToolName == "Bash" && !bashNamesCua(in.ToolInput) && !n.isAssistantSession(in.SessionID) {
+		return nil, nil
 	}
 
 	ix := proto.Interaction{
@@ -409,11 +456,28 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		return elicitationOutput(ix, res), nil
 
+	case in.HookEventName == "PreToolUse" && cuaToolOf(in.ToolName) != "":
+		// An Agent's own Cua Driver: never System Settings or a permission prompt (cua_gate.go, #4349).
+		if why := cuaVerdict(ctx, cuaToolOf(in.ToolName), in.ToolInput); why != "" {
+			n.logf("refused %s for %s: protected app, or the screen not checked", in.ToolName, in.SessionID)
+			return preToolDecision("deny", why), nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "PreToolUse" && in.ToolName == "Bash":
+		var c struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(in.ToolInput, &c) == nil {
+			if why := cuaBashVerdict(ctx, c.Command); why != "" { // its cua-driver calls, the same way (cua_gate.go)
+				n.logf("refused a cua-driver call in Bash for %s: protected app, or not checked", in.SessionID)
+				return preToolDecision("deny", why), nil
+			}
+		}
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil
 		}
-		return n.larkGate(ctx, in, ix)
+		return n.larkGateWithEdit(ctx, in, ix)
 
 	case in.HookEventName == "PostToolUse" && in.ToolName == "AskUserQuestion":
 		// A terminal answer includes answers; PermissionRequest's original input did not. Complete only the same
@@ -440,14 +504,20 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		_ = json.Unmarshal(in.ToolInput, &p)
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
-		res, ok, err := n.ask(ctx, ix)
+		// The terminal's own dialog may decide the plan while the card still waits (the card is not always
+		// withdrawn then): the footer is watched from now, until the card is answered.
+		decided := &terminalDecided{}
+		askCtx, endAsk := context.WithCancel(context.WithValue(ctx, terminalDecidedKey{}, decided))
+		defer endAsk()
+		stopWatch := n.planAfterTerminal(in.SessionID, func() {
+			decided.Store(true) // the card is withdrawn as decided on the computer, not as a hook that went away
+			endAsk()
+		})
+		res, ok, err := n.ask(askCtx, ix)
 		if err != nil || !ok || res.Approve == nil {
-			if !errors.Is(err, errNodeGone) {
-				// Not answered on the card: the terminal's own dialog decides, and with it the mode that follows.
-				n.planThenAfterTerminal(in.SessionID)
-			}
-			return nil, err
+			return nil, err // the watch goes on: the terminal decides, and with it the mode that follows
 		}
+		stopWatch()
 		if !*res.Approve {
 			msg := "用户在手机上打回了这个计划。"
 			if strings.TrimSpace(res.Feedback) != "" {
@@ -556,6 +626,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				"type": "addRules", "rules": []any{rule},
 				"behavior": "allow", "destination": "session",
 			}}
+		}
+		if !assistant { // Claude may not take it: its safety checks keep their dialog (allowwatch.go, #3752)
+			n.watchAllow(in.SessionID, n.allowPane(req, in.SessionID))
 		}
 		return permissionDecision(d), nil
 	}
@@ -675,6 +748,15 @@ var agentWatch = 2 * time.Second
 var agentGone = procGone
 
 // asksPhone: the hook events that may wait on the phone (the cases of handleHook that call ask).
+// bashNamesCua is whether a Bash call's input may hold a cua-driver call for cuaBashVerdict to check: its command
+// names cua-driver (cuaCalls finds none otherwise). An input not read as a command is not checked there either.
+func bashNamesCua(input json.RawMessage) bool {
+	var c struct {
+		Command string `json:"command"`
+	}
+	return json.Unmarshal(input, &c) == nil && strings.Contains(c.Command, "cua-driver")
+}
+
 func asksPhone(in hookInput) bool {
 	switch in.HookEventName {
 	case "Elicitation":
@@ -752,6 +834,10 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 		if errors.Is(err, rpc.ErrClosed) {
 			return res, false, errNodeGone
 		}
+		if d, _ := ctx.Value(terminalDecidedKey{}).(*terminalDecided); d != nil && d.Load() {
+			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID}) // answered in the terminal (planthen.go)
+			return res, false, nil
+		}
 		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
 		return res, false, nil
 	}
@@ -760,6 +846,9 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	}
 	if res.Dismiss {
 		return res, false, nil
+	}
+	if ix.EditableText != "" && res.EditedText != "" {
+		n.editedAnswers.Store(ix.ID, res.EditedText)
 	}
 	return res, true, nil
 }
@@ -825,10 +914,13 @@ func toolSummary(name string, input json.RawMessage) string {
 	return name
 }
 
-// callerTools are the agents' own tools that act for the agent calling them (assistant/agent_control.go
-// agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
-// that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go).
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read"}
+// callerTools are the agents' own tools that act for the agent calling them: the manager's
+// (assistantwire.AgentToolNames: reporting to its supervisor; the decisions, thread, repositories and links of the
+// todo it works on), handing a subtask to another computer and reading it back (assistant/dispatch.go), and a task
+// leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
+// reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
+// only, and every agent's call of them reached the hub with no session).
+var callerTools = slices.Concat(assistantwire.AgentToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

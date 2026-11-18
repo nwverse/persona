@@ -1,0 +1,34 @@
+📋 督办：你派出去的任务有 5 个要你处理
+（这是 Persona 的督办消息，不是用户发的。）
+<persona-supervision level="triage" />
+
+1. 任务「Finish the migration」（todo_3，signal=owner_cannot_answer）：用户回答不了你发的决定，回的是「你来定」
+   验收标准：未记录
+   当时发给用户的决定（why_owner=irreversible，不会默认执行）：Drop the old table?
+   - 任务来历（hub 记的）：From the main conversation, 2026-11-07: “Finish the migration” · Now: migrated, old table still there
+   - 选项「Drop it」：the old rows cannot be restored
+   - 选项「Keep it」：40 GB stay in use
+   - 推荐：Drop it
+   - 等待的代价：The disk fills up in two weeks
+
+2. 任务「Fix the login crash」（todo_4，signal=owner_cannot_answer）：用户回答不了你发的决定，回的是「这不是我要的」
+   验收标准：未记录
+   当时发给用户的决定（why_owner=priority）：Canary or everyone?
+   - 选项「Canary」：10% today
+   - 选项「Everyone」：all users today
+   - 推荐：Canary
+
+3. 任务「Fix the login crash」（todo_5，signal=owner_cannot_answer）：用户回答不了你发的决定，回的是「先讲清背景」
+   验收标准：未记录
+
+4. 任务「Finish the migration」（todo_1，signal=recheck）：要用户拍板的决定等了超过一天还没人回答，已交回督办
+   验收标准：old table gone
+   当时发给用户的决定（why_owner=irreversible，不会默认执行）：Drop the old table?
+   - 任务来历（hub 记的）：From the main conversation, 2026-11-07: “Finish the migration” · Now: migrated, old table still there
+   - 选项「Drop it」：the old rows cannot be restored
+   - 选项「Keep it」：40 GB stay in use
+   - 推荐：Drop it
+   - 等待的代价：The disk fills up in two weeks
+
+5. 任务「Tidy the docs」（todo_2，signal=undecidable）：标着等用户决定，但用户那边没有能回答的东西（没有问题、选项或推荐）（waits for the user to look）
+   验收标准：未记录

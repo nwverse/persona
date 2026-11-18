@@ -15,12 +15,14 @@ import persona.core.contracts.api.ExtensionViewAction
 import persona.core.contracts.api.ExtensionViewItem
 import persona.core.contracts.api.ExtensionViewPush
 import persona.core.contracts.api.ExtensionViewSection
+import persona.core.contracts.api.SUBSCRIPTIONS_UI
 import persona.core.designsystem.ChartMath
 import persona.core.designsystem.JCandle
 import persona.core.designsystem.JChartData
 import persona.core.designsystem.JChartKind
 import persona.core.designsystem.JChartSeries
 import persona.core.designsystem.JStat
+import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Tone
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
@@ -60,6 +62,39 @@ internal object ExtensionViewText {
         return runCatching { java.net.URLDecoder.decode(segments[0].replace("+", "%2B"), "UTF-8") }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    /** The most of a Set Up with … text taken (#5278): the pages name a source, they never carry its content. */
+    const val ASK_MOST = 8000
+
+    /**
+     * The text of Inbox Sources' Set Up with … (`persona://ask?text=…`, an older name's scheme too), for the
+     * assistant's main conversation. Null for any other link, an empty text, or more than [ASK_MOST] characters.
+     */
+    fun askText(url: String?): String? {
+        val uri = runCatching { java.net.URI(url ?: return null) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in persona.core.contracts.ProtocolCompatibility.appSchemes) return null
+        if (uri.host?.lowercase() != "ask") return null
+        val path = uri.rawPath.orEmpty()
+        if (path.isNotEmpty() && path != "/") return null
+        val raw = uri.rawQuery ?: return null
+        val encoded = raw.split('&').firstNotNullOfOrNull { part ->
+            val name = decodeQuery(part.substringBefore('='))
+            if (name == "text") part.substringAfter('=', "") else null
+        } ?: return null
+        val text = decodeQuery(encoded) ?: return null
+        if (text.trim().isEmpty() || text.length > ASK_MOST) return null
+        return text
+    }
+
+    /** [askText] when [extension] is the subscription pages; every other page refuses the link. */
+    fun askFrom(extension: String, url: String?): String? = if (extension == SUBSCRIPTIONS_UI) askText(url) else null
+
+    /** Which `open_url` a button may bring back: https, and on the subscription pages also Set Up with …. */
+    fun opens(extension: String, url: String?): Boolean = isHttps(url) || askFrom(extension, url) != null
+
+    /** A query component, with `+` kept (the pages percent-encode; they do not use form encoding). */
+    private fun decodeQuery(raw: String): String? =
+        runCatching { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrNull()
+
     /** A field's value before the user touches it: the extension's, never for a secret; a switch is off; no choices `[]`. */
     fun initial(item: ExtensionViewItem): String = when (item.kind) {
         "secret" -> ""
@@ -87,6 +122,16 @@ internal object ExtensionViewText {
     /** A trend line (UI version 6) for the design system; none with fewer than two values. */
     fun spark(spark: persona.core.contracts.api.ExtensionSpark?): persona.core.designsystem.JSpark? = spark?.values?.filter(Double::isFinite)
         ?.takeIf { it.size >= 2 }?.take(60)?.let { persona.core.designsystem.JSpark(it, hue(spark.color), spark.tone?.takeIf { t -> t.isNotBlank() }?.let(::tone), spark.fill == true) }
+
+    /**
+     * Which picture an image item is (UI version 6), to tie its viewer to: the extension's key, else its source (the
+     * hub's path, the https address, the extension's ref); none without any (the viewer then stays with its place).
+     */
+    fun imageIdentity(item: ExtensionViewItem): String? = item.key?.takeIf { it.isNotBlank() }?.let { "key:$it" }
+        ?: item.src?.let { s ->
+            s.path?.takeIf { it.isNotBlank() }?.let { "path:$it" } ?: s.url?.takeIf { it.isNotBlank() }?.let { "url:$it" }
+                ?: s.ref?.takeIf { it.isNotBlank() }?.let { "ref:$it" }
+        }
 
     /** A picture's frame (UI version 6): `square` 1:1, `wide` 16:9, `portrait` 3:4, `auto` from the source's size; else 4:3. */
     fun aspect(item: ExtensionViewItem): Float = when (item.aspect) {
@@ -145,14 +190,19 @@ internal object ExtensionViewText {
         java.time.LocalTime.parse((value ?: return null).substringAfter('T').take(5))
     }.getOrNull()
 
-    /** A date, time or datetime field's value as it reads in the page's language; the value itself when it cannot be read. */
-    fun whenText(kind: String?, value: String, locale: java.util.Locale = java.util.Locale.getDefault()): String {
+    /**
+     * A date, time or datetime field's value as it reads in the page's language ([locale]: `currentLocale`, not the
+     * system's, #4105), the time in the language's 12 / 24 hour habit like the app's other times (#4128); the value
+     * itself when it cannot be read.
+     */
+    fun whenText(kind: String?, value: String, locale: java.util.Locale): String {
         if (value.isBlank()) return ""
         val dateFormat = java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withLocale(locale)
+        val timeFormat = LocalizedFormats.formatter(LocalizedFormats.TIME, locale)
         return when (kind) {
             "date" -> date(value)?.format(dateFormat)
-            "time" -> time(value)?.toString()
-            "datetime" -> date(value)?.let { d -> time(value)?.let { t -> "${d.format(dateFormat)} $t" } }
+            "time" -> time(value)?.format(timeFormat)
+            "datetime" -> date(value)?.let { d -> time(value)?.let { t -> "${d.format(dateFormat)} ${t.format(timeFormat)}" } }
             else -> null
         } ?: value
     }
@@ -272,15 +322,16 @@ internal object ExtensionViewText {
     /** How long the search box waits after typing stops before asking the extension. */
     const val SearchPauseMillis = 300L
 
-    /** How a chart's value is written: the extension's own words, else short with the unit (`1.2M tokens`). */
-    fun display(value: Double, display: String?, unit: String?): String =
-        display?.takeIf { it.isNotBlank() } ?: (ChartMath.compact(value) + (unit?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""))
+    /** How a chart's value is written: the extension's own words, else short in [locale] with the unit (`1.2M tokens`). */
+    fun display(value: Double, display: String?, unit: String?, locale: java.util.Locale = java.util.Locale.ENGLISH): String =
+        display?.takeIf { it.isNotBlank() } ?: (ChartMath.compact(value, locale) + (unit?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""))
 
     /**
      * A chart item as the design system's chart: the first series' labels along the bottom, every series cut to as
-     * many points (the hub checks they match), a role colour for a series with a tone. None when there is nothing to draw.
+     * many points (the hub checks they match), a role colour for a series with a tone; numbers in [locale]'s words.
+     * None when there is nothing to draw.
      */
-    fun chart(item: ExtensionViewItem): JChartData? {
+    fun chart(item: ExtensionViewItem, locale: java.util.Locale = java.util.Locale.ENGLISH): JChartData? {
         val kind = when (item.kind) {
             "bar" -> JChartKind.Bar; "line" -> JChartKind.Line
             // UI version 6
@@ -299,16 +350,17 @@ internal object ExtensionViewText {
         val volumes = candles.all { it.volume != null }
         return JChartData(kind, labels, series.map { s ->
             val points = s.points.take(labels.size)
-            JChartSeries(s.name?.takeIf { it.isNotBlank() }, points.map { it.value }, points.map { display(it.value, it.display, item.unit) },
+            JChartSeries(s.name?.takeIf { it.isNotBlank() }, points.map { it.value }, points.map { display(it.value, it.display, item.unit, locale) },
                 s.tone?.takeIf { it.isNotBlank() }?.let(::tone), hue(s.color))
         }, stacked = item.stacked == true && (kind == JChartKind.Bar || kind == JChartKind.Area),
-            axis = if (kind == JChartKind.Candlestick) ::price else ChartMath::compact,
+            axis = { v -> if (kind == JChartKind.Candlestick) price(v, locale) else ChartMath.compact(v, locale) },
             candles = if (volumes) candles else candles.map { it.copy(volume = null) },
             risingRed = item.rising == "red", center = item.center?.takeIf { it.isNotBlank() && kind == JChartKind.Donut })
     }
 
     /** A price on a candlestick's scale and in its numbers: up to two decimals ("182.35", "1,234.5"), large ones short. */
-    fun price(value: Double): String = if (!value.isFinite()) "—" else if (kotlin.math.abs(value) >= 100_000) ChartMath.compact(value)
+    fun price(value: Double, locale: java.util.Locale = java.util.Locale.ENGLISH): String = if (!value.isFinite()) "—"
+    else if (kotlin.math.abs(value) >= 100_000) ChartMath.compact(value, locale)
     else java.math.BigDecimal(value).setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 
     /** A stat_grid's numbers, up to six. */
@@ -388,8 +440,8 @@ internal data class ExtensionActionOutcome(
 
 /**
  * One view an extension draws: at [place], with [context] (a launcher's page, a machine's, a card's size). [now] is the
- * clock `refresh_after` counts on; [opens] is which `open_url` a button may bring back (https, and an inbox item's
- * page also its source link).
+ * clock `refresh_after` counts on; [opens] is which `open_url` a button may bring back (https, and the subscription
+ * pages' Set Up with …; an inbox item's page passes its own, which also allows its source link).
  */
 internal class ExtensionViewModel(
     private val api: ExtensionUi,
@@ -397,7 +449,7 @@ internal class ExtensionViewModel(
     val ui: String,
     private val context: ExtensionUiContext? = null,
     private val now: () -> Long = System::currentTimeMillis,
-    private val opens: (String) -> Boolean = ExtensionViewText::isHttps,
+    private val opens: (String) -> Boolean = { url -> ExtensionViewText.opens(extension, url) },
     /** A pushed page's first state (the push's); later drawings send the view's own. */
     private val initialState: String? = null,
 ) {
@@ -414,14 +466,23 @@ internal class ExtensionViewModel(
 
     private fun currentState(): String? = state.value.view?.state ?: initialState
 
-    /** Draws it (again), with the extension's state of the last view. */
-    suspend fun load() {
+    /**
+     * Draws it (again), with the extension's state of the last view. [keepTyped]: a redraw the user did not ask for
+     * (`refresh_after`, `ui.invalidate`, back from a page pushed on it, its inbox item changed) keeps what is typed in the
+     * fields the new view still has, as on the web and iOS; the first draw, Retry, pull to refresh and a press that answers
+     * nothing take the extension's values.
+     */
+    suspend fun load(keepTyped: Boolean = false) {
         if (state.value.loading) return
         mutable.update { it.copy(loading = true) }
         try {
             val view = api.renderUi(extension, ui, context, currentState())
             // drawn again for the same page: the diffs loaded since stay (UI version 5)
-            mutable.update { it.copy(view = ExtensionCodeReview.keepLoaded(it.view, view), values = ExtensionViewText.fields(view), error = null, failure = null, unsupported = false) }
+            mutable.update {
+                val fresh = ExtensionViewText.fields(view)
+                it.copy(view = ExtensionCodeReview.keepLoaded(it.view, view), values = if (keepTyped) fresh + it.values.filterKeys { name -> name in fresh } else fresh,
+                    error = null, failure = null, unsupported = false)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: ExtensionUiUnsupported) { mutable.update { it.copy(unsupported = true, error = null) } }
         catch (_: ExtensionUiNotFound) { mutable.update { it.copy(unsupported = true, error = null) } }
@@ -434,7 +495,7 @@ internal class ExtensionViewModel(
      * comes back.
      */
     suspend fun invalidate() {
-        if (shown) load() else stale = true
+        if (shown) load(keepTyped = true) else stale = true
     }
 
     /**
@@ -445,7 +506,7 @@ internal class ExtensionViewModel(
         shown = on
         if (on && stale && state.value.view != null) {
             stale = false
-            load()
+            load(keepTyped = true)
         }
     }
 
@@ -460,7 +521,7 @@ internal class ExtensionViewModel(
         state.map(ExtensionViewText::refreshAt).distinctUntilChanged().collectLatest { at ->
             at ?: return@collectLatest
             delay((at - now()).coerceAtLeast(0))
-            load()
+            load(keepTyped = true)
         }
     }
 

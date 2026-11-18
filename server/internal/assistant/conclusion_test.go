@@ -67,12 +67,37 @@ func conclusionServiceOn(t *testing.T, st Store, onlyConclusions bool) (s *Servi
 func reviewTask(t *testing.T, s *Service, todo string, args map[string]any) string {
 	t.Helper()
 	args["todo_id"] = todo
+	asDecision(args)
 	raw, _ := json.Marshal(args)
 	res, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw)
 	if err != nil {
 		t.Fatalf("task_review %v: %v", args, err)
 	}
 	return res
+}
+
+// asDecision fills in what a needs_user review must carry to be a decision (#3804, decision_test.go tests each part)
+// where a test about something else left it out: why only the owner decides (one that cannot be undone, so nothing is
+// taken by default unless the test sets a reversible deadline), two options with the recommended first, and what
+// waiting costs. What the test gave is kept; a review without reason or recommend is still refused.
+func asDecision(args map[string]any) {
+	if args["verdict"] != "needs_user" {
+		return
+	}
+	if _, ok := args["why_owner"]; !ok {
+		args["why_owner"] = whyIrreversible
+		if rev, _ := args["reversible"].(bool); rev {
+			args["why_owner"] = whyPriority
+		}
+	}
+	if _, ok := args["options"]; !ok {
+		if rec, _ := args["recommend"].(string); rec != "" {
+			args["options"] = []map[string]string{{"label": rec, "leads_to": "照推荐的做"}, {"label": "先不动", "leads_to": "任务停在这里"}}
+		}
+	}
+	if _, ok := args["cost_of_waiting"]; !ok {
+		args["cost_of_waiting"] = "任务停着等你"
+	}
 }
 
 // waitsForReview has the task's agent finish a turn with reply until the judge's "done" puts the task up for review.
@@ -162,7 +187,10 @@ func TestConclusionFindsItsLink(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "做完了")
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "做完了",
-		"checks": []ReviewCheck{{Criterion: "PR 合并到 master", Met: true, Evidence: "https://github.com/o/r/pull/7 merged"}}})
+		"checks": []ReviewCheck{
+			{Criterion: "PR 合并到 master", Met: true, Evidence: "https://github.com/o/r/pull/7 merged"},
+			{Criterion: "浅色 / 深色截图贴进 PR", Met: true, Evidence: "both screenshots verified"},
+		}})
 	cards := cardsWith(posts(), "结论：")
 	if len(cards) != 1 || !strings.Contains(cards[0], "https://github.com/o/r/pull/7") || !strings.Contains(cards[0], "✅ 做完了：做完了") {
 		t.Fatalf("cards %q", cards)
@@ -187,7 +215,7 @@ func TestDeployedWorkKeepsPleaseVerifyWithTheVerdictOnTop(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
 	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了"})
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 	time.Sleep(6 * testReportDelay)
 	if n := len(cardsWith(posts(), "结论：")); n != 0 {
 		t.Fatalf("%d conclusion cards for deployed work", n)
@@ -205,21 +233,37 @@ func TestDeployedWorkKeepsPleaseVerifyWithTheVerdictOnTop(t *testing.T) {
 	}
 }
 
-// A task sent back twice and still short goes to the owner: the card asks how to go on, not with the rework the agent
-// was told.
+// A task sent back twice and still short goes to the owner only as a decision they can answer (#3804): a third rework
+// that states none is refused and changes nothing, so the supervisor states one; with one, the card asks that, not
+// with the rework the agent was told.
 func TestReworkOverAsksTheOwnerHowToGoOn(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "补了一部分")
 	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool { v.Round = maxReworkRounds; return true }); err != nil {
 		t.Fatal(err)
 	}
-	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "rework", "note": "把深色截图补上，再跑一遍 CI"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "把深色截图补上，再跑一遍 CI"})
+	_, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw)
+	if err == nil || !strings.Contains(err.Error(), "sent back 2 times") || !strings.Contains(err.Error(), "why_owner") {
+		t.Fatalf("a third rework with no decision: %v", err)
+	}
+	if v := todoNow(s, todo.ID).Supervision; v.State != reviewPending || len(v.Reviews) != 0 || askOf(s, todo.ID) != nil {
+		t.Fatalf("the refused rework changed the task: %+v, ask %+v", v, askOf(s, todo.ID))
+	}
+	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "rework", "note": "把深色截图补上，再跑一遍 CI",
+		"why_owner": "priority", "reason": "返工了 2 轮还没做完，接下来怎么办", "recommend": "再返工一轮",
+		"options":         []map[string]string{{"label": "就这样收下", "leads_to": "缺深色截图，直接合并"}, {"label": "再返工一轮", "leads_to": "再等大约半小时"}},
+		"cost_of_waiting": "PR 一直开着"})
 	if !strings.Contains(res, "sent back 2 times") || !strings.Contains(res, "went to them in Lark") {
 		t.Fatalf("answer: %s", res)
 	}
 	cards := cardsWith(posts(), "结论：")
-	if len(cards) != 1 || !strings.Contains(cards[0], "🤔 要你拍板：返工了 2 轮还没做完，接下来怎么办？") || strings.Contains(cards[0], "深色截图") {
+	if len(cards) != 1 || !strings.Contains(cards[0], "🤔 要你拍板：返工了 2 轮还没做完，接下来怎么办") || strings.Contains(cards[0], "深色截图补上") {
 		t.Fatalf("cards %q", cards)
+	}
+	// The recommended option is listed first whatever order the review gave them in.
+	if a := askOf(s, todo.ID); a == nil || len(a.Options) != 2 || a.Options[0].Label != "再返工一轮" || todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatalf("ask %+v", a)
 	}
 }
 
@@ -273,7 +317,8 @@ func TestOnlyConclusionsPushesNoProgress(t *testing.T) {
 	if p := posts(); len(p) != 0 {
 		t.Fatalf("pushed before the conclusion:\n%s", strings.Join(p, "\n---\n"))
 	}
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "reason": "能做，方案已写好", "link": "https://docs.example.com/plan"})
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "reason": "能做，方案已写好", "link": "https://docs.example.com/plan",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	time.Sleep(6 * testReportDelay)
 	if p := posts(); len(p) != 1 || !strings.Contains(p[0], "✅ 做完了：能做，方案已写好") {
 		t.Fatalf("posts:\n%s", strings.Join(p, "\n---\n"))
@@ -325,7 +370,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = errors.New("node down")
 	f.mu.Unlock()
-	if ok, err := s.acceptTryFromBrief(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok || err == nil {
+	if ok, err := s.acceptTryFromBrief(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok.taken || err == nil {
 		t.Fatalf("taken while the agent cannot be reached: %v %v", ok, err)
 	}
 	// The web button: 502 with the reason, not 409 "already handled" (the web app toasts it and the button works again).
@@ -353,7 +398,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = nil
 	f.mu.Unlock()
-	if ok, err := s.acceptTry(ctx, todo.ID, ""); !ok || err != nil {
+	if ok, err := s.acceptTry(ctx, todo.ID, ""); !ok.taken || err != nil {
 		t.Fatalf("not taken once the agent is reachable: %v %v", ok, err)
 	}
 	if got := sentToAgent(f); len(got) == 0 || !strings.Contains(got[len(got)-1], "先灰度 10%") {
@@ -391,7 +436,7 @@ func TestLateTaskDecisionDoesNotSendAfterCompletion(t *testing.T) {
 				reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Choose a rollout", "recommend": "Use staged rollout"})
 				a := askOf(s, todo.ID)
 				h := &conclusionLookupHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{})}
-				s.hub = h
+				setHub(s, h)
 				var release sync.Once
 				defer release.Do(func() { close(h.release) })
 				ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), conclusionLookupKey{}, true), 5*time.Second)
@@ -444,7 +489,7 @@ func TestLateTaskDecisionDoesNotSendAfterCompletion(t *testing.T) {
 	}
 }
 
-// The automatic-send guard must not change a deliberate user message from a task card.
+// A task-card message still goes through, but an unknown stop needs a successor, not an implicit resume.
 func TestCompletedTaskDirectMessageStillReachesAgent(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	c := idleAgent(time.Now().Add(-time.Hour))
@@ -453,11 +498,18 @@ func TestCompletedTaskDirectMessageStillReachesAgent(t *testing.T) {
 	e := &todoEnv{t: t, s: s, f: f}
 	e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`)
 	sent := len(sentToAgent(f))
+	started := len(startCalls(f))
 	if _, err := s.routeToTask(context.Background(), todo.Origin, todo.ID, "Check one more case"); err != nil {
 		t.Fatal(err)
 	}
-	if got := sentToAgent(f)[sent:]; len(got) != 1 || got[0] != "Check one more case" {
-		t.Fatalf("direct user message: %v", got)
+	starts := startCalls(f)[started:]
+	prompt := ""
+	if len(starts) == 1 {
+		prompt, _ = starts[0]["prompt"].(string)
+	}
+	if len(sentToAgent(f)) != sent || len(starts) != 1 || starts[0]["resume_session_id"] != nil ||
+		!strings.HasSuffix(prompt, "Check one more case") {
+		t.Fatalf("unknown stop was resumed or lost the user's message: %v", starts)
 	}
 	s.taskWorking(context.Background(), "box", "s1")
 	if todoNow(s, todo.ID).DoneAt == nil {
@@ -494,7 +546,7 @@ func TestRecommendationIsRecordedOnlyOnceItReachedTheAgent(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = errors.New("node down")
 	f.mu.Unlock()
-	if err := s.takeRecommendation(ctx, todo.ID, a); err == nil {
+	if _, err := s.takeRecommendation(ctx, todo.ID, a); err == nil {
 		t.Fatal("no error while the agent cannot be reached")
 	}
 	if list := decisions(); len(list) != 0 {
@@ -503,7 +555,7 @@ func TestRecommendationIsRecordedOnlyOnceItReachedTheAgent(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = nil
 	f.mu.Unlock()
-	if err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
+	if _, err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
 		t.Fatal(err)
 	}
 	if list := decisions(); len(list) != 1 || list[0].Choice != "先灰度 10%" {
@@ -572,5 +624,48 @@ func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
 		if status != http.StatusBadGateway || body["error"] != want {
 			t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
 		}
+	}
+}
+
+// A decision answered in words on Lark is made even when its agent cannot take it now: recorded, out of needs_user,
+// its ask answered, and its supervisor told what to pass on. The hub does not resend it, so a later reply to the same
+// card finds it answered and nothing reaches the agent twice.
+func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
+	s, f, todo, _, notes := conclusionService(t, false)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+	a := askOf(s, todo.ID)
+	f.mu.Lock()
+	f.failSend = errors.New("a dialog is open")
+	f.mu.Unlock()
+	sent := len(sentToAgent(f))
+	if !s.acceptReply(ctx, "om_words", "直接全量吧", false, a.MessageID) {
+		t.Fatal("reply not taken")
+	}
+	if got := todoNow(s, todo.ID).Supervision.State; got == reviewNeedsUser {
+		t.Fatalf("still waits on the owner: %q", got)
+	}
+	if got := askOf(s, todo.ID); got.AcceptedAt.IsZero() {
+		t.Fatalf("ask not answered: %+v", got)
+	}
+	want := i18n.T(s.botLang(ctx), "assistant-reports.accept_decided_not_sent", i18n.Args{"error": "a dialog is open"})
+	if n := notes(); len(n) == 0 || n[len(n)-1] != want {
+		t.Fatalf("reply note %q", n)
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if !(pending && g.Key == key && strings.Contains(g.Detail, "直接全量") && strings.Contains(g.Detail, "a dialog is open")) && !told {
+		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
+	}
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	s.acceptReply(ctx, "om_again", "直接全量吧", false, a.MessageID)
+	if n := len(sentToAgent(f)); n != sent {
+		t.Fatalf("%d sends after the failed one: the hub resent it", n-sent)
 	}
 }

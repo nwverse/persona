@@ -6,8 +6,9 @@ import { getState } from "./store";
 import { ApiError } from "./api";
 import { parseAPIError } from "./api-errors";
 import { providerName } from "./model-config";
+import { initI18n } from "../i18n";
 import {
-  blockingStep, claudeMissing, readinessChanged, refreshReadiness, resetReadiness, retryWhileBlocked, claudeWorks, codedFailure, helpTopic, knownAction, passesBySelf, providersPath, runAction, sendLabel, turnErrorFix, type Readiness,
+  actionLabel, blockingStep, claudeMissing, readinessChanged, refreshReadiness, resetReadiness, retryWhileBlocked, claudeWorks, codedFailure, helpTopic, knownAction, passesBySelf, providersPath, runAction, sendLabel, turnErrorFix, type Readiness,
   type ReadinessStep,
 } from "./readiness";
 
@@ -82,6 +83,29 @@ describe("actions and help", () => {
     expect(providersPath("my key")).toBe("/settings?tab=models&launcher=my%20key");
   });
 
+  it("offers another app or setup and opens model settings in every language", async () => {
+    const labels = {
+      en: "Choose another app or setup",
+      "zh-Hans": "选择其他应用或配置",
+      ja: "別のアプリや設定を選ぶ",
+    };
+    const onHelp = vi.fn();
+    try {
+      for (const [lang, label] of Object.entries(labels)) {
+        await initI18n(lang);
+        history.replaceState(null, "", "/");
+        expect(knownAction("main_chat_model")).toBe(true);
+        expect(actionLabel("main_chat_model")).toBe(label);
+        runAction("main_chat_model", { onHelp });
+        expect(location.pathname + location.search).toBe("/settings?tab=models");
+        expect(onHelp).not.toHaveBeenCalled();
+      }
+    } finally {
+      history.replaceState(null, "", "/");
+      await initI18n("zh-Hans");
+    }
+  });
+
   it("opens the computer flows through the page: add as help (the page picks the flow), confirm in place", () => {
     const onHelp = vi.fn();
     const onConfirm = vi.fn();
@@ -104,6 +128,26 @@ describe("turn errors", () => {
     expect(turnErrorFix("model_route")?.action).toBe("connect_model");
     expect(turnErrorFix("rate_limited")).toBeNull();
     expect(turnErrorFix(undefined)).toBeNull();
+  });
+
+  it("says a signed-out CLI is the one to sign in, not the desktop app, in every language (#9366)", async () => {
+    const words = {
+      en: ["Claude Code CLI", "Claude desktop app's sign-in doesn't count", "claude auth login", "API key"],
+      "zh-Hans": ["Claude Code 命令行", "Claude 桌面版登录了也不算", "claude auth login", "API Key"],
+      ja: ["Claude Code CLI", "Claude デスクトップアプリのログインはこれに含まれません", "claude auth login", "API キー"],
+    };
+    try {
+      for (const [lang, [cli, desktop, command, key]] of Object.entries(words)) {
+        await initI18n(lang);
+        const fix = turnErrorFix("not_logged_in")!;
+        expect(fix.title).toContain(cli);
+        expect(fix.detail).toContain(desktop);
+        expect(fix.detail).toContain(command);
+        expect(fix.detail).toContain(key);
+      }
+    } finally {
+      await initI18n("zh-Hans");
+    }
   });
 
   it("reads Claude Code's own refusals as model errors (the hub's markers)", () => {

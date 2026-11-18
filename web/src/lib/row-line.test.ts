@@ -10,7 +10,7 @@ describe("rowLine", () => {
   it("says what a card asks, after its kind", () => {
     const q = ix({ questions: [{ question: "网络层的测试用哪个框架？" } as NonNullable<Interaction["questions"]>[number]] });
     expect(rowLine(s({ state: "needs_you" }), q)).toEqual({ lead: "在问你：", text: "网络层的测试用哪个框架？" });
-    expect(rowLine(s({ state: "needs_you" }), ix({ kind: "permission", summary: "swift test" }))).toEqual({ lead: "需要你授权：", text: "swift test" });
+    expect(rowLine(s({ state: "needs_you" }), ix({ kind: "permission", summary: "swift test" }))).toEqual({ lead: "在等你批准：", text: "swift test" });
   });
 
   it("names a card with nothing to quote by its kind alone", () => {
@@ -27,6 +27,13 @@ describe("rowLine", () => {
     expect(rowLine(s({ state: "unread", last_text: "旧的话", work: { phase: "done", line: "三段都写好了" } as Session["work"] }))).toEqual({ text: "✓ 三段都写好了" });
   });
 
+  it("says what a Just finished agent did (#9751)", () => {
+    const finished = s({ state: "idle", last_text: "旧的话", work: { phase: "done", line: "三段都写好了", just_finished: true } as Session["work"] });
+    expect(rowLine(finished, undefined, false, true)).toEqual({ text: "✓ 三段都写好了" });
+    // muted, or the caller says no: a seen row has no second line
+    expect(rowLine(finished)).toBeUndefined();
+  });
+
   it("says nothing for the other states", () => {
     for (const state of ["working", "idle", "offline", "unknown"] as const) expect(rowLine(s({ state, last_text: "在跑测试" }))).toBeUndefined();
   });
@@ -38,7 +45,7 @@ describe("rowLine", () => {
 
 describe("interactionKicker", () => {
   it("is the 待办 page's word for each kind", () => {
-    expect(["question", "plan", "permission", "screen", "elicitation"].map((kind) => interactionKicker({ kind } as Interaction))).toEqual(["在问你", "计划等你审批", "需要你授权", "终端等你处理", "MCP 请求"]);
+    expect(["question", "plan", "permission", "screen", "elicitation"].map((kind) => interactionKicker({ kind } as Interaction))).toEqual(["在问你", "计划等你审批", "在等你批准", "终端等你处理", "MCP 请求"]);
   });
 
   it("says 待你回复 and what it asks for a seen agent awaiting your reply (#5096)", () => {

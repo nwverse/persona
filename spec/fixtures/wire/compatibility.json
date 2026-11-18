@@ -101,11 +101,11 @@
     "input": {
       "machine_id": "",
       "session_id": "s1",
+      "started_by_persona": false,
+      "assistant": false,
       "title": "",
       "cwd": "",
       "status": "future_status",
-      "started_by_persona": false,
-      "assistant": false,
       "state": "future_state",
       "seen_at": "0001-01-01T00:00:00Z",
       "state_since": "0001-01-01T00:00:00Z",
@@ -304,18 +304,18 @@
     "description": "Go 零时间能解码，但不算有意义的日期。",
     "source": [
       "server/internal/proto/session.go: Session",
-      "apple/Shared/JSONValue.swift: JSON.decoder, Date.isMeaningful"
+      "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: JSON.decoder, Date.isMeaningful"
     ],
     "derived": true,
     "decoder": "compat_session",
     "input": {
       "machine_id": "",
       "session_id": "s1",
+      "started_by_persona": false,
+      "assistant": false,
       "title": "",
       "cwd": "",
       "status": "",
-      "started_by_persona": false,
-      "assistant": false,
       "state": "",
       "seen_at": "0001-01-01T00:00:00Z",
       "state_since": "0001-01-01T00:00:00Z",
@@ -335,7 +335,7 @@
     "name": "date_at_cutoff",
     "description": "当前 iOS 将 2000 年起点本身也判为无意义日期。",
     "source": [
-      "apple/Shared/JSONValue.swift: Date.isMeaningful",
+      "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: Date.isMeaningful",
       "docs/archive/redesign/README.md: D5（现状差异）"
     ],
     "derived": true,

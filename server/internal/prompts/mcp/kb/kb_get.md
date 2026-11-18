@@ -1,4 +1,4 @@
-Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's meeting minutes with where each action item stands (a suggestion, or its to-do: open, done, cancelled, deleted) and its full timestamped transcript (recordings: the user's phone / watch recordings of the last days, text only), a meeting's or event's recordings. id from kb_list / kb_search (a project also by name).
+Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's meeting minutes, or an all-day recording's day recap (the day's timeline, meetings, suggested to-dos), with each action item's state (suggested, or its to-do's) and its timestamped transcript while still retained (phone/watch recordings, text only), a meeting's / event's recordings, a topic's knowledge points by subtopic (each with its kind, reason and the entries it came from). Transcripts expire after recording_days (default 14 days); then meetings keep only minutes and all-day recordings their recap, per minutes_days (forever by default). id from kb_list / kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).
 
 ```json
 {
@@ -7,7 +7,7 @@ Read one entity: its metadata (links to people / chats / projects, tags), compre
   "properties": {
     "kind": {
       "type": "string",
-      "enum": ["projects", "chats", "people", "docs", "meetings", "events", "recordings"]
+      "enum": ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"]
     },
     "id": {
       "type": "string"

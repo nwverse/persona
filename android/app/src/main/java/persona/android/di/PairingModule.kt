@@ -39,14 +39,16 @@ object PairingModule {
         updates: AppUpdates, diagnostics: SettingsDiagnostics, devices: WiredDeviceSettings, runtime: ConnectionRuntime,
         machines: MachineManagement, models: ModelConfiguration, extensions: ExtensionManagement, providers: ProviderSetup,
         connectors: ConnectorsManagement, channels: ChannelManagement, platform: persona.android.platform.PlatformPairing,
-        hubUpdates: HubUpdates, managers: HubManagers, sent: HubSent, translation: TranslationSettings, triage: AgentTriage, capsule: persona.android.capsule.CapsuleRuntime,
+        hubUpdates: HubUpdates, managers: HubManagers, sent: HubSent, translation: TranslationSettings, triage: AgentTriage, knowledgeSelection: KnowledgeSelection, capsule: persona.android.capsule.CapsuleRuntime,
         attempts: PairingAttempts, application: Application, readiness: AssistantReadinessSource, feishuBot: FeishuBotSettings,
+        standing: StandingAuthorizationsSource,
     ) = SettingsServices(pairing, connection, sessions, updates, diagnostics, binding = devices.binding,
         // Explicit: the runtime cannot be a ConnectionEndpoints itself (its HubConnection.state has another type).
         disconnect = { pairing.unpair() }, endpoints = runtime.endpoints, machines = machines, models = models, extensions = extensions, providers = providers,
         channels = channels, feishuBot = feishuBot, hubUpdates = hubUpdates, managers = managers, sent = sent,
         hubs = runtime.hubGroups, tunnels = runtime.hubTunnels, addHub = platform.adding, connectors = connectors,
-        translation = translation, triage = triage, capsule = capsule, pairingAttempts = attempts, readiness = readiness,
+        translation = translation, triage = triage, knowledgeSelection = knowledgeSelection, capsule = capsule, pairingAttempts = attempts, readiness = readiness,
+        standing = standing,
         appUpdateStore = persona.feature.settings.AppUpdateStore(application, updates, devices.binding),
         desktops = (application as PersonaApp).desktops, clearCacheFiles = { files -> persona.core.data.CacheClearing.delete(files) })
 }
@@ -80,10 +82,12 @@ class WiredPairingService @Inject constructor(application: Application, private 
             val parsed = request.parsedPairingLink()?.copy(access = request.access)
                 ?: request.copy(url = request.url.trim(), token = request.token.trim())
             val addresses = HubPairingClient.addresses(parsed)
-            networking = HubPairingClient(parsed.hub, parsed.fp, addresses, app.clientVersion(), parsed.access)
-            val result = networking.pair(parsed.token, app.deviceName, progress)
+            // A link's `url` behind a proxy with a public CA's certificate (#2622): that origin alone is checked like any site.
+            val proxied = setOfNotNull(HubPairingClient.systemTrustedOrigin(parsed))
+            networking = HubPairingClient(parsed.hub, parsed.fp, addresses, app.clientVersion(), parsed.access, systemOrigins = proxied)
+            val result = networking.pair(parsed.token, app.deviceName, deviceId = parsed.deviceId, progress = progress)
             val saved = HubCredentials(result.address, result.hubId, result.fingerprint,
-                result.candidates, result.token, result.deviceId)
+                result.candidates, result.token, result.deviceId, systemOrigins = result.systemOrigins.toList())
             withContext(NonCancellable) {
                 save(saved, parsed.access)
                 progress(PairingProgress(PairingStage.Complete))
@@ -118,6 +122,11 @@ class WiredPairingService @Inject constructor(application: Application, private 
         activeClient().checkUpdate(saved.deviceToken)
     }
 
+    override suspend fun lookup(): AppUpdateLookup = lock.withLock {
+        val saved = requireNotNull(runtime.activeCredentials()) { "Updates require a paired hub" }
+        activeClient().lookupUpdate(saved.deviceToken)
+    }
+
     override suspend fun download(update: AppUpdate, destination: OutputStream) = lock.withLock {
         activeClient().download(requireNotNull(runtime.activeCredentials()).deviceToken, update, destination)
     }
@@ -126,14 +135,16 @@ class WiredPairingService @Inject constructor(application: Application, private 
 
     private fun Exception.pairingException(): PairingException {
         if (this is PairingException) return this
+        val failure = HubFailure.from(this)
         val reason = if (this is IllegalArgumentException) PairingFailure.InvalidCode
         else if (this is SecurityException) PairingFailure.LocalPermission
-        else when (HubFailure.from(this).kind) {
+        else when (failure.kind) {
             HubError.AddressNotFound -> PairingFailure.Dns
             HubError.ConnectionRefused -> PairingFailure.Refused
             HubError.Unreachable, HubError.NoNetwork -> PairingFailure.Unreachable
             HubError.Timeout -> PairingFailure.Timeout
-            HubError.CertificateMismatch, HubError.HubMismatch -> PairingFailure.Certificate
+            HubError.CertificateMismatch -> if (failure.code == persona.core.hub.PROXY_CERTIFICATE) PairingFailure.ProxyCertificate else PairingFailure.Certificate
+            HubError.HubMismatch -> PairingFailure.Certificate
             HubError.PairingExpired -> PairingFailure.Expired
             HubError.Incompatible -> PairingFailure.Incompatible
             HubError.TlsRequired -> PairingFailure.TlsRequired
@@ -142,7 +153,9 @@ class WiredPairingService @Inject constructor(application: Application, private 
             HubError.AccessRejected -> PairingFailure.AccessRejected
             else -> PairingFailure.Unknown
         }
-        return PairingException(reason).also { it.initCause(this) }
+        // The proxied address whose certificate was refused is named (#2622).
+        val address = failure.detail.takeIf { reason == PairingFailure.ProxyCertificate }
+        return PairingException(reason, address).also { it.initCause(this) }
     }
 }
 

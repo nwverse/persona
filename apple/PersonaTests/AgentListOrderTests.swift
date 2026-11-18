@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's order and sections (`AgentListOrder`), without the list.
 @MainActor struct AgentListOrderTests {
@@ -18,7 +19,7 @@ import Testing
     }
 
     @Test func rowMenuForwardsEachActionOnceAndUsesUpdatedCallbacks() {
-        let actions = AgentRowMenu.Actions()
+        let actions = AgentMenuHandlers()
         let first = session("first", "working")
         let second = session("second", "working")
         actions.close(first)
@@ -47,6 +48,20 @@ import Testing
     @Test func sameRankNewestFirstThenById() {
         let list = [session("b", "unread", updated: 5), session("a", "unread", updated: 5), session("c", "unread", updated: 9)]
         #expect(order().ordered(list).map(\.sessionID) == ["c", "a", "b"])
+    }
+
+    /// The same session id on two machines, at the same time: the complete id decides, whichever order the machines
+    /// answered in (spec/fixtures/sort `cross_machine_same_session_id` and its reversed input, #9064).
+    @Test func sameSessionIdOnTwoMachinesGoesByTheCompleteId() {
+        let a = session("shared-session", "working", updated: 10, machine: "machine-a")
+        let b = session("shared-session", "working", updated: 10, machine: "machine-b")
+        for list in [[b, a], [a, b]] {
+            #expect(order().ordered(list).map(\.id) == ["machine-a/shared-session", "machine-b/shared-session"])
+            #expect(order(byRank: false).ordered(list).map(\.id) == ["machine-a/shared-session", "machine-b/shared-session"])
+        }
+        // the session id still comes first: another machine's earlier id stays ahead
+        let c = session("aaa", "working", updated: 10, machine: "machine-z")
+        #expect(order().ordered([a, c]).map(\.id) == ["machine-z/aaa", "machine-a/shared-session"])
     }
 
     @Test func quietSpaceRowsFollowActivityWhileTheSpacesTabsKeepTheirOrder() throws {
@@ -326,6 +341,20 @@ import Testing
         #expect(AgentListRows.step(keys, from: nil, by: 1) == keys[0], "nothing open: ↓ opens the first")
         #expect(AgentListRows.step(keys, from: nil, by: -1) == keys[2])
         #expect(AgentListRows.step([], from: nil, by: 1) == nil)
+    }
+
+    /// By App (#3756): an open app section's rows in order, none of a folded one's, all of them while searching.
+    @Test func appsListTheirRowsUnlessFolded() {
+        var desktop = session("d", "offline", updated: 9)
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        let other = session("o", "working", updated: 5)
+        let groups = AppGroups.build([other, desktop])
+        #expect(rows(.app).apps(groups).map(\.sessionID) == ["d", "o"])
+        #expect(rows(.app, folded: ["app/desktop/claude code"]).apps(groups).map(\.sessionID) == ["o"])
+        let searching = AgentListRows(order: AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }), grouping: .app,
+                                      searching: true, isFolded: { _ in true })
+        #expect(searching.apps(groups).map(\.sessionID) == ["d", "o"])
     }
 
     @Test func machinesListTheirBusyRowsAndOpenedIdleOnes() {

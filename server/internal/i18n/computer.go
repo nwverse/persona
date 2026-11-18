@@ -34,7 +34,8 @@ var computerTemplates = sync.OnceValue(func() *templateIndex { return indexTempl
 func makeComputerTemplates() []deploymentTemplate {
 	forms := makeCatalogTemplates(func(key string) bool {
 		return strings.HasPrefix(key, "hub-computer.rpc_") || strings.HasPrefix(key, "hub-browser.rpc_") ||
-			key == "hub-computer.note_outdated" || key == "hub-browser.note_outdated"
+			strings.HasPrefix(key, "hub-iphone.rpc_") || key == "hub-computer.note_outdated" ||
+			key == "hub-browser.note_outdated" || key == "hub-iphone.note_outdated"
 	})
 	for n := range forms {
 		// A failed pbcopy/open/installer may emit no diagnostic output. Empty details are still recognized copy.
@@ -72,5 +73,23 @@ func computerJob(l Lang, job *proto.ComputerJob) *proto.ComputerJob {
 	out := *job
 	out.Step = ComputerText(l, job.Step)
 	out.Error = ComputerText(l, job.Error)
+	return &out
+}
+
+// IPhoneStatus is the paired iPhones' counterpart of ComputerStatus: the Mac's note and each device's.
+func IPhoneStatus(l Lang, p *proto.IPhone) *proto.IPhone {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	out.Note = ComputerText(l, p.Note)
+	out.Job = computerJob(l, p.Job)
+	if p.Devices != nil {
+		out.Devices = make([]proto.IPhoneDevice, len(p.Devices))
+	}
+	for i, d := range p.Devices {
+		d.Note = ComputerText(l, d.Note)
+		out.Devices[i] = d
+	}
 	return &out
 }

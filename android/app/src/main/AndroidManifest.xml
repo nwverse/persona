@@ -28,6 +28,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Persona">
 
+        <!-- The welcome page's "No hub yet?" address; "unset" when the build has none (GettingStarted.kt). -->
+        <meta-data android:name="persona.getting_started_url" android:value="${gettingStartedUrl}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -44,6 +47,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="persona" android:host="pair" />
+                <data android:scheme="persona" android:host="password-login" />
                 <data android:scheme="persona" android:host="open" />
                 <data android:scheme="@string/compatibility_legacy_scheme" android:host="pair" />
                 <data android:scheme="@string/compatibility_legacy_scheme" android:host="open" />

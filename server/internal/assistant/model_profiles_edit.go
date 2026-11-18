@@ -32,22 +32,35 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 		return i18n.Err("assistant-model_profiles.err_description", i18n.Args{"max": modelProfileAbout})
 	}
 	for id, b := range p.Purposes {
+		if err := checkExternalPurpose(b); err != nil {
+			return err
+		}
 		if !slices.Contains(modelCategoryIDs, id) {
 			return i18n.Err("assistant-model_profiles.err_purpose", i18n.Args{"purpose": id, "purposes": strings.Join(modelCategoryIDs, ", ")})
 		}
-		if b.Runtime != "" {
-			return i18n.Err("assistant-model_profiles.err_runtime")
+		if b.ConfigDir != "" {
+			return i18n.Err("assistant-model_profiles.err_config_dir")
 		}
 		for field, v := range map[string]string{"provider": b.Provider, "model": b.Model} {
 			if !validProfileValue(v) {
 				return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": id, "field": field})
 			}
 		}
-		if b.Effort != "" && !slices.Contains(proto.EffortLevels, b.Effort) {
-			return profileEffortErr(id, b.Effort)
+		kind := ""
+		for _, purpose := range modelPurposes {
+			if purpose.ID == id {
+				kind = purpose.Kind
+				break
+			}
+		}
+		if b.Effort != "" && !slices.Contains(effortLevelsForKind(kind), b.Effort) {
+			return profileEffortErr(id, b.Effort, effortLevelsForKind(kind))
 		}
 	}
 	for name, m := range p.Launchers {
+		if proto.IsExternalLauncher(name) {
+			return i18n.Err("external-adapter.purpose_unsupported")
+		}
 		i := slices.IndexFunc(stored, func(l storedLauncher) bool { return l.Name == name })
 		if i < 0 {
 			return i18n.Err("assistant-model_profiles.err_launcher_missing", i18n.Args{"launcher": name})
@@ -66,7 +79,7 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 				return i18n.Err("assistant-model_profiles.err_launcher_model", i18n.Args{"launcher": name})
 			}
 			if f.name == "effort" && *v != "" && !slices.Contains(proto.EffortLevels, *v) {
-				return profileEffortErr(name, *v)
+				return profileEffortErr(name, *v, proto.EffortLevels)
 			}
 			if stored[i].Kind == "api" && f.name != "model" && *v != "" {
 				return i18n.Err("assistant-model_profiles.err_launcher_api", i18n.Args{"launcher": name, "field": f.name})
@@ -99,6 +112,9 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 		return i18n.Err("assistant-model_profiles.err_tiers", i18n.Args{"max": maxModelTiers})
 	}
 	for name, t := range tiers {
+		if proto.IsExternalLauncher(t.Launcher) {
+			return i18n.Err("external-adapter.purpose_unsupported")
+		}
 		if !modelTierName.MatchString(name) {
 			return i18n.Err("assistant-model_profiles.err_tier_name", i18n.Args{"tier": name})
 		}
@@ -111,7 +127,7 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 			}
 		}
 		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
-			return profileEffortErr(name, t.Effort)
+			return profileEffortErr(name, t.Effort, proto.EffortLevels)
 		}
 		if t.Description = strings.TrimSpace(t.Description); utf8.RuneCountInString(t.Description) > modelTierAbout ||
 			strings.ContainsAny(t.Description, "\r\n\x00") {
@@ -132,8 +148,8 @@ func checkTierModel(name string, t ModelTier) error {
 	return nil
 }
 
-func profileEffortErr(where, effort string) error {
-	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(proto.EffortLevels, " / ")})
+func profileEffortErr(where, effort string, levels []string) error {
+	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(levels, " / ")})
 }
 
 // ---- editing ----

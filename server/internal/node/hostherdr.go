@@ -62,10 +62,16 @@ const (
 // environment, it would be authoritative for everything run there later.
 const herdrAgentEnv = "HERDR_AGENT"
 
-// herdrAgentName is what herdr calls an agent of kind, "" for one it has no integration for (a compatible CLI, pi: left to its
-// own detection) and on Windows, where herdr does not read HERDR_AGENT.
+// herdrAgentName is what herdr calls an agent of kind, "" for one it has no integration for (a compatible CLI: left to its
+// own detection) and on Windows, where herdr does not read HERDR_AGENT. pi, the Cursor CLI and the Antigravity CLI
+// are integrations herdr ships (herdr 0.9.5: pi, cursor, antigravity_cli), so a wrapper that execs them under another
+// name is still recognised.
 func herdrAgentName(kind string) string {
-	if runtime.GOOS != "windows" && (kind == "claude" || kind == "codex") {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	switch kind {
+	case "claude", "codex", piAgent, cursorAgent, agyAgent:
 		return kind
 	}
 	return ""
@@ -155,12 +161,48 @@ func (h *herdrHost) SendText(ctx context.Context, pane host.PaneRef, text string
 	return t.c.PaneSendText(ctx, t.id, text)
 }
 
+// SendKeys presses the keys in order: by name, but home, end, page up and page down, which herdr 0.9 has no name for
+// (send-keys answers invalid_key), go as the bytes an xterm sends for them (orcaKeyBytes) through pane.send_text,
+// which writes them as they are (ctrl+End brings a scrolled-up Claude Code back to its end, #4537).
 func (h *herdrHost) SendKeys(ctx context.Context, pane host.PaneRef, keys ...string) error {
 	t, err := h.target(ctx, pane.ID)
 	if err != nil {
 		return err
 	}
-	return t.c.PaneSendKeys(ctx, t.id, keys...)
+	var named []string
+	flush := func() error {
+		if len(named) == 0 {
+			return nil
+		}
+		err := t.c.PaneSendKeys(ctx, t.id, named...)
+		named = nil
+		return err
+	}
+	for _, k := range keys {
+		b, ok := herdrUnnamedKey(k)
+		if !ok {
+			named = append(named, k)
+			continue
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		if err := t.c.PaneSendText(ctx, t.id, b); err != nil {
+			return err
+		}
+	}
+	return flush()
+}
+
+// herdrUnnamedKey is the bytes of a key herdr has no name for (home, end, pageup, pagedown, with any modifiers);
+// false for the others, which go by name.
+func herdrUnnamedKey(k string) (string, bool) {
+	name := strings.ToLower(strings.TrimSpace(k))
+	switch name[strings.LastIndex(name, "+")+1:] {
+	case "home", "end", "pageup", "pagedown":
+		return orcaKeyBytes(name)
+	}
+	return "", false
 }
 
 // Prompt is agent.prompt; herdr answers *_not_found for a pane whose agent it does not detect (a compatible CLI).
@@ -223,6 +265,15 @@ func (h *herdrHost) PaneReportResume(ctx context.Context, pane host.PaneRef, sou
 		return err
 	}
 	return t.c.PaneReportResume(ctx, t.id, source, agent, sessionID, argv)
+}
+
+// serverID is herdr.Client.ServerID of the server the pane is in; "" when it cannot tell.
+func (h *herdrHost) serverID(ctx context.Context, pane host.PaneRef) string {
+	t, err := h.target(ctx, pane.ID)
+	if err != nil || t.c == nil {
+		return ""
+	}
+	return t.c.ServerID()
 }
 
 // has runs `herdr <args> --help` once: whether this herdr knows the command.

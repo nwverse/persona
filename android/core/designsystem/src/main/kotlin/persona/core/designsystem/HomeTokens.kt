@@ -6,6 +6,12 @@ import androidx.compose.ui.unit.dp
 /** Application chrome shared with the compact iPhone shell, independent of platform system bars. */
 internal object HomeTokens {
     const val drawerFraction = 0.82f
+
+    /** Flick faster than this, in dp/s, settles that way. The iPhone's 300 pt/s (`ShellPager.swift:193-196`). */
+    const val drawerFlickDpPerSecond = 300f
+
+    /** How far the half-way rule looks ahead, in seconds (`ShellPager.swift:195`). */
+    const val drawerProjectionSeconds = 0.2f
     val drawerMaximum = 380.dp
     val drawerPageRadius = 55.dp
     val drawerShadow = 24.dp
@@ -17,6 +23,8 @@ internal object HomeTokens {
     /** An assistant's monogram: in the sidebar's head, and in the switcher's rows. */
     val assistantAvatar = 40.dp
     val assistantAvatarSmall = 32.dp
+    /** In the head of Settings' first group. */
+    val assistantAvatarHeader = 24.dp
     const val assistantInitialShare = 0.42f
     const val assistantOfflineAlpha = 0.45f
     /** An assistant's presence dot at its monogram's corner, and the ring cut around it. */

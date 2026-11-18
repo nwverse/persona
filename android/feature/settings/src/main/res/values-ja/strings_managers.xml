@@ -57,9 +57,19 @@
         <item quantity="other">このアシスタントの %1$d 台のコンピュータは hub 自身のアシスタントに戻ります。</item>
     </plurals>
     <string name="settings_managers_delete_sources">ソース（メールアカウントなど）はこのアシスタント自身のデータベースにあります。先に別のアシスタントへ移さないと、一緒に削除されます。</string>
+    <string name="settings_managers_show_in_switcher">切り替えに表示</string>
+    <string name="settings_managers_switcher_note">オフにすると、このアシスタントがデフォルトでなくコンピュータもないあいだ、切り替えに表示しません</string>
+    <string name="settings_managers_switcher_in_use">デフォルトか、コンピュータがあるため、切り替えに表示されています</string>
+    <string name="settings_managers_switcher_unsupported">このハブのバージョンではまだ切り替えから外せません。ハブをアップデートしてからもう一度開いてください</string>
     <string name="settings_managers_needs_update">要更新</string>
     <string name="settings_managers_needs_update_note">このアシスタントの personad は古く、自分の設定（manager.json）をまだ読まないため、組み込みの既定値で動いています。動いているコンピューターで personad を更新してください。</string>
     <string name="settings_switcher_line">%1$s · %2$s</string>
     <string name="settings_switcher_switched">%1$sに切り替えました</string>
     <string name="settings_switcher_manage">アシスタントを管理…</string>
+    <string name="settings_group_assistant">%1$sの設定</string>
+    <string name="settings_group_assistant_switch">切り替え</string>
+    <string name="settings_group_assistant_footer">「%1$s」の設定だけを表示しています。ほかのアシスタントを変更するには、先に切り替えてください。</string>
+    <string name="settings_group_device">このデバイス</string>
+    <string name="settings_group_hub">ハブ</string>
+    <string name="settings_group_hub_footer">この 2 つのグループは、どのアシスタントを選んでいても同じです。</string>
 </resources>

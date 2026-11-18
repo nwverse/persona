@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's node menu (`NodeMenu`, docs/integrations/terminal.md「Node menus」): what it offers and what it sends.
 @MainActor struct NodeMenuTests {
@@ -109,10 +110,33 @@ import Testing
         #expect(NodeMenu.shells(in: panes, workspaceID: "w1").isEmpty)
     }
 
-    @Test func onlyClaudeLaunchersRunInAShell() {
+    /// Claude Code runs in a shell; Codex only where the computer keeps the shell when its start fails (#5504).
+    @Test func claudeAndRunHereCodexLaunchersRunInAShell() {
         #expect(NodeMenu.launchableHere(Launcher(name: "claude")))
         #expect(NodeMenu.launchableHere(Launcher(name: "c2", agent: "claude")))
         #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex")))
+        #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex", promptOptional: true)))
+        #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex", promptOptional: true, runHere: false)))
+        #expect(NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex", promptOptional: true, runHere: true)))
+    }
+
+    /// The computer's word decodes, and an older computer's list, without it, does too.
+    @Test func runHereDecodes() throws {
+        let list = try JSON.decoder.decode([Launcher].self, from: Data(#"[{"name":"codex","agent":"codex","prompt_optional":true,"run_here":true},{"name":"cx"}]"#.utf8))
+        #expect(list[0].runHere == true && list[1].runHere == nil)
+    }
+
+    /// The footer names Codex, and where it starts, only on a computer with a Codex launcher it doesn't offer here
+    /// (#5275, #5504).
+    @Test func runHereFooterMentionsCodexOnlyWhereItIsLeftOut() {
+        let plain = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "c2", agent: "claude")])
+        let withCodex = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "codex", agent: "codex", promptOptional: true)])
+        let offered = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "codex", agent: "codex", promptOptional: true, runHere: true)])
+        #expect(!plain.contains("Codex"))
+        #expect(withCodex.contains("Codex"))
+        #expect(withCodex.hasPrefix(plain), "the Codex line comes after the same first sentence")
+        #expect(offered == plain, "Codex offered here needs no word on where it starts")
+        #expect(NodeMenu.runHereFooter([]) == plain)
     }
 
     /// Run Agent Here opens the agent it started (#3287): the session `panes/agent` names, on the space's computer and
@@ -128,10 +152,16 @@ import Testing
     }
 
     @Test func rowMenuIsNotEqualWhenItsPaneItemsChange() {
-        let actions = AgentRowMenu.Actions()
-        let key = session("a").key
-        let a = AgentRowMenu(key: key, pinned: false, muted: false, looping: false, live: true, actions: actions)
-        let b = AgentRowMenu(key: key, pinned: false, muted: false, looping: false, live: true, paneActions: true, actions: actions)
+        let actions = AgentMenuHandlers()
+        let s = session("a", pane: nil)
+        let before = AgentActionFacts(session: s)
+        let a = AgentActionMenu(facts: before, handlers: actions)
+        var paned = s
+        paned.paneID = "w1:p1"
+        let after = AgentActionFacts(session: paned)
+        let b = AgentActionMenu(facts: after, handlers: actions)
+        #expect(before != after)
+        #expect(a.facts.items.map(\.id) != b.facts.items.map(\.id))
         #expect(a != b)
     }
 }

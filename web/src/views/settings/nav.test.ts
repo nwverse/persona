@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { categoryState, FROM_LIST, itemState, NAV_GROUPS, openedFromList, redirectLegacySettings, searchSettings, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
+import { describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
+import { searchSettings } from "./search";
+import { ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, openedFromList, redirectLegacySettings, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
 
 describe("settings location", () => {
   it("names no category on plain /settings: the phone's list (通用 on a wide screen)", () => {
@@ -40,7 +42,7 @@ describe("settings location", () => {
   it("redirects each old combined category to its new section and preserves its destination", () => {
     expect(redirectLegacySettings("?tab=model-config&purpose=agent.triage&manager=work", "")).toBe("/settings?tab=models&purpose=agent.triage&manager=work#settings-model-config");
     expect(redirectLegacySettings("?tab=models&launcher=example&add=1", "")).toBeNull();
-    for (const agent of ["claude", "codex", "agy", "omp"]) {
+    for (const agent of ["claude", "codex", "agy", "omp", "grok"]) {
       expect(redirectLegacySettings(`?tab=${agent}`, "")).toBe(`/settings?tab=agents#settings-${agent}`);
     }
     expect(redirectLegacySettings("?tab=translate", "")).toBe("/settings?tab=general#settings-translation");
@@ -76,23 +78,52 @@ describe("settings location", () => {
   });
   it("gives every category a one-line hint, and no group shares a name with one of its rows (#3636)", () => {
     for (const k of TABS) expect(TAB_INFO[k].hint.trim()).not.toBe("");
-    for (const g of NAV_GROUPS) for (const k of g.tabs) expect(TAB_INFO[k].label).not.toBe(g.title);
+    const titles = [t("settings-nav.group_assistant", { name: "助手" }), t("settings-nav.group_device"), t("settings-nav.group_hub")];
+    for (const k of TABS) expect(titles).not.toContain(TAB_INFO[k].label);
   });
 });
 
 describe("settings sidebar groups", () => {
-  it("has the four sections in order", () => {
-    expect(NAV_GROUPS).toHaveLength(4);
+  it("has the current assistant's, this device's and the hub's, in that order, every category in one of them", () => {
+    expect(NAV_GROUPS.map((g) => g.key)).toEqual(["assistant", "device", "hub"]);
     expect(NAV_GROUPS.map((g) => g.tabs)).toEqual([
+      ["models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents"],
       ["general", "notifications", "shortcuts"],
-      ["persona", "models", "agents", "knowledge"],
-      ["channels", "connectors", "extensions"],
-      ["devices", "hub", "managers"],
+      ["hub", "managers", "avatar", "devices"],
     ]);
+    expect(NAV_GROUPS.flatMap((g) => g.tabs).sort()).toEqual([...TABS].sort());
+    expect([...ASSISTANT_TABS]).toEqual(NAV_GROUPS[0].tabs);
+  });
+
+  // audit item 66: the hub's own page was a hard-coded lowercase "hub", and Models and Knowledge selection shared a mark
+  it.each(["en", "zh-Hans", "ja"])("names every category from the catalog in %s, each with a mark of its own", async (lang) => {
+    vi.resetModules();
+    const { initI18n, t } = await import("../../i18n");
+    await initI18n(lang);
+    const { TAB_INFO, TABS } = await import("./nav");
+    expect(TAB_INFO.hub.label).toBe(t("settings-nav.tab_hub"));
+    expect(TAB_INFO.hub.label).not.toBe("hub");
+    expect(TAB_INFO.hub.label).not.toBe(t("settings-nav.group_hub"));
+    expect(new Set(TABS.map((k) => TAB_INFO[k].icon)).size).toBe(TABS.length);
+  });
+
+  it("names the assistant's profile and the assistant list apart: no row is called like a group (#3365)", () => {
+    expect(TAB_INFO.persona.label).toBe("助手资料");
+    expect(TAB_INFO.managers.label).toBe("助手");
+    expect(t("settings-nav.group_assistant", { name: "工作" })).toBe("工作 的设置");
   });
 });
 
 describe("settings search", () => {
+  it.each(["en", "zh-Hans", "ja"])("finds standing authorizations by its localized title in %s", async (lang) => {
+    vi.resetModules();
+    const { initI18n, t } = await import("../../i18n");
+    await initI18n(lang);
+    const { searchSettings } = await import("./search");
+    const title = t("settings-standing.title");
+    expect(title).not.toBe("settings-standing.title");
+    expect(searchSettings(title).groups).toContainEqual({ tab: "persona", anchor: "standing-authorizations", group: title });
+  });
   it("matches a category by label", () => {
     expect(searchSettings("模型").tabs).toContain("models");
     expect(searchSettings("Agent").tabs).toContain("agents");
@@ -113,6 +144,35 @@ describe("settings search", () => {
       expect(result.tabs).not.toContain("sent");
       expect(result.groups).toContainEqual(expect.objectContaining({ tab: "connectors", anchor: "sent" }));
     }
+  });
+  // audit item 18: only the categories and group headings were found, none of the settings on the pages
+  it.each(["en", "zh-Hans", "ja"])("finds the settings on a page by their own labels in %s", async (lang) => {
+    vi.resetModules();
+    const { initI18n, t } = await import("../../i18n");
+    await initI18n(lang);
+    const { searchSettings } = await import("./search");
+    const finds = (q: string, tab: string, anchor: string) => expect(searchSettings(q).groups).toContainEqual(expect.objectContaining({ tab, anchor }));
+    finds(t("language.label"), "general", "language");
+    finds(t("ui-look.text_size"), "general", "text-size");
+    finds(t("ui-look.accent"), "general", "theme-color");
+    finds(t("settings.theme_dark"), "general", "theme");
+    finds(t("settings.reply_motion"), "general", "reply-motion");
+    finds(t("settings.disconnect_browser"), "general", "disconnect");
+    finds(t("disconnect.sign_out"), "general", "disconnect");
+    finds(t("settings.add_provider"), "models", "settings-providers");
+    finds("API Key", "models", "settings-providers");
+    finds(t("settings-notifications.sound"), "notifications", "notify-sound");
+    finds(t("settings.revoke"), "devices", "devices");
+    finds(t("workspace-board.setting_label"), "hub", "workflow-board");
+  });
+  it("finds the words people search for in Chinese", () => {
+    const anchors = (q: string) => searchSettings(q).groups.map((g) => g.anchor);
+    expect(anchors("主题")).toContain("theme-color");
+    expect(anchors("深色")).toContain("theme");
+    expect(anchors("语言")).toContain("language");
+    expect(anchors("字号")).toContain("text-size");
+    expect(anchors("退出")).toContain("disconnect");
+    expect(anchors("撤销")).toContain("devices");
   });
   it("returns nothing for an unknown query", () => {
     expect(searchSettings("zzz-no-such-setting")).toEqual({ tabs: [], groups: [] });

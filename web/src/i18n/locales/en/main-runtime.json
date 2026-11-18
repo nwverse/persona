@@ -1,0 +1,11 @@
+{
+  "main": "Main chat",
+  "not_started": "Main chat hasn't started yet",
+  "starting": "Main chat · Starting…",
+  "running": "Running",
+  "proxy": "Via {name}",
+  "container": "Container {name}",
+  "offline": "Main chat · Offline",
+  "stopped": "Main chat · Stopped",
+  "last_location": "Last ran on {location}"
+}

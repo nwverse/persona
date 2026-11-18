@@ -4,10 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -20,12 +18,24 @@ import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.AssistantSnapshot
 import persona.core.designsystem.*
 
+/**
+ * Which sidebar row stays shaded for the page root beside the column (#9667).
+ * iOS `UnifiedSidebar.shownPlace` (UnifiedSidebar.swift:39–44); [None] has no place row.
+ */
+object AssistantSidebarShade {
+    const val Conversation = "conversation"
+    const val Inbox = "inbox"
+    const val Todos = "todos"
+    const val Knowledge = "knowledge"
+    const val Machines = "machines"
+    const val None = "none"
+}
+
 /** The real shared history remains available even while a secondary page hides the Assistant root. */
 @Composable
 fun AssistantSidebarContent(
     snapshot: AssistantSnapshot,
     repository: AssistantRepository,
-    pinned: Set<SessionKey>,
     active: SessionKey?,
     operationScope: CoroutineScope,
     demo: Boolean,
@@ -43,9 +53,24 @@ fun AssistantSidebarContent(
     settingsBadge: String?,
     pages: List<NavItem>,
     onPage: (String) -> Unit,
-    onTogglePin: suspend (SessionKey) -> Unit,
     onRetired: (SessionKey) -> Unit,
+    /** A to-do's card / an Agent's session, from the Directions tree (#4352); null: those rows only fold. */
+    onOpenTodo: ((String) -> Unit)? = null,
+    onOpenAgent: ((SessionKey) -> Unit)? = null,
     switcher: AssistantSwitcherSlot? = null,
+    /**
+     * A regular window (open foldable / tablet): Search opens over the whole window as the open iPhone Duo (#9171).
+     * Compact windows keep the drawer's inline search.
+     */
+    fullWindowSearch: Boolean = false,
+    /**
+     * Which place row stays shaded at regular width, including while drilled in
+     * (iOS `UnifiedSidebar.shownPlace`, UnifiedSidebar.swift:39–44).
+     * Null keeps the phone drawer's conversation shading.
+     */
+    shadedPlace: String? = null,
+    /** When the sidebar is a column beside the page, folds the column from its own header; null in a drawer or overlay. */
+    onFoldColumn: (() -> Unit)? = null,
 ) {
     val choice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val received = snapshot.takeIf { it.managerId == choice.shown }
@@ -53,37 +78,68 @@ fun AssistantSidebarContent(
     val base = LocalAssistantHost.current?.management
     val management = remember(base, choice.hubId, choice.shown) { base?.forManager(choice.shown) }
     val resources = LocalResources.current
-    val clipboard = LocalClipboardManager.current
+    val copy = rememberCopy()
     val feedback = LocalAppFeedback.current
+    val haptics = persona.core.designsystem.rememberHaptics()
+    val archivedWords = stringResource(R.string.assistant_archived)
     val words = conversationWords()
     var query by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf("") }
-    var showAll by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
-    var autoOpen by rememberAutoOpen()
+    var fullSearchOpen by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
+    LaunchedEffect(fullWindowSearch) {
+        if (fullWindowSearch) query = "" else fullSearchOpen = false
+    }
     var ended by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
+    // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
+    val history = rememberConversationHistory(management?.takeUnless { demo }, repository)
+    val openKeys = remember(received.conversations) { openKeys(received.conversations) }
     var ending by remember { mutableStateOf<Pair<Session, AssistantManagement>?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var pinning by remember { mutableStateOf(false) }
+    var leaderBusy by remember { mutableStateOf(false) }
+    // The 设为常驻 / 取消常驻 menu asks before the hub call (#6214).
+    var leaderConfirm by remember { mutableStateOf<Session?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     fun failed(error: Exception) {
         failure = operationFeedback(error).text.resolve(resources)
         feedback?.failure(error)
     }
-    fun toggle(keys: List<SessionKey>) {
-        if (pinning || keys.isEmpty()) return
-        pinning = true
+    // A chat is made a leader (常驻) or stops being one on the hub, for every device (#4331).
+    fun setLeader(session: Session) {
+        val target = management?.takeUnless { demo } ?: return
+        if (leaderBusy) return
+        leaderBusy = true
+        val leader = session.sessionId in received.leaders
         operationScope.launch {
-            try { keys.forEach { onTogglePin(it) } }
-            catch (cancelled: CancellationException) { throw cancelled }
+            try {
+                if (leader) target.endDirection(session.key) else target.makeDirection(session.key)
+                repository.refresh()
+            } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { failed(error) }
-            finally { pinning = false }
+            finally { leaderBusy = false }
         }
     }
-    val groups = remember(received, query, pinned, ended, archived, words) {
-        conversationGroups(received.copy(conversations = received.conversations.filter { it.key !in archived }.map {
+    val groups = remember(received, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
+        conversationGroups(received.copy(conversations = history.tagged(received.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
-        }), query, pinned, words)
+        })), query, words, activeTag = history.activeTag)
     }
+    val searchOn = management != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
+    val openChats = remember(received.conversations, ended, archived, history.titles, history.tagEdits) {
+        history.tagged(received.conversations.filter { !it.archived && it.key !in archived }.map {
+            if (it.key in ended) it.copy(status = "offline", state = "offline") else it
+        })
+    }
+    val knownChats = remember(received.conversations, ended, archived, history.titles, history.tagEdits, history.archived, history.restoring) {
+        val listed = received.conversations.filter { it.key !in archived }.map {
+            if (it.key in ended) it.copy(status = "offline", state = "offline") else it
+        }
+        history.tagged((listed + history.shownArchived(openKeys(openChats))).distinctBy { it.sessionId })
+    }
+    val tagChoices = remember(knownChats) { inUseConversationTags(knownChats) }
+    val (foundChats, searchPartial) = rememberFoundChats(
+        query, remember(groups) { (groups.directions + groups.others).distinctBy { it.sessionId } },
+        knownChats.withConversationTag(history.activeTag), searchOn, management, "${choice.hubId.orEmpty()}|${choice.shown}",
+        activeTag = history.activeTag)
     Column(Modifier.fillMaxHeight()) {
         failure?.let { JNotice(it, status = Status.NeedsYou) }
         Box(Modifier.weight(1f)) {
@@ -98,17 +154,19 @@ fun AssistantSidebarContent(
                     AssistantInfo.Launcher, AssistantInfo.Settings -> onAction(AssistantSidebarAction.Launcher)
                 } },
                 onNew = { onAction(AssistantSidebarAction.NewConversation) },
-                onHome = { onAction(AssistantSidebarAction.Home) },
+                // The health space (docs/assistant/health.md): the Assistant page opens its newest chat or its new-chat page.
+                onHealth = if (demo) null else ({ onAction(AssistantSidebarAction.Health) }),
                 onSettings = onSettings,
                 onInbox = onInbox, inboxCount = inboxCount,
-                onPin = { toggle(listOf(it.key)) },
-                onUnpinAll = { toggle(received.conversations.map { it.key }.distinct().filter { it in pinned && it != received.mainSession }) },
-                onCopy = { clipboard.setText(AnnotatedString(it.sessionId)); feedback?.notice(resources.getString(R.string.assistant_copied_session_id)) },
+                onCopy = { copy(it.sessionId, resources.getString(R.string.assistant_copied_session_id)) },
                 onArchive = management?.takeUnless { demo }?.let { target -> { session: Session ->
                     archived = archived + session.key
+                    // As iOS: a tap now, "Archived" once the hub has it (DESIGN_SYSTEM.md 4.3).
+                    haptics(persona.core.designsystem.Haptic.Tap)
                     operationScope.launch {
                         try {
                             target.archiveConversation(session.key)
+                            feedback?.notice(archivedWords, persona.core.designsystem.FeedbackStyle.Success)
                             onRetired(session.key)
                             repository.refresh()
                             archived = archived - session.key
@@ -116,13 +174,49 @@ fun AssistantSidebarContent(
                         catch (error: Exception) { archived = archived - session.key; failed(error) }
                     }
                 } },
-                showAllRecent = showAll, onShowAllRecent = { showAll = true },
-                autoOpen = autoOpen, onAutoOpen = { autoOpen = it },
+                onLeader = if (management != null && !demo) ({ session: Session ->
+                    // Open the confirmation first; setLeader runs only on the second choice.
+                    leaderConfirm = session
+                }) else null,
+                onRename = if (management != null && !demo) ({ session: Session -> history.renaming = session }) else null,
+                onEditTags = if (management != null && !demo) ({ session: Session -> history.editingTags = session }) else null,
+                onDiagnostics = { copy(conversationDiagnostics(it), resources.getString(R.string.assistant_diagnostics_copied)) },
+                archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
+                tagChoices = tagChoices, activeTag = history.activeTag, onTag = history::selectTag,
                 onTodos = onTodos, todoCount = todoCount, showTodos = showTodos,
                 settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
-                pages = pages, onPage = onPage, switcher = switcher)
+                pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
+                found = foundChats, searchPartial = searchPartial,
+                fullWindowSearch = fullWindowSearch,
+                onFullSearch = { if (fullWindowSearch) fullSearchOpen = true },
+                shadedPlace = shadedPlace,
+                onFoldColumn = onFoldColumn)
         }
     }
+    if (fullSearchOpen && fullWindowSearch) {
+        val roster = persona.core.designsystem.LocalManagerRoster.current
+        val assistantName = roster.assistantDisplayName(choice.shown, persona.core.designsystem.LocalPersonaName.current)
+        AssistantFullSearch(
+            chats = openChats,
+            known = knownChats,
+            searchOn = searchOn,
+            management = management,
+            hubKey = "${choice.hubId.orEmpty()}|${choice.shown}",
+            words = words,
+            names = received.directionNames,
+            backgroundId = received.backgroundSupervisor,
+            activeTag = history.activeTag,
+            mainName = assistantName,
+            mainKey = received.mainSession,
+            onOpen = { key ->
+                fullSearchOpen = false
+                onOpen(key)
+            },
+            onDismiss = { fullSearchOpen = false },
+        )
+    }
+    ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
+        notice = { feedback?.notice(it, persona.core.designsystem.FeedbackStyle.Success) }, failure = ::failed)
     ending?.let { (session, target) ->
         JDialog(onDismiss = { if (!busy) ending = null }, title = stringResource(R.string.assistant_end_title),
             text = stringResource(R.string.assistant_end_text, session.conversationTitle(words)),
@@ -141,5 +235,20 @@ fun AssistantSidebarContent(
                     finally { busy = false }
                 }
             }, dismiss = stringResource(R.string.assistant_cancel) to { if (!busy) ending = null })
+    }
+    leaderConfirm?.let { session ->
+        val leader = session.sessionId in received.leaders
+        val title = session.conversationTitle(words)
+        JDialog(onDismiss = { if (!leaderBusy) leaderConfirm = null },
+            title = stringResource(if (leader) R.string.assistant_end_leader_title else R.string.assistant_make_leader_title),
+            text = if (leader) stringResource(R.string.assistant_end_leader_text, title)
+                   else stringResource(R.string.assistant_make_leader_text),
+            // Reversible (pin again any time), so the confirm is the ordinary primary button, not a destructive one.
+            confirmEnabled = !leaderBusy,
+            confirm = stringResource(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader) to {
+                // setLeader owns the busy flag, the hub call and the failure notice.
+                setLeader(session)
+                leaderConfirm = null
+            }, dismiss = stringResource(R.string.assistant_cancel) to { if (!leaderBusy) leaderConfirm = null })
     }
 }

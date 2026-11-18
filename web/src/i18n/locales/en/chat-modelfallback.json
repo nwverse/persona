@@ -1,0 +1,9 @@
+{
+  "cause_safeguards_refusal": "the model refused",
+  "cause_quota_exhausted": "quota exhausted",
+  "cause_rate_limited": "rate limited",
+  "cause_server_error": "service error",
+  "cause_model_unavailable": "model unavailable",
+  "exhausted_resets": "Available again {time}",
+  "exhausted_tried": "Models tried: {models}"
+}

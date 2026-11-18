@@ -19,8 +19,11 @@ import (
 
 const (
 	inboxWindow   = 7 * 24 * time.Hour // older unread chats / mail are history, not inbox
-	inboxKeepDone = 3 * 24 * time.Hour // done items stay listed (for undo) this long
+	inboxKeepDone = 3 * 24 * time.Hour // done items are the list's (for undo) this long, the newest inboxListDone of them
 	inboxForget   = 8 * 24 * time.Hour // and are held in memory (so old unread messages don't come back) this long
+	// inboxListDone: of those, a list carries the newest this many (inbox_list_done.go); Done pages the rest from the
+	// history.
+	inboxListDone = 200
 	// inboxKeepHistory: done items stay in the database this long, paged by GET /api/v1/inbox/done (inbox_history.go);
 	// inboxPurgeEvery is how often the rounds delete those past it.
 	inboxKeepHistory = 90 * 24 * time.Hour
@@ -59,6 +62,7 @@ type InboxItem struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 	Tier        string     `json:"tier,omitempty"` // empty until triaged
 	Summary     string     `json:"summary,omitempty"`
+	Body        string     `json:"body,omitempty"` // an assistant row's text as Markdown (inbox_post.go, #9041)
 	Reason      string     `json:"reason,omitempty"`
 	Read        bool       `json:"read,omitempty"` // read somewhere else (Feishu, another mail client)
 	DoneAt      *time.Time `json:"done_at,omitempty"`
@@ -84,6 +88,24 @@ type InboxItem struct {
 	// TriagedBy says who sorted an event (inbox_group.go): "model" (its title, summary and tier are the model's) or
 	// "rules" (the connector grouped it and its rule tier stands, "By rule").
 	TriagedBy string `json:"triaged_by,omitempty"`
+	// Where is where the matter happens, for people: a group's name, the other person of a direct chat, a repository
+	// ("" for mail). TitleBy says who wrote Title (TitleBy* in inbox_follow.go): once the assistant or the user did,
+	// grouping leaves the title and the summary alone; kept, not listed. Follow is what the matter waits on, its next
+	// step and when to look at it again; Now is its state key, listed only (docs/assistant/inbox.md "Following up").
+	Where   string       `json:"where,omitempty"`
+	TitleBy string       `json:"title_by,omitempty"`
+	Follow  *InboxFollow `json:"follow,omitempty"`
+	Now     string       `json:"now,omitempty"`
+	// MergedFrom lists the rows merged into this one by hand (listed); MergedInto, on such a row, names this one and hides
+	// it (kept, not listed). PreMergeTier is the tier this row had before (inbox_merge.go, #6480).
+	MergedFrom   []InboxMergeRef `json:"merged_from,omitempty"`
+	MergedInto   string          `json:"merged_into,omitempty"`
+	PreMergeTier string          `json:"pre_merge_tier,omitempty"`
+	// PreMergeTitle and PreMergeTitleBy are the title this row had before the model wrote one for the merged row
+	// (MergeTitle), so Undo puts it back (inbox_merge_title.go, #7229). Kept, not listed.
+	PreMergeTitle   string `json:"pre_merge_title,omitempty"`
+	PreMergeTitleBy string `json:"pre_merge_title_by,omitempty"`
+	MergeTitle      string `json:"merge_title,omitempty"`
 	// Parent is what the item grew out of: another item, a todo or an agent session (inbox_parent.go, #2128).
 	Parent *InboxParent `json:"parent,omitempty"`
 	// Folder is the "/"-separated folder path the item is filed under ("" none); FolderBy says who filed it, "model"
@@ -100,7 +122,10 @@ type InboxItem struct {
 	Handling   *InboxHandling    `json:"handling,omitempty"`
 	Suggestion *InboxSuggestion  `json:"suggestion,omitempty"`
 	Chain      []InboxChainEntry `json:"chain,omitempty"`
-	Related    []InboxRelated    `json:"related,omitempty"`
+	// ChainCount is set only in a list asked with chain=last (inbox_list_memo.go, #4742): a done item's chain is then
+	// its newest entry alone, and this is how many it has. GET /api/v1/inbox/{id} has them all.
+	ChainCount int            `json:"chain_count,omitempty"`
+	Related    []InboxRelated `json:"related,omitempty"`
 	// Handoffs are the latest conversations the event was handed to (inbox_handoff.go), oldest first.
 	Handoffs []InboxHandoff `json:"handoffs,omitempty"`
 
@@ -113,6 +138,21 @@ type InboxItem struct {
 	FolderOf  string `json:"folder_of,omitempty"`  // Last when the model was asked for its folder
 	// Rules are the item's own triage rules, from its connector (InboxThing.Rules): they replace inbox.rules for it.
 	Rules string `json:"rules,omitempty"`
+	// TriageRev is the tier criteria's revision (inboxTriageRev) the model last sorted the item under: an open "Needs
+	// you" item sorted under older criteria is sorted again once (inbox_triage.go retriageStale).
+	TriageRev int `json:"triage_rev,omitempty"`
+	// RuleOf is Last when the item's tier came from the rules because the model failed on it (an error or too slow,
+	// not a held connection or no model): TriagedAt stays behind, and later passes ask the model again, a few at a
+	// time and less often while it keeps failing, until it answers (inbox_triage.go retryRuled, #8298).
+	RuleOf string `json:"rule_of,omitempty"`
+	// SettledOf is the evidence the manager filed the item on as handled elsewhere (inbox_settle.go): the newest source
+	// position it read for a conversation, "mail:<uid>" for an answered mail, "todo:<id>" for a finished to-do. Reopened
+	// by hand, the same evidence never files it again.
+	SettledOf string `json:"settled_of,omitempty"`
+	// RepliedOf is Last when a connector's state report recorded the owner's reply in the source (inbox_group_state.go).
+	// The report repeats until new messages come, and the self_replied entry that says so can fall out of the newest
+	// chainMax kept: this is what keeps the same report from counting as another reply (#8424).
+	RepliedOf string `json:"replied_of,omitempty"`
 	// ArrivedAt is the clock here when the item first held Last (ArrivedOf), as listed or saved: a bulk "Done" over a
 	// filter leaves what arrived after the list it acted on (inbox_bulk.go). Rows stored before have UpdatedAt.
 	ArrivedOf string    `json:"arrived_of,omitempty"`
@@ -166,7 +206,12 @@ type InboxMail struct {
 	Thread    string      `json:"thread"`           // normalized subject: replies join the same item
 }
 
-func (it *InboxItem) open() bool { return it.DoneAt == nil }
+// open: not filed, and not a member of a merged row (inbox_merge.go): a member is hidden and its survivor stands for it.
+func (it *InboxItem) open() bool { return it.DoneAt == nil && it.MergedInto == "" }
+
+// tiered: the item has a tier for what it holds now, the model's (TriagedAt) or, while the model fails on it, the
+// rules' (RuleOf).
+func (it *InboxItem) tiered() bool { return it.TriagedAt == it.Last || it.RuleOf == it.Last }
 
 // conversationOf is where a chat item opens in its messaging source: the source is the connector's id ("lark", the
 // Lark extension's source of the same id), the account the one the apps would pass as ol_account.
@@ -186,10 +231,17 @@ func conversationOf(it *InboxItem) *wire.MessagingConversationRef {
 func (it *InboxItem) listed() InboxItem {
 	c := *it
 	c.Context, c.Last, c.TriagedAt, c.BodyOf, c.JudgedAt, c.Rules, c.ArrivedOf, c.FolderOf = "", "", "", "", "", "", "", ""
+	c.TriageRev, c.SettledOf, c.RuleOf, c.RepliedOf = 0, "", "", ""
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
 	c.Status = it.status()
+	c.Now, c.TitleBy = it.nowKey(), ""
+	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
+	if it.Follow != nil {
+		f := *it.Follow
+		c.Follow = &f
+	}
 	c.Chain = listedChain(it)
 	c.Related = slices.Clone(it.Related)
 	c.Handoffs = listedHandoffs(it.Handoffs)
@@ -200,6 +252,7 @@ func (it *InboxItem) listed() InboxItem {
 	if g := currentSuggestion(it); g != nil {
 		g := *g
 		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
+		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		c.Suggestion = &g
 		if c.Handling == nil && g.Conversation == nil && it.Agent != nil { // an old draft: its conversation is done with this round
 			c.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
@@ -211,6 +264,8 @@ func (it *InboxItem) listed() InboxItem {
 	if it.Agent != nil { // the copy is encoded after the lock is released
 		a := *it.Agent
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
+		a.ProcessingTurn = ""
+		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
 	}
 	if it.Mail != nil {

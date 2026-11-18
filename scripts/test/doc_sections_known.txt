@@ -14,14 +14,11 @@ apple/Persona/Views/Shell/ShellPager.swift	docs/apple/ios.md	只在前台做的�
 apple/PersonaUITests/ExtensionMarketTests.swift	docs/extensions/extensions.md	自动升级
 apple/Shared/APIClient.swift	docs/protocol/protocol.md	发消息
 apple/Shared/APIClient.swift	docs/protocol/protocol.md	操作回执
-apple/project.yml	docs/apple/mac.md	验收清单
 docs/apple/ios.md	docs/integrations/codex.md	Effort
 docs/apple/phone-tools.md	docs/android/android.md	App shell and direct page navigation,
 docs/apple/recording.md	protocol.md	Recording synchronization
 docs/extensions/connectors.md	docs/assistant/inbox.md	Who owns what
 docs/extensions/extensions.md	docs/protocol/protocol.md	Personal Agents
-docs/extensions/wechat.md	docs/extensions/channels.md	How a message flows
-docs/extensions/wechat.md	docs/extensions/channels.md	Who owns what
 docs/integrations/codex.md	docs/operations/testing.md	Codex integration testing
 docs/integrations/engines.md	docs/plans/plan-orca-support.md	Side-by-side engines
 docs/operations/admin.md	extensions.md	Admin console: extensions
@@ -35,7 +32,6 @@ docs/operations/testing.md	docs/protocol/protocol.md	Sending video
 docs/protocol/protocol.md	channels.md	6. Endpoints
 docs/protocol/protocol.md	computer-use.md	Approving per app
 docs/protocol/protocol.md	docs/apple/ios.md	Reasoning effort and permission mode
-docs/protocol/protocol.md	docs/assistant/todos.md	Close the Agent of a finished task
 docs/protocol/protocol.md	docs/assistant/todos.md	Record the conclusion when done
 docs/protocol/protocol.md	docs/extensions/extensions.md	Programs that run on computers
 docs/protocol/protocol.md	docs/extensions/extensions.md	Shared Inbox rules

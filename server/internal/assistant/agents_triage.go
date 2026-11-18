@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -47,7 +49,7 @@ type triageOut struct {
 // with no phase (nothing shown, nothing done; the turn is not triaged again).
 // same: the model says the turn still waits on the very step the user approved (#3824), false when there is none.
 func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine string, c proto.Session) (w *proto.WorkState, same bool, err error) {
-	ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+	ask, reply := s.triageRead(ctx, machine, c)
 	if reply == "" {
 		reply = strings.TrimSpace(c.LastText)
 	}
@@ -89,21 +91,44 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		}
 		in.Answered = triageAnswered(records)
 	}
-	var out triageOut
-	if err := s.purposeModel("agent.triage").JSON(ctx, prompts.RenderAgentTriage(prompts.AgentTriage{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale)}),
-		prompts.RenderAgentTriageInput(in), &out); err != nil {
+	w, same, err = judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
+		System: prompts.AgentTriage{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale)},
+		Input:  in, Reply: reply, Others: byShort, Lang: s.lang(ctx),
+	})
+	if err != nil {
 		return nil, false, err
 	}
-	same = out.Wait != nil && out.Wait.Approved && in.ApprovedThen != ""
-	out.Questions = slices.DeleteFunc(out.Questions, func(q proto.Question) bool {
-		text := strings.TrimSpace(q.Question)
-		return text == "" || !strings.Contains(reply, text) || !explicitUserRequest(text)
-	})
-	w = triageWork(out, byShort, time.Now(), s.lang(ctx))
 	if hasCloseout {
 		w = unfinished(withCloseout(w, co, coArtifacts), s.lang(ctx))
 	}
 	return w, same, nil
+}
+
+// triageJudgeInput is everything the triage model's answer is judged on, read from the session and the hub
+// (triageTurnModel) or written out by a test.
+type triageJudgeInput struct {
+	System prompts.AgentTriage
+	Input  prompts.AgentTriageInput
+	Reply  string                     // the whole last reply: a question must be copied from it (Input.Reply is clipped)
+	Others map[string]proto.WorkAgent // the agents it may wait for, by the ids in Input.Others
+	Lang   i18n.Lang                  // the texts the hub fills in itself
+}
+
+// judgeTriageWith asks m where the stopped turn in stands and applies the hub's rules to what it answers: a question
+// must be an explicit request copied from the reply, and triageWork keeps only what the model may say. same: it waits
+// on the very step the user approved (#3824). It reads nothing else, so a behaviour check can run it on written-out
+// turns (#2586, agents_triage_judge_live_test.go).
+func judgeTriageWith(ctx context.Context, m jsonModel, j triageJudgeInput) (w *proto.WorkState, same bool, err error) {
+	var out triageOut
+	if err := m.JSON(ctx, prompts.RenderAgentTriage(j.System), prompts.RenderAgentTriageInput(j.Input), &out); err != nil {
+		return nil, false, err
+	}
+	same = out.Wait != nil && out.Wait.Approved && j.Input.ApprovedThen != ""
+	out.Questions = slices.DeleteFunc(out.Questions, func(q proto.Question) bool {
+		text := strings.TrimSpace(q.Question)
+		return text == "" || !strings.Contains(j.Reply, text) || !explicitUserRequest(text)
+	})
+	return triageWork(out, j.Others, time.Now(), j.Lang), same, nil
 }
 
 // Interactions returns newest first. Deferral, delegation and permission approval are not user decisions on questions.
@@ -284,16 +309,44 @@ func triageOthers(machine, sid string, list []proto.Session) ([]prompts.AgentTri
 	return out, by
 }
 
-// lastTurnOf is a session's latest turn: what the user asked in it ("" when none) and its last reply ("" when the
-// turn cannot be read).
-func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, answer string) {
+// triageRead is the latest turn of machine's session c as the triage model is given it: read once per turn. A turn
+// whose model call failed is tried again (backfillWork, every workRetryTriage while it stays unread), and the retry
+// takes what the attempt before read (triedTurn) instead of asking the node again. A turn the session's runtime will
+// not read without starting the agent (not_loaded: Paseo would relaunch the provider of an agent it let go, #8132)
+// counts as read with nothing in it: the row's last words stand in for the reply, and the retries ask nothing either.
+// A read that failed otherwise (the node away) is tried again by the next attempt.
+func (s *Service) triageRead(ctx context.Context, machine string, c proto.Session) (ask, reply string) {
+	k := [2]string{machine, c.SessionID}
+	s.work.mu.Lock()
+	t, ok := s.work.tried[k]
+	s.work.mu.Unlock()
+	if ok && t.read != nil && sameTurn(c, t.turn) {
+		return t.read.ask, t.read.reply
+	}
+	ask, reply, err := s.lastTurnOf(ctx, machine, c.SessionID)
+	var re *rpc.Error
+	if err != nil && !(errors.As(err, &re) && re.Code == proto.CodeNotLoaded) {
+		return "", ""
+	}
+	s.work.mu.Lock()
+	if t, ok := s.work.tried[k]; ok && sameTurn(c, t.turn) {
+		t.read = &turnRead{ask: ask, reply: reply}
+		s.work.tried[k] = t
+	}
+	s.work.mu.Unlock()
+	return ask, reply
+}
+
+// lastTurnOf is a session's latest turn: what the user asked in it ("" when none) and its last reply ("" when none);
+// err when the turn could not be read.
+func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, answer string, err error) {
 	var res struct {
 		Items []proto.Item `json:"items"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1}, &res); err != nil {
-		return "", ""
+		return "", "", err
 	}
 	for _, it := range res.Items {
 		if it.Kind == proto.KindText && it.Role == "user" && strings.TrimSpace(it.Text) != "" {
@@ -303,10 +356,10 @@ func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, ans
 	}
 	for i := len(res.Items) - 1; i >= 0; i-- {
 		if it := res.Items[i]; it.Kind == proto.KindText && it.Role == "assistant" && strings.TrimSpace(it.Text) != "" {
-			return ask, strings.TrimSpace(it.Text)
+			return ask, strings.TrimSpace(it.Text), nil
 		}
 	}
-	return ask, ""
+	return ask, "", nil
 }
 
 // clipMiddleRunes keeps a long text's first and last n runes: a last answer says what was done first and what is

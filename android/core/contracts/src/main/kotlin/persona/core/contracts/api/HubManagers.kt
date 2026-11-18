@@ -32,6 +32,13 @@ interface HubManagers {
     /** `PATCH /api/v1/managers/{id} {default: true}`. */
     suspend fun makeDefault(id: String): HubManager
 
+    /**
+     * `PATCH /api/v1/managers/{id} {hide}`: keep the hub's own assistant out of the switcher while it is not used, or
+     * show it there again. Only the built-in manager takes it; hiding is refused (409 `builtin_in_use`) while it is the
+     * default or owns a computer.
+     */
+    suspend fun setHide(id: String, hide: Boolean)
+
     /** `DELETE /api/v1/managers/{id}`: its token stops working at once (an installing one's code is void). */
     suspend fun delete(id: String)
 }
@@ -52,6 +59,13 @@ data class ManagerRoster(
     /** More than one installed manager: another one's computers, conversations and offline state are told apart. */
     val isMulti: Boolean get() = installed.size > 1
 
+    /**
+     * The switcher's rows: the installed managers (the default first), then the ones still installing, leaving out a
+     * [HubManager.hidden] one (the hub's own assistant, kept out while it is not used). [installed] and [isMulti] still
+     * count it: what is its keeps its place, and the badges and the Default tag read as before.
+     */
+    val switcherRows: List<HubManager> get() = (installed + managers.filter { it.isInstalling }).filterNot { it.hidden }
+
     /** The default manager's id: the roster's `default`, else the one marked default, else the hub's own assistant. */
     val defaultManagerId: String get() = defaultId.ifBlank { managers.firstOrNull { it.isDefault }?.id ?: ASSISTANT_MANAGER }
 
@@ -66,20 +80,6 @@ data class ManagerRoster(
 
     /** Which manager an item stamped with [manager] belongs to: no stamp is the default manager's. */
     fun ownerOf(manager: String?): String = manager?.takeIf { it.isNotBlank() } ?: defaultManagerId
-
-    /**
-     * [items] by the manager they belong to ([managerOf]; no stamp is the default's): the installed managers in
-     * [installed]'s order, empty groups left out; items of a manager the roster does not list (deleted, still
-     * installing) come last, by their id. Null with one manager: nothing groups then.
-     */
-    fun <T> groups(items: List<T>, managerOf: (T) -> String?): List<ManagerGroup<T>>? {
-        if (!isMulti) return null
-        val byOwner = items.groupBy { ownerOf(managerOf(it)) }
-        val known = installed.mapNotNull { m -> byOwner[m.id]?.let { ManagerGroup(m.id, m, it) } }
-        val ids = installed.map { it.id }.toSet()
-        val others = byOwner.keys.filter { it !in ids }.sorted().map { id -> ManagerGroup(id, manager(id), byOwner.getValue(id)) }
-        return known + others
-    }
 
     companion object {
         /** The hub's own assistant's id: what an unstamped live update comes from. */
@@ -116,9 +116,6 @@ data class CurrentAssistant(
     /** What waits for the user at the other assistants ([ManagerRoster.waiting]'s tally): the dot on the sidebar's button. */
     fun othersWaiting(waiting: Map<String, Int>): Boolean = waiting.any { (manager, count) -> count > 0 && manager != id }
 }
-
-/** One manager's share of a list; [manager] is null for an id the roster does not list. */
-data class ManagerGroup<T>(val id: String, val manager: HubManager?, val items: List<T>)
 
 /**
  * The current assistant: the manager every page shows (docs/assistant/managers.md "Clients"), picked in the sidebar's
@@ -178,11 +175,13 @@ object AssistantManagerChoice {
      * The manager a request to [path] (segments under /api/v1) of [hubId]'s hub is for, from a list that showed it (or
      * the thing it is under); null: send none (none known, or the default). A page's own pins are [ManagerPins].
      */
-    fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? {
-        val default = state.value.defaultId
+    fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? =
+        itemManager(path, hubId)?.takeIf { it != state.value.defaultId }
+
+    /** The recorded owner, including the default; delayed card actions must not follow the current selection. */
+    fun itemManager(path: List<String>, hubId: String? = state.value.hubId): String? {
         for (n in path.size downTo 1) {
-            val owner = items[hubId to path.subList(0, n)] ?: continue
-            return owner.takeIf { it != default }
+            items[hubId to path.subList(0, n)]?.let { return it }
         }
         return null
     }
@@ -222,6 +221,13 @@ data class HubManager(
      * installing, an older hub), which counts as none.
      */
     @SerialName("inbox_needs_you") val inboxNeedsYou: Int? = null,
+    /**
+     * The user's choice to keep it out of the switcher while it is not used (the hub's own assistant only): what
+     * Settings' Show in the switcher shows, turned around. Absent (false) from an older hub.
+     */
+    val hide: Boolean = false,
+    /** That choice in effect now (the hub's word: [hide], not the default, owns no computer): the switcher leaves it out. */
+    val hidden: Boolean = false,
 ) {
     val isInstalling: Boolean get() = !installing.isNullOrBlank()
 }

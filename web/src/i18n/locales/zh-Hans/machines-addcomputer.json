@@ -25,10 +25,10 @@
   "mac_step_install": "在那台 Mac 上装好 Persona Link。目前还没有安装包，要自己从源码编译。",
   "mac_install_link": "安装说明",
   "mac_step_link": "把配对链接发到那台 Mac，点菜单栏里的 Persona Link 图标 › 配对…，粘贴进去。",
-  "copy_link": "拷贝配对链接",
+  "copy_link": "复制配对链接",
   "share_link": "分享…",
   "share_title": "Persona 配对链接",
-  "copy_command": "拷贝",
+  "copy_command": "复制",
   "waiting": "等「{name}」连上来…",
   "expires": "{time} 后失效",
   "expired": "这个链接已经过期，那台电脑还没连上来。",
@@ -52,5 +52,7 @@
   "too_many_waiting": "已经有 {count} 台电脑在等着：没连上来的可以删掉，连上来的先确认是不是你的，再添加新的。",
   "never_connected": "还没连上来过",
   "waiting_confirm": "等你确认",
-  "offline_short": "离线"
+  "offline_short": "离线",
+  "added_under": "这台电脑加到了「{name}」名下。",
+  "assistant_offline": "「{name}」离线，暂时不能给它添加电脑。"
 }

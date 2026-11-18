@@ -6,7 +6,16 @@
 
 ## Verification
 
-<!-- Commands you ran and their results; screenshots for UI changes (light and dark). Say what was not run. -->
+<!-- Commands you ran and their results; screenshots for UI changes (light and dark), shown here and not committed. Say what was not run. -->
+
+
+
+## Apple performance
+
+<!-- Required when the change touches apple/; otherwise write "Not applicable".
+     Paste the review checklist from docs/apple/performance.md and mark each rule done, not applicable, or deviated (with the reason).
+     A performance-sensitive change (chat list, composer, Agents list, pushes, launch, images) adds before / after numbers:
+     device or simulator, build settings, runs, range. -->
 
 
 
@@ -22,3 +31,4 @@
 - [ ] 4 Consistency first: components, patterns and count definitions reused are named; anything new has its reason in the docs.
 - [ ] 5 Model and product separate: names which of speed, model, persona and features it touches; the others are unaffected.
 - [ ] 6 Checkable: the issue's acceptance criteria are met, with evidence for each item above.
+- [ ] 7 Fast, local-first and stateful: immediate local feedback, hub-confirmed Processing, recoverable failure; isolated before/after feedback and execution timings, with light/dark screenshots.

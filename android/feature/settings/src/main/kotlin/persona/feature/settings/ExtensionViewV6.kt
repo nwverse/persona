@@ -71,8 +71,15 @@ import persona.core.designsystem.icons.PhIcons
  * Loads pictures the extension serves through the hub ([ExtensionHubPicture]) with [fetch] (the device's credentials go
  * to the hub's own signed path, nowhere else); https urls are left to the app's ordinary loader, without credentials.
  */
-internal fun extensionPictureLoader(context: android.content.Context, fetch: suspend (String) -> ByteArray): ImageLoader =
-    ImageLoader.Builder(context).components {
+internal fun extensionPictureLoader(context: android.content.Context, fetch: suspend (String) -> ByteArray, maxMemoryBytes: Long? = null): ImageLoader =
+    ImageLoader.Builder(context).apply {
+        if (maxMemoryBytes != null) {
+            memoryCache { coil3.memory.MemoryCache.Builder().maxSizeBytes(maxMemoryBytes).build() }
+            diskCache(null)
+        }
+    }.components {
+        // Catalog PNGs use the platform decoder (also available to Native JVM screenshot tests).
+        if (maxMemoryBytes != null) add(coil3.decode.BitmapFactoryDecoder.Factory())
         add(Keyer<ExtensionHubPicture> { data, _ -> data.path })
         add(object : Fetcher.Factory<ExtensionHubPicture> {
             override fun create(data: ExtensionHubPicture, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
@@ -111,7 +118,7 @@ internal fun ExtensionPicture(src: ExtensionImageSource?, alt: String, handle: E
             else failed = true
         }
         if (failed) Column(Modifier.padding(Tokens.Space.s), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            JIcon(PhIcons.Image, null, size = Tokens.Space.xl, tint = palette.ink3, decorative = true)
+            JIcon(PhIcons.Image, null, size = Tokens.Size.iconXS, tint = palette.ink3, decorative = true)
             if (showAlt) Text(alt, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -139,7 +146,9 @@ internal fun ExtensionImage(item: ExtensionViewItem, handle: ExtensionViewHandle
     val alt = item.alt.orEmpty()
     val context = LocalContext.current
     var loaded by remember(src) { mutableStateOf(false) }
-    var viewing by remember { mutableStateOf(false) }
+    // the viewer belongs to this picture, not to its place: drawn again with the items shifted, the neighbour that takes
+    // the place does not open in it (#4178)
+    var viewing by remember(ExtensionViewText.imageIdentity(item)) { mutableStateOf(false) }
     val zoom = item.noZoom != true && loaded
     val open = stringResource(R.string.settings_ext_open_image)
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {

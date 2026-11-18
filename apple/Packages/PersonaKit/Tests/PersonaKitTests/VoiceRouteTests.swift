@@ -200,4 +200,34 @@ struct VoiceRouteTests {
         let wiredStill = route(out: [Self.speaker], in: [Self.mic], available: [Self.mic, Self.wiredMic])
         #expect(follower.changed(wiredStill, .deviceLeft, at: t0 + .seconds(25)) == Plan(input: "wired-mic"))
     }
+    // MARK: A meeting's spoken answer (#2981): the output only, never a microphone
+
+    @Test func aMeetingAnswerPlaysFromTheConnectedHeadset() {
+        // A2DP AirPods with the recording on the phone's microphone: they play it; their microphone is not asked for.
+        let r = route(out: [Self.airPodsA2DP], in: [Self.mic], available: [Self.mic, Self.airPods])
+        #expect(VoiceRoute.output(r) == .keep)
+        #expect(!VoiceRoute.fromLoudspeaker(r))
+        for out in [Self.wired, Self.airPods, Self.car, Self.usb, Self.btSpeaker] {
+            let other = route(out: [out], in: [Self.mic], available: [Self.mic])
+            #expect(VoiceRoute.output(other) == .keep)
+            #expect(!VoiceRoute.fromLoudspeaker(other))
+        }
+    }
+
+    @Test func aMeetingAnswerNeverPlaysFromTheEarpiece() {
+        let earpiece = route(out: [Self.receiver], in: [Self.mic], available: [Self.mic, Self.airPods])
+        #expect(VoiceRoute.output(earpiece) == Plan(speaker: true))
+        #expect(VoiceRoute.fromLoudspeaker(earpiece, after: VoiceRoute.output(earpiece)))
+        #expect(!VoiceRoute.fromLoudspeaker(earpiece))
+        let loud = route(out: [Self.speaker], in: [Self.mic], available: [Self.mic])
+        #expect(VoiceRoute.output(loud) == .keep)
+        #expect(VoiceRoute.fromLoudspeaker(loud))
+    }
+
+    @Test func aMeetingAnswerLeavesTheRecordingsMicrophone() {
+        // A headset the system left out would take a call; a meeting keeps recording the room.
+        let r = route(out: [Self.speaker], in: [Self.mic], available: [Self.mic, Self.airPods, Self.wiredMic])
+        #expect(VoiceRoute.output(r).input == nil)
+        #expect(VoiceRoute.plan(r, at: .start).input != nil)
+    }
 }

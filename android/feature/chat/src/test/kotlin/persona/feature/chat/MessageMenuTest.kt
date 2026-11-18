@@ -28,6 +28,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -52,6 +53,18 @@ class MessageMenuTest {
         assertEquals(listOf(Copy, Select, Quote, Share, Context), messageActions(MessageTarget("line3", "回复", user = false), true, false, extras))
         assertEquals(listOf(Copy, Select, Quote, Share, Context, Edit, Rewind), messageActions(mine, true, false, extras))
         assertEquals(listOf(Copy, Select, Share), messageActions(mine, writes = false, handOff = false, extras))
+        // Only on this phone (#4645): Copy, Select, Share, then Delete ("Cancel send" while it waits) where the page deletes;
+        // nothing that treats it as a transcript line (Quote, Context, Edit, Rewind).
+        val deletes = MessageExtras(fork = true, rewind = true, delete = true)
+        for (state in listOf(DeliveryState.Queued, DeliveryState.WaitingForNetwork, DeliveryState.Refused, DeliveryState.Rejected)) {
+            val pending = mine.copy(pending = state)
+            assertEquals("$state", listOf(Copy, Select, Share, Delete), messageActions(pending, true, true, deletes))
+            assertEquals("$state", listOf(Copy, Select, Share), messageActions(pending, true, true, extras))
+            assertEquals("$state", listOf(Copy, Select, Share), messageActions(pending, writes = false, handOff = true, deletes))
+        }
+        // The hub may have it: no Delete.
+        for (state in listOf(DeliveryState.Sending, DeliveryState.Sent, DeliveryState.Unknown, DeliveryState.Verifying, DeliveryState.NeedsConfirmation))
+            assertEquals("$state", listOf(Copy, Select, Share), messageActions(mine.copy(pending = state), true, true, deletes))
         assertTrue(messageMenuWrites(readOnly = false, session = null))
         assertTrue(!messageMenuWrites(readOnly = true, session = null))
         // A Codex history session takes no messages: no quote, edit or context either.
@@ -159,5 +172,12 @@ class MessageMenuTest {
         assertNull(suggestionFor(idle.copy(status = "working"), typed = false))
         assertNull(suggestionFor(idle.copy(suggestion = " "), typed = false))
         assertNull(suggestionFor(null, typed = false))
+
+        val send: (String) -> Unit = {}
+        assertSame("a safe suggestion keeps the caller's sender", send, suggestionDirectSend(idle, send))
+        assertSame(send, suggestionDirectSend(idle.copy(suggestionRisky = false), send))
+        assertNull("a risky suggestion never gets a direct sender", suggestionDirectSend(idle.copy(suggestionRisky = true), send))
+        assertNull("no sender stays fill-only", suggestionDirectSend(idle, null))
+        assertNull(suggestionDirectSend(null, send))
     }
 }

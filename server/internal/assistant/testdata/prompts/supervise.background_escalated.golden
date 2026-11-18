@@ -1,0 +1,7 @@
+📋 督办：你派出去的任务有 1 个要你处理
+（这是 Persona 的督办消息，不是用户发的。）
+<persona-supervision level="triage" />
+
+1. 任务「修登录崩溃」（t1，signal=escalated）：跟进它的后台督办对话判断要用户决定，结论卡已经发给用户（要不要顺手改 iPhone 横屏）
+   验收标准：未记录
+   后台督办对话推荐：先只修 iPad

@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { backgroundWaiting, stateOf } from "./format";
 import { took } from "./tasks";
 import type { Session, Workflow, WorkflowAgent, WorkflowPhaseStats } from "./types";
+import type { AgentStatus } from "./work-groups";
 
 export type WorkflowStatus = "running" | "completed" | "failed" | "killed" | "stalled";
 
@@ -15,8 +16,11 @@ export function workflowStatus(w: Workflow): WorkflowStatus {
   return (["failed", "killed", "stalled"] as const).find((s) => s === w.status) ?? "completed";
 }
 
-/** Its runs still running. */
+/** Its runs still running. On a summary row (`summary=1`) its `workflow_progress`, the newest running run without its
+ *  agents and phases, stands for them (#5888), even when the store kept an older complete row's `workflows`: fresh
+ *  summary counts win, as in `backgroundWork`. */
 export function runningWorkflows(s: Session | undefined): Workflow[] {
+  if (typeof s?.waiting === "boolean") return s.workflow_progress?.running ? [s.workflow_progress] : [];
   return (s?.workflows ?? []).filter((w) => w.running);
 }
 
@@ -41,7 +45,7 @@ export function workflowName(w: Workflow): string {
 /** "Verify 2/2", "Verify", "" */
 export function workflowPhase(w: Workflow): string {
   if (!w.phase) return "";
-  const n = w.phases?.length ?? 0;
+  const n = w.phases?.length || w.phase_count || 0; // a summary row's run has no phases, only how many (#5888)
   return w.phase_index && n ? `${w.phase} ${w.phase_index}/${n}` : w.phase;
 }
 
@@ -72,8 +76,9 @@ export function workflowShortLine(s: Session | undefined): string {
 export function workflowLine(s: Session | undefined, now: number): string {
   const runs = runningWorkflows(s);
   if (!runs.length) {
-    // an older hub: it only says a workflow runs
-    return (s?.running_workflows ?? 0) > 0 || (s?.background ?? []).some((b) => b.kind === "workflow") ? t("lib-workflows.running_in_background") : "";
+    // an older hub: it only says a workflow runs (a summary's background is an older row's, kept by the store)
+    const said = typeof s?.waiting === "boolean" ? (s.running_workflows ?? 0) > 0 : (s?.background ?? []).some((b) => b.kind === "workflow");
+    return said ? t("lib-workflows.running_in_background") : "";
   }
   const w = runs[0];
   const parts = [t("lib-workflows.line_name", { name: workflowName(w) }), workflowPhase(w), workflowCounts(w), workflowElapsed(w, now)].filter(Boolean);
@@ -106,7 +111,7 @@ function endedAt(w: Workflow): number | null {
 }
 
 /** Its runs still running, and those that ended within the last day (the node lists them that long; an older one may
- *  list them longer): what the chat's "Background" chip and its dialog show. */
+ *  list them longer): what the chat's Background tasks button and panel show. */
 export function recentWorkflows(s: Session | undefined, now: number): Workflow[] {
   return (s?.workflows ?? []).filter((w) => {
     if (w.running) return true;
@@ -296,8 +301,69 @@ export function tallyParts(c: WorkflowTally): { key: "done" | "running" | "faile
   });
 }
 
+// ── the run's card in the chat (#5030, after cindy's AgentTaskCard) ──
+
+/** The task card's status word for a run: killed (stopped by hand) and stalled (no word from it for 30 minutes, its
+ *  claude gone) both read Stopped; neither is known to have failed, and only a failure is red. */
+export function workflowTaskStatus(w: Workflow): AgentStatus {
+  const s = workflowStatus(w);
+  return s === "killed" || s === "stalled" ? "stopped" : s;
+}
+
+/** How long an ended run ran (ms), to its end or its last sign of life; null while it runs or when the hub does not say. */
+export function workflowDurationMs(w: Workflow): number | null {
+  const start = ms(w.started_at);
+  const end = w.running ? null : (ms(w.ended_at) ?? ms(w.updated_at));
+  return start === null || end === null ? null : Math.max(0, end - start);
+}
+
+/** The card's progress line: its agents back (done or failed) of those started, and the phase it is in while it runs. */
+export function workflowProgress(w: Workflow): { phase: string; done: number; total: number } | null {
+  const c = workflowTally(w);
+  if (!c.started) return null;
+  return { phase: w.running ? (w.phase?.trim() ?? "") : "", done: c.done + c.failed, total: c.started };
+}
+
+/** One square of the card's strip: how an agent stands ("unknown": one the hub no longer lists that the counts do not
+ *  account for), and its label when the hub lists it. */
+export interface StripCell {
+  state: AgentRunState | "unknown";
+  label?: string;
+}
+
+/** At most this many squares in the strip; the rest is "+n". */
+export const STRIP_CELLS = 40;
+
+/**
+ * The card's strip: one square per agent in the order they started, the first `max` of them, and how many more. The
+ * hub lists only the run's newest agents: the earlier ones it leaves out are squares too, their states what the run's
+ * counts leave over once the listed ones are counted (done first: the oldest are the likeliest back).
+ */
+export function workflowStrip(w: Workflow, max = STRIP_CELLS): { cells: StripCell[]; more: number } {
+  const listed = w.agents ?? [];
+  const tally = workflowTally(w);
+  const total = Math.max(tally.started, listed.length);
+  const cells: StripCell[] = [];
+  let unlisted = total - listed.length;
+  if (unlisted > 0) {
+    const seen = { done: 0, running: 0, failed: 0, stopped: 0 };
+    for (const a of listed) seen[agentRunState(a)]++;
+    for (const s of ["done", "failed", "stopped", "running"] as const) {
+      const n = Math.min(unlisted, Math.max(0, tally[s] - seen[s]));
+      for (let i = 0; i < n && cells.length < max; i++) cells.push({ state: s });
+      unlisted -= n;
+    }
+    for (let i = 0; i < unlisted && cells.length < max; i++) cells.push({ state: "unknown" });
+  }
+  for (const a of listed) {
+    if (cells.length >= max) break;
+    cells.push({ state: agentRunState(a), label: agentLabel(a) });
+  }
+  return { cells, more: total - cells.length };
+}
+
 /** The Workflow calls of a chat with a run the hub lists (#3434), by tool_use_id, with when each run started (ms, NaN when
- *  the hub does not say): those draw the run's card, which stays out of the agent's folded work, running or ended. */
+ *  the hub does not say): those draw the run's card, inside the turn's folded work like every tool call (super rule 2). */
 export interface WorkflowCalls {
   known: ReadonlySet<string>;
   startedAt: ReadonlyMap<string, number>;
@@ -322,8 +388,8 @@ export function workflowCalls(runs: Workflow[] | undefined): WorkflowCalls {
 }
 
 /** What the running bar says once the turn is over and a workflow keeps the agent working (#3434): the run it waits for
- *  (the first running one, as the rows say) and where its clock starts. Other background work (commands, Monitors,
- *  subagents) leaves the bar as it was. */
+ *  (the first running one, as the rows say) and where its clock starts. Background subagents, waiting commands and
+ *  working commands have their own selectors below and in background-work.ts. */
 export interface BackgroundLine {
   run: Workflow;
   /** Other runs running besides it. */
@@ -359,12 +425,27 @@ export interface WaitLine {
   since?: string;
 }
 
-export function backgroundWaitLine(s: Session | undefined): WaitLine | null {
-  if (!s || !backgroundWaiting(s)) return null;
-  const tasks = (s.background ?? []).filter((b) => b.kind === "shell" || b.kind === "monitor");
+function backgroundCommands(s: Session): NonNullable<Session["background"]> {
+  return (s.background ?? []).filter((b) => b.kind === "shell" || b.kind === "monitor");
+}
+
+function commandLine(tasks: NonNullable<Session["background"]>, since?: string): WaitLine {
   const first = tasks[0];
   const what = (first?.description || first?.command || "").split("\n")[0]!.trim();
-  return { what, more: Math.max(0, tasks.length - 1), ...(s.state_since ? { since: s.state_since } : {}) };
+  return { what, more: Math.max(0, tasks.length - 1), ...(since ? { since } : {}) };
+}
+
+export function backgroundWaitLine(s: Session | undefined): WaitLine | null {
+  if (!s || !backgroundWaiting(s)) return null;
+  return commandLine(backgroundCommands(s), s.state_since);
+}
+
+/** A real background command after the turn (#7341): the same first command and count as the wait line, but timed from
+ *  that command's own start. No listed command still returns the empty line, so the bar can show its label alone. */
+export function backgroundCommandLine(s: Session | undefined): WaitLine | null {
+  if (s?.background_working !== true) return null;
+  const tasks = backgroundCommands(s);
+  return commandLine(tasks, tasks[0]?.started_at);
 }
 
 /** The hub says the agent's turn is over and a workflow it launched keeps it working: the chat draws that turn finished. */

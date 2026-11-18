@@ -2,16 +2,18 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 extension MarkdownUI.Theme {
     /// Reading-first markdown: system body text, roomy lists, quiet code blocks.
     /// The base size is the body level's (`Theme.Level.body`: 17 on the iPhone, 13 on the Mac, where a fixed 17 put
     /// replies and profiles a size above the user's bubble, #779); MarkdownUI scales it with Dynamic Type (a
     /// ScaledMetric relative to .body), so a reply and the user's bubble are one size at every setting. Headings follow
-    /// `Theme.Font`: the first is the title level (1.3 em), the others the heading level (body size, semibold), told
-    /// apart by the space above them; code blocks are the code level. Paragraphs have the body's line height (1.45:
-    /// 0.26 em over SF's own 1.19). On the Mac, where ScaledMetric does not follow Small / Standard / Large, the base size is
-    /// times `Theme.Font.scale` (#833) and the theme is made again when it changes (once on the iPhone).
+    /// `Theme.Font`: the first is the title level (1.3 em), the second and third the heading level (body size, semibold),
+    /// told apart by the space above them, the rest a step smaller in a quieter ink (`minorHeading`); code blocks are the
+    /// code level. Paragraphs have the body's line height (1.45: 0.26 em over SF's own 1.19). On the Mac, where
+    /// ScaledMetric does not follow Small / Standard / Large, the base size is times `Theme.Font.scale` (#833) and the
+    /// theme is made again when it changes (once on the iPhone).
     @MainActor static var persona: MarkdownUI.Theme { personaAtScale.value }
     @MainActor private static let personaAtScale = PerTextScale { makePersona() }
 
@@ -19,30 +21,46 @@ extension MarkdownUI.Theme {
         MarkdownUI.Theme()
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) }
             .code {
+                #if os(macOS)
                 FontFamilyVariant(.monospaced)
                 FontSize(.em(ReplyMetrics.inlineCode))
                 BackgroundColor(Theme.codeBackground)
+                #else
+                // The system's monospaced face on no background (#9477), tappable to copy (#2984, `CodeCopyMarkdown`).
+                // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts
+                // (`runFonts`); its ink is `InlineCodeInk`'s. A thin space where it meets a CJK letter (`InlineCodeGap`).
+                FontFamilyVariant(.monospaced)
+                FontSize(.em(ReplyMetrics.inlineCode))
+                InlineCodeInk()
+                #endif
             }
             .strong { FontWeight(.semibold) }
             .link { ForegroundColor(Theme.accent) }
             .heading1 { config in
-                config.label.markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
+                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
                     .markdownTextStyle { FontWeight(.bold); FontSize(.em(ReplyMetrics.heading1.size)) }
             }
             .heading2 { config in
-                config.label.markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
+                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading3 { config in
-                config.label.markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
+                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
+            .heading4 { config in minorHeading(config) }
+            .heading5 { config in minorHeading(config) }
+            .heading6 { config in minorHeading(config) }
             .paragraph { config in
-                config.label.fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
+                config.label.runFonts().fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
                     .markdownMargin(top: 0, bottom: ReplyMetrics.paragraphBottom)
             }
             .listItem { config in config.label.markdownMargin(top: .em(ReplyMetrics.itemTop)) }
             .codeBlock { config in
+                // A run of pictures (`ReplyImages`, #9474): one, or squares, the viewer on all of the reply's.
+                if config.language == ReplyImages.language, let block = ReplyImages.block(config.content) {
+                    ReplyPictureRun(block: block).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                } else
                 // A card the assistant drew (persona-view, or the older persona-card, #886), drawn with the extensions'
                 // components (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」); one the app cannot read stays a code block.
                 if AssistantCardBlock.handles(config.language), let view = AssistantCardBlock.parse(language: config.language, config.content) {
@@ -56,19 +74,64 @@ extension MarkdownUI.Theme {
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
                         .markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 } else {
+                    // The Mac is frozen (docs/apple/mac.md): its code blocks keep their hover Copy.
+                    #if os(macOS)
                     plainCodeBlock(config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                    #else
+                    ReplyCodeBlock(config: config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                    #endif
                 }
             }
             .blockquote { config in
+                #if os(macOS)
                 config.label
                     .padding(.leading, Theme.Space.m)
                     .overlay(alignment: .leading) { Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: Theme.Size.bar) }
                     .markdownTextStyle { ForegroundColor(.secondary) }
+                #else
+                ReplyQuote(config: config)
+                #endif
             }
-            .table { config in FittedTable(config: config) } // fits the width it gets; scrolls only when it cannot
-            .tableCell { config in FittedTableCell(config: config) }
+            .table { config in FittedTable(config: config).oneBlockInLift() } // fits the width it gets; scrolls only when it cannot
+            .tableCell { config in FittedTableCell(config: config).runFonts() }
     }
 }
+
+/// A block's words each keep their own font (#2984). The style's font design set on the root (RootView's `fontDesign`)
+/// replaces every run's font with the system one of that design, a monospaced or named one included, so inline code was
+/// drawn in the body font. Under a block that draws words the design is cleared and given to its runs as their family
+/// instead (read from the style: SwiftUI has no public environment value for it), and inline code's monospaced variant
+/// holds. The Mac is frozen: it keeps the root's design.
+struct RunFonts: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+        #else
+        content.markdownTextStyle { FontFamily(.system(StyleSpec.current.fontDesign)) }.fontDesign(nil)
+        #endif
+    }
+}
+
+extension View {
+    /// The block's runs keep their fonts under the style's font design (`RunFonts`).
+    func runFonts() -> some View { modifier(RunFonts()) }
+}
+
+#if os(iOS)
+/// Inline code's ink (#9477): `Theme.Reply.codeInk`, a step quieter than the words, where they are in the body's own
+/// ink. Words drawn in an ink of their own (a quote, a quieter heading, an agent's quiet words between its steps) keep it
+/// for their code too, and so does a written link: code in it is the link's. A copy link (`CodeCopyMarkdown`, what
+/// every other code span is in a chat) is no link to the eye: the code's ink, not the link's.
+struct InlineCodeInk: TextStyle {
+    func _collectAttributes(in attributes: inout AttributeContainer) {
+        if let url = attributes.link {
+            if CodeCopyURL.parse(url) != nil { attributes.swiftUI.foregroundColor = Theme.Reply.codeInk }
+        } else if attributes.swiftUI.foregroundColor == nil {
+            attributes.swiftUI.foregroundColor = Theme.Reply.codeInk
+        }
+    }
+}
+#endif
 
 extension MarkdownUI.Theme {
     /// A fenced code block: monospaced, scrolling sideways, on the code background.
@@ -79,10 +142,23 @@ extension MarkdownUI.Theme {
                 .markdownTextStyle { FontFamilyVariant(.monospaced); FontSize(.em(Theme.Level.code.size / Theme.Level.body.size)) }
                 .padding(Theme.Space.m)
         }
+        .clipped() // not past the block into the safe area beside it (`ReplyCodeBlock`, #8212)
         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
         .macHoverActions {
             MacHoverButton(title: String(localized: "Copy Code [Message Views fa2611]"), symbol: Theme.Icon.copy) { MacHover.copy(config.content, said: String(localized: "Code copied")) }
         }
+    }
+
+    /// H4–H6 (#3863): MarkdownUI's own were the bare text, so `#### Notes` read as the next paragraph's first line. A step
+    /// below the third level (the secondary level's size), semibold in the quieter ink, more space above than below.
+    /// Its label is built as heading1–3's are: a modifier theirs gains (the style's run fonts, say) belongs here too.
+    @MainActor static func minorHeading(_ config: BlockConfiguration) -> some View {
+        config.label.runFonts().markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
+            .markdownTextStyle {
+                FontWeight(.semibold)
+                FontSize(.em(ReplyMetrics.heading4.size))
+                ForegroundColor(Theme.Reply.secondaryInk)
+            }
     }
 }
 
@@ -159,11 +235,15 @@ struct ImageViewing: Identifiable {
 struct UserBubble: View, Equatable {
     @Environment(\.rowMemoScope) private var memoScope
     var item: Item
+    /// The extension that opened the conversation with this message (#3758): 「来自 飞书 /agent」 under it. Set by the chat
+    /// page on the conversation's first message only.
+    var external: AutoConversationSource? = nil
     /// Only the message itself: the chat page re-evaluates its body on every hub push, and without this every row on
     /// screen (and in the lazy list's buffer) ran its body again too (about 45 a push on a long Persona conversation).
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -184,13 +264,21 @@ struct UserBubble: View, Equatable {
             if !shown.isEmpty || !quotes.isEmpty {
                 HStack {
                     Spacer(minLength: 48)
-                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
-                        .messageLongPress(id: item.id) { UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead) }
+                    let fold = BubbleFoldKey(id: item.id)
+                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead, fold: fold)
+                        .messageLongPress(id: item.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                            UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
+                        }
                 }
             }
             if let openFile { FileChips(paths: d.chips, open: openFile) }
-            // Came in from a channel (WeChat, the Feishu bot…): 「来自 微信」 under it.
-            if ChannelSource.possible(item.clientMsgID) { ChannelSourceLine(clientMsgID: item.clientMsgID) }
+            // Came in from a channel (WeChat, the Feishu bot…): 「来自 微信」 under it; an extension opened the conversation
+            // with it: 「来自 飞书 /agent」.
+            if ChannelSource.possible(item.clientMsgID) {
+                ChannelSourceLine(clientMsgID: item.clientMsgID)
+            } else if let external {
+                ExternalSourceLine(source: external)
+            }
             if d.cardSource != nil {
                 Text("From a card").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                     .accessibilityIdentifier("assistant-card-source")
@@ -255,7 +343,7 @@ struct PeerMessage: View {
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
             .messageLongPress(id: item.id) { card }
-            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
+            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from)
     }
 
     /// The message in its card (also what a long press lifts).
@@ -285,6 +373,8 @@ struct PeerMessage: View {
         Markdown(d.markdown)
             .markdownSoftBreakMode(.lineBreak)
             .markdownTheme(.persona)
+            .readingContent()
+            .environment(\.replyKey, RowMemo.key(memoScope, item.id)) // its quotes' folds, the lifted copy's too
             .selectableInLift(item.text ?? "", as: .reply(quiet: false)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
             #if os(macOS)
@@ -296,13 +386,16 @@ struct PeerMessage: View {
 /// A message just sent from this phone, before the transcript has it: drawn like a sent bubble right away, with a
 /// quiet clock while the request runs, the clock and "Sends when connected" while it waits for the network (Outbox.swift),
 /// and a red "Resend" when it failed. A long press gives an action bar like a sent message's, with Copy, Select Text and
-/// Share (#6427): one that never went out can be copied rather than typed again.
+/// Share (#6427): one that never went out can be copied rather than typed again. One only on this phone (failed or
+/// waiting) ends the bar in Delete / Don't Send, as its mark's menu does (#4626).
 struct PendingBubble: View {
     var msg: PendingMessage
     var retry: () -> Void
     var discard: () -> Void
     @Environment(\.viewImages) private var viewImages
     @Environment(\.chatImages) private var chatImages
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         let parsed = ContextRef.parse(msg.text)
@@ -352,11 +445,17 @@ struct PendingBubble: View {
                         ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
                     }
                     .accessibilityLabel("Failed to send. Resend or delete.")
+                    // The menu's items as actions too: VoiceOver's Actions rotor, and the Runtime CLI (`activate`
+                    // `action:`), which cannot touch a menu's items.
+                    .accessibilityAction(named: Text("Resend"), retry)
+                    .accessibilityAction(named: Text("Delete"), discard)
                 }
                 let split = MessageComments.inBubble(shown)
-                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                let fold = BubbleFoldKey(id: "pending-" + msg.id.uuidString) // folded as a sent bubble is (#5676)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
                     .opacity(msg.state == .failed || msg.state == .waiting ? 0.6 : 1)
-                    .messageLongPress(id: msg.id.uuidString) {
+                    .messageLongPress(id: msg.id.uuidString, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
                         UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
                     }
             }
@@ -366,8 +465,79 @@ struct PendingBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true)
+        // The bar's last item on one only on this phone (#4626): what its mark's menu says, doing the same.
+        .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true,
+                          delete: .of(msg, run: discard))
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// One of your messages the assistant keeps after it could not go in (`Session.undelivered`, #10194): your bubble as a
+/// failed one looks (`PendingBubble`), with a line under it. Waiting: why, and that it goes by itself; its mark's menu
+/// offers Delete. Given up: why, with Retry and Delete. Shown on every device, from the chat's row.
+struct UndeliveredBubble: View {
+    var message: UndeliveredMessage
+    var retry: () -> Void
+    var discard: () -> Void
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
+
+    var body: some View {
+        let parsed = ContextRef.parse(message.text)
+        let shown = AttachedFile.parse(parsed.rest).rest
+        let reason = message.error ?? String(localized: "The assistant could not start")
+        VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+            let files = AttachedFile.parse(message.text).files
+            if !files.isEmpty { AttachedFileCards(files: files) }
+            HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                Spacer(minLength: 40)
+                Menu {
+                    if message.gaveUp {
+                        Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                    }
+                    Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
+                } label: {
+                    if message.gaveUp {
+                        ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                    } else {
+                        ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                            .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                            .contentShape(.rect)
+                    }
+                }
+                .accessibilityLabel(message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
+                // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
+                .accessibilityActions {
+                    if message.gaveUp { Button("Retry", action: retry) }
+                    Button("Delete", action: discard)
+                }
+                let split = MessageComments.inBubble(shown)
+                let fold = BubbleFoldKey(id: "undelivered-" + message.id)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
+                    .opacity(0.6)
+                    .messageLongPress(id: "undelivered-" + message.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                        UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                    }
+            }
+            Group {
+                if message.gaveUp {
+                    Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
+                } else {
+                    Text("Not delivered: \(reason). It will be sent automatically.").foregroundStyle(Theme.cautionText)
+                }
+            }
+            .font(Theme.Font.label)
+            .multilineTextAlignment(.trailing)
+            if let n = message.images, n > 0 {
+                Text("Pictures: \(n)").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        // Copy, and Delete, from the long-press bar as on a message only on this phone (#6427).
+        .messageActionBar(id: "undelivered-" + message.id, text: shown, isUser: true, date: message.at, pending: true,
+                          delete: MessageBarDelete(title: String(localized: "Delete"), run: discard))
+        .transition(.opacity)
     }
 }
 
@@ -511,6 +681,8 @@ struct AssistantText: View, Equatable {
             // Inside the theme (applied first), or the theme's text style wins (docs/lessons/ios.md).
             .modifier(QuietMarkdown(on: quiet))
             .markdownTheme(.persona)
+            .readingContent()
+            .environment(\.replyKey, RowMemo.key(memoScope, item.id)) // its quotes' folds, the lifted copy's too
             .selectableInLift(item.text ?? "", as: .reply(quiet: quiet)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
             .chatBoxed(Theme.ChatBox.persona, on: boxed)
@@ -551,7 +723,7 @@ struct AssistantText: View, Equatable {
 
     /// Links in a fresh answer open instantly: their pages load in the background. Only for recent answers — every
     /// old one scrolling past used to create web views on the main thread, and those were the long freezes.
-    private static func preloadLinks(_ item: Item) async {
+    static func preloadLinks(_ item: Item) async {
         guard let ts = item.ts, Date.now.timeIntervalSince(ts) < 15 * 60, let text = item.text else { return }
         // Not a machine's localhost (it is opened through the hub, docs/operations/ports.md).
         let links = await Task.detached(priority: .utility) { WebLinks.find(in: text).filter { PortLinks.link($0) == nil } }.value
@@ -685,7 +857,7 @@ struct ThinkingRow: View {
             isWorking: false,
             doneTitle: open ? String(localized: "Thinking [Message Views a62acb]") : ToolPresentation.firstLine(text),
             rows: [BeautifulUI.ThinkingRow(id: item.id, text)],
-            isExpanded: Binding(get: { open }, set: { v in toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { open = v } }),
+            isExpanded: Binding(get: { open }, set: { v in toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, closing: !v) { open = v } }),
             maxWidth: .infinity
         )
         .chatPinned(pinKey) // the trace's header is its top
@@ -725,7 +897,7 @@ struct CompactDivider: View {
         VStack(spacing: Theme.Space.s) {
             Button {
                 let opening = !open
-                toggleInPlace(pin, "compact-" + item.id, animation: Theme.Motion.state) { open.toggle() }
+                toggleInPlace(pin, "compact-" + item.id, animation: Theme.Motion.state, closing: open) { open.toggle() }
                 // The divider as the last row: the notes open under it, past the composer on a short screen.
                 guard opening, let pin else { return }
                 Task { @MainActor in
@@ -779,7 +951,8 @@ struct NoticeRow: View {
     @Environment(\.chatPin) private var pin
 
     var body: some View {
-        if item.compact != nil { CompactDivider(item: item) }
+        if let r = item.modelRefusal { RefusalNotice(refusal: r) } // an upstream refusal (#4489)
+        else if item.compact != nil { CompactDivider(item: item) }
         else if item.wake == true { wake } else if item.task != nil { TaskNoteRow(item: item) } else if Self.isShort(item.text ?? "") { plain } else { long }
     }
 
@@ -789,7 +962,7 @@ struct NoticeRow: View {
 
     private var long: some View {
         Button {
-            toggleInPlace(pin, "notice-" + item.id, animation: Theme.Motion.state) {
+            toggleInPlace(pin, "notice-" + item.id, animation: Theme.Motion.state, closing: expanded) {
                 if let openTools { openTools.set("notice-" + item.id, !expanded) } else { expandedHere.toggle() }
             }
         } label: {
@@ -985,8 +1158,9 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(item.text ?? ""))))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply(item.text ?? "")))))))
                                 .markdownTheme(.persona)
+                                .readingContent()
                                 .markdownSoftBreakMode(.lineBreak)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -998,7 +1172,7 @@ struct RecapDrawer: View {
             .background(Theme.pageBackground)
             .navigationTitle(items.count > 1 ? String(localized: "While You Were Away · \(items.count)") : String(localized: "While You Were Away"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -1008,13 +1182,34 @@ struct RecapDrawer: View {
 /// The assistant's answer while it is still being generated, with a caret after its words (`StreamTail`).
 struct StreamingText: View {
     var text: String
+    /// The stream is over (`ChatStore.liveDone`): the whole text at once.
+    var done = false
+    /// What of `text` is shown, a few characters a frame (`StreamReveal`, #6651): read only by this view, so the frames
+    /// redraw the reply and nothing around it.
+    @State private var reveal = StreamRevealClock()
 
-    /// A delta comes every 80 ms with the whole text so far. Parsing and laying out all of it each time cost a long
-    /// reply 10–20 ms a delta on the simulator: the blocks already finished are their own Markdown views that stay as
-    /// they are (`StreamChunks`), and only the block being written is parsed and laid out again.
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("StreamingText")
+        #endif
+        StreamingMarkdown(text: done ? text : reveal.shown(of: text))
+            .onChange(of: text, initial: true) { _, new in reveal.receive(new) }
+            .onChange(of: done) { _, done in if done { reveal.finish() } }
+            .onAppear { reveal.resume() }
+            .onDisappear { reveal.stop() }
+    }
+}
+
+/// The reply as far as it is shown. A delta comes every 80 ms with the whole text so far, and the reveal adds a few
+/// characters a frame. Parsing and laying out all of it each time cost a long reply 10–20 ms on the simulator: the
+/// blocks already finished are their own Markdown views that stay as they are (`StreamChunks`), and only the block
+/// being written is parsed and laid out again.
+private struct StreamingMarkdown: View {
+    var text: String
+
+    var body: some View {
+        #if DEBUG
+        let _ = StreamCadence.shown = text.utf16.count
         #endif
         let parts = StreamChunks.split(AssistantCardText.replacingCards(text))
         VStack(alignment: .leading, spacing: 0) {
@@ -1027,8 +1222,98 @@ struct StreamingText: View {
                 .padding(.top, parts.done.last.map { StreamChunks.gap(after: $0, before: parts.tail) } ?? 0)
         }
         .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
+        .environment(\.replyStreaming, true) // its quotes fold once it is done
+        .readingContent()
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
+
+/// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
+/// (P9), 10 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
+/// as it comes.
+@MainActor @Observable
+final class StreamRevealClock {
+    /// Bumped when what is shown changed: the view's only dependency.
+    private var revision = 0
+    @ObservationIgnored private var reveal: StreamReveal?
+    #if os(iOS) || os(visionOS)
+    @ObservationIgnored private var link: CADisplayLink?
+    #endif
+
+    /// What of `text` to draw. `text` is the newest the view was given; `receive` takes it in right after this redraw,
+    /// so until then what was shown stays (or, first time, `StreamReveal`'s start; a text that does not continue it,
+    /// all of it).
+    func shown(of text: String) -> String {
+        _ = revision
+        guard let reveal else { return String(StreamReveal(text).shown) }
+        let shown = reveal.shown
+        return text.hasPrefix(shown) ? String(shown) : text
+    }
+
+    func receive(_ text: String) {
+        #if os(iOS) || os(visionOS)
+        let now = CACurrentMediaTime()
+        if reveal == nil { reveal = StreamReveal(text) } else { reveal?.receive(text, at: now) }
+        revision &+= 1
+        if reveal?.caughtUp == false { start() }
+        #else
+        reveal = StreamReveal(text)
+        reveal?.finish()
+        revision &+= 1
+        #endif
+    }
+
+    func finish() {
+        reveal?.finish()
+        revision &+= 1
+        stop()
+    }
+
+    func stop() {
+        #if os(iOS) || os(visionOS)
+        link?.invalidate()
+        link = nil
+        #endif
+    }
+
+    /// Back on screen: what still waits goes on (a stream that paused meanwhile sends nothing to restart it).
+    func resume() {
+        #if os(iOS) || os(visionOS)
+        if reveal?.caughtUp == false { start() }
+        #endif
+    }
+
+    #if os(iOS) || os(visionOS)
+    private func start() {
+        guard link == nil else { return }
+        // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
+        let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick(_:)))
+        // 10 a second, the owner's choice between smoothness and power (#7135): each change re-measures the chat's rows
+        // and redraws the reply (about 4 ms of the main thread on the simulator), so the main thread's time while a
+        // reply streams follows the rate: 60 → about 300 ms a second, 30 → about 190. A step is then 2–15 characters.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 10, preferred: 10)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    fileprivate func tick(_ link: CADisplayLink) {
+        guard var r = reveal else { return stop() }
+        let moved = r.advance(to: link.timestamp, maxStep: 0.2) // a step is a tenth of a second
+        reveal = r
+        if moved { revision &+= 1 }
+        if r.caughtUp { stop() }
+    }
+
+    private final class Tick: NSObject {
+        weak var clock: StreamRevealClock?
+        init(_ clock: StreamRevealClock) { self.clock = clock }
+        @objc func tick(_ link: CADisplayLink) {
+            MainActor.assumeIsolated {
+                if let clock { clock.tick(link) } else { link.invalidate() }
+            }
+        }
+    }
+    #endif
 }
 
 /// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment
@@ -1045,7 +1330,7 @@ nonisolated enum StreamTail {
         memo(tail) { tail in
             var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
             if StreamRepair.end(of: tail) == .text { shown += " ▍" }
-            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(shown))))
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply(shown)))))))
         }
     }
 }
@@ -1076,11 +1361,11 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply($0))))))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply($0))))))) } }
 }
 
 /// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
@@ -1097,16 +1382,37 @@ struct LinkedMarkdown: View {
 
     private static let memo = TextMemo<MarkdownContent>(limit: 512)
 
-    var body: some View { Markdown(content) }
+    /// The paths of a message that are there to open, which it links: none outside a chat. Only a message with paths
+    /// reads the presence (and is drawn again when an answer comes). Also how its words are laid out to select them
+    /// in place (`SelectableInLift`): a path written as code that is linked is drawn as words.
+    static func linkable(_ paths: PathMarkdown, model: AppModel?, scope: FileScope?) -> [String] {
+        guard !paths.paths.isEmpty, let model, let scope else { return [] }
+        return paths.paths.filter { model.filePresence.linkable($0, in: scope) }
+    }
+
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("LinkedMarkdown")
+        #endif
+        Markdown(content)
+    }
 
     private var content: MarkdownContent {
-        // Only a message with paths reads the presence (and is drawn again when an answer comes).
-        guard !paths.paths.isEmpty, let model, let scope else { return plain }
-        let there = paths.paths.filter { model.filePresence.linkable($0, in: scope) }
-        guard !there.isEmpty else { return plain }
+        // In a chat on the iPhone and iPad a tap on inline code copies it (#2984): its spans are links the chat's
+        // `openURL` answers (`CodeCopyMarkdown`), the ones linked to a file first.
+        #if os(iOS)
+        let copies = scope != nil
+        #else
+        let copies = false
+        #endif
         let paths = paths
+        let there = Self.linkable(paths, model: model, scope: scope)
+        guard !there.isEmpty else {
+            return copies ? Self.memo(key + "\u{1}") { _ in MarkdownContent(CodeCopyMarkdown.linked(paths.source)) } : plain
+        }
         return Self.memo(key + "\u{0}" + there.joined(separator: "\n")) { _ in
-            MarkdownContent(paths.linked { there.contains($0) }.markdown)
+            let linked = paths.linked(plainCode: copies) { there.contains($0) }.markdown
+            return MarkdownContent(copies ? CodeCopyMarkdown.linked(linked) : linked)
         }
     }
 }
@@ -1127,6 +1433,11 @@ nonisolated enum RowMemo {
     /// A chat's scope: its machine and session.
     static func scope(_ key: SessionKey) -> String { MemoScope.of(machine: key.machineID, session: key.sessionID) }
 
+    /// Whether rows are prewarmed while the app's scene is in `phase`: not in the background, where nothing draws them
+    /// and the app may be running only for a recording; iOS kills an app that uses too much CPU there, and the
+    /// recording with it (#9108: a row's path detection did). Back in front, the chat prewarms what came meanwhile.
+    static func prewarms(in phase: ScenePhase) -> Bool { phase != .background }
+
     /// Fills both memos off the main thread for messages just loaded (of the chat of `scope`), so a row scrolling
     /// into view only lays out.
     static func prewarm(_ items: [Item], scope: String) {
@@ -1136,7 +1447,13 @@ nonisolated enum RowMemo {
             if it.kind == .toolUse || it.kind == .toolResult { ToolTextMemo.prewarm(it, scope: scope) }
             guard it.kind == .text else { continue }
             guard let text = it.text, !text.isEmpty else { continue }
-            if it.role == "assistant" { _ = assistant(key(scope, it.id)) { _ in AssistantRowText(text) } }
+            if it.role == "assistant" {
+                _ = assistant(key(scope, it.id)) { _ in AssistantRowText(text) }
+                // A long answer's parts, as their rows draw them (`AssistantTextPart`).
+                for (n, part) in AnswerPartMemo.parts(text).enumerated() {
+                    _ = assistant(AnswerPartMemo.key(key(scope, it.id), n)) { _ in AssistantRowText(part.text) }
+                }
+            }
             if it.role == "user" { _ = user(key(scope, it.id)) { _ in UserRowText(text) } }
         }
     }
@@ -1158,9 +1475,9 @@ nonisolated struct AssistantRowText {
     /// limit) and its pictures, videos and sounds; documents aside (their cards).
     let chips: [String]
     init(_ text: String) {
-        // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); links end where `Links` says,
-        // not at the next space; formulas as pictures.
-        let source = Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(text)))
+        // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); bold next to CJK punctuation
+        // closes (`CJKEmphasis`, #3863); links end where `Links` says, not at the next space; formulas as pictures.
+        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply(text))))))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths
@@ -1168,7 +1485,11 @@ nonisolated struct AssistantRowText {
         self.files = files
         asked = PathRefs.unique(paths.paths + files, limit: 40)
         let inline = Set(paths.paths)
-        chips = files.filter { !FileThumbnails.isDocument($0) && (!inline.contains($0) || FilePaths.isMedia($0)) }
+        // A picture the reply draws (`ReplyImages`, #9474) is not a chip too: a path found inside its address is its.
+        let pictures = ReplyImages.all(in: text).map(\.url)
+        chips = files.filter { file in
+            !FileThumbnails.isDocument(file) && (!inline.contains(file) || FilePaths.isMedia(file)) && !pictures.contains { $0.contains(file) }
+        }
     }
 }
 

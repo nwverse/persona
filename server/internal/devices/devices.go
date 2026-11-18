@@ -18,12 +18,14 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -225,6 +227,8 @@ func (d *Devices) Run(ctx context.Context) error {
 		}()
 	}
 	go d.usageLoop(mctx)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
@@ -584,7 +588,13 @@ func (d *Devices) BusUp() {
 		m.mu.Lock()
 		list := slices.Clone(m.sessions)
 		has := m.online || m.warmLocked(time.Now()) || len(list) > 0
+		unknown := list == nil && !m.sessionsListed
 		m.mu.Unlock()
+		if unknown {
+			// No snapshot has arrived on the current connection: nil is unknown, not an empty snapshot.
+			// The initial forward or an existing refresh path publishes the real list once a call succeeds.
+			continue
+		}
 		if has {
 			if list == nil {
 				list = []proto.Session{}
@@ -624,6 +634,12 @@ func (d *Devices) forward(machine, event string, params any) {
 // Call is devices.call: a call to a machine's node, coded for the hub (no_device, machine_offline, node_closed;
 // the node's own coded errors as they are).
 func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	if reservedOwnerControl(p.Method) {
+		return nil, errReservedOwnerControl
+	}
+	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
+		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("no machine %q", p.MachineID)}
@@ -637,12 +653,54 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if p.Method == "session.send" {
+		var err error
+		params, err = d.prepareSessionSkills(params)
+		if err != nil {
+			return nil, err
+		}
+		if params, err = ownerInputParams(p, params); err != nil {
+			return nil, err
+		}
+	} else if carriesOwnerInput(p.Method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if p.Method == "session.interrupt" && trustedHumanInput(p) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, p.Method)
+		}
+	}
+	if refusesHandoff(p.Method, params) {
+		return nil, errHandoffRefused
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt, preparation string
+	var prepareErr error
+	params, receipt, preparation, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		d.observeCreationCall(p, nil, nil, preparation, prepareErr)
+		return nil, wireError(prepareErr)
+	}
+	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
+		return nil, errHandoffRefused
+	}
+	var snapshot *sessionSnapshot
+	if p.Method == "sessions.list" {
+		snapshot = new(sessionSnapshot)
+	}
+	modeSID, modeFrom, modeTo, recordMode := m.modeSetFrom(p, params) // the record of mode changes (mode_changes.go)
 	var out json.RawMessage
-	err := m.call(ctx, p.Method, params, &out)
+	err := m.callWithSnapshot(ctx, p.Method, params, &out, snapshot)
+	if recordMode && err == nil {
+		m.recordModeSet(p.Actor, modeSID, modeFrom, modeTo, out)
+	}
+	d.observeCreationCall(p, params, out, preparation, err)
+	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
 		return nil, wireError(err)
@@ -652,8 +710,7 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 			Sessions []proto.Session `json:"sessions"`
 		}
 		if json.Unmarshal(out, &list) == nil && list.Sessions != nil {
-			m.setSessions(list.Sessions)
-			d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+			m.acceptSessionsList(snapshot, list.Sessions, true)
 		}
 	}
 	if out == nil {
@@ -686,6 +743,15 @@ func wireError(err error) error {
 // Notify is devices.notify: a one-way event to a machine's node, queued for it (notes.go): the bus's read loop goes
 // on at once.
 func (d *Devices) Notify(p devicewire.NodeEvent) {
+	if p.Event == proto.EventMCPWait {
+		var update proto.MCPWaitEvent
+		if json.Unmarshal(p.Params, &update) != nil || !proto.ValidMCPWaitCallID(update.CallID) {
+			return // correlation is optional, but an invalid id must never consume the machine's note budget
+		}
+	}
+	if strings.HasPrefix(p.Event, "session.codex.takeover.") {
+		return
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return
@@ -712,37 +778,93 @@ func (d *Devices) Reconnect(id string) error {
 func (d *Devices) List() []Summary {
 	out := []Summary{}
 	for _, m := range d.machinesNow() {
-		m.mu.Lock()
-		s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}
-		m.mu.Unlock()
-		s.Trust = d.machineTrust(m)
-		s.Reachable = m.reachable()
-		out = append(out, s)
+		out = append(out, d.summaryOf(m))
 	}
 	return out
 }
 
-// View is one machine with what its node said of itself (node.info), and its sessions as the node listed them.
+// summaryOf is one machine as List has it.
+func (d *Devices) summaryOf(m *Machine) Summary {
+	m.mu.Lock()
+	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
+		DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+	m.mu.Unlock()
+	s.Trust = d.machineTrust(m)
+	s.Reachable = m.reachable()
+	return s
+}
+
+// Summary is List's entry for the machine id names (an entry another one absorbed: that one's), false when List has
+// none: the first listed machine with Canonical(id) as its id, found without the summaries of the others (their trust
+// reads every path's configuration). The fleet asks for one machine on every list a node sends.
+func (d *Devices) Summary(id string) (Summary, bool) {
+	m := d.listed(d.Canonical(id))
+	if m == nil {
+		return Summary{}, false
+	}
+	return d.summaryOf(m), true
+}
+
+// listed is the first of machinesNow with this id, read in place rather than from a copy of the list; nil when none
+// has it.
+func (d *Devices) listed(id string) *Machine {
+	f := &d.fleet
+	f.mu.Lock()
+	order := f.order // replaced whole by a regroup, never written into
+	f.mu.Unlock()
+	if order == nil {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		order = d.entries
+	}
+	for _, m := range order {
+		if m.cfg.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+// View is one machine with what its node said of itself (node.info). Its sessions are not in it: the extensions'
+// code looks one up on every node event it takes (each port stream's data, ack and close), and copying every
+// machine's list for that was 6.3 MB a lookup at 20 machines of 200 sessions (#3197); FindSession reads them.
 type View struct {
 	Summary
-	Info     proto.NodeInfo
-	Sessions []proto.Session
+	Info proto.NodeInfo
 }
 
 // Views are the machines with their node.info (the extensions' code reads the computers' OS, programs, capabilities).
 func (d *Devices) Views() []View {
-	out := []View{}
-	for _, m := range d.machinesNow() {
+	machines := d.machinesNow()
+	out := make([]View, 0, len(machines))
+	for _, m := range machines {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
+			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
 		v.Reachable = m.reachable()
 		out = append(out, v)
 	}
 	return out
+}
+
+// FindSession reports whether match accepts one of the sessions of the machine Views lists as id, as its node listed
+// them, stopping at the first it accepts; false when Views lists none. match reads each session in place, under the
+// machine's lock: it must not change or keep it, nor call the devices.
+func (d *Devices) FindSession(id string, match func(*proto.Session) bool) bool {
+	m := d.listed(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if match(&m.sessions[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // Relist asks a machine's node for its sessions again and passes the list on (what it leaves out changed: the
@@ -755,11 +877,11 @@ func (d *Devices) Relist(ctx context.Context, id string) error {
 	var list struct {
 		Sessions []proto.Session `json:"sessions"`
 	}
-	if err := m.call(ctx, "sessions.list", json.RawMessage(`{}`), &list); err != nil {
+	snapshot := new(sessionSnapshot)
+	if err := m.callWithSnapshot(ctx, "sessions.list", json.RawMessage(`{}`), &list, snapshot); err != nil {
 		return err
 	}
-	m.setSessions(list.Sessions)
-	d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+	m.acceptSessionsList(snapshot, list.Sessions, true)
 	return nil
 }
 
@@ -772,15 +894,41 @@ type Summary struct {
 // Has reports whether id is one of the machines (an entry another one absorbed included).
 func (d *Devices) Has(id string) bool { return d.machineByID(id) != nil }
 
+// NodeAnnounced reports whether machine id's node is connected and announced capability in its handshake, never
+// assumed for an older node: the assistant checks secret_env before it shows a hand-off card.
+func (d *Devices) NodeAnnounced(id, capability string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	info, connected := m.info, m.peer != nil
+	m.mu.Unlock()
+	return connected && info.Protocol > 0 && slices.Contains(info.Capabilities, capability)
+}
+
 // CallNode is a call to a machine's node from the manager itself (the assistant's device.call): errors as the
 // hub's were (apierr.ErrOffline, rpc.ErrClosed, the node's *rpc.Error).
 func (d *Devices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
+	if reservedOwnerControl(method) {
+		return nil, errReservedOwnerControl
+	}
 	m := d.machineByID(id)
 	if m == nil {
 		return nil, ErrNoMachine
 	}
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
+	}
+	if carriesOwnerInput(method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if method == "codex.answer" && devicewire.IsOwnerAnswer(ctx) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, method)
+		}
 	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
@@ -801,6 +949,17 @@ func (d *Devices) Session(id, session string) (proto.Session, bool) {
 	return m.session(session)
 }
 
+// Watched says whether the hub watches a machine's session for its apps (session.watch): an app has it open.
+func (d *Devices) Watched(id, session string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.watched[session]
+}
+
 // Sessions are a machine's sessions as its node listed them; false when there is no such machine.
 func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 	m := d.machineByID(id)
@@ -808,6 +967,17 @@ func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 		return nil, false
 	}
 	return m.sessionList(), true
+}
+
+// AppendSessions is Sessions appended to dst, the rows copied under the machine's lock; false, and dst as it came,
+// when there is no such machine. A reader that copies the same machine's list again and again passes its last copy
+// as dst[:0] and keeps one array, allocating only when the list outgrew it.
+func (d *Devices) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return dst, false
+	}
+	return m.appendSessions(dst), true
 }
 
 // SessionsWhere are those of a machine's sessions keep accepts, copied out without the rest; false when there is no
@@ -918,3 +1088,12 @@ func (w *wrapped) Error() string   { return w.message.Error() }
 func (w *wrapped) Unwrap() []error { return []error{w.message, w.err} }
 
 func explain(message, err error) error { return &wrapped{message: message, err: err} }
+
+// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another manager's
+// to ask for (Devices.Call), so nobody else can stage values or start an Agent with them.
+var errHandoffRefused = &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+
+// refusesHandoff: a hub-relayed call that would stage values or start with a ticket.
+func refusesHandoff(method string, params json.RawMessage) bool {
+	return method == proto.MethodSecretStage || devicewire.IsSessionStart(method) && startHasSecretTicket(params)
+}

@@ -51,5 +51,7 @@
   "report_delete_body": "原本と整理した記録は完全に削除され、元に戻せません。健康の会話と健康メモリに書かれた内容は一緒には削除されないため、別途削除してください。",
   "report_deleted": "「{title}」を削除しました",
   "conversation_load_failed": "このヘルスケアのチャットを開けませんでした：{error}",
-  "retry": "再試行"
+  "retry": "再試行",
+  "history": "健康チャットの履歴",
+  "new_chat": "新しい健康チャット"
 }

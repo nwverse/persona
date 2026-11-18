@@ -18,7 +18,8 @@ import (
 // second definition: it reads the to-dos and sessions as the apps get them (GET /api/v1/todos, the decorated session
 // lists) and passes the clients' shared cases (spec/fixtures/triage, todo_triage_test.go).
 
-// The SOP's sections, in the page's order.
+// The SOP's sections, in the page's order: what the owner has to act on, the unfinished work, what just finished, then
+// the folded ones, Done last (#5707).
 const (
 	triageWaiting  = "waiting"
 	triageWorking  = "working"
@@ -29,11 +30,12 @@ const (
 	triageDone     = "done"
 )
 
-var triageSections = []string{triageWaiting, triageWorking, triageJustDone, triagePR, triageOther, triageShelved, triageDone}
+var triageSections = []string{triageWaiting, triageWorking, triagePR, triageOther, triageJustDone, triageShelved, triageDone}
 
 // The SOP's rules, by name.
 const (
 	ruleFailedStart    = "failed_start"
+	ruleSuperseded     = "superseded"
 	ruleAgentAsks      = "agent_asks"
 	ruleOwnerDecides   = "owner_decides"
 	ruleAgentRunning   = "agent_running"
@@ -41,6 +43,7 @@ const (
 	ruleAccepted       = "accepted"
 	ruleDeployed       = "deployed"
 	ruleFinishedUnseen = "finished_unseen"
+	ruleSeen           = "seen"
 	rulePROpen         = "pr_open"
 	ruleStale          = "stale"
 	ruleRest           = "rest"
@@ -49,7 +52,8 @@ const (
 const (
 	// triageShelveAfter: no activity for this long, nothing of it running: shelved.
 	triageShelveAfter = 48 * time.Hour
-	// triageJustDoneFor: finished this recently is Just finished; earlier, Done.
+	// triageJustDoneFor: finished this recently, and not seen since, is Just finished; earlier, Done. Seeing it files it
+	// at once (#5707); the time is the fallback.
 	triageJustDoneFor = 24 * time.Hour
 	// triageLimitGrace: how long past its reset a usage-limit wait still counts (limitResumeGrace, the web's GRACE_MS).
 	triageLimitGrace = 10 * time.Minute
@@ -276,20 +280,51 @@ func triageLastActivity(t listedTodo, look triageLookup, restoredAt time.Time) t
 	return last
 }
 
-// triageStages are the stages in order (the web's TODO_STAGES).
-var triageStages = []string{"plan", "develop", "review", "merge", "deploy", "verify"}
+const triagePRStatusFreshFor = 15 * time.Minute
 
-// triageOpenPR: its work stopped at a PR still to merge (the web's openPR): the delivery says so, or it names a PR and
-// neither a delivery nor the stage is past it.
-func triageOpenPR(t Todo) bool {
-	d := ""
-	if t.Delivery != nil {
-		d = t.Delivery.State
+func triageNormalizePRURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if i := strings.IndexAny(raw, "#?"); i >= 0 {
+		raw = raw[:i]
 	}
-	if d == deliveryPR {
-		return true
+	return strings.ToLower(strings.TrimRight(raw, "/"))
+}
+
+// triageOpenPRs are t's PRs with a fresh observation saying open and non-draft: its current PR first, then its earlier
+// ones newest first (#7935). Stale, absent or mismatched facts count for nothing.
+func triageOpenPRs(t Todo, now time.Time) []TodoPRStatus {
+	fresh := func(f TodoPRStatus) bool {
+		age := now.Sub(f.CheckedAt)
+		return f.State == "open" && !f.Draft && !f.CheckedAt.IsZero() && age >= 0 && age <= triagePRStatusFreshFor
 	}
-	return t.PRURL != "" && (d == "" || d == "none") && slices.Index(triageStages, t.Stage) < slices.Index(triageStages, "merge")
+	var out []TodoPRStatus
+	if f := t.PRStatus; f != nil && t.PRURL != "" && triageNormalizePRURL(t.PRURL) == triageNormalizePRURL(f.URL) && fresh(*f) {
+		out = append(out, *f)
+	}
+	for _, f := range t.OtherPRs {
+		if triageNormalizePRURL(f.URL) != triageNormalizePRURL(t.PRURL) && fresh(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// triageWaitingForMerge requires a fresh observation of an open, non-draft PR of the task, its current one or an
+// earlier one still open (#7935). PR facts are display signals on the existing todo lifecycle: active Agents and
+// genuine owner decisions retain priority, while stale or legacy delivery/stage hints cannot claim that a PR is
+// waiting for merge.
+func triageWaitingForMerge(t listedTodo, status string, now time.Time) bool {
+	if t.DoneAt != nil || len(triageOpenPRs(t.Todo, now)) == 0 {
+		return false
+	}
+	if status == "failed" || status == "needs_you" || status == "interrupted" || status == "working" || status == "waiting" {
+		return false
+	}
+	dismissed := t.DecisionReview != nil && t.DecisionReview.DismissalID != ""
+	if !dismissed && (triageReviewState(t.Todo) == reviewNeedsUser || t.Ask != nil && (t.Ask.Outcome == outcomeDecide || t.Ask.Outcome == outcomeCannot)) {
+		return false
+	}
+	return true
 }
 
 // triageDueBy is the moment a to-do is due by: its due_at, or the end of its due day in loc; false without either.
@@ -309,9 +344,9 @@ func triageDueBy(t Todo, loc *time.Location) (time.Time, bool) {
 
 // triageShelvable: a task (an agent was linked, or a conversation handed it out) with no due date ahead. An open concern
 // never is (docs/assistant/todos.md "Concerns", #3582): it waits for the secretary's report, however long, and sits in
-// Working while an agent of it runs, else in Other open (triageTodo keeps it out of Done too). The clients get the same
-// rule with W1 / I1 / A1, and the shared fixtures follow then; so does whether a concern may share a row with a related
-// to-do (triageTodos still merges it like any to-do).
+// Working while an agent of it runs, else in Other open (triageTodo keeps it out of Done too). The web has the same rule
+// and shared fixtures; iOS and Android follow in their own PRs. triageRelatedRoots also keeps an open concern in a row
+// of its own; a closed concern groups like any closed to-do.
 func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
 	if t.Kind == db.KindConcern {
 		return false
@@ -322,21 +357,35 @@ func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
 	return len(triageAgents(t)) > 0 || t.Origin != ""
 }
 
-// triageTodo places one to-do by the SOP's decision table, first match wins (docs/assistant/todo-status-sop.md).
+// triageTodo places one to-do by the SOP's decision table, first match wins (docs/assistant/todo-status-sop.md). A to-do
+// the owner has seen (Got it, or opening it: todo_seen.go, #5707) since the moment that put it in Just finished is
+// filed under Done.
 // restoredAt is a restore from Shelved (zero on the hub: restores are kept on each device); loc is the user's zone, for
-// a due day.
-func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc *time.Location) todoTriage {
+// a due day; superseded: a failed start whose row's work really finished (triageSupersededFailedStarts, #3713).
+func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc *time.Location, superseded bool) todoTriage {
 	last := triageLastActivity(t, look, restoredAt)
 	status := triageStatus(t.Todo, look, now)
-	recent := func(at time.Time) bool { return now.Sub(at) < triageJustDoneFor }
+	// seen: the owner looked at it at or after at; fresh: it got to Just finished at at, less than 24 hours ago, and is
+	// not seen since
+	seen := func(at time.Time) bool { return t.SeenAt != nil && !t.SeenAt.Before(at) }
+	fresh := func(at time.Time) bool { return now.Sub(at) < triageJustDoneFor && !seen(at) }
 	ask := triageOpenAsk(t.Ask)
 	at := func(section, rule string) todoTriage { return todoTriage{Section: section, Rule: rule, Last: last} }
 	review := triageReviewState(t.Todo)
+	// The owner chose Don't handle on this decision round (task_review_dismissals.go): it no longer waits on them.
+	dismissed := t.DecisionReview != nil && t.DecisionReview.DismissalID != ""
 	// An open concern closes only with the secretary's report: nothing else files it with the finished ones.
 	concern := t.Kind == db.KindConcern && t.DoneAt == nil
+	// rule 8's signals: a turn nobody has seen, a review not done yet, an ask that says done / please verify
+	finished := status == "unread" || review == reviewPending || ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)
+	// accepted or deployed work is finished whatever its PR facts say: rule 9 never outranks those rules (#7614 review)
+	settled := !concern && (acceptanceStands(t.Todo) || t.Delivery != nil && t.Delivery.State == deliveryLive)
 
 	switch {
 	case status == "failed":
+		if superseded { // the same piece of work finished in a related to-do: history, nothing left to retry
+			return at(cond(fresh(cmp.Or(derefTime(t.DoneAt), last)), triageJustDone, triageDone), ruleSuperseded)
+		}
 		if now.Sub(last) < triageShelveAfter {
 			return at(triageWaiting, ruleFailedStart)
 		}
@@ -346,24 +395,36 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageDone, ruleFailedStart)
 	case status == "needs_you" || status == "interrupted":
 		return at(triageWaiting, ruleAgentAsks)
-	case t.DoneAt == nil && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
+	case t.DoneAt == nil && !dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
 		return at(triageWaiting, ruleOwnerDecides)
+	case !settled && !(finished && !seen(last) && review != reviewParked) && triageWaitingForMerge(t, status, now):
+		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open. A parked
+		// hold is its supervisor's reading of the latest turn, so an agent session left unread does not hide its PR.
+		return at(triagePR, rulePROpen)
 	case status == "working" || status == "waiting":
 		return at(triageWorking, ruleAgentRunning)
 	case t.DoneAt != nil:
-		return at(cond(recent(*t.DoneAt), triageJustDone, triageDone), ruleClosed)
+		return at(cond(fresh(*t.DoneAt), triageJustDone, triageDone), ruleClosed)
 	case !concern && acceptanceStands(t.Todo):
-		return at(cond(recent(triageLatestReview(t.Supervision).At), triageJustDone, triageDone), ruleAccepted)
+		return at(cond(fresh(triageLatestReview(t.Supervision).At), triageJustDone, triageDone), ruleAccepted)
 	case !concern && t.Delivery != nil && t.Delivery.State == deliveryLive:
-		return at(cond(recent(cmp.Or(t.Delivery.At, last)), triageJustDone, triageDone), ruleDeployed)
-	case status == "unread" || review == reviewPending || ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone):
+		return at(cond(fresh(cmp.Or(t.Delivery.At, last)), triageJustDone, triageDone), ruleDeployed)
+	case finished && !seen(last):
 		return at(triageJustDone, ruleFinishedUnseen)
-	case triageOpenPR(t.Todo):
-		return at(triagePR, rulePROpen)
+	case finished && !concern: // seen since it last moved, and no PR waits on the owner (a concern is never Done open)
+		return at(triageDone, ruleSeen)
 	case triageShelvable(t.Todo, now, loc) && now.Sub(last) >= triageShelveAfter:
 		return at(triageShelved, ruleStale)
 	}
 	return at(triageOther, ruleRest)
+}
+
+// derefTime is *at, or the zero time.
+func derefTime(at *time.Time) time.Time {
+	if at == nil {
+		return time.Time{}
+	}
+	return *at
 }
 
 func cond[T any](c bool, a, b T) T {
@@ -429,17 +490,10 @@ type triageResult struct {
 	Open, Shelved, Finished int
 }
 
-// triageTodos places every to-do and merges related ones into rows (the web's triageTodos): closed and open to-dos never
-// share a row; a row takes its lead's section; rows go most recently active first. includeQuiet false leaves quiet
-// tasks out, as the sidebar's badge does.
-func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.Location, includeQuiet bool) triageResult {
-	if !includeQuiet {
-		list = slices.DeleteFunc(slices.Clone(list), func(t listedTodo) bool { return t.Quiet })
-	}
-	placed := make(map[string]todoTriage, len(list))
-	for _, t := range list {
-		placed[t.ID] = triageTodo(t, look, now, time.Time{}, loc)
-	}
+// triageRelatedRoots is the row each to-do is in (the web's relatedRoots): the root of its related to-dos, open and
+// closed ones kept apart. An open concern never joins another row or has another to-do joined to it; a closed concern
+// groups like any closed to-do.
+func triageRelatedRoots(list []listedTodo) func(string) string {
 	parent := map[string]string{}
 	for _, t := range list {
 		parent[t.ID] = t.ID
@@ -455,6 +509,9 @@ func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.
 	}
 	owner := map[string]string{}
 	for _, t := range list {
+		if t.DoneAt == nil && t.Kind == db.KindConcern {
+			continue
+		}
 		side := cond(t.DoneAt != nil, "c", "o")
 		for _, k := range triageRelatedKeys(t.Todo) {
 			key := side + "|" + k
@@ -465,6 +522,49 @@ func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.
 			}
 		}
 	}
+	return find
+}
+
+// triageSupersededFailedStarts are the failed starts (rule 1) whose row has a to-do that really finished: closed
+// without a start error (the web's supersededFailedStarts, #3713). The work got done another way; such a failed start
+// goes to Just finished / Done and is not counted open.
+func triageSupersededFailedStarts(list []listedTodo) map[string]bool {
+	find := triageRelatedRoots(list)
+	finished := map[string]bool{}
+	for _, t := range list {
+		if t.DoneAt != nil && t.StartError == "" {
+			finished[find(t.ID)] = true
+		}
+	}
+	out := map[string]bool{}
+	for _, t := range list {
+		if t.StartError != "" && finished[find(t.ID)] {
+			out[t.ID] = true
+		}
+	}
+	return out
+}
+
+// triagePlace places each to-do of list by id, as triageTodos does (a failed start superseded by its row's finished
+// work included); the direction tree reads the same places (direction_tree.go).
+func triagePlace(list []listedTodo, look triageLookup, now time.Time, loc *time.Location) map[string]todoTriage {
+	superseded := triageSupersededFailedStarts(list)
+	placed := make(map[string]todoTriage, len(list))
+	for _, t := range list {
+		placed[t.ID] = triageTodo(t, look, now, time.Time{}, loc, superseded[t.ID])
+	}
+	return placed
+}
+
+// triageTodos places every to-do and merges related ones into rows (the web's triageTodos): closed and open to-dos never
+// share a row, and an open concern always has a row of its own; a row takes its lead's section (a superseded failed start
+// never leads); rows go most recently active first. includeQuiet false leaves quiet tasks out, as the sidebar's badge does.
+func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.Location, includeQuiet bool) triageResult {
+	if !includeQuiet {
+		list = slices.DeleteFunc(slices.Clone(list), func(t listedTodo) bool { return t.Quiet })
+	}
+	placed := triagePlace(list, look, now, loc)
+	find := triageRelatedRoots(list)
 	var roots []string
 	byRoot := map[string][]listedTodo{}
 	for _, t := range list {
@@ -490,7 +590,9 @@ func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.
 		members := byRoot[r]
 		slices.SortStableFunc(members, func(a, b listedTodo) int {
 			ta, tb := placed[a.ID], placed[b.ID]
-			return cmp.Or(cmp.Compare(order(ta.Section), order(tb.Section)), tb.Last.Compare(ta.Last), strings.Compare(a.ID, b.ID))
+			behind := func(t todoTriage) int { return cond(t.Rule == ruleSuperseded, 1, 0) }
+			return cmp.Or(cmp.Compare(order(ta.Section), order(tb.Section)), cmp.Compare(behind(ta), behind(tb)),
+				tb.Last.Compare(ta.Last), strings.Compare(a.ID, b.ID))
 		})
 		g := triageGroup{Lead: members[0], Members: members, Section: placed[members[0].ID].Section, Triage: map[string]todoTriage{}}
 		for _, m := range members {

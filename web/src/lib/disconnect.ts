@@ -3,6 +3,7 @@
 // hub with nothing on screen to tell. Signing out anyway keeps its id apart, so the next sign-in here names it in
 // `replaces` (lib/auth.ts pair) and the hub takes it off then.
 import { api, ApiError, errorText, setToken } from "./api";
+import { forgetForwards } from "./forward-memory";
 import { forgetHandOffs } from "./handoff-memory";
 import { keepUnrevoked } from "./auth";
 import { BASE } from "./base";
@@ -45,8 +46,14 @@ export async function revokeThisBrowser(): Promise<Revoke> {
 
 /** Forget this browser's credential and go to the sign-in page. `unrevoked`: the id of one the hub may still take. */
 export function signOutHere(unrevoked = "") {
+  if (typeof window !== "undefined") {
+    window.personaDesktop?.clearNotifications?.();
+    // and the notch island's counts and agent titles (#7669); the page leaves before lib/desktop-island.ts could
+    window.personaDesktop?.setIslandState?.({ needsYou: 0, working: 0, unread: 0, rows: [], summary: "" });
+  }
   setToken("");
   forgetHandOffs(); // where Hand to AI sent each source's items: ids on a hub this browser leaves (#2121)
+  forgetForwards(); // and where forwards went (#3899)
   if (unrevoked) keepUnrevoked(unrevoked);
   reset();
   location.href = BASE + "/";

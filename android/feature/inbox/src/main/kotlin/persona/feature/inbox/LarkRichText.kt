@@ -15,7 +15,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -257,7 +256,7 @@ sealed interface LarkRichNode {
 /** Renders a syntax-highlighted code block. */
 @Composable
 fun LarkCodeBlock(code: String, language: String, modifier: Modifier = Modifier) {
-    val clipboard = LocalClipboardManager.current
+    val copy = rememberCopy()
     val tokens = remember(code) { LarkSyntax.tokens(code) }
     val palette = PersonaTheme.palette
     val shape = RoundedCornerShape(Tokens.Radius.control)
@@ -283,12 +282,19 @@ fun LarkCodeBlock(code: String, language: String, modifier: Modifier = Modifier)
                 maxLines = 1
             )
             Row(
-                Modifier.clickable { clipboard.setText(AnnotatedString(code)) },
+                Modifier.clickable { copy(code, null) },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)
             ) {
                 JIcon(PhIcons.Copy, modifier = Modifier.size(RichTextTokens.codeCopyIcon), tint = palette.accent)
-                Text(stringResource(R.string.inbox_lark_code_copy), style = PersonaTheme.type.micro, color = palette.accent)
+                Text(
+                    stringResource(R.string.inbox_lark_code_copy),
+                    style = PersonaTheme.type.micro,
+                    color = palette.accent,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
         SelectionContainer {
@@ -296,8 +302,8 @@ fun LarkCodeBlock(code: String, language: String, modifier: Modifier = Modifier)
                 for (t in tokens) {
                     val color = when (t.kind) {
                         LarkSyntax.Kind.KEYWORD -> palette.accent
-                        LarkSyntax.Kind.STRING -> RichTextTokens.Syntax.string
-                        LarkSyntax.Kind.NUMBER -> RichTextTokens.Syntax.number
+                        LarkSyntax.Kind.STRING -> palette.codeString
+                        LarkSyntax.Kind.NUMBER -> palette.codeNumber
                         LarkSyntax.Kind.COMMENT -> palette.ink3
                         LarkSyntax.Kind.PLAIN -> palette.ink
                     }

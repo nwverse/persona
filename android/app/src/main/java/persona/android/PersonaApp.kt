@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.filter
 
 /** Holds the one hub connection for the process: the activity and the foreground service share it. */
 @HiltAndroidApp
@@ -37,8 +39,22 @@ class PersonaApp : Application() {
     val pairingReady = MutableStateFlow(false)
     val pairingRestoreError = MutableStateFlow(false)
 
+    /** Captures debug-only selection before the graph starts; this never creates a core. */
+    val continuityFactory: (String, (persona.core.data.ContinuityAdapter.Applied) -> Unit) -> persona.core.data.ContinuityAdapter by lazy {
+        if (BuildConfig.DEBUG) ContinuitySelection.factory(this)
+        else { chat, _ -> persona.core.data.KotlinContinuityAdapter(chat) }
+    }
+
+    /** Kotlin by default; the optional DEBUG observer is chosen before the graph starts, never on the UI hot path. */
+    val agentListAdapter: persona.core.data.AgentListAdapter by lazy {
+        AgentSortSelection.wrap(this, persona.core.data.AgentListAdapters.create())
+    }
+
     /** Settings › Interface style; device-wide, kept across pairings. */
     val appearance: persona.core.designsystem.AppStyleStore by lazy { persona.core.designsystem.AppStyleStore(this) }
+
+    /** The GitHub star prompts (#5761); device-wide like the appearance, kept across pairings. */
+    val starPrompt: persona.core.designsystem.StarPromptStore by lazy { persona.core.designsystem.StarPromptStore(this) }
 
     /** Settings › Appearance › Persona look's hub packages; device-wide, listed again whenever the hub comes online. */
     val personas: persona.core.designsystem.PersonaStore by lazy {
@@ -63,6 +79,9 @@ class PersonaApp : Application() {
     override fun onCreate() {
         // Before Hilt builds the graph, so a crash there is written too.
         errorReporting.installCrashHandler()
+        continuityFactory // Capture before Hilt, and before a debug Activity can save the next selection.
+        agentListAdapter
+        persona.core.domain.answer.AnswerAdapters.install(AnswerSelection.choose(this))
         super.onCreate()
         // The core modules' words (errors, the data repositories' state) in the shown language (docs/protocol/i18n.md).
         persona.core.contracts.CoreText.words = { it.resolve(this) }
@@ -86,13 +105,15 @@ class PersonaApp : Application() {
         }
         // Light/dark for what Compose does not draw (WebView pages, system dialogs) too: the app's own night mode.
         scope.launch { appearance.scheme.collect { applyNightMode(it) } }
-        // A tiered look moved to another tier: the new tier is downloaded whole before the face changes.
+        // A tiered look moved to another tier: the new tier is downloaded whole before the face changes. The two events
+        // are taken off the event flow first, so the download holds up no other live event (#4038).
         scope.launch {
-            connection.events.collect { event ->
-                if (event is persona.core.contracts.PersonasEvent) runCatching { personas.refresh() }
-                // Another device chose a look (#3200): this phone shows it too.
-                if (event is persona.core.contracts.LookEvent) runCatching { personas.follow(event.id) }
-            }
+            connection.events.filter { it is persona.core.contracts.PersonasEvent || it is persona.core.contracts.LookEvent }
+                .buffer(kotlinx.coroutines.channels.Channel.UNLIMITED).collect { event ->
+                    if (event is persona.core.contracts.PersonasEvent) runCatching { personas.refresh() }
+                    // Another device chose a look (#3200): this phone shows it too.
+                    if (event is persona.core.contracts.LookEvent) runCatching { personas.follow(event.id) }
+                }
         }
     }
 

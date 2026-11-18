@@ -87,7 +87,7 @@ func (s *Service) toolDirectionName(ctx context.Context, self string, args json.
 	if strings.TrimSpace(a.Name) == "" {
 		return fmt.Sprintf("Direction %s has no name of its own now: it shows its project's name, else its title.", a.ID), nil
 	}
-	return fmt.Sprintf("Direction %s is called 「%s」 now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil
+	return fmt.Sprintf("Direction %s is called “%s” now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil
 }
 
 // toolLeaderProgress is leader_progress: a leader reports its direction's progress at the goal level.
@@ -156,7 +156,7 @@ func (s *Service) leaderProgressReport(ctx context.Context, lead string, p leade
 	sum := sha256.Sum256([]byte(key))
 	ev := assistantwire.LeaderReportEvent{ID: "lrep_" + hex.EncodeToString(sum[:8]), Leader: lead, Kind: assistantwire.LeaderProgress,
 		Text: clip(strings.Join(parts, "\n"), assistantwire.LeaderReportTextMost), At: p.At, Reached: p.Reached, Doing: p.Doing,
-		NeedsYou: p.NeedsYou, Links: p.Links}
+		NeedsYou: p.NeedsYou, Links: p.Links, Level: s.leaderReportLevel(ctx, assistantwire.LeaderProgress)}
 	if len(p.Links) > 0 {
 		ev.Link = p.Links[0]
 	}

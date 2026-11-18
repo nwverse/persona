@@ -26,7 +26,7 @@ func AddMCPAliases(servers map[string]any) map[string]any {
 }
 
 // MCPRegistrationServers prepares the built-in handler for a new process. Legacy
-// peers and resumed sessions retain the alias; negotiated new sessions use only
+// peers retain the alias; negotiated assistant starts, including resumes, use only
 // Persona. Extension namespaces and their permission scopes never change.
 func MCPRegistrationServers(servers map[string]any, legacy bool) map[string]any {
 	builtin := servers["persona"]

@@ -115,3 +115,31 @@ func TestCodexDetailsNameNoOptionValue(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexServiceTierSetting(t *testing.T) {
+	n := &Node{home: t.TempDir()}
+	for _, tier := range []string{"fast", "default"} {
+		if err := n.setCodexSetting("service_tier", tier); err != nil {
+			t.Fatal(err)
+		}
+		settings, err := n.getCodexSettings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, setting := range settings {
+			if setting.Key == "service_tier" {
+				found = setting.Value == tier
+			}
+		}
+		if !found {
+			t.Fatalf("speed %q missing from settings", tier)
+		}
+	}
+	if err := n.setCodexSetting("service_tier", "invented"); err == nil {
+		t.Fatal("invalid speed accepted")
+	}
+	if err := n.setCodexSetting("service_tier", nil); err != nil {
+		t.Fatal(err)
+	}
+}

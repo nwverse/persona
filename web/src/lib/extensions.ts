@@ -10,6 +10,7 @@ import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import type { Contribution, DependencyState, PackMember } from "./extension-model";
 import type { ExtensionAuth, ExtensionTool } from "./extension-auth";
 import { clock } from "./format";
+import type { SecretReference } from "./secret-reference";
 import { itemHeaders } from "./manager-choice";
 import { t } from "../i18n";
 
@@ -31,6 +32,12 @@ export interface HubExtension {
   source?: string;
   enabled?: boolean;
   description?: string;
+  /** Public catalog artwork: absolute HTTPS without URL credentials; absent on older hubs. */
+  icon_url?: string;
+  /** Cumulative package downloads across all versions, not users or Persona installations. Explicit zero is meaningful. */
+  downloads?: number;
+  /** When the package-download statistics were last updated. */
+  downloads_updated_at?: string;
   /** The extension points it contributes to, with the ids. */
   contributes?: Record<string, string[]>;
   /** What it still needs before it runs, in words. */
@@ -48,6 +55,9 @@ export interface HubExtension {
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
   nodes?: ExtensionNodeState[];
+  /** How that program is across all its machines, aggregated by the hub; the status follows it while the hub's own
+   *  process is idle, so a node-only extension does not say "stopped" while it runs on every machine. */
+  node_status?: NodeStatusSummary;
   /** An installed extension's sandbox and its connections through the hub's egress proxy (hub extension_sandbox.go). */
   sandbox?: ExtensionSandbox;
   /** An extension one signs in to (hub extension_auth, #4507): its state as the hub last knew it. */
@@ -78,23 +88,16 @@ export interface ExtensionSandbox {
   active: boolean;
   why?: string;
   trusted?: boolean;
-  egress?: { allowed: number; denied: number; last_denied?: string; denied_at?: string };
+  /** recent_denied: the last different hosts the proxy refused, the latest first (#5697). */
+  egress?: { allowed: number; denied: number; last_denied?: string; denied_at?: string; recent_denied?: { target: string; count: number; at: string }[] };
+  /** The hosts the owner allowed it in /admin (#5697): no port is any port. */
+  owner_allowed?: { host: string; port?: string; at?: string }[];
 }
 
 /** The sandbox's state in words: in effect, asked for but not in effect, or off (Android ExtensionModelText.sandbox). */
 export function sandboxState(s: ExtensionSandbox): string {
   if (s.active) return t("lib-extensions.sandbox_active");
   return t(s.enabled ? "lib-extensions.sandbox_inactive" : "lib-extensions.sandbox_off");
-}
-
-/** What it reached through the egress proxy: "through the egress proxy: N allowed · M refused", null without counts. */
-export function sandboxEgress(s: ExtensionSandbox): string | null {
-  const e = s.egress;
-  if (!e) return null;
-  return t("lib-extensions.sandbox_egress", {
-    allowed: t("lib-extensions.sandbox_allowed", { count: e.allowed ?? 0 }),
-    denied: t("lib-extensions.sandbox_denied", { count: e.denied ?? 0 }),
-  });
 }
 
 /** The channel an extension contributes (its first `channel` id), whose page is where it is bound. */
@@ -109,6 +112,45 @@ export interface ExtensionNodeState {
   /** running | starting | stopped | error | missing | lease_expired | offline | outdated */
   state: string;
   error?: string;
+}
+
+/** The hub's aggregate of an extension's node program across its machines (Go ExtensionNodeStatusView). */
+export interface NodeStatusSummary {
+  total: number;
+  running: number;
+  starting: number;
+  stopped: number;
+  offline: number;
+  abnormal: number;
+}
+
+/**
+ * One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
+ * with the abnormal or offline count when there is one. Null without a node summary, so the hub-process wording stands.
+ */
+export function nodeStatusNote(p: Pick<HubExtension, "node_status" | "status">): string | null {
+  const s = p.node_status;
+  if (!s || s.total === 0) return null;
+  const offlinePart = () => (s.offline > 0 ? ` · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : "");
+  switch (p.status) {
+    case "running": {
+      const main = t("lib-extensions.node_running", { count: s.running });
+      const abnormal = s.abnormal > 0 ? ` · ${t("lib-extensions.node_abnormal_count", { count: s.abnormal })}` : "";
+      return main + abnormal + offlinePart();
+    }
+    case "error": {
+      const main = t("lib-extensions.node_abnormal_count", { count: s.abnormal });
+      return s.offline > 0 ? `${main} · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : main;
+    }
+    case "starting":
+      return t("lib-extensions.node_starting", { count: s.starting }) + offlinePart();
+    case "stopped":
+      // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+      if (s.stopped === 0 && s.offline > 0) return t("lib-extensions.node_offline_count", { count: s.offline });
+      return t("lib-extensions.node_stopped", { count: s.stopped }) + offlinePart();
+    default:
+      return null;
+  }
 }
 
 /** A market extension's newer version and where it stands. */
@@ -182,6 +224,33 @@ export interface ExtensionSecret {
   set: boolean;
   /** Its last four characters, when it is set and the extension asked for them (secrets[].hint "last4"); never more. */
   hint?: string;
+  /** It holds a provider's reference, not a value (docs/extensions/secret-providers.md). */
+  reference?: SecretReference;
+}
+
+export type { SecretReference } from "./secret-reference";
+
+/** A setting that holds one of a provider's references: another extension's secret, or a model provider's key. */
+export interface SecretUser {
+  kind: "extension" | "launcher";
+  extension?: string;
+  extension_name?: string;
+  secret?: string;
+  secret_title?: string;
+  launcher?: string;
+  launcher_name?: string;
+  machine?: string;
+  reference: string;
+}
+
+/** An "Always" of a hand-off card: this reference for this launcher on this computer, asked no more. */
+export interface HandoffRule {
+  id: string;
+  reference: string;
+  launcher: string;
+  machine: string;
+  by?: string;
+  at: string;
 }
 
 /** A line of what an extension may do. */
@@ -216,6 +285,9 @@ export interface HubExtensionDetail extends HubExtension {
   pack_off?: string[];
   /** The installed members that are on: the ones switching the pack off switches off, named in its confirmation. */
   pack_on?: { id: string; name: string }[];
+  /** A secret provider's: the settings that hold its references, and its Always rules for hand-offs. */
+  secret_users?: SecretUser[];
+  handoff_rules?: HandoffRule[];
 }
 
 // ── the hub ─────────────────────────────────────────────
@@ -255,6 +327,10 @@ export const setExtensionConfig = (id: string, config: JsonObject) =>
   api<HubExtensionDetail>(`${base(id)}/config`, { method: "PUT", json: { config } }).then(detailOf).then(changed);
 export const setExtensionSecret = (id: string, name: string, value: string) =>
   api<HubExtensionDetail>(`${base(id)}/secrets/${enc(name)}`, { method: "PUT", json: { value } }).then(detailOf).then(changed);
+export const setExtensionSecretReference = (id: string, name: string, reference: string) =>
+  api<HubExtensionDetail>(`${base(id)}/secrets/${enc(name)}`, { method: "PUT", json: { reference } }).then(detailOf).then(changed);
+export const removeHandoffRule = (id: string, rule: string) =>
+  api<HubExtensionDetail>(`${base(id)}/handoff-rules/${enc(rule)}`, { method: "DELETE" }).then(detailOf).then(changed);
 export const clearExtensionSecret = (id: string, name: string) =>
   api<HubExtensionDetail>(`${base(id)}/secrets/${enc(name)}`, { method: "DELETE" }).then(detailOf).then(changed);
 
@@ -299,11 +375,13 @@ const STATES: Record<string, string> = {
   error: t("lib-extensions.state_error"),
 };
 
-export const extensionState = (p: HubExtension) => STATES[p.status] ?? t("lib-extensions.state_unknown");
+export const extensionState = (p: HubExtension) => nodeStatusNote(p) ?? STATES[p.status] ?? t("lib-extensions.state_unknown");
 
 /** Whether an enabled extension's program runs right now (the detail page's small print); "" for any other state. */
-export const runNote = (p: HubExtension) =>
-  p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+export const runNote = (p: HubExtension) => {
+  if (p.node_status) return ""; // the node status line already says where it runs
+  return p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+};
 
 /** An attached extension's small print: online or offline since when, and why while it is still reconnecting (its
  *  status says no error yet); "" while it is switched off. */
@@ -448,7 +526,19 @@ export function pickerChoices(f: ExtensionField, current: Json | undefined, mach
   return out;
 }
 
+/**
+ * The secret the header's "Still needs" line opens (#8853): the first one not set that is required or that the line
+ * names (the hub writes a missing secret's own title into needs_setup). Undefined when nothing it names is a secret to
+ * set here (a dependency, a configuration an upgrade no longer takes): the line stays plain text.
+ */
+export function setupSecret(needs: string[] | undefined, secrets: ExtensionSecret[] | undefined): ExtensionSecret | undefined {
+  if (!needs?.length) return undefined;
+  return secrets?.find((s) => !s.set && (!!s.required || needs.some((n) => !!s.title && n.includes(s.title))));
+}
+
+/** Where a reference's value comes from, in words: "From <provider> · <item>". */
 export function secretState(s: ExtensionSecret): string {
+  if (s.reference) return t("lib-extensions.from_provider", { provider: s.reference.provider_name || s.reference.provider });
   if (s.set) return s.hint ? t("lib-extensions.is_set_hint", { hint: s.hint }) : t("lib-extensions.is_set");
   return s.required ? t("lib-extensions.not_set_required") : t("lib-extensions.not_set");
 }

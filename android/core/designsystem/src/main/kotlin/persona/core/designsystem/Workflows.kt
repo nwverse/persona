@@ -1,8 +1,5 @@
 package persona.core.designsystem
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
@@ -10,10 +7,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -69,8 +62,8 @@ import java.time.Instant
 //   WorkflowTimeline.PHASE_ROWS of them with the quiet rest folded into "n more", the earliest ones the hub no longer
 //   lists said above them. A row opens the agent's conversation.
 // The rules are core:domain's WorkflowTimeline. Things move only when a value changes, never on the first draw and not at
-// all with reduced motion: counts count, colors go over, a block opens and folds, a new agent fades in. Nothing moves
-// while nothing changes: the status chip keeps its look, with no breathing.
+// all with reduced motion: counts count, colors go over, a block fades in over its full space and closes at once (#9574),
+// a new agent fades in. Nothing moves while nothing changes: the status chip keeps its look, with no breathing.
 
 /** The mark of a background workflow, wherever one is named. */
 val WorkflowIcon: PhIcon get() = PhIcons.TreeStructure
@@ -111,12 +104,12 @@ fun JWorkflowCallCard(
     val action = stringResource(if (open) R.string.designsystem_workflow_collapse else R.string.designsystem_workflow_expand, title)
     val state = stringResource(if (open) R.string.designsystem_expanded else R.string.designsystem_collapsed)
     val shape = PersonaTheme.shapes.cardShape
-    Column(modifier.fillMaxWidth().padding(vertical = 6.dp).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
+    Column(modifier.fillMaxWidth().padding(vertical = 6.dp.dense).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
         .testTag("workflow-call")) {
         Column(
             Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = action) { folds[key] = !open }
                 .semantics { stateDescription = state }
-                .padding(horizontal = CardInset, vertical = 10.dp),
+                .padding(horizontal = CardInset, vertical = 10.dp.dense),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs),
         ) {
             WorkflowHead(workflow, clock, kind = true, open = open)
@@ -291,7 +284,7 @@ private fun WorkflowProgress(workflow: Workflow, inset: Dp) {
     val colors = segments.map { partColor(it.part) }
     val spoken = WorkflowSummary.agentsDone(workflow).text()
     val calls = workflow.calls?.takeIf { it > 0 && LocalWindowLayout.current.expanded }
-    Column(Modifier.fillMaxWidth().padding(start = inset, end = inset, bottom = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.fillMaxWidth().padding(start = inset, end = inset, bottom = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(6.dp.dense)) {
         Box(
             Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(palette.surfaceStrong)
                 .semantics {
@@ -362,7 +355,7 @@ private fun PhaseView(workflow: Workflow, block: PhaseBlock, clock: State<Instan
         Row(
             Modifier.fillMaxWidth().drawBehind { drawRect(lit) }
                 .then(if (opens) Modifier.clickable(role = Role.Button) { folds[key] = !open }.semantics { stateDescription = state } else Modifier)
-                .heightIn(min = 40.dp).padding(horizontal = inset),
+                .heightIn(min = 40.dp.row).padding(horizontal = inset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PhaseMark(block)
@@ -424,14 +417,14 @@ private fun PhaseMark(block: PhaseBlock) {
         block.state == PhaseState.Stopped -> R.string.designsystem_workflow_phase_stopped
         else -> R.string.designsystem_workflow_phase_next
     })
-    FadeOnChange(block.state to block.current, Modifier.size(Tokens.Space.l).semantics { contentDescription = label }) {
+    FadeOnChange(block.state to block.current, Modifier.size(Tokens.Space.Standard.l).semantics { contentDescription = label }) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             when (block.state) {
                 PhaseState.Done -> if (block.failed > 0) JIcon(PhIcons.X, null, size = 13.dp, tint = palette.danger.dot)
                     else JIcon(PhIcons.Check, null, size = 13.dp, tint = palette.positive)
-                PhaseState.Current -> Box(Modifier.size(Tokens.Space.s).clip(CircleShape).background(if (block.current) palette.ai else palette.ai.copy(alpha = 0.5f)))
-                PhaseState.Stopped -> Box(Modifier.size(Tokens.Space.s).clip(RoundedCornerShape(2.dp)).background(palette.ink3))
-                PhaseState.Next -> Box(Modifier.size(Tokens.Space.s).border(1.5.dp, palette.ink3, CircleShape))
+                PhaseState.Current -> Box(Modifier.size(Tokens.Space.Standard.s).clip(CircleShape).background(if (block.current) palette.ai else palette.ai.copy(alpha = 0.5f)))
+                PhaseState.Stopped -> Box(Modifier.size(Tokens.Space.Standard.s).clip(RoundedCornerShape(2.dp)).background(palette.ink3))
+                PhaseState.Next -> Box(Modifier.size(Tokens.Space.Standard.s).border(1.5.dp, palette.ink3, CircleShape))
             }
         }
     }
@@ -449,8 +442,8 @@ private fun AgentRow(agent: WorkflowAgent, clock: State<Instant>, fresh: Boolean
     val label = agentLabel(agent)
     val reduce = PersonaTheme.reduceMotion
     val alpha = remember { Animatable(if (fresh && !reduce) 0f else 1f) }
-    val duration = PersonaTheme.motion.standard
-    LaunchedEffect(Unit) { if (alpha.value < 1f) alpha.animateTo(1f, tween(duration, easing = FastOutSlowInEasing)) }
+    // iOS WorkflowViews.swift:590: .animation(Theme.Motion.reveal, value: r.rows.map(\.id))
+    LaunchedEffect(Unit) { if (alpha.value < 1f) alpha.animateTo(1f, SharedMotion.reveal()) }
     val word = CoreText.of(when (state) {
         AgentState.Running -> CoreText.Key.WorkflowRunning
         AgentState.Done -> CoreText.Key.WorkflowCompleted
@@ -463,7 +456,7 @@ private fun AgentRow(agent: WorkflowAgent, clock: State<Instant>, fresh: Boolean
         Modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha.value }
             .then(if (onOpen != null) Modifier.clickable(role = Role.Button, onClickLabel = action, onClick = onOpen) else Modifier)
             .semantics(mergeDescendants = true) { stateDescription = word }
-            .heightIn(min = 36.dp).padding(start = inset + Tokens.Space.xxl, end = inset)
+            .heightIn(min = 36.dp.row).padding(start = inset + Tokens.Space.xl, end = inset)
             .testTag("workflow-agent:" + agent.id),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -498,7 +491,7 @@ private fun AgentDot(state: AgentState) {
         AgentState.Failed -> {
             val danger = PersonaTheme.palette.danger
             val shape = if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(2.dp) else CircleShape
-            Box(Modifier.size(Tokens.Space.s).clip(shape).background(danger.dot).border(1.dp, danger.text, shape))
+            Box(Modifier.size(Tokens.Space.Standard.s).clip(shape).background(danger.dot).border(1.dp, danger.text, shape))
         }
     }
 }
@@ -506,29 +499,30 @@ private fun AgentDot(state: AgentState) {
 /** A quiet line among the rows ("12 earlier ones not listed"). */
 @Composable
 private fun Note(text: String, inset: Dp) {
-    Text(text, Modifier.heightIn(min = 32.dp).padding(start = inset + Tokens.Space.xxl, end = inset, top = Tokens.Space.s),
+    Text(text, Modifier.heightIn(min = 32.dp.row).padding(start = inset + Tokens.Space.xl, end = inset, top = Tokens.Space.s),
         style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 /** "n more" / "Show fewer" among the rows: words in the accent color, one line. */
 @Composable
 private fun TextAction(text: String, inset: Dp, onClick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).heightIn(min = 36.dp)
-        .padding(start = inset + Tokens.Space.xxl, end = inset), contentAlignment = Alignment.CenterStart) {
+    Box(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).heightIn(min = 36.dp.row)
+        .padding(start = inset + Tokens.Space.xl, end = inset), contentAlignment = Alignment.CenterStart) {
         Text(text, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Medium), color = PersonaTheme.palette.accent, maxLines = 1)
     }
 }
 
-/** Opens and folds [content] over the style's size motion; at once with reduced motion, and not on the first draw. */
+/**
+ * Opens [content] as the chat's unfolding: full height on the first frame, a Reveal fade, gone at once when it closes.
+ * iOS `WorkflowCallCard` body (`WorkflowCallCard.swift:102`) and a phase's rows (`WorkflowViews.swift:498`), both through
+ * `toggleInPlace` (`ChatPin.swift:707-726`). Not on the first draw. Without a chat pin iOS animates with
+ * `Theme.Motion.reveal` instead (`WorkflowViews.swift:509-511`); these cards are in the chat, or always open.
+ */
 @Composable
 private fun Unfold(open: Boolean, content: @Composable () -> Unit) {
-    val reduce = PersonaTheme.reduceMotion
-    val motion = PersonaTheme.motion
-    AnimatedVisibility(
-        visible = open,
-        enter = if (reduce) EnterTransition.None else expandVertically(motion.size()) + fadeIn(tween(motion.quick)),
-        exit = if (reduce) ExitTransition.None else shrinkVertically(motion.size()) + fadeOut(tween(motion.quick)),
-    ) { content() }
+    val edge = rememberOpenEdge()
+    val revealing = edge.revealing(open)
+    if (open) Box(Modifier.unfolding(revealing)) { content() }
 }
 
 /** [content] for [value]: drawn at once the first time; when [value] changes, the new one fades in (at once with reduced motion). */

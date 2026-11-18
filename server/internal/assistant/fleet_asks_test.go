@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // A list decorated with what its sessions asked in the lists before is the list decorated afresh, for the same inputs,
@@ -25,7 +25,7 @@ func TestDecoratedListsAnswerAsAfresh(t *testing.T) {
 	st := newFleetMem()
 	s := New(Options{Hub: f, Devices: d, Store: func() Store { return st }})
 	reads := 0
-	s.fleet.asks.askOf = func(text string) string { reads++; return transcript.AskOf(text) }
+	s.fleet.asks.askOf = func(text string) string { reads++; return closeout.AskOf(text) }
 
 	row := func(id, text string) proto.Session {
 		return proto.Session{SessionID: id, Cwd: "/code/example", Agent: "claude", Status: proto.StatusDone, LastText: text}
@@ -104,33 +104,4 @@ func swapAsks(s *Service, machines map[string]*askBook) map[string]*askBook {
 	kept := s.fleet.asks.machines
 	s.fleet.asks.machines = machines
 	return kept
-}
-
-// changedWriter keeps nothing while what comes is old's, and everything once it differs.
-func TestChangedWriter(t *testing.T) {
-	for _, c := range []struct {
-		name, old string
-		parts     []string
-		same      bool
-	}{
-		{"the same", `{"a":1}`, []string{`{"a"`, `:1}`}, true},
-		{"nothing before", "", []string{`{}`}, false},
-		{"shorter", `{"a":12}`, []string{`{"a":1`}, false},
-		{"longer", `{"a":1}`, []string{`{"a":1}`, `x`}, false},
-		{"differs inside a part", `{"a":1,"b":2}`, []string{`{"a":1,`, `"b":3}`}, false},
-	} {
-		w := changedWriter{old: []byte(c.old)}
-		for _, p := range c.parts {
-			if n, err := w.Write([]byte(p)); n != len(p) || err != nil {
-				t.Fatal(n, err)
-			}
-		}
-		all := []byte("")
-		for _, p := range c.parts {
-			all = append(all, p...)
-		}
-		if same := w.same(); same != c.same || !same && !bytes.Equal(w.written(), all) {
-			t.Errorf("%s: same %v, written %q", c.name, same, w.written())
-		}
-	}
 }

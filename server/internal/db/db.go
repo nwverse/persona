@@ -59,6 +59,16 @@ type DB struct {
 	pids *pidSet
 }
 
+// QueryRow runs one ordinary read on the existing pool. It carries no manager-owned types.
+func (d *DB) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	return d.pool.QueryRow(ctx, query, args...)
+}
+
+// Transaction runs fn in one transaction on the existing pool.
+func (d *DB) Transaction(ctx context.Context, fn func(pgx.Tx) error) error {
+	return pgx.BeginFunc(ctx, d.pool, fn)
+}
+
 // pidSet is the backend process ids of a pool's open connections.
 type pidSet struct {
 	mu sync.Mutex
@@ -246,6 +256,7 @@ var renumbered = []struct{ from, to string }{
 	{"0071_pair_tokens.sql", "0111_pair_tokens.sql"},             // 0071 is sent_messages
 	{"0081_device_push_relay.sql", "0141_device_push_relay.sql"}, // 0081 is device_sessions
 	{"0428_todo_source.sql", "0429_todo_source.sql"},             // 0428 is manager_moved
+	{"0492_client_password.sql", "0505_client_password.sql"},     // 0492 is the manager's agent_shares
 }
 
 // lastUnified is the last migration from before the split: a NULL-part row up to it stands for both sets.
@@ -455,7 +466,7 @@ func (d *DB) TruncateForTest(ctx context.Context) error {
 		"device_tokens", "live_activities", "phone_tools", "phone_write_queue", "node_sessions", "mail_accounts", "interactions",
 		"settings", "inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "sent_messages",
 		"todos", "todo_agents", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
-		"machine_audit", "sent_as_user"})
+		"machine_audit", "sent_as_user", "session_work_events", "hub_push_sent", "urgent_calls"})
 	if err != nil {
 		return err
 	}

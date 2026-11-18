@@ -11,9 +11,11 @@ This meeting, being recorded now (times are minutes:seconds from its start):
 {{end}}{{with .Asks}}Already answered in this meeting:
 {{range .}}- Q: {{attr .Question}}
   A: {{attr .Answer}}
+{{end}}{{end}}{{with .Photos}}Photos taken in it (the owner's caption, the text recognized in it on the phone, a note on it):
+{{range .}}[{{.At}}] photo {{.N}}{{with .Caption}} · caption: {{attr .}}{{end}}{{with .Text}} · text: {{attr .}}{{end}}{{with .Note}} · note: {{attr .}}{{end}}
 {{end}}{{end}}</this_meeting>
 
-Earlier meetings, by their minutes:
+{{if .EarlierAvailable}}Earlier meetings, by their minutes:
 {{range .Earlier}}<earlier_meeting id="{{attr .ID}}">
 Title: {{attr .Title}}
 {{with .When}}When: {{attr .}}
@@ -31,7 +33,7 @@ Title: {{attr .Title}}
 {{end}}{{end}}</earlier_meeting>
 {{else}}(none with minutes)
 {{end}}
-{{if .Question}}The question, typed on the phone:
+{{end}}{{if .Question}}The question, typed on the phone:
 <question>{{attr .Question}}</question>{{else}}No question was typed: the user tapped at [{{.HeardAt}}]. The lines said in the 45 seconds before the tap:
 <heard>
 {{range .Heard}}[{{.At}}] {{attr .Text}}

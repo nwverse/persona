@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930). The assistant hands the user a plan
@@ -38,14 +40,30 @@ type PlanTask struct {
 	Title   string `json:"title"`
 	Prompt  string `json:"prompt"`
 	Machine string `json:"machine"`
+	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
+	InboxItem string `json:"inbox_item,omitempty"`
+	// InboxHandoff is the hub-owned operation validated when the plan was made.
+	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
 	Cwd           string `json:"cwd"`
-	Launcher      string `json:"launcher,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Effort        string `json:"effort,omitempty"`
-	Tier          string `json:"tier,omitempty"`
-	Permission    string `json:"permission,omitempty"`
+	// Repo: the Git repository the task runs in on Machine (taskRunDir: the workspace it resolved to, which can be
+	// another repository than Cwd's), named by its main checkout, so that every worktree of one repository is one kind
+	// the user can let start without asking (trustKey, #8259). "" when that folder is in no repository or the machine
+	// could not say: the kind is then the exact folder. The hub's (resolveTaskRepo), set when the plan is made, again
+	// at Start, and once more at admission from the folder that actually runs, saved with the admitted Cwd; never what
+	// a tool call or an edit says.
+	Repo              string                 `json:"repo,omitempty"`
+	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
+	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
+	// Hub-owned identity for the default branch's preview, before a todo exists.
+	ReservedTodoID    string `json:"reserved_todo_id,omitempty"`
+	WorkspaceInferred bool   `json:"workspace_inferred,omitempty"`
+	Launcher          string `json:"launcher,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Effort            string `json:"effort,omitempty"`
+	Tier              string `json:"tier,omitempty"`
+	Permission        string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -54,6 +72,17 @@ type PlanTask struct {
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool   `json:"user_requested,omitempty"`
 	Why           string `json:"why,omitempty"`
+	// OwnerStarted: the owner tapped Start on the plan's card (POST …/start), as against the hub starting it without
+	// asking; the hub's, never what a tool call or an edit says. What a suggested rule counts (rule_suggest.go, #4929).
+	OwnerStarted bool `json:"owner_started,omitempty"`
+	// Schedule and ScheduleTitle: the scheduled task whose own round planned this (#8045), so its card can offer to let
+	// that schedule start this kind by itself. The hub's: set from the round the hub started, never from a tool call
+	// or an edit.
+	Schedule      string `json:"schedule,omitempty"`
+	ScheduleTitle string `json:"schedule_title,omitempty"`
+	// ScheduleBasis: the schedule's prompt and target when its round planned this (Task.grantBasis): a grant on Start
+	// applies only while they are the same.
+	ScheduleBasis string `json:"schedule_basis,omitempty"`
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
@@ -61,6 +90,19 @@ type PlanTask struct {
 	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
+	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
+	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
+	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
+	// call or a card's edit says.
+	Goal          string   `json:"goal,omitempty"`
+	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
+	Continues     string   `json:"continues,omitempty"`
+	ContinuesWhy  string   `json:"continues_why,omitempty"`
+	ScopeRevision string   `json:"scope_revision,omitempty"`
+	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
+	StartedWhy string     `json:"started_why,omitempty"`
+	Brief      *TaskBrief `json:"brief,omitempty"`
 	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
 	// "" the plan's own conversation supervises it, as before.
 	Supervisor string `json:"supervisor,omitempty"`
@@ -68,6 +110,16 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
+	// Role: "leader" makes the task's agent a task leader that may hand out workers beneath this task (task_leader.go,
+	// #3656); "" is an ordinary worker. Only a supervising conversation's task_plan sets it. Parent: the leader's task
+	// this task is a worker of; the hub's, never what a tool call or an edit says.
+	Role   string `json:"role,omitempty"`
+	Parent string `json:"parent,omitempty"`
+	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
+	// (todo_pieces.go), checked when the plan is made and written on the to-do when the task starts; left out, a task on
+	// a to-do (todo_id) keeps that to-do's own. Not what the apps send back with an edit.
+	PartOf string   `json:"part_of,omitempty"`
+	After  []string `json:"after,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
@@ -78,7 +130,8 @@ type PlanTask struct {
 	Attachments []string `json:"attachments,omitempty"`
 	Mentioned   []string `json:"mentioned,omitempty"`
 	AttachFrom  string   `json:"attach_from,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// Set once started: the todo the task is, and why its agent did not start. TodoID is cleared when another plan
+	// takes over that to-do; ReuseTodo keeps the historical target. ErrorCode and ErrorArgs: the start's
 	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
 	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
 	TodoID    string            `json:"todo_id,omitempty"`
@@ -87,18 +140,56 @@ type PlanTask struct {
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
 	// Start: the start being remedied after its agent did not start, or how that ended (start_remedy.go, #2570).
 	Start *StartRemedy `json:"start,omitempty"`
+	// Queue is set while the admission gate has refused this start for now: the task stays open (not failed, no
+	// failure receipt) and the admission queue loop retries it on a timer (task_queue.go, #6909). Cleared the moment
+	// a retry starts; the task's card reads as waiting with the queue's reason while it is set.
+	Queue *TaskQueue `json:"queue,omitempty"`
 	// defaulted: Launcher was filled in from a default by an earlier try of this start (startTaskAgent), not named by
 	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
 	defaulted bool
 	// inPane: the kept tab this try starts in (task_retry), "" for a new one.
-	inPane string
+	inPane    string
+	planID    string
+	planIndex int
+	// cwdStatus: what worktree.status said of cwdStatusOf (machine NUL cleaned cwd) in this resolve, kept so that
+	// resolveTaskRepo does not ask the machine twice for that folder. Never serialized.
+	cwdStatus   *proto.WorktreeStatus
+	cwdStatusOf string
+	// repoOf: the machine NUL folder Repo was resolved for, so that admission resolves again only when the folder
+	// that runs is another one.
+	repoOf string
+	// grantSchedule: the owner ticked "let this scheduled task start these" on Start; the kind is added to that
+	// schedule's StartGrant once admission fixed the folder that runs, as rememberKind is (schedule_grant.go).
+	grantSchedule string
+	// rememberKind: the owner ticked "start these directly" on Start; the kind is remembered once the task's
+	// workspace is admitted, from the repository that actually runs (startTaskAgent).
+	rememberKind bool
+	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
+	preservePermission bool
+	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
+	// serialized, this try only.
+	planFirst bool
+	// callerPick: the launcher, model, effort, tier, permission mode and ultracode the task named itself, kept from its
+	// first start try in this process, so every try starts from them again whichever start-defaults rule fits it.
+	// Never serialized: the task as stored keeps its own value for whatever a policy filled in (storedLaunch).
+	callerPick *startPick
+	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
+	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
+	startFilled startFill
+	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
+	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
+	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
+	admissionRelease func()
 }
 
-// Readonly is a launch constraint, including for older saved plans and card edits.
-// Never let an omitted mode inherit a writable launcher default.
-func (t *PlanTask) normalizeReadonlyPermission() {
-	if t.Readonly {
+// Keep the default protection unless the owner opted into instructions only. Spawned helpers keep their caller's mode.
+// Launcher fitting still applies the Claude-family and Auto Accept bypassPermissions behavior in either mode.
+func (t *PlanTask) normalizeReadonlyPermission(mode string) {
+	if t.Readonly && !t.preservePermission {
 		t.Permission = "plan"
+		if mode == readonlyPrompt {
+			t.Permission = "default"
+		}
 	}
 }
 
@@ -110,6 +201,9 @@ type TaskPlan struct {
 	State        string     `json:"state"` // planOpen, planStarted, planDismissed
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+	// Suggestion: the owner started this kind of task three times; the open plan's card offers to start it directly
+	// from now on (rule_suggest.go, #4929). Filled in where the apps read the plan, never kept with it.
+	Suggestion *proto.RuleSuggestion `json:"suggestion,omitempty"`
 }
 
 const (
@@ -130,7 +224,7 @@ type FeedItem struct {
 
 const (
 	feedPlan     = "plan"     // ref: the plan id
-	feedTask     = "task"     // ref: the todo id
+	feedTask     = "task"     // ref: the todo id; body: taskCardBody, a wake for a task that did not start its Agent (taskCard)
 	feedAnswered = "answered" // ref: the todo id; body: answeredBody (answered.go)
 	feedReceipt  = "receipt"  // ref: the todo id; body: title, state, summary, pr, machine
 	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first), from
@@ -171,12 +265,30 @@ type tasksState struct {
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
 	// however many turns the wait's wakes end.
 	limitLooks map[SessionRef]time.Time
-	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
-	retrying map[string]bool
+	// sendsOut: by agent (machine, session), the sends of more for its accepted task from a conversation that may ask
+	// for it (noteAgentSend: agent_send, agent_interrupt with then, the owner's message on a task's card), while each
+	// still counts, and a turn of the agent held for them (closedTurnHeld). A task its supervisor accepted opens again
+	// only for those (closedTurnReopens, #6726, #7539). Kept in the database too (sendsOutKey, tasks_sends_out.go): a
+	// manager that restarts with one out takes it as a send whose answer is unknown. sendsSaving orders reading and
+	// writing them, the latest state last, and guards the three flags: sendsLoaded, what the manager before kept was
+	// read; sendsDirty, the latest write failed, so what is kept is not what is in memory; sendsRetrying,
+	// retrySendsOut is writing them again. sendsRetryAfter: retrySendsOut's first wait (sendsRetryEvery as the
+	// service was made: a retry still running from an earlier service never reads what a test sets).
+	sendsOut                               map[[2]string]*sendsOut
+	sendsSaving                            sync.Mutex
+	sendsLoaded, sendsDirty, sendsRetrying bool
+	sendsRetryAfter                        time.Duration
+	// sendsAcceptedUnread: by task, the latest acceptance made before the sends kept before were read (sendsAccepted),
+	// applied to them as they are read (loadSendsOut); under mu.
+	sendsAcceptedUnread map[string]time.Time
+	// retrying: the tasks whose agent is starting (again), one start at a time: a Retry after a failed start (#1396), a
+	// Continue, or a new agent after all of the task's stopped (startTaskSuccessor). A message on the card that would
+	// start another waits for that one and goes to the agent it started (routeAfterStart).
+	retrying map[string]*taskStart
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
 	outcomes map[string]time.Time
-	// reusing: the todos a started plan took over (PlanTask.ReuseTodo) whose agent is not linked yet, so that a second
-	// plan cannot take the same todo in that gap (takeTodoForTask).
+	// reusing holds taken-over todos and newly created Inbox tasks until their first Agent is linked or failed.
+	// Another plan cannot take a task while its source binding or first start is still being admitted.
 	reusing map[string]bool
 	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome; the tests wait on them).
 	outcomeRuns sync.WaitGroup
@@ -190,12 +302,22 @@ type tasksState struct {
 	// trustMu serializes the read-modify-writes of tasks.trust (trustKinds, forgetTrust), so that two plans
 	// remembered at once, or a forget racing a remember, do not drop each other's kinds.
 	trustMu sync.Mutex
+	// Admission is serialized through claiming the resolved cwd; claims last until
+	// the task's agent link or failure is recorded.
+	workspaceMu     sync.Mutex
+	workspaceClaims map[string]string
+	// turns: the turns completion handling took up, kept in the database (task_turns.go).
+	turns turnsState
 }
 
 func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
-		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]bool{},
-		outcomes: map[string]time.Time{}, reusing: map[string]bool{}}
+		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]*taskStart{},
+		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sendsOut: map[[2]string]*sendsOut{},
+		sendsRetryAfter: sendsRetryEvery,
+		turns: turnsState{again: map[string]bool{}, looked: map[string]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
+			retry:   map[string]turnRetry{},
+			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}
 }
 
 // ---- plans and the feed: storage ----
@@ -238,6 +360,31 @@ func (s *Service) loadPlan(ctx context.Context, id string) (*TaskPlan, error) {
 		return nil, err
 	}
 	return planFromRow(*row), nil
+}
+
+// conversationPlans reads persisted plans, or snapshots the storeless plans, without relying on list order.
+func (s *Service) conversationPlans(ctx context.Context, conversation string) ([]*TaskPlan, error) {
+	var plans []*TaskPlan
+	if st := s.store(); st != nil {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			plans = append(plans, planFromRow(row))
+		}
+	} else {
+		s.tasks.mu.Lock()
+		defer s.tasks.mu.Unlock()
+		for _, plan := range s.tasks.plans {
+			if plan.Conversation == conversation {
+				cp := *plan
+				cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
+				plans = append(plans, &cp)
+			}
+		}
+	}
+	return plans, nil
 }
 
 func planFromRow(row db.TaskPlanRow) *TaskPlan {
@@ -296,23 +443,68 @@ func (s *Service) appendFeed(ctx context.Context, conversation, kind, ref string
 
 // appendFeedAt is appendFeed for an item that belongs at another time (the "Today" card: the start of the day).
 func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref string, body any, at time.Time) (FeedItem, error) {
-	it := FeedItem{ID: "feed_" + randomHex(8), Conversation: conversation, At: at.UTC(), Kind: kind, Ref: ref}
+	it, _, err := s.appendFeedItem(ctx, "feed_"+randomHex(8), false, conversation, kind, ref, body, at)
+	return it, err
+}
+
+// appendFeedOnce is appendFeed for an item that has one id whoever writes it and however often (a turn's receipt,
+// receiptID): fresh is false when the feed has it already, and nothing is written or told then.
+func (s *Service) appendFeedOnce(ctx context.Context, id, conversation, kind, ref string, body any) (fresh bool, err error) {
+	_, fresh, err = s.appendFeedItem(ctx, id, true, conversation, kind, ref, body, time.Now())
+	return fresh, err
+}
+
+// appendFeedItem appends the item under id; once: unless the feed has that id already (fresh false).
+func (s *Service) appendFeedItem(ctx context.Context, id string, once bool, conversation, kind, ref string, body any, at time.Time) (it FeedItem, fresh bool, err error) {
+	if s.isLeaderRef(conversation) { // a task leader's agent is no conversation: nobody reads a feed there (task_leader.go)
+		return FeedItem{}, true, nil
+	}
+	it = FeedItem{ID: id, Conversation: conversation, At: at.UTC(), Kind: kind, Ref: ref}
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return FeedItem{}, err
+			return FeedItem{}, false, err
 		}
 		it.Body = raw
 	}
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
+		if kind == feedMessage && s.duplicateDismissedDraft(it) {
+			s.tasks.mu.Unlock()
+			return FeedItem{}, true, nil
+		}
+		if once && slices.ContainsFunc(s.tasks.feed[conversation], func(have FeedItem) bool { return have.ID == id }) {
+			s.tasks.mu.Unlock()
+			return FeedItem{}, false, nil
+		}
 		s.tasks.feed[conversation] = append(s.tasks.feed[conversation], it)
 		s.tasks.mu.Unlock()
-	} else if err := st.AppendFeed(ctx, db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}); err != nil {
-		return FeedItem{}, err
+	} else {
+		if once {
+			if have, err := st.FeedItem(ctx, id); err != nil {
+				return FeedItem{}, false, err
+			} else if have != nil {
+				return FeedItem{}, false, nil
+			}
+		}
+		row := db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}
+		if ds, ok := st.(draftFeedStore); kind == feedMessage && ok {
+			inserted, err := ds.AppendDraftFeed(ctx, row)
+			if err != nil || !inserted {
+				return FeedItem{}, true, err
+			}
+		} else if err := st.AppendFeed(ctx, row); err != nil {
+			if have, lookErr := st.FeedItem(ctx, id); once && lookErr == nil && have != nil {
+				return FeedItem{}, false, nil // written meanwhile by another look at the same turn
+			}
+			return FeedItem{}, false, err
+		}
 	}
 	s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": conversation, "item": it})
-	return it, nil
+	if kind == feedReceipt {
+		s.interruptsSoon() // a task went on after being cut off (interruptions.go)
+	}
+	return it, true, nil
 }
 
 const feedPage = 500
@@ -320,11 +512,23 @@ const feedPage = 500
 // feedItems is a conversation's items after since, oldest first (with the message cards sent after since: the client
 // has them, not that they went out), without the plans they name: for readers that look only at the items.
 func (s *Service) feedItems(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
+	items, err := s.rawFeed(ctx, conversation, since)
+	if err != nil {
+		return nil, err
+	}
+	s.settleCards(ctx, items)
+	s.fileCards(ctx, items)
+	return s.resolveInterruptions(ctx, conversation, items), nil
+}
+
+// rawFeed is feedItems as stored, with nothing worked out on reading.
+func (s *Service) rawFeed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
 	var items []FeedItem
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
 		for _, it := range s.tasks.feed[conversation] {
-			if at := cardSentAt(it); it.At.After(since) || it.Kind == feedMessage && at != nil && at.After(since) {
+			at, changed := cardSentAt(it), cardChangedAt(it)
+			if it.At.After(since) || it.Kind == feedMessage && (at != nil && at.After(since) || changed != nil && changed.After(since)) {
 				items = append(items, it)
 			}
 		}
@@ -338,8 +542,6 @@ func (s *Service) feedItems(ctx context.Context, conversation string, since time
 			items = append(items, FeedItem{ID: r.ID, Conversation: r.Conversation, At: r.At, Kind: r.Kind, Ref: r.Ref, Body: r.Body})
 		}
 	}
-	s.settleCards(ctx, items)
-	s.fileCards(ctx, items)
 	return items, nil
 }
 
@@ -388,25 +590,122 @@ func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*T
 }
 
 // planStartsAtOnce: every task only reads, was asked for by the user in this turn (while start_requested_tasks is on),
-// or is a kind the user said to start without asking.
+// or is a kind the user said to start without asking (its directory or one it is under, task_trust_scope.go).
 func (s *Service) planStartsAtOnce(ctx context.Context, tasks []PlanTask) bool {
-	trusted := s.trustedKinds(ctx)
+	return s.planStartsAtOnceUnder(ctx, tasks, nil)
+}
+
+// planStartsAtOnceUnder is planStartsAtOnce in a scheduled round whose schedule's grant may start more (granted, read
+// only when a task needs it; nil: none, schedule_grant.go). started says which tasks the grant alone lets start.
+func (s *Service) planStartsAtOnceUnder(ctx context.Context, tasks []PlanTask, granted func() func(PlanTask) bool) bool {
+	trusted := s.trustCover(ctx)
 	requested := s.startRequestedTasks(ctx)
+	var cover func(PlanTask) bool
 	for _, t := range tasks {
-		if !t.Readonly && !(requested && t.UserRequested) && !trusted[trustKey(t)] {
+		if t.Readonly || (requested && t.UserRequested) || trustedTask(trusted, t) {
+			continue
+		}
+		if cover == nil && granted != nil {
+			cover = granted()
+			granted = nil
+		}
+		if cover == nil || !cover(t) {
 			return false
 		}
 	}
 	return true
 }
 
-// trustKey names a kind of task the user can let start without asking: a machine's directory, reading or editing.
+// trustKey names a kind of task the user can let start without asking: a machine's repository (Repo, every worktree
+// of it) or, outside one or when the machine could not say, its exact directory; reading or editing (#8259).
 func trustKey(t PlanTask) string {
-	kind := "edit"
-	if t.Readonly {
-		kind = "read"
+	dir := t.Repo
+	if dir == "" {
+		dir = taskRunDir(t)
 	}
-	return t.Machine + "|" + t.Cwd + "|" + kind
+	return t.Machine + "|" + dir + "|" + trustMode(t)
+}
+
+// trustFolderKey is the kind of t's exact directory: what every key was before #8259, and what trustKey is while the
+// repository is unknown. The directory that runs, never the one a plan was made from when its workspace is another.
+func trustFolderKey(t PlanTask) string {
+	return t.Machine + "|" + taskRunDir(t) + "|" + trustMode(t)
+}
+
+// taskRunDir is the folder t runs in, as far as the hub knows yet: the workspace it resolved to on its machine (an
+// existing workspace may be in another repository than Cwd), else Cwd. A new checkout not made yet is not a folder
+// the machine can name a repository for: until admission makes it, the folder it is made from (Cwd) stands for it, and
+// admission resolves again from the checkout made (admitTaskWorkspace).
+func taskRunDir(t PlanTask) string {
+	r := t.WorkspaceResolved
+	if r == nil || r.Path == "" || r.Machine != t.Machine || !proto.NodeAbs(r.Path) {
+		return t.Cwd
+	}
+	if !r.Created && t.Workspace != nil && t.Workspace.Mode == workspaceNew {
+		return t.Cwd
+	}
+	return r.Path
+}
+
+func trustMode(t PlanTask) string {
+	if t.Readonly {
+		return "read"
+	}
+	return "edit"
+}
+
+// trustedTask: the user lets t's kind start without asking (covered: trustCover), by its repository or by its exact
+// directory (a key remembered before #8259, or while the repository was unknown).
+func trustedTask(covered func(key string) bool, t PlanTask) bool {
+	return covered(trustKey(t)) || covered(trustFolderKey(t))
+}
+
+// repoLookup bounds asking a machine which repository a task's directory is in.
+const repoLookup = 5 * time.Second
+
+// resolveTaskRepo sets t.Repo from what t's machine says of the folder t runs in (taskRunDir; worktree.status, which
+// nodes answer since #6115): the main checkout of the repository, for its main checkout and every linked worktree
+// alike. Whatever it cannot learn (the machine offline, an older or failing node, a folder in no repository) leaves
+// Repo "", so the kind stays that exact folder: never wider than before #8259, and never the repository of a folder
+// the task does not run in.
+func (s *Service) resolveTaskRepo(ctx context.Context, t *PlanTask) {
+	dir := taskRunDir(*t)
+	t.Repo, t.repoOf = "", t.Machine+"\x00"+proto.NodeClean(dir)
+	st := t.cwdStatus
+	if st == nil || !statusNames(*st, t.cwdStatusOf, t.repoOf) {
+		ctx, cancel := context.WithTimeout(ctx, repoLookup)
+		defer cancel()
+		var got proto.WorktreeStatus
+		if err := s.call(ctx, t.Machine, "worktree.status", map[string]any{"cwd": dir}, &got); err != nil {
+			s.logf("tasks: trust: repository of %s on %s: %v", dir, t.Machine, err)
+			return
+		}
+		st = &got
+	}
+	t.Repo = repoOfStatus(*st)
+}
+
+// statusNames: a worktree.status answer asked for of (machine NUL folder) says what it says of want too: the same
+// folder, or the top level of the checkout that folder is in (one checkout, one repository).
+func statusNames(st proto.WorktreeStatus, of, want string) bool {
+	if of == want {
+		return true
+	}
+	machine, _, _ := strings.Cut(of, "\x00")
+	return st.Path != "" && proto.NodeAbs(st.Path) && machine+"\x00"+proto.NodeClean(st.Path) == want
+}
+
+// repoOfStatus is the repository worktree.status names: the main checkout, which is Root for a linked worktree and
+// the folder's own top level otherwise. "" when it names none.
+func repoOfStatus(st proto.WorktreeStatus) string {
+	dir := st.Path
+	if st.Worktree {
+		dir = st.Root
+	}
+	if dir == "" || !proto.NodeAbs(dir) {
+		return ""
+	}
+	return proto.NodeClean(dir)
 }
 
 // trustedKinds is the kinds the user lets start without asking; none when they cannot be read, so that a plan asks.
@@ -471,14 +770,16 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 // ---- HTTP ----
 
 func (s *Service) taskRoutes() {
+	s.draftDecisionRoutes()
 	s.doneCheckRoute()
+	s.handle("POST /api/v1/task-plans/{id}/workspace-preview", s.previewPlanWorkspaces)
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
 		if err != nil {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": p})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSuggestion(r.Context(), p, s.requestLang(r))})
 	})
 	s.handle("POST /api/v1/task-plans/{id}/start", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -488,6 +789,8 @@ func (s *Service) taskRoutes() {
 		var in struct {
 			Tasks    []PlanTask `json:"tasks"`
 			Remember bool       `json:"remember"`
+			// ScheduleGrant: let the scheduled task whose round made this plan start these kinds by itself (#8045).
+			ScheduleGrant bool `json:"schedule_grant"`
 		}
 		if r.ContentLength != 0 {
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
@@ -495,7 +798,11 @@ func (s *Service) taskRoutes() {
 				return
 			}
 		}
-		p, err := s.startPlan(r.Context(), r.PathValue("id"), in.Tasks, in.Remember)
+		ctx := ownerStart(r.Context())
+		if in.ScheduleGrant {
+			ctx = scheduleGranting(ctx)
+		}
+		p, err := s.startPlan(ctx, r.PathValue("id"), in.Tasks, in.Remember)
 		if err != nil {
 			planErr(w, err)
 			return
@@ -541,10 +848,31 @@ func (s *Service) taskRoutes() {
 			}
 			since = t
 		}
-		items, plans, err := s.feed(r.Context(), r.PathValue("id"), since)
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		query := r.URL.Query()
+		paginated := query.Get("paginate") == "1" || query.Has("cursor")
+		if query.Has("cursor") && (query.Get("cursor") == "" || query.Has("since")) {
+			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
+		}
+		var items []FeedItem
+		var nextCursor string
+		var err error
+		if paginated {
+			items, nextCursor, err = s.pagedFeed(r.Context(), r.PathValue("id"), since, query.Get("cursor"))
+		} else {
+			items, err = s.feedItems(r.Context(), r.PathValue("id"), since)
+		}
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			if errors.Is(err, errFeedCursor) {
+				status = http.StatusBadRequest
+			}
+			apierr.Write(w, status, err)
+			return
+		}
+		plans := s.feedPlans(r.Context(), items)
+		for id, p := range plans {
+			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
 		}
 		if items == nil {
 			items = []FeedItem{}
@@ -568,7 +896,11 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
+		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if paginated {
+			out["next_cursor"] = nextCursor
+		}
+		s.writeConversationJSON(r.Context(), w, r.PathValue("id"), out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -576,8 +908,9 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		var in struct {
-			TodoID string `json:"todo_id"`
-			Text   string `json:"text"`
+			TodoID  string `json:"todo_id"`
+			Text    string `json:"text"`
+			AskedAt string `json:"asked_at"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -587,7 +920,13 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errors.New("todo_id and text are required"))
 			return
 		}
-		it, err := s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
+		var it FeedItem
+		var err error
+		if in.AskedAt != "" {
+			it, err = s.routeDecisionAnswer(r.Context(), r.PathValue("id"), in.TodoID, in.AskedAt, in.Text)
+		} else {
+			it, err = s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
+		}
 		if err != nil {
 			apierr.Write(w, http.StatusConflict, err)
 			return

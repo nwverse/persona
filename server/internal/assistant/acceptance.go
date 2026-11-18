@@ -42,7 +42,8 @@ type acceptAsk struct {
 	// NoCard: no card is due (the bot is off or not paired, or task reports are off, when the ask was made or when its
 	// card was tried again), or its card could not be posted within acceptPostWindow, so MessageID stays empty for good;
 	// the owner is asked by the briefing, the board and the web app instead. An empty MessageID without it (and with
-	// AskedAt) is a card that did not go out yet: retryAcceptance posts it.
+	// AskedAt) is a card that did not go out yet: retryAcceptance posts it, also once its supervisor passed it
+	// (acceptCardDue).
 	NoCard bool `json:"no_card,omitempty"`
 	// Conclusion: the ask is a supervised task's conclusion (#1226, conclusion.go), told once its review gives a result: its
 	// card says the verdict, one sentence of why and one link instead of the three lines. Outcome is the verdict
@@ -59,8 +60,35 @@ type acceptAsk struct {
 	Reversible bool      `json:"reversible,omitempty"`
 	DueAt      time.Time `json:"due_at,omitzero"`
 	ByDefault  bool      `json:"by_default,omitempty"`
+	// AgentReply pauses the default while the supervisor checks an owner message in the task's Agent chat.
+	// It is not an option selection; only an explicit answer ends the decision.
+	AgentReply *decisionAgentReply `json:"agent_reply,omitempty"`
 	// ByAssistant: a deployed task the supervising assistant accepted itself, not a big feature (ownerVerifies, #3205).
 	ByAssistant bool `json:"by_assistant,omitempty"`
+	// A decision's own (#3804, decision.go). WhyOwner: why only the owner can decide; Options: what they choose from, the
+	// recommended first, each with what it leads to; CostOfWaiting: what waiting costs. From and Stands are the hub's:
+	// where the task came from and where it stood when the decision was asked. RecheckAt: when it went back to its
+	// supervisor for having waited long; RaisedAt: when one never taken by default was last raised to the owner again;
+	// Response: the fixed answer the owner gave instead of an option (ownerResponses).
+	WhyOwner      string           `json:"why_owner,omitempty"`
+	Options       []DecisionOption `json:"options,omitempty"`
+	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
+	From          *askFrom         `json:"from,omitempty"`
+	Stands        string           `json:"stands,omitempty"`
+	RecheckAt     time.Time        `json:"recheck_at,omitzero"`
+	RaisedAt      time.Time        `json:"raised_at,omitzero"`
+	Response      string           `json:"response,omitempty"`
+	// Chosen: the option the owner chose when it was not the recommended one.
+	Chosen string `json:"chosen,omitempty"`
+	// ForBriefing: a decision that can wait (#4930, decision_wait.go), raised without a push and without a card, while
+	// it waits for a briefing to bring it to the owner; cleared once one did, or once it was pushed after all, at
+	// PushedAt: its card is due from then (retryAcceptance).
+	ForBriefing bool      `json:"for_briefing,omitempty"`
+	PushedAt    time.Time `json:"pushed_at,omitzero"`
+	// RaisedBy: while a decision is held for a briefing, the conversation that raised it when the main conversation is
+	// to hear of it once it is pushed after all: the task's leader conversation, or the background supervisor, whose
+	// tasks' ledgers name the main conversation (heldEscalates, supervise_background.go).
+	RaisedBy string `json:"raised_by,omitempty"`
 }
 
 // acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send
@@ -78,10 +106,13 @@ func acceptCardKey(id string, asked time.Time) string {
 	return "pv:" + hex.EncodeToString(sum[:16])
 }
 
-// acceptCardDue says a's card is still to be posted: asked (not a claim in flight), not passed, no card and none
-// meant to be.
+// acceptCardDue says a's card is still to be posted: asked (not a claim in flight), no card and none meant to be, and
+// passed by nobody or only by the task's supervisor. The supervisor's pass (BySupervisor: a done or cannot conclusion it
+// checked is passed as it is asked, before its card goes out; a "Please verify" it passed while its card waited)
+// settles the work, not the telling: the card is how the owner hears of it, so it still goes out, saying the supervisor
+// checked it (#9253). The owner's own pass, or a decision settled, leaves nothing to tell.
 func acceptCardDue(a *acceptAsk) bool {
-	return a != nil && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && a.MessageID == "" && !a.NoCard
+	return a != nil && !a.AskedAt.IsZero() && a.MessageID == "" && !a.NoCard && (a.AcceptedAt.IsZero() || a.BySupervisor)
 }
 
 type acceptBook struct {
@@ -199,17 +230,32 @@ func (s *Service) acceptAskLocked(id string) (*acceptAsk, error) {
 // reminded nor counted. An auto-closed task (DoneByAuto) is the normal state: the judge finished it, but the owner
 // still has to pass the card, and so is a supervised task its review accepted (#1226: the review's conclusion is that
 // card, with the verdict on top). A conclusion is told after its review closed the task, so that does not end it; a
-// decision ends once the task is closed or no longer waits for the user (the supervisor reviewed it again).
+// decision ends once the task is closed or no longer waits for the user (the supervisor reviewed it again). An ask its
+// supervisor passed ends once that acceptance no longer stands (the task was cancelled or reopened since): its card,
+// still to go out (acceptCardDue), would tell a result that is not one any more (#9253).
 func acceptAskEnded(a *acceptAsk, t Todo) bool {
+	if a.BySupervisor && t.Supervision.state(t) != reviewAccepted {
+		return true
+	}
 	if a.Conclusion {
 		return a.Outcome == outcomeDecide && (t.DoneAt != nil || t.Supervision.state(t) != reviewNeedsUser)
 	}
 	return t.DoneAt != nil && t.DoneBy != db.DoneByAuto && !(t.DoneBy == db.DoneByReview && t.Supervision.state(t) == reviewAccepted)
 }
 
+// decisionOpen says a is a decision still waiting for the owner on task t as the caller read it: asked, not answered,
+// not from before the to-do's latest reopen. t may be a moment old (its review state is not asked: the decision's
+// review is what made it needs_user).
+func decisionOpen(a *acceptAsk, t Todo) bool {
+	return decideAsk(a) && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && t.DoneAt == nil && !acceptAskStale(a, t)
+}
+
 // acceptAskStale says an ask belongs to an earlier round: the todo was reopened (PATCH done:false, change feedback
 // on its card, or a failed start's retry) after the ask, so the old card is dead and the next deploy asks fresh.
+// A legacy owner-priority park also superseded its old decision: moving that park to needs_user cannot revive the
+// old card. A fresh needs_user review replaces that marker. Non-decision verification asks are unaffected.
 // A ReopenedAt the auto-judge's second close leaves is harmless (the new ask is younger); zero AskedAt is a claim.
 func acceptAskStale(a *acceptAsk, t Todo) bool {
-	return !a.AskedAt.IsZero() && t.ReopenedAt != nil && a.AskedAt.Before(*t.ReopenedAt)
+	return !a.AskedAt.IsZero() && (t.ReopenedAt != nil && a.AskedAt.Before(*t.ReopenedAt) ||
+		decideAsk(a) && t.Supervision.legacyOwnerPriorityReview() != nil)
 }

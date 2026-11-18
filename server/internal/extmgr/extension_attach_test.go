@@ -437,7 +437,10 @@ func TestOnlyAnAttachedPackageGetsATokenOfEveryScope(t *testing.T) {
 		t.Fatalf("installed from remote: with hub_api: %q %v", ip.Hub.Token, ip.Hub.Scopes)
 	}
 	ip := initOf("example-attached", true)
-	want := slices.DeleteFunc(extension.EveryScope(), func(s string) bool { return s == extension.ScopeModels })
+	// Model calls and transcription are granted by name only (extension_model_calls.go, extension_transcription.go).
+	want := slices.DeleteFunc(extension.EveryScope(), func(s string) bool {
+		return s == extension.ScopeModels || s == extension.ScopeTranscription
+	})
 	if !strings.HasPrefix(ip.Hub.Token, extTokenPrefix) || !slices.Equal(ip.Hub.Scopes, want) {
 		t.Fatalf("an attached package with hub_api: %q %v", ip.Hub.Token, ip.Hub.Scopes)
 	}
@@ -464,6 +467,45 @@ func TestHubAuditTakesRefusedPermissionModes(t *testing.T) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if !slices.Equal(store.audit, []string{"scoped permission_mode_refused extension:scoped", "scoped terminal_control_refused extension:scoped"}) {
+		t.Fatalf("audit: %q", store.audit)
+	}
+}
+
+// A refused approval of a hand-off card is recorded on the provider, with who tried as the actor the hub names; an
+// actor that is none of the kinds the records use is "unknown". An extension that is no provider here gets none.
+func TestHubAuditTakesRefusedHandoffApprovals(t *testing.T) {
+	h, store := extensionTestHub(t)
+	ctx := t.Context()
+	record := func(ext, actor string) error {
+		params, _ := json.Marshal(extwire.Audit{Extension: ext, Action: extwire.AuditSecretHandoffRefused, Actor: actor,
+			Detail: map[string]any{"interaction_id": "ix_1", "reason": "client"}})
+		_, err := h.hubCall(ctx, extwire.HubAudit, params)
+		return err
+	}
+	if err := record("example-vault", "device:d1"); err == nil {
+		t.Fatal("recorded on an extension that is not installed")
+	}
+	mux := h.routes()
+	master := h.cfg.Token
+	_, pv := call(t, mux, "POST", "/api/v1/plugins/-/preview", master,
+		`{"source": "dir:`+secretProviderPackage(t, "example-vault", "exv", filepath.Join(t.TempDir(), "calls.jsonl"))+`"}`)
+	if c, body := call(t, mux, "POST", "/api/v1/plugins/-/install", master, fmt.Sprintf(`{"preview_id": %q, "permissions_digest": %q}`, pv["preview_id"], pv["permissions_digest"])); c != 200 {
+		t.Fatalf("install: %d %v", c, body)
+	}
+	store.mu.Lock()
+	store.audit = nil // the install's own records
+	store.mu.Unlock()
+	for _, actor := range []string{"device:d1", "extension:other", "hub token", "admin", "device:x\nforged", ""} {
+		if err := record("example-vault", actor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	want := []string{"example-vault secret_handoff_approve_refused device:d1", "example-vault secret_handoff_approve_refused extension:other",
+		"example-vault secret_handoff_approve_refused hub token", "example-vault secret_handoff_approve_refused unknown",
+		"example-vault secret_handoff_approve_refused unknown", "example-vault secret_handoff_approve_refused unknown"}
+	if !slices.Equal(store.audit, want) {
 		t.Fatalf("audit: %q", store.audit)
 	}
 }

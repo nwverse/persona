@@ -9,13 +9,9 @@ vi.mock("./store", () => ({
 }));
 vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 
-import {
-  badgeCount, bulkMessage, bulkScope, bulkScopeName, canDraft, cardText, connectorReference, connectorSources, contextXML, openTitle, openURL, sourceLine, conversationRoute, docChangeLine, emojiLabel, fromLine, getInbox, handOffMessage, interactionAsk,
-  interactionMuted, interactionTitle, itemPath, kindLabel, labelIsUrgent, mailAccounts, mergeMessages, momentText, nextLarkPosition, partRuns, reloadInbox,
-  replyLarkMessage, resetInboxForTests, sections, sendLarkMessage, sendReply, setAllDone, setDocStatus, setDone, shortTime, triage, triageBanner, TRIAGE_REASONS, TRIAGE_SETTINGS,
-  listInboxMutes, muteCovers, muteItem, muteLine, muteShortName, muteTitle, unmuteInbox,
-  unsentReplies, waitingAgents, withToken, type InboxFilter, type InboxItem, type InboxTriage, type LarkMessage,
-} from "./inbox";
+import { applyInboxDelta, badgeCount, bulkMessage, connectorReference, connectorSources, contextXML, openTitle, openURL, conversationRoute, fromLine, getInbox, interactionAsk, interactionMuted, interactionTitle, itemPath, kindLabel, labelIsUrgent, mailAccounts, mergeMessages, refreshInbox, reloadInbox, resetInboxForTests, sections, sendReply, setAllDone, setDocStatus, setDone, shortTime, triage, triageBanner, TRIAGE_REASONS, muteCovers, muteItem, unsentReplies, waitingAgents, withToken, type InboxFilter, type InboxItem, type InboxTriage, type LarkMessage } from "./inbox";
+import { bulkScope, bulkScopeName, canDraft, cardText, sourceLine, docChangeLine, emojiLabel, repeatsSummary, handOffMessage, momentText, nextLarkPosition, partRuns, replyLarkMessage, sendLarkMessage, TRIAGE_SETTINGS, listInboxMutes, muteLine, muteShortName, muteTitle, unmuteInbox } from "./inbox-page";
+import { lineSummary, markdownBody, markdownInSummary, withoutMarks } from "./inbox-markdown";
 import { toast } from "../ui/atoms";
 import type { AgentMutes } from "./agent-groups";
 import type { AssistantInfo, Interaction, Session } from "./types";
@@ -111,11 +107,13 @@ describe("筛选和分段", () => {
     expect(sections(items, { ...all, source: "acc2" }).tiers.action).toEqual([]);
   });
 
-  it("@我 含文档和 @我 的公司圈，群聊含机器人，Agent 不含任何一件", () => {
+  it("@我 含文档和 @我 的公司圈，群聊不含机器人（机器人单独一类），Agent 不含任何一件", () => {
     const m = sections(items, { ...all, kind: "mention" });
     expect([...ids(m.tiers.action), ...ids(m.tiers.fyi)].sort()).toEqual([atAll.id, comment.id, doc.id, mention.id, moment.id].sort());
     const g = sections(items, { ...all, kind: "group" });
-    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)].sort()).toEqual([bot.id, group.id].sort());
+    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)]).toEqual([group.id]);
+    const b = sections(items, { ...all, kind: "bot" });
+    expect([...ids(b.tiers.fyi), ...ids(b.tiers.noise)]).toEqual([bot.id]);
     const a = sections(items, { ...all, kind: "agent" });
     expect([...a.tiers.action, ...a.tiers.fyi, ...a.tiers.noise, ...a.done]).toEqual([]);
   });
@@ -150,6 +148,11 @@ describe("等你的 Agent", () => {
     expect(interactionMuted(ix("s-free"), sessions, mutes)).toBe(false);
   });
 
+  it("a child session's card goes by its parent's switch alone (#5120), as the switcher counts it", () => {
+    expect(interactionMuted(ix("kid", { folded_under: "s-muted" }), sessions, mutes)).toBe(true);
+    expect(interactionMuted(ix("s-muted", { folded_under: "s-free" }), sessions, mutes)).toBe(false);
+  });
+
   it("只在没选来源时出现，Agent 筛选只看它们，老的在前，能搜", () => {
     const list = [ix("s-new", { created_at: at(1), session_title: "新的" }), ix("s-old", { created_at: at(9), summary: "要不要合并" }), ix("s-muted")];
     expect(ids(waitingAgents(list, sessions, mutes, all))).toEqual(["s-old", "s-new"]);
@@ -163,9 +166,17 @@ describe("等你的 Agent", () => {
     expect(interactionTitle(ix("a"))).toBe("Claude 在问你");
     expect(interactionTitle(ix("a", { kind: "plan" }))).toBe("计划等你审批");
     expect(interactionTitle(ix("a", { tool_name: "ask_user" }))).toBe("Persona 在问你");
-    expect(interactionTitle(ix("a", { agent: "codex", kind: "permission" }))).toBe("Codex 需要你授权");
+    expect(interactionTitle(ix("a", { agent: "codex", kind: "permission" }))).toBe("Codex 在等你批准");
     expect(interactionAsk(ix("a", { questions: [{ question: "用哪种格式？", options: [] }] }))).toBe("用哪种格式？");
     expect(interactionAsk(ix("a", { kind: "permission", tool_name: "Bash", tool_input: { command: "swift test" } }))).toBe("swift test");
+  });
+
+  it("names another agent's card by the name it carries, never the engine's id (#8142)", () => {
+    // one of Paseo's providers runs under Paseo's own id; the card carries the provider's label
+    expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok", kind: "permission" }))).toBe("Grok 在等你批准");
+    expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok" }))).toBe("Grok 在问你");
+    expect(interactionTitle(ix("a", { agent: "dsh", agent_label: "DSH" }))).toBe("DSH 在问你");
+    expect(interactionTitle(ix("a", { agent: "traex", kind: "permission" }))).toBe("TRAEX 在等你批准");
   });
 
   it("助手的会话跳到 Persona，其余跳到会话页", () => {
@@ -247,7 +258,7 @@ describe("连接器的条目", () => {
     const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ items: [review] }) });
     vi.stubGlobal("fetch", fetcher);
     await reloadInbox();
-    expect(fetcher.mock.calls[0][0]).toBe("/api/v1/inbox?sources=all");
+    expect(fetcher.mock.calls[0][0]).toBe("/api/v1/inbox?sources=all&since=0");
     expect(getInbox().items.map((x) => x.id)).toEqual([review.id]);
     vi.unstubAllGlobals();
   });
@@ -312,6 +323,132 @@ describe("飞书消息", () => {
     expect(emojiLabel("X", "[微笑]")).toBe("[微笑]");
     expect(momentText({ segments: [{ kind: "text", text: "好" }, { kind: "emoji", key: "THUMBSUP" }] })).toBe("好[THUMBSUP]");
     expect(momentText({ text: "纯文字" })).toBe("纯文字");
+  });
+});
+
+describe("inbox deltas (#9175)", () => {
+  const ok = (body: unknown, etag?: string) => ({ ok: true, status: 200, headers: new Headers(etag ? { ETag: etag } : {}), text: async () => JSON.stringify(body) });
+  const notModified = { ok: false, status: 304, headers: new Headers(), text: async () => "" };
+  let fetcher: ReturnType<typeof vi.fn>;
+  const asked = (i: number) => {
+    const [url, init] = fetcher.mock.calls[i];
+    const q = new URL(url, "http://hub.example").searchParams;
+    return { path: new URL(url, "http://hub.example").pathname, since: q.get("since"), tag: new Headers(init?.headers).get("If-None-Match") };
+  };
+  const a = item("lark:a:1", { manager: "m1", updated_at: at(10) });
+  const b = item("lark:b:1", { manager: "m1", updated_at: at(20) });
+  const c = item("lark:c:1", { manager: "m2", updated_at: at(5) });
+
+  beforeEach(() => {
+    resetInboxForTests();
+    vi.stubGlobal("localStorage", { getItem: () => "jd_test" });
+    fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("asks for the whole list with since=0, then only what changed since its cursor", async () => {
+    fetcher.mockResolvedValueOnce(ok({ items: [a, b, c], cursor: "m1.one" }));
+    await reloadInbox();
+    expect(asked(0)).toEqual({ path: "/api/v1/inbox", since: "0", tag: 'W/"i1-"' });
+    expect(ids(getInbox().items)).toEqual([a.id, b.id, c.id]);
+    const triage: InboxTriage = { state: "ok", waiting: 0 };
+    const changed = { ...b, title: "changed", updated_at: at(1) };
+    const fresh = item("lark:d:1", { manager: "m2", updated_at: at(1) });
+    fetcher.mockResolvedValueOnce(ok({ items: [changed, fresh], removed: [{ id: a.id, manager: "m1" }], cursor: "m1.two", delta: true, triage }));
+    await reloadInbox();
+    expect(asked(1).since).toBe("m1.one");
+    // a left, b changed and moved to the top of its manager's items, d joined m2's, newest first
+    expect(ids(getInbox().items)).toEqual([b.id, fresh.id, c.id]);
+    expect(getInbox().items[0].title).toBe("changed");
+    expect(getInbox().triage).toEqual(triage);
+    // nothing changed: an empty delta keeps the list, the same array
+    const before = getInbox().items;
+    fetcher.mockResolvedValueOnce(ok({ items: [], removed: [], cursor: "m1.two", delta: true }));
+    await reloadInbox();
+    expect(asked(2).since).toBe("m1.two");
+    expect(getInbox().items).toBe(before);
+  });
+
+  it("replaces the list when the hub could not follow the cursor", async () => {
+    fetcher.mockResolvedValueOnce(ok({ items: [a, b], cursor: "m1.one" }));
+    await reloadInbox();
+    fetcher.mockResolvedValueOnce(ok({ items: [c], cursor: "m1.new" }));
+    await reloadInbox();
+    expect(ids(getInbox().items)).toEqual([c.id]);
+    fetcher.mockResolvedValueOnce(ok({ items: [], removed: [], cursor: "m1.new", delta: true }));
+    await reloadInbox();
+    expect(asked(2).since).toBe("m1.new");
+    expect(ids(getInbox().items)).toEqual([c.id]);
+  });
+
+  it("lays a mark still out over a delta", async () => {
+    fetcher.mockResolvedValueOnce(ok({ items: [a, b], cursor: "m1.one" }));
+    await reloadInbox();
+    let finish: (v: unknown) => void = () => {};
+    fetcher.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const marked = setDone(b, true);
+    fetcher.mockResolvedValueOnce(ok({ items: [{ ...a, title: "new" }], removed: [], cursor: "m1.two", delta: true }));
+    await reloadInbox();
+    expect(getInbox().items.find((x) => x.id === b.id)?.done_by).toBe("user");
+    expect(getInbox().items.find((x) => x.id === a.id)?.title).toBe("new");
+    finish(ok({ ...b, done_at: at(0), done_by: "user" }));
+    expect(await marked).toBe(true);
+  });
+
+  it("without a cursor asks with the validator, and tries deltas again ten minutes later", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-16T10:00:00Z"));
+    // a hub or manager without deltas: the whole list, its tag, no cursor
+    fetcher.mockResolvedValueOnce(ok({ items: [a, b] }, 'W/"i1-aa"'));
+    await reloadInbox();
+    expect(asked(0).since).toBe("0");
+    fetcher.mockResolvedValueOnce(notModified);
+    await reloadInbox();
+    expect(asked(1)).toEqual({ path: "/api/v1/inbox", since: null, tag: 'W/"i1-aa"' });
+    expect(ids(getInbox().items)).toEqual([a.id, b.id]);
+    vi.setSystemTime(new Date("2026-11-16T10:10:01Z"));
+    fetcher.mockResolvedValueOnce(ok({ items: [b], cursor: "m1.one" }));
+    await reloadInbox();
+    expect(asked(2)).toEqual({ path: "/api/v1/inbox", since: "0", tag: 'W/"i1-aa"' });
+    expect(ids(getInbox().items)).toEqual([b.id]);
+    fetcher.mockResolvedValueOnce(ok({ items: [], removed: [], cursor: "m1.one", delta: true }));
+    await reloadInbox();
+    expect(asked(3).since).toBe("m1.one");
+  });
+
+  it("keeps the cursor and the list it names over a refresh", async () => {
+    fetcher.mockResolvedValueOnce(ok({ items: [a, b], cursor: "m1.one" }));
+    await reloadInbox();
+    fetcher.mockResolvedValueOnce(ok({ items: [a, b, c] }));
+    await refreshInbox();
+    expect(ids(getInbox().items)).toEqual([a.id, b.id, c.id]);
+    // the delta is from the list the cursor names, the refresh's new item in it
+    fetcher.mockResolvedValueOnce(ok({ items: [c], removed: [], cursor: "m1.two", delta: true }));
+    await reloadInbox();
+    expect(asked(2).since).toBe("m1.one");
+    expect(ids(getInbox().items)).toEqual([a.id, b.id, c.id]);
+  });
+
+  it("a reset forgets the cursor", async () => {
+    fetcher.mockResolvedValueOnce(ok({ items: [a], cursor: "m1.one" }));
+    await reloadInbox();
+    resetInboxForTests();
+    fetcher.mockResolvedValueOnce(ok({ items: [b], cursor: "m1.two" }));
+    await reloadInbox();
+    expect(asked(1).since).toBe("0");
+    expect(ids(getInbox().items)).toEqual([b.id]);
+  });
+
+  it("orders a delta as the hub orders its list", () => {
+    const tie = item("lark:a:0", { manager: "m1", updated_at: at(10) });
+    expect(ids(applyInboxDelta([a, b, c], [tie, item("lark:e:1", { manager: "m3", updated_at: at(0) })], [{ id: c.id, manager: "m2" }])))
+      .toEqual([tie.id, a.id, b.id, "lark:e:1"]);
+    // the same id under another manager is another item
+    expect(ids(applyInboxDelta([a], [], [{ id: a.id, manager: "m2" }]))).toEqual([a.id]);
   });
 });
 
@@ -754,6 +891,22 @@ describe("列表状态", () => {
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
     expect(vi.mocked(toast).mock.lastCall).toEqual(["已移回 1 件", "ok", undefined]);
 
+    // Undo reopens what was filed even when the list no longer carries it (only the newest done items, #5549).
+    vi.mocked(toast).mockClear();
+    fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [{ ...a, done_at: at(0), done_by: "user" }], unchanged: [], skipped: [] }));
+    await setAllDone([a], true);
+    const undo = vi.mocked(toast).mock.lastCall![2]!;
+    fetcher.mockReset().mockResolvedValueOnce(ok({ items: versioned.slice(1) }));
+    await reloadInbox();
+    expect(getInbox().items.some((x) => x.id === a.id)).toBe(false);
+    vi.mocked(toast).mockClear();
+    fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [a], unchanged: [], skipped: [] }));
+    undo.run();
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
+    fetcher.mockReset().mockResolvedValueOnce(ok({ items: versioned }));
+    await reloadInbox();
+
     // A failure puts every item back.
     fetcher.mockReset().mockResolvedValueOnce(fail(502, "boom"));
     await setAllDone(getInbox().items, true);
@@ -974,5 +1127,46 @@ describe("静音的文字", () => {
     expect(muteCovers("lark", o, item("b", { mutes: [o], done_at: at(1) }))).toBe(false);
     expect(muteCovers("lark", o, item("c", { mutes: [{ ...o, value: "f2" }] }))).toBe(false);
     expect(muteCovers("github", o, item("d", { mutes: [o] }))).toBe(false);
+  });
+});
+
+describe("the assistant's own rows (#6430)", () => {
+  const row = (patch: Partial<InboxItem> = {}) => item("assistant:s1", { source: "assistant", sender: "Assistant", preview: "Three meetings today", summary: "Three meetings today", connector: { thread: "m/s" }, ...patch });
+  it("says the text without a sender prefix, and not twice under the summary", () => {
+    expect(fromLine(row())).toBe("Three meetings today");
+    expect(repeatsSummary(row())).toBe(true);
+    expect(repeatsSummary(row({ preview: "Three meetings today, the review moved to 15:00" }))).toBe(true); // starts with the summary
+    expect(repeatsSummary(row({ preview: "Something else" }))).toBe(false);
+    expect(repeatsSummary(row({ summary: undefined }))).toBe(false);
+    expect(repeatsSummary({ ...row(), source: "github" })).toBe(false); // other sources draw as before
+  });
+  it("a long summary's preview is its first words with an ellipsis: still said once", () => {
+    expect(repeatsSummary(row({ summary: "Three meetings today, the review moved to 15:00", preview: "Three meetings today, the…" }))).toBe(true);
+  });
+});
+
+describe("an assistant row's Markdown (#9041)", () => {
+  const md = "**Briefing · Mon**\nToday: one tutorial.\n\n**Classes**\n- **Tutorial: 10:30–12:20**\n- Short quiz";
+  const row = (patch: Partial<InboxItem> = {}) => item("assistant:s3", { source: "assistant", preview: "Briefing · Mon Today: one tutorial. Classes…", summary: "Briefing · Mon Today: one tutorial. Classes Tutorial: 10:30–12:20 Short quiz", body: md, connector: { thread: "m/s" }, ...patch });
+  it("draws a hub's body in the detail and its plain lines as they are", () => {
+    expect(markdownBody(row())).toBe(md);
+    expect(markdownInSummary(row())).toBe(false);
+    expect(lineSummary(row())).toBe(row().summary);
+    expect(fromLine(row())).toBe(row().preview);
+    expect(repeatsSummary(row())).toBe(true);
+  });
+  it("an older hub's row: its summary is the Markdown, drawn as Markdown in the detail and without marks in a line", () => {
+    const raw = "**Briefing · Mon** Today: one tutorial. **Classes** - **Tutorial: 10:30–12:20** - Short quiz, no make-…";
+    const old = row({ body: undefined, summary: raw, preview: "**Briefing · Mon** Today: one tutorial. **Classes** - **Tut…" });
+    expect(markdownInSummary(old)).toBe(true);
+    expect(markdownBody(old)).toBe(raw);
+    expect(lineSummary(old)).toBe("Briefing · Mon Today: one tutorial. Classes Tutorial: 10:30–12:20 Short quiz, no make-…");
+    expect(withoutMarks(old.preview)).toBe("Briefing · Mon Today: one tutorial. Classes Tut…"); // the row's line under it (InboxList)
+    expect(withoutMarks("Classes - **Tutorial** Due*…")).toBe("Classes Tutorial Due…"); // a mark the cut left alone goes too
+  });
+  it("leaves other rows' summaries alone", () => {
+    const lark = item("lark:f1:1", { summary: "10:00 - 11:00 **review** moved" });
+    expect(markdownBody(lark)).toBeUndefined();
+    expect(lineSummary(lark)).toBe("10:00 - 11:00 **review** moved");
   });
 });

@@ -123,6 +123,12 @@ func (n *layoutNode) tabs(worktree string, out *[]Tab) {
 
 // Worktree is one worktree of worktree.ps.
 type Worktree struct {
+	ChildWorktreeIDs []string `json:"childWorktreeIds"`
+	WorkspaceLineage *struct {
+		ParentWorkspaceKey string `json:"parentWorkspaceKey"`
+	} `json:"workspaceLineage"`
+	InstanceID    string `json:"worktreeInstanceId"`
+	Removing      bool   `json:"removing"`
 	WorktreeID    string `json:"worktreeId"`
 	HostID        string `json:"hostId"`
 	Path          string `json:"path"`
@@ -134,6 +140,9 @@ type Worktree struct {
 	Unread        *bool  `json:"unread"`
 	SidebarStatus string `json:"sidebarStatus"`
 	WorkspaceKind string `json:"workspaceKind"`
+	// Active: the worktree Orca's window is showing. Orca's UI adopts a new terminal only there; one made in another
+	// worktree becomes an orphaned background terminal under a new pane key (#5547).
+	Active bool `json:"isActive"`
 	// ParentWorktreeID is the worktree this one is a child of in Orca's sidebar (its "N children"); empty for a top-level one.
 	ParentWorktreeID string `json:"parentWorktreeId"`
 	// Agents are the agents Orca's own hooks reported in the worktree's panes.
@@ -358,21 +367,34 @@ func (c *Client) Close(ctx context.Context, t Target) error {
 	return c.Call(ctx, CloseTimeout, "terminal.close", t.params(), nil)
 }
 
+// CapShellSelection is the capability (Status.Capabilities) of a runtime whose terminal.create honours shell. One
+// without it ignores the field and starts its default shell, so ask for a shell only when it is advertised.
+const CapShellSelection = "terminal.create-shell-selection.v1"
+
+// GitBash is terminal.create's shell for Git for Windows' bash.
+const GitBash = "git-bash"
+
 // CreateTerminal opens a fresh shell in an existing Orca worktree. The ordinary create RPC ignores cwd, so the
 // launcher changes directory explicitly when it runs its command. It never uses the currently focused terminal.
-func (c *Client) CreateTerminal(ctx context.Context, worktree, title, mutationID string) (*Terminal, error) {
+// shell is the Windows shell the terminal runs (GitBash, "powershell.exe"…; only with CapShellSelection), "" for
+// the user's default.
+func (c *Client) CreateTerminal(ctx context.Context, worktree, title, mutationID, shell string) (*Terminal, error) {
 	var res struct {
 		Terminal struct {
 			Terminal
 			PaneKey string `json:"paneKey"`
 		} `json:"terminal"`
 	}
-	err := c.Call(ctx, SendTimeout, "terminal.create", map[string]any{
+	params := map[string]any{
 		"worktree": worktree, "title": title, "clientMutationId": mutationID,
 		// Explicit "background" skips desktop tab registration entirely. Omit it to create an inactive tab;
 		// Orca awaits the renderer's creation receipt before returning, without switching the user's active tab.
 		"focus": false, "activate": false,
-	}, &res)
+	}
+	if shell != "" {
+		params["shell"] = shell
+	}
+	err := c.Call(ctx, SendTimeout, "terminal.create", params, &res)
 	if err != nil {
 		return nil, err
 	}

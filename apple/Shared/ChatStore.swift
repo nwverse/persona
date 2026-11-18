@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// One tool invocation with its result, as shown in a chat.
 nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
@@ -17,6 +18,11 @@ nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
         return result == nil
     }
     var isError: Bool { agentStatus == "failed" || agentStatus == "error" || (result?.isError ?? false) }
+    /// What it came to, when the node said (`ToolOutcome`).
+    var outcome: ToolOutcome? { result?.outcome }
+    /// An error that is not the call being denied, refused or interrupted: what it ran failed. The red a row and its
+    /// chip turn; `isError` still says the model got an error back.
+    var failed: Bool { isError && !(outcome?.stopped ?? false) }
 }
 
 nonisolated extension ChatRow {
@@ -123,12 +129,9 @@ nonisolated struct Turn: Identifiable, Hashable, Sendable {
     var process: [ChatRow] = []
     var answer: ChatRow?
     var trailing: [ChatRow] = [] // notices that belong to the turn (e.g. "interrupted")
-    /// Background tasks that woke the agent during this exchange (their notices).
+    /// The background task that woke the idle agent for this exchange (its notice, or a subagent's report): the row it
+    /// opens with. Empty when a message opened it.
     var wakes: [Item] = []
-    /// The latest wake has not produced an answer yet: its continuation is live, even after its rows move into `ordered`.
-    var hasPendingWake = false
-    /// What came after the answer (a follow-up once a background task reported back).
-    var tail: [ChatRow] = []
     /// Everything the agent did in arrival order, answer included.
     var steps: [ChatRow] = []
     /// Messages and steps in arrival order (how the running turn is shown: input sent mid-turn stays where it was sent).
@@ -154,23 +157,6 @@ nonisolated struct Turn: Identifiable, Hashable, Sendable {
         }
     }
     var interimCount: Int { process.filter { if case .assistant = $0 { true } else { false } }.count }
-
-    /// A wake continues the same exchange; its tools and narration join the ordinary execution summary. Until new
-    /// words arrive, `hasPendingWake` keeps them in the summary rather than promoting the earlier narration to a
-    /// separate answer (#2796).
-    mutating func pickAnswerAcrossWakes() {
-        let all = ordered
-        var pick: Int?
-        hasPendingWake = false
-        for (i, row) in all.enumerated() {
-            if case .notice(let n) = row, n.wake == true { pick = nil; hasPendingWake = true }
-            if case .assistant = row { pick = i; hasPendingWake = false }
-        }
-        guard let pick else { return }
-        tail = all[(pick + 1)...].filter { !$0.isUserInput }
-        ordered = Array(all[...pick]) + all[(pick + 1)...].filter(\.isUserInput)
-        process = ordered.filter { !$0.isUserInput }
-    }
 }
 
 nonisolated enum SubagentDelivery {
@@ -295,30 +281,16 @@ nonisolated enum ChatBlock: Identifiable, Hashable, Sendable {
     static func build(_ rows: [ChatRow]) -> [ChatBlock] {
         var blocks: [ChatBlock] = []
         var current: Turn?
-        // The last exchange as it was before closing, and where it sits: a background task that reports back after
-        // a recap card (Claude Code writes one when a finished session sits idle) still belongs to that exchange.
-        var lastRaw: Turn?
-        var lastIndex = 0
-        var reopenedAt: Int?
 
         func close() {
             guard var t = current else { return }
-            lastRaw = t
-            if !t.wakes.isEmpty { t.pickAnswerAcrossWakes() }
             // The answer is the last thing the assistant said; everything before it is process.
             // (Steps after the final words, rare trailing tool calls, stay in the process.)
             t.steps = t.process
             if let i = t.process.lastIndex(where: { if case .assistant = $0 { true } else { false } }) {
                 t.answer = t.process.remove(at: i)
             }
-            if let i = reopenedAt {
-                blocks.insert(.turn(t), at: i) // back in its place, the recap card still after it
-                lastIndex = i
-            } else {
-                lastIndex = blocks.count
-                blocks.append(.turn(t))
-            }
-            reopenedAt = nil
+            blocks.append(.turn(t))
             current = nil
         }
 
@@ -347,17 +319,18 @@ nonisolated enum ChatBlock: Identifiable, Hashable, Sendable {
             case .notice(let item):
                 // Inside a turn: "interrupted" closes it visibly; compaction / API errors are part of the process
                 // (auto-compaction happens mid-turn and must not split it).
-                if item.wake == true, current == nil, let raw = lastRaw, blocks.indices.contains(lastIndex),
-                   case .turn(let closed) = blocks[lastIndex], closed.id == raw.id {
-                    blocks.remove(at: lastIndex) // reopen the exchange the recap closed
-                    reopenedAt = lastIndex
-                    current = raw
-                }
-                if item.wake == true, current != nil {
-                    // A background task woke the idle agent: still the same exchange (the answer is picked at close).
-                    current!.wakes.append(item)
-                    current!.process.append(row)
-                    current!.ordered.append(row)
+                if item.modelRefusal != nil {
+                    // An upstream refusal (#4489): a line of its own after the exchange, never folded into the work row.
+                    if current == nil { current = Turn(id: row.id) }
+                    current!.trailing.append(row)
+                } else if item.wake == true {
+                    // A background task woke the idle agent: the turn before it was over, and the last words of that
+                    // turn stay its answer. The work it woke is an exchange of its own that opens with the notice,
+                    // where a message would be (#9140: kept in the exchange before it, each woken turn's last words
+                    // took the answer's place and the real answer folded into the work). After a recap it follows
+                    // the recap.
+                    close()
+                    current = Turn(id: row.id, process: [row], wakes: [item], ordered: [row])
                 } else if current == nil {
                     // e.g. a background command finishing after a recap: part of the (next) work, never its own line.
                     current = Turn(id: row.id)
@@ -404,10 +377,12 @@ nonisolated extension Item {
         return Int(id[id.index(after: hash)...]) ?? 0
     }
 
-    /// Work a fold may stand for: tool calls, their results and images, thoughts, folds.
+    /// Work a fold may stand for: tool calls, their results and images, thoughts, narration text, folds.
     var isWork: Bool {
         switch kind {
         case .thinking, .toolUse, .toolResult, .fold: true
+        // Only a fold's range distinguishes narration from a final assistant answer.
+        case .text: role == "assistant"
         case .image: toolUseID != nil
         default: false
         }
@@ -425,6 +400,10 @@ nonisolated extension Item {
 final class ChatStore {
     let key: SessionKey
     @ObservationIgnored private let cacheFolder: URL?
+    #if DEBUG
+    @ObservationIgnored var initialContinuitySnapshot: NativeContinuitySnapshot?
+    @ObservationIgnored var continuityShadowEnabled = true
+    #endif
     private(set) var items: [Item] = []
     private(set) var rows: [ChatRow] = []
     private(set) var blocks: [ChatBlock] = []
@@ -450,6 +429,9 @@ final class ChatStore {
     /// agent's live message its newest items do not hold yet (`agentStreamed`). Set through `showLive`, which a clear's
     /// fallback watches.
     private(set) var liveText: String = ""
+    /// The stream of `liveText` is over (a clear came) and it only waits for its transcript line: drawn whole at once,
+    /// no longer revealed a few characters a frame (`StreamReveal`, #6651).
+    private(set) var liveDone = false
     /// Bumped each time `liveText` is set: a clear's fallback (`clearLive`) does nothing once anything else set it.
     @ObservationIgnored private var liveStamp = 0
     /// The newest line when the live text began: its copy is written after it, so lines up to this one are not.
@@ -473,9 +455,32 @@ final class ChatStore {
     var screenUpdatedAt: Date?
     var error: String?
     var isLoadingOlder = false
+    /// This client's latest send survives replacement of its pending bubble by transcript echo.
+    var sendFeedback: ChatSendFeedback?
     /// Messages sent from this phone that the transcript has not shown yet: drawn at the end right away, and a failed one
     /// before the first message written after it (`ChatLines.placeFailed`).
-    var pending: [PendingMessage] = []
+    var pending: [PendingMessage] = [] {
+        didSet {
+            rebuildQueuePhotoMarks()
+            restoreSendFeedbackIfNeeded()
+        }
+    }
+    /// The Persona queue's own messages, kept to derive their photo marks again when the outbox changes.
+    @ObservationIgnored private var ownQueue: [String] = []
+    /// Local photo counts for the own queue rows, derived once per queue/outbox change rather than in a view body (P4).
+    private(set) var queuePhotoMarks: [Int] = []
+
+    func updateQueuePhotoMarks(queued: [String]?, own: Int) {
+        ownQueue = Array((queued ?? []).prefix(max(0, own)))
+        rebuildQueuePhotoMarks()
+    }
+
+    private func rebuildQueuePhotoMarks() {
+        let marks = ownQueue.map { raw in
+            pending.first { PendingMessage.same($0.text, raw) }?.images.count ?? 0
+        }
+        if marks != queuePhotoMarks { queuePhotoMarks = marks }
+    }
     /// When this phone wrote the messages it sent whose copies have arrived, by their id (`Item.clientMsgID`, upper
     /// case): a failed message goes by the phone's own times, not by when the computer wrote a copy (a queued message
     /// is written when the agent takes it in, minutes later; its clock may differ) (#6023). This run's only.
@@ -519,7 +524,7 @@ final class ChatStore {
             // Refs again: a cache written before they named a chat's group of hubs (#1555) sent its pictures to the
             // current group's hub.
             items = Self.withImageRefs(cached.items, key)
-            ids = Set(cached.items.map(\.id))
+            ids = Set(items.map(\.id))
             hasMore = cached.hasMore
             history = cached.history
             covered = cached.covered ?? (cached.items.last?.seq ?? 0)
@@ -548,6 +553,13 @@ final class ChatStore {
     /// cache, several exchanges behind). Without a span (an older hub) batches are trusted, as before.
     @discardableResult
     func apply(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
+        apply(.batch(backlog && span.from == nil ? .latest : .pushed, items: new, span: span,
+                     backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)) ?? .none
+    }
+
+    /// The native implementation behind the shared adapter. Its result is the only production result.
+    func applyNative(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
+        let new = new.publicRefusals()
         arrivedAt = .now
         defer { newestArrived() }
         if let h = span.history, let mine = history, h != mine {
@@ -557,12 +569,12 @@ final class ChatStore {
         }
         if let h = span.history { history = h }
         guard let to = span.to else {
-            merge(new, backlog: backlog, hasMore: hasMore)
+            mergeNative(new, backlog: backlog, hasMore: hasMore)
             covered = max(covered, lastSeq)
             return moreAfter ? .reload : .none
         }
         if let from = span.from {
-            merge(new, backlog: backlog, hasMore: hasMore)
+            mergeNative(new, backlog: backlog, hasMore: hasMore)
             // No baseline yet: the backlog from the end sets one. A batch from line 0 (a new session watched from its
             // first line) is its own baseline: without it, holes after it went unnoticed. If the backlog already came
             // and set none (the transcript did not exist yet) and the first lines' push was lost, only the latest
@@ -575,7 +587,7 @@ final class ChatStore {
         // A page from the end.
         if let first = new.first { newestFrom = (first.seq, first.part) }
         if covered > 0, let first = new.first?.seq, first > covered + 1 {
-            replace(with: new, hasMore: hasMore ?? true, span: span)
+            replaceNative(with: new, hasMore: hasMore ?? true, span: span)
             if backlog { loadedOnce = true }
             return .none
         }
@@ -599,9 +611,30 @@ final class ChatStore {
     }
 
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
+        // Legacy merges keep the native reducer and the shadow's previous snapshot in lockstep. Production adapter
+        // inputs arrive through applyNative; this path only prevents direct native callers from creating a stale base.
+        #if DEBUG
+        updateContinuitySnapshotForNativeMutation()
+        #endif
+        mergeNative(new, backlog: backlog, hasMore: hasMore)
+        #if DEBUG
+        updateContinuitySnapshotForNativeMutation()
+        #endif
+    }
+
+    private func mergeNative(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
+        let new = new.publicRefusals()
         if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
-        // Promotion is monotone, including when overlapping real work takes a promoted fold's place. Retain it on
-        // the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
+        // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
+        // promotion evidence; ids is already a Set, so a count mismatch finds this without scanning every ordinary merge.
+        func newestCopies(_ list: [Item]) -> [Item] {
+            guard list.count > 1 else { return list }
+            var seen = Set<String>()
+            return Array(list.reversed().filter { seen.insert($0.id).inserted }.reversed())
+        }
+        let deduplicated = items.count != ids.count
+        // Promotion is monotone, including when deduplication or overlapping real work takes a promoted fold's place.
+        // Retain it on the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
         // folded page can bring authoritative promotion while the UI keeps that work expanded.
         let evidence = (items + Array(opened.values) + new).filter { $0.supervisionUser == true || $0.fold?.supervisionUser == true }
         let promotedIDs = Set(evidence.filter { $0.supervisionUser == true }.map(\.id))
@@ -619,10 +652,14 @@ final class ChatStore {
                 return it
             }
         }
+        if deduplicated {
+            items = newestCopies(items)
+            ids = Set(items.map(\.id))
+        }
         let retained = retainingPromotion(items)
-        var changed = retained != items
+        var changed = deduplicated || retained != items
         if changed { items = retained; settled = nil }
-        let promoted = retainingPromotion(new)
+        let promoted = newestCopies(retainingPromotion(new))
         let batchWork = promoted.filter { $0.isWork && $0.kind != .fold }
         let fresh = promoted.filter { it in
             !stillOpen(it) && !(it.kind == .fold && batchWork.contains { it.folds($0) })
@@ -632,7 +669,7 @@ final class ChatStore {
         // Pages can repeat an id with new metadata or a completed receipt. The new copy wins, but never erases the
         // evidence above. Append-only pushes keep the fast path without building an index.
         let indices = fresh.contains { ids.contains($0.id) } ? Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) }) : [:]
-        var inOrder = true
+        var inOrder = !deduplicated // Keeping the last cached copies can move an older line behind a newer one.
         var added: [Item] = []
         for it in Self.withImageRefs(fresh, key) {
             if let i = indices[it.id] {
@@ -665,6 +702,7 @@ final class ChatStore {
             for it in added {
                 if let i = pending.firstIndex(where: { PendingMessage.arrived($0, as: it) }) {
                     let p = pending.remove(at: i)
+                    if sendFeedback?.id == p.id { sendFeedback?.echo(sequence: it.seq) }
                     if let at = p.createdAt {
                         if writtenAt.count >= 500 { writtenAt = writtenAt.filter { $0.value > at.addingTimeInterval(-86400) } }
                         writtenAt[p.id.uuidString] = at
@@ -673,6 +711,13 @@ final class ChatStore {
                 }
             }
             if pending.count != before { onArrived?() }
+        }
+        if var feedback = sendFeedback, feedback.phase != .finished {
+            for item in added {
+                feedback.echo(item)
+                if feedback.answered(by: item) { feedback.finish(feedback.id) }
+            }
+            if feedback != sendFeedback { sendFeedback = feedback }
         }
         // Streamed items arrive in order: only older pages / reconnect backlogs need the sort.
         if !inOrder { items = Self.ordered(items) }
@@ -714,12 +759,16 @@ final class ChatStore {
 
     /// The work a fold stood for, fetched (`AppModel.unfold`): it takes the fold's place.
     func unfold(_ fold: Item, into work: [Item]) {
+        apply(.range(work, fold: fold, more: false))
+    }
+
+    func unfoldNative(_ fold: Item, into work: [Item]) {
         guard let i = items.firstIndex(where: { $0.id == fold.id }) else { return }
         let retained = items.remove(at: i)
         ids.remove(fold.id)
         opened[fold.id] = retained // the caller may hold an older copy without the latest promotion
         settled = nil
-        merge(work.filter { $0.kind != .fold })
+        mergeNative(work.filter { $0.kind != .fold })
         scheduleRebuild()
     }
 
@@ -744,7 +793,7 @@ final class ChatStore {
     /// image) arrives for a call before it; then everything is built again.
     nonisolated static func rebuild(_ items: [Item], settled: SettledRows?) -> (rows: [ChatRow], blocks: [ChatBlock], settled: SettledRows?) {
         // Before the cut at the last message: a picture sent with it comes first in its line, and went to the rows
-        // before it, already built (`picturesAfterTheirText`).
+        // before it, already built (`picturesAfterTheirText`). `buildRows` orders each part again, which changes nothing.
         let items = picturesAfterTheirText(items)
         func full() -> (rows: [ChatRow], blocks: [ChatBlock], settled: SettledRows?) {
             let rows = buildRows(items)
@@ -794,6 +843,7 @@ final class ChatStore {
     func showLive(_ text: String) {
         if liveText.isEmpty, !text.isEmpty { liveSince = items.last?.seq ?? 0 }
         liveText = text
+        if liveDone { liveDone = false }
         liveStamp += 1
     }
 
@@ -845,6 +895,7 @@ final class ChatStore {
         if let text, !text.isEmpty, text.hasPrefix(liveText) { showLive(text) }
         let shown = liveText
         guard !shown.isEmpty else { return }
+        liveDone = true
         if Self.holdsLive(items, shown, after: liveSince) { return endLive(shown) }
         let stamp = liveStamp
         Task { @MainActor [weak self] in
@@ -988,8 +1039,10 @@ final class ChatStore {
         }
     }
 
-    /// Lazy images learn where to fetch their bytes from, and so do those a fold says its work looked at.
+    /// Lazy images learn where to fetch their bytes from, and so do those a fold says its work looked at. Every way
+    /// items come in (a page, a push, the disk cache, the background sync) passes here, so the view feedback goes too.
     nonisolated static func withImageRefs(_ items: [Item], _ key: SessionKey) -> [Item] {
+        let items = withoutViewFeedback(items)
         guard items.contains(where: { $0.image?.lazy == true || $0.fold?.images?.isEmpty == false }) else { return items }
         return items.map { it in
             var it = it
@@ -1007,6 +1060,11 @@ final class ChatStore {
 
     /// Starts over from the latest page: what came in between was too much to fetch, and a hole would never fill.
     func replace(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
+        apply(.batch(.reloaded, items: latest, span: span, hasMore: hasMore))
+    }
+
+    func replaceNative(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
+        let latest = latest.publicRefusals()
         arrivedAt = .now
         defer { newestArrived() }
         // Pushes that came in while the page was on its way, past what it holds, stay (the next push finds the hole
@@ -1019,10 +1077,27 @@ final class ChatStore {
         newestFrom = latest.first.map { ($0.seq, $0.part) }
         self.hasMore = hasMore
         if let h = span.history { history = h }
-        merge(latest)
-        merge(keep)
+        mergeNative(latest)
+        mergeNative(keep)
         covered = span.to ?? lastSeq
         scheduleRebuild() // also when the page is empty
+    }
+
+    /// The node's `<persona-view-errors>` feedback after the assistant's snapshot (its last rich views failed their
+    /// check) is for the model, not the user's words: an older hub (#4315) gave it as a user item of its own, the line's
+    /// block before the message, or at the start of the message, and the bubble showed its raw tags. Taken out of user
+    /// text; an item left with nothing goes.
+    nonisolated static func withoutViewFeedback(_ items: [Item]) -> [Item] {
+        guard items.contains(where: { $0.role == "user" && $0.kind == .text && ($0.text ?? "").contains("<persona-view-errors") }) else { return items }
+        return items.compactMap { it in
+            guard it.role == "user", it.kind == .text, let text = it.text, text.contains("<persona-view-errors") else { return it }
+            let left = text.replacingOccurrences(of: #"<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*"#,
+                                                 with: "", options: .regularExpression)
+            guard !left.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            var it = it
+            it.text = left
+            return it
+        }
     }
 
     /// Items in transcript order: by line, then by block within the line (ids end in "#<block>"; "#10" after "#2").
@@ -1031,8 +1106,12 @@ final class ChatStore {
     }
 
     func prepend(_ older: [Item], hasMore: Bool) {
+        _ = apply(.batch(.older, items: older, span: ItemSpan(), hasMore: hasMore))
+    }
+
+    func prependNative(_ older: [Item], hasMore: Bool) {
         self.hasMore = hasMore
-        merge(older)
+        mergeNative(older)
     }
 
     /// Live preview: the lines Claude is currently printing, cut above the input box.
@@ -1043,20 +1122,25 @@ final class ChatStore {
     /// pictures first (image blocks, then the text), where a picture pasted in an Agents chat comes after the text:
     /// first, a picture went to the exchange before its own message (into its work, out of sight) and the chat no
     /// longer showed what was sent once the transcript's copy replaced the one being sent.
+    /// A picture after a text of its line is in place and stays there, so a second pass changes nothing: `rebuild` orders
+    /// the items and `buildRows` orders them again, and a picture before two text blocks went on behind the second (#8706).
     nonisolated static func picturesAfterTheirText(_ items: [Item]) -> [Item] {
         func isPhoto(_ it: Item) -> Bool { it.kind == .image && it.role == "user" && it.toolUseID == nil }
         guard items.contains(where: isPhoto) else { return items }
         var out: [Item] = []
         out.reserveCapacity(items.count)
         var held: [Item] = [] // the pictures of one line, waiting for its text
+        var texted: Int? // the line of the last text: a picture of that line after it is in place
         for it in items {
             if isPhoto(it) {
                 if let first = held.first, first.seq != it.seq { out += held; held.removeAll() }
-                held.append(it)
+                if it.seq == texted { out.append(it) } else { held.append(it) }
                 continue
             }
+            let isText = it.kind == .text && it.role == "user"
+            if isText { texted = it.seq }
             if let first = held.first {
-                if it.kind == .text, it.role == "user", it.seq == first.seq {
+                if isText, it.seq == first.seq {
                     out.append(it) // the message, then its pictures
                     out += held
                     held.removeAll()
@@ -1275,6 +1359,9 @@ nonisolated enum ScreenParser {
         /// The tab that submits every answer ("Review your answers"); incomplete: a question has none yet.
         var review = false
         var incomplete = false
+        /// A permission prompt for a shell command, as the hub reads it (#5266): nil for any other dialog, and from a hub
+        /// before it.
+        var commandAsk: CommandAsk?
 
         init(header: String?, question: String, detail: String?, options: [Option]) {
             self.header = header
@@ -1440,16 +1527,31 @@ nonisolated enum ChatCache {
     /// v12: relayed and automated assistant input retains additive source metadata.
     /// v13: cached tails count user questions, not automatic supervision; discard the old shallow tails.
     /// v14: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
+    /// v16: tool results carry `outcome` (docs/protocol/protocol.md "Tool outcomes", #4303); older copies have none, and
+    /// their denied or interrupted calls would stay red.
+    /// v17: refusal notices carry `model_refusal` and their text is the refusal's words (#4489); an older hub made it the
+    /// record's whole line, which v16's copies would keep showing.
+    /// v18: Codex commentary is assistant text rather than thinking; older cached items would keep hiding mid-turn answers.
+    /// v19: Paseo's input to an agent is another session's message, a subagent's task note or a notice (#8220); v18's
+    /// copies would keep the raw <paseo-system> envelopes as the user's bubbles.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v15"
-    /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v14"
+    static let folder = "chats-v19"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
         guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        try? FileManager.default.removeItem(at: base.appending(path: previous))
+        // Off the caller's thread (often the main actor): the current folder is never among them, so nothing waits for it.
+        Task.detached(priority: .utility) { removeOlderFolders(in: base) }
     }()
+
+    /// Removes every older version's folder in `base`, not only the one right before: a phone that skipped versions
+    /// between installs kept each skipped one's copies, read by nothing (#8340).
+    static func removeOlderFolders(in base: URL) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
+        for name in names where name != folder && isFolder(name) {
+            try? FileManager.default.removeItem(at: base.appending(path: name))
+        }
+    }
 
     /// Whether a caches folder is one of ChatCache's, this version or an older one ("chats", "chats-v<N>"): what
     /// Settings › Storage counts under 「Agent 对话」.
@@ -1578,8 +1680,19 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// When its sends started coming back waiting while its group's link was up (AppModel.settleSend, `OutboxWait`);
     /// in memory only: a relaunch starts the run again.
     var stalledSince: Date?
+    /// How the app wrote it when the user did not type it (a card's button): sent with it, so it never counts as the
+    /// user's own words for a secret hand-off's Always rule.
+    var via: APIClient.MessageVia?
+    /// It was written while the agent worked (the composer's queue mode): the queue strip draws it, not the chat
+    /// (`QueuePlacement`, #1461). nil for one written while the agent was idle, and in outboxes saved before this.
+    var queuedMode: Bool?
 
-    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused }
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode }
+
+    /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
+    /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent
+    /// one is the hub's: neither can be deleted.
+    var onlyHere: Bool { state == .failed || state == .waiting }
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
     /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either

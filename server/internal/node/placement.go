@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -271,10 +270,10 @@ func (n *Node) placeIn(s *proto.Session, a host.Agent) {
 	n.mu.Unlock()
 	s.SpaceKind, s.SpaceID, s.SlotID = kind, a.WorkspaceID, a.TabID
 	if wok {
-		s.SpaceName, s.SpaceIndex, s.ParentSpaceID = w.Label, w.Number, w.ParentID
+		s.SpaceName, s.SpaceIndex, s.ParentSpaceID = w.Label, int32(w.Number), w.ParentID
 	}
 	if tok {
-		s.SlotName, s.SlotIndex = t.Label, t.Number
+		s.SlotName, s.SlotIndex = t.Label, int32(t.Number)
 	}
 	s.PaneIndex = nil
 	if piok {
@@ -324,7 +323,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 		return n.sessionFromKnownProcess(pane)
 	}
 	m, onList := map[string]host.Agent{}, map[string]bool{}
-	var unknown, codex, pi, opencode, botmux []host.Agent
+	var unknown, codex, family, opencode, botmux []host.Agent
 	other := map[string]host.Agent{} // terminal-only agents by their row id (opencode.go)
 	contested := contest{}           // sessions live in two hosts at once: an owner is picked below (ownership.go)
 	procs := n.liveClaudes()
@@ -355,8 +354,14 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			codex = append(codex, a)
 			continue
 		}
-		if a.Agent == piAgent { // its session: herdr's pi integration, or the extension in it (pi.go)
-			pi = append(pi, a)
+		if a.Agent == cursorAgent || a.Agent == agyAgent { // a work agent herdr detects (workagent.go): its own row
+			if id := otherSession(a); id != "" {
+				other[id] = a
+			}
+			continue
+		}
+		if piFamily(a.Agent) { // its session: herdr's integration, or the extension in it (pi.go, pifamily.go)
+			family = append(family, a)
 			continue
 		}
 		if a.Agent == opencodeAgent { // its session: herdr's opencode plugin, or the Persona plugin in the server (opencode.go)
@@ -407,13 +412,22 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.notePanes(unknown)
 	n.mu.Unlock()
-	for _, a := range pi {
-		if id := n.piSession(a); id != "" {
+	var omps []familyNote
+	for _, a := range family {
+		id := n.piSession(a)
+		if a.Agent == ompAgent && a.PaneID != "" {
+			omps = append(omps, familyNote{pane: a.PaneID, session: id}) // the panes that may write a file ompdisk.go lists
+		}
+		if id == "" {
+			id = otherSession(a) // nothing reported its session yet: the pane is the row, terminal only (pi.go)
+		}
+		if id != "" {
 			if _, taken := m[id]; !taken {
 				m[id] = a
 			}
 		}
 	}
+	n.noteFamilyPanes(omps)
 	for _, a := range opencode {
 		id := n.opencodeSession(a)
 		if id == "" {
@@ -455,6 +469,9 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			n.mu.Lock()
 			id = n.panes[a.PaneID]
 			n.mu.Unlock()
+			if isCodexWaitID(id) {
+				id = "" // a Codex that waited for its first message ran here (codex_waiting.go); this agent is another
+			}
 		}
 		if id == "" || liveTaken(m, id) {
 			if n.freshPane(a.PaneID) {
@@ -472,20 +489,45 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	// thread, the newest rollout in the directory nobody else has.
 	var unnamed []host.Agent
 	for _, a := range codex {
+		if w := n.codexWaitOf(a.PaneID); w != nil {
+			// Opened with no first message (codex_waiting.go): its row until its thread is attached, which only the look
+			// does. What herdr's integration and the pane's title name are noted for it, never taken as is.
+			named, titled := "", n.codexTitleThread(a)
+			if sid := a.SessionID(); sid != "" {
+				home := n.codexPaneHome(a.PaneID)
+				named = n.codexPublicID(home, mainThread(home, sid))
+			}
+			n.mu.Lock()
+			w.herdr, w.titled = named, titled
+			n.mu.Unlock()
+			m[w.id] = a
+			continue
+		}
 		home := n.codexPaneHome(a.PaneID)
-		id := a.SessionID()
+		reported := a.SessionID() // what the host says the pane runs now, not what the node remembers of the pane
+		id := reported
 		if id != "" {
 			id = mainThread(home, id) // a subagent's id stands for its conversation
 		}
+		sub := id != reported
 		if id == "" {
 			n.mu.Lock()
 			id = n.panes[a.PaneID]
 			n.mu.Unlock()
 		}
-		if named := n.codexByTitle(a, id, m); named != "" {
+		if named, claimed := n.codexByTitle(a, id, m); named != "" {
 			id = named
-		} else if strings.LastIndex(a.Title, " | ") > 0 {
-			id = "" // an unrecognised current title must not reuse a stale pane binding either
+		} else if claimed {
+			id = "" // the title names another pane's thread: keeping the stale reported one would misroute this row
+		} else if _, match, ok := codexTitleName(a.Title); ok && (reported == "" ||
+			(!sub && threadTitle(home, id) != "" && !threadFormerlyNamed(home, id, match))) {
+			// An unrecognised current title must not reuse a stale pane binding either, nor a thread the host named
+			// that the index knows under another name (a /resume in Codex since). A reported thread the index has no
+			// name for is not contradicted by a name the index lacks, so the host's word stands: left out, the pane
+			// was listed nowhere and its thread only as its app-server's row, with no terminal (#7538). Nor is a
+			// reported subagent contradicted by its conversation's name, which is not the name of the thread reported,
+			// nor a renamed thread by the name the index gave it before (a rename on the app-server the title missed).
+			id = ""
 		}
 		if id != "" {
 			id = n.codexPublicID(home, id)
@@ -532,6 +574,26 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	for id, a := range m {
 		if old := was[a.PaneID]; a.PaneID != "" && old != "" && old != id {
 			log.Printf("agents: pane %s runs session %s now, not %s", a.PaneID, id, old)
+		}
+	}
+	// A pane first listed by its fallback id (omp-w1-p2), then by its session: a client holding the fallback row keeps
+	// working (pifamily.go).
+	if n.idAlias == nil {
+		n.idAlias = map[string]paneAlias{}
+	}
+	live := map[string]bool{}
+	for id, a := range m {
+		if a.PaneID == "" {
+			continue
+		}
+		live[a.PaneID] = true
+		if old := was[a.PaneID]; old != "" && old != id && !validID(old) && piFamily(a.Agent) {
+			n.idAlias[old] = paneAlias{id: id, pane: a.PaneID}
+		}
+	}
+	for fallback, alias := range n.idAlias {
+		if !live[alias.pane] {
+			delete(n.idAlias, fallback) // its pane is gone: nothing is left to point at
 		}
 	}
 	n.agents = m

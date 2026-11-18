@@ -41,13 +41,22 @@ type FeishuBotConfig struct {
 
 // FeishuBotSettings is what the app set, in settings (botSettingsKey).
 type FeishuBotSettings struct {
-	Enabled   bool        `json:"enabled"`
-	AppID     string      `json:"app_id,omitempty"`
-	SecretEnc string      `json:"secret_enc,omitempty"` // sealed with secret.key (secretkey.go sealKey)
-	Domain    string      `json:"domain,omitempty"`
-	Features  BotFeatures `json:"features"`
-	Owner     *BotOwner   `json:"owner,omitempty"`
-	Pairing   *botPairing `json:"pairing,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	AppID     string `json:"app_id,omitempty"`
+	SecretEnc string `json:"secret_enc,omitempty"` // sealed with secret.key (secretkey.go sealKey)
+	Domain    string `json:"domain,omitempty"`
+	// LarkCLIProfile is the app's optional profile choice. An empty value keeps
+	// the automatic manager rule; manager.json lark.cli.profile still wins.
+	LarkCLIProfile string      `json:"larkcli_profile,omitempty"`
+	Features       BotFeatures `json:"features"`
+	Owner          *BotOwner   `json:"owner,omitempty"`
+	Pairing        *botPairing `json:"pairing,omitempty"`
+	// Registration is an app registration under way (bots_register.go): binding in one authorization.
+	Registration *botRegistration `json:"registration,omitempty"`
+	// RegistrationDeviceEnc and RegistrationSecretEnc are the registration's device code and, once confirmed, the new
+	// app's secret, sealed with secret.key; top-level so the key rotation re-seals them (db.sealedSettings).
+	RegistrationDeviceEnc string `json:"registration_device_enc,omitempty"`
+	RegistrationSecretEnc string `json:"registration_secret_enc,omitempty"`
 	// TopicChats are the group chats the owner opted in (bots_topics.go): their messages reach the assistant, and the
 	// bot may send into them. The owner's own list: it goes when the owner does.
 	TopicChats []BotChat `json:"topic_chats,omitempty"`
@@ -59,6 +68,9 @@ type FeishuBotSettings struct {
 	// NudgeAfter is how many minutes a card the bot sent may wait unanswered before the assistant nudges under it once
 	// (#6084, assistant/feishu_nudge.go): 0 is off, nil (never set) is assistantwire.NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`
+	// SourceReportDelayMinutes is the preview window before a reply to the source group. Zero skips it.
+	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
+	SourceReportFullReply    bool `json:"source_report_full_reply,omitempty"`
 }
 
 // BotFeatures are the parts that can be switched on one by one: kept here with the credentials, acted on by the
@@ -86,6 +98,10 @@ type BotFeatures struct {
 	// agent said, interrupted, closed — as it did before #3218. Off by default, and for settings saved before it: then
 	// only goal-level changes go out (reached, needs your decision, stuck).
 	ReportSteps bool `json:"report_steps"`
+	// AnswerNewCard: a finished run's answer is posted as a new card at the bottom of the chat (Lark notifies on it) and
+	// the progress card is folded, instead of the answer being written into the progress card (#5396). Off by default,
+	// and for settings saved before it: they have no such key.
+	AnswerNewCard bool `json:"answer_new_card"`
 }
 
 var defaultBotFeatures = BotFeatures{Main: true, Cards: true, Reports: true}
@@ -134,6 +150,10 @@ type botHub struct {
 	line chan struct{}
 	// now is replaced in tests.
 	now func() time.Time
+	// registrar is the accounts site's client for app registration, regDomain where a registered app's calls go
+	// (bots_register.go); both replaced in tests.
+	registrar *feishubot.Registrar
+	regDomain func(region string) string
 }
 
 func (b *botHub) clock() time.Time {
@@ -158,15 +178,17 @@ func (h *Manager) loadBotsLocked(ctx context.Context) {
 	}
 }
 
-func (h *Manager) saveBotSettingsLocked() {
+func (h *Manager) saveBotSettingsLocked() error {
 	if h.store == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.store.PutSetting(ctx, botSettingsKey, h.bots.set); err != nil {
 		h.logf("bots: save settings: %v", err)
+		return err
 	}
+	return nil
 }
 
 // botCredentialsLocked: the app's id, secret and domain, from the app's settings, else hub.json (h.bots.mu held).
@@ -262,6 +284,13 @@ func (s FeishuBotSettings) nudgeAfter() int {
 	return *s.NudgeAfter
 }
 
+func (s FeishuBotSettings) sourceReportDelayMinutes() int {
+	if s.SourceReportDelayMinutes == nil {
+		return assistantwire.SourceReportDelayDefault
+	}
+	return *s.SourceReportDelayMinutes
+}
+
 // copy is the settings with nothing shared: the owner is changed in place under h.bots.mu.
 func (s FeishuBotSettings) copy() FeishuBotSettings {
 	s.TopicChats = slices.Clone(s.TopicChats)
@@ -270,6 +299,10 @@ func (s FeishuBotSettings) copy() FeishuBotSettings {
 		n := *s.NudgeAfter
 		s.NudgeAfter = &n
 	}
+	if s.SourceReportDelayMinutes != nil {
+		delay := *s.SourceReportDelayMinutes
+		s.SourceReportDelayMinutes = &delay
+	}
 	if s.Owner != nil {
 		o := *s.Owner
 		s.Owner = &o
@@ -277,6 +310,10 @@ func (s FeishuBotSettings) copy() FeishuBotSettings {
 	if s.Pairing != nil {
 		p := *s.Pairing
 		s.Pairing = &p
+	}
+	if s.Registration != nil {
+		r := *s.Registration
+		s.Registration = &r
 	}
 	return s
 }
@@ -298,10 +335,14 @@ type feishuBotView struct {
 	Pairing     *botPairView  `json:"pairing,omitempty"`
 	TopicChats  []botChatView `json:"topic_chats,omitempty"` // the group chats the owner opted in
 	NudgeAfter  int           `json:"nudge_after"`           // minutes before the one nudge under an unanswered card, 0 off
+
+	SourceReportDelayMinutes int  `json:"source_report_delay_minutes"`
+	SourceReportFullReply    bool `json:"source_report_full_reply"`
 	// Target and Agents are the assistant's (feishu.view): where the chat's messages go now, the agents bound to
 	// threads of the chat; left out while it is not connected.
-	Target string                      `json:"target,omitempty"`
-	Agents []assistantwire.FeishuAgent `json:"agents,omitempty"`
+	Target  string                      `json:"target,omitempty"`
+	Agents  []assistantwire.FeishuAgent `json:"agents,omitempty"`
+	LarkCLI *larkCLIBotView             `json:"larkcli,omitempty"`
 }
 
 type botOwnerView struct {
@@ -321,7 +362,8 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 	s := b.set
 	appID, _, domain, fromConfig, _ := h.botCredentialsLocked()
 	v := feishuBotView{Enabled: s.Enabled, AppID: appID, Domain: feishubot.ResolveDomain(domain), HasSecret: appID != "",
-		FromConfig: fromConfig, Features: s.Features, BotName: b.info.Name, NudgeAfter: s.nudgeAfter()}
+		FromConfig: fromConfig, Features: s.Features, BotName: b.info.Name, NudgeAfter: s.nudgeAfter(),
+		SourceReportDelayMinutes: s.sourceReportDelayMinutes(), SourceReportFullReply: s.SourceReportFullReply}
 	if b.conn != nil {
 		st := b.conn.State()
 		v.Connected, v.Error = st.Connected, st.Error
@@ -340,11 +382,43 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 	for _, c := range s.TopicChats {
 		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat()})
 	}
+	botAppID := appID
 	b.mu.Unlock()
+	v.LarkCLI = h.larkCLIView(ctx, botAppID)
 	if chat, err := h.feishuChatView(ctx); err == nil {
 		v.Target, v.Agents = chat.Target, chat.Agents
 	}
 	return v
+}
+
+const sourceReportDelayMaxMinutes = 60
+
+func (h *Manager) setSourceReportSettings(ctx context.Context, delay *int, fullReply *bool) error {
+	b := &h.bots
+	b.mu.Lock()
+	h.loadBotsLocked(ctx)
+	previousDelay, previousFullReply := b.set.SourceReportDelayMinutes, b.set.SourceReportFullReply
+	var changes []botRecord
+	if delay != nil && b.set.sourceReportDelayMinutes() != *delay {
+		b.set.SourceReportDelayMinutes = delay
+		changes = append(changes, botRecord{auditBotSourceReportDelay, map[string]any{"minutes": *delay}})
+	}
+	if fullReply != nil && previousFullReply != *fullReply {
+		b.set.SourceReportFullReply = *fullReply
+		changes = append(changes, botRecord{auditBotSourceReportFullReply, map[string]any{"enabled": *fullReply}})
+	}
+	if len(changes) == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	if err := h.saveBotSettingsLocked(); err != nil {
+		b.set.SourceReportDelayMinutes, b.set.SourceReportFullReply = previousDelay, previousFullReply
+		b.mu.Unlock()
+		return err
+	}
+	b.mu.Unlock()
+	h.auditBot(ctx, changes...)
+	return nil
 }
 
 func (h *Manager) botRoutes(api *http.ServeMux) {
@@ -354,11 +428,12 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 	})
 	api.HandleFunc("PUT /api/v1/bots/feishu", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Enabled   *bool           `json:"enabled"`
-			AppID     *string         `json:"app_id"`
-			AppSecret *string         `json:"app_secret"`
-			Domain    *string         `json:"domain"`
-			Features  json.RawMessage `json:"features"`
+			Enabled        *bool           `json:"enabled"`
+			AppID          *string         `json:"app_id"`
+			AppSecret      *string         `json:"app_secret"`
+			Domain         *string         `json:"domain"`
+			LarkCLIProfile *string         `json:"larkcli_profile"`
+			Features       json.RawMessage `json:"features"`
 			// TopicChats replaces the list of group chats the owner opted in; absent leaves it, [] clears it.
 			// An entry may carry home: true (the home topic group, "/topics home"); when no entry says anything about home,
 			// the one the list has stays.
@@ -370,12 +445,30 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			// NudgeAfter is minutes before the one nudge under an unanswered card; 0 turns nudges off, absent leaves it.
 			// Read as raw JSON so that anything but a whole number in range gets the same answer (nudgeAfterValue).
 			NudgeAfter json.RawMessage `json:"nudge_after"`
+			// Zero posts as soon as the result is ready. Absent leaves the current setting.
+			SourceReportDelayMinutes json.RawMessage `json:"source_report_delay_minutes"`
+			SourceReportFullReply    *bool           `json:"source_report_full_reply"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
+		if in.LarkCLIProfile != nil {
+			if fixed := h.configuredLarkCLIProfile(); fixed != "" {
+				writeErrCode(w, http.StatusConflict, "larkcli_profile_fixed", fmt.Errorf("lark-cli profile is fixed by manager.json: %s", fixed))
+				return
+			}
+			if err := h.validateLarkCLIProfile(r.Context(), *in.LarkCLIProfile); err != nil {
+				writeErr(w, http.StatusBadRequest, err)
+				return
+			}
+		}
 		nudge, err := nudgeAfterValue(in.NudgeAfter)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		reportDelay, err := botMinutesValue(in.SourceReportDelayMinutes, sourceReportDelayMaxMinutes, "hub-bots.source_report_delay_range")
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err)
 			return
@@ -426,6 +519,18 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		if nudge != nil {
 			h.setNudgeAfter(r.Context(), *nudge)
+		}
+		if reportDelay != nil || in.SourceReportFullReply != nil {
+			if err := h.setSourceReportSettings(r.Context(), reportDelay, in.SourceReportFullReply); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if in.LarkCLIProfile != nil {
+			if err := h.setLarkCLIProfile(r.Context(), *in.LarkCLIProfile); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
 		}
 		writeJSON(w, h.botView(r.Context()))
 	})
@@ -594,6 +699,16 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 	h.auditBot(ctx, records...)
 	if reconnect {
 		h.restartBot()
+	}
+	if creds {
+		syncCtx := h.ctx
+		if syncCtx == nil {
+			syncCtx = context.Background()
+		}
+		if err := h.syncLarkCLIProfile(syncCtx); err != nil {
+			h.logf("larkcli profile sync: %v", err)
+		}
+		h.refreshLarkCLIConnector(syncCtx)
 	}
 	h.sendReport()
 	return nil

@@ -68,6 +68,12 @@ func (s *Service) followStarts(ctx context.Context, d DeviceSessions) {
 	for _, sess := range d.Sessions {
 		key := [2]string{d.MachineID, sess.SessionID}
 		switch {
+		case sess.Starting && sess.PendingSwitch != nil:
+			// A running Agent moving to another launcher (node/launcher_switch.go), listed as starting meanwhile on the
+			// launcher it moves to: not followed. The row listed after it may run on either launcher (back on its own
+			// one when the new one did not come up: a start of the own launcher that worked, but not of the one this
+			// row names), so it says nothing of the new launcher's starts; the switch's outcome goes to the message
+			// that carried it out.
 		case sess.Starting:
 			if _, ok := b.starting[key]; !ok {
 				b.starting[key] = startWatch{launcher: cmp.Or(sess.Launcher, "claude"), seen: now}
@@ -161,6 +167,9 @@ func codedStartRefusal(err error) (string, map[string]string) {
 func (s *Service) startFailureText(ctx context.Context, machine string, err error) string {
 	code, args := codedStartRefusal(err)
 	if code == "" {
+		if text := s.linkFailureText(ctx, machine, err); text != "" { // machine busy or link down (#7511)
+			return text
+		}
 		return err.Error()
 	}
 	return startErrorText(s.lang(ctx), s.machineName(machine), proto.Session{StartError: err.Error(), StartErrorCode: code, StartErrorArgs: args})

@@ -181,6 +181,9 @@ struct SiblingTabs: View {
                 .contentShape(.capsule)
         }
         .buttonStyle(.plain)
+        // Its count is never cut: where the row runs out of width (the largest text sizes, with the agent's pills and mode
+        // after it, #3719) the strip of tabs before it scrolls in less.
+        .fixedSize()
         .accessibilityLabel(waiting ? String(localized: "\(siblings.count) agents in this space, one needs you")
                                     : String(localized: "\(siblings.count) agents in this space [Space View 359a45]"))
         #if DEBUG
@@ -442,7 +445,7 @@ struct SpaceView: View {
                 }
             }
         }
-        .navigationDestination(item: $started) { key in ChatView(key: key).id(key) }
+        .navigationDestination(item: $started) { key in ChatView(key: key).id(key).splitDetailPage(ownsBack: true) }
         .renameSpaceAlert($renaming)
     }
 }

@@ -28,10 +28,12 @@ class HubChatTransport internal constructor(
     private val newOpId: () -> String = { UUID.randomUUID().toString() },
     /** How long an answer cut off by the connection keeps being retried with the same op id. */
     private val resolveRetryMillis: Long = RESOLVE_RETRY_MILLIS,
+    private val hierarchy: () -> Boolean = { false },
 ) : ChatTransport {
     constructor(connection: OkHttpHubConnection) : this(
         { path, method, body, headers -> connection.request(path, method, body, headers) },
         { timeout -> withTimeoutOrNull(timeout) { connection.state.first { it == ConnectionState.Online } } != null },
+        hierarchy = { "sessions_hierarchy" in connection.serverFeatures.value },
     )
 
     /** Fixed origins are only available to tests in this module. */
@@ -62,9 +64,15 @@ class HubChatTransport internal constructor(
         counts: Boolean = false,
     ): String {
         val url = path("sessions").apply {
-            addQueryParameter("summary", "1")
-            addQueryParameter("limit", "50")
+            // A complete-membership view holds whole rows (`summary=0`), read in the largest pages the hub allows.
+            val complete = filter.requiresCompleteMembership && !counts
+            addQueryParameter("summary", if (complete) "0" else "1")
+            addQueryParameter("limit", if (complete) "200" else "50")
             if (counts) addQueryParameter("counts", "1")
+            if (hierarchy()) {
+                if (filter.parentSessionId != null) addQueryParameter("parent_session_id", filter.parentSessionId)
+                else if (filter.roots && !filter.requiresCompleteMembership) addQueryParameter("roots", "1")
+            }
             filter.state?.let { addQueryParameter("state", it) }
             filter.machineId?.let { addQueryParameter("machine_id", it) }
             filter.project?.let { addQueryParameter("project", it) }
@@ -157,6 +165,13 @@ class HubChatTransport internal constructor(
         }
     }
 
+    override suspend fun reanswer(id: String, answers: Map<String, String>, manager: String?) {
+        val url = path("interactions", id, "reanswer").apply { manager?.takeIf(String::isNotEmpty)?.let { addQueryParameter("manager", it) } }.build()
+        val body = JsonObject(mapOf("answers" to JsonObject(answers.mapValues { JsonPrimitive(it.value) }))).toString()
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        request(url.encodedPath + (url.encodedQuery?.let { "?$it" } ?: ""), "POST", body).use { if (!it.isSuccessful) throw HubFailure.from(it) }
+    }
+
     override suspend fun image(session: SessionKey, itemId: String): ByteArray =
         request(api("sessions", session.machineId, session.sessionId, "items", itemId, "image"), "GET", null)
             .use { it.body!!.bytes() }
@@ -185,11 +200,15 @@ class HubChatTransport internal constructor(
             ?.let { runCatching { JsonCodec.parseToJsonElement(it) as? JsonObject }.getOrNull() }
             ?.get(name)?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
 
-        /** The connection lost the request (refused, reset, timed out, or a proxy said the hub is not there). */
+        /**
+         * The connection lost the request (refused, reset, timed out), or something in front of the hub answered
+         * 502/503/504 for it. The hub's own errors carry a `code` or say what was `delivered` (503 `assistant_offline`,
+         * a node that did not answer): those are answers, not gaps, as the web's `isTransient` (#2768).
+         */
         internal fun cutOff(failure: HubFailure) = when (failure.status) {
             null -> failure.kind in setOf(HubError.ConnectionRefused, HubError.Unreachable, HubError.Timeout,
                 HubError.Transport, HubError.NoNetwork, HubError.AddressNotFound)
-            502, 503, 504 -> true
+            502, 503, 504 -> failure.code.isNullOrEmpty() && failure.delivered == null
             else -> false
         }
     }

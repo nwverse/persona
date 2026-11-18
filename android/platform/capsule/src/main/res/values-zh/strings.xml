@@ -38,7 +38,9 @@
     <string name="capsule_group_pending">已读待处理</string>
     <string name="capsule_group_completed">已完成</string>
     <string name="capsule_read_all">全部已读</string>
-    <string name="capsule_message_count">%1$d 条消息</string>
+    <plurals name="capsule_message_count">
+        <item quantity="other">%1$d 条消息</item>
+    </plurals>
     <string name="capsule_ask_persona">向 Persona 提问…</string>
     <string name="capsule_reply_to">回复 %1$s…</string>
     <string name="capsule_confirm_send">确认发送</string>

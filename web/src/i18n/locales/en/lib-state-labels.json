@@ -8,6 +8,7 @@
   "waiting": "Waiting",
   "bg_waiting": "Waiting in the background",
   "awaits_reply": "Awaiting your reply",
+  "just_finished": "Just finished",
   "done": "Done",
   "interrupted": "Interrupted",
   "follow_up": "Follow-up",
@@ -21,5 +22,9 @@
   "count_unread_other": "{count} unread",
   "count_done_other": "{count} done",
   "mark_all_seen": "Mark all as seen",
-  "mark_all_seen_count": "Mark all as seen ({count})"
+  "mark_all_seen_count": "Mark all as seen ({count})",
+  "direction_working": "Doing",
+  "direction_needs_you": "Needs you",
+  "direction_stuck": "Stuck",
+  "direction_planned": "Not started"
 }

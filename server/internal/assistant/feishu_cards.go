@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/deeplink"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -60,6 +61,9 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	f, ready := s.feishuFeatures(ctx)
 	if !ready || !f.Cards {
 		return false
+	}
+	if ix.Private {
+		return false // a Just me turn's card: never on Lark (meeting_justme.go)
 	}
 	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
 	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
@@ -137,18 +141,27 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	s.keepBotCardLocked(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
 	b.mu.Unlock()
 	reply, to, topic := s.interactionPlace(ix)
+	ctx = feishuSendAs(ctx, string(ix.Kind), ix.MachineID, ix.SessionID)
 	fallback := ""
 	switch ix.Kind {
 	case proto.IxQuestion:
 		fallback = "❓ " + clip(firstQuestion(ix), 100)
 	case proto.IxPermission:
-		fallback = "🔐 " + toolDisplayName(ix.ToolName)
+		fallback = "🔐 " + ixToolName(ix)
 	case proto.IxPlan:
 		fallback = "📋 " + clip(firstLine(ix.Plan), 100)
 	case proto.IxScreen:
 		fallback = "🖥 " + i18n.T(s.botLang(ctx), "assistant-feishu_cards.screen_summary")
 	}
 	card := s.interactionCard(ctx, ix)
+	if s.interactionEnded(ix.ID) {
+		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
+		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
+		b.mu.Lock()
+		s.keepBotCardLocked(ix.ID, nil)
+		b.mu.Unlock()
+		return
+	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
 	// stray card in the group (the hub would send it into the chat), and the owner may not see it there. It goes to the
 	// owner instead, as with a chat that refused it.
@@ -529,9 +542,9 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			feishubot.Submit(i18n.T(l, "assistant-feishu_cards.send_back"), feishubot.Danger, "plan_reject", val(map[string]any{"approve": "0"})))
 		return safeCard(l, c.Buttons(open), open)
 	case proto.IxPermission:
-		c := feishubot.NewCard("🔐 "+i18n.T(l, "assistant-feishu_cards.permission_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Orange, i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": toolDisplayName(ix.ToolName)}))
+		c := feishubot.NewCard("🔐 "+i18n.T(l, "assistant-feishu_cards.permission_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Orange, i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": ixToolName(ix)}))
 		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(toolDisplayName(ix.ToolName)))
+		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(ixToolName(ix)))
 		if ix.Reason != "" {
 			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
@@ -540,6 +553,12 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			c.Markdown("```\n" + strings.ReplaceAll(clip(sum, 2500), "```", "'''") + "\n```")
 		} else if in := proto.RedactArgs(ix.ToolInput); in != "" { // a credential's value never goes to the chat (#4734)
 			c.Markdown("```json\n" + strings.ReplaceAll(clip(in, 2500), "```", "'''") + "\n```")
+		}
+		if ix.CanClarify && !ix.Private {
+			// Question-only form: no Resolution.Values, Allow or Deny travels with
+			// it. Field-bearing cards keep their fields App-only but may still ask.
+			c.Form("clarify", []any{feishubot.Input("question", "", i18n.T(l, "assistant-feishu_cards.question_placeholder"), false)},
+				feishubot.Submit(i18n.T(l, "assistant-feishu_cards.have_question"), feishubot.Default, "permission_clarify", val(map[string]any{"clarify": "1"})))
 		}
 		if len(ix.Fields) > 0 {
 			// A password or a code is typed in the app, never in a chat.
@@ -555,6 +574,12 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		// Claude's session rule (node/runtimes.go), so the button there would only allow once and ask again.
 		label := ix.AlwaysLabel
 		if label == "" && (ix.Agent == "" || ix.Agent == "claude") && ix.SessionID != "" {
+			label = i18n.T(l, "assistant-feishu_cards.always_allow")
+		}
+		// The manager's word wins where it gave one (#3590): no button that would only allow once.
+		if kept := ix.AlwaysHonored; kept != nil && !*kept {
+			label = ""
+		} else if kept != nil && label == "" {
 			label = i18n.T(l, "assistant-feishu_cards.always_allow")
 		}
 		if label != "" {
@@ -764,7 +789,7 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			c.Note(strings.TrimSpace(i18n.T(s.botLang(ctx), "assistant-feishu_cards.clipped")))
 		}
 	case proto.IxPermission:
-		c.Markdown(feishubot.EscapeMarkdown(ix.ToolName + " " + clip(oneLine(ix.Summary), 200)))
+		c.Markdown(feishubot.EscapeMarkdown(ixToolName(ix) + " " + clip(oneLine(ix.Summary), 200)))
 	case proto.IxPlan:
 		c.Markdown(feishubot.EscapeMarkdown(clip(planTitle(ix.Plan), 200)))
 	}
@@ -825,25 +850,19 @@ func (s *Service) webBase(ctx context.Context) string {
 
 // sessionLink is a conversation's page in the web app at web; "" when web is.
 func sessionLink(web, machine, session string, assistant bool) string {
-	if web == "" {
-		return ""
-	}
-	return web + sessionPath(machine, session, assistant)
+	return deeplink.Web(web, sessionPath(machine, session, assistant))
 }
 
-// sessionPath is a conversation's path in the web app (web/src/lib/router.ts): a Persona conversation is
+// sessionPath is a conversation's path in the route table (docs/protocol/deep-links.md): a Persona conversation is
 // /persona/<id>, an agent /s/<machine>/<id>.
 func sessionPath(machine, session string, assistant bool) string {
 	if assistant {
-		return "/persona/" + url.PathEscape(session)
+		return deeplink.Conversation(session)
 	}
-	return "/s/" + url.PathEscape(machine) + "/" + url.PathEscape(session)
+	return deeplink.Session(machine, session)
 }
 
-// todoLink is a todo's page in the web app at web, "" when web is.
+// todoLink is a todo's page in the web app at web (/todos/<id>), "" when web is.
 func todoLink(web, id string) string {
-	if web == "" {
-		return ""
-	}
-	return web + "/todos?id=" + url.QueryEscape(id)
+	return deeplink.Web(web, deeplink.Todo(id))
 }

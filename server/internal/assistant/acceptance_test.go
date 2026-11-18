@@ -108,7 +108,7 @@ func TestAcceptanceFeedbackGoesToTheAgent(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
 	waitAcceptCard(t, s, todo.ID, posts)
-	if card := acceptCardOf(posts()); strings.Contains(card, "evil.example.com") || !strings.Contains(card, "/todos?id="+todo.ID) {
+	if card := acceptCardOf(posts()); strings.Contains(card, "evil.example.com") || !strings.Contains(card, "/todos/"+todo.ID) {
 		t.Fatalf("link:\n%s", card)
 	}
 	mid := askOf(s, todo.ID).MessageID
@@ -404,6 +404,29 @@ func TestAcceptanceReplyWithMedia(t *testing.T) {
 				t.Fatalf("to the agent %v, ask kept %v, notes %q", sent, askOf(s, id) != nil, got)
 			}
 		})
+	}
+}
+
+// A reply "Pass" to a "Please verify" card whose round was already handled is answered, as its button is: the reply is
+// taken as an answer (it is not sent on to the Agent either), so one that gets nothing back reads as the bot ignoring
+// the owner while the same press on the card says "already handled" (feishu_card_actions.go).
+func TestAcceptancePassReplyWhenAlreadyHandled(t *testing.T) {
+	ctx := context.Background()
+	s, f, _, notes, id := askedToAccept(t)
+	mid := askOf(s, id).MessageID
+	if ok, err := s.acceptTry(ctx, id, mid); !ok.taken || err != nil { // the card's button
+		t.Fatalf("the card was not accepted: %v", err)
+	}
+	before, sent := len(notes()), len(f.agentSent)
+	if !s.acceptReply(ctx, "om_pass_again", "通过", false, mid) {
+		t.Fatal("the reply to the card was not taken as an answer")
+	}
+	got := notes()
+	if len(f.agentSent) != sent {
+		t.Fatalf("the reply went to the Agent: %v", f.agentSent[sent:])
+	}
+	if len(got)-before != 1 || !strings.Contains(got[before], "已经处理过了") {
+		t.Fatalf("notes %q, want one more saying it was already handled", got)
 	}
 }
 

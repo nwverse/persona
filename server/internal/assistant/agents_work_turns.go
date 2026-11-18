@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -92,7 +94,7 @@ func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, 
 	}
 	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a later turn can work on a reopened task
 	by := "user"
-	if now.Sub(s.work.sent[k]) < 2*time.Minute {
+	if now.Sub(s.work.sent[k]) < workSentWindow {
 		by = "hub"
 	}
 	if by == "user" {
@@ -100,6 +102,8 @@ func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, 
 	}
 	card := e.InteractionID
 	prev := *e
+	would, managed := s.work.would[k], now.Sub(s.work.told[k]) < workSentWindow
+	delete(s.work.would, k)
 	if card != "" {
 		delete(s.work.cards, card)
 	}
@@ -112,13 +116,61 @@ func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, 
 		s.workEvent(machine, sid, "withdrawn", map[string]any{"by": by})
 	}
 	if prev.Work.Phase != "" {
-		s.workEvent(machine, sid, "resumed", map[string]any{"after": now.Sub(prev.TurnAt).Seconds(), "phase": prev.Work.Phase,
-			"on": prev.Work.On, "by": by})
+		detail := map[string]any{"after": now.Sub(prev.TurnAt).Seconds(), "phase": prev.Work.Phase, "on": prev.Work.On, "by": by}
+		if by == "user" && !managed && would != "" && s.startedByHand(ctx, machine, sid) {
+			detail["hand"] = would
+		}
+		s.workEvent(machine, sid, "resumed", detail)
 	}
 	s.saveWork(saved)
 	if changed {
 		s.publishSoon()
 	}
+}
+
+// workSentWindow is how long after the manager sent a session something a turn it starts is the manager's doing.
+const workSentWindow = 2 * time.Minute
+
+// The triage actions a resumed event's `hand` names (workWould): the switch that alone would have gone on with the stop.
+const (
+	handDecide       = "decide"
+	handAutoContinue = "auto_continue"
+	handWake         = "wake"
+)
+
+// workTold notes that this manager sent machine's session sid a message now.
+func (s *Service) workTold(machine, sid string) {
+	s.work.mu.Lock()
+	s.work.init()
+	s.work.told[[2]string{machine, sid}] = time.Now()
+	s.work.mu.Unlock()
+}
+
+// workWould notes, for the session's stop the triage just acted on, the action that was left undone only because its
+// switch is off ("" clears it): what a resumed event's `hand` says when the session then goes on without Persona.
+func (s *Service) workWould(k [2]string, action string) {
+	s.work.mu.Lock()
+	s.work.init()
+	if action == "" {
+		delete(s.work.would, k)
+	} else {
+		s.work.would[k] = action
+	}
+	s.work.mu.Unlock()
+}
+
+// startedByHand: nothing says the turn machine's session sid just started was the agent's own doing (a background
+// task reporting back, a /loop). With no message of this manager's before it (workStartedObserved), that leaves a
+// message from outside Persona: the owner's, in an app or typed into the agent's terminal. A session that cannot be
+// read is not counted.
+func (s *Service) startedByHand(ctx context.Context, machine, sid string) bool {
+	sess, ok := s.nodeSession(machine, sid) // as the node listed it; asked only when this manager holds no list
+	if !ok {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		sess, ok = s.session(ctx, machine, sid)
+	}
+	return ok && !sess.WokeByTask && sess.Loop == nil
 }
 
 // workSeen: the user looked at a session. The first look after a turn ended is how long it waited for them.
@@ -170,7 +222,7 @@ func (s *Service) workTurnEnded(ctx context.Context, machine, sid string) {
 	}
 	s.wakeWaitersOn(machine, sid)
 	// On a timer: a goroutine asleep through the window would hold a stack per pending turn end (#2472).
-	time.AfterFunc(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
+	s.afterTurnCompletion(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
 }
 
 // workTurnSettled checks the turn after the settle window.
@@ -206,9 +258,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.work.mu.Unlock()
 		return
 	}
-	s.work.tried[k] = triedTurn{c.UpdatedAt, time.Now()}
+	tried := triedTurn{turn: c.UpdatedAt, at: time.Now()}
+	if was, ok := s.work.tried[k]; ok && sameTurn(c, was.turn) {
+		tried.read = was.read // the turn as an attempt before read it: not read again (triageRead)
+	}
+	s.work.tried[k] = tried
 	if had && sameTurn(c, prev.TurnAt) && (prev.Work.Phase != "" || prev.Work.By != "") {
+		retired, recovered := retiredRetry(c, *prev)
 		s.work.mu.Unlock()
+		if recovered {
+			s.putWork(ctx, retired)
+		}
 		return
 	}
 	s.work.triaging[k] = true
@@ -222,6 +282,12 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.work.mu.Lock()
 		delete(s.work.triaging, k)
 		delete(s.work.generation, k)
+		// A turn with its work state is not tried again: what was read of it goes (kept for the retries, triageRead).
+		if e, ok := s.work.entries[k]; ok && sameTurn(c, e.TurnAt) && s.work.tried[k].read != nil {
+			t := s.work.tried[k]
+			t.read = nil
+			s.work.tried[k] = t
+		}
 		s.work.mu.Unlock()
 	}()
 
@@ -282,7 +348,7 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	}
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
 		if ciWaitIntent(&e.Work) {
-			ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+			ask, reply, _ := s.lastTurnOf(ctx, machine, c.SessionID)
 			startCIWatch(c, &e, time.Now(), ask, reply)
 		}
 		if e.Work.CI != nil {
@@ -506,12 +572,12 @@ var (
 	// error (500, 502, 503, 504) or overloaded (529).
 	transientStatus = lazyre.New(`\b(408|429|500|502|503|504|529)\b`)
 	rateLimitStatus = lazyre.New(`\b429\b`)
-	userErrorWords  = []string{"failed to authenticate", "oauth token has expired", "invalid api key", "not logged in", "please run /login",
-		"issue with the selected model", "permission_error", "authentication_error", "credit balance", "billing",
-		"ssl certificate", "self-signed certificate", "certificate verif",
+	// userErrorWords: the auth words shared with the node's failed-turn check (assistantwire.AuthErrorWords, #4669),
+	// then a request the service refuses as it is, a context too long, an interrupt.
+	userErrorWords = append(slices.Clone(assistantwire.AuthErrorWords),
 		"invalid_request_error", "invalid request", "prompt is too long", "context length", "context window", "context_length_exceeded",
 		"maximum context", "too many tokens", "request too large", "request_too_large",
-		"interrupted by user", "request was aborted", "aborted by user", "user aborted"}
+		"interrupted by user", "request was aborted", "aborted by user", "user aborted")
 	transientWords = []string{"overloaded", "rate limit", "rate_limit", "too many requests",
 		"connection", "timed out", "timeout", "socket hang up", "econnreset", "econnrefused", "fetch failed", "no eligible upstream",
 		"internal server error", "service unavailable", "bad gateway", "gateway timeout", "network", "api_error", "upstream",

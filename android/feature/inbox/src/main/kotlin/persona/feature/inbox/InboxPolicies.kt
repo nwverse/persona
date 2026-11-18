@@ -150,7 +150,8 @@ internal fun muteAndRuleActions(
     res: Resources, record: InboxRecord, onMute: (InboxMuteOption) -> Unit, onRule: (InboxMuteOption) -> Unit,
 ): List<JAction> =
     record.mutes.mapIndexed { i, option ->
-        JAction(res.getString(R.string.inbox_mute_option, res.getString(option.title), option.shortName), PhIcons.Prohibit,
+        val name = if (option.tag == "chat") record.event.where?.takeIf { it.isNotBlank() } ?: option.shortName else option.shortName
+        JAction(res.getString(R.string.inbox_mute_option, res.getString(option.title), name), PhIcons.Prohibit,
             separatorBefore = i == 0) { onMute(option) }
     } + record.mutes.mapIndexed { i, option ->
         JAction(res.getString(R.string.inbox_mute_option, res.getString(option.policyTitle), option.shortName), PhIcons.Target,
@@ -237,7 +238,7 @@ internal fun InboxPolicySheet(repository: InboxRepository, target: InboxPolicyTa
         Text(stringResource(R.string.inbox_policy_twin_note), Modifier.padding(horizontal = rowPadding),
             style = PersonaTheme.type.caption, color = palette.ink3)
         failure?.let { JNotice(it, Modifier.padding(top = Tokens.Space.l), status = Status.NeedsYou) }
-        Spacer(Modifier.height(Tokens.Space.xl))
+        Spacer(Modifier.height(Tokens.Space.section))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             if (editor.policy != null) JButton(stringResource(R.string.inbox_policy_remove), { send(InboxPolicySend.Remove) },
                 kind = JButtonKind.Quiet, size = JButtonSize.Medium, enabled = !editor.busy, loading = editor.sending == InboxPolicySend.Remove)

@@ -10,7 +10,7 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 
-const calls = vi.hoisted(() => ({ list: [] as { path: string; json?: unknown }[], items: [] as unknown[], history: [] as unknown[], historyStatus: 200, days: false }));
+const calls = vi.hoisted(() => ({ list: [] as { path: string; json?: unknown }[], items: [] as unknown[], history: [] as unknown[], historyStatus: 200, days: false, byId: {} as Record<string, unknown> }));
 vi.mock("../../lib/api", async (orig) => {
   const m = await orig<typeof import("../../lib/api")>();
   return {
@@ -39,6 +39,8 @@ vi.mock("../../lib/api", async (orig) => {
         const last = page.at(-1);
         return Promise.resolve({ items: page, next: page.length === Number(q.get("limit") ?? 50) && last ? { before: last.done_at, before_id: last.id } : undefined });
       }
+      // one item by id (GET /api/v1/inbox/{id}), as the hub reads any it keeps
+      if (path.startsWith("/inbox/") && path.slice(7) in calls.byId) return Promise.resolve(calls.byId[path.slice(7)]);
       if (path === "/mail/accounts") return Promise.resolve({ accounts: [{ id: "acc1", email: "me@example.com" }] });
       if (path === "/inbox/bulk") {
         const ids = new Set((init?.json?.items ?? []).map((x) => x.id));
@@ -71,7 +73,13 @@ let root: Root;
 const flush = async () => {
   for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); });
 };
+// a long group's rows mount in steps while the page is idle (audit item 34): let those steps run
+const allRows = async () => {
+  for (let i = 0; i < 10; i++) await act(async () => { await new Promise((done) => setTimeout(done, 60)); });
+};
 const button = (text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
+// the section bar opens on Needs you (#9053): these cases are about every section stacked, All
+const showAll = () => act(() => host.querySelector<HTMLButtonElement>('[data-bar-choice="all"]')!.click());
 const groups = (section: string) => [...host.querySelectorAll<HTMLElement>(`[data-section="${section}"] [data-group]`)].map((g) => g.dataset.group!.split("|")[2]);
 const head = (section: string, key: string) => host.querySelector<HTMLElement>(`[data-group="|${section}|${key}"]`)!;
 const toggle = (section: string, key: string) => head(section, key).querySelector<HTMLButtonElement>("button[aria-expanded]")!;
@@ -90,6 +98,7 @@ beforeEach(async () => {
   calls.list = [];
   calls.historyStatus = 200;
   calls.days = false;
+  calls.byId = {};
   // Needs you: two Lark today, one mail yesterday, one mail 3 days ago; FYI: one Lark; Done: one today (the list's)
   calls.items = [lark("l1"), lark("l2"), mail("m1", { updated_at: ago(1) }), mail("m2", { updated_at: ago(3) }), lark("f1", { tier: "fyi" }),
     lark("d1", { done_at: ago(0, 0.2), done_by: "user" })];
@@ -105,6 +114,7 @@ beforeEach(async () => {
   root = createRoot(host);
   act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
   await flush();
+  showAll();
 });
 
 afterEach(() => {
@@ -122,8 +132,10 @@ describe("inbox groups (#2059)", () => {
     expect(groups("fyi")).toEqual([]);
   });
 
-  it("by time: today, yesterday, each date; the switch is kept on this device", async () => {
-    await click([...host.querySelectorAll('[role="radio"]')].find((b) => b.textContent === "按时间"));
+  it("by time: today, yesterday, each date; the switch, in the section bar's grouping menu, is kept on this device", async () => {
+    await click(host.querySelector('[data-inbox-bar] button[aria-label="分组方式"]'));
+    expect([...document.querySelectorAll('[role="menuitemradio"]')].map((el) => [el.textContent, el.getAttribute("aria-checked")])).toEqual([["按来源", "true"], ["按时间", "false"]]);
+    await click([...document.querySelectorAll('[role="menuitemradio"]')].find((el) => el.textContent === "按时间"));
     expect(groups("action").slice(0, 2)).toEqual(["today", "yesterday"]);
     expect(groups("action")[2]).toMatch(/^d:\d{4}-\d{2}-\d{2}$/);
     expect(localStorage.getItem("inbox.grouping")).toBe("time");
@@ -142,6 +154,17 @@ describe("inbox groups (#2059)", () => {
     expect(head("done", "month").textContent).toContain("1 个月前1");
   });
 
+  it("draws the Jump to down arrow and still opens its groups menu", async () => {
+    const jump = host.querySelector<HTMLButtonElement>('[data-section="done"] button[aria-haspopup="menu"]');
+    expect(jump).not.toBeNull();
+    const arrow = jump!.querySelector('svg[width="10"]');
+    expect(arrow?.querySelector("path")?.getAttribute("d")).toBeTruthy();
+    expect(arrow?.getAttribute("stroke-width")).toBe("2.4");
+    await click(jump);
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect([...document.querySelectorAll('[role="menuitem"]')].some(item => item.textContent?.includes("7 天前"))).toBe(true);
+  });
+
   it("an old hub without history (404): Done has only the list's items", async () => {
     act(() => root.unmount());
     calls.historyStatus = 404;
@@ -149,6 +172,7 @@ describe("inbox groups (#2059)", () => {
     root = createRoot(host);
     act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
     await flush();
+    showAll();
     expect(groups("done")).toEqual([]); // one group: no titles
     expect(host.querySelector('[data-section="done"]')?.textContent).not.toContain("+");
   });
@@ -196,6 +220,7 @@ const remount = async () => {
   root = createRoot(host);
   act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
   await flush();
+  showAll();
 };
 const historyAsks = () => calls.list.filter((c) => c.path.startsWith("/inbox/done?")).map((c) => new URLSearchParams(c.path.slice(c.path.indexOf("?") + 1)));
 /** Local midnight `n` days before the tests' "now" (Mon 9 Nov 2026, 15:00). */
@@ -237,12 +262,71 @@ describe("Done's day counts from the hub (#2969)", () => {
     await click(toggle("done", "just").closest("section")?.querySelector('button[aria-haspopup="menu"]'));
     await click([...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.includes("7 天前")));
     expect(historyAsks()).toHaveLength(1);
+    await allRows();
     expect(head("done", "week").querySelectorAll("[data-item]").length).toBe(100);
     await click(button("加载更早的"));
     const ask = historyAsks().at(-1)!;
     expect(ask.get("before_id")).toBeTruthy(); // where the first page ended
+    await allRows();
     expect(head("done", "week").querySelectorAll("[data-item]").length).toBe(151);
     expect(button("加载更早的")).toBeUndefined();
+  });
+
+  it("the list's last days are not complete on their own: Today loads what the list leaves out (#5549)", async () => {
+    // the list carries only the newest done items (one of today's): three more were done today, only the history has them
+    calls.items.push(lark("lt", { done_at: ago(0, 2), done_by: "user" }));
+    calls.history.push(...[1, 2, 3].map((i) => lark(`t${i}`, { done_at: ago(0, 4 + i), done_by: "user" })));
+    calls.days = true;
+    await remount();
+    expect(head("done", "today").textContent).toContain("今天4");
+    await click(toggle("done", "just").closest("section")?.querySelector('button[aria-haspopup="menu"]'));
+    await click([...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.includes("今天")));
+    // Today's first page starts past the oldest done item the list holds, not with rows the list has
+    const ask = historyAsks().at(-1)!;
+    expect([ask.get("before"), ask.get("before_id")]).toEqual([ago(0, 2), "lt"]);
+    expect(["t1", "t2", "t3"].map((id) => Boolean(head("done", "today").querySelector(`[data-item="${id}"]`)))).toEqual([true, true, true]);
+    // a row only the history has opens like a listed one
+    act(() => root.render(<Inbox id="t2" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.textContent).not.toContain("这件事已经不在收件箱里了");
+    expect(host.textContent).toContain("chat t2");
+  });
+
+  // the section bar (#9053): chosen, Done is shown open, so it reads its history as an open Done does under All
+  it("the Done choice reads Done's history as Done opened under All does", async () => {
+    calls.items.push(lark("lt", { done_at: ago(0, 2), done_by: "user" }));
+    calls.history.push(...[1, 2, 3].map((i) => lark(`t${i}`, { done_at: ago(0, 4 + i), done_by: "user" })));
+    calls.days = true;
+    await remount();
+    // All, Done folded: nothing loads
+    expect(historyAsks()).toEqual([]);
+    await click(host.querySelector('[data-bar-choice="done"]'));
+    expect(host.querySelector('[data-section="done"] h3')).not.toBeNull();
+    expect(groups("done")).toEqual(["just", "today", "week", "month"]);
+    // Today is open at first and the list holds only one of its four: its first page comes by itself
+    expect([historyAsks().at(-1)!.get("before"), historyAsks().at(-1)!.get("before_id")]).toEqual([ago(0, 2), "lt"]);
+    expect(["t1", "t2", "t3"].map((id) => Boolean(head("done", "today").querySelector(`[data-item="${id}"]`)))).toEqual([true, true, true]);
+    // Jump To with no fold of its own to open first
+    await click(host.querySelector('[data-section="done"] button[aria-haspopup="menu"]'));
+    await click([...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.includes("7 天前")));
+    expect(toggle("done", "week").getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector('[data-item="h10"]')).toBeTruthy();
+  });
+
+  it("a link to a done item neither the list nor the loaded history has opens the hub's copy (#5549)", async () => {
+    calls.byId = { x9: lark("x9", { title: "chat x9", done_at: ago(0, 2), done_by: "user" }) };
+    act(() => root.render(<Inbox id="x9" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(calls.list.filter((c) => c.path === "/inbox/x9")).toHaveLength(1);
+    expect(host.textContent).not.toContain("这件事已经不在收件箱里了");
+    expect(host.textContent).toContain("chat x9");
+    // one the hub doesn't have either is gone, asked once
+    act(() => root.render(<Inbox id="nope" onToggleSidebar={() => {}} />));
+    await flush();
+    act(() => root.render(<Inbox id="nope" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(calls.list.filter((c) => c.path === "/inbox/nope")).toHaveLength(1);
+    expect(host.textContent).toContain("这件事已经不在收件箱里了");
   });
 
   it("filtered, the counts are of what is loaded, and n+ until a group is complete", async () => {
@@ -253,6 +337,9 @@ describe("Done's day counts from the hub (#2969)", () => {
     // nothing of 7+ days is loaded yet: only Lark's done item of the list shows
     expect(groups("done")).toEqual([]);
     expect(host.querySelector('[data-section="done"]')?.textContent).toContain("1+");
+    // Today first: the list carries only the newest done items (#5549), so its days page in too, past what it holds
+    await click(button("加载更早的"));
+    expect(historyAsks().at(-1)!.get("before_id")).toBe("d1");
     await click(button("加载更早的"));
     expect(historyAsks().at(-1)!.get("before")).toBe(midnight(6).toISOString());
     expect(head("done", "week").textContent).toContain("7 天前2"); // h10 and h12, Lark's; the week is complete

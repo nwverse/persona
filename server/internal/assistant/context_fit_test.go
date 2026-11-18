@@ -50,6 +50,8 @@ func bigSnapshot(now time.Time) prompts.Snapshot {
 		Plans:     []prompts.SnapshotPlan{{At: now, Titles: []string{"a", "b"}, Tasks: 2}},
 		Asked:     []prompts.SnapshotAsked{{TodoID: "todo_3", Question: "先发哪个？", At: now}},
 		Followups: followups, FollowupsTotal: 11,
+		FollowingEnabled: true,
+		Following:        []prompts.SnapshotFollowing{{Title: "跟进的报价", Where: "项目群", Who: "评审", Next: "再问一次", CheckAt: now}}, FollowingTotal: 1,
 		Routines: []prompts.SnapshotRoutine{{Label: "早报", Rule: "每天 09:00"}}, RoutinesTotal: 1,
 		Missed: []prompts.SnapshotMiss{{At: now, Label: "清单", Why: line[:60*3]}}, MissedTotal: 1,
 	}
@@ -65,6 +67,29 @@ func TestFitSnapshotLeavesASmallSnapshotAlone(t *testing.T) {
 		Routines: []prompts.SnapshotRoutine{{Label: "早报", Rule: "每天 09:00"}}, RoutinesTotal: 1}
 	if got, want := fitSnapshot(s), prompts.RenderSnapshot(s); got != want {
 		t.Fatalf("a snapshot under the budget changed:\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestSnapshotDoneAndMutedStayCounts(t *testing.T) {
+	s := prompts.Snapshot{Now: fitNow, Zone: "Asia/Shanghai",
+		Needs:    []prompts.SnapshotAgent{{Label: "等你批准发布", Machine: "build-1", Session: "need-1", Line: "可以合并吗"}},
+		Awaiting: []prompts.SnapshotAgent{{Label: "看过还没回复", Machine: "build-1", Session: "wait-1", Line: "选哪个方案"}},
+		Done:     []prompts.SnapshotAgent{{Label: "已经修完的登录问题", Machine: "build-2", Session: "done-1", Line: "测试通过"}},
+		Muted:    []prompts.SnapshotAgent{{Label: "已经屏蔽的巡检", Machine: "build-3", Session: "mute-1", Line: "没有新事"}}}
+	got := fitSnapshot(s)
+	for _, want := range []string{
+		"  - 做完的（24 小时内）：1 个，agents_list state=done 查",
+		"  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：1 个，agents_list state=muted 查",
+		"等你批准发布", "看过还没回复", "可以合并吗", "选哪个方案",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"已经修完的登录问题", "已经屏蔽的巡检", "done-1", "mute-1", "测试通过", "没有新事"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("done or muted details stayed in an under-budget snapshot (%q):\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -98,8 +123,8 @@ func TestFitSnapshotKeepsCountsOfWhatItLeavesOut(t *testing.T) {
 	got := fitSnapshot(bigSnapshot(fitNow))
 	for _, want := range []string{
 		"- Agents：需要你 6 个，完成未看 6 个，工作中 12 个",
-		"  - 做完的（24 小时内）：20 个，这份快照放不下",
-		"  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：4 个，这份快照放不下",
+		"  - 做完的（24 小时内）：20 个，agents_list state=done 查",
+		"  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：4 个，agents_list state=muted 查",
 		"- 已安排的跟进：11 个，这份快照放不下，没列出来，要看用 list_followups",
 		"- 知识库（kb_get 看详情）：这份快照放不下",
 		"- 飞书未读会话 2 个",
@@ -130,6 +155,10 @@ func TestFitSnapshotCoversEverySection(t *testing.T) {
 		omit(&one)
 		s := full
 		s.Omit = one
+		if one.OpenTodos {
+			s.OpenTodos = []prompts.SnapshotOpenTodo{{ID: "todo_fixture", Title: "fixture"}}
+			s.OpenTodosTotal = 1
+		}
 		if prompts.RenderSnapshot(s) == prompts.RenderSnapshot(full) {
 			t.Errorf("the template ignores %+v (or the fixture does not reach its section)", one)
 		}
@@ -185,6 +214,23 @@ func TestFitSnapshotCutsWhatCannotBeLeftOut(t *testing.T) {
 		if !strings.Contains(got, "session_id=s1") {
 			t.Errorf("%s: the agent waiting for the user was cut:\n%s", name, got)
 		}
+	}
+}
+
+func TestFitSnapshotHardCutKeepsOpenTodoCountAndEntrance(t *testing.T) {
+	s := prompts.Snapshot{
+		Now: fitNow, Zone: "UTC", OpenTodosLoaded: true, OpenTodosTotal: 26,
+		Needs: []prompts.SnapshotAgent{{Label: "waiting agent", Machine: "m", Session: "s1", Line: strings.Repeat("urgent detail ", 1000)}},
+	}
+	got := fitSnapshot(s)
+	if n := runes(got); n > snapshotBudget {
+		t.Fatalf("snapshot has %d characters, budget is %d", n, snapshotBudget)
+	}
+	if !strings.HasSuffix(got, "\n"+prompts.SnapshotCut()) {
+		t.Fatalf("fixture did not exercise the hard cut:\n%s", got)
+	}
+	if !strings.Contains(got, "开放待办：共 26 件（完整列表用 todo_list）") {
+		t.Fatalf("the hard cut lost the protected open-todo summary:\n%s", got)
 	}
 }
 

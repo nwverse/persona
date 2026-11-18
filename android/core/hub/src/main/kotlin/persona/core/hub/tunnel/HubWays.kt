@@ -127,7 +127,11 @@ class HubWays(
     private val lock = Any()
 
     private class Running(val tunnel: HubTunnel, val ssh: SshTunnel?, val forward: LocalProxyForward?) : AutoCloseable {
-        val alive: Boolean get() = ssh?.alive ?: forward!!.listening
+        /** A proxy listener can accept before start's final epoch check; only a completed start may be reused. */
+        @Volatile private var ready = false
+        val alive: Boolean get() = ready && (ssh?.alive ?: forward!!.listening)
+
+        fun markReady() { ready = true }
 
         suspend fun start(preferred: Int): Int = ssh?.start(preferred)
             ?: blocking(forward!!::close) { forward.check(); forward.listen(preferred) }
@@ -166,6 +170,7 @@ class HubWays(
     suspend fun open(tunnel: HubTunnel): String {
         val key = tunnel.key
         val task = synchronized(lock) {
+            blocked[key]?.let { (way, problem) -> if (way.sameWay(tunnel)) throw TunnelException(problem) else blocked.remove(key) }
             val pending = starting[key]
             if (pending != null && pending.epoch == epochs[key] && pending.tunnel.sameWay(tunnel)) pending.task
             else {
@@ -199,7 +204,16 @@ class HubWays(
                     HubTunnel.baseUrl(tunnel.hubAddress, reuse.ssh?.localPort ?: reuse.forward!!.localPort)
                 }
             }
-            val ssh = tunnel.ssh?.let { SshTunnel(it, identity(), sshTimings) }
+            val ssh = tunnel.ssh?.let {
+                SshTunnel(it, identity(), sshTimings) { problem ->
+                    // The rejection is a fact about these settings even if the waiting start was cancelled. Keep it
+                    // until the user changes them, without overwriting the state of a newer attempt (#10101).
+                    synchronized(lock) {
+                        if (blocked[key]?.first?.sameWay(tunnel) != true) blocked[key] = tunnel to problem
+                        if (running[key]?.tunnel?.sameWay(tunnel) == true) setState(key, TunnelState.Down(problem))
+                    }
+                }
+            }
             val forward = tunnel.proxy?.let { LocalProxyForward(LocalProxyForward.Dial.of(it, tunnel.hubAddress)) }
             val handle = Running(tunnel, ssh, forward)
             made = handle
@@ -219,6 +233,7 @@ class HubWays(
                 current(key, epoch)
                 if (running[key] !== handle) throw CancellationException("Tunnel replaced")
                 ports[key] = port
+                handle.markReady()
                 recent += key
                 setState(key, TunnelState.Up)
                 HubTunnel.baseUrl(tunnel.hubAddress, port)
@@ -230,6 +245,16 @@ class HubWays(
             val detail = error.message ?: error.javaClass.simpleName
             val problem = (error as? TunnelException)?.problem
                 ?: if (tunnel.ssh != null) TunnelProblem.SshUnreachable(detail) else TunnelProblem.ProxyUnreachable(detail)
+            // A changed key must block every concurrent retry, not just opens which arrive after this coroutine finishes.
+            // Publish it before removing the pending start or closing its session, so no caller can redial in that window.
+            if (problem.needsUser) {
+                synchronized(lock) {
+                    if ((epochs[key] ?: 0) == epoch) {
+                        blocked[key] = tunnel to problem
+                        setState(key, TunnelState.Down(problem))
+                    }
+                }
+            }
             val stale = synchronized(lock) {
                 val handle = made
                 if (handle != null && running[key] === handle) running.remove(key)

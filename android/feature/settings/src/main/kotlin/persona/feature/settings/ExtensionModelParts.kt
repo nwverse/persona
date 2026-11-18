@@ -11,8 +11,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import java.time.Instant
 import persona.core.contracts.api.ExtensionDependency
 import persona.core.contracts.api.ExtensionDetail
+import persona.core.contracts.api.ExtensionPackMember
 import persona.core.contracts.api.ExtensionPreview
 import persona.core.contracts.api.ExtensionSandbox
 import persona.core.designsystem.*
@@ -42,7 +48,12 @@ internal object ExtensionModelText {
     }
 }
 
-internal fun LazyListScope.installedExtensionModel(detail: ExtensionDetail) {
+/** A pack member by its [name] when known, the id beside its version and market (only the id when it isn't named, #4122). */
+internal fun packMemberLine(member: ExtensionPackMember, name: String?): Pair<String, String?> =
+    (name ?: member.id) to listOfNotNull(member.id.takeIf { name != null }, member.version, member.market).joinToString(" · ").ifBlank { null }
+
+/** [names]: the pack's members by their installed names (#4122); one not installed keeps its id. */
+internal fun LazyListScope.installedExtensionModel(detail: ExtensionDetail, names: Map<String, String> = emptyMap()) {
     if (detail.depends.isNotEmpty()) {
         item("dependencies-title") { JSectionHeader(stringResource(R.string.settings_ext_depends)) }
         detail.depends.forEachIndexed { index, dependency ->
@@ -59,15 +70,15 @@ internal fun LazyListScope.installedExtensionModel(detail: ExtensionDetail) {
         detail.extensionPack.forEachIndexed { index, member ->
             item("pack-member-$index") {
                 JGroupItem(GroupPosition.of(index, detail.extensionPack.size)) {
-                    JRow(member.id, subtitle = listOfNotNull(member.version, member.market).joinToString(" · ").ifBlank { null },
-                        subtitleLines = Int.MAX_VALUE, chevron = false)
+                    val (title, subtitle) = packMemberLine(member, names[member.id])
+                    JRow(title, subtitle = subtitle, subtitleLines = Int.MAX_VALUE, chevron = false)
                 }
             }
         }
     }
 }
 
-internal fun LazyListScope.sandbox(s: ExtensionSandbox?) {
+internal fun LazyListScope.sandbox(s: ExtensionSandbox?, name: String, onAllow: (() -> Unit)? = null) {
     s ?: return
     item("sandbox-title") { JSectionHeader(stringResource(R.string.settings_ext_sandbox_title)) }
     item("sandbox-state") {
@@ -75,21 +86,46 @@ internal fun LazyListScope.sandbox(s: ExtensionSandbox?) {
             JRow(ExtensionModelText.sandbox(LocalResources.current, s), subtitle = s.why?.ifBlank { null }, subtitleLines = 4)
         }
     }
+    s.egress?.let { e ->
+        item("sandbox-egress") {
+            JGroupItem(GroupPosition.Single) {
+                val allowed = pluralStringResource(R.plurals.settings_ext_sandbox_allowed, e.allowed.quantity(), e.allowed)
+                val blocked = pluralStringResource(R.plurals.settings_ext_sandbox_blocked, e.denied.quantity(), e.denied)
+                val separator = stringResource(R.string.settings_ext_dot_separator)
+                val palette = PersonaTheme.palette
+                JRow(stringResource(R.string.settings_ext_sandbox_network), trailing = {
+                    Text(buildAnnotatedString {
+                        withStyle(SpanStyle(color = palette.positive)) { append(allowed) }
+                        append(separator)
+                        withStyle(SpanStyle(color = if (e.denied > 0) palette.danger.text else palette.ink3)) { append(blocked) }
+                    }, style = PersonaTheme.type.callout, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                })
+            }
+        }
+        e.lastDenied?.ifBlank { null }?.let { host ->
+            item("sandbox-denied") {
+                val res = LocalResources.current
+                val ago = e.deniedAt?.let { at -> runCatching { agoText(res, Instant.parse(at)) }.getOrNull() }
+                JNotice(
+                    stringResource(R.string.settings_ext_sandbox_blocked_sentence, name, host) + ago?.let { "\n$it" }.orEmpty(),
+                    Modifier.padding(top = Tokens.Space.s), status = Status.NeedsYou,
+                    actionLabel = if (onAllow == null) null else stringResource(R.string.settings_ext_sandbox_go_admin),
+                    onAction = onAllow,
+                )
+            }
+        }
+    }
     item("sandbox-note") {
-        SettingsCaption(stringResource(R.string.settings_ext_sandbox_note),
+        SettingsCaption(stringResource(if (s.egress == null) R.string.settings_ext_sandbox_note else R.string.settings_ext_sandbox_footer),
             Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
     }
-    s.egress?.let { e -> item("sandbox-egress") {
-        SettingsCaption(stringResource(R.string.settings_ext_sandbox_egress,
-            pluralStringResource(R.plurals.settings_ext_sandbox_allowed, e.allowed.quantity(), e.allowed),
-            pluralStringResource(R.plurals.settings_ext_sandbox_denied, e.denied.quantity(), e.denied)) +
-            e.lastDenied?.let { "\n" + stringResource(R.string.settings_ext_sandbox_last_denied, it) }.orEmpty(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
-    } }
 }
 
 @Composable
-internal fun BundlePreview(preview: ExtensionPreview) {
+internal fun BundlePreview(preview: ExtensionPreview, installedNames: Map<String, String> = emptyMap()) {
     val res = LocalResources.current
+    // A pack's members named (#4122): those installed with it by their manifests, those already here by the installed list.
+    val names = installedNames + preview.bundle.mapNotNull { b -> b.manifest?.let { m -> m.id to (m.name?.ifBlank { null } ?: m.id) } }
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         if (preview.depends.isNotEmpty()) {
             Text(stringResource(R.string.settings_ext_depends), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
@@ -98,7 +134,7 @@ internal fun BundlePreview(preview: ExtensionPreview) {
         }
         preview.manifest?.extensionPack?.takeIf { it.isNotEmpty() }?.let { members ->
             Text(stringResource(R.string.settings_ext_pack_members), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            members.forEach { JRow(it.id, subtitle = listOfNotNull(it.version, it.market).joinToString(" · ").ifBlank { null }) }
+            members.forEach { member -> val (title, subtitle) = packMemberLine(member, names[member.id]); JRow(title, subtitle = subtitle) }
             SettingsCaption(stringResource(R.string.settings_ext_pack_note))
         }
         if (preview.bundle.isNotEmpty()) {

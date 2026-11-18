@@ -136,7 +136,7 @@ func dispatchProfilePlan(t *testing.T, s *Service, st *profileTaskStore, task Pl
 }
 
 func profilePlanTask() PlanTask {
-	return PlanTask{Title: "Fix the login crash", Prompt: "Fix the login crash and verify the change", Machine: "box", Cwd: "/code/app", Tier: "standard"}
+	return PlanTask{Title: "Fix the login crash", Prompt: "Fix the login crash and verify the change", Machine: "box", Cwd: "/code/app", Tier: "standard", Permission: "bypassPermissions"}
 }
 
 func profileNodeStarts(f *fakeHub) []DeviceCall {
@@ -430,7 +430,7 @@ func TestProfileSnapshotFreshOutsideCache(t *testing.T) {
 		if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: id}); err != nil {
 			t.Fatal(err)
 		}
-		got := s.contextSnapshot(ctx)
+		got := s.contextSnapshot(ctx, "", false)
 		if !strings.Contains(got, "- 模型档位：") {
 			t.Fatal("profile line missing")
 		}

@@ -8,6 +8,7 @@ import persona.core.contracts.api.ScheduledTask
 import java.io.IOException
 import java.time.Instant
 import java.time.ZoneId
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -34,6 +35,8 @@ private class FakeHub(
     /** The write lands but the answer never comes back. */
     var loseAnswer = false
     var failRun: Exception? = null
+    /** When set, a run waits for it before the hub answers (a slow hub). */
+    var runAnswer: CompletableDeferred<Unit>? = null
     var failDelete: Exception? = null
     var deleteLandsAnyway = false
     var reads = 0
@@ -50,6 +53,7 @@ private class FakeHub(
             lastSessionId = hub?.lastSessionId, lastStatus = hub?.lastStatus, lastError = hub?.lastError,
             runMachineId = hub?.runMachineId, runSessionId = hub?.runSessionId, machineId = hub?.machineId,
             sessionId = task.sessionId?.takeIf { it.isNotBlank() && hub?.sessionId == it },
+            inbox = task.inbox ?: hub?.inbox,
             nextRun = if (task.enabled) "2026-11-03T01:00:00Z" else null)
         table = if (hub == null) table + saved else table.map { if (it.id == saved.id) saved else it }
         if (loseAnswer) throw IOException("connection reset")
@@ -66,6 +70,7 @@ private class FakeHub(
     }
 
     override suspend fun runTask(id: String): SessionKey {
+        runAnswer?.await()
         failRun?.let { throw it }
         started += id
         val task = table.first { it.id == id }
@@ -180,6 +185,33 @@ class ProactiveStoreTest {
         assertEquals(listOf("没保存上：连不上 hub"), messages)
     }
 
+    @Test fun aFailureAfterThePageIsGoneGoesToTheAppsFeedback() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val unheard = mutableListOf<String>()
+        val store = ProactiveStore(hub, this, say, unheard = { unheard += it })
+        val page = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.messages.collect {} }
+        store.refresh()
+        hub.failWrite = IOException("no route")
+        // The switch is flipped and the page is left before the write fails.
+        store.toggle("morning", false)
+        page.cancel()
+        advanceUntilIdle()
+        assertEquals(listOf("没保存上：连不上 hub"), unheard)
+    }
+
+    @Test fun aPageThatIsListeningSaysItItself() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val unheard = mutableListOf<String>()
+        val store = ProactiveStore(hub, this, say, unheard = { unheard += it })
+        val messages = messagesOf(store)
+        store.refresh()
+        hub.failWrite = IOException("no route")
+        store.toggle("morning", false)
+        advanceUntilIdle()
+        assertEquals(listOf("没保存上：连不上 hub"), messages)
+        assertTrue(unheard.isEmpty())
+    }
+
     @Test fun aLostAnswerIsNotAFailureWhenTheHubHasTheChange() = runTest {
         val hub = FakeHub(listOf(morning))
         val store = ProactiveStore(hub, this, say)
@@ -269,6 +301,66 @@ class ProactiveStoreTest {
         assertTrue(store.save(TaskChange.Edit("fu_review", opened, opened.copy(continues = false))).isSuccess)
         assertNull(hub.writes.single().sessionId)
         assertEquals("", hub.writes.single().editable()["session_id"].toString().trim('"'))
+    }
+
+    @Test fun inboxValuesRoundTripWithoutChangingPush() {
+        for (mode in listOf("", "worthy", "every")) {
+            val task = review.copy(push = ScheduledTask.PUSH_ASKED, inbox = mode)
+            val opened = task.draft()
+            assertEquals(mode, opened.inbox)
+            val saved = task.applying(opened)
+            assertEquals(mode, saved.editable()["inbox"].toString().trim('"'))
+            assertEquals(ScheduledTask.PUSH_ASKED, saved.push)
+        }
+    }
+
+    @Test fun inboxChangesArePatchedAndCanBeTurnedOff() {
+        val opened = morning.draft()
+        val changed = morning.patched(opened, opened.copy(inbox = "worthy"))
+        assertEquals("worthy", changed.inbox)
+        assertEquals(morning.push, changed.push)
+        assertEquals(morning.sessionId, changed.sessionId)
+        val turnedOff = changed.patched(changed.draft(), changed.draft().copy(inbox = ""))
+        assertEquals("", turnedOff.editable()["inbox"].toString().trim('"'))
+    }
+
+    @Test fun aSwitchLeavesAnUnchangedInboxOutOfThePut() = runTest {
+        val task = morning.copy(inbox = "every")
+        val hub = FakeHub(listOf(task))
+        val store = ProactiveStore(hub, this, say)
+        store.refresh()
+        store.toggle("morning", false)
+        advanceUntilIdle()
+        val written = hub.writes.single()
+        assertNull(written.inbox)
+        assertFalse(written.editable().containsKey("inbox"))
+        assertEquals("every", hub.table.single().inbox)
+        assertEquals("every", store.state.value.task("morning")?.inbox)
+    }
+
+    @Test fun inboxStaysUnsetForAnOldHubAndKeepsANewerSettingDuringAnotherEdit() {
+        val opened = morning.draft()
+        val untouched = morning.patched(opened, opened.copy(prompt = "Changed"))
+        assertNull(untouched.inbox)
+        assertFalse(untouched.editable().containsKey("inbox"))
+        val changedMeanwhile = morning.copy(inbox = "every")
+        val saved = changedMeanwhile.patched(opened, opened.copy(prompt = "Changed again"))
+        assertNull(saved.inbox)
+        assertFalse(saved.editable().containsKey("inbox"))
+        assertEquals("Changed again", saved.prompt)
+    }
+
+    @Test fun unchangedInboxStillCountsAsSavedWhenTheAnswerIsLost() = runTest {
+        val task = morning.copy(inbox = "every")
+        val hub = FakeHub(listOf(task))
+        val store = ProactiveStore(hub, this, say)
+        store.refresh()
+        val opened = task.draft()
+        hub.loseAnswer = true
+        assertTrue(store.save(TaskChange.Edit("morning", opened, opened.copy(prompt = "Changed"))).isSuccess)
+        assertNull(hub.writes.single().inbox)
+        assertFalse(hub.writes.single().editable().containsKey("inbox"))
+        assertEquals("every", store.state.value.task("morning")?.inbox)
     }
 
     /** "Only when it alerts" is written, leaves "Continue the original chat" (the hub runs it in its own conversation), and can be turned back. */
@@ -361,6 +453,32 @@ class ProactiveStoreTest {
         hub.failRun = IOException("refused")
         assertTrue(store.run("morning").isFailure)
         assertEquals(listOf("没跑起来：连不上 hub"), messages)
+    }
+
+    @Test fun runNowOpensTheConversationOnlyForAPageThatIsStillThere() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val store = ProactiveStore(hub, this, say)
+        val opened = mutableListOf<SessionKey>()
+        val page = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.runsToOpen.collect { opened += it } }
+        store.runNow("morning")
+        advanceUntilIdle()
+        assertEquals(listOf(SessionKey("server", "run-morning")), opened)
+
+        // Run now, then the page is left before the hub answers: the run still happens, nothing opens.
+        hub.runAnswer = CompletableDeferred()
+        store.runNow("morning")
+        advanceUntilIdle()
+        page.cancel()
+        hub.runAnswer!!.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("morning", "morning"), hub.started)
+        assertEquals(listOf(SessionKey("server", "run-morning")), opened)
+
+        // Nor is it kept for the next time the page opens.
+        val again = mutableListOf<SessionKey>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.runsToOpen.collect { again += it } }
+        advanceUntilIdle()
+        assertTrue(again.isEmpty())
     }
 
     @Test fun freshForgetsTheTasksOwnConversation() = runTest {

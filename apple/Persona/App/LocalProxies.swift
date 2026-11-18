@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Observation
+import PersonaWire
 
 /// A loopback listener that carries every connection made to it through a SOCKS5 proxy to the hub
 /// (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy"): each connection dials the proxy, has it
@@ -497,7 +498,7 @@ extension AppModel {
     /// details and Settings › hub say.
     func localProxyState(_ group: String) -> (hub: PairedHub, route: LocalProxyRoute, routed: Bool, state: LocalProxies.State?)? {
         guard let link = link(group), let on = link.live.currentConfig,
-              let hub = registry.members(group).first(where: { $0.config == on }), let route = hub.localProxy, route.isUsable else { return nil }
+              let hub = registry.members(group).first(where: { $0.configs.contains(on) }), let route = hub.localProxy, route.isUsable else { return nil }
         let proxies = LocalProxies.shared
         return (hub, route, proxies.routed.contains(hub.id), proxies.states[hub.id])
     }
