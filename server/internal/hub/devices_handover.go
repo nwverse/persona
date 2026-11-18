@@ -51,6 +51,7 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	if h.cfg != nil {
 		out.TailcatDERPMapURL = h.cfg.Tailcat.DERPMapURL
 		out.WebURL = h.webURL()
+		out.LinkSwitch = h.linkPairable() // and it answers devices.link_switch.* (link_switch.go)
 	}
 	out.NodePackagesURL, out.NodePackagesProxy = h.nodePackages()
 	if every, timeout, set := h.linkPingTimes(); set {

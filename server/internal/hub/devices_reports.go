@@ -236,10 +236,16 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		if known := h.knownEntry(id) != nil; known && h.entryOwner(id) != owner || !known && owner != devicesOwner {
 			continue
 		}
+		kindChanged := false
 		if m == nil || !m.managed {
 			// Its entry stays as it was made (it is read without m.mu everywhere, as when the hub connected it).
 			m = newMachine(h, h.mirrorConfig(s))
 			m.managed, m.peer = true, &busNode{h: h, id: id, done: make(chan struct{})}
+		} else if kind := h.reportedKind(s); kindOf(MachineConfig{Kind: kind}) != kindOf(MachineConfig{Kind: m.kind()}) {
+			// Switched to Persona Link, or back (link_switch.go): the same computer, reached another way. What ran
+			// through the old way ends as when its connection ends.
+			m.setKind(kind)
+			kindChanged = true
 		}
 		m.mu.Lock()
 		m.owner = owner
@@ -263,8 +269,8 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		m.connected, m.connectedAt = s.Connected, s.ConnectedAt
 		m.warmUntil = s.WarmUntil
 		c := change{m: m}
-		c.ended = wasConn && (!s.Connected || !s.ConnectedAt.Equal(wasAt))
-		c.began = s.Connected && (!wasConn || !s.ConnectedAt.Equal(wasAt))
+		c.ended = wasConn && (!s.Connected || !s.ConnectedAt.Equal(wasAt) || kindChanged)
+		c.began = s.Connected && (!wasConn || !s.ConnectedAt.Equal(wasAt) || kindChanged)
 		if c.ended || s.Connected && !wasConn {
 			c.oldMux, m.streams = m.streams, nil
 		}
@@ -406,6 +412,14 @@ func (h *Hub) mirrorConfig(s devicewire.State) MachineConfig {
 		mc.Name = s.Machine.Name
 	}
 	return mc
+}
+
+// reportedKind is the kind mirrorConfig gives a reported machine: hub.json's for one of its own, else the report's.
+func (h *Hub) reportedKind(s devicewire.State) string {
+	if mc := h.cfgEntry(s.Machine.ID); mc != nil && !s.Derived {
+		return mc.Kind
+	}
+	return s.Machine.Kind
 }
 
 // devicesConnected: the manager that carries the machines connected (its handshake). The port streams and terminals

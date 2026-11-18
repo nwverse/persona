@@ -61,6 +61,9 @@ func (h *Hub) pendingRestart(l i18n.Lang) restartView {
 	}
 	running := map[string]MachineConfig{}
 	for _, m := range h.cfg.Machines {
+		if live := h.cfgEntry(m.ID); live != nil {
+			m.Kind = live.Kind // a switch to Persona Link, or back, is taken at once (link_switch.go kindLive)
+		}
 		running[m.ID] = m
 	}
 	for _, m := range h.addedLive() { // added while running: already connecting (devices_handover.go addMachineLive)
