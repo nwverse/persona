@@ -257,8 +257,11 @@ concern never shelves either: it waits for its report, however long.
 - Shelved to-dos are folded under **Shelved**, not counted as open, and not changed on the hub: nothing is deleted, closed
   or released. Any new activity (an agent working, a report, a review, an edit) takes it out again at once.
 - **Restore** on a shelved row counts as activity now: the to-do goes back to its section and shelves again only after
-  another 48 hours without a move. The restore is kept in this browser (`localStorage`, `persona.todos.restored`), not
-  on the hub; another browser or device still shows it shelved until it moves.
+  another 48 hours without a move. The restore is kept in this browser (`localStorage`, `persona.todos.restored`);
+  another browser or device still shows it shelved until it moves. The hub now stores restores too (`restored_at`,
+  `PUT /api/v1/todos/{id}/restored`, `docs/assistant/todos.md` "Restores and Someday"), but today's triage still uses
+  each device's own restore, and the hub's copy of the triage uses none, until the clients switch to the status the hub
+  works out (`view`, `docs/design/proposals/todos-redesign.md` section 6.1), from stage 2 of #10226.
 
 ## Related to-dos
 
@@ -352,3 +355,11 @@ has no Status | Folder switch (it had no folder view), and the Mac shows a merge
 lead. The iOS list draws a row's "N related" inside the lead's row, under its words (Android's card already had it). iOS and
 Android filter and sort the list on the device (`docs/assistant/todos.md`, "List filter and sort"; the web follows). Moving the classification to the hub, so the clients only draw the section it sends, would remove the copies; it
 is not done yet.
+
+## The hub's view (in progress)
+
+#10226 moves this classification to the hub: each row of `GET /api/v1/todos` will carry a `view`
+(`schema/wire/todo-view.schema.json`) worked out by the redesign's decision table, pinned by `spec/fixtures/todo-view`
+and `spec/fixtures/todo-counts`. Its line 2 is a stable key with string arguments, never words; the keys and their
+arguments are listed in `spec/fixtures/todo-view/README.md` ("Line keys"). No route sends `view` yet, so every client
+still follows the rules above.

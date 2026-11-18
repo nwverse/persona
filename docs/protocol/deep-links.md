@@ -103,6 +103,7 @@ checks; none of them is ever written by the hub's link builder.
 | `persona://pair?url=&token=` | pairs the app with a hub | asks "Connect to <host>?" first (#9929) |
 | `persona://link?…`, `persona://peer?…`, `persona://connector?…` | a computer's, a linked hub's, a connector's pairing | not for this device; pasted where they belong |
 | `persona://password-login?state=&code=` | finishes a sign-in | its `state` |
+| `persona://browser-login?hub=&request=` | a browser asks to sign in (the web sign-in page's code) | read only by the app's own scanner in Settings › Devices; opened as a link it signs nothing in ([protocol.md](protocol.md) "Browser QR sign-in") |
 | `persona://shortcut-callback/…` | a Shortcut Persona ran came back | its token |
 | `persona://ask?text=`, `persona://sources-graph` | the subscriptions pages' actions | only from those pages |
 | `persona://widget/<kind>`, `persona://record…`, `persona://allday?action=` | Home Screen widgets, Live Activities, watch complications | Persona's own surfaces |
@@ -133,7 +134,8 @@ checks; none of them is ever written by the hub's link builder.
 - **Web**: links to its own hub go through the router's own `parse` and open in place; app links and older forms in
   messages and cards open the same pages (#9930).
 - **Desktop**: the packaged app registers `persona://`. An app link's path is handed to the web app in the window,
-  which applies the table; the desktop app itself only refuses malformed links and drops query keys no row lists (#9931).
+  which applies the table; the desktop app itself only refuses malformed links and drops query keys no row lists, in
+  both app-link forms (`persona://open<path>` and `persona://open?route=`; #9931, #10281).
 - **Android**: `core/navigation` `HubLinks` reads paired hubs' web links; app links and the rows it lacks are #9932.
 - **The hub**: one builder writes every path in the table, and the web link from `public_url` (#9927). Push payloads
   keep their typed keys (`machine_id`, `session_id`, `todo`, …), which each app maps to the same pages.
