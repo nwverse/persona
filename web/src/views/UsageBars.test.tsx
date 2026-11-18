@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
@@ -46,7 +46,7 @@ describe("the sidebar's usage strip", () => {
       await act(async () => root.render(<UsageBars accounts={[account("a", 10, 20, { problem: "unreachable" })]} now={NOW} />));
       expect(host.querySelector("[role=dialog]")).toBeNull();
       await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!.click());
-      await act(async () => {});
+      await act(async () => vi.dynamicImportSettled());
       const dialog = host.querySelector("[role=dialog]");
       expect(dialog?.textContent).toContain("5h");
       expect(dialog?.textContent).toContain("网关暂时读不到，显示的是上次的数字");

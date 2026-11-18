@@ -1,5 +1,11 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A deferred action on an agent belongs to its process, not its session id (#10296)
+
+- A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.
+- Bind anything that waits to act on "the agent" to the process it was decided for: pid plus start mark (`hookTurns.process`, else `sessions/<pid>.json` via `liveClaudes`), checked with `processAlive` at every look and again right before acting. Drop it once that process is gone or the hooks report another one; refuse it where the process cannot be told.
+- Keep the wait short. "Once this turn ends" is not "whenever this conversation next runs".
+
 ## Project MCP enums only in agy's tool declarations (#9944)
 
 agy can turn a valid boolean enum such as `task_review`'s `evidence.ready: enum [true]` into an empty Gemini string

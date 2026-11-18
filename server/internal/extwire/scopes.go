@@ -102,8 +102,8 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/assistant/conversations/{id}/stop":     ScopeAssistantAsk, // /agent's /stop (#3308)
 	"GET /api/v1/assistant/reporters":                    ScopeAssistantAsk,
 	// The todos (the assistant's, relayed): reading them, adding, editing and attaching agents and spaces, and writing
-	// outcome decisions (an extension writes no other source). Deleting a todo, superseding decisions, the done check and
-	// a retry stay with full credentials.
+	// outcome decisions (an extension writes no other source). Deleting a todo, superseding decisions, the done check, a
+	// retry and the owner's own marks (seen, restored, Someday) stay with full credentials.
 	"GET /api/v1/todos/{id}/backend-workspace":                           ScopeTodosRead,
 	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}": ScopeTodosRead,
 	"POST /api/v1/todos/{id}/backend-workspace/prepare":                  ScopeTodosWrite,

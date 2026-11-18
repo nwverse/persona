@@ -1,0 +1,1194 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "failed_start_recent",
+      "description": "A start that failed three hours ago is open and needs the owner: a retry ask on the to-do, the stored error on line 2, and 48 hours after the failure it moves on.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 1",
+        "#10226 (a failed start reads as open)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_a1",
+          "title": "Book the train to Kyoto",
+          "notes": "",
+          "done_at": "2026-11-10T09:00:00Z",
+          "created_at": "2026-11-10T08:55:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "start_error": "Desk Mac is offline",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "project": "kyoto-trip"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "needs_you",
+          "reason": "failed_start",
+          "line": {
+            "key": "failed_start",
+            "args": {
+              "error": "Desk Mac is offline"
+            }
+          },
+          "since": "2026-11-10T09:00:00Z",
+          "next_change_at": "2026-11-12T09:00:00Z",
+          "rank": 0,
+          "asks": [
+            {
+              "id": "todo:retry@2026-11-10T09:00:00Z",
+              "kind": "retry",
+              "home": "todo"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "failed_start_after_two_days",
+      "description": "48 hours after a start failed, with nothing done to the to-do since, it is a To do with the Inactive mark, never Done, though done_at is stored.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 1, 13 and 14",
+        "#10226 (a failed start reads as open)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_a2",
+          "title": "Plant the tulip bulbs",
+          "notes": "",
+          "done_at": "2026-11-07T10:00:00Z",
+          "created_at": "2026-11-07T09:55:00Z",
+          "updated_at": "2026-11-07T10:00:00Z",
+          "origin": "conv_main",
+          "start_error": "Desk Mac is offline",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "project": "garden"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "rank": 0,
+          "inactive": "2026-11-07T10:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "failed_start_edited_since",
+      "description": "The owner edited a failed start's notes the day after it failed. Its 48 hours in Needs you run from the failure, so it is a To do now; the edit is activity, so the Inactive mark waits until 48 hours after it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 1, 13 and 14",
+        "#10226 (a failed start reads as open)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_a3",
+          "title": "Renew the rail pass",
+          "notes": "Ask about the discount for two",
+          "done_at": "2026-11-07T10:00:00Z",
+          "created_at": "2026-11-07T09:55:00Z",
+          "updated_at": "2026-11-09T15:00:00Z",
+          "origin": "conv_main",
+          "start_error": "Desk Mac is offline",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "project": "kyoto-trip"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "next_change_at": "2026-11-11T15:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "failed_start_due_ahead",
+      "description": "A failed start the owner started by hand (no conversation handed it out) and due in ten days. A task like that is never marked Inactive otherwise, but a failed start is: 48 hours after the failure it is a To do with the mark, since it waits for nothing.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 1, 13 and 14",
+        "#10226 (a failed start reads as open)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_a4",
+          "title": "Print the boarding passes",
+          "notes": "",
+          "done_at": "2026-11-08T08:00:00Z",
+          "created_at": "2026-11-08T07:55:00Z",
+          "updated_at": "2026-11-08T08:00:00Z",
+          "start_error": "Desk Mac is offline",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "due_date": "2026-11-20"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "rank": 0,
+          "inactive": "2026-11-08T08:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "agent_asks_question",
+      "description": "A run waits on the owner: Needs you, with the run's ask (its home is the run's session) and what it asks.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 2",
+        "docs/design/proposals/todos-redesign.md 3.7 \"Homes\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_b1",
+          "title": "Plan the Kyoto trip",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-09T08:00:00Z",
+          "updated_at": "2026-11-10T10:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-ryokan",
+              "linked_at": "2026-11-09T08:01:00Z",
+              "title": "Ryokan research",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "kyoto-trip"
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-ryokan",
+            "title": "Ryokan research",
+            "status": "blocked",
+            "state": "needs_you",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 1,
+            "asks": "Which ryokan should I book?"
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "needs_you",
+          "reason": "agent_asks",
+          "line": {
+            "key": "agent_asks",
+            "args": {
+              "run": "Ryokan research",
+              "text": "Which ryokan should I book?"
+            }
+          },
+          "since": "2026-11-10T11:30:00Z",
+          "rank": 0,
+          "asks": [
+            {
+              "id": "run:m1/s-ryokan@2026-11-10T11:30:00Z",
+              "kind": "question",
+              "home": "run",
+              "text": "Which ryokan should I book?",
+              "run": {
+                "machine_id": "m1",
+                "session_id": "s-ryokan",
+                "title": "Ryokan research"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "interrupted_turn",
+      "description": "A run cut off by a model error that is not a usage limit: Needs you with its own reason, and no ask (the owner continues it in its session).",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 2",
+        "docs/assistant/todo-status-sop.md \"Decision table\" rule 2"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_c1",
+          "title": "Summarize the venue reviews",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T07:00:00Z",
+          "updated_at": "2026-11-10T07:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-reviews",
+              "linked_at": "2026-11-10T07:01:00Z",
+              "title": "Venue reviews",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-reviews",
+            "title": "Venue reviews",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "API Error: 529 overloaded",
+            "turn_error_kind": "transient"
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "needs_you",
+          "reason": "interrupted",
+          "line": {
+            "key": "interrupted",
+            "args": {
+              "run": "Venue reviews"
+            }
+          },
+          "since": "2026-11-10T11:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "owner_decides_decision",
+      "description": "The to-do's own decision: Needs you, the ask on the to-do with its round, question, recommendation and options.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 3",
+        "docs/design/proposals/todos-redesign.md 3.7 \"Homes\"",
+        "docs/assistant/todo-status-sop.md \"Decision table\" rule 3"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_d1",
+          "title": "Book the ryokan",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-09T08:00:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-book",
+              "linked_at": "2026-11-09T08:01:00Z",
+              "title": "Ryokan booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [
+              "A ryokan is booked for Apr 3 to 5"
+            ],
+            "criteria": [],
+            "state": "needs_user",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-10T09:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Which ryokan?",
+                "recommend": "Ryokan Hanami",
+                "options": [
+                  {
+                    "label": "Ryokan Hanami",
+                    "leads_to": "Two nights for 42,000 yen, dinner included"
+                  },
+                  {
+                    "label": "Kiyomizu Inn",
+                    "leads_to": "Two nights for 51,000 yen, a short walk to the temple"
+                  }
+                ]
+              }
+            ],
+            "updated_at": "2026-11-10T09:00:00Z"
+          },
+          "ask": {
+            "outcome": "decide",
+            "verdict": "Needs your decision",
+            "recommend": "Ryokan Hanami",
+            "asked_at": "2026-11-10T09:00:00Z",
+            "question": "Which ryokan?",
+            "options": [
+              {
+                "label": "Ryokan Hanami",
+                "leads_to": "Two nights for 42,000 yen, dinner included"
+              },
+              {
+                "label": "Kiyomizu Inn",
+                "leads_to": "Two nights for 51,000 yen, a short walk to the temple"
+              }
+            ],
+            "responses": [
+              "decide_yourself",
+              "not_what_i_asked",
+              "explain_first"
+            ]
+          }
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-book",
+            "title": "Ryokan booking",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T08:50:00Z",
+            "updated_at": "2026-11-10T08:50:00Z",
+            "pending_interactions": 0
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "needs_you",
+          "reason": "owner_decides",
+          "line": {
+            "key": "decision",
+            "args": {
+              "text": "Which ryokan?",
+              "recommend": "Ryokan Hanami"
+            }
+          },
+          "since": "2026-11-10T09:00:00Z",
+          "rank": 0,
+          "asks": [
+            {
+              "id": "todo:decision@2026-11-10T09:00:00Z",
+              "kind": "decision",
+              "home": "todo",
+              "round": "2026-11-10T09:00:00Z",
+              "text": "Which ryokan?",
+              "recommend": "Ryokan Hanami",
+              "options": [
+                {
+                  "label": "Ryokan Hanami",
+                  "leads_to": "Two nights for 42,000 yen, dinner included"
+                },
+                {
+                  "label": "Kiyomizu Inn",
+                  "leads_to": "Two nights for 51,000 yen, a short walk to the temple"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "can_wait_decision",
+      "description": "A decision that can wait for the briefing (for_briefing) is filed under Can wait, not counted; Persona takes the recommendation at the deadline unless the owner answers.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 4",
+        "docs/design/proposals/todos-redesign.md 3.4 \"Can wait\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_e1",
+          "title": "Pick the cherry blossom spot",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-09T08:00:00Z",
+          "updated_at": "2026-11-10T10:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-spots",
+              "linked_at": "2026-11-09T08:01:00Z",
+              "title": "Blossom spots",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [
+              "A picnic spot is chosen"
+            ],
+            "criteria": [],
+            "state": "needs_user",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-10T10:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Which spot for the picnic?",
+                "recommend": "Maruyama Park",
+                "options": [
+                  {
+                    "label": "Maruyama Park",
+                    "leads_to": "A picnic under the big weeping cherry"
+                  },
+                  {
+                    "label": "Philosopher's Path",
+                    "leads_to": "A walk along the canal, no picnic spot"
+                  }
+                ],
+                "deadline": "2026-11-13T09:00:00Z",
+                "reversible": true
+              }
+            ],
+            "updated_at": "2026-11-10T10:00:00Z"
+          },
+          "ask": {
+            "outcome": "decide",
+            "verdict": "Needs your decision",
+            "recommend": "Maruyama Park",
+            "asked_at": "2026-11-10T10:00:00Z",
+            "question": "Which spot for the picnic?",
+            "options": [
+              {
+                "label": "Maruyama Park",
+                "leads_to": "A picnic under the big weeping cherry"
+              },
+              {
+                "label": "Philosopher's Path",
+                "leads_to": "A walk along the canal, no picnic spot"
+              }
+            ],
+            "deadline": "2026-11-13T09:00:00Z",
+            "default": "taken",
+            "responses": [
+              "decide_yourself",
+              "not_what_i_asked",
+              "explain_first"
+            ],
+            "for_briefing": true
+          }
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-spots",
+            "title": "Blossom spots",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T09:50:00Z",
+            "updated_at": "2026-11-10T09:50:00Z",
+            "pending_interactions": 0
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "can_wait",
+          "reason": "can_wait",
+          "line": {
+            "key": "decision_default",
+            "args": {
+              "text": "Which spot for the picnic?",
+              "recommend": "Maruyama Park",
+              "default_at": "2026-11-13T09:00:00Z"
+            }
+          },
+          "since": "2026-11-10T10:00:00Z",
+          "rank": 0,
+          "can_wait": true,
+          "asks": [
+            {
+              "id": "todo:decision@2026-11-10T10:00:00Z",
+              "kind": "decision",
+              "home": "todo",
+              "round": "2026-11-10T10:00:00Z",
+              "text": "Which spot for the picnic?",
+              "recommend": "Maruyama Park",
+              "options": [
+                {
+                  "label": "Maruyama Park",
+                  "leads_to": "A picnic under the big weeping cherry"
+                },
+                {
+                  "label": "Philosopher's Path",
+                  "leads_to": "A walk along the canal, no picnic spot"
+                }
+              ],
+              "can_wait": true,
+              "default_at": "2026-11-13T09:00:00Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "awaits_reply",
+      "description": "A run that ended on a plain-text question nobody answered: Can wait with reason awaits_reply, not counted, no ask (there is no card), ahead of Just finished.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 4",
+        "docs/design/DECISIONS.md \"11-10 Awaiting Reply stays its own state\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_f1",
+          "title": "Find a dinner place near the station",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T06:00:00Z",
+          "updated_at": "2026-11-10T06:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-dinner",
+              "linked_at": "2026-11-10T06:01:00Z",
+              "title": "Dinner places",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-dinner",
+            "title": "Dinner places",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T10:30:00Z",
+            "updated_at": "2026-11-10T10:30:00Z",
+            "pending_interactions": 0,
+            "awaits_reply": true,
+            "asks": "Do you want somewhere quiet or lively?"
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "can_wait",
+          "reason": "awaits_reply",
+          "line": {
+            "key": "awaits_reply",
+            "args": {
+              "run": "Dinner places",
+              "text": "Do you want somewhere quiet or lively?"
+            }
+          },
+          "since": "2026-11-10T10:30:00Z",
+          "rank": 0,
+          "can_wait": true
+        }
+      }
+    },
+    {
+      "name": "agent_running_with_steps",
+      "description": "A run works on the to-do: Working, line 2 from the run's activity before its last text; one of its two steps is closed.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 5",
+        "docs/design/proposals/todos-redesign.md 3.4 \"Steps roll up\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_g1",
+          "title": "Plan the Osaka day",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-08T08:00:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-osaka",
+              "linked_at": "2026-11-08T08:01:00Z",
+              "title": "Osaka itinerary",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "kyoto-trip"
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-osaka",
+            "title": "Osaka itinerary",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-10T11:40:00Z",
+            "updated_at": "2026-11-10T11:55:00Z",
+            "pending_interactions": 0,
+            "activity": "reading the train timetable",
+            "activity_at": "2026-11-10T11:55:00Z",
+            "last_text": "Checking the Shinkansen times"
+          }
+        ],
+        "steps": [
+          {
+            "id": "todo_g2",
+            "title": "Buy the rail passes",
+            "notes": "",
+            "done_at": "2026-11-09T10:00:00Z",
+            "created_at": "2026-11-08T08:05:00Z",
+            "updated_at": "2026-11-09T10:00:00Z",
+            "spaces": [],
+            "agents": [],
+            "quiet": false,
+            "seen_at": "2026-11-09T11:00:00Z",
+            "part_of": "todo_g1"
+          },
+          {
+            "id": "todo_g3",
+            "title": "Reserve the aquarium tickets",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:05:00Z",
+            "updated_at": "2026-11-08T08:05:00Z",
+            "spaces": [],
+            "agents": [],
+            "quiet": false,
+            "part_of": "todo_g1",
+            "after": [
+              "todo_g2"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "working",
+          "section": "working",
+          "reason": "agent_running",
+          "line": {
+            "key": "working",
+            "args": {
+              "run": "Osaka itinerary",
+              "text": "reading the train timetable"
+            }
+          },
+          "since": "2026-11-10T11:40:00Z",
+          "rank": 0,
+          "steps": {
+            "done": 1,
+            "total": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_external",
+      "description": "A parked task waits whatever its run last said: Waiting with the park's reason and end; the end passing changes nothing by itself (the hub's wake does), so there is no next_change_at.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 8",
+        "docs/assistant/todo-status-sop.md \"Decision table\" rule 5a"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_h1",
+          "title": "Confirm the tea ceremony booking",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-08T08:00:00Z",
+          "updated_at": "2026-11-09T15:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-tea",
+              "linked_at": "2026-11-08T08:01:00Z",
+              "title": "Tea ceremony booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [
+              "The venue confirmed the booking"
+            ],
+            "criteria": [],
+            "state": "parked",
+            "parked": {
+              "reason": "Waiting for the venue to confirm by mail",
+              "until": "2026-11-11T09:00:00Z",
+              "waiting_on": "external_event",
+              "count": 1
+            },
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-09T15:00:00Z",
+                "verdict": "parked",
+                "reason": "Waiting for the venue to confirm by mail",
+                "until": "2026-11-11T09:00:00Z",
+                "waiting_on": "external_event",
+                "parks": 1
+              }
+            ],
+            "updated_at": "2026-11-09T15:00:00Z"
+          }
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-tea",
+            "title": "Tea ceremony booking",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-09T14:50:00Z",
+            "updated_at": "2026-11-09T14:50:00Z",
+            "pending_interactions": 0
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "waiting",
+          "section": "waiting",
+          "reason": "parked",
+          "line": {
+            "key": "parked",
+            "args": {
+              "reason": "Waiting for the venue to confirm by mail",
+              "until": "2026-11-11T09:00:00Z"
+            }
+          },
+          "since": "2026-11-09T15:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "finished_unseen",
+      "description": "A run finished a turn nobody has seen: ready, in Just finished, for as long as nobody sees it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 9"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_i1",
+          "title": "Compare the rail pass prices",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T07:00:00Z",
+          "updated_at": "2026-11-10T07:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-rail",
+              "linked_at": "2026-11-10T07:01:00Z",
+              "title": "Rail pass prices",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-rail",
+            "title": "Rail pass prices",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:20:00Z",
+            "updated_at": "2026-11-10T11:20:00Z",
+            "pending_interactions": 0
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "ready",
+          "section": "just_finished",
+          "reason": "finished_unseen",
+          "line": {
+            "key": "finished",
+            "args": {
+              "run": "Rail pass prices"
+            }
+          },
+          "since": "2026-11-10T11:20:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "finished_seen_recently",
+      "description": "Finished work the owner saw four hours ago stays in Just finished for 24 hours after seen_at.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 9",
+        "docs/assistant/todo-status-sop.md \"Seen\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_j1",
+          "title": "Check the luggage rules",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-09T07:00:00Z",
+          "updated_at": "2026-11-09T07:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-bags",
+              "linked_at": "2026-11-09T07:01:00Z",
+              "title": "Luggage rules",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "seen_at": "2026-11-10T08:00:00Z"
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-bags",
+            "title": "Luggage rules",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T06:00:00Z",
+            "updated_at": "2026-11-10T06:00:00Z",
+            "pending_interactions": 0
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "ready",
+          "section": "just_finished",
+          "reason": "finished_recent",
+          "line": {
+            "key": "finished",
+            "args": {
+              "run": "Luggage rules"
+            }
+          },
+          "since": "2026-11-10T06:00:00Z",
+          "next_change_at": "2026-11-11T08:00:00Z",
+          "rank": 0,
+          "seen": true
+        }
+      }
+    },
+    {
+      "name": "finished_seen_over_a_day",
+      "description": "Finished work seen more than 24 hours ago and still open is a To do (Mark Done), no longer Done as before.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 11",
+        "#10226 (rule 9a changes only in view)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_k1",
+          "title": "Translate the menu photos",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-07T07:00:00Z",
+          "updated_at": "2026-11-07T07:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-menu",
+              "linked_at": "2026-11-07T07:01:00Z",
+              "title": "Menu translation",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "seen_at": "2026-11-09T09:00:00Z"
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-menu",
+            "title": "Menu translation",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-08T18:00:00Z",
+            "updated_at": "2026-11-08T18:00:00Z",
+            "pending_interactions": 0
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "finished_seen",
+          "line": {
+            "key": "finished_seen",
+            "args": {
+              "at": "2026-11-08T18:00:00Z"
+            }
+          },
+          "since": "2026-11-08T18:00:00Z",
+          "rank": 0,
+          "seen": true
+        }
+      }
+    },
+    {
+      "name": "closed_unseen",
+      "description": "Closed two hours ago by the hub's judge and not seen: done, drawn in Just finished until 24 hours after done_at.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 6",
+        "docs/design/proposals/todos-redesign.md 6.2 invariant 1"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_l1",
+          "title": "Send the itinerary to the group",
+          "notes": "",
+          "done_at": "2026-11-10T10:00:00Z",
+          "created_at": "2026-11-09T07:00:00Z",
+          "updated_at": "2026-11-10T10:00:00Z",
+          "origin": "conv_main",
+          "done_by": "auto",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-send",
+              "linked_at": "2026-11-09T07:01:00Z",
+              "released_at": "2026-11-10T10:00:00Z",
+              "title": "Itinerary mail",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "project": "travel-admin"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "done",
+          "section": "just_finished",
+          "reason": "closed_unseen",
+          "line": {
+            "key": "completed",
+            "args": {
+              "by": "auto"
+            }
+          },
+          "since": "2026-11-10T10:00:00Z",
+          "next_change_at": "2026-11-11T10:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "canceled_seen",
+      "description": "A cancelled to-do the owner has seen is in Done at once; cancelled_at says it was cancelled, though the list sends done_by review for a cancellation.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 7",
+        "docs/assistant/todo-status-sop.md \"Seen\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_m1",
+          "title": "Book the airport limousine",
+          "notes": "",
+          "done_at": "2026-11-10T08:00:00Z",
+          "created_at": "2026-11-08T07:00:00Z",
+          "updated_at": "2026-11-10T08:00:00Z",
+          "origin": "conv_main",
+          "done_by": "review",
+          "cancelled_at": "2026-11-10T08:00:00Z",
+          "cancelled_reason": "The trip moved to spring",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "seen_at": "2026-11-10T09:00:00Z"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "done",
+          "section": "done",
+          "reason": "canceled",
+          "line": {
+            "key": "canceled",
+            "args": {
+              "reason": "The trip moved to spring"
+            }
+          },
+          "since": "2026-11-10T08:00:00Z",
+          "rank": 0,
+          "seen": true
+        }
+      }
+    },
+    {
+      "name": "someday_until",
+      "description": "The owner put it off until Dec 1: Someday until then, when it comes back by itself.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 12",
+        "docs/design/proposals/todos-redesign.md 6.1 schedule.someday_until"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_n1",
+          "title": "Learn to make matcha at home",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-01T07:00:00Z",
+          "updated_at": "2026-11-01T07:00:00Z",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "project": "reading"
+        },
+        "sessions": [],
+        "someday_until": "2026-12-01T00:00:00Z"
+      },
+      "expected": {
+        "view": {
+          "phase": "someday",
+          "section": "someday",
+          "reason": "deferred",
+          "line": {
+            "key": "someday",
+            "args": {
+              "until": "2026-12-01T00:00:00Z"
+            }
+          },
+          "next_change_at": "2026-12-01T00:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "rest_restored",
+      "description": "A task idle for four days that the owner restored yesterday: the restore counts as activity, so no Inactive mark until 48 hours after it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 13 and 14",
+        "docs/assistant/todo-status-sop.md \"Shelving\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_o1",
+          "title": "Research the onsen towns",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-05T07:00:00Z",
+          "updated_at": "2026-11-06T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-onsen",
+              "linked_at": "2026-11-05T07:01:00Z",
+              "title": "Onsen towns",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-onsen",
+            "title": "Onsen towns",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-06T09:00:00Z",
+            "updated_at": "2026-11-06T09:00:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "restored_at": "2026-11-09T12:00:00Z"
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "next_change_at": "2026-11-11T12:00:00Z",
+          "rank": 0
+        }
+      }
+    }
+  ]
+}
