@@ -254,7 +254,7 @@ func TestUndeliveredToAGoneConversationFails(t *testing.T) {
 func TestConversationSendToOneThatCannotStartIsQueued(t *testing.T) {
 	s, f := newQuietService(t)
 	f.mu.Lock()
-	f.failAssistant = errors.New("the launcher did not start")
+	f.failAssistant = &rpc.Error{Message: "the launcher did not start, the message was not delivered"} // as the node answers it
 	f.mu.Unlock()
 	f.known["conv2"] = true
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
@@ -288,5 +288,25 @@ func TestUndeliveredReachesTheRow(t *testing.T) {
 	s.fleetTakeSnapshot(s.snapshot(context.Background()))
 	if rows := s.publishList("mac"); len(rows) != 1 || rows[0].Undelivered != nil {
 		t.Fatalf("still on the row: %+v", rows)
+	}
+}
+
+// A refusal for good (the manager's own, or a node's with a code) is no passing failure: conversation_send fails and
+// nothing is queued.
+func TestConversationSendRefusedForGoodIsNotQueued(t *testing.T) {
+	for _, refusal := range []error{errors.New("the picked model is gone"), &rpc.Error{Code: "launcher_missing", Message: "no launcher"}} {
+		s, f := newQuietService(t)
+		f.mu.Lock()
+		f.failAssistant = refusal
+		f.mu.Unlock()
+		f.known["conv2"] = true
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+			proto.Session{SessionID: "conv2", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		if out, err := s.toolConversationSend(context.Background(), "conv2", []byte(`{"id":"conv1","text":"status?"}`)); err == nil {
+			t.Fatalf("%v: reported %q", refusal, out)
+		}
+		if s.queuedFor("conv1") != 0 {
+			t.Fatalf("%v: queued", refusal)
+		}
 	}
 }
