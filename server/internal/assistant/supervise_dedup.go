@@ -25,9 +25,14 @@ type superviseFingerprint struct {
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
-	if g.Kind == sigPRConflict || g.Kind == sigDraftPR ||
-		g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
-		// An unhandled source, like a PR head, is not new when its recipient or last reply changes.
+	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
+		// Keep every task/PR/head independently, including a head that returns after another one.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
+		sum := sha256.Sum256(key)
+		return string(key), hex.EncodeToString(sum[:])
+	}
+	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		// An unhandled source is not new when its recipient or last reply changes.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
 		return string(key), hex.EncodeToString(sum[:])
@@ -132,9 +137,11 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			pending = append(pending, id)
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if g := signals[i]; g.Kind == sigAllStopped ||
-			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		if signals[i].Kind == sigAllStopped {
 			fingerprint.Todo = signals[i].Todo
+		}
+		if g := signals[i]; g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
 		out, kept = append(out, entry), append(kept, signals[i])
