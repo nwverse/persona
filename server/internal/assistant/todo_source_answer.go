@@ -171,21 +171,31 @@ func (s *Service) forgetSourceWait(id string) {
 	b.reportMu.Unlock()
 }
 
-// sourceMainReplyItems follows wakes only when their tool call belongs to the handoff or
-// one of its continuations. An intervening request in the shared conversation cannot
-// supply the answer. Tool results still identify background work after its run is gone.
+// sourceMainReplyItems reads the handoff's answer from items, the main conversation after the
+// handoff's prompt. A wake whose tool call belongs to the handoff or one of its continuations
+// carries the handoff on. An unrelated wake cannot supply the answer.
+//
+// A different request (sourceOtherRequest) ends the handoff: a later wake for its background
+// work answers in a conversation that has moved on. The reply is then the last words one of the
+// handoff's own exchanges ended with before that request, even one that was still waiting on
+// background work, and nothing more is awaited.
+//
+// Until then, background work counts across the handoff's exchanges, as runBackground counts a
+// run's: a continuation for one of several tasks is still an interim answer. A Monitor reports
+// events, not an end, so it is not awaited (startsBackground). Tool results still identify
+// background work after its run is gone.
 func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, time.Duration) {
 	owned, start := true, 0
 	wait := sourceReportWait
-	var calls, background, reply []proto.Item
+	var calls, background, reply, last []proto.Item
 	for i, it := range items {
 		if it.Task != nil && taskEnded(it.Task.Status) {
 			background = slices.DeleteFunc(background, func(launch proto.Item) bool {
 				return launchedIn([]proto.Item{launch}, it.Task)
 			})
 		}
-		if it.Role == "user" || it.Wake {
-			if it.Wake && launchedIn(calls, it.Task) {
+		if it.Wake {
+			if launchedIn(calls, it.Task) {
 				owned, start = true, i+1
 				reply, wait = nil, sourceReportWait
 			} else {
@@ -196,6 +206,9 @@ func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, ti
 			}
 			continue
 		}
+		if sourceOtherRequest(it) {
+			return last, 0
+		}
 		if !owned {
 			continue
 		}
@@ -205,15 +218,21 @@ func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, ti
 		case proto.KindToolResult:
 			if !it.IsError && transcript.LaunchedBackgroundID(it.Text) != "" {
 				calls = append(calls, it)
-				background = append(background, it)
+				if startsBackground(it.Text) {
+					background = append(background, it)
+				}
 			}
 		case turnDurationKind:
 			owned = false
+			turn := items[start : i+1]
+			words, _ := sourceReplyItems(turn)
+			if len(words) != 0 {
+				last = words
+			}
 			if len(background) != 0 || heldThrough >= 0 && (start == 0 || it.Seq <= heldThrough) {
 				continue
 			}
-			turn := items[start : i+1]
-			reply, _ = sourceReplyItems(turn)
+			reply = words
 			if len(reply) != 0 || channel.Stopped(turn) != "" {
 				wait = 0
 			}
@@ -229,6 +248,16 @@ func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, ti
 		return nil, 0
 	}
 	return nil, wait
+}
+
+// sourceOtherRequest: a message put into the shared conversation after the handoff's prompt,
+// typed, queued mid-turn or injected by Persona. Tool results, and the pictures a tool returns,
+// are user lines in a transcript too, and a wake is a background task's notice.
+func sourceOtherRequest(it proto.Item) bool {
+	if it.Role != "user" || it.Wake {
+		return false
+	}
+	return it.Kind == proto.KindText || it.Kind == proto.KindImage && it.ToolUseID == ""
 }
 
 // Only assistant text after the last tool call or result is part of the final answer.

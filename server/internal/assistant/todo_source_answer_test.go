@@ -27,7 +27,7 @@ func TestSourceReportFullTaskAnswer(t *testing.T) {
 			proto.Item{Role: "user", Kind: proto.KindText, TS: at, Text: "Check the release notes"},
 			proto.Item{Role: "assistant", Kind: proto.KindText, TS: at, Text: "I am running the checks."},
 			proto.Item{Role: "assistant", Kind: proto.KindToolUse, TS: at, ToolName: "check"},
-			proto.Item{Role: "tool", Kind: proto.KindToolResult, TS: at, Text: "Tool log"},
+			proto.Item{Role: "user", Kind: proto.KindToolResult, TS: at, Text: "Tool log"},
 			proto.Item{ID: "final", Role: "assistant", Kind: proto.KindText, TS: at, Text: "Truncated", FullSize: 100},
 			proto.Item{Role: "assistant", Kind: proto.KindText, TS: at, Text: "See the [release notes](https://example.com/notes)."},
 			proto.Item{ID: "end", Kind: "turn_duration", TS: at},
@@ -115,7 +115,7 @@ func TestSourceReportMainAnswerWaitsForItsBackgroundWork(t *testing.T) {
 		items := []proto.Item{
 			{Seq: 1, Role: "user", Kind: proto.KindText, TS: at, ClientMsgID: channel.ClientMsgID(channel.Feishu, todo.Source.Handoff)},
 			{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_check"},
-			{Seq: 3, Role: "tool", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
+			{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
 			{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "The check is still running."},
 			{ID: "interim_end", Seq: 5, Kind: turnDurationKind},
 		}
@@ -217,8 +217,20 @@ func TestSourceReportImmediateAnswerWaitsForLateHandoff(t *testing.T) {
 	})
 }
 
-// While background work runs past sourceReportWait, a read that fails or no longer finds the
-// prompt in the near window must keep waiting instead of sending the fallback.
+// backgroundHandoff is a handoff's turn that leaves a background check running, as a Claude Code
+// transcript has it: the call's result is a user line.
+func backgroundHandoff(handoff string) []proto.Item {
+	return []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, ClientMsgID: channel.ClientMsgID(channel.Feishu, handoff)},
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_check"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
+		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "The check is still running."},
+		{ID: "interim_end", Seq: 5, Kind: turnDurationKind},
+	}
+}
+
+// While background work runs past sourceReportWait, a read that fails must keep waiting instead
+// of sending the fallback.
 func TestSourceReportBackgroundWaitSurvivesUnclearReads(t *testing.T) {
 	e := newAskEnv(t, nil)
 	minutes := 0
@@ -226,13 +238,7 @@ func TestSourceReportBackgroundWaitSurvivesUnclearReads(t *testing.T) {
 	e.f.pageTurns = true
 	e.ask(ownerAsk("om_long_background", "/ai Check the release"))
 	todo := onlyTodo(e.s)
-	items := []proto.Item{
-		{Seq: 1, Role: "user", Kind: proto.KindText, ClientMsgID: channel.ClientMsgID(channel.Feishu, todo.Source.Handoff)},
-		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_check"},
-		{Seq: 3, Role: "tool", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
-		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "The check is still running."},
-		{ID: "interim_end", Seq: 5, Kind: turnDurationKind},
-	}
+	items := backgroundHandoff(todo.Source.Handoff)
 	e.f.setItems(items...)
 	e.closeDone(todo.ID)
 	e.clock.advance(0)
@@ -251,32 +257,159 @@ func TestSourceReportBackgroundWaitSurvivesUnclearReads(t *testing.T) {
 		t.Fatalf("a failed read sent the fallback: %v", got)
 	}
 
-	// Other requests push the handoff's prompt out of the last five turns before the work ends.
+	// Another agent reports back meanwhile: a wake, not a request, so the handoff still waits.
+	items = append(items,
+		proto.Item{Seq: 6, Role: "user", Kind: proto.KindToolResult, ToolUseID: "peer_call", Wake: true, Task: &proto.TaskNote{Kind: "agent", TaskID: "peer", ToolUseID: "peer_call", Status: "completed"}},
+		proto.Item{Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "The peer finished."},
+		proto.Item{ID: "peer_end", Seq: 8, Kind: turnDurationKind},
+	)
+	e.f.setItems(items...)
+	e.clock.advance(30 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 0 {
+		t.Fatalf("an unrelated wake ended the wait: %v", got)
+	}
+
+	const answer = "The release check passed."
+	items = append(items,
+		proto.Item{Seq: 9, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "check1", Status: "completed"}},
+		proto.Item{Seq: 10, Role: "assistant", Kind: proto.KindText, Text: answer},
+		proto.Item{ID: "final_end", Seq: 11, Kind: turnDurationKind},
+	)
+	e.f.setItems(items...)
+	e.clock.advance(30 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 1 || got[0]["text"] != answer || got[0]["full_answer"] != true {
+		t.Fatalf("expected the background work's final answer, got %v", got)
+	}
+}
+
+// Another request in the shared conversation ends the handoff before its background work reports
+// back. The reply is the handoff's own last words, not the later continuation, and it goes out
+// even though the requests pushed the handoff's prompt out of the last five turns.
+func TestSourceReportEndsAtAnotherRequest(t *testing.T) {
+	e := newAskEnv(t, nil)
+	minutes := 0
+	e.fullReply, e.reportDelay = true, &minutes
+	e.f.pageTurns = true
+	e.ask(ownerAsk("om_interrupted", "/ai Check the release"))
+	todo := onlyTodo(e.s)
+	items := backgroundHandoff(todo.Source.Handoff)
+	e.f.setItems(items...)
+	e.closeDone(todo.ID)
+	e.clock.advance(0)
+	if src := onlyTodo(e.s).Source; src.ReportDueAt != "" {
+		t.Fatalf("planned a reply while the background work ran: %q", src.ReportText)
+	}
+
 	seq := 5
 	for i := range 5 {
 		seq += 3
 		items = append(items,
 			proto.Item{Seq: seq - 2, Role: "user", Kind: proto.KindText, Text: fmt.Sprintf("Other request %d", i)},
 			proto.Item{Seq: seq - 1, Role: "assistant", Kind: proto.KindText, Text: "Other answer"},
-			proto.Item{Seq: seq, Kind: turnDurationKind},
+			proto.Item{ID: fmt.Sprintf("other_end_%d", i), Seq: seq, Kind: turnDurationKind},
 		)
 	}
-	e.f.setItems(items...)
-	e.clock.advance(30 * time.Second)
-	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 0 {
-		t.Fatalf("a prompt outside the near window sent the fallback: %v", got)
-	}
-
-	const answer = "The release check passed."
 	items = append(items,
 		proto.Item{Seq: seq + 1, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "check1", Status: "completed"}},
-		proto.Item{Seq: seq + 2, Role: "assistant", Kind: proto.KindText, Text: answer},
-		proto.Item{ID: "final_end", Seq: seq + 3, Kind: turnDurationKind},
+		proto.Item{Seq: seq + 2, Role: "assistant", Kind: proto.KindText, Text: "The check passed, and here is the other request again."},
+		proto.Item{ID: "late_end", Seq: seq + 3, Kind: turnDurationKind},
 	)
 	e.f.setItems(items...)
-	e.clock.advance(30 * time.Second)
-	if got := reportsTo(e.f, askSrc, "om_long_background"); len(got) != 1 || got[0]["text"] != answer || got[0]["full_answer"] != true {
-		t.Fatalf("expected the background work's final answer, got %v", got)
+	e.clock.advance(5 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_interrupted"); len(got) != 1 || got[0]["text"] != "The check is still running." || got[0]["full_answer"] != true {
+		t.Fatalf("expected the handoff's own last words, got %v", got)
+	}
+}
+
+func TestSourceMainReplyEndsAtAnotherRequest(t *testing.T) {
+	launch := []proto.Item{
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_check"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
+	}
+	other := []proto.Item{
+		{Seq: 6, Role: "user", Kind: proto.KindText, Text: "Other request"},
+		{Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "Other answer"},
+		{ID: "other_end", Seq: 8, Kind: turnDurationKind},
+	}
+	interim := []proto.Item{
+		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Interim."},
+		{ID: "interim_end", Seq: 5, Kind: turnDurationKind},
+	}
+	wake := []proto.Item{
+		{Seq: 9, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "check1", Status: "completed"}},
+		{Seq: 10, Role: "assistant", Kind: proto.KindText, Text: "Continuation."},
+		{ID: "wake_end", Seq: 11, Kind: turnDurationKind},
+	}
+	cases := []struct {
+		name  string
+		items []proto.Item
+		held  int
+		want  string
+	}{
+		{"the handoff's wake after another request", slices.Concat(launch, interim, other, wake), -1, "Interim."},
+		{"background that never reports", slices.Concat(launch, interim, other), -1, "Interim."},
+		{"a held run", slices.Concat(launch, interim, other), 5, "Interim."},
+		{"a request taken before any words", slices.Concat(launch, other, wake), -1, ""},
+		{"a picture sent before any words", slices.Concat(launch, []proto.Item{{Seq: 6, Role: "user", Kind: proto.KindImage}}, interim), -1, ""},
+	}
+	for _, c := range cases {
+		reply, wait := sourceMainReplyItems(c.items, c.held)
+		var got string
+		if len(reply) == 1 {
+			got = reply[0].Text
+		}
+		if len(reply) > 1 || got != c.want || wait != 0 {
+			t.Errorf("%s: got %v with wait %s, want %q at once", c.name, reply, wait, c.want)
+		}
+	}
+}
+
+func TestSourceMainReplyReadsToolLines(t *testing.T) {
+	// A call's result and the picture it returns are user lines in a transcript, not requests.
+	items := []proto.Item{
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "shot"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "shot", Text: "Screenshot taken"},
+		{Seq: 4, Role: "user", Kind: proto.KindImage, ToolUseID: "shot"},
+		{Seq: 5, Role: "assistant", Kind: proto.KindText, Text: "The page renders."},
+		{ID: "end", Seq: 6, Kind: turnDurationKind},
+	}
+	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 1 || reply[0].Text != "The page renders." || wait != 0 {
+		t.Fatalf("tool lines: got %v with wait %s", reply, wait)
+	}
+	// A Monitor reports events, not an end: the answer does not wait for it.
+	items = []proto.Item{
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "watch"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "watch", Text: "Monitor started (task m1, expires in 30m unless stopped)"},
+		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Watching the deploy."},
+		{ID: "end", Seq: 5, Kind: turnDurationKind},
+	}
+	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 1 || reply[0].Text != "Watching the deploy." || wait != 0 {
+		t.Fatalf("a Monitor: got %v with wait %s", reply, wait)
+	}
+}
+
+func TestSourceMainReplyWaitsForAllItsBackgroundWork(t *testing.T) {
+	items := []proto.Item{
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "call_a"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "call_a", Text: "Command running in background with ID: a1."},
+		{Seq: 4, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "call_b"},
+		{Seq: 5, Role: "user", Kind: proto.KindToolResult, ToolUseID: "call_b", Text: "Command running in background with ID: b1."},
+		{Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "Both are running."},
+		{ID: "first_end", Seq: 7, Kind: turnDurationKind},
+		{Seq: 8, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{ToolUseID: "call_a", Status: "completed"}},
+		{Seq: 9, Role: "assistant", Kind: proto.KindText, Text: "A passed; B is still running."},
+		{ID: "a_end", Seq: 10, Kind: turnDurationKind},
+	}
+	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 0 || wait != channel.HeldMost {
+		t.Fatalf("one of two tasks reported: got %v with wait %s", reply, wait)
+	}
+	items = append(items,
+		proto.Item{Seq: 11, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{ToolUseID: "call_b", Status: "completed"}},
+		proto.Item{Seq: 12, Role: "assistant", Kind: proto.KindText, Text: "Both passed."},
+		proto.Item{ID: "b_end", Seq: 13, Kind: turnDurationKind},
+	)
+	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 1 || reply[0].Text != "Both passed." || wait != 0 {
+		t.Fatalf("both tasks reported: got %v with wait %s", reply, wait)
 	}
 }
 
