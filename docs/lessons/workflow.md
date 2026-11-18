@@ -99,7 +99,7 @@ SDK synchronization intentionally replaces only the selected SDK subtree (#1471)
 
 ## Hosted CI path aggregation
 
-- Adding a hosted Web input must update the local `check-fast` selector too (#2559); the parity test intentionally fails when attention fixtures are omitted. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of both failures rather than weakening portable guards.
+- The web lane's inputs outside `web/` are derived, not listed (#10619): `scripts/ci/paths.py` scans `web/src` and the web tests for the paths they name relative to themselves, and both CI's web lane and `check-fast` use that scan. The hand list it replaced named 6 of the ~25 fixture directories the tests read. Read a fixture by a path relative to the file (an import, `new URL("../…", import.meta.url)`, `join(__dirname, "../…")` or `".."` elements); a path built from the working directory or a variable root is invisible to the scan. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of failures rather than weakening portable guards.
 
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
   orchestrator, put filters in a tested selector, call platform workflows through `workflow_call`, and require only its final aggregate.
