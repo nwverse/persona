@@ -74,6 +74,11 @@ var (
 
 func linkSwitchRefusal(code, msg string) *rpc.Error { return &rpc.Error{Code: code, Message: msg} }
 
+// linkSwitchNoMachine: the computer is none of this manager's (gone, or another manager's now).
+func linkSwitchNoMachine() *rpc.Error {
+	return linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
+}
+
 func init() {
 	handleBus(devicewire.MethodLinkSwitchBegin, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
 		var p devicewire.LinkSwitchBegin
@@ -134,12 +139,12 @@ func (h *Hub) beginLinkSwitch(ctx context.Context, c *busConn, p devicewire.Link
 func (h *Hub) linkSwitchReady(ctx context.Context, c *busConn, p devicewire.LinkSwitchBegin) error {
 	mid := p.MachineID
 	if mid == "" || h.ownsMachine(c, mid) != nil {
-		return linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
+		return linkSwitchNoMachine()
 	}
 	mc := h.knownEntry(mid)
 	switch {
 	case mc == nil:
-		return linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
+		return linkSwitchNoMachine()
 	case kindOf(*mc) != "ssh":
 		return linkSwitchRefusal(devicewire.LinkSwitchCodeNotSSH, "the computer is not reached over ssh")
 	case mc.SSHHost != p.SSHHost:
@@ -177,7 +182,7 @@ func linkSwitchSwapErr(err error) error {
 	var re *rpc.Error
 	switch {
 	case errors.Is(err, errNoMachine), errors.As(err, &re) && re.Code == devicewire.CodeNoDevice:
-		return linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
+		return linkSwitchNoMachine()
 	case errors.Is(err, errSwapKind):
 		return linkSwitchRefusal(devicewire.LinkSwitchCodeNotSSH, "the computer's entry is not of the kind expected")
 	case errors.Is(err, errSwapHost):
@@ -201,7 +206,7 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 				h.revoked(id)
 			}
 		}
-		return nil, linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
+		return nil, linkSwitchNoMachine()
 	}
 	run, _ := h.linkSwitch.get(mid) // who asked, when this hub saw it begin
 	run.operation = clip(p.Operation, 64)
@@ -319,14 +324,7 @@ func (h *Hub) swapMachineKind(ctx context.Context, mid, kind string, check func(
 // the manager (which connects it the new way now), and so what the apps see once the manager reports it. No restart
 // waits for it (pendingRestart).
 func (h *Hub) kindLive(mid, kind string) {
-	d := &h.devices
-	d.mu.Lock()
-	for i := range d.entries {
-		if d.entries[i].ID == mid {
-			d.entries[i].Kind = kind
-		}
-	}
-	d.mu.Unlock()
+	h.editEntryLive(mid, func(mc *MachineConfig) { mc.Kind = kind })
 	h.devicesConfigChanged()
 	h.broadcastMachines() // and the mesh record
 }

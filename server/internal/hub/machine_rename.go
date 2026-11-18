@@ -96,19 +96,25 @@ func (h *Hub) renamed(ctx context.Context, id, was, shown, by, via string) strin
 // machine and its connection: only the name changed) and the machine the apps see. A name is no change waiting for a
 // restart (pendingRestart).
 func (h *Hub) renameMachineLive(id, name string) {
-	d := &h.devices
-	d.mu.Lock()
-	for i := range d.entries {
-		if d.entries[i].ID == id {
-			d.entries[i].Name = name
-		}
-	}
-	d.mu.Unlock()
+	h.editEntryLive(id, func(mc *MachineConfig) { mc.Name = name })
 	if m := h.localMachine(id); m != nil {
 		m.setName(name)
 	}
 	h.devicesConfigChanged()
 	h.broadcastMachines() // and the mesh record
+}
+
+// editEntryLive changes computer id's entry the running hub hands its manager (renameMachineLive, link_switch.go
+// kindLive); the caller hands it over (devicesConfigChanged).
+func (h *Hub) editEntryLive(id string, edit func(*MachineConfig)) {
+	d := &h.devices
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.entries {
+		if d.entries[i].ID == id {
+			edit(&d.entries[i])
+		}
+	}
 }
 
 // nameAfterSystem names a computer that has just paired its Persona Link after what its system calls it, when it has

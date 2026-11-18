@@ -63,7 +63,24 @@ func remoteTarget(cfg MachineConfig, info proto.NodeInfo, bin string) string {
 	if cfg.RemoteBin != "" {
 		return cfg.RemoteBin
 	}
-	return "~/.persona/bin/personad"
+	return defaultRemoteBin
+}
+
+// gzipPipe is r gzipped as it is read, for an ssh's stdin. The caller closes it once ssh is done: exec copies a
+// non-*os.File Stdin in its own goroutine and never closes it, so once ssh exits early (auth failure, connect timeout,
+// the remote script failing, ctx done) nothing reads it, and the gzip writer would block for good (#2377). Closing it
+// makes that Write fail with io.ErrClosedPipe so it returns.
+func gzipPipe(r io.Reader) *io.PipeReader {
+	pr, pw := io.Pipe()
+	go func() {
+		zw, _ := gzip.NewWriterLevel(pw, gzip.BestSpeed)
+		_, err := io.Copy(zw, r)
+		if err == nil {
+			err = zw.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	return pr
 }
 
 // errFallbackOnRedeploy: an update the manager makes by itself found a fallback build (the newest release, another
@@ -234,20 +251,9 @@ func (m *Machine) deploy(ctx context.Context, bin, target string) error {
 	// what it runs); the device's file takes either program.
 	guard := isPersonaNodeBuild(bin) && !update.IsDeviceFile(remote)
 	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, deployScript(remote, guard))
-	pr, pw := io.Pipe()
-	// exec copies a non-*os.File Stdin in its own goroutine and never closes it: once ssh exits early (auth failure,
-	// connect timeout, the remote script failing, ctx done) nothing reads pr, and the gzip writer below would block on
-	// pw for good (#2377). Closing pr makes its Write fail with io.ErrClosedPipe so it returns.
+	pr := gzipPipe(f)
 	defer pr.Close()
 	cmd.Stdin = pr
-	go func() {
-		zw, _ := gzip.NewWriterLevel(pw, gzip.BestSpeed)
-		_, err := io.Copy(zw, f)
-		if err == nil {
-			err = zw.Close()
-		}
-		pw.CloseWithError(err)
-	}()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == deployExitWrapper {

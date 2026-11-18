@@ -148,7 +148,7 @@ export function LinkSwitch({ machineId, name, state, post, refresh, user, classN
     >
       <div className="min-w-0 flex-1 break-words" role="status">
         {body}
-        {notice && !starting && <p className="mt-0.5 text-red" data-link-switch-notice={notice.kind}>{noticeText(notice, user)}</p>}
+        {notice && <p className="mt-0.5 text-red" data-link-switch-notice={notice.kind}>{noticeText(notice, user)}</p>}
       </div>
       {canStart && (
         <Button tone="secondary" size="sm" icon="link" onClick={() => setAsking(true)} testId="link-switch-start">

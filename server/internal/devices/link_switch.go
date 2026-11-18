@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -203,19 +202,18 @@ func (d *Devices) saveLinkSwitch(ctx context.Context, rec linkSwitchRecord) erro
 	return d.opts.Store.PutSetting(ctx, linkSwitchKey(rec.MachineID), rec)
 }
 
-// linkSwitchCandidate: a computer this manager connects itself over ssh, which a switch may start on.
-func (d *Devices) linkSwitchCandidate(m *Machine) bool {
+// linkSwitchCandidate: a computer this manager connects itself over ssh, which a switch may start on (cfg: the hub's
+// handover).
+func linkSwitchCandidate(cfg devicewire.Config, m *Machine) bool {
 	if m.derived || kindOf(m.cfg) != "ssh" {
 		return false
 	}
-	mesh := d.config().Mesh
-	return mesh == nil || !mesh.Member // a member's computers are the center's to connect
+	return cfg.Mesh == nil || !cfg.Mesh.Member // a member's computers are the center's to connect
 }
 
 // linkSwitchReason is why a switch cannot start on the candidate m now ("": it can), cheaply: from what the hub's
-// handover and the node's node.info say, nothing asked of the computer.
-func (d *Devices) linkSwitchReason(m *Machine, info proto.NodeInfo, online, deploying bool, rec *linkSwitchRecord) string {
-	cfg := d.config()
+// handover (cfg) and the node's node.info say, nothing asked of the computer.
+func linkSwitchReason(cfg devicewire.Config, m *Machine, info proto.NodeInfo, online, deploying bool, rec *linkSwitchRecord) string {
 	switch {
 	case rec.unfinished():
 		return proto.LinkSwitchReasonInProgress
@@ -225,7 +223,7 @@ func (d *Devices) linkSwitchReason(m *Machine, info proto.NodeInfo, online, depl
 		return proto.LinkSwitchReasonHubOld
 	case cfg.PendingUnknown || slices.Contains(cfg.Pending, m.cfg.ID):
 		return proto.LinkSwitchReasonPending
-	case m.cfg.RemoteBin != "" && m.cfg.RemoteBin != "~/.persona/bin/personad",
+	case m.cfg.RemoteBin != "" && m.cfg.RemoteBin != defaultRemoteBin,
 		info.Home != "" && info.DataDir != info.Home+"/.persona" && info.DataDir != info.Home+`\.persona`:
 		return proto.LinkSwitchReasonCustomNode
 	case !online:
@@ -248,13 +246,14 @@ func (d *Devices) linkSwitchView(m *Machine, info proto.NodeInfo, online, deploy
 	if rec != nil && rec.finished() && time.Since(rec.At) >= d.linkSwitchTimes().Shown {
 		rec = nil
 	}
-	candidate := d.linkSwitchCandidate(m)
+	cfg := d.config()
+	candidate := linkSwitchCandidate(cfg, m)
 	if !candidate && rec == nil {
 		return nil
 	}
 	v := &proto.MachineLinkSwitch{}
 	if candidate {
-		v.Reason = d.linkSwitchReason(m, info, online, deploying, rec)
+		v.Reason = linkSwitchReason(cfg, m, info, online, deploying, rec)
 		v.Available = v.Reason == ""
 	} else if rec.unfinished() {
 		v.Reason = proto.LinkSwitchReasonInProgress
@@ -310,14 +309,15 @@ func (d *Devices) startLinkSwitch(ctx context.Context, m *Machine, by string) (*
 		d.logf("[%s] link switch: read the last switch: %v", id, err)
 		return nil, "", err
 	}
-	if !d.linkSwitchCandidate(m) {
+	cfg := d.config()
+	if !linkSwitchCandidate(cfg, m) {
 		if kindOf(m.cfg) == kindLink {
 			return nil, proto.LinkSwitchReasonExistingLink, nil
 		}
 		return nil, proto.LinkSwitchReasonUnknown, nil
 	}
 	info, online, deploying := m.linkSwitchFacts()
-	if reason := d.linkSwitchReason(m, info, online, deploying, d.linkSwitchRecordOf(id)); reason != "" {
+	if reason := linkSwitchReason(cfg, m, info, online, deploying, d.linkSwitchRecordOf(id)); reason != "" {
 		return nil, reason, nil
 	}
 	t := d.linkSwitchTimes()
@@ -331,11 +331,7 @@ func (d *Devices) startLinkSwitch(ctx context.Context, m *Machine, by string) (*
 		return nil, proto.LinkSwitchReasonInProgress, nil
 	}
 	prev := ls.records[id]
-	if ls.active == nil {
-		ls.active = map[string]bool{}
-	}
-	ls.active[id] = true
-	ls.wg.Add(1)
+	ls.claimLocked(id)
 	ls.mu.Unlock()
 	if err := d.saveLinkSwitch(ctx, rec); err != nil {
 		ls.mu.Lock()
@@ -357,6 +353,16 @@ func (d *Devices) startLinkSwitch(ctx context.Context, m *Machine, by string) (*
 		(&linkSwitchRun{d: d, rec: rec, t: t}).run(d.deployContext())
 	}()
 	return d.linkSwitchView(m, info, online, deploying), "", nil
+}
+
+// claimLocked: a goroutine of this manager is to run the machine's switch (releaseLinkSwitch once it is done). ls.mu
+// is held.
+func (ls *linkSwitches) claimLocked(id string) {
+	if ls.active == nil {
+		ls.active = map[string]bool{}
+	}
+	ls.active[id] = true
+	ls.wg.Add(1)
 }
 
 // releaseLinkSwitch: this manager's goroutine for the machine's switch is done.
@@ -410,11 +416,7 @@ func (d *Devices) resumeLinkSwitch(ctx context.Context, id string, t linkSwitchT
 		ls.mu.Unlock()
 		return
 	}
-	if ls.active == nil {
-		ls.active = map[string]bool{}
-	}
-	ls.active[id] = true
-	ls.wg.Add(1)
+	ls.claimLocked(id)
 	r := &linkSwitchRun{d: d, rec: *rec, t: t}
 	ls.mu.Unlock()
 	d.logf("[%s] link switch %s: resumed after a restart (phase %s)", id, r.rec.Operation, r.rec.Phase)
@@ -449,6 +451,11 @@ func (r *linkSwitchRun) phase(ctx context.Context, phase string) bool {
 	return r.save(ctx)
 }
 
+// fail ends a switch the hub never changed anything for (nothing to roll back) as failed, with why.
+func (r *linkSwitchRun) fail(ctx context.Context, why string) {
+	r.finish(ctx, proto.LinkSwitchPhaseFailed, why, false)
+}
+
 // finish ends the switch: succeeded, or failed with why (and whether the computer could be shown to be back as it
 // was).
 func (r *linkSwitchRun) finish(ctx context.Context, phase, why string, unconfirmed bool) {
@@ -464,11 +471,11 @@ func (r *linkSwitchRun) run(ctx context.Context) {
 		return // the manager stops: the record says where this switch was
 	}
 	if reason != "" {
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, reason, false)
+		r.fail(ctx, reason)
 		return
 	}
 	if !r.phase(ctx, proto.LinkSwitchPhaseInstalling) {
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonUnknown, false)
+		r.fail(ctx, proto.LinkSwitchReasonUnknown)
 		return
 	}
 	pkgOf := r.d.switches.pkg
@@ -484,11 +491,11 @@ func (r *linkSwitchRun) run(ctx context.Context) {
 	}
 	if err != nil { // none anywhere, the release site away, a build that did not check out: none to send
 		r.logf("no build: %v", err)
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonNoPackage, false)
+		r.fail(ctx, proto.LinkSwitchReasonNoPackage)
 		return
 	}
 	if !r.save(ctx) {
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonUnknown, false)
+		r.fail(ctx, proto.LinkSwitchReasonUnknown)
 		return
 	}
 	if !r.stage(ctx, path) {
@@ -496,21 +503,21 @@ func (r *linkSwitchRun) run(ctx context.Context) {
 			return
 		}
 		r.removeStaged(ctx)
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonTransferFailed, false)
+		r.fail(ctx, proto.LinkSwitchReasonTransferFailed)
 		return
 	}
 	r.logf("build %s staged", version)
 	r.rec.BeginIntended = true
 	if !r.save(ctx) { // never asked of the hub without its record
 		r.removeStaged(ctx)
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonUnknown, false)
+		r.fail(ctx, proto.LinkSwitchReasonUnknown)
 		return
 	}
 	link, refused, err := r.begin(ctx)
 	switch {
 	case refused != "": // the hub changed nothing
 		r.removeStaged(ctx)
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, refused, false)
+		r.fail(ctx, refused)
 		return
 	case err != nil: // it may have begun, its answer lost
 		if ctx.Err() != nil {
@@ -557,7 +564,7 @@ func (r *linkSwitchRun) resume(ctx context.Context) {
 	if !r.rec.BeginIntended {
 		r.removeStaged(ctx)
 		if ctx.Err() == nil {
-			r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonInterrupted, false)
+			r.fail(ctx, proto.LinkSwitchReasonInterrupted)
 		}
 		return
 	}
@@ -704,17 +711,8 @@ func (r *linkSwitchRun) stage(ctx context.Context, path string) bool {
 		return false
 	}
 	defer f.Close()
-	pr, pw := io.Pipe()
-	// Closed once ssh is done, so the writer below never blocks on a reader that is gone (deploy.go, #2377).
-	defer pr.Close()
-	go func() {
-		zw, _ := gzip.NewWriterLevel(pw, gzip.BestSpeed)
-		_, err := io.Copy(zw, f)
-		if err == nil {
-			err = zw.Close()
-		}
-		pw.CloseWithError(err)
-	}()
+	pr := gzipPipe(f)
+	defer pr.Close() // once ssh is done (gzipPipe)
 	exit, out := r.ssh(ctx, "stage", lsStageScript(r.rec.Operation, r.rec.SHA256), pr, r.t.Transfer)
 	return exit == 0 && outputOf(out)["staged"] == "1"
 }

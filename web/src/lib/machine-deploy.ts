@@ -15,6 +15,12 @@ export function linkSwitchRunning(s?: MachineLinkSwitch | null): boolean {
   return p === "checking" || p === "installing" || p === "connecting" || p === "rolling_back";
 }
 
+/** Offline on purpose: an update restarting its node, or a switch to Persona Link reconnecting it (#10662). Pure, so
+ *  the machine alerts read it without counting as a deployment read (lib/machine-alerts.ts). */
+export function disconnectExpected(m: Machine): boolean {
+  return !m.online && ((!m.deploy_error && (m.deploy_phase === "restarting" || m.deploy_phase === "confirming")) || linkSwitchRunning(m.link_switch));
+}
+
 /** Older hubs can deploy SSH nodes, but never advertised an update path for linked nodes. */
 export function machineDeployment(m: Machine) {
   const linked = m.kind === "link" || m.kind === "service";
@@ -32,8 +38,7 @@ export function machineDeployment(m: Machine) {
   return {
     visible: !!(m.node_mismatch || busy || m.deploy_error),
     busy,
-    // offline on purpose: an update restarting its node, or a switch to Persona Link reconnecting it (#10662)
-    expectedDisconnect: !m.online && ((!m.deploy_error && (m.deploy_phase === "restarting" || m.deploy_phase === "confirming")) || linkSwitchRunning(m.link_switch)),
+    expectedDisconnect: disconnectExpected(m),
     supported,
     canDeploy: canDeploy && !busy,
     label: busy ? phase?.label || t("lib-machine-deploy.deploying") : t("lib-machine-deploy.redeploy"),

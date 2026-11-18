@@ -313,11 +313,14 @@ func (h *Hub) addedLive() []MachineConfig {
 	return out
 }
 
-func kindOf(c MachineConfig) string {
-	if c.Kind == "" {
+func kindOf(c MachineConfig) string { return kindName(c.Kind) }
+
+// kindName is an entry's kind as kindOf says it: "" is ssh.
+func kindName(kind string) string {
+	if kind == "" {
 		return "ssh"
 	}
-	return c.Kind
+	return kind
 }
 
 // withoutName is the entry but for its name, which the running hub takes as it is (machine_rename.go).

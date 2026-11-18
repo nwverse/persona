@@ -226,9 +226,7 @@ func (m *Machine) snapshot() proto.Machine {
 	d := m.d
 	engine := d.engineOf(m.cfg.ID) // before m.mu: it may read settings
 	choice := d.engineChoiceOf(m.cfg.ID)
-	m.mu.Lock()
-	info, online, deploying := m.info, m.online, m.deploying
-	m.mu.Unlock()
+	info, online, deploying := m.linkSwitchFacts()
 	// Switching to Persona Link (link_switch.go): before m.mu, as it reads the hub's handover.
 	linkSwitch := d.linkSwitchView(m, info, online, deploying)
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
@@ -325,6 +323,9 @@ func (m *Machine) reconnect() {
 	}
 }
 
+// defaultRemoteBin is the program an ssh machine's node runs when its entry names none (remote_bin).
+const defaultRemoteBin = "~/.persona/bin/personad"
+
 func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	if m.nodeCmd != nil {
 		return m.nodeCmd(ctx)
@@ -335,7 +336,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	}
 	bin := m.cfg.RemoteBin
 	if bin == "" {
-		bin = "~/.persona/bin/personad"
+		bin = defaultRemoteBin
 	}
 	host := m.cfg.SSHHost
 	if host == "" {
