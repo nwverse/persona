@@ -614,6 +614,9 @@ update is work to follow up, not an external dependency to park (#9754).
   receipts retain their provided send time for this ordering.
   A retry of the same delivery, an incoming reply, another topic, or a
   failed/unconfirmed send does not.
+  Automatic bot status or delivery-error notes never create or fulfill promises;
+  a missing-pieces warning is not a successfully delivered answer. Real bot
+  answers, including their plain-text fallback, keep their normal receipt path.
   GitHub comment fragments do not change the topic. A task's separate Lark work
   topic is never substituted for its actual outward source. Newly captured
   Feishu source requests retain their original thread id. Migrated Inbox chat

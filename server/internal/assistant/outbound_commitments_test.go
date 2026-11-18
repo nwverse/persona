@@ -471,31 +471,33 @@ func TestOutboundPromiseOldInboxReceiptCannotFulfillANewerPromise(t *testing.T) 
 	}
 }
 
-func TestOutboundPromisePlainBotTopicReply(t *testing.T) {
-	ctx := context.Background()
+func TestOutboundPromiseBotReplyKeepsPlainTextFallback(t *testing.T) {
 	st := &memStore{}
-	s, f, _, _ := outwardBot(t, st)
+	s, f, r, _ := outwardBot(t, st)
+	r.Ext = map[string]string{"chat": "oc_original", "thread": "omt_original"}
 	var sends int
-	f.answerApp(AppFeishu, FeishuText, func(raw json.RawMessage) (any, error) {
+	want := "I'll share the results later."
+	f.answerApp(AppFeishu, FeishuPost, func(raw json.RawMessage) (any, error) {
 		var p struct {
-			NoDetour bool `json:"no_detour"`
+			NoDetour bool   `json:"no_detour"`
+			Fallback string `json:"fallback"`
 		}
 		_ = json.Unmarshal(raw, &p)
-		if !p.NoDetour {
-			t.Error("a tracked topic reply could silently detour into the group")
+		if !p.NoDetour || !strings.Contains(p.Fallback, want) {
+			t.Errorf("a tracked reply lost its original topic or plain-text fallback: %+v", p)
 		}
 		sends++
 		return map[string]any{"message_id": "om_plain"}, nil
 	})
-	to := (&feishuTopic{Chat: "oc_original", Thread: "omt_original"}).target()
-	s.botNoteTo(ctx, to, "om_request", "算完再同步") // i18n-ignore: sent-message fixture
+	sendOutwardBot(t, s, r, want)
 	got := outwardReceipts(t, st)
 	if len(got) != 1 || got[0].SentAt.IsZero() || got[0].Reply.TodoID == "" {
-		t.Fatalf("plain bot reply omitted its task commitment: %+v", got)
+		t.Fatalf("bot reply with a plain-text fallback omitted its task commitment: %+v", got)
 	}
-	s.botNoteTo(ctx, to, "om_request", "The results are ready.")
+	r.ID, want = "plain-update", "The results are ready."
+	sendOutwardBot(t, s, r, want)
 	if outwardReceipts(t, st)[0].FulfilledAt.IsZero() || sends != 2 {
-		t.Fatal("plain bot follow-up did not fulfill its topic's promise exactly once")
+		t.Fatal("real bot follow-up did not fulfill its topic's promise exactly once")
 	}
 }
 

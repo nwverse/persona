@@ -51,7 +51,7 @@ func outwardMigratedInboxOn(t *testing.T, store Store) (*inboxHub, *InboxItem) {
 }
 
 func TestOutboundPromiseMigratedFeishuCrossPathFulfillment(t *testing.T) {
-	for _, path := range []string{"bot answer", "bot note", "source report", "legacy source report", "reverse Inbox reply"} {
+	for _, path := range []string{"bot answer", "source report", "legacy source report", "reverse Inbox reply"} {
 		t.Run(path, func(t *testing.T) {
 			h, it := outwardMigratedInbox(t)
 			ctx := context.Background()
@@ -72,9 +72,6 @@ func TestOutboundPromiseMigratedFeishuCrossPathFulfillment(t *testing.T) {
 			switch path {
 			case "bot answer":
 				sendOutwardBot(t, h.Service, r, "Here are the results.")
-			case "bot note":
-				h.botNoteTo(ctx, feishuTarget{ChatID: "oc_example", ThreadID: "omt_example", InThread: true},
-					"om_request", "Here are the results.")
 			case "source report", "legacy source report":
 				src := TodoSource{Channel: channel.Feishu, ChatID: "oc_example", MessageID: "om_request",
 					ThreadID: "omt_example", ReportText: "Here are the results."}
