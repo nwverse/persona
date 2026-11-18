@@ -271,6 +271,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
 		}
+		if in.CloseEndedTerminals != nil {
+			v.CloseEndedTerminals = in.CloseEndedTerminals
+		}
 		if in.AgentAutoNaming != nil {
 			v.AgentAutoNaming = in.AgentAutoNaming
 		}

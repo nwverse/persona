@@ -24,6 +24,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+const assistantShellReady = "__PERSONA_ASSISTANT_SHELL_READY__"
+
 // An assistant process that exits within assistantEarlyExit of starting failed to start: its last assistantStderrTail
 // stderr lines go to the log.
 const (
@@ -279,7 +281,7 @@ func (n *Node) assistantCLICommand(shell, launcher, cwd string, itself bool, arg
 	if itself {
 		command = commandInProfile("command claude", envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath)
 	}
-	argv := append([]string{shell, "-ic", command + ` "$@"`, "persona"}, args...)
+	argv := append([]string{shell, "-ic", `echo ` + assistantShellReady + `; ` + command + ` "$@"`, "persona"}, args...)
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),
@@ -337,6 +339,11 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if hooks == "" && n.launcherOwnSettings(context.Background(), launcher) != "" {
 		compaction.ownSettings = ""
 	}
+	toolSearch := n.assistantToolSearch(launcher, execution.Model, compaction)
+	compaction.toolSearchOff = toolSearch.forceOff
+	if toolSearch.forceOff {
+		n.logger.Printf("assistant %s: starts with every tool loaded: %s refused tool search for model %q", short(id), launcher, execution.Model)
+	}
 	var settingsErr error
 	settings, settingsErr = n.assistantCompactionSettings(id, cwd, settings, compaction)
 	if settingsErr != nil {
@@ -369,6 +376,9 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		model = n.resumeModel(launcher, cwd, settings, configPath)
 	}
 	if model != "" {
+		model = n.claudeModelArg(launcher, model) // no tier alias for a gateway (#10365); "" its default
+	}
+	if model != "" {
 		args = append(args, "--model", model)
 	}
 	// bypassPermissions only takes as a flag at start; the other modes are set with a control request (syncAssistantModes).
@@ -387,11 +397,18 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	} else {
 		args = append(args, "--session-id", id)
 	}
-	// Tool search is on for every conversation: personad mcp marks the Persona tools used all the time alwaysLoad, the
-	// rest and other MCP servers' tools wait behind ToolSearch (#5838, #7317). ENABLE_TOOL_SEARCH=true lifts Claude
-	// Code's hold-off for a conversation that ran without ToolSearch (one from before #5839), which would otherwise load
-	// every tool until it is compacted. Never false: that turns deferral off for every server (#5838).
-	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1", "ENABLE_TOOL_SEARCH=true"}, compaction.env()...)...)
+	// Tool search by where the requests go (toolSearchFor, #10365): personad mcp marks the Persona tools used all the
+	// time alwaysLoad, the rest and other MCP servers' tools wait behind ToolSearch (#5838, #7317). On Anthropic's own
+	// API, ENABLE_TOOL_SEARCH=true lifts Claude Code's hold-off for a conversation that ran without ToolSearch (one from
+	// before #5839), which would otherwise load every tool until it is compacted. Behind a gateway true would also lift
+	// Claude Code's own rule that keeps tool search off there, so a gateway gets false (every tool up front), and a
+	// start that cannot tell where its requests go gets nothing: Claude Code decides, as before #7371. A value the
+	// node inherited never reaches claude.
+	startEnv := []string{"PERSONA_ASSISTANT=1"}
+	if toolSearch.env != "" {
+		startEnv = append(startEnv, toolSearchEnv+"="+toolSearch.env)
+	}
+	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv}), append(startEnv, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
 	gateEnv, releaseGates := n.assistantLarkEnv(cwd, id) // its addresses at the gate proxy go with the process
 	if guest {
@@ -463,10 +480,13 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	started = true
 	processExecution := execution
 	processExecution.StartupContext = nil // a live or resident process must never keep the completed RPC's context
+	// Effort is deliberately unconfirmed here: --effort cannot express auto and
+	// launcher environment/policy can override a flag. syncAssistantModes must
+	// receive its ACK before the user's first input, just as for live changes.
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
 		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
-		round: round.anchor != "", toolSet: round.toolSet}
+		round: round.anchor != "", toolSet: round.toolSet, toolSearch: toolSearch, endpoint: compaction.endpoint}
 	if !spare {
 		n.mu.Lock()
 		n.procs[id] = p
@@ -586,6 +606,13 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 	if err := sc.Err(); err != nil {
 		logger.Printf("assistant %s: stderr read: %v", id[:8], err)
 		_, _ = io.Copy(io.Discard, stderr)
+	}
+	p.mu.Lock()
+	stopReason := p.stopReason
+	p.mu.Unlock()
+	if stopReason != "" {
+		logger.Printf("assistant %s: stopped by node after %s: %s", short(id), time.Since(born).Round(time.Millisecond), stopReason)
+		return
 	}
 	if lived := time.Since(born); lived < assistantEarlyExit && len(tail) > 0 {
 		logger.Printf("assistant %s: %s exited %s after it started: %s", id[:8], launcher, lived.Round(time.Millisecond),

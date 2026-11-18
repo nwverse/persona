@@ -83,8 +83,10 @@ type assistantProc struct {
 	// is complete only then. nil for Codex.
 	stderrDone chan struct{}
 	// ready closes at its first JSON line on stdout (claude): it started. nil for Codex.
-	ready     chan struct{}
-	readyOnce sync.Once
+	ready        chan struct{}
+	readyOnce    sync.Once
+	shellReadyAt time.Time // guarded by mu; shell init completed, before invoking the launcher
+	stopReason   string    // guarded by mu; a node-initiated startup/control failure
 
 	wmu    sync.Mutex   // one writer on stdin at a time (messages and control requests)
 	reqSeq atomic.Int64 // control request ids
@@ -124,6 +126,10 @@ type assistantProc struct {
 	// model of the conversation's last reply. compactIdleAt follows the window Claude Code reports for it (followWindow).
 	declaredWindow int
 	replyModel     string
+	// toolSearch: what its start did about Claude Code's tool search, and endpoint where its requests go, "" Anthropic's
+	// own API (assistant_tool_search.go). Set at the start, never changed.
+	toolSearch toolSearchStart
+	endpoint   string
 	// repliedAt: when replyModel last answered (assistant_recovery.go: a transient "model does not exist" on it).
 	repliedAt time.Time
 
@@ -653,7 +659,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) && p != nil && p.alive() && !otherTools && !restartForRecovery && !p.needsRestartFor(want) && !p.instructionsStale() {
 		execution = pinExternalExecution(p, launcher, execution)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools) {
+	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
@@ -757,9 +763,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", err
 	}
 	n.noteAssistantRecoveryProcess(ctx, p)
-	if !hasInput {
-		// Android creates the session before sending its outbox. Keep the process and
-		// settings, but do not turn its context into a message or acknowledge it as read.
+	if !hasInput && p.agent == "codex" {
+		// Codex has no startup settings controls; do not allocate a turn for an empty start.
 		err := n.syncAssistantModes(ctx, p)
 		awaitList(n.notifySessionsSoon())
 		if err != nil {
@@ -770,7 +775,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		return id, nil
 	}
-	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
+	if hasInput && (launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude") {
 		// An active process may retain its old environment while a switch waits. Never send selections to that
 		// different environment simply because the display names match. Claude startup can also
 		// reveal a managed-policy cache; recheck before handing exact-file instructions to it.
@@ -788,7 +793,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		modec = make(chan error, 1)
 		go func() { modec <- n.syncAssistantModes(ctx, p) }()
 	}
-	live, commit := n.turnContext(id, <-snapc)
+	var live string
+	commit := func() {}
+	if hasInput {
+		live, commit = n.turnContext(id, <-snapc)
+	}
 	if p.agent == "codex" {
 		p.mu.Lock()
 		p.busy = true
@@ -807,8 +816,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 
-	interject = interject && !fresh && p.interjects()
-	midTurn := !fresh && p.midTurn()
+	// A model recovery's resend continues the failed turn its busy flag holds: no message of the owner's, so no
+	// interjection (#10178).
+	interject = interject && recovery == nil && !fresh && p.interjects()
+	midTurn := recovery == nil && !fresh && p.midTurn()
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
@@ -830,6 +841,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
 	in := assistantInput{text: text, images: images, content: content}
+	startAttemptsAt := time.Now()
+	if fresh && !p.born.IsZero() {
+		startAttemptsAt = p.born
+	}
 	for attempt := 1; ; attempt++ {
 		if proto.IsExternalLauncher(launcher) && ctx.Err() != nil {
 			return "", externalAdapterError(ctx, ctx.Err())
@@ -848,6 +863,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if controlErr != nil && (!fresh || ctx.Err() != nil || !errors.As(controlErr, &unconfirmed)) {
 			return "", controlErr
 		}
+		if controlErr == nil && !hasInput {
+			// Allocation and its retries confirm settings without consuming a
+			// snapshot, acknowledging context, or starting a context-only turn.
+			awaitList(n.notifySessionsSoon())
+			return id, nil
+		}
 		p.mu.Lock()
 		p.busy = true
 		p.turnError = ""
@@ -856,6 +877,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		p.lastActive = time.Now()
 		p.partial.Reset()
 		p.mu.Unlock()
+		var timeout *assistantControlTimeoutError
+		retryControl := errors.As(controlErr, &timeout)
 		werr := controlErr
 		if proto.IsExternalLauncher(launcher) && ctx.Err() != nil {
 			return "", externalAdapterError(ctx, ctx.Err())
@@ -869,8 +892,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.stopAssistantProcess(id)
 			n.notifySessionsSoon() // the modes it took, and the process gone
 			return "", fmt.Errorf("send to claude: %w", werr)
-		case werr != nil:
+		case werr != nil && !retryControl:
 			werr = p.startFailure() // it is gone already: say why, not that the pipe is closed (#2581)
+		case werr != nil:
+			werr = fmt.Errorf("%s: %w", i18n.T(i18n.Default, "node-assistant-start.not_delivered"), werr)
 		case fresh:
 			werr = p.awaitStart(assistantStartWait)
 			if werr != nil {
@@ -898,24 +923,33 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.logf("assistant %s: the supervision round did not start from its first turn (%v); resuming it as before", short(id), werr)
 			round = spawnRound{}
 			superviseRoundFrom(ctx).set(roundKept, roundWhyStartFailed)
+			// An unconfirmed control rolled these back; the plain fallback
+			// must confirm the same request, just like an ordinary retry.
+			n.noteModes(id, retryMode, retryEffort)
+			n.persistModes(id, retryMode, retryEffort)
 			if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
 				return "", err
 			}
 			n.noteAssistantRecoveryProcess(ctx, p)
 			continue
 		}
-		if !p.missingCommand() || attempt > assistantStartRetries {
+		if (!p.missingCommand() && !retryControl) || attempt > assistantStartRetries {
 			timing.mark("start_failed", false)
+			if retryControl {
+				return "", refusal("assistant_control_failed", i18n.T(i18n.Default, "node-assistant-start.attempts_exhausted", i18n.Args{
+					"attempts": attempt, "wait": time.Since(startAttemptsAt).Round(100 * time.Millisecond).String(), "reason": werr.Error(),
+				}), nil)
+			}
 			return "", p.startRefusal(werr)
 		}
-		// Its command is missing, most likely for the moment Claude Code is being reinstalled: start it again.
+		// Retry only before user input was written: a missing executable or an unconfirmed startup deadline.
 		n.logf("assistant %s: %s (attempt %d), starting it again in %s", id[:8], werr, attempt, assistantStartRetryDelay)
 		select {
 		case <-ctx.Done():
 			return "", p.startRefusal(werr)
 		case <-time.After(assistantStartRetryDelay):
 		}
-		// No Claude process accepted or refused the settings while its executable was missing.
+		// No user input was delivered on this attempt. Restore the requested settings for the new process.
 		// Keep the original choices when retrying that transient startup failure.
 		n.noteModes(id, retryMode, retryEffort)
 		n.persistModes(id, retryMode, retryEffort)
@@ -963,15 +997,17 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		p.reading.Add(1)
 		n := p.ownerOr(started) // a resident node's next connection may have taken it over (assistant_keep.go)
 		line := sc.Bytes()
+		if string(line) == assistantShellReady {
+			p.mu.Lock()
+			p.shellReadyAt = time.Now()
+			p.mu.Unlock()
+			n.logf("assistant %s: shell initialization completed elapsed_ms=%d", short(p.id), time.Since(p.born).Milliseconds())
+			continue
+		}
 		if len(line) == 0 || line[0] != '{' { // interactive zsh may print banners
 			continue
 		}
 		p.printed()
-		if p.round {
-			n.settleSoon(p) // its row says working until it settled (assistant_round.go); it starts with its init (below)
-		} else {
-			p.started()
-		}
 		var ev struct {
 			Type     string                   `json:"type"`
 			Subtype  string                   `json:"subtype"`
@@ -1007,6 +1043,11 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		if json.Unmarshal(line, &ev) != nil {
 			p.invalidateUpdateTasks()
 			continue
+		}
+		if p.round {
+			n.settleSoon(p) // its row says working until it settled (assistant_round.go); it starts with its init (below)
+		} else {
+			p.started()
 		}
 		if p.round && ev.Type == "result" && !p.hasStarted() {
 			// A round's process that refuses its --resume-session-at (assistant_round.go) prints only a result
