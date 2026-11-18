@@ -9,7 +9,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -220,8 +219,8 @@ func TestTaskStuckEstimateBoundaries(t *testing.T) {
 	t.Run("sub-day reports", checkLeaderStuckSubDayWording)
 }
 
-// A short task can be stuck within its first day. Neither the localized report nor the
-// assistant's supervision and briefing may turn that signal into a one-day age claim.
+// A short task can be stuck within its first day. The localized report must not turn
+// that signal into a one-day age claim; the supervision and briefing have P1 goldens.
 // Keep these cases under the existing estimate-boundary test: the shared runner partitions
 // top-level names round-robin, so adding a new name would reassign unrelated tests.
 func checkLeaderStuckSubDayWording(t *testing.T) {
@@ -237,20 +236,13 @@ func checkLeaderStuckSubDayWording(t *testing.T) {
 			for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 				t.Run(string(lang), func(t *testing.T) {
 					report := leaderReportText(lang, assistantwire.LeaderStuck, task, "", section)
-					supervision := prompts.RenderSupervise(prompts.Supervise{LeaderStuck: true,
-						Entries: []prompts.SuperviseEntry{{ID: "todo_example", Title: task.Title,
-							Kind: sigLeaderStuck, Detail: report}}})
-					briefing := prompts.RenderBriefFacts(prompts.BriefFacts{Hours: 12,
-						Leaders: []prompts.BriefLeader{{Name: "Example direction", Open: 1, Stuck: 1}}})
-					for name, text := range map[string]string{"report": report, "supervision": supervision, "briefing": briefing} {
-						for _, wrongAge := range []string{"over a day", "一天", "1 日以上"} {
-							if strings.Contains(text, wrongAge) {
-								t.Errorf("%s claims a day for 270 minutes: %s", name, text)
-							}
+					for _, wrongAge := range []string{"over a day", "一天", "1 日以上"} {
+						if strings.Contains(report, wrongAge) {
+							t.Errorf("report claims a day for 270 minutes: %s", report)
 						}
-						if name != "briefing" && !strings.Contains(text, task.Title) {
-							t.Errorf("%s lost the task title: %s", name, text)
-						}
+					}
+					if !strings.Contains(report, task.Title) {
+						t.Errorf("report lost the task title: %s", report)
 					}
 				})
 			}
