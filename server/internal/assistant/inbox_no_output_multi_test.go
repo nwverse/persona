@@ -248,12 +248,13 @@ func TestInboxNoOutputRecoveryRetriesTheRecipientAfterAReadFailure(t *testing.T)
 		return map[string]any{"items": turnPage("peer", "Unrelated work.", true)}, nil
 	})
 	f.setSessions("box", first, peer)
+	key := turnRecoveryKey{Todo: todo.ID, Machine: first.MachineID, Session: first.SessionID}
 	for pass := range 2 {
 		if pass == 1 {
 			s.tasks.turns.mu.Lock()
-			retry := s.tasks.turns.retry[todo.ID]
+			retry := s.tasks.turns.retry[key]
 			retry.at = time.Now().Add(-time.Second)
-			s.tasks.turns.retry[todo.ID] = retry
+			s.tasks.turns.retry[key] = retry
 			s.tasks.turns.mu.Unlock()
 		}
 		s.watchTurn(context.Background(), todo, []proto.Session{first, peer})

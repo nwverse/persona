@@ -222,6 +222,10 @@ type turnLook struct {
 	UpdatedAt                time.Time
 }
 
+type turnRecoveryKey struct {
+	Todo, Machine, Session string
+}
+
 func lookOf(c proto.Session) turnLook {
 	look := turnLook{Machine: c.MachineID, Session: c.SessionID, Status: c.Status, Rev: c.Rev}
 	if c.Rev == 0 {
@@ -244,12 +248,12 @@ type turnsState struct {
 	doc    taskTurnsDoc
 	// again: the judgment on the ledger is being put back (turnAgain): the signal it raises is the one told already.
 	again map[string]bool
-	// looked: the row the sweep looked at last; recovering: a look is going on; tries: how often the sweep had the
-	// turn judged; retry: the looks at a row that could not finish, and when the next one is due (turnRetry).
-	looked     map[string]turnLook
+	// looked and retry are per task/recipient: one unreadable transcript must not hold up a peer.
+	// recovering serializes a task's reads; tries counts its unfinished judgments.
+	looked     map[turnRecoveryKey]turnLook
 	recovering map[string]bool
 	tries      map[string]int
-	retry      map[string]turnRetry
+	retry      map[turnRecoveryKey]turnRetry
 	// judging: the end of a turn of the task is being handled (taskJudging). Under jmu, not mu: it is set with the
 	// receipt's reservation and read with it under the task lock (settleTurn, turnStartHeard), which must not wait
 	// for the ledger. The ledger's own looks read it with mu held (settling), so what they read of the ledger and of
@@ -371,9 +375,19 @@ func (s *Service) pruneTurns(ctx context.Context) {
 			delete(b.closed, SessionRef{MachineID: e.Machine, SessionID: e.Session})
 		}
 		delete(b.doc.Turns, id)
-		delete(b.looked, id)
 		delete(b.tries, id)
-		delete(b.retry, id)
+		for key := range b.looked {
+			if key.Todo == id {
+				delete(b.closed, SessionRef{MachineID: key.Machine, SessionID: key.Session})
+				delete(b.looked, key)
+			}
+		}
+		for key := range b.retry {
+			if key.Todo == id {
+				delete(b.closed, SessionRef{MachineID: key.Machine, SessionID: key.Session})
+				delete(b.retry, key)
+			}
+		}
 		for key, e := range b.doc.InboxEvents {
 			if e.Todo == id {
 				delete(b.doc.InboxEvents, key)
@@ -663,8 +677,8 @@ func (s *Service) taskJudging(todo string, n int) {
 // look that could not finish (the node did not answer, the judgment did not land) is tried again on the next tick and
 // then ever later while the row stays as it is (turnRetryIn). A usage limit that is waited out is not looked at until
 // the wait is over (its turn goes on then), nor an agent whose computer is not connected. What a manager before this
-// one left untold is told from the ledger alone. A recorded event's recipient is recovered before the newest peer,
-// independently of whether that peer is still working.
+// one left untold is told from the ledger alone. Recorded recipients are recovered independently of a working peer
+// or another recipient's failed read. Reads remain serial within a task and bounded by turnRecoverMost across tasks.
 func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session) {
 	agents = currentTaskAgents(agents, supersededAgents(t, agents))
 	probe := make([]proto.Session, len(agents))
@@ -688,11 +702,11 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		b.mu.Unlock()
 		return
 	}
-	pendingRecipient := false
-recipients:
+	var candidates []proto.Session
 	for i, c := range agents {
 		ref := SessionRef{MachineID: c.MachineID, SessionID: c.SessionID}
-		retry, retrying := b.retry[t.ID]
+		key := turnRecoveryKey{Todo: t.ID, Machine: c.MachineID, Session: c.SessionID}
+		retry, retrying := b.retry[key]
 		// A closed row can still need its settlement read retried.
 		if b.closed[ref] == lookOf(c) && (!retrying || retry.look != lookOf(c)) ||
 			!taskAgentSettled(probe[i]) || limitTakenUp(c, now) {
@@ -700,79 +714,89 @@ recipients:
 		}
 		for _, e := range b.doc.InboxEvents {
 			if e.Todo == t.ID && e.Machine == c.MachineID && e.Session == c.SessionID {
-				last, pendingRecipient = c, true
-				break recipients
+				candidates = append(candidates, c)
+				break
 			}
 		}
 	}
-	b.mu.Unlock()
-	if !pendingRecipient && (waiting || !taskAgentsSettled(t, probe)) {
-		return // one works, waits, or is not listed: its end comes later, by itself or by this look
+	if len(candidates) == 0 {
+		if waiting || !taskAgentsSettled(t, probe) {
+			b.mu.Unlock()
+			return // one works, waits, or is not listed: its end comes later
+		}
+		candidates = append(candidates, last)
 	}
-	var conn time.Time
-	if s.devs != nil {
-		conn = s.devs.ConnectedAt(last.MachineID) // a node that connected again is looked at whatever could not finish before
-	}
-	look := lookOf(last)
-	b.mu.Lock()
-	if !s.turnsLocked(ctx) {
-		b.mu.Unlock()
-		return
-	}
-	e, known := b.doc.Turns[t.ID]
-	same := known && e.Machine == last.MachineID && e.Session == last.SessionID && e.Rev == last.Rev
 	var tell *turnSignal
-	if sig := e.Signal; same && sig != nil && sig.Told == nil {
-		tell = sig
+	if e, known := b.doc.Turns[t.ID]; known && e.Signal != nil && e.Signal.Told == nil {
+		for _, row := range candidates {
+			if e.Machine == row.MachineID && e.Session == row.SessionID && e.Rev == row.Rev {
+				tell = e.Signal
+				break
+			}
+		}
 	}
-	skip := b.looked[t.ID] == look || b.recovering[t.ID]
-	if !skip && same && last.Rev != 0 && e.settled() {
-		b.looked[t.ID], skip = look, true // nothing was written since it was handled
-	}
-	if r, waits := b.retry[t.ID]; waits && (r.look != look || !r.conn.Equal(conn)) {
-		delete(b.retry, t.ID) // the row moved or its node connected again: looked at now, whatever could not finish before
-	} else if waits && now.Before(r.at) {
-		skip = true
-	}
-	if !skip && len(b.recovering) >= turnRecoverMost {
-		skip = true
+	busy := b.recovering[t.ID] || len(b.recovering) >= turnRecoverMost
+	if !busy {
+		b.recovering[t.ID] = true
 	}
 	b.mu.Unlock()
-	if tell != nil { // judged before a restart, never told: told now (a signal waiting or told already stays as it is)
+	if tell != nil { // the ledger's untold notice does not need a transcript-read slot
 		s.signal(superviseSignal{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine, Detail: tell.Detail})
 	}
-	if skip {
+	if busy {
 		return
 	}
-	if s.devs != nil { // the fleet is this manager's: the rows are its copy of the node's last list, kept while it is away
-		if m, ok := s.devs.Summary(last.MachineID); ok && !m.Reachable {
-			return // its computer is not connected: nothing can be read. Looked at on the tick after it is back
-		}
-	}
-	b.mu.Lock()
-	if b.recovering[t.ID] || len(b.recovering) >= turnRecoverMost {
-		b.mu.Unlock()
-		return
-	}
-	b.recovering[t.ID] = true
-	b.mu.Unlock()
 	go func() {
-		looked := s.recoverTurn(context.WithoutCancel(ctx), t, last)
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.recovering, t.ID)
-		if looked {
-			b.looked[t.ID] = look
-			delete(b.retry, t.ID)
-			return
+		defer func() {
+			b.mu.Lock()
+			delete(b.recovering, t.ID)
+			b.mu.Unlock()
+		}()
+		recoveryCtx := context.WithoutCancel(ctx)
+		for _, row := range candidates {
+			key := turnRecoveryKey{Todo: t.ID, Machine: row.MachineID, Session: row.SessionID}
+			look := lookOf(row)
+			var conn time.Time
+			if s.devs != nil {
+				conn = s.devs.ConnectedAt(row.MachineID)
+			}
+			b.mu.Lock()
+			e, known := b.doc.Turns[t.ID]
+			same := known && e.Machine == row.MachineID && e.Session == row.SessionID && e.Rev == row.Rev
+			skip := b.looked[key] == look
+			if !skip && same && row.Rev != 0 && e.settled() {
+				b.looked[key], skip = look, true
+			}
+			if r, waits := b.retry[key]; waits && (r.look != look || !r.conn.Equal(conn)) {
+				delete(b.retry, key) // a new row or connection retries only this recipient
+			} else if waits && time.Now().Before(r.at) {
+				skip = true
+			}
+			b.mu.Unlock()
+			if skip {
+				continue
+			}
+			if s.devs != nil {
+				if m, ok := s.devs.Summary(row.MachineID); ok && !m.Reachable {
+					continue
+				}
+			}
+			looked := s.recoverTurn(recoveryCtx, t, row)
+			b.mu.Lock()
+			if looked {
+				b.looked[key] = look
+				delete(b.retry, key)
+			} else {
+				r := b.retry[key]
+				if r.look != look || !r.conn.Equal(conn) {
+					r = turnRetry{look: look, conn: conn}
+				}
+				r.n++
+				r.at = time.Now().Add(turnRetryIn(r.n))
+				b.retry[key] = r
+			}
+			b.mu.Unlock()
 		}
-		r := b.retry[t.ID]
-		if r.look != look || !r.conn.Equal(conn) {
-			r = turnRetry{look: look, conn: conn}
-		}
-		r.n++
-		r.at = time.Now().Add(turnRetryIn(r.n))
-		b.retry[t.ID] = r
 	}()
 }
 

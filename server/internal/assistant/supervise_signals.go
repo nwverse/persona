@@ -250,7 +250,10 @@ func (s *Service) signal(g superviseSignal) {
 	}
 	b.mu.Lock()
 	b.init()
-	if b.sent[g.id()] == g.Key {
+	// This early cache is not an unhandled source's delivery receipt: an owner wait
+	// can discard the entry before dispatch. Its durable fingerprint deduplicates delivery.
+	unhandled := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+	if b.sent[g.id()] == g.Key && !unhandled {
 		b.mu.Unlock()
 		return
 	}
