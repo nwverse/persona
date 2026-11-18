@@ -1920,8 +1920,9 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   short lines take turns with the oldest long line; the other long lines wait, as on the one writer.
 - **A frame is not a line, nor a read.** The heartbeat's signals are defined per line and per read: the read-ahead must
   never judge a later piece of a line on its own (a closing piece does not decode, and counted as activity), the
-  middle of a line counts per read that goes on with it (not per whole frame), and it stands while the line still
-  arrives even when shorter lines finish beside it. Each was a divergence from lines that a review found by feeding a
+  middle of a line counts per read that goes on with it (not per whole frame), and it stands while that same line
+  still arrives even when shorter lines finish beside it (any long line in progress would do for a first fix, and a
+  line held back by credit the other side never gets then kept every later event's middle alive: #8771 again). Each was a divergence from lines that a review found by feeding a
   peer of lines and a framed one the same bytes (`server/internal/rpc/lanes_activity_test.go`).
 - **Switch each direction on its own line.** One side cannot know where the other's lines end except by a line that
   says so: the answering side's last line is its answer, the asking side's a marker event. Both are written under the

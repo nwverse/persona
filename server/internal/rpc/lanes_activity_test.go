@@ -294,3 +294,102 @@ func TestLanesLineWrittenAcrossClose(t *testing.T) {
 		t.Fatalf("LineWritten saw %q", b)
 	}
 }
+
+func oneFrame(lane Lane, slot uint16, fin bool, seq uint64, payload []byte) []byte {
+	var h [frameHeader]byte
+	putHead(h[:], frameHead{kind: frameData, lane: lane, fin: fin, slot: slot, size: len(payload), seq: seq})
+	return append(h[:], payload...)
+}
+
+// tick waits until the clock is past t, so that a later activity is told apart from t.
+func tick(t time.Time) {
+	for time.Since(t) < time.Millisecond {
+		runtime.Gosched()
+	}
+}
+
+// A middle stands for its own line only: once that line is whole, another long line in progress (one that never
+// counted, or one held back by credit) does not keep it.
+func TestLanesActivityMiddleStandsForItsLineOnly(t *testing.T) {
+	p, write, base := framedHub(t)
+	x := []byte(`{"event":"sessions.changed","params":"` + strings.Repeat("e", 2*framePayloadMax) + `"}`)
+	z := []byte(`{"id":"n4","method":"state.save","params":"` + strings.Repeat("z", 2*framePayloadMax) + `"}`)
+	m := framePayloadMax
+	write(oneFrame(LaneEvents, 0, false, 1, x[:m]))
+	write(oneFrame(LaneEvents, 0, false, 2, x[m:2*m])) // the middle of x
+	if !p.PingActivity().After(base) {
+		t.Fatal("no middle")
+	}
+	write(oneFrame(LaneInteractive, 0, false, 3, z[:m])) // z begins: no middle of its own
+	write(oneFrame(LaneEvents, 0, true, 4, x[2*m:]))     // x whole
+	if p.PingActivity().After(base) {
+		t.Fatal("x's middle still stands after x is whole, held by z")
+	}
+}
+
+// The #8771 shape framed: a node's answer stuck for credit (the manager's acknowledgements do not get through), its
+// long events going on: no event's middle stands once that event is whole.
+func TestLanesActivityStuckLineKeepsNoEventAlive(t *testing.T) {
+	ev := []byte(`{"event":"sessions.changed","params":"` + strings.Repeat("s", 90<<10) + `"}`)
+	p, write, base := framedHub(t)
+	z := []byte(`{"id":"n4","result":"` + strings.Repeat("z", 64<<10) + `"}`)
+	seq := uint64(0)
+	for i := 0; i < 4; i++ { // a window of z in 8 KiB frames, then nothing more of it
+		seq++
+		write(oneFrame(LaneInteractive, 0, false, seq, z[i*8<<10:(i+1)*8<<10]))
+	}
+	prev := p.PingActivity()
+	for round := 0; round < 3; round++ {
+		tick(prev)
+		wire, last := frames(seq, LaneEvents, framePayloadMax, ev)
+		seq = last
+		k := len(wire) / 3
+		write(wire[:k])
+		write(wire[k : 2*k])
+		write(wire[2*k:])
+		got := p.PingActivity()
+		if got.After(prev) {
+			t.Fatalf("round %d: a whole node event left activity %s after the lanes answer", round, got.Sub(base))
+		}
+		prev = got
+	}
+}
+
+// The read-ahead behind a deadline counts a whole answer of several frames, an error one too, as lines do; and the
+// start of an answer taken in from the same read before the deadline.
+func TestLanesActivityAnswersAroundADeadline(t *testing.T) {
+	d := []byte(`{"id":"h9","error":{"message":"context deadline exceeded"}}`)
+	t.Run("a whole error answer of two frames behind it", func(t *testing.T) {
+		e := []byte(`{"id":"h5","error":{"message":"` + strings.Repeat("o", 12<<10) + `"}}`)
+		if !linesActivity(t, string(d)+"\n"+string(e)+"\n") {
+			t.Fatal("lines: no activity")
+		}
+		p, write, base := framedHub(t)
+		held := make(chan message) // the deadline's caller: Serve waits there, after it counted what it read ahead
+		released := false
+		t.Cleanup(func() { // before Serve's own cleanup waits for it (cleanups run last first)
+			if !released {
+				<-held
+			}
+		})
+		p.mu.Lock()
+		p.pending["h9"], p.methods["h9"] = held, "ping"
+		p.mu.Unlock()
+		w1, seq := frames(0, LaneInteractive, 8<<10, d)
+		w2, _ := frames(seq, LaneInteractive, 8<<10, e)
+		wrote := make(chan struct{})
+		go func() { write(append(w1, w2...)); close(wrote) }()
+		eventually(t, func() bool { return p.PingActivity().After(base) })
+		<-held
+		released = true
+		<-wrote
+	})
+	t.Run("an answer begun before it in the same read", func(t *testing.T) {
+		p, write, base := framedHub(t)
+		r := []byte(`{"id":"h5","result":"` + strings.Repeat("r", 2*framePayloadMax) + `"}`)
+		write(append(oneFrame(LaneInteractive, 0, false, 1, r[:framePayloadMax]), oneFrame(LaneInteractive, 1, true, 2, d)...))
+		if !p.PingActivity().After(base) {
+			t.Fatal("the start of an answer read with the deadline did not count")
+		}
+	})
+}

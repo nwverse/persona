@@ -2,7 +2,9 @@ package rpc
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"io"
 	"slices"
@@ -23,6 +25,8 @@ type frameReader struct {
 	creditRead bool                 // a frame with credit was read since the last ack asked for
 	partial    map[uint32]*partLine // lines in progress, by lane<<16 | slot
 	held       int                  // their bytes
+	reads      int                  // reads made so far
+	middleLine uint64               // the first frame of the line whose middle counted last (holding)
 	token      []byte
 	owned      bool
 	ack        func(seq uint64)       // ask for an acknowledgement of every frame read through seq
@@ -123,7 +127,7 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 		if len(s.partial) >= maxPartialLines {
 			return nil, false, fmt.Errorf("%w: more than %d lines in progress", errFrame, maxPartialLines)
 		}
-		part = &partLine{reply: bufferedActivity(payload)}
+		part = &partLine{first: h.seq, read: s.reads, reply: replyEnvelope(payload)}
 		s.partial[key] = part
 	}
 	if h.fin {
@@ -145,9 +149,28 @@ func frameKey(h frameHead) uint32 { return uint32(h.lane)<<16 | uint32(h.slot) }
 type partLine struct {
 	pieces [][]byte
 	n      int
-	// reply: the envelope of its first frame says it answers a call (bufferedActivity), which aheadActivity takes for
-	// the whole line rather than put the line together to decode it.
+	first  uint64 // its first frame's sequence number: which line it is, a slot carrying one line after another
+	read   int    // the read its first frame came in
+	// reply: its first frame opens an answer (replyEnvelope), which aheadActivity takes for the whole line rather than
+	// put the line together to decode it (a deadline, the one answer that does not count, never takes two frames).
 	reply bool
+}
+
+// replyEnvelope: first, the start of a line, opens an answer to a call: an id and then a result or an error, in the
+// order message's fields put them.
+func replyEnvelope(first []byte) bool {
+	dec := jsontext.NewDecoder(bytes.NewReader(first))
+	if t, err := dec.ReadToken(); err != nil || t.Kind() != '{' {
+		return false
+	}
+	if t, err := dec.ReadToken(); err != nil || t.String() != "id" {
+		return false
+	}
+	if _, err := dec.ReadValue(); err != nil {
+		return false
+	}
+	t, err := dec.ReadToken()
+	return err == nil && (t.String() == "result" || t.String() == "error")
 }
 
 // partPiece is the size of a partLine's pieces: grownBufs' smallest.
@@ -202,6 +225,7 @@ func (s *frameReader) fill() {
 			return
 		}
 		if n > 0 {
+			s.reads++
 			s.noteMiddle(carried)
 			return
 		}
@@ -216,11 +240,12 @@ func (s *frameReader) fill() {
 // aheadLine is what is known of a line from the frames read and not yet taken (frameReader.ahead).
 type aheadLine struct {
 	key   uint32
-	size  int  // its bytes so far, those before these frames included
-	first bool // its first frame is among these
-	lead  bool // the first of these frames is its
-	ended bool // its last frame is among these, whole
-	reply bool // begun before these: its first frame named a result (partLine.reply)
+	start uint64 // its first frame's sequence number
+	size  int    // its bytes so far, those before these frames included
+	first bool   // its first frame is among these
+	lead  bool   // the first of these frames is its
+	ended bool   // its last frame is among these, whole
+	reply bool   // its first frame opens an answer (replyEnvelope)
 }
 
 // ahead walks the frames read and not yet taken (s.buf[s.start:s.end]), the last perhaps in part, calling f, when set,
@@ -240,11 +265,11 @@ func (s *frameReader) ahead(f func(h frameHead, payload []byte, l *aheadLine) bo
 			key := frameKey(h)
 			i := slices.IndexFunc(lines, func(l aheadLine) bool { return l.key == key && !l.ended })
 			if i < 0 {
-				l := aheadLine{key: key, first: true, lead: lead}
+				l := aheadLine{key: key, start: h.seq, first: true, lead: lead, reply: replyEnvelope(b[frameHeader : frameHeader+have])}
 				// A slot whose line ended among these frames carries a new one; otherwise it goes on with the line in
 				// progress there.
 				if part, ok := s.partial[key]; ok && !slices.ContainsFunc(lines, func(l aheadLine) bool { return l.key == key }) {
-					l.first, l.size, l.reply = false, part.n, part.reply
+					l.start, l.first, l.size, l.reply = part.first, false, part.n, part.reply
 				}
 				lines = append(lines, l)
 				i = len(lines) - 1
@@ -269,12 +294,16 @@ func (s *frameReader) ahead(f func(h frameHead, payload []byte, l *aheadLine) bo
 // result and no method or event; for a line in several frames that is all its first frame says (a deadline is never
 // that long), and its later pieces say nothing of their own.
 func (s *frameReader) aheadActivity() bool {
+	for _, p := range s.partial {
+		if p.reply && p.read == s.reads {
+			return true // an answer begun in this read, taken in already: with lines its start would be ahead
+		}
+	}
 	found := false
 	s.ahead(func(h frameHead, payload []byte, l *aheadLine) bool {
 		switch {
-		case !l.first: // the rest of a line begun before these frames
+		case !l.first || l.size != len(payload): // a later piece: the line counts once whole, by its first frame
 			found = l.ended && l.reply
-		case l.size != len(payload): // a later piece of a line begun among these: its first piece was looked at
 		case l.ended: // a whole line in one frame
 			var m message
 			found = json.Unmarshal(payload, &m) != nil || replyMessage(m) && !deadlineMessage(m)
@@ -295,18 +324,27 @@ func (s *frameReader) noteMiddle(carried bool) {
 	}
 	for _, l := range s.ahead(nil) {
 		if (!l.first || l.lead && carried) && !l.ended && l.size > pingFrameMiddleBytes {
+			s.middleLine = l.start
 			s.middle()
 			return
 		}
 	}
 }
 
-// holding: a line past pingFrameMiddleBytes is still arriving, so the middle activity it gave stands (Serve).
+// holding: the line whose middle counted last is still arriving, so that activity stands (Serve). That line only: one
+// held back (by credit the other side never gets) must not keep the middles of lines that finished alive.
 func (s *frameReader) holding() bool {
+	if s.middleLine == 0 {
+		return false
+	}
 	for _, p := range s.partial {
-		if p.n > pingFrameMiddleBytes {
+		if p.first == s.middleLine {
 			return true
 		}
+	}
+	if s.end-s.start >= frameHeader { // its first frame still coming in
+		h, err := parseHead(s.buf[s.start:])
+		return err == nil && h.kind == frameData && h.seq == s.middleLine
 	}
 	return false
 }
