@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -17,6 +18,13 @@ import (
 // extension's repository_providers contribution answers for the hosts it claims (s.repoExt, the extensions' manager).
 // A provider is never asked inside a store transaction or under todos.writing, and the calls of one request share one
 // repository.CheckTimeout budget.
+
+// The extensions' manager is what SetExtensions picks the providers up from, by assertion: a change to either side
+// that would quietly leave the manager without them fails the build instead.
+var _ interface {
+	repository.Extensions
+	Started() <-chan struct{}
+} = (*extmgr.Manager)(nil)
 
 // repositoryRegistry routes an address to its provider; without the extensions only the built-ins answer.
 func (s *Service) repositoryRegistry() repository.Registry {
