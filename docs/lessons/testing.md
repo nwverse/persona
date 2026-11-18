@@ -473,6 +473,15 @@ test meetings there, which then sat in the owner's meeting list. Before pairing 
 use another one, or move the earlier recordings out of the app's `Library/Application Support/Recordings/` while the
 app isn't running.
 
+## A made-up recording under a fixed id must never reach the hub, its delete included (2026-11-19, #10589)
+
+The replayed meeting (#9417) used one fixed id and was kept from uploading, but its Delete still queued
+`DELETE /api/v1/recordings/<that id>`. The hub answered `{"deleted": false}` and kept a tombstone for the id anyway; from
+then on every replay's entry was deleted by reconciliation while it played. Guarding the obvious calls (upload, the
+live read) is not enough for such an id: keep it out at the client (`ReplayedMeeting`: `APIClient` refuses any path or
+query naming it), make its delete local, and have reconciliation ignore the hub's word on it, since an older app may
+already have left the tombstone.
+
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).

@@ -492,6 +492,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   "Compacting context…", "Working…"); a Persona conversation says it in cindy's plain phases ("Thinking…", "Replying…",
   "Reading files…", "Updating files…", "Searching files…", "Searching the web…", "Reading web pages…", "Organizing the
   conversation…", "Working…") and never names a tool (super rules 0 and 4, section 5.6).
+- Model retry: while the screen reports one, the left leads with the existing classifier's plain reason and localized
+  `Retrying N/M`; the observed error is secondary detail beneath it. It is never retained from the last status: ordinary
+  work, `live: null` and turn end remove it before the usual linger/fade (#887).
 - Right, in `--ink-3`, tabular figures: the time in the work summary's format (`0s`, `1m 0s`, `1m 5s`, `1h 0m`; section 4.7),
   then in an Agent session either `· 42 tok/s` or `· ↓ 1.2k tok` (a 13 px arrow mark), never both, and no speed or tokens
   before there is a measurement (principle 5). The time and speed together are a 24 px round button with `hover:bg-hover`
@@ -1260,7 +1263,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
-| Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry |
+| Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry. While a model request is still retrying, the web's run status bar and Apple's `SessionLiveRetryNote` instead show the plain classified reason, observed error as secondary detail and localized current/max attempt, cleared on recovery, turn end or unwatch (#887) |
 | Chat loading and waiting | iOS `ChatSkeleton` (five rounded bars of `Theme.Size.markS`, the first at the trailing edge, breathing between `Fill.well` and `Fill.chip`) while a chat's first page loads, its load error as a danger line at the chat's newest end, and `TypingIndicator` ("Claude is getting ready…", three pulsing dots) under your message until its turn's work line comes; Android `ChatSkeleton` and the error line on Glass, `TypingLine` in every style (#4339 C9) |
 | The day over a message | iOS `DayLine` (`Theme.Font.caption`, tertiary, centered): over the first line of each day in Persona's conversation, never in an Agent's chat, and over a first message the transcript does not have yet (the first-message page, a conversation with an empty transcript), so the day does not appear above it later (#1911); Android `DayLine`: the transcript's in every style, those pending ones on Glass (#4339 C18) |
 
