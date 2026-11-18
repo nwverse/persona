@@ -804,7 +804,7 @@ func (n *Node) codexWaitCalls(method, id string) (any, error, bool) {
 	switch method {
 	case "session.items":
 		return map[string]any{"items": []proto.Item{}, "has_more": false, "history": "codex-wait:" + id, "to_seq": 0}, nil, true
-	case "session.item", "session.image":
+	case "session.item", "session.image", "session.visualization":
 		return nil, fmt.Errorf("no item"), true
 	case "session.watch", "session.unwatch":
 		return okResult(nil), nil, true

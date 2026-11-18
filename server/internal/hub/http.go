@@ -598,6 +598,21 @@ func (h *Hub) sessionImage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	_, _ = w.Write(data)
 }
 
+// sessionVisualization serves one visualization item's HTML fragment as raw UTF-8. A fragment never changes, so the
+// app may cache it forever.
+func (h *Hub) sessionVisualization(w http.ResponseWriter, r *http.Request, m *Machine) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	var html string
+	if err := m.call(ctx, "session.visualization", map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}, &html); err != nil {
+		callErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	_, _ = w.Write([]byte(html))
+}
+
 // proxyBody forwards a POST body (plus session_id from the path) to the node.
 func (h *Hub) proxyBody(method string) http.HandlerFunc {
 	// Resuming an offline session can take a while (shell + claude startup).

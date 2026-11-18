@@ -289,6 +289,12 @@ export function fullItem(mid: string, sid: string, itemID: string): Promise<Item
   return api<Item>(`${sessionPath(mid, sid)}/items/${enc(itemID)}/full`);
 }
 
+/** A Codex visualization item's self-contained HTML fragment: `GET …/items/{id}/visualization`, read as text. */
+export async function visualizationHTML(mid: string, sid: string, itemID: string): Promise<string> {
+  const blob = await apiBlob(`${sessionPath(mid, sid)}/items/${enc(itemID)}/visualization`);
+  return blob.text();
+}
+
 /** A machine file's bytes by Range (docs/protocol/protocol.md "File preview"): `<video>` / `<audio>` seek through it, a viewer
  * fetches it whole. `inline` lets the browser show it in place (images, media, PDF only; anything else downloads). */
 export function fileDownloadURL(mid: string, path: string, cwd?: string, opts: { inline?: boolean } = {}) {

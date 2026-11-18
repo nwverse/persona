@@ -656,7 +656,7 @@ export interface Item {
   seq: number;
   ts?: string;
   role: "user" | "assistant" | "system";
-  kind: "text" | "thinking" | "tool_use" | "tool_result" | "notice" | "image" | "fold" | "recap";
+  kind: "text" | "thinking" | "tool_use" | "tool_result" | "notice" | "image" | "fold" | "recap" | "visualization";
   text?: string;
   tool_use_id?: string;
   tool_name?: string;
@@ -670,6 +670,9 @@ export interface Item {
   task?: TaskNote;
   fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[] };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
+  /** A Codex visualize marker (kind "visualization"): a self-contained HTML fragment on the node, fetched through the
+   *  session visualization route. `mode` is "wide" or absent; the bytes are never carried here. */
+  visualization?: { path: string; mode?: string; title?: string };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
   /** The client_msg_id of the message this came from, as the hub tied it (every item of it: the text, its images, a

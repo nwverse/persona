@@ -442,8 +442,8 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		for _, c := range it.Content {
 			b.WriteString(c.Text)
 		}
-		text := codexThreadLinks(strings.TrimSpace(b.String()))
-		if text == "" {
+		text, vizRefs := splitVisualizations(codexThreadLinks(strings.TrimSpace(b.String())))
+		if text == "" && len(vizRefs) == 0 {
 			return nil
 		}
 		// AgentMessage is what Codex said, including narration between tool calls; only Reasoning is thinking.
@@ -451,10 +451,20 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 			meta.LastText = t
 			meta.turnSaid(t)
 		}
-		a := mk(0, it.ID, "assistant", proto.KindText)
-		a.Narration = it.Phase == "commentary"
-		a.Text = clip(text)
-		return []proto.Item{a}
+		var out []proto.Item
+		if text != "" {
+			a := mk(0, it.ID, "assistant", proto.KindText)
+			a.Narration = it.Phase == "commentary"
+			a.Text = clip(text)
+			out = append(out, a)
+		}
+		for _, ref := range vizRefs {
+			v := mk(len(out), it.ID, "assistant", proto.KindVisualization)
+			v.Narration = it.Phase == "commentary"
+			v.Visualization = &proto.Visualization{Path: ref.Path, Mode: ref.Mode, Title: ref.Title}
+			out = append(out, v)
+		}
+		return out
 	case "Reasoning":
 		text := strings.TrimSpace(strings.Join(it.SummaryText, "\n\n"))
 		if text == "" {

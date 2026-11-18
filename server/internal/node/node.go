@@ -1761,6 +1761,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, fmt.Errorf("no image %s in session %s", a.ItemID, p.SessionID)
 		}
 		return it.Image, nil
+	case "session.visualization":
+		var a struct {
+			ItemID string `json:"item_id"`
+		}
+		_ = json.Unmarshal(params, &a)
+		html, err := n.visualizationHTML(p.SessionID, a.ItemID)
+		if err != nil {
+			return nil, err
+		}
+		return html, nil
 	case "session.item": // one item whole: the text a page cut (full_size)
 		var a struct {
 			ItemID string `json:"item_id"`

@@ -312,6 +312,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/info
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
+agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/visualization
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
