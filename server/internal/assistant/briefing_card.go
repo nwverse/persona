@@ -311,7 +311,11 @@ func briefFixedDirections(c *feishubot.Card, plain *[]string, room *briefBudget,
 		*plain = append(*plain, line)
 		for _, w := range d.Waits {
 			body.WriteString("\n" + feishubot.EscapeMarkdown(w.Line) + briefLink(l, w.Link))
-			*plain = append(*plain, w.Line)
+			row := w.Line
+			if boardLinkOK(w.Link) {
+				row += " · " + w.Link
+			}
+			*plain = append(*plain, row)
 		}
 		if d.More > 0 {
 			more := i18n.T(l, "assistant-briefing.direction_more", i18n.Args{"n": d.More})

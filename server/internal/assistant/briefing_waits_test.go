@@ -170,8 +170,8 @@ func TestBriefDirectionsListStoppedWork(t *testing.T) {
 			continue
 		}
 		waits[w.TodoID] = w
-		if w.Title != todoNow(e.s, w.TodoID).Title || w.Since.IsZero() || w.Link == "" || !strings.Contains(w.Line, w.Title) {
-			t.Errorf("incomplete wait row: %+v", w)
+		if w.Title != todoNow(e.s, w.TodoID).Title || w.Since.IsZero() || w.Link != todoLink(testWeb, w.TodoID) || !strings.Contains(w.Line, w.Title) {
+			t.Errorf("incomplete wait row: %+v, want task link %s", w, todoLink(testWeb, w.TodoID))
 		}
 	}
 	for id, kind := range map[string]string{
@@ -200,7 +200,7 @@ func TestBriefDirectionsListStoppedWork(t *testing.T) {
 		t.Errorf("orphan stopped duration starts at %s, want the existing orphan mark %s", got.Since, orphanSince)
 	}
 	if private == nil || private.TodoID != "" || private.Title != i18n.T(i18n.ZhHans, "assistant-briefing.private_card") ||
-		private.Reason != "" || private.Link == "" || private.WaitingOn != "owner" {
+		private.Reason != "" || private.Link == "" || strings.Contains(private.Link, privateTask) || private.WaitingOn != "owner" {
 		t.Fatalf("private row = %+v", private)
 	}
 	raw, _ := json.Marshal(dirs)
@@ -231,6 +231,56 @@ func TestBriefDirectionsListStoppedWork(t *testing.T) {
 	}
 	if !foundOrphan {
 		t.Fatal("first closed-orphan discovery produced no stopped row")
+	}
+}
+
+// The owner reads parked-until values in the hub's configured zone, directions by conversation name rather than raw ID,
+// and every ordinary task row with the same to-do URL in both the rich card and its complete plain-text substitute.
+func TestBriefDirectionsUseHubZoneNamesAndTaskLinks(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2030, 1, 2, 20, 0, 0, 0, time.UTC)
+	until := time.Date(2030, 1, 3, 1, 30, 0, 0, time.UTC)
+	e := newTodoEventEnv(t, nil)
+	const main, lead = "conv_main", "conv_lead_a"
+	setSettings(t, e.s, func(v *Settings) { v.Main, v.Leaders, v.Timezone = main, []string{lead}, "Asia/Shanghai" })
+	e.title(lead, "Platform")
+	parked := e.leaderTask("Parked until tomorrow", lead)
+	linkedAt, releasedAt := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	e.s.todos.mu.Lock()
+	todo := e.s.todos.todos[parked]
+	todo.Origin = lead
+	todo.Agents = []TodoAgent{{MachineID: "server", SessionID: "released-parked", LinkedAt: linkedAt, ReleasedAt: &releasedAt}}
+	todo.Supervision.State = reviewParked
+	todo.Supervision.Reviews = []TaskReview{{At: releasedAt, Verdict: reviewParked, Until: until, WaitingOn: "vendor"}}
+	e.s.todos.mu.Unlock()
+
+	dirs, _ := e.s.briefDirections(ctx, now, i18n.ZhHans, testWeb)
+	byID := map[string]prompts.BriefDirection{}
+	for _, d := range dirs {
+		byID[d.ID] = d
+	}
+	if got, want := byID[main].Name, i18n.T(i18n.ZhHans, "assistant-feishu_cards.main_chat"); got != want {
+		t.Errorf("main direction name = %q, want %q (raw ID hidden)", got, want)
+	}
+	if got := byID[lead].Name; got != "Platform" {
+		t.Errorf("leader direction name = %q, want its conversation title", got)
+	}
+	if len(byID[lead].Waits) != 1 {
+		t.Fatalf("leader waits = %+v, want the parked task", byID[lead].Waits)
+	}
+	w := byID[lead].Waits[0]
+	if !strings.Contains(w.Line, "2030-01-03 09:30") || strings.Contains(w.Line, "2030-01-03 01:30") {
+		t.Errorf("parked-until line did not convert UTC to the hub zone: %q", w.Line)
+	}
+	if want := todoLink(testWeb, parked); w.Link != want {
+		t.Fatalf("parked task link = %q, want %q", w.Link, want)
+	}
+	card, plain, _ := e.s.briefCard(&briefFacts{At: now, l: i18n.ZhHans, loc: e.s.location(ctx), web: testWeb, Directions: dirs}, "Evening briefing", "")
+	if !strings.Contains(card.JSON(), "]("+w.Link+")") {
+		t.Errorf("rich card has no clickable task link %s: %s", w.Link, card.JSON())
+	}
+	if !strings.Contains(plain, w.Line+" · "+w.Link) {
+		t.Errorf("plain-text substitute omitted the task URL %s: %s", w.Link, plain)
 	}
 }
 

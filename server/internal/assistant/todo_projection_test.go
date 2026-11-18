@@ -301,3 +301,77 @@ func TestProjectionOfTheManagersList(t *testing.T) {
 		t.Errorf("the failed start with its computer unreached: %+v", v)
 	}
 }
+
+// On a manager that carries the fleet, as in production, the adapter reads only the sessions of the open to-dos'
+// active runs, never a computer's whole list or its archive's records, and the archive's row of a run the computer no
+// longer lists, which reads as offline as in the computer's whole list: the views are those the whole list gives.
+func TestProjectionReadsOnlyTheLinkedRunsOnTheFleet(t *testing.T) {
+	d := newFleetDevs()
+	d.add("box", "Computer")
+	st := newFleetMem()
+	s := New(Options{Hub: newFakeHub(), Devices: d, Store: func() Store { return st }, Logf: func(string, ...any) {}})
+	ctx := context.Background()
+	gone := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	archive := map[string]agentArchive{}
+	for _, sid := range []string{"gone", "old1", "old2"} {
+		archive[runtimeListID("box", sid)] = agentArchive{Session: archiveSnapshot(proto.Session{MachineID: "box", SessionID: sid,
+			Title: "Ferry booking", UpdatedAt: gone}), Archived: true, ChangedAt: gone}
+	}
+	if err := st.PutSetting(ctx, agentArchivesKey, archive); err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now().UTC().Add(-time.Minute)
+	d.setSessions("box", []proto.Session{
+		{SessionID: "s1", Title: "Hedge trimming", Status: proto.StatusWorking, StateSince: began, UpdatedAt: began,
+			Activity: "measuring the hedge"},
+		{SessionID: "s2", Title: "Something else", Status: proto.StatusIdle, UpdatedAt: began},
+	})
+	created := began.Add(-time.Hour)
+	todo := func(id, machine, sid string) listedTodo {
+		return listedTodo{Todo: formatTodo(Todo{ID: id, Title: id, CreatedAt: created, UpdatedAt: created,
+			Agents: []TodoAgent{{MachineID: machine, SessionID: sid, LinkedAt: created}}})}
+	}
+	list := []listedTodo{todo("todo_worked", "box", "s1"), todo("todo_archived", "box", "gone"),
+		todo("todo_elsewhere", "nowhere", "s9")}
+	now := time.Now()
+
+	d.mu.Lock()
+	lists := d.machines["box"].lists
+	d.mu.Unlock()
+	got := s.todoProjectionOf(ctx, list, now)
+	d.mu.Lock()
+	if d.machines["box"].lists != lists {
+		t.Error("the computer's whole list was read")
+	}
+	d.mu.Unlock()
+	if n := len(got.facts[0].Sessions); n != 1 || got.facts[0].Sessions[0].SessionID != "s1" {
+		t.Errorf("the working run's sessions: %+v", got.facts[0].Sessions)
+	}
+	if ss := got.facts[1].Sessions; len(ss) != 1 || ss[0].SessionID != "gone" || ss[0].State != proto.StateOffline {
+		t.Errorf("the archived run's sessions: %+v", ss)
+	}
+	if !got.facts[2].Unreached || got.facts[0].Unreached || got.facts[1].Unreached {
+		t.Errorf("unreached: %v %v %v", got.facts[0].Unreached, got.facts[1].Unreached, got.facts[2].Unreached)
+	}
+
+	whole, err := s.sessions(ctx, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := map[[2]string]proto.Session{}
+	for _, c := range whole {
+		c.MachineID = "box"
+		all[[2]string{"box", c.SessionID}] = c
+	}
+	facts := make([]projection.Facts, len(list))
+	for i := range list {
+		facts[i] = projectionFacts(list[i], all, s.location(ctx))
+	}
+	facts[2].Unreached = true
+	if want := projection.Views(facts, now); !reflect.DeepEqual(got.views, want) {
+		t.Fatalf("from the linked runs:\n%+v\nfrom the whole list:\n%+v", got.views, want)
+	}
+	if v := got.views[0]; v.Reason != assistantwire.TodoReasonAgentRunning {
+		t.Errorf("the working run's to-do: %+v", v)
+	}
+}

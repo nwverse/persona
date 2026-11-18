@@ -39348,6 +39348,40 @@
       },
       "extractionState" : "manual"
     },
+    "Clear All %lld in “%@”" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Clear %1$lld Item in “%2$@”"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Clear All %1$lld in “%2$@”"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%2$@」の%1$lld件をすべて消去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除「%2$@」的全部 %1$lld 条"
+          }
+        }
+      }
+    },
     "Clear All Caches" : {
       "localizations" : {
         "en" : {
@@ -91298,6 +91332,40 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Mark All %lld in “%@” Seen" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mark %1$lld Item in “%2$@” Seen"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mark All %1$lld in “%2$@” Seen"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%2$@」の%1$lld件をすべて確認済みにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看过「%2$@」的全部 %1$lld 条"
+          }
+        }
+      }
     },
     "Mark All Seen" : {
       "localizations" : {
@@ -197724,29 +197792,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Working [Call Screen]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Working"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "作業中"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在工作"
-          }
-        }
-      }
     },
     "Working [Car Play Voice Screen 694b71]" : {
       "localizations" : {
