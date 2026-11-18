@@ -311,9 +311,18 @@ struct LarkChatView: View {
                 askReceiptsAgain()
             }
         }
-        .task {
-            for await _ in LarkSync.shared.changes(of: conversation.key) {
+        // Follows its chat only while its page is in front (a hidden shell page stays mounted, #10337). Back in front it
+        // catches up once; the first appearance's load already fetches the page (`landed` is false until it finished).
+        .tabActiveTask {
+            let changes = LarkSync.shared.changes(of: conversation.key)
+            if landed {
                 await refreshLatest()
+                guard !Task.isCancelled else { return }
+                askReceiptsAgain()
+            }
+            for await _ in changes {
+                await refreshLatest()
+                guard !Task.isCancelled else { return }
                 askReceiptsAgain()
             }
         }
@@ -802,8 +811,9 @@ struct LarkChatView: View {
     /// `untouchedSince`: Jump to Latest took the list to its end with the drag count at this; the finger has not taken it since,
     /// so it is still at the end even when the geometry just after the window changed says otherwise.
     private func refreshLatest(untouchedSince: Int? = nil) async {
-        guard !pager.hasNewer, let api = chatAPI, let r = try? await api.larkMessages(conversation.id, topic: isTopic),
-              !pager.hasNewer else { return } // (the window may have moved away meanwhile)
+        guard !Task.isCancelled, !pager.hasNewer, let api = chatAPI,
+              let r = try? await api.larkMessages(conversation.id, topic: isTopic),
+              !Task.isCancelled, !pager.hasNewer else { return } // (the window may have moved away meanwhile)
         problem = nil // it answers again (the Lark gateway signed in again, the network is back)
         switch pager.latest(r) {
         case .fresh(let fresh):
