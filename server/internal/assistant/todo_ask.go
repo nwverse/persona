@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -149,7 +150,10 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 		// A decision the owner must take now: P0 interrupts even with the hub's push tiering on, every time it is
 		// pushed (its reminders too); the hub keys it by to-do and round.
 		Level: assistantwire.LevelP0,
-		Todo:  &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses}}
+		// The ask and how its push may answer it: the view's (projection), so a notification never offers what the
+		// to-do's row would not answer in place.
+		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
+			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))}}
 	for _, o := range a.Options {
 		n.Todo.Options = append(n.Todo.Options, o.Label)
 	}

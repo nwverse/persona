@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"time"
 
@@ -256,13 +257,14 @@ func fitAlert(payload map[string]any, most int) ([]byte, error) {
 	full := payload["aps"]
 	for limit := 1000; len(b) > most; limit /= 2 {
 		if limit < 20 {
-			if _, ok := payload["ask"]; !ok {
+			aps, ok := dropAnswers(payload, full)
+			if !ok {
 				return nil, fmt.Errorf("payload of %d bytes does not fit", len(b))
 			}
-			// Option labels must remain complete. Without ask, the client opens the app;
-			// retry from the full alert so dropping options does not leave a tiny preview.
-			delete(payload, "ask")
-			payload["aps"] = full
+			// Option labels must remain complete. Without them, the client opens the app (or takes the
+			// recommendation); retry from the full alert so dropping options does not leave a tiny preview.
+			full = aps
+			payload["aps"] = aps
 			b, _ = json.Marshal(payload)
 			limit = 2000 // The loop halves this before retrying the alert at 1000 characters.
 			continue
@@ -271,6 +273,33 @@ func fitAlert(payload map[string]any, most int) ([]byte, error) {
 		b, _ = json.Marshal(payload)
 	}
 	return b, nil
+}
+
+// dropAnswers takes out of payload, in place, the options a notification answers with, for when even its shortest
+// alert does not fit: a card's whole `ask`, or a decision's `todo.options` with the mutable-content that has a newer
+// app's extension offer them as actions (#10465), never the decision's category, `todo.lockscreen` or `todo.ask`, so a
+// decision only the app may answer stays so and one the lock screen may answer falls back to Take Recommendation. It
+// answers the aps to start again from: full (payload's aps before any shortening), less its mutable-content once the
+// options went. full and the `todo` map are copied before an edit, since other devices' payloads share them. False:
+// nothing to drop.
+func dropAnswers(payload map[string]any, full any) (any, bool) {
+	if _, ok := payload["ask"]; ok {
+		delete(payload, "ask")
+		return full, true
+	}
+	td, _ := payload["todo"].(map[string]any)
+	if _, ok := td["options"]; !ok {
+		return full, false
+	}
+	td = maps.Clone(td)
+	delete(td, "options")
+	payload["todo"] = td
+	if aps, ok := full.(map[string]any); ok {
+		aps = maps.Clone(aps)
+		delete(aps, "mutable-content")
+		full = aps
+	}
+	return full, true
 }
 
 // shortenAlert returns a copy of aps whose alert texts have at most n characters (the original is shared by all devices).

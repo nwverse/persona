@@ -65,12 +65,15 @@ def domain_cases(domain):
 
 
 def todo_views():
-    """(definition, sample) of every view todo-view expects, and every counts and places todo-counts expects."""
+    """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, and every
+    decision push's todo todo-push expects."""
     for where, c in domain_cases("todo-view"):
         yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
     for where, c in domain_cases("todo-counts"):
         yield "TodoCounts", f"{where}.expected.counts", c["expected"]["counts"]
         yield "TodoPlaces", f"{where}.expected.places", c["expected"]["places"]
+    for where, c in domain_cases("todo-push"):
+        yield "TodoDecidePush", f"{where}.expected.todo", c["expected"]["todo"]
 
 
 SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}

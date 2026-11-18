@@ -296,6 +296,34 @@ type TodoPlaces struct {
 	Counts TodoCounts `json:"counts"`
 }
 
+// TodoDecidePush: the top-level `todo` of a decision's push (category TODO_DECIDE, or TODO_DECIDE_OPEN, which no app
+// gives actions; docs/assistant/todos.md "Waiting for the owner") and of its WebSocket notify: what its Take
+// Recommendation needs, and from a manager that says how the push may answer it (#10465) the ask, the lock-screen
+// rule and the options. A push from an older manager carries the first four only and keeps TODO_DECIDE. The cases are
+// in spec/fixtures/todo-push.
+type TodoDecidePush struct {
+	// The to-do.
+	ID string `json:"id"`
+	// The round the decision waits in, as POST /api/v1/todos/{id}/accept takes it: an answer to an earlier round takes
+	// nothing.
+	AskedAt time.Time `json:"asked_at"`
+	// The label of the recommended option, which Take Recommendation takes.
+	Recommend string `json:"recommend"`
+	// The manager whose to-do it is, which every answer names in X-Persona-Manager.
+	Manager string `json:"manager,omitempty"`
+	// The decision's ask in the to-do's view (OwnerAsk.id), which an answer from the notification names; absent from an
+	// older manager.
+	Ask string `json:"ask,omitempty"`
+	// What the notification may offer: answer, the category stays TODO_DECIDE and the options may be its actions;
+	// open_only, the category is TODO_DECIDE_OPEN and a tap opens it. Absent from an older manager: Take Recommendation
+	// only, as before.
+	Lockscreen string `json:"lockscreen,omitempty"`
+	// The decision's option labels, whole, the recommended first; only with lockscreen answer, and with
+	// aps.mutable-content so the app's notification service extension can offer them. The hub drops both when the push
+	// would not fit otherwise, never the category or lockscreen.
+	Options []string `json:"options,omitempty"`
+}
+
 // todoViewDefs makes a value of each definition, for tests that read examples by definition name.
 var todoViewDefs = map[string]func() any{
 	"TodoLine":       func() any { return new(TodoLine) },
@@ -307,4 +335,5 @@ var todoViewDefs = map[string]func() any{
 	"TodoPlace":      func() any { return new(TodoPlace) },
 	"TodoCounts":     func() any { return new(TodoCounts) },
 	"TodoPlaces":     func() any { return new(TodoPlaces) },
+	"TodoDecidePush": func() any { return new(TodoDecidePush) },
 }

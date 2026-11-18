@@ -391,10 +391,12 @@ redesign changes them:
   manager's `askRisk`, also written on the list's `ask`, one rule for every place that answers it); a retry is
   `safe`; a run's ask is what its pending card asks (`question`, `plan`, `tool`, `form` or `secret`, the card's id as
   `interaction`; the session's own card before Persona's about its turn, then the oldest), `safe` only when a
-  notification may answer that card too (one question with options, not a Just me turn's or a health conversation's)
-  and its asker did not say going ahead cannot be undone. A failed start of a to-do no conversation opened
-  carries no retry, since the hub would refuse it; its row still says why it did not start. The table is in
-  `spec/fixtures/todo-view/README.md` ("Risk and the lock screen").
+  notification may answer that card too (one question with options, not a Just me turn's or a health conversation's,
+  and its asker did not say going ahead cannot be undone; the Agent's push offers no options on such a card either).
+  A failed start of a to-do no conversation opened carries no retry, since the hub would refuse it; its row still
+  says why it did not start. The table is in `spec/fixtures/todo-view/README.md` ("Risk and the lock screen"). The
+  decision's push says the same rule (`lockscreen`; `open_only` sends `TODO_DECIDE_OPEN`, which offers no action,
+  `docs/assistant/todos.md` "Waiting for the owner").
 
 The list carries it: every row of `GET /api/v1/todos` has its `view` and the answer the list's `counts`, worked out
 once per read over the whole list (`server/internal/assistant/todo_view_routes.go`); `GET /api/v1/todos/{id}` answers

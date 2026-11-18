@@ -1970,8 +1970,8 @@ Mac app is frozen: it decodes the same models and draws none of this (`#if os(ma
   `BriefAcceptRow` has them there (`TodoAskRow`'s `deferrable`). A decision held for the briefing says so, and a
   suggested rule's line (`RuleSuggestionLine`) sits under it, as on `BriefAcceptRow`. An ask without options, and every
   ask on the Mac, keeps `BriefAcceptRow`.
-- **Not built**: the `TODO_DECIDE` notification's option and response actions (the push payload carries `options` and
-  `responses`); the watch.
+- **Not built**: the `TODO_DECIDE` notification's option actions (the push payload carries `options` when its
+  `lockscreen` is `answer`, and `TODO_DECIDE_OPEN`, no actions, when it is `open_only`, #10465); the watch.
 - **Tests**: `CloseoutTests` (decoding, claims, the rows' line, the stripped block, nothing new without a closeout),
   `DecisionRowTests` (the ask's fields, the default line and its memo, every answer with `FakeHub`, the row staying
   answerable after a fixed answer, the row held during Complete Directly, the armed option keeping its button,
