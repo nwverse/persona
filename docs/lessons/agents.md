@@ -1,5 +1,19 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A deferred action on an agent belongs to its process, not its session id (#10296)
+
+- A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.
+- Bind anything that waits to act on "the agent" to the process it was decided for: pid plus start mark (`hookTurns.process`, else `sessions/<pid>.json` via `liveClaudes`), checked with `processAlive` at every look and again right before acting. Drop it once that process is gone or the hooks report another one; refuse it where the process cannot be told.
+- Keep the wait short. "Once this turn ends" is not "whenever this conversation next runs".
+
+## Project MCP enums only in agy's tool declarations (#9944)
+
+agy can turn a valid boolean enum such as `task_review`'s `evidence.ready: enum [true]` into an empty Gemini string
+enum and reject the whole request. In its proxy's matched `tools/list` responses, omit enum constraints that are not
+nonempty arrays of nonempty strings. Walk schema keywords, not arbitrary objects: a property named `enum` is still
+a property, and defaults, examples and constants are data. Keep call arguments and the server's schema and validation
+unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call` result containing `tools` is not a list.
+
 - Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
   (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
