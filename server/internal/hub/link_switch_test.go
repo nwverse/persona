@@ -520,6 +520,25 @@ func TestLinkSwitchRollbackWithoutItsHash(t *testing.T) {
 	if r := h.pendingRestart("en"); r.Required {
 		t.Fatalf("restart %v", r.Reasons)
 	}
+	// Put back to ssh meanwhile (an admin edit): a rollback still revokes the switch's code and credential first.
+	got, err = busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: switchOp, SSHHost: "me@box.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out = redeem(t, h, pairTokenOf(t, got.Link), `{}`); code != 200 {
+		t.Fatalf("redeem again %d", code)
+	}
+	cred = out["token"].(string)
+	if err := os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), []byte(switchHubJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: switchOp, PairHash: got.PairHash,
+		Outcome: devicewire.LinkSwitchRolledBack}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.authenticate(ctx, cred); ok {
+		t.Fatal("its credential still works after its entry went back to ssh on its own")
+	}
 	// On a computer that never switched: nothing to undo.
 	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-bare", Operation: switchOp, Outcome: devicewire.LinkSwitchRolledBack}); err != nil {
 		t.Fatal(err)
@@ -545,6 +564,50 @@ func TestLinkSwitchEndRefusals(t *testing.T) {
 	}
 	refusedWith(t, "neither link nor ssh", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Outcome: devicewire.LinkSwitchRolledBack}),
 		devicewire.LinkSwitchCodeNotSSH)
+}
+
+// A computer moved to another manager while it switched: end from the manager that began it is refused as not its
+// own, yet a rollback that names its code still revokes that code's credential first; one without a hash revokes
+// nothing of another manager's computer.
+func TestLinkSwitchRollbackAfterTheComputerMoved(t *testing.T) {
+	h, _, _ := switchHub(t)
+	ctx := context.Background()
+	got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: switchOp, SSHHost: "me@box.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := redeem(t, h, pairTokenOf(t, got.Link), `{}`)
+	if code != 200 {
+		t.Fatalf("redeem %d", code)
+	}
+	cred := out["token"].(string)
+	more, err := h.newPairCode(ctx, "lsw-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out = redeem(t, h, more.Token, `{}`); code != 200 {
+		t.Fatalf("redeem the other code %d", code)
+	}
+	other := out["token"].(string)
+	h.devices.mu.Lock()
+	h.devices.assign = map[string]string{"lsw-box": "m-0e0e0e"}
+	h.devices.mu.Unlock()
+	refusedWith(t, "without a hash", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: switchOp,
+		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNoMachine)
+	if _, ok := h.authenticate(ctx, cred); !ok {
+		t.Fatal("a rollback without a hash revoked another manager's computer's credential")
+	}
+	refusedWith(t, "with its hash", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: switchOp,
+		PairHash: got.PairHash, Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNoMachine)
+	if _, ok := h.authenticate(ctx, cred); ok {
+		t.Fatal("its credential still works")
+	}
+	if _, ok := h.authenticate(ctx, other); !ok {
+		t.Fatal("a credential the switch did not make was revoked")
+	}
+	if k := diskKind(t, h, "lsw-box"); k != "link" {
+		t.Fatalf("another manager's computer's kind was changed: %v", k)
+	}
 }
 
 // The whole hub side with a real manager and a real Persona Link connection: begin hands the manager the computer as

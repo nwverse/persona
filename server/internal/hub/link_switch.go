@@ -190,6 +190,17 @@ func linkSwitchSwapErr(err error) error {
 func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchEnd) (any, error) {
 	mid := p.MachineID
 	if mid == "" || h.ownsMachine(c, mid) != nil {
+		// Not this manager's (any more: moved to another meanwhile). A rollback that names its code still revokes
+		// that code and what it became, which only the manager that began it can name; never all of a computer's.
+		if mid != "" && p.Outcome == devicewire.LinkSwitchRolledBack && p.PairHash != "" && h.store != nil {
+			id, _, err := h.store.RevokeLinkPair(ctx, p.PairHash, mid)
+			if err != nil {
+				return nil, err
+			}
+			if id != "" {
+				h.revoked(id)
+			}
+		}
 		return nil, linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
 	}
 	run, _ := h.linkSwitch.get(mid) // who asked, when this hub saw it begin
