@@ -16,11 +16,11 @@ extension VoiceSupport {
 }
 
 @MainActor enum VoiceEntry {
-    /// Who works in the conversation, for the bar's words: the agent (「Claude」, 「Codex」…), or the persona's name in
-    /// its own conversations.
-    static func label(_ session: Session?, model: AppModel) -> String {
-        guard let session else { return "Claude" }
-        return session.assistant ? model.persona.name : session.agentLabel
+    /// Who works in the conversation `key`, for the bar's words: the agent (「Claude」, 「Codex」…), or in the assistant's
+    /// own conversations its name as their top bar says it (#9887: one name, the call's too).
+    static func label(_ key: SessionKey, model: AppModel) -> String {
+        guard let session = model.session(key) else { return "Claude" }
+        return session.assistant ? model.assistantShownName(in: key) : session.agentLabel
     }
 
     /// The phone icon places a system call to its conversation on the iPhone (#9887 one button: the one voice entry, the
@@ -88,6 +88,13 @@ extension VoiceSupport {
         return model.assistantShownName(in: key)
     }
 
+    /// The voice chat in the app that is on in another conversation than `key` (the fallback, which survives leaving its
+    /// page, #9887), as the page names it, else nil: starting one here would end it, so the page asks first.
+    static func voiceChatElsewhere(_ key: SessionKey, model: AppModel) -> String? {
+        guard let chat = VoiceCalls.shared.current, chat.surface != .call, !chat.phase.isEnded, chat.key != key else { return nil }
+        return callTitle(chat.key, model: model)
+    }
+
     /// What a start does: says something at once (nil: nothing to say, the call screen came up), or is ready to begin
     /// the voice chat, which says why not when it is refused after all.
     private enum Prepared {
@@ -108,21 +115,27 @@ extension VoiceSupport {
         /// The voice chat in the app (the iPad, Apple Vision Pro, DEBUG `-openVoice`); with a system call on elsewhere it
         /// asks first (`endCallFirst`), as before.
         case inApp
+        /// The voice chat in the app is on in another conversation (`name`, #9887): the question first, before a voice
+        /// chat here (`call` false) or a system call to this conversation (`call` true) would end it.
+        case askVoiceChat(name: String, call: Bool)
     }
 
-    nonisolated static func choose(urgent: Bool, ownCall: Bool, liveCall: String?, endingCall: Bool, systemCalls: Bool) -> Choice {
+    /// `voiceChat`: the voice chat in the app that is on in another conversation, by name (`voiceChatElsewhere`);
+    /// `endingCall`: the owner said yes to ending what is on (a call, or that voice chat).
+    nonisolated static func choose(urgent: Bool, ownCall: Bool, liveCall: String?, voiceChat: String? = nil, endingCall: Bool,
+                                   systemCalls: Bool) -> Choice {
         if urgent { return .urgentCall }
         if ownCall { return .showCall }
-        guard systemCalls else { return .inApp }
-        if !endingCall, let liveCall { return .ask(name: liveCall) }
-        return .systemCall
+        if systemCalls, !endingCall, let liveCall { return .ask(name: liveCall) }
+        if !endingCall, liveCall == nil, let voiceChat { return .askVoiceChat(name: voiceChat, call: systemCalls) }
+        return systemCalls ? .systemCall : .inApp
     }
 
     private static func prepare(_ key: SessionKey, model: AppModel, endingCall: Bool, inApp: Bool) -> Prepared {
         #if os(iOS)
         let calls = PersonaCalls.shared
         switch choose(urgent: calls.urgentInProgress, ownCall: calls.isOwnerCallConversation(key), liveCall: calls.liveOwnerCallName,
-                      endingCall: endingCall, systemCalls: !inApp && placesSystemCall) {
+                      voiceChat: voiceChatElsewhere(key, model: model), endingCall: endingCall, systemCalls: !inApp && placesSystemCall) {
         case .urgentCall:
             return .said(PersonaCalls.urgentNote)
         case .showCall:
@@ -130,6 +143,8 @@ extension VoiceSupport {
             return .said(nil)
         case .ask(let name):
             return .said(.callElsewhereFirst(name, key: key, target: callTitle(key, model: model)))
+        case .askVoiceChat(let name, let call):
+            return .said(.endVoiceChatFirst(name, key: key, call: call ? callTitle(key, model: model) : nil))
         case .systemCall:
             // The same rules as the voice chat's decide whether this conversation can be called; the call itself asks
             // again once the hub answered (`PersonaCalls.callConversation`).
@@ -145,6 +160,9 @@ extension VoiceSupport {
         case .inApp:
             if !endingCall, let name = calls.liveOwnerCallName { return .said(.endCallFirst(name, key: key)) }
         }
+        #else
+        // Apple Vision Pro: the voice chat in the app, asked first while one is on elsewhere (#9887).
+        if !endingCall, let name = voiceChatElsewhere(key, model: model) { return .said(.endVoiceChatFirst(name, key: key)) }
         #endif
         let availability = VoiceSupport.shared.availability(for: model.session(key), group: key.group)
         guard case .available(let id) = availability else {
@@ -168,7 +186,7 @@ extension VoiceSupport {
         switch note.proceed {
         case .startVoice(let key): return await begin(key, model: model, endingCall: true)
         case .resumeVoice(let key): return await VoiceCalls.shared.resume(key, endingCall: true)
-        case .callConversation(let key): return await begin(key, model: model, endingCall: true)
+        case .callConversation(let key), .replaceVoice(let key): return await begin(key, model: model, endingCall: true)
         case nil: return nil
         }
     }

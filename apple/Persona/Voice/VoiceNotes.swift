@@ -17,18 +17,22 @@ nonisolated enum VoiceSettingsPlace: Equatable, Sendable {
 }
 
 /// What a confirmation goes on to do once the user says yes: end the system call that is on, then start (or pick up
-/// again) the voice chat in this conversation, or call this conversation (#9887 one button) (#9290 follow-up: nothing in
-/// the app ends a live call by itself).
+/// again) the voice chat in this conversation, or call this conversation (#9887 one button); or end the voice chat in the
+/// app that is on in another conversation and start one here (#9887) (#9290 follow-up: nothing in the app ends a live
+/// call by itself, nor the voice chat that survives leaving its page).
 nonisolated enum VoiceProceed: Equatable, Sendable {
     case startVoice(SessionKey)
     case resumeVoice(SessionKey)
     case callConversation(SessionKey)
+    /// The voice chat elsewhere ends and one starts in this conversation.
+    case replaceVoice(SessionKey)
 
     /// The yes button's words.
     var label: String {
         switch self {
         case .startVoice, .resumeVoice: String(localized: "End Call and Start")
         case .callConversation: String(localized: "End and Call")
+        case .replaceVoice: String(localized: "End and Start")
         }
     }
 }
@@ -94,6 +98,21 @@ nonisolated struct VoiceUnavailableNote: Equatable, Sendable {
         VoiceUnavailableNote(title: String(localized: "End the call with \(name) and call \(target)?"),
                              message: String(localized: "The call ends, and a new call starts with this conversation."),
                              settings: nil, proceed: .callConversation(key))
+    }
+
+    /// The question before the voice chat in the app that is on with `name` (another conversation's: the fallback that
+    /// survives leaving its page, #9887) is replaced by one here: End and Start, or Cancel (it goes on). `target`: where
+    /// the phone icon places a system call instead (the iPhone, after that chat's own Start was refused), as the page
+    /// names this conversation: End and Call.
+    static func endVoiceChatFirst(_ name: String, key: SessionKey, call target: String? = nil) -> VoiceUnavailableNote {
+        if let target {
+            return VoiceUnavailableNote(title: String(localized: "End the voice chat with \(name) and call \(target)?"),
+                                        message: String(localized: "The voice chat ends, and a call starts with this conversation."),
+                                        settings: nil, proceed: .callConversation(key))
+        }
+        return VoiceUnavailableNote(title: String(localized: "End the voice chat with \(name) and start one here?"),
+                                    message: String(localized: "The voice chat ends, and a new one starts in this conversation."),
+                                    settings: nil, proceed: .replaceVoice(key))
     }
 
     /// The question before a voice chat in another conversation ends the call to `name`: End Call and Start, or Cancel

@@ -177,19 +177,23 @@ struct CallFollowUpTests {
 
     // MARK: The call screen and its window
 
-    /// The assistant's look follows the call: moving while it speaks or works, idling while it listens, still on hold,
-    /// muted and over, the ring and a mark saying which.
+    /// The assistant's look follows the call (each row in `CallAvatarStatesTests`): the shared speaking motion while it
+    /// speaks, its working picture while its conversation works, idling while it listens, still on hold, muted and over,
+    /// the ring and a mark saying which.
     @Test func theAssistantsLookFollowsTheCall() {
-        #expect(CallAvatarLook.make(.speaking) == CallAvatarLook(state: .working, still: false, ring: .voice, mark: nil))
-        #expect(CallAvatarLook.make(.working).state == .working)
-        #expect(CallAvatarLook.make(.listening) == CallAvatarLook(state: .idle, still: false, ring: .voice, mark: nil))
-        #expect(CallAvatarLook.make(.hearing).followsLevel)
-        #expect(CallAvatarLook.make(.connecting) == CallAvatarLook(state: .idle, still: false, ring: .lap, mark: nil))
-        #expect(CallAvatarLook.make(.paused) == CallAvatarLook(state: .idle, still: true, ring: .held, mark: .hold))
-        #expect(CallAvatarLook.make(.muted) == CallAvatarLook(state: .idle, still: true, ring: .quiet, mark: .muted))
-        #expect(CallAvatarLook.make(.ended) == CallAvatarLook(state: .offline, still: true, ring: .ended, mark: nil))
-        for phase in VoiceOrb.Phase.allCases where CallAvatarLook.make(phase).still {
-            #expect(!CallAvatarLook.make(phase).ringMoves, "\(phase): a still look's ring moves")
+        func look(_ row: CallAvatarLook.Row, muted: Bool = false) -> CallAvatarLook {
+            CallAvatarLook.make(row, muted: muted, kind: .builtin, motion: true)
+        }
+        #expect(look(.speaking).state == .idle && look(.speaking).bounces && look(.speaking).ring == .speaking)
+        #expect(look(.working).state == .working)
+        #expect(look(.listening) == CallAvatarLook(state: .idle, still: false, ring: .voice, mark: nil, clock: true))
+        #expect(look(.hearing).followsLevel)
+        #expect(look(.connecting) == CallAvatarLook(state: .idle, still: false, ring: .lap, mark: nil, clock: true))
+        #expect(look(.held) == CallAvatarLook(state: .idle, still: true, ring: .held, mark: .hold, eyesShut: true))
+        #expect(look(.muted, muted: true) == CallAvatarLook(state: .idle, still: true, ring: .quiet, mark: .muted))
+        #expect(look(.ended) == CallAvatarLook(state: .offline, still: true, ring: .ended, mark: nil, greyed: true))
+        for row in CallAvatarLook.Row.allCases where look(row).still {
+            #expect(!look(row).clock, "\(row): a still look's ring moves")
         }
     }
 

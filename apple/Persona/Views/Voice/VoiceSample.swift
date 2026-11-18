@@ -46,7 +46,7 @@ enum VoiceSample: String, CaseIterable {
 
     @MainActor static func start(_ sample: VoiceSample, key: SessionKey, model: AppModel) {
         let main = model.session(key)?.assistant == true
-        let label = VoiceEntry.label(model.session(key), model: model)
+        let label = VoiceEntry.label(key, model: model)
         Task {
             await VoiceCalls.shared.start(key, extensionID: "voice", surface: .phone,
                                           deps: deps(sample, frames: frames(sample, key: key, main: main, label: label)))

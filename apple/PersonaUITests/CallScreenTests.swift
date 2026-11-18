@@ -566,16 +566,67 @@ final class CallScreenTests: XCTestCase {
 
     // MARK: Nothing in the app ends the call (#9290 follow-up)
 
-    /// The assistant on the call screen: its look and name (the built-in's "Persona") in each state the samples have,
-    /// speaking with its ring swelling, on hold with the pause mark, ended greyed.
+    /// The assistant on the call screen: its look and the name the main conversation's top bar says (the mock's
+    /// 「助手」 on a hub with several assistants, #9887), in each state the samples have, speaking with its ring swelling,
+    /// on hold with the pause mark, ended greyed.
     @MainActor func testTheAssistantOnTheCallScreen() throws {
         for (sample, name) in [("connected", "call-avatar-connected"), ("speaking", "call-avatar-speaking"), ("held", "call-avatar-held"),
                                ("ended", "call-avatar-ended")] {
             try XCTContext.runActivity(named: sample) { _ in
                 let app = try self.sample(sample)
-                XCTAssertTrue(app.staticTexts["Persona"].exists, "\(sample): no assistant's name\n\(app.debugDescription)")
+                XCTAssertTrue(app.staticTexts["助手"].exists, "\(sample): not the top bar's name\n\(app.debugDescription)")
                 shot(name, app)
                 app.terminate()
+            }
+        }
+    }
+
+    /// The avatar in each of the call's states (#9887, docs/apple/calls.md "The avatar"): every row's sample on the call
+    /// screen, and the bar's still face; a speaking sample has a made-up voice, so its bounce, ripples and mouth move
+    /// (two shots a moment apart). `PERSONA_CALL_LOOKS` lists the pictures, comma-separated: `mochi` (the look on screen,
+    /// the default), `agent` (a call to an Agent session, `-showCallSampleAgent`), `package`, `uploaded` or a look's id
+    /// (`-showCallSampleLook`; the mock's MOCK_PERSONAS=builtin MOCK_LOOK=nwverse has a package). The shots are named
+    /// `call-avatar-<look>-<state>.png`. The state line keeps the running time while the voice's upstream is paused
+    /// (`paused`: listening, not on hold).
+    /// `PERSONA_CALL_STATES` picks some of the states, and `PERSONA_CALL_HOLD` (seconds) keeps each on screen that long
+    /// after its shot, for a screen recording (each state's start goes to the log as `avatar-state <name> <epoch>`).
+    @MainActor func testTheAvatarsStates() throws {
+        let env = ProcessInfo.processInfo.environment
+        let looks = (env["PERSONA_CALL_LOOKS"] ?? "mochi").split(separator: ",").map(String.init)
+        let all = ["dialing", "connected", "hearing", "thinking", "speaking", "working", "asking", "held", "muted", "mutedSpeaking",
+                   "paused", "reconnecting", "ended"]
+        let states = env["PERSONA_CALL_STATES"].map { $0.split(separator: ",").map(String.init) } ?? all
+        let hold = env["PERSONA_CALL_HOLD"].flatMap(Double.init) ?? 0
+        for look in looks {
+            let extra: [String] = switch look {
+            case "mochi": []
+            case "agent": ["-showCallSampleAgent", "YES"]
+            default: ["-showCallSampleLook", look]
+            }
+            for state in states {
+                try XCTContext.runActivity(named: "\(look) \(state)") { _ in
+                    let app = try self.sample(state, args: Self.main + extra)
+                    // A look that waits to be on the phone comes a moment later.
+                    if look != "mochi", look != "agent" { Thread.sleep(forTimeInterval: 2) }
+                    if state == "paused" {
+                        XCTAssertTrue(self.element(app, "call-duration").exists, "the voice's pause shows as a hold\n\(app.debugDescription)")
+                        XCTAssertFalse(app.staticTexts["通话保持中"].exists, "the voice's pause shows On Hold")
+                    }
+                    print("avatar-state \(look)-\(state) \(Date.now.timeIntervalSince1970)")
+                    shot("call-avatar-\(look)-\(state)", app)
+                    if hold > 0 { Thread.sleep(forTimeInterval: hold) }
+                    if state.hasSuffix("peaking") {
+                        Thread.sleep(forTimeInterval: 0.35)
+                        shot("call-avatar-\(look)-\(state)-2", app)
+                    }
+                    if ["thinking", "working", "asking", "held", "speaking"].contains(state) {
+                        app.buttons["call-minimise"].tap()
+                        XCTAssertTrue(app.buttons["call-return-bar"].waitForExistence(timeout: 10), "\(state): no bar")
+                        Thread.sleep(forTimeInterval: 1)
+                        shot("call-avatar-\(look)-\(state)-bar", app)
+                    }
+                    app.terminate()
+                }
             }
         }
     }
@@ -759,9 +810,10 @@ final class CallScreenTests: XCTestCase {
 
     /// The question before the phone icon (or a voice chat) ends the call: it names the assistant, and Cancel keeps the
     /// call. `yes`: its yes button (End and Call for the phone icon on the iPhone, #9887); `message`: words of its message;
-    /// `callWith`: whom the call is with (the assistant's name, or an Agent's conversation's title).
+    /// `callWith`: whom the call is with (the assistant's name as the main conversation's top bar says it, the mock's
+    /// 「助手」, #9887; or an Agent's conversation's title).
     @MainActor private func confirmAndCancel(_ app: XCUIApplication, shot name: String, yes: String = "结束通话并开始",
-                                             message words: String = "通话会结束", callWith: String = "Persona") throws {
+                                             message words: String = "通话会结束", callWith: String = "助手") throws {
         let question = "结束与 \(callWith) 的通话"
         let ask = app.alerts.matching(NSPredicate(format: "label CONTAINS %@", question)).firstMatch
         XCTAssertTrue(ask.waitForExistence(timeout: 10), "no question before ending the call\n\(app.debugDescription)")
@@ -782,8 +834,9 @@ final class CallScreenTests: XCTestCase {
         XCTAssertTrue(app.buttons["call-return-bar"].waitForExistence(timeout: 5), "the call ended")
     }
 
-    /// Another assistant (the mock's frog look, MOCK_PERSONAS=builtin MOCK_LOOK=nwverse): the call carries its name
-    /// and the call screen and the bar show its face. Skipped against a mock without it.
+    /// Another assistant (the mock's frog look, MOCK_PERSONAS=builtin MOCK_LOOK=nwverse MOCK_MANAGERS=1): the call carries
+    /// its name (with one assistant on the hub the main conversation's top bar says the look's, #9887) and the call screen
+    /// and the bar show its face. Skipped against a mock without it.
     @MainActor func testTheCallFollowsTheAssistant() throws {
         let hub = try hub
         var request = URLRequest(url: URL(string: hub + "/api/v1/looks")!)
@@ -795,6 +848,16 @@ final class CallScreenTests: XCTestCase {
         let looks = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         guard let current = looks?["current"] as? [String: Any], current["id"] as? String == "nwverse" else {
             throw XCTSkip("needs MOCK_PERSONAS=builtin MOCK_LOOK=nwverse")
+        }
+        var roster = URLRequest(url: URL(string: hub + "/api/v1/managers")!)
+        roster.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        let listed = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var managers: Data?
+        URLSession.shared.dataTask(with: roster) { data, _, _ in managers = data; listed.signal() }.resume()
+        _ = listed.wait(timeout: .now() + 10)
+        let count = (managers.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["managers"] as? [Any]
+        guard (count?.count ?? 1) <= 1 else {
+            throw XCTSkip("needs MOCK_MANAGERS=1: with several assistants the call says the current one's name, not the look's")
         }
         let app = try launch(Self.main)
         // The look is downloaded after pairing; a call takes the name the app has when it is made: until the look is

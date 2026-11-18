@@ -57,9 +57,11 @@ nonisolated enum CallSystemState: Equatable, Sendable {
 }
 
 /// The handle a call to Persona carries to the system: what its call UI, the Dynamic Island, the Lock Screen and Recents
-/// show, and what a Recents redial gives back. Its value is the assistant's own name (`Persona.name`, "Persona" for the
-/// built-in Mochi): the system shows the value and ignores the display name (FB24933340). Any value redials the current
-/// hub's main conversation, so a name changed since still calls Persona. Developing Persona's Call handle (#9887, an
+/// show, and what a Recents redial gives back. Its value is the assistant's name as the main conversation's top bar says
+/// it (#9887: `AppModel.assistantShownName`, the current assistant's on a hub with several, else the look's, "Persona"
+/// for the built-in Mochi), the same name the call screen, its bar and the questions say: the system shows the value and
+/// ignores the display name (FB24933340). Any value redials the current hub's main conversation, so a name changed since
+/// still calls Persona. Developing Persona's Call handle (#9887, an
 /// on-device experiment for Phone › Recents) can make it an email handle with a fixed placeholder address instead.
 nonisolated struct CallHandle: Equatable, Sendable {
     var kind: CallHandleKind

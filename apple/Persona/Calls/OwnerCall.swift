@@ -108,8 +108,8 @@ extension PersonaCalls {
 
     /// Asks the system to start the call. Too early (the app still coming to the front): once more half a second later.
     /// Refused otherwise: `instead` (the in-app voice chat), and the call ends. Who the call is with is taken once more
-    /// just before the Start, after every wait (a cold launch's hub and look may have come meanwhile): the look and the
-    /// name together, fixed from then on as the system's handle is.
+    /// just before the Start, after every wait (a cold launch's hub, roster and look may have come meanwhile): the look
+    /// and the name the main conversation's top bar says, together, fixed from then on as the system's handle is.
     func place(_ call: PersonaCall, origin: CallOrigin, instead: (@MainActor (CallSystemError) -> Void)? = nil) async {
         if origin != .app { await Self.waitUntilActive() }
         await readySystem()
@@ -118,7 +118,7 @@ extension PersonaCalls {
         while call.phase.isLive {
             // Asked again just before each Start: an urgent call that rang meanwhile goes first.
             if let note = admission() { return refuse(call, note: note) }
-            call.assistant.retake(assistant())
+            call.assistant.retake(assistant(), name: assistantName())
             do {
                 try await system.start(call.id, handle: .outgoing(name: call.name, kind: handleKind(), conversation: call.conversation?.title))
                 // Hung up while the system took it: its call ends too.
@@ -178,7 +178,7 @@ extension PersonaCalls {
         activityTypes.contains(activity.activityType) || activity.interaction?.intent is INStartCallIntent
     }
 
-    /// The handle the redial names (the assistant's name when it was called, `CallHandle.name`, Developing Persona's
+    /// The handle the redial names (the name the main conversation's top bar said when it was called, `CallHandle.name`, Developing Persona's
     /// placeholder address, or whatever an older entry had): any calls the current hub's main conversation.
     nonisolated static func handle(_ activity: NSUserActivity) -> String? {
         (activity.interaction?.intent as? INStartCallIntent)?.contacts?.first?.personHandle?.value
@@ -192,7 +192,7 @@ extension PersonaCalls {
         if let last = lastRedial, now.timeIntervalSince(last) < 2 { return true }
         lastRedial = now
         let handle = Self.handle(activity)
-        let named = handle == CallHandle.name(assistant().name) ? "the assistant's name"
+        let named = handle == CallHandle.name(assistantName()) ? "the assistant's name"
             : handle == CallHandle.placeholderAddress ? "the placeholder address" : "another value"
         Self.log.notice("call: a redial (\(activity.activityType, privacy: .public), \(named, privacy: .public))")
         Task { await callPersona(origin: .recents) }

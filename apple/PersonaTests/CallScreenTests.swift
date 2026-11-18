@@ -36,13 +36,15 @@ struct CallScreenTests {
         #expect(Self.state(on).line == .duration(since: Self.since))
     }
 
-    /// The orb moves as the voice bar's does: speaking, hearing, muted, the upstream paused.
+    /// The orb moves as the voice bar's does: speaking, hearing, muted; the upstream paused is the call listening, not
+    /// on hold (#9887: only the call's own hold is a hold).
     @Test func theOrbFollowsTheVoice() {
         let on = CallPhase.connected(since: Self.since)
         #expect(Self.state(on, voice: (.live(.speaking), .live)).orb == .speaking)
         #expect(Self.state(on, voice: (.live(.hearing), .live)).orb == .hearing)
         #expect(Self.state(on, muted: true, voice: (.live(.listening), .live)).orb == .muted)
-        #expect(Self.state(on, voice: (.live(.listening), .paused)).orb == .paused)
+        #expect(Self.state(on, voice: (.live(.listening), .paused)).orb == .listening)
+        #expect(Self.state(on, voice: (.live(.listening), .paused)).line == .duration(since: Self.since))
         #expect(Self.state(on, muted: true).orb == .muted, "a sample, no voice")
         #expect(Self.state(on).orb == .listening)
     }

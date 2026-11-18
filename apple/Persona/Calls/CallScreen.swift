@@ -5,8 +5,9 @@ import SwiftUI
 // Phone app's in-call screen, because a call is one task going on with its controls always under the thumb; Minimize
 // leaves it for a bar at the top that returns to it, and the call goes on (`PersonaCalls` runs it, not this page).
 
-/// What the call screen says and how the voice looks (the orb's phase, which the assistant's look follows:
-/// `CallAvatarLook`), from the call's state alone (pure, for the tests).
+/// What the call screen says and how the voice looks (the orb's phase), and what the avatar shows the call doing
+/// (`avatar`, which `CallAvatarLook` draws in the call's look), from the call's state and what its conversation and voice
+/// do (pure, for the tests).
 nonisolated struct CallScreenState: Equatable, Sendable {
     nonisolated enum Line: Equatable, Sendable {
         /// Outgoing, the system asked to start it.
@@ -27,29 +28,102 @@ nonisolated struct CallScreenState: Equatable, Sendable {
 
     var line: Line
     var orb: VoiceOrb.Phase
+    /// What the avatar shows the call doing (#9887 avatar states).
+    var avatar: CallAvatarLook.Row
+    /// The owner's microphone is off (the avatar's mark).
+    var microphoneOff: Bool
 
-    /// `voice`: the call's voice once it began, its phase and link (a sample has none: `reconnecting` stands in).
+    init(line: Line, orb: VoiceOrb.Phase, avatar: CallAvatarLook.Row? = nil, muted: Bool = false) {
+        self.line = line
+        self.orb = orb
+        self.avatar = avatar ?? Self.row(orb)
+        microphoneOff = muted
+    }
+
+    /// `voice`: the call's voice once it began, its phase and link (a sample has none: `reconnecting` stands in);
+    /// `activity`: what the call's conversation and voice do beyond that (`CallActivity`: it works, a card waits, the
+    /// voice thinks). In a call only the call's own hold (`held`) is a hold: the voice's pause (the extension closing the
+    /// upstream while nobody speaks, or while the conversation works) and its waking are the call listening as ever, or
+    /// working while its conversation works, and the line stays the running time.
     static func make(phase: CallPhase, held: Bool, muted: Bool, note: String?, voice: (phase: VoicePhase, link: VoiceLink)?,
-                     reconnecting: Bool = false) -> CallScreenState {
+                     reconnecting: Bool = false, activity: CallActivity = CallActivity()) -> CallScreenState {
         switch phase {
         case .dialing, .ringing:
-            return CallScreenState(line: .calling, orb: .connecting)
+            return CallScreenState(line: .calling, orb: .connecting, muted: muted)
         case .connecting:
-            return CallScreenState(line: .connecting, orb: .connecting)
+            return CallScreenState(line: .connecting, orb: .connecting, muted: muted)
         case .ended:
-            return CallScreenState(line: .ended(note: note), orb: .ended)
+            return CallScreenState(line: .ended(note: note), orb: .ended, muted: muted)
         case .connected(let since):
-            if held { return CallScreenState(line: .onHold, orb: .paused) }
+            if held { return CallScreenState(line: .onHold, orb: .paused, muted: muted) }
             let dropped: Bool = {
                 guard let voice else { return reconnecting }
                 if case .reconnecting = voice.phase { return true }
                 return voice.link == .reconnecting
             }()
-            if dropped { return CallScreenState(line: .reconnecting, orb: .connecting) }
-            let orb = voice.map { VoiceBarStatus.make(phase: $0.phase, link: $0.link, muted: muted, working: false).orb }
-                ?? (muted ? .muted : .listening)
-            return CallScreenState(line: .duration(since: since), orb: orb)
+            if dropped { return CallScreenState(line: .reconnecting, orb: .connecting, muted: muted) }
+            let orb = voice.map { voice in
+                let link: VoiceLink = voice.link == .paused || voice.link == .waking ? .live : voice.link
+                return VoiceBarStatus.make(phase: voice.phase, link: link, muted: muted, working: activity.working).orb
+            } ?? (muted ? .muted : activity.working ? .working : .listening)
+            let row: CallAvatarLook.Row = switch orb {
+            case .connecting, .idle: .connecting
+            case .paused: .held
+            case .ended: .ended
+            case .speaking: .speaking
+            case .listening, .hearing, .working, .muted:
+                activity.asking ? .needsYou : activity.thinking ? .thinking : activity.working ? .working
+                    : muted ? .muted : orb == .hearing ? .hearing : .listening
+            }
+            return CallScreenState(line: .duration(since: since), orb: orb, avatar: row, muted: muted)
         }
+    }
+
+    /// The avatar's row for the orb alone (nothing known of the conversation).
+    private static func row(_ orb: VoiceOrb.Phase) -> CallAvatarLook.Row {
+        switch orb {
+        case .idle, .connecting: .connecting
+        case .paused: .held
+        case .ended: .ended
+        case .speaking: .speaking
+        case .working: .working
+        case .muted: .muted
+        case .hearing: .hearing
+        case .listening: .listening
+        }
+    }
+}
+
+/// What the call's conversation and its voice do, beyond the call's own state (#9887 avatar states): the conversation
+/// works (its session, or what the voice handed it and is still open), a card in it waits for the owner (asked by voice or
+/// on the screen), the voice is thinking (`VoiceConversation.thinking`). Pure (`make`); the pages read it in small views of
+/// their own (`read`), which redraw as these change and nothing around them.
+nonisolated struct CallActivity: Equatable, Sendable {
+    var working = false
+    var asking = false
+    var thinking = false
+
+    /// From the conversation (`session`, whether it has pending `cards`) and the voice (its `runs`, the card it is
+    /// `askingAbout`, `thinking`): as the voice bar decides working (a run sent, working, waiting outside or answered and
+    /// still at work) and the Persona tab's dot decides Needs You (a pending card, the session waiting on the owner).
+    static func make(session: Session?, cards: Bool, runs: [VoiceRun], askingAbout: Bool, thinking: Bool) -> CallActivity {
+        let open = runs.filter(\.state.isOpen)
+        let working = session?.status == .working || session?.state == .working
+            || open.contains { [.sent, .working, .blocked, .held].contains($0.state) }
+        let asking = cards || askingAbout || session?.state == .needsYou || open.contains { $0.state == .needsYou }
+        return CallActivity(working: working, asking: asking, thinking: thinking)
+    }
+}
+
+extension CallActivity {
+    /// `call`'s now: its voice's, and its conversation's as the app has it. Nothing before the call connected.
+    @MainActor static func read(_ call: PersonaCall, model: AppModel) -> CallActivity {
+        #if DEBUG
+        if let sample = call.sampleActivity { return sample }
+        #endif
+        guard let voice = call.voice, call.connectedSince != nil else { return CallActivity() }
+        return make(session: model.session(voice.key), cards: !model.interactions(for: voice.key).isEmpty, runs: voice.runs,
+                    askingAbout: voice.askingID != nil, thinking: voice.thinking)
     }
 }
 
@@ -109,17 +183,16 @@ struct CallScreen: View {
         return points / scale
     }
 
-    static func state(_ call: PersonaCall) -> CallScreenState {
+    /// `call`'s state; `activity`: what its conversation and voice do (`CallActivity.read`), for the avatar.
+    static func state(_ call: PersonaCall, activity: CallActivity = CallActivity()) -> CallScreenState {
         var reconnecting = false
+        var voice = call.voice.map { (phase: $0.phase, link: $0.link) }
         #if DEBUG
         reconnecting = call.sampleReconnecting
+        if voice == nil, let live = call.sampleVoice { voice = (phase: .live(live), link: call.sampleLink) }
         #endif
-        var state = CallScreenState.make(phase: call.phase, held: call.held, muted: call.muted, note: call.note,
-                                         voice: call.voice.map { ($0.phase, $0.link) }, reconnecting: reconnecting)
-        #if DEBUG
-        if call.sampleSpeaking, case .duration = state.line { state.orb = .speaking }
-        #endif
-        return state
+        return CallScreenState.make(phase: call.phase, held: call.held, muted: call.muted, note: call.note, voice: voice,
+                                    reconnecting: reconnecting, activity: activity)
     }
 
     private var minimise: some View {
@@ -173,7 +246,7 @@ private struct CallScreenMiddle: View {
             VStack(spacing: Theme.Space.section) {
                 VStack(spacing: Theme.Space.l) {
                     if let size {
-                        CallScreenAvatar(call: call, phase: state.orb, size: size)
+                        CallScreenAvatar(call: call, size: size)
                     }
                     VStack(spacing: Theme.Space.s) {
                         CallScreenName(call: call, lines: CallScreen.nameLines(typeSize)) { open(.name) }
@@ -200,8 +273,8 @@ private struct CallScreenMiddle: View {
     }
 }
 
-/// Who the call is with (`PersonaCall.title`): the assistant's name for the main conversation, as the system's call UI
-/// and Recents show it; another conversation's title, and whose it is under it (#9887 one button). The name wraps to
+/// Who the call is with (`PersonaCall.title`): the assistant's name for the main conversation, as its top bar, the
+/// system's call UI and Recents say it; another conversation's title, and whose it is under it (#9887 one button). The name wraps to
 /// `lines`, shrinking a little first, then its end is cut; whose it is stays one line, cut in the middle (an agent's and
 /// a machine's names, both ends tell). VoiceOver reads both whole, and a tap opens them whole (`CallDetailsSheet`).
 private struct CallScreenName: View {
@@ -233,24 +306,31 @@ private struct CallScreenName: View {
     }
 }
 
-/// The assistant at the call screen's size, its ring following the voice (its levels: the microphone's while it
-/// listens, the assistant's own while it speaks). A tap while it speaks stops the voice, as the voice bar's orb does.
+/// The assistant at the call screen's size showing what the call does (`CallAvatarLook` from the call's state and what its
+/// conversation and voice do, read here so only this view redraws as they change: docs/apple/performance.md P5), its
+/// ring following the voice (its levels: the microphone's while it listens, the assistant's own while it speaks). A tap
+/// while it speaks stops the voice, as the voice bar's orb does.
 private struct CallScreenAvatar: View {
     let call: PersonaCall
-    let phase: VoiceOrb.Phase
     let size: CGFloat
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let state = CallScreen.state(call, activity: .read(call, model: model))
+        let motion = !reduceMotion && !ProcessInfo.processInfo.isLowPowerModeEnabled
+        let look = CallAvatarLook.make(state.avatar, muted: state.microphoneOff, kind: CallAvatarLook.kind(call), motion: motion)
+        let speaking = state.avatar == .speaking
         let voice = call.voice
         #if DEBUG
-        let sample = call.sampleLevel
+        let sample: () -> Double = { [call] in call.sampleLevel }
         #else
-        let sample = 0.0
+        let sample: () -> Double = { 0 }
         #endif
-        CallAvatar(look: CallAvatarLook.make(phase), assistant: call.assistant, agent: call.conversation?.agent, level: { [levels = voice?.levels, speaking = phase == .speaking] in
-            guard let levels else { return sample }
+        CallAvatar(look: look, assistant: call.assistant, agent: call.conversation?.agent, level: { [levels = voice?.levels] in
+            guard let levels else { return sample() }
             return Double(speaking ? levels.output : levels.input)
-        }, size: size, interrupt: phase == .speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
+        }, size: size, interrupt: speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
     }
 }
 
@@ -449,14 +529,7 @@ struct CallReturnPill: View {
             open()
         } label: {
             HStack(spacing: Theme.Space.s) {
-                // The assistant's face, still: the call screen's look, small (the call's own, never one chosen since); an
-                // Agent session's mark for a call to it (#9887 one button).
-                let side = Theme.Size.callBarAvatar * Theme.sizeScale(typeSize)
-                if let agent = call.conversation?.agent {
-                    CallAgentFace(agent: agent, size: side)
-                } else {
-                    CallAssistantFace(assistant: call.assistant, size: side)
-                }
+                CallBarFace(call: call, side: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
                 CallBarWords(title: call.title) {
                     CallBarLine(line: state.line)
                 }
@@ -478,6 +551,32 @@ struct CallReturnPill: View {
         .accessibilityHint("Returns to the call")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("call-return-bar")
+    }
+}
+
+/// The bar's small avatar (#9887 avatar states): the call screen's, in the same state but still. The assistant's look shows
+/// its state's still picture (Mochi's thinking bubble, working arc, needs-you ring, its eyes shut on hold, asleep once
+/// over; a package's first frame of the state, dimmed on hold), greyed once over; an Agent session's mark, or another
+/// conversation's look, stays the same picture. No motion and no clock: the bar sits over every page for the whole call,
+/// where a moving face would pull the eye from what the owner reads and keep a clock running on every page, and at its
+/// size a bounce or a mouth would not read; the call screen moves. What its conversation does is read here, so only this
+/// redraws as it changes.
+private struct CallBarFace: View {
+    let call: PersonaCall
+    let side: CGFloat
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let state = CallScreen.state(call, activity: .read(call, model: model))
+        let look = CallAvatarLook.make(state.avatar, muted: state.microphoneOff, kind: CallAvatarLook.kind(call), motion: false)
+        Group {
+            if let agent = call.conversation?.agent {
+                CallAgentFace(agent: agent, size: side)
+            } else {
+                CallAssistantDot(assistant: call.assistant, size: side, state: look.state, still: true, eyesShut: look.eyesShut)
+            }
+        }
+        .opacity(look.pictureOpacity)
     }
 }
 

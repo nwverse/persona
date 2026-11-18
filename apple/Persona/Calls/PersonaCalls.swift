@@ -13,8 +13,8 @@ import os
     /// Who the call is with: the assistant's look and name, taken together when the call is made (and once more just
     /// before the system's Start), then fixed for the call (`CallAssistant`).
     let assistant: CallAssistant
-    /// The assistant's name as the call carries it (`CallHandle.name`): what the system's call UI, the Lock Screen and
-    /// Recents show.
+    /// The assistant's name as the call carries it (`CallHandle.name`): what the main conversation's top bar says
+    /// (`AppModel.assistantShownName`, #9887), and what the system's call UI, the Lock Screen and Recents show.
     var name: String {
         #if DEBUG
         if let sampleName { return sampleName }
@@ -67,16 +67,24 @@ import os
     fileprivate(set) var sampleCaption: String?
     /// A sample's name in the assistant's place (`-showCallSampleName`): a long one, for the screenshots.
     fileprivate(set) var sampleName: String?
-    /// A sample of the assistant speaking (its ring swelling as with a voice at this level).
-    fileprivate(set) var sampleSpeaking = false
-    var sampleLevel: Double { sampleSpeaking ? 0.6 : 0 }
+    /// A sample's voice (once it connected): its live state and its link (`-showCallSample speaking`, `hearing`,
+    /// `paused`…), and what its conversation does (`working`, `asking`, `thinking`), as a real voice's would read.
+    fileprivate(set) var sampleVoice: VoiceLiveState?
+    fileprivate(set) var sampleLink: VoiceLink = .live
+    fileprivate(set) var sampleActivity: CallActivity?
+    /// A sample's voice level: a made-up voice while it speaks or hears (`CallSampleVoice`), so the speaking motion and the
+    /// ring show on the Simulator, which has no audio for a sample; read only on the avatar's clock.
+    var sampleLevel: Double {
+        guard let voice = sampleVoice, voice != .listening else { return 0 }
+        return CallSampleVoice.level(at: Date.now.timeIntervalSinceReferenceDate)
+    }
     #endif
 
-    fileprivate init(id: UUID, kind: CallKind, direction: CallDirection, persona: Persona) {
+    fileprivate init(id: UUID, kind: CallKind, direction: CallDirection, persona: Persona, name: String) {
         self.id = id
         self.kind = kind
         self.direction = direction
-        assistant = CallAssistant(persona)
+        assistant = CallAssistant(persona, name: name)
         machine = CallMachine(id: id, kind: kind, direction: direction)
         phase = machine.phase
     }
@@ -142,8 +150,11 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     @ObservationIgnored var lastRedial: Date?
     /// A call to Persona on this group ended: the tunnels it kept open in the background go (`AppModel.callEnded`).
     @ObservationIgnored var callLeft: @MainActor (_ group: String) -> Void = { AppModel.shared.callEnded(group: $0) }
-    /// The assistant a new call is with: the persona on screen (the tests' own). The call carries its look and name.
+    /// The assistant a new call is with: the persona on screen (the tests' own). The call carries its look.
     @ObservationIgnored let assistant: @MainActor () -> Persona
+    /// The name a new call carries (#9887): what the main conversation's top bar says, the current assistant's on a hub
+    /// with several, else the look's (`AppModel.assistantShownName`; the tests' own).
+    @ObservationIgnored let assistantName: @MainActor () -> String
     /// What the system's side needs before it is made, off the main actor: its call UI's icon (`CallIcon.prepare`).
     @ObservationIgnored let prepareSystem: @MainActor () async -> Void
     /// The kind of handle a new call to Persona carries (Developing Persona's Call handle, #9887).
@@ -159,11 +170,13 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
              = { VoiceDeps.systemCall(group: $0, audio: $1, events: $2) },
          callCategory: @escaping @MainActor () async -> Void = { await PersonaCalls.setCallCategory() },
          assistant: @escaping @MainActor () -> Persona = { AppModel.shared.persona },
+         assistantName: @escaping @MainActor () -> String = { AppModel.shared.assistantShownName },
          prepareSystem: @escaping @MainActor () async -> Void = { await CallIcon.prepare() },
          handleKind: @escaping @MainActor () -> CallHandleKind = { DevMode.shared.callHandleInUse }) {
         makeSystem = system
         self.handleKind = handleKind
         self.assistant = assistant
+        self.assistantName = assistantName
         self.prepareSystem = prepareSystem
         self.clock = clock
         self.voiceCalls = voiceCalls
@@ -288,7 +301,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     // MARK: Adding and ending calls
 
     @discardableResult func add(_ id: UUID = UUID(), kind: CallKind, direction: CallDirection, persona: Persona? = nil) -> PersonaCall {
-        let call = PersonaCall(id: id, kind: kind, direction: direction, persona: persona ?? assistant())
+        let call = PersonaCall(id: id, kind: kind, direction: direction, persona: persona ?? assistant(),
+                               name: persona?.name ?? assistantName())
         if calls.isEmpty { route.watch() }
         calls.append(call)
         noteLive()
@@ -687,15 +701,35 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         /// Muted on the loudspeaker; the voice's connection being picked up again; AirPods connected (Audio in
         /// Speaker's place); the assistant speaking.
         case mutedSpeaker, reconnecting, audioRoute, speaking
+        /// Each of the avatar's rows (#9887 avatar states): the owner speaking; the voice thinking before its answer; the
+        /// conversation working; a card waiting for the owner; the assistant speaking while the owner is muted; the
+        /// voice's upstream paused (the call listens, it is not on hold).
+        case hearing, thinking, working, asking, mutedSpeaking, paused
+
+        /// The sample's voice once connected: its live state.
+        var voice: VoiceLiveState {
+            switch self {
+            case .speaking, .mutedSpeaking: .speaking
+            case .hearing: .hearing
+            default: .listening
+            }
+        }
     }
 
     /// A call to Persona's page in each of its states, with no system, no audio and no hub (`-showCallSample <state>`).
     /// `name`, `caption` and `reason` stand in for the assistant's name (on the page and the bar), its latest words and
     /// why the call ended (`-showCallSampleName`, `-showCallSampleCaption`, `-showCallSampleReason`): long texts for the
-    /// screenshots.
-    func showSample(_ sample: Sample, name: String? = nil, caption: String? = nil, reason: String? = nil) {
+    /// screenshots. `look`: the assistant's look instead of the one on screen (`-showCallSampleLook`, a package's or an
+    /// uploaded one); `agent`: a call to an Agent session instead of the main conversation (`-showCallSampleAgent`).
+    func showSample(_ sample: Sample, name: String? = nil, caption: String? = nil, reason: String? = nil, look: Persona? = nil,
+                    agent: Bool = false) {
         for old in calls where old.sample { remove(old) }
         let call = add(kind: .owner(group: AppModel.shared.hub?.group ?? ""), direction: .outgoing)
+        if let look { call.assistant.retake(look, name: assistantName()) }
+        if agent {
+            call.conversation = CallConversation(title: "修登录页的跳转", detail: "Claude Code · MacBook", // i18n-ignore: a DEBUG sample's conversation
+                                                 agent: AgentKind(brand: Theme.Brand.claude, name: "Claude Code", surface: nil))
+        }
         call.sample = true
         call.sampleName = name
         let now = clock.now
@@ -704,8 +738,9 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         if ![.dialing, .connecting].contains(sample) { events += [.audioActivated, .engineRunning] }
         switch sample {
         case .dialing, .connecting: break
-        case .connected, .speaker, .reconnecting, .audioRoute, .speaking: events.append(.voiceReady)
-        case .muted, .mutedSpeaker: events += [.voiceReady, .muteTapped(true), .muteAction(true)]
+        case .connected, .speaker, .reconnecting, .audioRoute, .speaking, .hearing, .thinking, .working, .asking, .paused:
+            events.append(.voiceReady)
+        case .muted, .mutedSpeaker, .mutedSpeaking: events += [.voiceReady, .muteTapped(true), .muteAction(true)]
         case .held: events += [.voiceReady, .pauseAction(true)]
         case .interrupted: events += [.voiceReady, .interruptionBegan]
         case .resume: events += [.voiceReady, .interruptionBegan, .audioDeactivated, .interruptionEnded, .timer(.recoveryUnpause),
@@ -723,12 +758,29 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         default: route.show(.receiver)
         }
         call.sampleReconnecting = sample == .reconnecting
-        call.sampleSpeaking = sample == .speaking
+        if call.machine.phase.connectedSince != nil, sample != .reconnecting {
+            call.sampleVoice = sample.voice
+            call.sampleLink = sample == .paused ? .paused : .live
+            call.sampleActivity = CallActivity(working: sample == .working, asking: sample == .asking, thinking: sample == .thinking)
+        }
         if call.machine.phase.connectedSince != nil {
             call.sampleCaption = caption ?? "好的，明早九点的会我帮你改到十点了，也跟大家说了一声。" // i18n-ignore: a DEBUG sample's caption
         }
         call.sync()
         presented = true
+    }
+
+    /// The look a sample shows (`-showCallSampleLook`): `package` (the look on screen when it is a package's, else the
+    /// first package on the phone that the owner did not upload), `uploaded` (the first uploaded one on the phone), or a
+    /// look's id; nil until it is on the phone.
+    static func sampleLook(_ wanted: String, model: AppModel) -> Persona? {
+        let store = model.personas
+        let onPhone = ([model.persona] + store.offered).filter { !$0.isBuiltin && store.isOnPhone($0) }
+        switch wanted {
+        case "package": return onPhone.first { !$0.isUploaded }
+        case "uploaded": return onPhone.first(where: \.isUploaded)
+        default: return onPhone.first { $0.id == wanted }
+        }
     }
 
     /// The urgent call page's sample on hold (`-showUrgentCallSample held`, `UrgentCallCenter.showSample`): the system call
@@ -744,6 +796,21 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     }
     #endif
 }
+
+#if DEBUG
+/// A made-up voice for the samples (#9887 avatar states): phrases of syllables with a breath between them, 0…1, so the
+/// speaking motion (the bounce, the ripples on its peaks, Mochi's mouth) and the ring show on the Simulator.
+nonisolated enum CallSampleVoice {
+    static func level(at t: TimeInterval) -> Double {
+        // A phrase of about three seconds, then most of a second of quiet.
+        let phrase = t.truncatingRemainder(dividingBy: 4.2)
+        guard phrase < 3.2 else { return 0.02 }
+        let syllable = abs(sin(t * .pi * 2.4))
+        let stress = 0.65 + 0.35 * sin(t * 1.9)
+        return min(1, 0.08 + 0.92 * syllable * syllable * stress)
+    }
+}
+#endif
 
 // MARK: The system's callbacks
 

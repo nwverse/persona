@@ -282,6 +282,10 @@ struct VoiceDeps {
     /// The voice is playing: changes only as it starts or stops, so a page can offer Stop Speaking without being drawn
     /// again on every phase (#3862 phase 4).
     private(set) var speaking = false
+    /// The owner said something and the voice has not begun to answer it yet (the call screen's Thinking, #9887): from the
+    /// owner's caption turning final until the voice plays or says anything, the owner speaks again, the connection
+    /// changes, or `thinkingAtMost` passed (an answer that never comes). Changes only as it starts or stops.
+    private(set) var thinking = false
     /// The extension said `ready` on the connection that is up: changes only as it connects, drops or ends, so the
     /// meeting page can send Talk to the call without being drawn again on every phase (#3862 phase 4).
     private(set) var connected = false
@@ -297,6 +301,8 @@ struct VoiceDeps {
     static let runLimit = 20
     /// The user's caption stops counting as 「在说」 this long after it last changed.
     static let hearingQuiet: Duration = .seconds(2)
+    /// The longest the voice is shown thinking before an answer (`thinking`): past it, it listens again.
+    static let thinkingAtMost: Duration = .seconds(8)
     static let idleCheck: Duration = .seconds(30)
 
     /// The rates the extension said last, per group and extension: the next call records at them before `ready`.
@@ -317,6 +323,8 @@ struct VoiceDeps {
     @ObservationIgnored private var playing = false
     @ObservationIgnored private var hearing = false
     @ObservationIgnored private var hearingTick = 0
+    /// The owner's line the voice was last shown thinking about (`thinking`): once for each.
+    @ObservationIgnored private var thoughtAbout: String?
     @ObservationIgnored private var resolved = false
     @ObservationIgnored private var format: VoiceAudioFormat
     @ObservationIgnored private let recent: [VoiceLine]
@@ -454,6 +462,7 @@ struct VoiceDeps {
         link = .live
         levels.reset()
         if speaking { speaking = false }
+        if thinking { thinking = false }
         if held { held = false }
         pausedByInterruption = false
         formatOnResume = nil
@@ -643,6 +652,7 @@ struct VoiceDeps {
         if link != .live { link = .live }
         if askingID != nil { askingID = nil }
         if notice != nil { notice = nil }
+        think(false)
         let socket = deps.socket(VoiceEndpoint.request(api, extensionID: extensionID), api)
         self.socket = socket
         socket.open { [weak self] event in self?.received(event, generation: generation) }
@@ -830,6 +840,14 @@ struct VoiceDeps {
         }
         lastActivity = deps.clock.now
         if t.role == VoiceLine.user {
+            // Thinking once the owner's words are final (once for each line), unless the voice already began to answer
+            // them (a late caption goes before that answer: `before`); not while they still come.
+            if !t.final {
+                think(false)
+            } else if t.before == nil, !playing, !t.text.isEmpty, thoughtAbout != id {
+                thoughtAbout = id
+                think(true)
+            }
             hearing = !t.final
             hearingTick += 1
             let tick = hearingTick
@@ -840,8 +858,21 @@ struct VoiceDeps {
                     me.refreshPhase()
                 }
             }
+        } else if !t.text.isEmpty {
+            think(false)
         }
         refreshPhase()
+    }
+
+    /// Thinking starts or stops (`thinking`); started, it stops by itself after `thinkingAtMost`.
+    private func think(_ on: Bool) {
+        if thinking != on { thinking = on }
+        if on {
+            after(Self.thinkingAtMost, "thinking") { me in me.think(false) }
+        } else {
+            timers["thinking"]?.cancel()
+            timers["thinking"] = nil
+        }
     }
 
     private func update(_ run: VoiceRun) {
@@ -871,7 +902,10 @@ struct VoiceDeps {
         switch event {
         case .playing(let on):
             playing = on
-            if on { lastActivity = deps.clock.now }
+            if on {
+                lastActivity = deps.clock.now
+                think(false)
+            }
             refreshPhase()
         case .outputLevel(let level):
             if levelsShown { levels.set(output: level) }

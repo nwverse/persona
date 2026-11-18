@@ -37,33 +37,42 @@ nonisolated struct CallConversation: Equatable, Sendable {
 
 /// Who a call is with, as its pages show them (#9290 follow-up): the assistant's look and its name, taken together when
 /// the call is made and once more just before the system's Start (a cold launch's look may have come by then:
-/// `PersonaCalls.place`), then fixed for the call, as the system's handle is. Choosing another avatar, or another hub's,
-/// changes neither the face nor the name of a call that is on. A package's pictures are read and decoded off the main
-/// actor (`prepareFrames`, `prepareFace`) and kept here for the call; until they are ready, and for a built-in, the face
-/// is the built-in drawing in the look's design. The pages only arrange what is here (docs/apple/performance.md P1, P4,
-/// P8).
+/// `PersonaCalls.place`), then fixed for the call, as the system's handle is. The name is the one the main conversation's
+/// top bar says (#9887: `AppModel.assistantShownName`, the current assistant's on a hub with several, else the look's),
+/// so the call screen, its bar, the question elsewhere and the system's handle say one name. Choosing another avatar,
+/// assistant or hub changes neither the face nor the name of a call that is on. A package's pictures are read and decoded
+/// off the main actor (`prepareFrames`, `prepareFace`) and kept here for the call; until they are ready, and for a
+/// built-in, the face is the built-in drawing in the look's design. The pages only arrange what is here
+/// (docs/apple/performance.md P1, P4, P8).
 @MainActor @Observable final class CallAssistant {
     private(set) var persona: Persona
-    /// The package's dot frames for the states the call screen shows (`states`), once decoded.
+    /// The name as the main conversation's top bar says it when the call was made (before `CallHandle.name`).
+    private(set) var shownName: String
+    /// The package's dot frames for every state the call screen shows (`states`), once decoded.
     private(set) var frames: [PersonaState: PersonaFrames] = [:]
-    /// The package's face for the return bar and the urgent call's header, once decoded.
+    /// The package's face for the urgent call's header and the voice chat's bar, once decoded.
     private(set) var face: UIImage?
     /// The pixel width the face was read for: a larger one is read again (the text grew).
     @ObservationIgnored private var faceWidth: CGFloat = 0
     @ObservationIgnored private var loadingFrames = false
 
-    /// The states the call screen shows (`CallAvatarLook.state`).
-    static let states: [PersonaState] = [.idle, .working, .offline]
+    /// The states the call screen shows (`CallAvatarLook.state`): all five of a package's dot (a state it lacks shows its
+    /// idle frames, as `PersonaDot` does).
+    static let states: [PersonaState] = PersonaState.allCases
 
-    /// The name the system's call UI, the call screen and the bar say (`CallHandle.name`).
-    var name: String { CallHandle.name(persona.name) }
+    /// The name the system's call UI, the call screen and the bar say (`CallHandle.name`: "Persona" when it is empty).
+    var name: String { CallHandle.name(shownName) }
 
-    init(_ persona: Persona) {
+    /// `name`: what the main conversation's top bar says; nil: the look's own.
+    init(_ persona: Persona, name: String? = nil) {
         self.persona = persona
+        shownName = name ?? persona.name
     }
 
     /// The look and name taken once more (just before the system's Start), together; its pictures go with the old look.
-    func retake(_ persona: Persona) {
+    func retake(_ persona: Persona, name: String? = nil) {
+        let name = name ?? persona.name
+        if name != shownName { shownName = name }
         guard persona != self.persona else { return }
         self.persona = persona
         frames = [:]
@@ -94,16 +103,59 @@ nonisolated struct CallConversation: Equatable, Sendable {
     }
 }
 
-/// How the assistant looks on the call screen in each of the voice's phases (pure, for the tests): which of its states
-/// it shows (`PersonaState`, as the Persona tab's dot does), whether it holds still, how the ring around it looks, and
-/// the mark on it. It moves while it speaks or works and idles (blinking) while it listens; on hold, muted and over it
-/// holds still, the ring and a mark saying why.
+/// How the call's avatar looks in each state of the call (pure, for the tests; #9887, docs/apple/calls.md "The avatar"):
+/// which of the look's own states it shows (`PersonaState`, as the Persona tab's dot does), whether that picture holds
+/// still, the ring around it, the mark on it, and the speaking layer every call shares.
+///
+/// - The **shared speaking layer**, the same for every look and every conversation (Mochi, a package, an uploaded photo,
+///   an Agent's mark): while the assistant speaks the avatar bounces gently with the voice's level (`CallSpeech`: a
+///   little larger and lifted, never warped), the ring brightens with it, and soft ripples leave its edge on the voice's
+///   peaks. Reduce Motion and Low Power Mode keep none of the motion: a bright, still ring says it speaks.
+/// - The **look's own pictures**, the main conversation's only: its thinking, working, needs-you and offline states (a
+///   package's frames, Mochi's drawing), Mochi's mouth moving with the voice and its eyes shut on hold, a package's idle
+///   frame dimmed on hold. A call to another conversation (an Agent's harness mark, another assistant conversation's look)
+///   keeps the same still picture: only the shared layer, the ring and the marks move or change on it.
 nonisolated struct CallAvatarLook: Equatable, Sendable {
+    /// What the call is doing as the avatar shows it, the first that applies (`CallScreenState.make`).
+    nonisolated enum Row: String, CaseIterable, Sendable {
+        /// Calling…, Connecting…, Reconnecting….
+        case connecting
+        /// The call's own hold (the system's pause, an interruption): never the voice's pause.
+        case held
+        case ended
+        /// The assistant's voice plays (muted or not: the owner still hears it).
+        case speaking
+        /// A card in the call's conversation waits for the owner's decision (asked by voice or not).
+        case needsYou
+        /// The owner stopped speaking and the voice has not begun to answer (`VoiceConversation.thinking`).
+        case thinking
+        /// The call's conversation works on something (its session, or what the voice handed it).
+        case working
+        /// The owner's microphone is off and nothing else goes on.
+        case muted
+        /// The owner is speaking.
+        case hearing
+        /// Nobody speaks.
+        case listening
+    }
+
+    /// Whose picture it is: the main conversation's look (the built-in Mochi, drawn; a package's frames; a picture the owner
+    /// uploaded, the hub's frames of it), or another conversation's (`other`: an Agent session's harness mark, another
+    /// assistant conversation's look), which has no pictures of its own for a call's states.
+    nonisolated enum Kind: String, CaseIterable, Sendable {
+        case builtin, package, uploaded, other
+
+        var isMain: Bool { self != .other }
+    }
+
     nonisolated enum Ring: Equatable, Sendable {
         /// An arc lapping a faint track: the call connects (Calling…, Connecting…, Reconnecting…).
         case lap
-        /// The persona's color, swelling with the voice's level (the microphone's, or the assistant's own voice).
+        /// The persona's color, swelling with the microphone's level.
         case voice
+        /// The persona's color, bright, swelling and brightening with the assistant's own voice; bright and still where
+        /// motion is off (it says the assistant speaks).
+        case speaking
         /// On hold: still, in the caution color.
         case held
         /// Muted: still and gray.
@@ -116,38 +168,165 @@ nonisolated struct CallAvatarLook: Equatable, Sendable {
         case hold, muted
     }
 
+    /// The look's own state the picture shows (a main look's; another conversation's stays idle).
     var state: PersonaState
+    /// The picture holds still (its first frame, Mochi's still drawing).
     var still: Bool
     var ring: Ring
     var mark: Mark?
+    /// The shared speaking motion: the bounce and the ripples (`CallSpeech`).
+    var bounces = false
+    /// Mochi's mouth follows the voice (the built-in main look while it speaks).
+    var mouth = false
+    /// Mochi's eyes shut (the built-in main look on hold).
+    var eyesShut = false
+    /// The picture dimmed (a package's or an uploaded picture's idle frame on hold).
+    var dimmed = false
+    /// The picture greyed (the call is over).
+    var greyed = false
+    /// The ring runs on its own clock (a level to follow, or the lap): only while motion is allowed.
+    var clock = false
 
-    static func make(_ phase: VoiceOrb.Phase) -> CallAvatarLook {
-        switch phase {
-        case .idle: CallAvatarLook(state: .idle, still: false, ring: .quiet, mark: nil)
-        case .connecting: CallAvatarLook(state: .idle, still: false, ring: .lap, mark: nil)
-        case .listening, .hearing: CallAvatarLook(state: .idle, still: false, ring: .voice, mark: nil)
-        // Speaking is the assistant answering, as its dot shows a reply on its way; working, the conversation it handed
-        // work to at work.
-        case .speaking, .working: CallAvatarLook(state: .working, still: false, ring: .voice, mark: nil)
-        case .paused: CallAvatarLook(state: .idle, still: true, ring: .held, mark: .hold)
-        case .muted: CallAvatarLook(state: .idle, still: true, ring: .quiet, mark: .muted)
-        case .ended: CallAvatarLook(state: .offline, still: true, ring: .ended, mark: nil)
+    /// `row` as `kind`'s avatar shows it; `muted`: the owner's microphone is off (a mark, and the picture still, unless the
+    /// assistant speaks); `motion`: neither Reduce Motion nor Low Power Mode.
+    static func make(_ row: Row, muted: Bool, kind: Kind, motion: Bool) -> CallAvatarLook {
+        let main = kind.isMain
+        // Another conversation's picture is always the same one, still: only the main look has pictures for the states.
+        var look = CallAvatarLook(state: .idle, still: !main || !motion, ring: .voice, mark: nil)
+        switch row {
+        case .connecting:
+            look.ring = .lap
+        case .listening, .hearing:
+            break
+        case .thinking:
+            if main { look.state = .thinking }
+        case .working:
+            if main { look.state = .working }
+        case .needsYou:
+            if main { look.state = .needsYou }
+        case .speaking:
+            // Its idle picture under the shared motion; Mochi's mouth moves with the voice.
+            look.ring = .speaking
+            look.bounces = motion
+            look.mouth = kind == .builtin && motion
+            if muted { look.mark = .muted }
+        case .muted:
+            break
+        case .held:
+            look.still = true
+            look.ring = .held
+            look.mark = .hold
+            look.eyesShut = kind == .builtin
+            look.dimmed = kind == .package || kind == .uploaded
+        case .ended:
+            if main { look.state = .offline }
+            look.still = true
+            look.ring = .ended
+            look.greyed = true
+        }
+        // Muted: still, the quiet ring and the mark, whatever the look says it is doing; its voice still moves it.
+        if muted, [.listening, .hearing, .thinking, .working, .needsYou, .muted].contains(row) {
+            look.still = true
+            look.ring = .quiet
+            look.mark = .muted
+        }
+        look.clock = motion && [.lap, .voice, .speaking].contains(look.ring)
+        return look
+    }
+
+    /// The kind of the call's picture: another conversation's, or the main look's.
+    static func kind(conversation: Bool, look: Persona) -> Kind {
+        if conversation { return .other }
+        if look.isBuiltin { return .builtin }
+        return look.isUploaded ? .uploaded : .package
+    }
+
+    /// The ring follows a level (the microphone's, or the assistant's voice while it speaks).
+    var followsLevel: Bool { ring == .voice || ring == .speaking }
+}
+
+@MainActor extension CallAvatarLook {
+    /// The kind of `call`'s picture.
+    static func kind(_ call: PersonaCall) -> Kind {
+        kind(conversation: call.conversation != nil, look: call.assistant.persona)
+    }
+
+    /// How opaque the picture is: greyed once over (as an offline face), dimmed on hold.
+    var pictureOpacity: Double { greyed ? PersonaFace.offlineOpacity : dimmed ? Theme.Call.heldPicture : 1 }
+}
+
+/// The shared speaking motion (#9887, every look, every conversation): the voice's level followed as an envelope (up
+/// within `callSpeechAttack`, down within `callSpeechRelease`), the avatar's bounce riding it (a scale of 1.00–1.04 and a
+/// lift of a few points, `callAvatarBounce`, `callAvatarLift`), and a ripple leaving the avatar's edge each time the
+/// envelope peaks (at most one per `callRippleGap`, each `callRipple` long). Pure: one step per frame of the ring's own
+/// clock; the tests hold it to the tokens.
+nonisolated struct CallSpeech: Equatable, Sendable {
+    /// 0…1: the level followed.
+    private(set) var envelope: Double = 0
+    /// When each ripple left the edge, oldest first.
+    private(set) var ripples: [TimeInterval] = []
+    private var last: TimeInterval?
+    /// A peak may start a ripple: the envelope came down since the last one.
+    private var armed = true
+
+    /// At rest: no level heard yet, no ripple.
+    static let rest = CallSpeech()
+
+    /// The envelope at which a ripple leaves, and the one it must come back under before the next.
+    static let peak = 0.5
+    static let rearm = 0.3
+    static let ripplesAtMost = 3
+
+    /// The level at `t` (seconds, any epoch). A step from long ago counts as at most a quarter second.
+    mutating func follow(_ raw: Double, at t: TimeInterval) {
+        let level = min(max(raw, 0), 1)
+        let dt = last.map { min(max(t - $0, 0), 0.25) } ?? 0
+        last = t
+        let time = level > envelope ? Theme.Motion.callSpeechAttack : Theme.Motion.callSpeechRelease
+        envelope += (level - envelope) * (1 - exp(-dt / time))
+        ripples.removeAll { t - $0 >= Theme.Motion.callRipple || t < $0 }
+        if envelope < Self.rearm {
+            armed = true
+        } else if armed, envelope >= Self.peak, ripples.last.map({ t - $0 >= Theme.Motion.callRippleGap }) ?? true {
+            ripples.append(t)
+            if ripples.count > Self.ripplesAtMost { ripples.removeFirst() }
+            armed = false
         }
     }
 
-    /// The ring follows a level (and so needs a clock) in this look.
-    var followsLevel: Bool { ring == .voice }
-    /// The ring moves by itself (a level, or the lap) while motion is allowed.
-    var ringMoves: Bool { ring == .voice || ring == .lap }
+    /// The avatar's scale and its lift (a share of its box).
+    var scale: Double { 1 + Theme.Size.callAvatarBounce * envelope }
+    var lift: Double { Theme.Size.callAvatarLift * envelope }
+    /// Each ripple at `t`, by when it left: how far it went, 0 (at the avatar's edge) to 1 (at the box's, faded out).
+    func ripples(at t: TimeInterval) -> [Ripple] {
+        ripples.map { Ripple(id: $0, progress: min(1, max(0, (t - $0) / Theme.Motion.callRipple))) }
+    }
+
+    nonisolated struct Ripple: Equatable, Identifiable, Sendable {
+        /// When it left the edge.
+        var id: TimeInterval
+        var progress: Double
+    }
+    /// Mochi's mouth: the envelope in eighths, so the face is drawn again only when the mouth visibly moves.
+    var mouth: Double { (envelope * 8).rounded() / 8 }
+}
+
+/// The speaking motion's state between frames (`CallSpeech`), kept by the avatar and stepped on its ring's clock. Not
+/// observed: nothing redraws because it changed, only the clock's frames read it.
+@MainActor final class CallSpeechClock {
+    var speech = CallSpeech.rest
 }
 
 /// The assistant on the call screen: the call's own look (`CallAssistant`, as the app's dot draws it: Mochi drawn, or a
-/// package's or an uploaded picture's frames, decoded off the main actor), moving with the call, and a thin ring around
-/// it following the voice. Only
-/// the ring reads the levels, on its own clock, so a new level redraws the ring and nothing else (docs/apple/performance.md
-/// P4, P5); the clock pauses whenever the ring has nothing to follow, with Reduce Motion and in Low Power Mode, where the
-/// face holds still too. While the assistant speaks and `interrupt` is given it is a button, Interrupt Voice, as the voice
-/// bar's orb; otherwise it is decoration (the name and the line under it say the state in words).
+/// package's or an uploaded picture's frames, decoded off the main actor), or an Agent session's mark, showing the call's
+/// state (`CallAvatarLook`), a thin ring around it following the voice, and while the assistant speaks the shared speaking
+/// layer: the avatar's bounce and the ripples leaving its edge. One clock, the ring's own, drives the ring, the ripples
+/// and the avatar's transform (its scale and lift); the picture itself is not drawn again for them (Mochi's mouth alone
+/// redraws Mochi as it moves), so a new level redraws the ring and moves the picture and nothing else
+/// (docs/apple/performance.md P4, P5). The clock runs only while the ring has something to follow or lap and motion is
+/// allowed: paused with Reduce Motion, in Low Power Mode, when the look is still, and when the page is not on screen
+/// (P9). While the assistant speaks and `interrupt` is given it is a button, Interrupt Voice, as the voice bar's orb;
+/// otherwise it is decoration (the name and the line under it say the state in words).
 struct CallAvatar: View {
     let look: CallAvatarLook
     /// Who the call is with: the look and name it was made with (never the one chosen since).
@@ -162,27 +341,32 @@ struct CallAvatar: View {
     var interrupt: (() -> Void)?
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var speech = CallSpeechClock()
 
-    private var isButton: Bool { interrupt != nil && !look.still }
+    private var isButton: Bool { interrupt != nil }
 
     var body: some View {
         let box = size * Theme.sizeScale(typeSize)
         let face = box * Theme.Size.callAvatarFace
         Button { if isButton { interrupt?() } } label: {
-            ZStack {
-                CallAvatarRing(look: look, level: level, box: box)
-                Group {
-                    if let agent {
-                        CallAgentFace(agent: agent, size: face)
-                    } else {
-                        CallAssistantDot(assistant: assistant, size: face, state: look.state, still: look.still)
+            TimelineView(.animation(minimumInterval: Theme.Motion.voiceFrame, paused: !look.clock)) { context in
+                let now = look.clock ? context.date.timeIntervalSinceReferenceDate : nil
+                let heard = now != nil && look.followsLevel ? min(1, max(0, level())) : 0
+                let step = pose(now, level: heard)
+                ZStack {
+                    if !step.ripples.isEmpty { CallAvatarRipples(ripples: step.ripples, box: box, face: face) }
+                    CallAvatarRing(look: look, lap: now.map { $0.truncatingRemainder(dividingBy: Theme.Motion.voiceSpin) / Theme.Motion.voiceSpin },
+                                   level: heard, box: box)
+                    ZStack {
+                        CallAvatarPicture(look: look, assistant: assistant, agent: agent, size: face, mouth: step.mouth)
+                        if let mark = look.mark {
+                            CallAvatarMark(mark: mark, side: box * Theme.Size.callAvatarBadge)
+                                .offset(x: face * 0.36, y: face * 0.36)
+                                .transition(.opacity)
+                        }
                     }
-                }
-                .opacity(look.ring == .ended ? PersonaFace.offlineOpacity : 1)
-                if let mark = look.mark {
-                    CallAvatarMark(mark: mark, side: box * Theme.Size.callAvatarBadge)
-                        .offset(x: face * 0.36, y: face * 0.36)
-                        .transition(.opacity)
+                    .scaleEffect(step.scale)
+                    .offset(y: -step.lift * box)
                 }
             }
             .frame(width: box, height: box)
@@ -197,6 +381,20 @@ struct CallAvatar: View {
         .accessibilityIdentifier("call-avatar")
     }
 
+    /// The speaking layer at `now` (nil: still): the level followed while the assistant speaks and motion is allowed, else
+    /// at rest.
+    private func pose(_ now: TimeInterval?, level: Double) -> (scale: Double, lift: Double, ripples: [CallSpeech.Ripple], mouth: Double?) {
+        let quiet: Double? = look.mouth ? 0 : nil
+        guard let now, look.bounces || look.mouth else {
+            if speech.speech != .rest { speech.speech = .rest }
+            return (1, 0, [], quiet)
+        }
+        speech.speech.follow(level, at: now)
+        let s = speech.speech
+        guard look.bounces else { return (1, 0, [], look.mouth ? s.mouth : nil) }
+        return (s.scale, s.lift, s.ripples(at: now), look.mouth ? s.mouth : nil)
+    }
+
     /// As it is, enabled or not (the picture says the state); pressed, it dims as a plain button does.
     private struct Press: ButtonStyle {
         func makeBody(configuration: Configuration) -> some View {
@@ -205,28 +403,70 @@ struct CallAvatar: View {
     }
 }
 
-/// The ring around the assistant: the only part that follows the voice's level, on a clock of its own that runs only
-/// while it has something to follow and motion is allowed.
-private struct CallAvatarRing: View {
+/// The avatar's picture in the call's look: an Agent session's mark (still, the same picture whatever the call does), or
+/// the assistant's (`CallAssistantDot`) in the look's state, with Mochi's mouth and shut eyes where the look has them,
+/// greyed once over and dimmed on hold. Its inputs change only with the call's state (and Mochi's mouth), so the ring's
+/// clock moves it without drawing it again.
+private struct CallAvatarPicture: View {
     let look: CallAvatarLook
-    let level: () -> Double
-    let box: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var moving: Bool { look.ringMoves && !reduceMotion && !ProcessInfo.processInfo.isLowPowerModeEnabled }
+    let assistant: CallAssistant
+    let agent: AgentKind?
+    let size: CGFloat
+    let mouth: Double?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: Theme.Motion.voiceFrame, paused: !moving)) { context in
-            let now = moving ? context.date.timeIntervalSinceReferenceDate : nil
-            ring(lap: now.map { $0.truncatingRemainder(dividingBy: Theme.Motion.voiceSpin) / Theme.Motion.voiceSpin },
-                 level: moving && look.followsLevel ? min(1, max(0, level())) : 0)
+        Group {
+            if let agent {
+                CallAgentFace(agent: agent, size: size)
+            } else {
+                CallAssistantDot(assistant: assistant, size: size, state: look.state, still: look.still, mouth: mouth,
+                                 eyesShut: look.eyesShut)
+            }
+        }
+        .opacity(look.pictureOpacity)
+    }
+}
+
+/// The ripples leaving the avatar's edge on the voice's peaks: circles from the picture's edge out to the box's, fading as
+/// they go (`CallSpeech.ripples(at:)`).
+private struct CallAvatarRipples: View {
+    let ripples: [CallSpeech.Ripple]
+    let box: CGFloat
+    let face: CGFloat
+
+    var body: some View {
+        ZStack {
+            ForEach(ripples) { ripple in
+                let p = ripple.progress
+                Circle()
+                    .stroke(Theme.persona.opacity(0.5 * (1 - p)), lineWidth: Theme.Size.ruleWide * (1 - 0.5 * p))
+                    .frame(width: face + (box - face) * p, height: face + (box - face) * p)
+            }
         }
         .frame(width: box, height: box)
         .accessibilityHidden(true)
     }
+}
 
-    @ViewBuilder private func ring(lap: Double?, level: Double) -> some View {
+/// The ring around the assistant: the part that follows the voice's level, drawn from what the avatar's clock gives it.
+private struct CallAvatarRing: View {
+    let look: CallAvatarLook
+    /// How far round the lap is (nil: still).
+    let lap: Double?
+    let level: Double
+    let box: CGFloat
+
+    var body: some View {
+        ring
+            .frame(width: box, height: box)
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var ring: some View {
         let rest = box * Theme.Size.callAvatarRing
+        // A full voice swells the ring to the box's edge, its widest stroke inside it (the page's scroll view clips what
+        // reaches past the box).
+        let swell = box / (rest + Theme.Size.ruleWide * 2) - 1
         switch look.ring {
         case .lap:
             ZStack {
@@ -242,7 +482,13 @@ private struct CallAvatarRing: View {
             Circle()
                 .stroke(Theme.persona.opacity(0.35 + 0.65 * level), lineWidth: Theme.Size.ruleWide * (1 + level))
                 .frame(width: rest, height: rest)
-                .scaleEffect(1 + level * (1 / Theme.Size.callAvatarRing - 1))
+                .scaleEffect(1 + level * swell)
+        case .speaking:
+            // Brighter than a listening ring at rest, and brightening with the voice; bright and still without a clock.
+            Circle()
+                .stroke(Theme.persona.opacity(look.clock ? 0.6 + 0.4 * level : 1), lineWidth: Theme.Size.ruleWide * (1 + level))
+                .frame(width: rest, height: rest)
+                .scaleEffect(1 + level * swell)
         case .held:
             Circle().stroke(Theme.caution, lineWidth: Theme.Size.ruleWide).frame(width: rest, height: rest)
         case .quiet:
@@ -254,14 +500,19 @@ private struct CallAvatarRing: View {
 }
 
 /// The call's assistant in a state, as `PersonaDot` draws one but from what `CallAssistant` has ready: a package's frames
-/// once decoded (in a UIImageView, as the dot's), else the built-in drawing in the look's design. Nothing is read or
-/// decoded here: the frames are asked for in a task, off the main actor. Holds still with Reduce Motion and in Low Power
-/// Mode, and when the call says so.
+/// once decoded (in a UIImageView, as the dot's; a state it has no frames for shows its idle ones), else the built-in
+/// drawing in the look's design, with the call's own expressions (`mouth`, `eyesShut`) where the call asks for them.
+/// Nothing is read or decoded here: the frames are asked for in a task, off the main actor. Holds still with Reduce
+/// Motion and in Low Power Mode, and when the call says so.
 struct CallAssistantDot: View {
     let assistant: CallAssistant
     let size: CGFloat
     let state: PersonaState
     var still = false
+    /// Mochi's mouth, open by the voice (`PersonaFace.mouth`); nil: none.
+    var mouth: Double? = nil
+    /// Mochi's eyes shut (on hold).
+    var eyesShut = false
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -279,7 +530,7 @@ struct CallAssistantDot: View {
                 PersonaFramesView(frames: frames, animating: !still, eligible: eligible)
             }
         } else {
-            AssistantAvatar(size: size, design: look.avatarDesign, state: state, still: still)
+            AssistantAvatar(size: size, design: look.avatarDesign, state: state, still: still, mouth: mouth, eyesShut: eyesShut)
         }
     }
 }

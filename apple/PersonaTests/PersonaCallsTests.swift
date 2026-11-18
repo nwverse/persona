@@ -82,6 +82,9 @@ import Testing
     var assistant = "Persona"
     /// The persona on screen, when a test gives a whole one (its look and name): else the built-in named `assistant`.
     var persona: Persona?
+    /// The name the main conversation's top bar says when it is not the look's (a hub with several assistants: the current
+    /// one's, `AppModel.assistantShownName`, #9887).
+    var shownName: String?
     /// Developing Persona's Call handle (#9887).
     var handleKind: CallHandleKind = .generic
     /// What happened before the system's side was made, in order: "prepared" (`PersonaCalls.readySystem`), "made".
@@ -98,6 +101,8 @@ import Testing
             return deps
         }, callCategory: { [weak self] in self?.categories += 1 }, assistant: { [weak self] in
             self?.persona ?? CallRig.persona(named: self?.assistant ?? "")
+        }, assistantName: { [weak self] in
+            self?.shownName ?? self?.persona?.name ?? self?.assistant ?? ""
         }, prepareSystem: { [weak self] in self?.systemSteps.append("prepared") }, handleKind: { [weak self] in self?.handleKind ?? .generic })
         calls.callLeft = { [weak self] in self?.left.append($0) }
         return calls

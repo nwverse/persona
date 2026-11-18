@@ -5994,7 +5994,7 @@ struct Composer: View, Equatable {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let call, inCall {
-                VoiceBar(call: call, key: key, label: VoiceEntry.label(model.session(key), model: model))
+                VoiceBar(call: call, key: key, label: VoiceEntry.label(key, model: model))
                     .transition(.opacity)
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).

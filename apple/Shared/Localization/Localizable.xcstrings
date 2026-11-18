@@ -63502,6 +63502,29 @@
         }
       }
     },
+    "End and Start" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End and Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了して開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束并开始"
+          }
+        }
+      }
+    },
     "End and Write the Minutes" : {
       "localizations" : {
         "en" : {
@@ -63657,6 +63680,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "结束与 %1$@ 的通话，在这里开始语音对话？"
+          }
+        }
+      }
+    },
+    "End the voice chat with %@ and call %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the voice chat with %1$@ and call %2$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ との音声チャットを終了して「%2$@」に発信しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束与 %1$@ 的语音对话，改为呼叫「%2$@」？"
+          }
+        }
+      }
+    },
+    "End the voice chat with %@ and start one here?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the voice chat with %@ and start one here?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ との音声チャットを終了して、ここで開始しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束与 %@ 的语音对话，在这里开始新的？"
           }
         }
       }
@@ -170395,6 +170464,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The voice chat ends, and a call starts with this conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The voice chat ends, and a call starts with this conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の音声チャットが終了し、この会話に発信します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前语音对话会结束，然后呼叫这个对话。"
+          }
+        }
+      }
+    },
+    "The voice chat ends, and a new one starts in this conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The voice chat ends, and a new one starts in this conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の音声チャットが終了し、この会話で新しく開始します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前语音对话会结束，然后在这个对话里开始新的。"
+          }
+        }
+      }
     },
     "The voice extension's protocol doesn't match. Upgrade the voice extension on the hub" : {
       "localizations" : {

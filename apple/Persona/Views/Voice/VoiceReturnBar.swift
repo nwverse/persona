@@ -8,8 +8,9 @@ struct VoiceReturnPill: View {
     let chat: VoiceConversation
     let model: AppModel
     let open: () -> Void
-    /// The assistant's look for its face, taken when the bar shows (as a call's is).
-    @State private var assistant = CallAssistant(AppModel.shared.persona)
+    /// The assistant's look for its face and the name the main conversation's top bar says, taken when the bar shows (as
+    /// a call's are).
+    @State private var assistant = CallAssistant(AppModel.shared.persona, name: AppModel.shared.assistantShownName)
     @State private var conversation: CallConversation?
     @Environment(\.dynamicTypeSize) private var typeSize
 

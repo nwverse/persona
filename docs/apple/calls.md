@@ -27,7 +27,8 @@ never stops the call.
   kind carries the key (`CallKind.owner(group:key:)`; nil for the main conversation found as the call is placed, which is
   what Recents, Siri and CarPlay ask for), and its voice starts bound to it with surface `.call` (the `start` frame's
   `target` is that session, `"surface":"call"`).
-- **One fixed handle** for every call (value: the assistant's name, "Persona" when it has none; `CallHandle.outgoing`).
+- **One fixed handle** for every call (value: the assistant's name as the main conversation's top bar says it, "Persona"
+  when it has none; `CallHandle.outgoing`, "One name" below).
   Its display name carries the conversation's title for another conversation ("Persona · <title>"); the system may show
   only the value (what Recents shows is a device-checklist line). **Recents, Siri and CarPlay always call the main
   conversation** (`callPersona`).
@@ -71,6 +72,78 @@ never stops the call.
   so it is not billed). In the background whether it works is the voice connection's word, not the app's copy of the
   session, which is not updated there (docs/assistant/voice.md 6.5 "Idle"): the upstream paused or waking for the work,
   or a card asked by voice. Once the task is done the quiet minutes count again.
+
+## The avatar shows each state (#9887)
+
+The avatar on the call screen says what the call does, as the state line says it in words (VoiceOver hears the line; the
+avatar stays decorative). `CallScreenState.make` derives the row from what the call screen already observes: the call's
+phase and hold, the voice's phase and link, the mute, and what the call's conversation and voice do (`CallActivity`: the
+session working or a run the voice handed it still open, a card waiting for the owner, the voice thinking). The first row
+that applies wins: connecting, held, ended, speaking, needs you, thinking, working, muted, hearing, listening.
+`CallAvatarLook.make(row, muted:, kind:, motion:)` draws it in the call's kind of picture: the main conversation's look
+(the built-in Mochi, a package, an uploaded picture) or another conversation's (`other`: an Agent session's harness mark,
+another assistant conversation's look).
+
+| Row | When | Mochi (built-in) | A package / an uploaded picture | Another conversation (Agent mark, other look) |
+| --- | --- | --- | --- | --- |
+| Connecting | Calling…, Connecting…, Reconnecting… | idle, blinking; the ring laps | its idle frames; the ring laps | the same still picture; the ring laps |
+| Listening | nobody speaks | idle, blinking; a faint ring following the microphone | its idle frames | still; the ring |
+| Hearing | the owner speaks | idle; the ring swells with the microphone | its idle frames; the ring swells | still; the ring swells |
+| Thinking | the owner stopped and the voice has not begun to answer (`VoiceConversation.thinking`) | thinking (eyes up, the bubble) | its `thinking` frames | still |
+| Speaking | the voice plays | the shared speaking layer, its idle face with its mouth moving with the voice | its idle frames under the shared speaking layer | the same picture under the shared speaking layer |
+| Working | the call's conversation works (its session, or a run sent, working, waiting outside or answered and still at work) | working (the arc, the bob, the eyes scanning) | its `working` frames | still |
+| Needs you | a card in the call's conversation waits (asked by voice or not; a run or the session waiting on the owner) | needs you (the red ring, waving) | its `needs_you` frames | still |
+| Held | the call's own hold (the system's pause, an interruption) | still, eyes shut; the pause mark, the caution ring | its idle frame, dimmed (`Theme.Call.heldPicture`); the pause mark, the caution ring | still; the pause mark, the caution ring |
+| Muted | the owner's microphone is off | still, its state's still frame; the slashed microphone, a gray ring | its state's first frame; the mark, the gray ring | still; the mark, the gray ring |
+| Ended | the call is over | asleep (`offline`), greyed; a faint ring | its `offline` frames, greyed | the same picture, greyed |
+
+A state a package has no frames for shows its idle ones, as `PersonaDot` does (an uploaded picture usually has only idle).
+Every state's frames are decoded once, off the main actor, when the call screen first shows (`CallAssistant.states`,
+`PersonaStore.decodedFrames`); until then, and for a package not on the phone, the built-in drawing stands in.
+
+- **The shared speaking layer**, the same for every call (Mochi, a package, an uploaded photo, an Agent's mark, another
+  conversation's look), so a call to an Agent and one to the main conversation look alike while it speaks: the avatar
+  bounces gently with the voice's output level (`CallSpeech`: the level followed as an envelope, up within
+  `callSpeechAttack` and down within `callSpeechRelease`; a scale of 1.00–1.04, `callAvatarBounce`, and a lift of
+  `callAvatarLift` of the box, about four points; the picture is never warped, no mouth is guessed on a photo), the ring
+  brightens and swells with it, and a soft ripple leaves the avatar's edge on each peak of the voice (at most one per
+  `callRippleGap`, each `callRipple` long, at most three at once). Muted, it still speaks (the owner hears it): the layer
+  shows with the muted mark.
+- **What stays the main conversation's**: the look's own state pictures (a package's thinking, working, needs-you and
+  offline frames; Mochi's), Mochi's mouth and its shut eyes on hold, a package's dimmed idle frame on hold. A harness mark
+  has none of these, so it stays the same picture; another assistant conversation's look does too.
+- **Mochi's call-only drawing**: `PersonaFace.mouth` (0 a small smile … 1 wide open, its tongue in the cheek's orange,
+  tilted with the eyes) and `PersonaFace.eyesShut` (the asleep face's closed eyes, without its grey). Their defaults draw
+  Mochi as everywhere else, pixel for pixel (`CallAvatarStatesTests.mochisDefaultDrawingIsUnchanged`); only `CallAvatar`
+  passes them.
+- **Performance** (docs/apple/performance.md P4, P5, P7, P9): one clock, the ring's own (`TimelineView` at `voiceFrame`),
+  drives the ring, the ripples and the avatar's transform (its scale and lift); the picture is not drawn again for them,
+  except Mochi's face as its mouth moves (in eighths, so only when it visibly moves, as its working state redraws). The
+  clock runs only while the ring has a level to follow or a lap to run, motion is allowed and the screen shows (a
+  minimised call has none). What the conversation does is read in the avatar's own small view (`CallScreenAvatar`), so
+  only it redraws as that changes. Reduce Motion and Low Power Mode: every picture still (its state's first frame), no
+  bounce, ripples, mouth or clock; a bright, still ring alone says it speaks.
+- **The minimised bar's small avatar** (`CallBarFace`): the same state, still: Mochi's still drawing of the state (the
+  thinking bubble, the working arc, the needs-you ring, its eyes shut on hold, asleep once over), a package's first frame
+  of the state (dimmed on hold), greyed once over; an Agent's mark as it is. No motion: the bar sits over every page for
+  the whole call, where a moving face would pull the eye from what the owner reads and keep a clock running on every
+  page, and at 28 points a bounce or a mouth would not read; the call screen is where it moves. The bar's own hold and
+  mute marks stay beside its words.
+- **The voice's pause is not a hold.** The extension pauses its upstream while nobody speaks or while the conversation
+  works (`link{paused}`, then `waking` as the owner speaks): on a call that is the call listening (or working while its
+  conversation works), the line stays the running time. Only the call's own hold (`PersonaCall.held`) shows On Hold, the
+  caution ring and the pause mark (`CallScreenState.make`; the voice bar's own words for the pause are unchanged).
+- A future idea (a pack-format change through the hub and docs/extensions, not now): an optional `speaking` dot state in
+  pack manifests, played under the shared layer when a package has it.
+
+## One name for the main conversation (#9887)
+
+Everything about a call says what the main conversation's top bar says: `AppModel.assistantShownName` (the current
+assistant's name on a hub with several assistants, else the look's, "Persona" for the built-in), taken when the call is
+made and once more just before the system's Start, then fixed for the call (`CallAssistant.name`, `PersonaCalls.assistantName`):
+the call screen and its bar, the question elsewhere ("End the call with <name> and call …?"), the handle's value and
+display name, and an urgent call's handle; the voice bar in the main conversation says it too (`VoiceEntry.label`), and the
+voice chat's bar. A redial with any value still calls the current hub's main conversation.
 
 The page is a full-screen call screen that can be minimised to a "return to call" bar
 (`docs/design/DESIGN_SYSTEM.md`, "Call screen" and "Return-to-call bar"). The call is the assistant's: the screen shows
@@ -121,9 +194,10 @@ LiveCommunicationKit in the Simulator, to see and log what it does.
 - Every conversation is pausable: `capabilities: [.pausing]` in the incoming report and in the outgoing call's members
   update (below).
 
-The handle is the assistant's name: `Handle(type: .generic, value: <name>, displayName: <name>)`, where the name is
-`Persona.name` of the look on screen ("Persona" for the built-in Mochi, the package's name for another look), trimmed,
-and "Persona" when it is empty (`CallHandle.name`). The call takes the look and its name together when it is made, and
+The handle is the assistant's name: `Handle(type: .generic, value: <name>, displayName: <name>)`, where the name is the
+one the main conversation's top bar says ("One name" above: the current assistant's on a hub with several, else
+`Persona.name` of the look on screen, "Persona" for the built-in Mochi), trimmed, and "Persona" when it is empty
+(`CallHandle.name`). The call takes the look and its name together when it is made, and
 once more just before the system's Start (after every wait, so a cold launch's hub and look count), then keeps both
 (`PersonaCall.assistant`): the system, the call screen and the bar say the same name beside the same face for the whole
 call, whatever avatar or hub is chosen meanwhile. The system UI, the Dynamic Island, the Lock Screen and Recents show
@@ -248,6 +322,13 @@ dropped: a newer call's page and alert stay.
   `VoiceCalls.endSystemCall`, which `PersonaCalls.endForVoiceChat` answers); it is refused if an urgent call rang
   meanwhile. Without the yes `VoiceCalls` refuses it, touching nothing (`VoiceUnavailableNote.systemCallOn`). The phone
   icon in the call's own conversation shows the call screen.
+- The voice chat in the app survives leaving its page, so it asks before it is replaced too (#9887): the phone icon in
+  another conversation while one is on elsewhere (on the iPad and Apple Vision Pro, or on the iPhone where it is the
+  fallback after a refused Start) asks "End the voice chat with <name> and start one here?" (**End and Start**,
+  destructive, or **Cancel**, which keeps it; `VoiceUnavailableNote.endVoiceChatFirst`, `VoiceProceed.replaceVoice`), and
+  on the iPhone, where the icon places a system call, "End the voice chat with <name> and call <this conversation>?"
+  (**End and Call**). Same question component (`voiceUnavailableAlert`); `VoiceEntry.choose` asks it
+  (`askVoiceChat`), and the yes goes ahead as a call's does (`VoiceEntry.proceed`).
 - An urgent call rings during a call to Persona: it is reported as always (iOS ends an app that does not report a VoIP
   push's call), and the system offers Hold & Accept, End & Accept or Decline. Pause and End reach the call to Persona
   through its machine; after the urgent call, the app unpauses it.
@@ -368,8 +449,13 @@ offered in China otherwise. The source guard and the binary check run in CI and 
 All are listed in `scripts/release/release.sh`, which fails a Release binary that still has them.
 
 - `-showCallSample <state>`: the call screen with no system, audio or hub: `dialing`, `connecting`, `connected`,
-  `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`
-  (the assistant speaking, its ring swelling) (`PersonaCalls.showSample`). A sample guards nothing ("Nothing in the app
+  `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`,
+  and each of the avatar's rows (#9887): `hearing`, `thinking`, `working`, `asking` (a card waiting), `mutedSpeaking`,
+  `paused` (the voice's upstream paused: listening, not on hold) (`PersonaCalls.showSample`). A speaking or hearing
+  sample has a made-up voice level (`CallSampleVoice`: phrases of syllables with breaths), so the bounce, the ripples,
+  Mochi's mouth and the ring move on the Simulator. `-showCallSampleLook package|uploaded|<id>` shows that look (it
+  waits up to 30 s for it to be on the phone; the mock's `MOCK_PERSONAS=builtin MOCK_LOOK=nwverse` has a package),
+  `-showCallSampleAgent YES` a call to an Agent session (Claude's mark). A sample guards nothing ("Nothing in the app
   ends a call"). `-showCallSampleName <text>`, `-showCallSampleCaption <text>` and `-showCallSampleReason <text>` put
   long texts in the sample's name (the page's and the bar's), latest words and end reason (`CallScreenTests`'
   `testTheLongTexts`, which also opens Call Details from the name).
@@ -384,7 +470,12 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
 
 ## Tests
 
-- Unit (`apple/PersonaTests/`): `CallOneButtonTests` (#9887: the icon's choice per context, the question with a call
+- Unit (`apple/PersonaTests/`): `CallAvatarStatesTests` (#9887: each row from what the call screen observes and their
+  order, each row's look for every kind of picture, the shared speaking layer for every kind, the look's own pictures
+  only for the main looks, the mouth only for the built-in, Reduce Motion and Low Power holding still, the bar's still
+  face, the speaking motion's envelope and ripples, Mochi's default drawing unchanged pixel for pixel, the voice
+  thinking, the voice's pause not a hold, the real working and asking, one name for the main conversation, the voice
+  chat's question in three languages), `CallOneButtonTests` (#9887: the icon's choice per context, the question with a call
   elsewhere, the call's kind carrying its key and its voice bound to it, the fixed handle and the redial to the main
   conversation, a refused Start falling back with its line, the conversation on the pages and whose it is with another
   assistant's conversation open, the voice chat's bar, End and Call while the old call dials or is held without its
@@ -421,7 +512,10 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
   lock, the counts in `walk.json`; `testACallFromAnAgentsConversation`, the phone icon in an Agent's conversation: the
   start's target is that session with `surface: "call"`, its title on the call screen and the bar, Home, another app
   15 s, locked 15 s, back, the audio rising and no socket closed, the counts in `agent-call.json`;
-  `testTheAssistantOnTheCallScreen`; `testTheCallFollowsTheAssistant` with `MOCK_PERSONAS=builtin MOCK_LOOK=nwverse`) and
+  `testTheAssistantOnTheCallScreen` (the top bar's name, the mock's 「助手」); `testTheAvatarsStates` (#9887: every
+  avatar row's sample and the bar's still face, `PERSONA_CALL_LOOKS=mochi,agent,package` for the pictures, the voice's
+  pause showing the running time); `testTheCallFollowsTheAssistant` with `MOCK_PERSONAS=builtin MOCK_LOOK=nwverse
+  MOCK_MANAGERS=1`, one assistant, so the top bar says the look's name) and
   `CallPersonaShortcutTests` (Call Persona and Talk to Persona from Spotlight, over Settings and an Agent's
   conversation, the microphone refused).
 - The mock's `GET /mock/voice2` keeps each start's `surface` (`"call"` for a system call) and the app's `hold` frames

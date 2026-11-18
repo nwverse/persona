@@ -208,16 +208,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 PersonaCalls.shared.hangUp()
             }
         }
-        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended|speaking|…`: the call page's
-        // state, with no system and no audio (PersonaCalls.showSample). `-showCallSampleName <text>`,
+        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended|speaking|hearing|
+        // thinking|working|asking|mutedSpeaking|paused|…`: the call page's state, with no system and no audio
+        // (PersonaCalls.showSample; a speaking or hearing sample has a made-up voice level). `-showCallSampleName <text>`,
         // `-showCallSampleCaption <text>`, `-showCallSampleReason <text>`: the name (the page's and the bar's), the latest
-        // words and why it ended, instead of the sample's own (long texts for the screenshots).
+        // words and why it ended, instead of the sample's own (long texts for the screenshots). `-showCallSampleLook
+        // package|uploaded|<id>`: that look's avatar (waits up to 30 s for it to be on the phone; the mock's
+        // MOCK_PERSONAS=builtin MOCK_LOOK=nwverse has a package). `-showCallSampleAgent YES`: a call to an Agent session.
         if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
             let name = d.string(forKey: "showCallSampleName"), caption = d.string(forKey: "showCallSampleCaption")
-            let reason = d.string(forKey: "showCallSampleReason")
+            let reason = d.string(forKey: "showCallSampleReason"), wanted = d.string(forKey: "showCallSampleLook")
+            let agent = d.bool(forKey: "showCallSampleAgent")
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                PersonaCalls.shared.showSample(sample, name: name, caption: caption, reason: reason)
+                var look: Persona?
+                if let wanted {
+                    for _ in 0..<60 {
+                        look = PersonaCalls.sampleLook(wanted, model: AppModel.shared)
+                        if look != nil { break }
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+                PersonaCalls.shared.showSample(sample, name: name, caption: caption, reason: reason, look: look, agent: agent)
             }
         }
         #endif
