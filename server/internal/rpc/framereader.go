@@ -130,6 +130,11 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 	if h.fin {
 		delete(s.partial, key)
 		s.owned = true
+		if cap(part)-len(part) > len(part)/4 && len(part) > linePiece {
+			// The line is kept as long as its params are (unmarshalOwned): not with up to as much again of room the
+			// doubling left behind it.
+			part = bytes.Clone(part)
+		}
 		return part, true, nil
 	}
 	s.partial[key] = part

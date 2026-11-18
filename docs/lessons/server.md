@@ -1894,6 +1894,38 @@ Two remaining limits aren't fixed by heartbeat settings:
   The root fix is smaller frames (`Writer` segmentation), or ping only when idle.
 - Hub Persona Link forwarding caps each write at 1 minute (`spliceWS`); below about 17 KB/s, 1 MiB blocks still time out. Use smaller blocks or speed-dependent limits.
 
+## Priority lanes on the node connection (2026-11-19, #10660)
+
+The heartbeat closed working connections because a pong queued behind whatever the node's one writer was writing, a
+1 MiB file chunk being 47 s at 30 KB/s. The miss rules were relaxed five times (#7520, #7861, #8846, #8900, #10442);
+framing the connection on lanes (protocol.md "Lanes") changes the queue instead. What the design learned:
+
+- **Priority at the writer is not enough.** The transports (ssh's channel window, TCP's buffers, a relay) take
+  megabytes the moment they are written, and a pong written after them waits behind them all the same. Only a credit
+  window bounds what is ahead of it in the pipe, and only a delay-based one fits both 30 KB/s (where 64 KiB in flight
+  is two seconds of queue) and a fast link (where it starves a transfer). Frames shrink with the window: on a slow
+  link the frame an interactive frame waits behind is a few KiB.
+- **Credit only where no read loop writes.** A window on every lane would bound control's wait for every kind of
+  traffic, but a write made from inside a read loop (a synchronous event handler) that waits for credit waits for an
+  acknowledgement only that read loop's reading could release: a deadlock today's lines cannot have. Bulk writes come
+  from workers (transfers, handlers, the port pumps), never a read loop, so bulk alone waits for credit. Large
+  interactive answers and events still go to the transport at once; the middle of a long line keeps excusing a late
+  pong, as it did with lines.
+- **Switch each direction on its own line.** One side cannot know where the other's lines end except by a line that
+  says so: the answering side's last line is its answer, the asking side's a marker event. Both are written under the
+  writer's lock (a writer that waited for it finds the output framed and queues frames), and each read loop switches
+  right after reading the other's last line, handing the bytes it already read past it to the frame reader. An answer
+  must switch the asker whether or not its call still waits: a node already framing to a manager that gave up would
+  otherwise be read as lines.
+- **Writers wrapped around a connection assume a line a write.** The node's secret scrubbing and its update-response
+  observer were `io.Writer`s around the connection; with frames they would have scrubbed across frame headers (a value
+  split between two frames never found, a length changed under its header) and parsed frames as JSON. They are line
+  hooks on the peer now (`LineFilter` when a line's first frame is cut, `LineWritten` when its last is written).
+- **Not removed here:** the relaxed ping rules. Lanes take the large blocks out of a pong's way on the node connection;
+  whether the late-pong allowances can go needs evidence from framed connections first (follow-up issue). On Persona
+  Link, frames also mean no WebSocket message over 32 KiB on the node stream, which takes away the 5 s `writeControl`
+  wait and `spliceWS`'s one-minute write cap described in "Heartbeat timeouts on slow links" for that stream.
+
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
 Uploads already had a `dest` parameter (`terminal`, `health`), but older nodes never read it: given `dest=dir&dir=~/proj`, they still put the file in the system temp directory and returned a successful path.
