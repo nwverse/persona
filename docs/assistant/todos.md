@@ -441,12 +441,16 @@ of going to the computer:
   offers, only while that question is still the tab's last line, Ctrl-C alone into a password prompt, never "yes" to
   an ssh host key, Enter after a key a line-reading question echoes (never after a key a one-key question read). A
   question no longer on the last line (answered at the computer) gets nothing typed, and the task starts in the tab
-  all the same.
+  all the same. The node's reply says which (`{ok, typed}`; a reply without `typed`, from the first `start.answer`,
+  counts as typed).
 - **Then the task starts again in that tab**, as its Retry does there (`retryTaskWith` with `in_pane`): the same to-do
   reopened, no new tab. The node marks the tab typed (as `task_start_keys` does), so that start waits out the
   question's line, which stays the last one written until the shell draws its prompt, instead of refusing at once as a
   plain Retry into a tab whose question is still open does. A question after that one fails the start again with its own answers. The step is a
   `start_remedy` feed item `{action: "answer", by: "user", choice}`: the answer's id, never what a prompt asked for.
+  When the node typed nothing (the question was answered at the computer, or gone by itself), the step is
+  `{action: "answer_not_typed", by: "user", choice}` instead: the task's history and the supervising assistant never
+  read the owner's answer as the one that took effect.
 - **The web** shows the question card (`views/ShellQuestionCard.tsx`, loaded only for such a failure) on the failed
   row, the task panel and the to-do page while the tab is kept and the hub lists the feature, beside Retry, which stays.
   Apple and Android offer Retry only, so the failure's words (`shell_waiting`, also the assistant's notice and 督办

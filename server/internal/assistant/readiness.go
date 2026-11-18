@@ -361,15 +361,18 @@ func (s *Service) readiness(ctx context.Context, probe bool, wait time.Duration)
 			out.Steps = append(out.Steps, ReadinessStep{ID: id, State: StepUnknown})
 		}
 	} else {
-		s.askAhead(d.ID, launcher)
+		// The steps after the computer are of the launcher the main conversation's next turn runs: its kept pick's
+		// when that is on another launcher than Main chat's, which "Try it" checks too (readinessTurnLauncher).
+		turn := s.readinessTurnLauncher(ctx, d.ID, launcher)
+		s.askAhead(d.ID, turn)
 		if probe {
 			out.Probe = s.readinessProbe(ctx, d.ID, v)
 		}
 		deadline := time.Now().Add(wait) // the node's two answers are waited for together, not one after the other
 		rec := s.readinessRecordNow(ctx)
 		main, hasMain := s.readinessMain(ctx, d.ID, v.Main)
-		auth, _ := s.claudeAuthStatus(ctx, d.ID, launcher, time.Until(deadline))
-		model, modelOK := s.readinessModel(ctx, lang, d, launcher, rec, main, hasMain, auth)
+		auth, _ := s.claudeAuthStatus(ctx, d.ID, turn, time.Until(deadline))
+		model, modelOK := s.readinessModel(ctx, lang, d, launcher, turn, rec, main, hasMain, auth)
 		first := s.readinessFirst(ctx, lang, d, rec, v, main, hasMain)
 		// One button for the try: the first message's step offers it, and every client shows the try's spinner and
 		// answer there, so an unverified model step that would offer the same leaves it to that step (#6317). Once the
@@ -377,7 +380,7 @@ func (s *Service) readiness(ctx context.Context, probe bool, wait time.Duration)
 		if model.Action != nil && model.Action.ID == "test_assistant" && first.Action != nil && first.Action.ID == "test_assistant" {
 			model.Action = nil
 		}
-		out.Steps = append(out.Steps, s.readinessClaude(ctx, lang, d, launcher, rec, modelOK, time.Until(deadline)), model, first)
+		out.Steps = append(out.Steps, s.readinessClaude(ctx, lang, d, turn, rec, modelOK, time.Until(deadline)), model, first)
 	}
 
 	out.Mode = ReadinessFull
@@ -496,24 +499,28 @@ func answeredWell(sess proto.Session) bool {
 		strings.TrimSpace(sess.LastText) != ""
 }
 
-// readinessModel is the model step from the newest of what is known: the last probe, the main conversation's last
-// turn, the launcher's health record, Claude Code's sign-in status. ok reports that the newest said it answered (or
-// that Claude Code is signed in to claude.ai). Signed in with a key or a gateway's token says nothing of whether the
-// key works: no evidence, but an unknown step says what it runs on.
-func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, launcher string, rec readinessRecord,
+// readinessModel is the model step of launcher, the one the main conversation's next turn runs (readinessTurnLauncher;
+// Main chat's is mainLauncher), from the newest of what is known: the last probe of that turn, the main
+// conversation's last turn, the launcher's health record, Claude Code's sign-in status. ok reports that the newest said
+// it answered (or that Claude Code is signed in to claude.ai). Signed in with a key or a gateway's token says nothing
+// of whether the key works: no evidence, but an unknown step says what it runs on. The conversation's last turn counts
+// on launcher, and on Main chat's launcher it ran on before a pick moved it to launcher: that failure stands, as one on
+// the pick's own launcher does, until a newer pass of what the next turn runs.
+func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, mainLauncher, launcher string, rec readinessRecord,
 	main proto.Session, hasMain bool, auth claudeAuth) (ReadinessStep, bool) {
 	var ev []readinessEvidence
 	binding, fingerprint := s.readinessModelScope(ctx, launcher)
+	hasMain = hasMain && (main.Launcher == "" || main.Launcher == launcher || main.Launcher == mainLauncher)
 	if success := rec.Success; success != nil && success.Machine == d.ID && success.Launcher == launcher &&
 		fingerprint != "" && success.Fingerprint == fingerprint {
 		ev = append(ev, readinessEvidence{at: success.At, ok: true})
 	}
 	if p := rec.Probe; p != nil {
-		if e, ok := s.readinessProbeEvidence(ctx, *p, d.ID, launcher, binding, main, hasMain); ok {
+		if e, ok := s.readinessProbeEvidence(ctx, *p, d.ID, launcher, binding, hasMain && main.TurnError != ""); ok {
 			ev = append(ev, e)
 		}
 	}
-	if hasMain && (main.Launcher == "" || main.Launcher == launcher) {
+	if hasMain {
 		switch {
 		case main.TurnError != "":
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError, code: sessionTurnErrorCode(main)})
@@ -597,7 +604,7 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 				if st.Occurrence == "" {
 					st.Occurrence = newest.at.UTC().Format(time.RFC3339Nano)
 				}
-				if hasMain && (main.Launcher == "" || main.Launcher == launcher) && !main.UpdatedAt.IsZero() {
+				if hasMain && !main.UpdatedAt.IsZero() {
 					if reset, ok := usageLimitReset(main); ok && st.Occurrence == reset.UTC().Format(time.RFC3339Nano) {
 						// A newer health record can be this same turn settled. Keep the turn's identity so another turn
 						// within one reset window is still a new failure; health-only evidence keeps the reset identity.

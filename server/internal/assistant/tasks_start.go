@@ -935,8 +935,9 @@ func (s *Service) retryTaskStart(ctx context.Context, todoID string, with retryW
 	if moved || t.Model != model {                        // another launcher starts in a new tab, as task_retry's does
 		inPane = ""
 	}
+	typed := false
 	if with.answer != "" {
-		if err := s.answerKeptTab(ctx, m, t, inPane, with.answer); err != nil {
+		if typed, err = s.answerKeptTab(ctx, m, t, inPane, with.answer); err != nil {
 			return nil, false, err
 		}
 	}
@@ -962,8 +963,11 @@ func (s *Service) retryTaskStart(ctx context.Context, todoID string, with retryW
 	if moved && with.by != "" { // the step the task's history shows: who moved it to which launcher
 		s.remedyStep(ctx, p.Conversation, todoID, startRemedyBody{Action: "retry", By: with.by, LauncherFrom: from, LauncherTo: t.Launcher})
 	}
-	if with.answer != "" { // the answer's id, never what a prompt asked for
+	switch { // the answer's id, never what a prompt asked for
+	case with.answer != "" && typed:
 		s.remedyStep(ctx, p.Conversation, todoID, startRemedyBody{Action: "answer", By: with.by, Choice: with.answer})
+	case with.answer != "": // the question had left the tab's last line (answered at the computer): not the owner's answer
+		s.remedyStep(ctx, p.Conversation, todoID, startRemedyBody{Action: "answer_not_typed", By: with.by, Choice: with.answer})
 	}
 	s.logf("task %s: retrying its start on %s", todoID, m.ID)
 	started = true

@@ -17,7 +17,7 @@ type StartContinueParams struct {
 	Choice string `json:"choice"`
 }
 
-// MethodStartAnswer is the node method (capability nodeproto.StartAnswer): StartAnswerParams → {"ok": true}. It
+// MethodStartAnswer is the node method (capability nodeproto.StartAnswer): StartAnswerParams → StartAnswerResult. It
 // answers the question a failed start's kept tab stopped on with the same guards as start.continue, for a start the
 // hub runs again itself in that tab (a planned task's, POST /api/v1/todos/{id}/start/answer).
 const MethodStartAnswer = "start.answer"
@@ -28,6 +28,14 @@ type StartAnswerParams struct {
 	Pane   string `json:"pane"`
 	Line   string `json:"line"`
 	Choice string `json:"choice"`
+}
+
+// StartAnswerResult is start.answer's answer. Typed says whether the answer was typed: false when Line was no longer
+// the tab's last line (answered at the computer, gone by itself, or another question since), so nothing was. A reply
+// without it (nil, a node of the first start.answer) is taken as typed.
+type StartAnswerResult struct {
+	OK    bool  `json:"ok"`
+	Typed *bool `json:"typed,omitempty"`
 }
 
 // StartErrorArgs keys of a CodeShellWaiting start (besides line, screen, pane and kept_until): the question's kind

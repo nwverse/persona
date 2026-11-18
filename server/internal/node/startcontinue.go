@@ -81,29 +81,29 @@ func (n *Node) startContinue(ctx context.Context, id, choice string) (*proto.Ses
 // for a start the hub runs again itself: a planned task's (POST /api/v1/todos/{id}/start/answer), whose start was
 // not the node's own async one and has no record here to restart. The hub then starts it in that tab (session.start's
 // in_pane); the tab is marked typed so that start waits out the question's line as startContinue's does. A question
-// no longer on the tab's last line gets nothing typed and nothing marked, and the hub's start there decides as
-// startContinue's does.
-func (n *Node) startAnswer(ctx context.Context, pane, line, choice string) error {
+// no longer on the tab's last line gets nothing typed and nothing marked (typed false), so the hub records no answer
+// of the owner's, and the hub's start there decides as startContinue's does.
+func (n *Node) startAnswer(ctx context.Context, pane, line, choice string) (typed bool, _ error) {
 	if pane == "" || line == "" {
-		return errStartNotWaiting
+		return false, errStartNotWaiting
 	}
 	ask, c, err := offeredAnswer(line, choice)
 	if err != nil {
-		return err
+		return false, err
 	}
 	unlock := n.typing.lock(workAgentPaneLockPrefix + pane)
 	defer unlock()
-	typed, err := n.typeAnswer(ctx, pane, line, ask, c)
+	typed, err = n.typeAnswer(ctx, pane, line, ask, c)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !typed {
 		n.logf("kept tab %s: its question %q is gone; nothing typed", pane, line)
-		return nil
+		return false, nil
 	}
 	n.markKeptTyped(pane)
 	n.logf("kept tab %s: answered its question %q with %s", pane, line, c.Label)
-	return nil
+	return true, nil
 }
 
 // markKeptTyped notes that something was typed into the kept tab on pane (keptStart.typed).
