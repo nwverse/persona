@@ -841,6 +841,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.logf("assistant %s: the supervision round did not start from its first turn (%v); resuming it as before", short(id), werr)
 			round = spawnRound{}
 			superviseRoundFrom(ctx).set(roundKept, roundWhyStartFailed)
+			// An unconfirmed control rolled these back; the plain fallback
+			// must confirm the same request, just like an ordinary retry.
+			n.noteModes(id, retryMode, retryEffort)
+			n.persistModes(id, retryMode, retryEffort)
 			if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
 				return "", err
 			}

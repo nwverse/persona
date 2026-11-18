@@ -260,3 +260,44 @@ func TestAssistantColdStartCallerDeadlineKeepsCause(t *testing.T) {
 		t.Fatal("caller deadline retried or delivered input")
 	}
 }
+
+func TestAssistantColdStartRoundFallbackKeepsRequestedSettings(t *testing.T) {
+	n, argv, _ := roundTestNode(t, roundStarted("2.1.322", 1), false)
+	shortControlWaits(t)
+	n.noteModes(roundConversation, "acceptEdits", "high")
+	n.persistModes(roundConversation, "acceptEdits", "high")
+	dir := t.TempDir()
+	t.Setenv("CLI_FAKE_DIR", dir)
+	script := "printf '%s\\n' \"$@\" >> " + shellQuote(argv) + "\necho ---- >> " + shellQuote(argv) + "\n" + `case " $* " in
+ *' --resume-session-at '*)
+  echo '{"type":"system","subtype":"init"}'
+  read line
+  sleep 30
+  exit 0 ;;
+esac
+` + fakeCLI
+	writeFile(t, filepath.Join(os.Getenv("HOME"), "bin", "claude"), "#!/bin/sh\n"+script)
+	out := sendRound(t, n, "timeout-round")
+	if out["context"] != roundKept || out["why"] != roundWhyStartFailed {
+		t.Fatalf("round fallback = %v", out)
+	}
+	starts := roundStarts(t, argv)
+	if len(starts) != 2 || !hasArg(starts[0], "--resume-session-at") || hasArg(starts[1], "--resume-session-at") {
+		t.Fatalf("starts = %q", starts)
+	}
+	p := idleRound(n)
+	p.mu.Lock()
+	mode, effort := p.mode, p.effort
+	p.mu.Unlock()
+	if mode != "acceptEdits" || effort != "high" {
+		t.Fatalf("fallback changed settings: %q %q", mode, effort)
+	}
+	waitFor(t, "the fallback's single user input", func() bool {
+		raw, _ := os.ReadFile(filepath.Join(dir, "stdin.jsonl"))
+		return strings.Count(string(raw), `"type":"user"`) == 1
+	})
+	st, _ := n.state.get(roundConversation)
+	if st.AppMode != "acceptEdits" || st.AppEffort != "high" {
+		t.Fatalf("fallback saved settings: %q %q", st.AppMode, st.AppEffort)
+	}
+}
