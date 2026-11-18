@@ -169,10 +169,17 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         return field
     }
 
-    @MainActor private func openFirstResultAndReturn() {
+    @MainActor private func openResultAndReturn() {
         let rows = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["agents.row", "agents.compactRow"]))
-        let row = rows.firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "the query has no result to open")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "the query has no result to open")
+        // A row in the middle of the window, not the first in the tree: after a long scroll that one can lie under the
+        // top bar, where a tap on its centre reaches the status bar and scrolls the list to its top instead.
+        let window = app.windows.firstMatch.frame
+        let row = rows.allElementsBoundByIndex.first(where: { row in
+            guard row.exists else { return false }
+            let y = row.frame.midY
+            return y > window.minY + window.height * 0.3 && y < window.minY + window.height * 0.75 && row.isHittable
+        }) ?? rows.firstMatch
         if !row.isHittable { app.bringAboveTabBar(row) }
         row.tap()
         let opened = app.descendants(matching: .any).matching(NSPredicate(
@@ -187,7 +194,7 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
                 .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)),
                        withVelocity: .slow, thenHoldForDuration: 0.1)
         }
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Back did not return to the query results")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "Back did not return to the query results")
         sleep(1)
     }
 
@@ -237,7 +244,7 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         _ = assertFieldVisible("active query scrolled", expected: query)
         shot("query-03-active-scrolled")
 
-        openFirstResultAndReturn()
+        openResultAndReturn()
         shot("query-04-result-return")
         _ = assertRetainedAtRest("returned from or opened a result")
         scrollFar()
@@ -256,7 +263,7 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         retained.typeText("\n")
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 4), "Return did not dismiss the edited keyboard")
         sleep(1)
-        openFirstResultAndReturn()
+        openResultAndReturn()
         _ = assertRetainedAtRest("second retained return")
         scrollFar()
 
@@ -278,7 +285,7 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
         try XCTSkipIf(regularWidth, "regular-width full search has its own regression below")
         _ = beginQuery()
         app.searchFields.firstMatch.typeText("\n")
-        openFirstResultAndReturn()
+        openResultAndReturn()
         _ = assertRetainedAtRest("before Agents leaves the front")
         // First with the list at its top, where an empty field folds again when the tab comes back (#740): the
         // retained one must leave the list where it is, or its first rows go under the field.
@@ -310,7 +317,7 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
             if name != "show" { launch() }
             _ = beginQuery()
             app.searchFields.firstMatch.typeText("\n")
-            openFirstResultAndReturn()
+            openResultAndReturn()
             _ = assertRetainedAtRest("before the \(name) small drag")
             let restY = app.buttons["agents.filter.all"].firstMatch.frame.midY
             let from = agentsList.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
