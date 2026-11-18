@@ -7,7 +7,7 @@ if [ -n "${CI_BASE_SHA:-}" ]; then
 fi
 # CI_BASE_SHA when the workflow set it, otherwise the clone's default branch. A migration already on that base
 # cannot be edited, deleted or renamed (comment- and whitespace-only edits pass), and a new one is named by the UTC
-# minute it was written, not a hand-picked number.
+# second it was written (YYYYMMDDHHMMSS_<name>.sql), not a hand-picked number.
 ci_run 'Frozen migrations' 60 python3 scripts/ci/migration_freeze.py
 # Fixed time.Sleep calls in Go tests may stay or fall, never rise. A // sleep-ok: <reason> line does not count.
 ci_run 'Fixed sleeps' 60 python3 scripts/ci/sleep_ratchet.py

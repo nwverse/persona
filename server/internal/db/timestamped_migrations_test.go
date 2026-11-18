@@ -13,11 +13,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The probes' minutes are far later than any migration a line of work will write: whatever timestamped migrations
+// The probes' seconds are far later than any migration a line of work will write: whatever timestamped migrations
 // are added after this test, the probes take none of their versions and sort after all of them.
 const (
-	managerProbe = "299912312358_probe.sql"
-	hubProbe     = "299912312359_probe.sql"
+	managerProbe = "29991231235958_probe.sql"
+	hubProbe     = "29991231235959_probe.sql"
 )
 
 // timestampedProbes are timestamped migrations as later lines of work add them, by path under migrations/. Each
@@ -30,9 +30,9 @@ var timestampedProbes = map[string]string{
 
 // probeRecords are the rows the probes leave as "version name part", by the sets they run in.
 var probeRecords = map[Sets][]string{
-	HubSet:     {"299912312359 " + hubProbe + " hub"},
-	ManagerSet: {"299912312358 " + managerProbe + " manager"},
-	AllSets:    {"299912312358 " + managerProbe + " manager", "299912312359 " + hubProbe + " hub"},
+	HubSet:     {"29991231235959 " + hubProbe + " hub"},
+	ManagerSet: {"29991231235958 " + managerProbe + " manager"},
+	AllSets:    {"29991231235958 " + managerProbe + " manager", "29991231235959 " + hubProbe + " hub"},
 }
 
 // probeSQL makes table, after part's migration numbered last is recorded.
@@ -140,8 +140,8 @@ func probeRows(t *testing.T, d *DB) []string {
 
 // A database of each kind (a hub's own, a manager's own, one they share) that the numbered migrations made, its
 // version an int as every build before timestamps left it: the next open widens the column to bigint and keeps the
-// rows; the timestamped migrations run after the numbered ones, each once, recorded under their minute; and opening
-// again only reads. A set with two files of one version is refused, not half skipped.
+// rows; the timestamped migrations run after the numbered ones, each once, recorded under their second; and opening
+// again only reads. A set with two files of one version is refused before anything runs, in either set.
 func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 	ctx := context.Background()
 	numbered := numberedMigrations(t)
@@ -210,15 +210,23 @@ func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 			if c.sets != AllSets {
 				return
 			}
+			// A new hub migration that runs first, and a manager one of a version a recorded one has: neither runs.
 			twice := withMigrations(t, map[string]string{
-				"manager/" + managerProbe:        timestampedProbes["manager/"+managerProbe],
-				"manager/299912312358_other.sql": `CREATE TABLE timestamp_other (id int)`,
+				"hub/" + hubProbe:                  timestampedProbes["hub/"+hubProbe],
+				"manager/" + managerProbe:          timestampedProbes["manager/"+managerProbe],
+				"hub/29991231235957_before.sql":    `CREATE TABLE timestamp_before (id int)`,
+				"manager/29991231235958_other.sql": `CREATE TABLE timestamp_other (id int)`,
 			})
-			if err := d.migrateFrom(ctx, twice); err == nil || !strings.Contains(err.Error(), "same version 299912312358") {
-				t.Fatalf("two migrations of one minute: %v", err)
+			err = d.migrateFrom(ctx, twice)
+			if err == nil || !strings.Contains(err.Error(), "29991231235958_other.sql, "+managerProbe+" have the same version") ||
+				!strings.Contains(err.Error(), "no migration was applied") {
+				t.Fatalf("two migrations of one second: %v", err)
 			}
-			if slices.Contains(tablesOf(t, d), "timestamp_other") {
-				t.Fatal("the second migration of a minute ran")
+			if tables := tablesOf(t, d); slices.Contains(tables, "timestamp_other") || slices.Contains(tables, "timestamp_before") {
+				t.Fatalf("a migration ran beside two of one second: %v", tables)
+			}
+			if got := records(t, d); !slices.Equal(got, want) {
+				t.Fatalf("records after a refused set %v, want %v", got, want)
 			}
 		})
 	}
@@ -249,6 +257,10 @@ const previousSchemaMigrationsSplit = `SELECT coalesce((
 // back) on a database this one has migrated further: its catalog check finds the table as it left it, so it changes
 // nothing there; it reads the bigint versions, the timestamped ones too, into a Go int as it always did; and every
 // migration it has is done, so it applies and records nothing. Forward again, nothing runs twice.
+//
+// This replays the older build's catalog query and its scan, but its open runs this build's runner over the numbered
+// files only, so it can't notice a difference in what the older runner does. The evidence for the older build itself
+// is v0.8.2 run against such databases (#10618; docs/server/server.md "Migrations").
 func TestOlderBuildAfterTimestampedMigrations(t *testing.T) {
 	ctx := context.Background()
 	url := migratedDatabase(t, AllSets)
@@ -285,7 +297,7 @@ func TestOlderBuildAfterTimestampedMigrations(t *testing.T) {
 	if sort.Strings(read); !slices.Equal(read, probeRecords[AllSets]) {
 		t.Fatalf("an older build's read of the timestamped rows: %v", read)
 	}
-	// The older build's own migrations: the numbered ones.
+	// The older build's own migrations, the numbered ones, through this build's runner.
 	traced, log := tracedDB(t, url)
 	traced.sets = AllSets
 	if err := traced.migrateFrom(ctx, numberedMigrations(t)); err != nil {
@@ -299,5 +311,53 @@ func TestOlderBuildAfterTimestampedMigrations(t *testing.T) {
 	}
 	if got := records(t, d); !slices.Equal(got, want) {
 		t.Fatalf("records %v, want %v", got, want)
+	}
+}
+
+// Every set's files are checked before any runs: a bad name or two files of one version in a part refuse them all, and
+// the error names each file and how to fix it.
+func TestPlanMigrations(t *testing.T) {
+	ok := fstest.MapFS{
+		"migrations/hub/0001_init.sql":                {},
+		"migrations/hub/29991231235959_probe.sql":     {},
+		"migrations/manager/0001_init.sql":            {},
+		"migrations/manager/29991231235959_probe.sql": {}, // one second in both parts is fine
+		"migrations/manager/29991231235958_probe.sql": {},
+	}
+	plan, err := planMigrations(ok, []string{"hub", "manager"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(plan["manager"]); got != "[{0001_init.sql 1} {29991231235958_probe.sql 29991231235958} {29991231235959_probe.sql 29991231235959}]" {
+		t.Fatalf("manager plan %s", got)
+	}
+	bad := fstest.MapFS{
+		"migrations/hub/0001_init.sql":                {},
+		"migrations/hub/202611191230_minute.sql":      {},
+		"migrations/manager/29991231235958_c.sql":     {},
+		"migrations/manager/29991231235958_a.sql":     {},
+		"migrations/manager/29991231235958_b.sql":     {},
+		"migrations/manager/29991231235959_other.sql": {},
+	}
+	_, err = planMigrations(bad, []string{"hub", "manager"})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for _, want := range []string{
+		"no migration was applied",
+		"migrations/hub: bad migration name 202611191230_minute.sql: want YYYYMMDDHHMMSS_<name>.sql",
+		"migrations/manager: 29991231235958_a.sql, 29991231235958_b.sql, 29991231235958_c.sql have the same version 29991231235958",
+		"keep the name of the one that merged first",
+		"$(date -u +%Y%m%d%H%M%S)_<name>.sql",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q, want %q in it", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "_other.sql") {
+		t.Errorf("error %q names a file of a version of its own", err)
+	}
+	if _, err := planMigrations(bad, []string{"manager"}); err == nil || strings.Contains(err.Error(), "hub") {
+		t.Fatalf("only the manager's set: %v", err)
 	}
 }

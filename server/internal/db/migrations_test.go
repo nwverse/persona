@@ -26,20 +26,25 @@ import (
 var bothSets = []string{"0001_init.sql", "0071_sent_messages.sql", "0241_sent_echo.sql"}
 
 // sharedNumbers are numbers both sets use for different migrations, frozen: two lines of work took 421 at once
-// (#5751). Harmless, since each set records its own part, but a new migration takes a version neither set has.
+// (#5751). Harmless, since each set records its own part; no other number is in both sets.
 var sharedNumbers = map[int64][2]string{421: {"0421_hub_settings.sql", "0421_machine_usage.sql"}}
 
 // lastNumbered is the last migration numbered by hand, and numberedFiles how many numbered files each set has, both
-// frozen: every migration after them is named YYYYMMDDHHMM_<name>.sql, the UTC minute it was written (`date -u
-// +%Y%m%d%H%M`), which another line of work adding one meanwhile doesn't pick too (db.go migrationVersion, #10618).
+// frozen: every migration after them is named YYYYMMDDHHMMSS_<name>.sql, the UTC second it was written (`date -u
+// +%Y%m%d%H%M%S`), which another line of work adding one meanwhile is all but sure not to take too (db.go
+// migrationVersion, #10618). scripts/ci/migration_freeze.py keeps the same numbered files by name.
 const lastNumbered = 561
 
 var numberedFiles = map[string]int{"hub": 35, "manager": 86}
 
-// firstStamp is the day migrations began to be timestamped: none is earlier.
-const firstStamp = 202611190000
+// firstStamp is when migrations began to be timestamped, and stampAhead how far after now a timestamp may be: one
+// further ahead (a typo in the year, a clock set wrong) would sort after every migration written until then, so new
+// and existing databases would run those in different orders. scripts/ci/migration_freeze.py has the same bounds.
+var firstStamp = time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
 
-var migrationName = regexp.MustCompile(`^([0-9]{4}|[0-9]{12})_[a-z0-9_]+\.sql$`)
+const stampAhead = 24 * time.Hour
+
+var migrationName = regexp.MustCompile(`^([0-9]{4}|[0-9]{14})_[a-z0-9_]+\.sql$`)
 
 // sharedTables are the tables both sets make (a database the hub and the default manager share has one of each).
 var sharedTables = []string{"sent_messages"}
@@ -82,9 +87,9 @@ func setTables(t *testing.T, part string) []string {
 	return out
 }
 
-// Every migration is in exactly one set and has a version of its own (docs/server/server.md "Migrations"), but for the
-// frozen few in bothSets and sharedNumbers; the numbered ones are frozen, and the rest timestamped, after them in name
-// order as in version order.
+// Every migration is in exactly one set and has a version of its own there (docs/server/server.md "Migrations"); a
+// number is in both sets only for the frozen few in bothSets and sharedNumbers. The numbered ones are frozen, and the
+// rest timestamped, after them in name order as in version order.
 func TestMigrationSets(t *testing.T) {
 	root, err := fs.ReadDir(migrations, "migrations")
 	if err != nil {
@@ -96,7 +101,7 @@ func TestMigrationSets(t *testing.T) {
 		}
 	}
 	files := setFiles(t)
-	for _, p := range migrationNameProblems(files) {
+	for _, p := range migrationNameProblems(files, time.Now()) {
 		t.Error(p)
 	}
 	for v, pair := range sharedNumbers {
@@ -121,21 +126,23 @@ func TestMigrationSets(t *testing.T) {
 	}
 }
 
-// migrationNameProblems are what is wrong with the names of each part's migrations (sorted): a name that is not
-// numbered or timestamped, a number added after they were frozen, a version two files have (but the frozen
-// exceptions), a name that sorts before an earlier version.
-func migrationNameProblems(files map[string][]string) []string {
-	const rename = "name a new migration YYYYMMDDHHMM_<name>.sql, the UTC minute you write it (date -u +%Y%m%d%H%M)"
+// migrationNameProblems are what is wrong with the names of each part's migrations (sorted), now: a name that is not
+// numbered or timestamped, a number added after they were frozen, a timestamp before firstStamp or more than
+// stampAhead after now, a version two files of a part have, a number both parts have (but the frozen exceptions), a
+// name that sorts before an earlier version. A timestamp may be in both parts: each records its own, and no record
+// from before the split (which stands for both) has one.
+func migrationNameProblems(files map[string][]string, now time.Time) []string {
+	const rename = "a UTC second of its own: $(date -u +%Y%m%d%H%M%S)_<name>.sql"
 	var out []string
 	type file struct{ part, name string }
-	versions := map[int64]file{}
+	numbers := map[int64]file{}
 	for _, part := range []string{"hub", "manager"} {
-		seen := map[int64]bool{}
+		seen := map[int64]string{}
 		numbered := 0
 		var last int64 = -1
 		for _, name := range files[part] {
 			if !migrationName.MatchString(name) {
-				out = append(out, fmt.Sprintf("migrations/%s/%s: %s, in lower case", part, name, rename))
+				out = append(out, fmt.Sprintf("migrations/%s/%s: name a new migration by %s, in lower case", part, name, rename))
 				continue
 			}
 			v, err := migrationVersion(name)
@@ -146,38 +153,45 @@ func migrationNameProblems(files map[string][]string) []string {
 			if name[numberedDigits] == '_' {
 				numbered++
 				if v > lastNumbered {
-					out = append(out, fmt.Sprintf("migrations/%s/%s: numbers stopped at %04d; %s", part, name, lastNumbered, rename))
+					out = append(out, fmt.Sprintf("migrations/%s/%s: numbers stopped at %04d; name it by %s", part, name, lastNumbered, rename))
 				}
-			} else if v < firstStamp {
-				out = append(out, fmt.Sprintf("migrations/%s/%s: a time before migrations were timestamped; %s", part, name, rename))
+				pair, known := sharedNumbers[v]
+				if was, ok := numbers[v]; ok && was.part != part && (was.name != name || !slices.Contains(bothSets, name)) &&
+					!(known && was.name == pair[0] && name == pair[1]) {
+					out = append(out, fmt.Sprintf("migration %d is in both sets (%s, %s): a new migration goes in exactly one", v, was.name, name))
+				}
+				numbers[v] = file{part, name}
+			} else if at, _ := time.Parse(stampLayout, name[:len(stampLayout)]); at.Before(firstStamp) {
+				out = append(out, fmt.Sprintf("migrations/%s/%s: a time before migrations were timestamped (%s); name it by %s",
+					part, name, firstStamp.Format(time.DateOnly), rename))
+			} else if at.After(now.Add(stampAhead)) {
+				out = append(out, fmt.Sprintf("migrations/%s/%s: a time more than %.0f hours after now (%s UTC); name it by %s",
+					part, name, stampAhead.Hours(), now.UTC().Format(stampLayout), rename))
 			}
-			if seen[v] {
-				out = append(out, fmt.Sprintf("migrations/%s: two migrations with version %d: give the newer one another minute", part, v))
+			if was, ok := seen[v]; ok {
+				out = append(out, fmt.Sprintf("migrations/%s: %s and %s have the same version %d: keep the name of the one that merged first and give the other %s",
+					part, was, name, v, rename))
 			}
-			seen[v] = true
+			seen[v] = name
 			if v < last {
 				out = append(out, fmt.Sprintf("migrations/%s/%s sorts after a migration with a later version (%d)", part, name, last))
 			}
 			last = v
-			pair, known := sharedNumbers[v]
-			if was, ok := versions[v]; ok && was.part != part && (was.name != name || !slices.Contains(bothSets, name)) &&
-				!(known && was.name == pair[0] && name == pair[1]) {
-				out = append(out, fmt.Sprintf("migration %d is in both sets (%s, %s): a new migration goes in exactly one; give it a minute neither set has", v, was.name, name))
-			}
-			versions[v] = file{part, name}
 		}
 		if numbered != numberedFiles[part] {
-			out = append(out, fmt.Sprintf("migrations/%s has %d numbered migrations, %d when they were frozen: %s", part, numbered, numberedFiles[part], rename))
+			out = append(out, fmt.Sprintf("migrations/%s has %d numbered migrations, %d when they were frozen: name a new one by %s", part, numbered, numberedFiles[part], rename))
 		}
 	}
 	return out
 }
 
 // The guard on names: a numbered file added after the freeze (above the last number, or in a gap) fails, as do a
-// timestamp that is no time, one before the switch, and a minute taken twice; a timestamped file passes, in one set or
-// the other. The made-up files are of minutes far after any real one, so the real timestamped files added later
-// neither share their versions nor sort after them.
+// timestamp that is no time, one before the switch or more than a day ahead, a second taken twice in a set, and a
+// number in both sets; a timestamped file passes, in one set or in both. The made-up files are of seconds far after any
+// real one (now is put next to them), so the real timestamped files added later neither share their versions nor sort
+// after them.
 func TestMigrationNameProblems(t *testing.T) {
+	now := time.Date(2999, 12, 31, 12, 0, 0, 0, time.UTC)
 	with := func(add map[string][]string) map[string][]string {
 		files := setFiles(t)
 		for part, names := range add {
@@ -193,18 +207,25 @@ func TestMigrationNameProblems(t *testing.T) {
 		want  []string // a part of each problem, in order
 	}{
 		{"frozen", setFiles(t), nil},
-		{"timestamped", in("manager", "299912312350_probe.sql", "299912312351_probe_more.sql"), nil},
-		{"timestamped in each set", in("hub", "299912312352_hub_probe.sql"), nil},
+		{"timestamped", in("manager", "29991231235000_probe.sql", "29991231235001_probe_more.sql"), nil},
+		{"timestamped in each set", in("hub", "29991231235002_hub_probe.sql"), nil},
+		{"one second in both sets", with(map[string][]string{"hub": {"29991231235000_probe.sql"}, "manager": {"29991231235000_probe_too.sql"}}), nil},
+		{"the first second", in("hub", "20261118000000_probe.sql"), nil},
+		{"a day ahead", in("hub", "30000101120000_probe.sql"), nil},
 		{"next number", in("manager", "0562_probe.sql"), []string{"numbers stopped at 0561", "87 numbered migrations, 86"}},
 		{"a gap", in("hub", "0559_probe.sql"), []string{"36 numbered migrations, 35"}},
-		{"upper case", in("hub", "299912312350_Probe.sql"), []string{"in lower case"}},
+		{"a number in both sets", in("hub", "0561_probe.sql"), []string{"36 numbered migrations, 35", "561 is in both sets (0561_probe.sql, 0561_model_usage.sql)"}},
+		{"upper case", in("hub", "29991231235000_Probe.sql"), []string{"in lower case"}},
 		{"three digits", in("hub", "562_probe.sql"), []string{"in lower case"}},
-		{"no time", in("hub", "299911311230_probe.sql"), []string{"not a time"}},
-		{"before the switch", in("hub", "202611181230_probe.sql"), []string{"before migrations were timestamped"}},
-		{"one minute twice", in("manager", "299912312350_a.sql", "299912312350_b.sql"), []string{"two migrations with version 299912312350"}},
+		{"a minute", in("hub", "299912312350_probe.sql"), []string{"in lower case"}},
+		{"no time", in("hub", "29991131123000_probe.sql"), []string{"not a UTC time"}},
+		{"before the switch", in("hub", "20261117235959_probe.sql"), []string{"before migrations were timestamped (2026-11-18)"}},
+		{"more than a day ahead", in("hub", "30000101120001_probe.sql"), []string{"more than 24 hours after now (29991231120000 UTC)"}},
+		{"one second twice", in("manager", "29991231235000_a.sql", "29991231235000_b.sql"),
+			[]string{"29991231235000_a.sql and 29991231235000_b.sql have the same version 29991231235000: keep the name of the one that merged first"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := migrationNameProblems(c.files)
+			got := migrationNameProblems(c.files, now)
 			if len(got) != len(c.want) {
 				t.Fatalf("problems %q, want %q", got, c.want)
 			}
@@ -215,31 +236,32 @@ func TestMigrationNameProblems(t *testing.T) {
 			}
 		})
 	}
-	both := with(map[string][]string{"hub": {"299912312350_probe.sql"}, "manager": {"299912312350_probe_too.sql"}})
-	if got := migrationNameProblems(both); len(got) != 1 || !strings.Contains(got[0], "is in both sets") {
-		t.Fatalf("one minute in both sets: %q", got)
+	// The real files pass today, whatever the date: TestMigrationSets is not the only caller.
+	if got := migrationNameProblems(setFiles(t), time.Now()); len(got) != 0 {
+		t.Fatalf("the embedded migrations now: %q", got)
 	}
 }
 
-// migrationVersion reads a number or a UTC minute, and nothing else; name order is version order.
+// migrationVersion reads a number or a UTC second, and nothing else; name order is version order.
 func TestMigrationVersion(t *testing.T) {
 	for name, want := range map[string]int64{
-		"0001_init.sql":          1,
-		"0561_model_usage.sql":   561,
-		"202611191230_probe.sql": 202611191230,
-		"209912312359_late.sql":  209912312359,
+		"0001_init.sql":            1,
+		"0561_model_usage.sql":     561,
+		"20261119123000_probe.sql": 20261119123000,
+		"20991231235959_late.sql":  20991231235959,
 	} {
 		if got, err := migrationVersion(name); err != nil || got != want {
 			t.Errorf("%s: %d %v, want %d", name, got, err, want)
 		}
 	}
-	for _, name := range []string{"init.sql", "0001.sql", "561_x.sql", "00561_x.sql", "+561_x.sql", "20261119123_x.sql",
-		"2026111912300_x.sql", "202613191230_x.sql", "202602301230_x.sql", "202611192430_x.sql", "202611191260_x.sql"} {
+	for _, name := range []string{"init.sql", "0001.sql", "561_x.sql", "00561_x.sql", "+561_x.sql", "202611191230_x.sql",
+		"2026111912300_x.sql", "202611191230000_x.sql", "20261319123000_x.sql", "20260230123000_x.sql",
+		"20261119243000_x.sql", "20261119126000_x.sql", "20261119123060_x.sql"} {
 		if v, err := migrationVersion(name); err == nil {
 			t.Errorf("%s: version %d, want an error", name, v)
 		}
 	}
-	names := []string{"202611191230_b.sql", "0561_model_usage.sql", "202611191229_z.sql", "0001_init.sql", "202701010000_a.sql"}
+	names := []string{"20261119123000_b.sql", "0561_model_usage.sql", "20261119122959_z.sql", "0001_init.sql", "20270101000000_a.sql"}
 	sort.Strings(names)
 	var last int64 = -1
 	for _, name := range names {
