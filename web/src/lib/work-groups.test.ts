@@ -153,6 +153,37 @@ describe("Codex commentary as assistant text (#5853)", () => {
   });
 });
 
+describe("Codex visualization fragments stand alone (#10321)", () => {
+  const viz = (id: string, at?: number) =>
+    mk("assistant", "visualization", at, { id, visualization: { path: `/home/me/.codex/visualizations/2026/10/28/thread/${id}.html`, mode: "wide" } });
+
+  it("keeps a fragment after the answer outside the collapsed summary", () => {
+    const b = blocks([user("u1", 0), ...tool("b1", "Bash", 1000, 1500), say("a1", "Done.", 2000), viz("v1", 2000)]);
+    expect(topSteps(b)).toEqual(["v1", "a1"]);
+    expect(folded(b, "v1")).toBe(false);
+    expect(folded(b, "b1")).toBe(true);
+  });
+
+  it("treats the fragment as response content, not work after the answer: the words stay out of the summary", () => {
+    const b = blocks([user("u1", 0), ...tool("b1", "Bash", 1000, 1500), say("a1", "Done.", 2000), viz("v1", 2000)]);
+    expect(folded(b, "a1")).toBe(false);
+  });
+
+  it("a marker-only turn leaves the fragment standalone beside one summary", () => {
+    const b = blocks([user("u1", 0), ...tool("b1", "Bash", 1000, 1500), viz("v1", 2000)]);
+    expect(groups(b)).toHaveLength(1);
+    expect(topSteps(b)).toEqual(["v1"]);
+    expect(folded(b, "v1")).toBe(false);
+  });
+
+  it("keeps several fragments standalone in order, none inside the summary", () => {
+    const b = blocks([user("u1", 0), ...tool("b1", "Bash", 1000, 1500), viz("v1", 2000), viz("v2", 2001)]);
+    expect(topSteps(b)).toEqual(["v1", "v2"]);
+    expect(folded(b, "v1")).toBe(false);
+    expect(folded(b, "v2")).toBe(false);
+  });
+});
+
 describe("while the agent works", () => {
   it("the tail run is live; its clock starts at your message", () => {
     const b = blocks([user("u1", 0), think("th1", 5951)], true);
