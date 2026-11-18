@@ -31,7 +31,9 @@ final class ContentPopPriority: NSObject, UIGestureRecognizerDelegate {
     nonisolated(unsafe) private weak var system: UIGestureRecognizerDelegate?
 
     static func install(on navigation: UINavigationController) {
-        guard let pop = navigation.interactiveContentPopGestureRecognizer, !(pop.delegate is ContentPopPriority) else { return }
+        // Before iOS 26 there is no swipe back from anywhere: the edge swipe is the only one.
+        guard #available(iOS 26.0, *),
+              let pop = navigation.interactiveContentPopGestureRecognizer, !(pop.delegate is ContentPopPriority) else { return }
         let priority = ContentPopPriority()
         priority.system = pop.delegate
         pop.delegate = priority
