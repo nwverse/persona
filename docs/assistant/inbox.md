@@ -282,7 +282,11 @@ a summary up to 40 characters, and a short reason:
     20-second limit; `login_refused` when, after the failed read, mail settings show the account's error (its server refuses the login: a wrong password or authorization code,
     a revoked OAuth grant); `failed` for anything else. `login_refused` gets its own words because it doesn't clear by itself: the line tells the owner that the account needs
     fixing, while the server's exact answer stays in mail settings. An account deleted during the round is not named. A round without mail (a poll) keeps the entries;
-    the next mail round replaces them, and they go with mail itself. Mixed versions: a sender from before this change (an older hub or extension manager) has no
+    transient failures (`timeout`, `rate_limited`, `failed`, including unknown codes) appear only after three consecutive
+    failed mail rounds for that account. Non-mail rounds do not count. A refused login appears immediately; once shown,
+    a notice remains until a successful read or removal. Failure counts are capped at three and reset on recovery or
+    account/source removal. Explicit source diagnostics still report each read immediately.
+    The next mail round replaces the notices, and they go with mail itself. Mixed versions: a sender from before this change (an older hub or extension manager) has no
     `mail.failed`, so the account is left out as before and nothing is named here; an Inbox from before this change ignores the field and reads the round as before.
   Apps use it for the waiting-for-triage banner below, and iOS / iPadOS, Android and web show sources with a `read_error` in a quiet neutral notice under it, one line per source, "name: `read_reason`" (#1849; mock `MOCK_INBOX_UNREAD`). All three use the same fallback words when `read_reason` is absent, and the notice clears with the next good read.
 - **Waiting-for-triage banner** (#1773, consistent on web, iOS / Mac, Android): if `triage.state` is not `ok` and `waiting > 0`, show a non-dismissible caution-colored (orange) banner at the top of the Inbox list, below search / filters and above the first section.

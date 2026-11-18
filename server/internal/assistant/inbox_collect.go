@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"time"
 
@@ -239,20 +238,8 @@ func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 		changed = changed || b.readErrs[id] != code
 	}
 	b.readErrs = next
-	mail := b.mailReadErrs
-	if _, there := r.Names["mail"]; r.Mail != nil || r.Names != nil && !there {
-		mail = map[string]assistantwire.InboxMailFailed{}
-		if r.Mail != nil {
-			for _, f := range r.Mail.Failed {
-				if f.ID != "" && f.ReadError != "" {
-					mail[f.ID] = f
-				}
-			}
-		}
-	}
-	changed = changed || !maps.Equal(mail, b.mailReadErrs)
-	b.mailReadErrs = mail
-	return changed
+	mailChanged := b.recordMailReads(r)
+	return changed || mailChanged
 }
 
 // ---- the connectors' ----
