@@ -101,8 +101,9 @@
     all('.k-tc-f.has-text').forEach((f) => {
       f.classList.toggle('v3-cut', f.scrollWidth > f.clientWidth + 1);
     });
-    // The section bar draws whole chips only. Needs you and the chosen chip always stay; a chip that would be cut leaves
-    // the row (from the end) and moves into the grouping icon's menu, so no label or count is ever drawn half.
+    // The section bar draws whole chips only. All (first), Needs you and the chosen chip always stay; a chip that would
+    // be cut leaves the row (from the end) and moves into the grouping icon's menu, so no label or count is ever drawn
+    // half.
     all('.v3-bar .k-sbar').forEach((bar) => {
       const row = bar.querySelector('.k-sbar-in');
       if (!row) return;
@@ -113,7 +114,7 @@
       const fits = () => row.scrollWidth <= row.clientWidth + 1;
       const on = row.querySelector('.is-on');
       const hidden = [];
-      for (let i = chips.length - 1; i > 0 && !fits(); i -= 1) {
+      for (let i = chips.length - 1; i > 1 && !fits(); i -= 1) {
         if (chips[i] === on) continue;
         chips[i].style.display = 'none';
         hidden.unshift(chips[i]);
@@ -122,10 +123,10 @@
       // A column too narrow for Needs you and In progress side by side (320) hands Group by to the column's ⋯, so
       // the In progress count stays readable beside Needs you (§3.4 task 1).
       let groupMoved = false;
-      if (g && chips[1] && hidden[0] === chips[1] && !g.hasAttribute('data-go')) {
+      if (g && chips[2] && hidden[0] === chips[2] && !g.hasAttribute('data-go')) {
         g.style.display = 'none';
-        chips[1].style.display = '';
-        if (fits()) { hidden.shift(); groupMoved = true; } else { chips[1].style.display = 'none'; g.style.display = ''; }
+        chips[2].style.display = '';
+        if (fits()) { hidden.shift(); groupMoved = true; } else { chips[2].style.display = 'none'; g.style.display = ''; }
       }
       const names = hidden.map((c) => c.textContent.replace(/\s+/g, ' ').trim().replace(/(\D)(\d+)$/, '$1 $2'));
       if (g && !groupMoved && hidden.length && g.hasAttribute('data-toast')) {

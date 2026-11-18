@@ -185,6 +185,93 @@ done
 	}
 }
 
+// A recovery resend is the node continuing the failed turn, not a message the user sent while it answered. The recovery
+// holds the failed turn busy, but neither its same-model retry to the running process nor the resend to the next
+// model's new process carries the mid-turn note, and neither moves foreground work to the background, even when the
+// conversation's messages carry interject_background (the setting on) and its Claude Code takes background_tasks
+// (#10178). The fake CLI is the real node process/stream-json seam, not a model call.
+func TestAssistantRecoveryResendIsNoInterjection(t *testing.T) {
+	f := cliTest(t)
+	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+echo '{"type":"system","subtype":"init","claude_code_version":"2.1.322"}'
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
+model=primary-model
+case "$*" in *'--model fallback-model'*) model=fallback-model ;; esac
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CLI_FAKE_DIR/stdin.jsonl"
+  case "$line" in
+    *'"subtype":"initialize"'*)
+      echo '{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[{"value":"default","displayName":"Default"},{"value":"primary-model","resolvedModel":"primary-model","displayName":"Primary"},{"value":"fallback-model","resolvedModel":"fallback-model","displayName":"Fallback"}]}}}' ;;
+    *'"type":"control_request"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+      printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s"}}\n' "$id" ;;
+    *'"type":"user"'*)
+      printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
+      count=$(cat "$CLI_FAKE_DIR/attempts" 2>/dev/null || echo 0)
+      count=$((count+1))
+      echo "$count" > "$CLI_FAKE_DIR/attempts"
+      if [ "$count" -eq 1 ]; then
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+      elif [ "$count" -eq 2 ]; then
+        # The same-model retry fails a moment later: any control the node writes after it is in reaches this process.
+        echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+        (sleep 0.5; echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}') &
+      else
+        printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
+        echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
+        echo '{"type":"result","subtype":"success","is_error":false,"result":"answered by fallback"}'
+      fi ;;
+  esac
+done
+`
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\n"+script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The manager sends every message of a conversation with interject_background while the setting is on.
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "original request", nil, "", "", modelExecution{Fingerprint: "fp", Interject: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliWait(t, "the same-model retry, then the next launcher model's resend", func() bool {
+		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 3
+	})
+	f.idle(t, id)
+	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" {
+		t.Fatalf("the next model did not answer: %+v", p)
+	}
+	notes := map[string]bool{
+		prompts.RenderInterject(prompts.Interject{}):                 true,
+		prompts.RenderInterject(prompts.Interject{Background: true}): true,
+	}
+	lines := strings.Split(strings.TrimSpace(f.file("user.jsonl")), "\n")
+	for i, raw := range lines {
+		var line struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatal(err)
+		}
+		retry, note := false, false
+		for _, block := range line.Message.Content {
+			retry = retry || block.Text == prompts.RenderModelRetry()
+			note = note || notes[block.Text]
+		}
+		if i > 0 && !retry {
+			t.Fatalf("resend %d is not the model retry prompt: %s", i, raw)
+		}
+		if note {
+			t.Errorf("resend %d (%s) carries the mid-turn interjection note: %s", i, map[int]string{0: "the owner's message", 1: "same-model retry", 2: "next model"}[i], raw)
+		}
+	}
+	if got := f.file("stdin.jsonl"); strings.Contains(got, `"subtype":"background_tasks"`) {
+		t.Errorf("a recovery resend moved foreground work to the background:\n%s", got)
+	}
+}
+
 func TestAssistantCodexStructuredRecoveryClasses(t *testing.T) {
 	send := assistantRecoverySend
 	t.Cleanup(func() { assistantRecoverySend = send })
