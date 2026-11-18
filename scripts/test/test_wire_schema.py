@@ -4,8 +4,8 @@ fixtures hold for them is exactly what the schema describes.
     python3 scripts/test/test_wire_schema.py
 
 The generator's --check covers all generated files (schema/extension and schema/wire), so nobody can edit one by hand.
-A sample must name no field the schema lacks and miss no required one: a generated client type would otherwise drop
-it or fail on it, changing the bytes it writes back.
+A sample must name no field the schema lacks, at any depth, and miss no required one: a generated client type would
+otherwise drop it or fail on it, changing the bytes it writes back. Every definition is reached by some sample.
 """
 
 import importlib.util
@@ -43,7 +43,108 @@ def recent_setups():
             yield "RecentSetup", f"{c['name']}.expected.after", s
 
 
-SAMPLES = {"recents.schema.json": recent_setups}
+def domain_cases(domain):
+    """(where, case) of every case in spec/fixtures/<domain>/*.json."""
+    for path in sorted((FIXTURES / domain).glob("*.json")):
+        for c in cases(f"{domain}/{path.name}"):
+            yield f"{domain}/{path.name} {c['name']}", c
+
+
+def todo_views():
+    """(definition, sample) of every view todo-view expects, and every counts and places todo-counts expects."""
+    for where, c in domain_cases("todo-view"):
+        yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
+    for where, c in domain_cases("todo-counts"):
+        yield "TodoCounts", f"{where}.expected.counts", c["expected"]["counts"]
+        yield "TodoPlaces", f"{where}.expected.places", c["expected"]["places"]
+
+
+SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
+
+
+def walk(doc, schema, value, at, reached):
+    """The fields value names that schema lacks, at any depth; every definition value reaches goes into reached."""
+    if "$ref" in schema:
+        name = schema["$ref"].rsplit("/", 1)[1]
+        reached.add(name)
+        return walk(doc, doc["$defs"][name], value, at, reached)
+    unknown = []
+    if isinstance(value, dict) and "properties" in schema:
+        for k, v in value.items():
+            if k in schema["properties"]:
+                unknown += walk(doc, schema["properties"][k], v, f"{at}.{k}", reached)
+            else:
+                unknown.append(f"{at}.{k}")
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if isinstance(schema.get("propertyNames"), dict):
+                walk(doc, schema["propertyNames"], k, f"{at}.<key>", reached)
+            if isinstance(schema.get("additionalProperties"), dict):
+                unknown += walk(doc, schema["additionalProperties"], v, f"{at}.{k}", reached)
+    elif isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for i, v in enumerate(value):
+            unknown += walk(doc, schema["items"], v, f"{at}[{i}]", reached)
+    return unknown
+
+
+# ---- hand-written copies ----
+# A schema's names are declared only by its generated files, in every language it generates (x-out) and in the ones it
+# guards before or instead of generating them (x-guard): its definitions and the names it reserves for later
+# (x-reserved). Per schema, so a schema that guards only TypeScript and Swift (recents) does not fail on copies in other
+# languages that predate the rule.
+
+ANNOTATED = r"^[ \t]*(?:@\w+(?:\([^)\n]*\))?\s+)*"  # Swift, Kotlin and ArkTS attributes or annotations first
+TS_DECL = r"(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?"
+LANGUAGES = {  # language: (suffixes, a declaration of one of NAMES)
+    "swift": ((".swift",), ANNOTATED + r"(?:(?:public|private|fileprivate|internal|package|open|final|nonisolated|"
+                                       r"indirect)\s+)*(?:struct|class|enum|protocol|actor|typealias)\s+(NAMES)\b"),
+    "ts": ((".ts", ".tsx", ".mts", ".cts"),
+           r"^[ \t]*" + TS_DECL + r"(?:class|interface|type|enum|const\s+enum)\s+(NAMES)\b"),
+    "arkts": ((".ets",), ANNOTATED + TS_DECL + r"(?:class|interface|type|enum|struct|const\s+enum)\s+(NAMES)\b"),
+    "kotlin": ((".kt", ".kts"), ANNOTATED + r"(?:(?:public|private|internal|protected|data|sealed|enum|value|inline|"
+                                            r"annotation|open|abstract|inner|fun|companion|expect|actual)\s+)*"
+                                            r"(?:class|interface|object|typealias)\s+(NAMES)\b"),
+    "go": ((".go",), r"^[ \t]*type\s+(NAMES)\b"),  # and the specs of a type ( … ) group, below
+    "rust": ((".rs",), r"^[ \t]*(?:#\[[^\]\n]*\]\s*)*(?:pub(?:\([^)\n]*\))?\s+)?(?:struct|enum|type|trait|union)"
+                       r"\s+(NAMES)\b"),
+}
+
+
+def declared(language, text, names):
+    """The names among names that text declares a type of, in language."""
+    alt = "|".join(map(re.escape, sorted(names)))
+    found = [m.group(1) for m in re.finditer(LANGUAGES[language][1].replace("NAMES", alt), text, re.M)]
+    if language == "go":
+        group = None  # the indentation of the type ( … ) group we are in: its specs are one tab deeper, fields deeper
+        for line in text.splitlines():
+            if group is None:
+                m = re.match(r"([ \t]*)type\s*\(\s*(?://.*)?$", line)
+                group = m.group(1) if m else None
+            elif line.startswith(group + ")"):
+                group = None
+            elif m := re.match(re.escape(group) + r"\t(" + alt + r")\b", line):
+                found.append(m.group(1))
+    return found
+
+
+def hand_copies(schemas, read, tracked):
+    """(file, name) of every declaration of a wire name outside the generated files. schemas: the wire schemas by file
+    name; tracked: the repository's files; read(rel) their text."""
+    generated = {rel for doc in schemas.values() for rel in doc["x-out"].values()}
+    out = []
+    for doc in schemas.values():
+        names = list(doc["$defs"]) + doc.get("x-reserved", [])
+        for language in sorted(set(doc["x-out"]) | set(doc.get("x-guard", []))):
+            suffixes = LANGUAGES[language][0]
+            for rel in tracked:
+                if rel in generated or not rel.endswith(suffixes):
+                    continue
+                out += [(rel, name) for name in declared(language, read(rel), names)]
+    return sorted(set(out))
+
+
+def wire_schemas():
+    return {p.name: json.loads(p.read_text()) for p in sorted(WIRE.glob("*.schema.json"))}
 
 
 class WireSchema(unittest.TestCase):
@@ -54,43 +155,86 @@ class WireSchema(unittest.TestCase):
     def test_every_schema_has_samples(self):
         self.assertEqual({p.name for p in WIRE.glob("*.schema.json")}, set(SAMPLES))
 
+    def test_schema_keywords_are_known(self):
+        unknown = set()
+        for name, doc in wire_schemas().items():
+            unknown |= ext.unknown_keywords(doc, name)
+        self.assertEqual(sorted(unknown), [])
+
+    def test_guarded_languages_are_known(self):
+        for name, doc in wire_schemas().items():
+            self.assertLessEqual(set(doc["x-out"]) | set(doc.get("x-guard", [])), set(LANGUAGES), name)
+            self.assertFalse(set(doc.get("x-reserved", [])) & set(doc["$defs"]), f"{name}: reserved and defined")
+
     def test_samples_are_exactly_the_schema(self):
         for fname, source in SAMPLES.items():
             doc = json.loads((WIRE / fname).read_text())
             v = ext.Validator({fname: doc})
-            count = 0
+            count, reached = 0, set()
             for definition, where, sample in source():
                 count += 1
+                reached.add(definition)
                 schema = doc["$defs"][definition]
                 errs = v.errors(schema, sample, fname)
-                unknown = sorted(set(sample) - set(schema["properties"]))
+                unknown = walk(doc, schema, sample, "$", reached)
                 self.assertEqual(errs, [], f"{fname} {where}")
                 self.assertEqual(unknown, [], f"{fname} {where}: fields the schema lacks")
             self.assertGreater(count, 0, fname)
+            self.assertEqual(sorted(set(doc["$defs"]) - reached), [], f"{fname}: definitions no sample reaches")
+
+    def test_places_carry_the_list_counts(self):
+        for where, c in domain_cases("todo-counts"):
+            self.assertEqual(c["expected"]["places"]["counts"], c["expected"]["counts"], where)
 
     def test_no_hand_written_copy_returns(self):
-        # The names a schema defines are declared only by the generated files (the old hand-written types stay gone).
-        generated, names = set(), []
-        for p in WIRE.glob("*.schema.json"):
-            doc = json.loads(p.read_text())
-            generated |= {ROOT / f for f in doc["x-out"].values()}
-            names += list(doc["$defs"])
-        tracked = subprocess.run(["git", "ls-files", "apple", "web/src"], cwd=ROOT, capture_output=True, text=True,
-                                 check=True).stdout.split()
-        pattern = re.compile(r"^\s*(?:export\s+)?(?:public\s+)?(?:nonisolated\s+)?(?:struct|class|enum|interface|type)\s+("
-                             + "|".join(map(re.escape, names)) + r")\b", re.M)
-        for rel in tracked:
-            path = ROOT / rel
-            if path in generated or path.suffix not in (".swift", ".ts", ".tsx"):
-                continue
-            for m in pattern.finditer(path.read_text(errors="ignore")):
-                self.fail(f"{rel} declares {m.group(1)}, which schema/wire generates")
+        tracked = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True,
+                                 check=True).stdout.split("\0")
+        tracked = [rel for rel in tracked if rel and (ROOT / rel).is_file()]
+
+        def read(rel):
+            return (ROOT / rel).read_text(errors="ignore")
+
+        for rel, name in hand_copies(wire_schemas(), read, tracked):
+            self.fail(f"{rel} declares {name}, which schema/wire generates or reserves")
+
+    def test_hand_copy_guard_reads_each_language(self):
+        schemas = {
+            "a.schema.json": {"x-out": {"ts": "web/a.ts", "swift": "apple/A.swift"}, "$defs": {"Thing": {}}},
+            "b.schema.json": {"x-out": {"go": "server/b_gen.go", "kotlin": "android/B.kt"},
+                              "x-guard": ["arkts", "rust"], "x-reserved": ["Later"], "$defs": {"Widget": {}}},
+        }
+        files = {
+            "android/B.kt": "@Serializable\ndata class Widget(\n",  # generated
+            "android/Thing.kt": "internal data class Thing(\n",  # a.schema.json guards no Kotlin
+            "android/Widget.kt": "@Serializable\ninternal data class Widget(\n",
+            "server/b_gen.go": "type Widget struct {}\n",  # generated
+            "server/group.go": "type (\n\tLater struct {\n\t\tWidget Widget\n\t}\n)\n",
+            "server/field.go": "type Holder struct {\n\tWidget Widget\n\tLater  string\n}\n",
+            "server/local.go": "func f() {\n\ttype Widget int\n}\n",
+            "core/src/thing.rs": "pub struct Thing {}\n",  # a.schema.json guards no Rust
+            "core/src/widget.rs": "#[derive(Debug)]\npub(crate) struct Widget {}\n",
+            "harmony/Widget.ets": "@Observed\nexport class Widget {\n",
+            "harmony/use.ets": "let w: Widget = new Widget()\n",
+            "apple/Thing.swift": "@MainActor private final class Thing {}\n",
+            "apple/use.swift": "let thing: Thing = .init()\n",
+            "web/thing.ts": "export type Thing = {\n",
+            "web/use.ts": "const x: Thing = y;\n",
+            "web/a.ts": "export interface Thing {}\n",  # generated
+            "web/notes.md": "struct Widget\n",
+        }
+        self.assertEqual(hand_copies(schemas, files.__getitem__, sorted(files)), [
+            ("android/Widget.kt", "Widget"), ("apple/Thing.swift", "Thing"), ("core/src/widget.rs", "Widget"),
+            ("harmony/Widget.ets", "Widget"), ("server/group.go", "Later"), ("server/local.go", "Widget"),
+            ("web/thing.ts", "Thing"),
+        ])
 
     def test_empty_strings_are_samples(self):
         # "" is a value, not an absent field: a generated type must write it back (Go omitempty would not).
         setups = [s for _, _, s in recent_setups()]
         self.assertTrue(any(s["launcher"] == "" for s in setups))
         self.assertTrue(any(s["mode"] == "" for s in setups))
+        places = [p for d, _, s in todo_views() if d == "TodoPlaces" for p in s["places"]]
+        self.assertTrue(any(p["title"] == "" for p in places))
 
 
 if __name__ == "__main__":

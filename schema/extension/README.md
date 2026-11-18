@@ -39,10 +39,11 @@ python3 scripts/test/test_extension_schema.py     # --check, and the examples ho
 | Swift | `apple/Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift` | Type names with an `Extension` prefix (`ExtensionView`), `public nonisolated`, `Codable`, `Hashable`, `Sendable`; legacy models take zero/nil for missing or mistyped fields, while stream envelopes reject missing required and mistyped present fields; a union is an enum, an unknown or unreadable component is `.unknown(type:)`; free JSON is `JSONValue` |
 | Kotlin | `android/core/contracts/src/main/kotlin/persona/core/contracts/generated/ExtensionWire.kt` | kotlinx.serialization data classes, also with the `Extension` prefix, every field with a default; a union is a sealed interface plus a serializer reading `type`, an unknown or unreadable one is `Unknown(type, raw)` and written back as it was. Unlike Swift, an object other than a component with a field of the wrong type does not read at all (the hub checks Views against the schema first, so what the apps get holds) |
 
-The generator also copies the schemas as they are to `sdk/go/wire/schema/` (`go:embed` cannot reach outside the
-module): `wire.Validate(<definition>, value)` checks against them. The hub checks extensions' Views with it
-(`extension.CheckView`), the conformance tests check `initialize`'s answer and every connector call with it, and it
-knows the same subset as the validator in `scripts/test/test_extension_schema.py`.
+The same generator also writes the hub wire types of `schema/wire/` (TypeScript, Swift, Go and Kotlin, each where its
+schema's `x-out` says; `schema/wire/README.md`). It also copies the schemas here as they are to `sdk/go/wire/schema/`
+(`go:embed` cannot reach outside the module): `wire.Validate(<definition>, value)` checks against them. The hub checks
+extensions' Views with it (`extension.CheckView`), the conformance tests check `initialize`'s answer and every connector
+call with it, and it knows the same subset as the validator in `scripts/test/test_extension_schema.py`.
 The View semantics both extensions and the assistant check (charts, tables, fields) are in `sdk/go/wire/viewcheck.go`.
 
 ## Native UI stream protocol 1
