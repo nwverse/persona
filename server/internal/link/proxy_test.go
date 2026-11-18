@@ -44,6 +44,7 @@ type connectProxy struct {
 	url      string // with the credentials
 	upstream atomic.Value
 	refuse   atomic.Int32 // a status to answer CONNECT with instead
+	reset    atomic.Bool  // answer 200, then reset the connection
 	connects atomic.Int32
 	mu       sync.Mutex
 	targets  []string
@@ -107,6 +108,15 @@ func (p *connectProxy) serve(w http.ResponseWriter, r *http.Request) {
 	p.conns = append(p.conns, up, down)
 	p.mu.Unlock()
 	_, _ = io.WriteString(down, "HTTP/1.1 200 Connection established\r\n\r\n")
+	if p.reset.Load() {
+		_, _ = io.ReadFull(down, make([]byte, 1)) // the hub's TLS has begun
+		if tc, ok := down.(*net.TCPConn); ok {
+			_ = tc.SetLinger(0)
+		}
+		_ = down.Close()
+		_ = up.Close()
+		return
+	}
 	go func() { _, _ = io.Copy(up, down); _ = up.Close() }()
 	go func() { _, _ = io.Copy(down, up); _ = down.Close() }()
 }
@@ -215,7 +225,7 @@ func TestParseProxy(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{"", "socks5://user:pw-secret@p:1080", "ftp://p", "http://p:8080/path", "http://p:99999",
-		"http://user:pw-secret@", "http://p?x=1", "http://p#x"} {
+		"http://user:pw-secret@", "http://p?x=1", "http://p#x", "https:user:pw-secret@p:443"} {
 		_, err := ParseProxy(raw)
 		if err == nil {
 			t.Errorf("ParseProxy(%q) accepted", raw)
@@ -273,8 +283,8 @@ func TestProxiedFollowsTheSettingAndTheEnvironment(t *testing.T) {
 	}
 	t.Setenv("https_proxy", "http://lower.example:3") // lower case first, as Go's net/http reads them
 	p, got := via(c)
-	// Loopback and localhost never go through a proxy; the others keep link.json's order.
-	if p != "http://lower.example:3" || !slices.Equal(got, []string{"https://192.0.2.2:18662", "https://hub.example.com:18662"}) {
+	// Loopback and localhost never go through a proxy; LAN addresses go last.
+	if p != "http://lower.example:3" || !slices.Equal(got, []string{"https://hub.example.com:18662", "https://192.0.2.2:18662"}) {
 		t.Fatalf("https_proxy: %s %v", p, got)
 	}
 	c.Proxy = "http://u:pw@set.example:4"
@@ -294,11 +304,21 @@ func TestProxiedFollowsTheSettingAndTheEnvironment(t *testing.T) {
 	if p, got := via(c); p != "" || got != nil {
 		t.Fatalf("off, with HTTPS_PROXY set: %s %v", p, got)
 	}
-	// A proxy that cannot be used is the proxy route's error, never a quoted URL.
+	// An environment proxy Persona cannot use (SOCKS) is the other programs'; one in link.json is the proxy route's
+	// error, never a quoted URL, unless NO_PROXY leaves it nothing to carry.
 	c.Proxy = ""
+	t.Setenv("no_proxy", "")
 	t.Setenv("https_proxy", "socks5://user:pw-secret@127.0.0.1:1080")
+	if p, got, err := proxied(c); p != nil || got != nil || err != nil {
+		t.Fatalf("socks5 in the environment: %v %v %v", p, got, err)
+	}
+	c.Proxy = "socks5://user:pw-secret@127.0.0.1:1080"
 	if _, _, err := proxied(c); err == nil || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("socks5: %v", err)
+		t.Fatalf("socks5 in link.json: %v", err)
+	}
+	t.Setenv("NO_PROXY", "*")
+	if p, got, err := proxied(c); p != nil || got != nil || err != nil {
+		t.Fatalf("socks5 in link.json, every candidate exempt: %v %v %v", p, got, err)
 	}
 }
 
@@ -438,6 +458,8 @@ func TestProxyFailuresNameNeitherTheProxyNorItsCredentials(t *testing.T) {
 		"credentials": {badCredentials, "link-errors.proxy_rejected", 0, http.StatusProxyAuthRequired},
 		"refused":     {proxy.url, "link-errors.proxy_rejected", http.StatusForbidden, http.StatusForbidden},
 		"unreachable": {"http://" + proxyUser + ":" + proxySecret + "@" + closedAddr, "link-errors.proxy_unreachable", 0, 0},
+		// Not a certificate problem: the proxy does not speak TLS.
+		"not https": {strings.Replace(proxy.url, "http://", "https://", 1), "link-errors.proxy_tls_handshake", 0, 0},
 	} {
 		proxy.refuse.Store(tc.refuse)
 		c := &Config{Machine: "laptop", FP: pinOf(hub), Token: "jd_x", Proxy: tc.proxy, Endpoints: []Endpoint{{URL: unroutable, Kind: "ipv4"}}}
@@ -458,6 +480,55 @@ func TestProxyFailuresNameNeitherTheProxyNorItsCredentials(t *testing.T) {
 		if got, want := StatusErrorText(i18n.En, summary(err)), kindText(i18n.En, KindProxy)+" 192.0.2.1:443: "+pe.Text(i18n.En); got != want {
 			t.Fatalf("%s: saved status in English = %q, want %q", name, got, want)
 		}
+	}
+	proxy.refuse.Store(0)
+
+	// A tunnel the proxy breaks after opening it fails as the hub's handshake does, still without the proxy's address.
+	proxy.reset.Store(true)
+	c := &Config{Machine: "laptop", FP: pinOf(hub), Token: "jd_x", Proxy: proxy.url, Endpoints: []Endpoint{{URL: unroutable, Kind: "ipv4"}}}
+	_, err = dialProxy(context.Background(), c)
+	if err == nil {
+		t.Fatal("a reset tunnel connected")
+	}
+	for _, text := range []string{err.Error(), summary(err), fmt.Sprintf("%+v", err)} {
+		if strings.Contains(text, portOf(proxy.url)) {
+			t.Fatalf("the proxy's address in %q", text)
+		}
+	}
+}
+
+// A proxy that opens the tunnel and then says nothing does not hold the hub's handshake forever: the transport gives
+// up after dialTimeout and closes the connection, also once the request itself was given up.
+func TestProxyStallingInsideTheTunnelIsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out dialTimeout")
+	}
+	stall, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stall.Close() })
+	closed := make(chan struct{})
+	go func() {
+		c, err := stall.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, c) // reads the ClientHello, answers nothing, until the other side closes
+		close(closed)
+		c.Close()
+	}()
+	proxy := newConnectProxy(t, stall.Addr().String(), nil)
+	c := &Config{Machine: "laptop", FP: "any", Token: "jd_x", Proxy: proxy.url, Endpoints: []Endpoint{{URL: unroutable, Kind: "ipv4"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := dialProxy(ctx, c); err == nil {
+		t.Fatal("a silent tunnel connected")
+	}
+	select {
+	case <-closed:
+	case <-time.After(dialTimeout + 5*time.Second):
+		t.Fatal("the stalled handshake's connection is still open")
 	}
 }
 
@@ -515,17 +586,23 @@ func TestDialActiveTriesTheProxyAfterDirect(t *testing.T) {
 		t.Fatalf("HTTPS_PROXY: %+v %v", l, err)
 	}
 
-	// A proxy setting that cannot be used fails its own route only: direct candidates still work, and are still tried.
+	// An environment proxy Persona cannot use is left alone: no proxy route, no error about it.
 	t.Setenv("HTTPS_PROXY", "socks5://127.0.0.1:1080")
-	direct.allowed.Store(true)
-	if l, err := try(&env, KindProxy); err != nil || l.ep != ep {
-		t.Fatalf("an unusable HTTPS_PROXY kept direct candidates from working: %+v %v", l, err)
-	}
-	direct.allowed.Store(false)
-	if _, err := try(&env, ""); err == nil || !strings.Contains(err.Error(), defaultText("link-errors.proxy_invalid")) {
-		t.Fatalf("an unusable proxy is not said: %v", err)
+	if _, err := try(&env, ""); err == nil || strings.Contains(err.Error(), defaultText("link-errors.proxy_invalid")) {
+		t.Fatalf("a SOCKS HTTPS_PROXY: %v", err)
 	}
 	t.Setenv("HTTPS_PROXY", "")
+	// One in link.json fails its own route only: direct candidates still work, and are still tried.
+	unusable := *cfg
+	unusable.Proxy = "socks5://127.0.0.1:1080"
+	direct.allowed.Store(true)
+	if l, err := try(&unusable, KindProxy); err != nil || l.ep != ep {
+		t.Fatalf("an unusable proxy kept direct candidates from working: %+v %v", l, err)
+	}
+	direct.allowed.Store(false)
+	if _, err := try(&unusable, ""); err == nil || !strings.Contains(err.Error(), defaultText("link-errors.proxy_invalid")) {
+		t.Fatalf("an unusable proxy is not said: %v", err)
+	}
 
 	// A pinned hub that refused the credential directly is not asked again through the proxy.
 	refused := *cfg

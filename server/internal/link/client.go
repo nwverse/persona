@@ -384,8 +384,8 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 	}
 }
 
-// dialActive dials c's hub over its routes in routeOrder. A pinned hub that refused the credential on its own route
-// ends the attempt: no other route can do better.
+// dialActive dials c's hub over its routes in routeOrder. A pinned hub that refused the credential, on whichever
+// route, ends the attempt: no other route can do better.
 func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*link, error) {
 	p, eps, perr := proxied(c)
 	return tryRoutes(routeOrder(c, p != nil || perr != nil, last), func(kind string) (*link, error) {
@@ -399,9 +399,9 @@ func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*li
 			return dialVia(ctx, c, eps, p)
 		}
 		return dial(ctx, c)
-	}, func(kind string, err error) bool {
+	}, func(err error) bool {
 		var he *httpError
-		return ctx.Err() != nil || (kind != KindSSH && c.FP != "" && errors.As(err, &he) &&
+		return ctx.Err() != nil || (c.FP != "" && errors.As(err, &he) &&
 			(he.status == http.StatusUnauthorized || he.status == http.StatusForbidden))
 	})
 }
@@ -428,7 +428,7 @@ func routeOrder(c *Config, proxy bool, last string) []string {
 
 // tryRoutes tries each route in order until one works; stop ends it early after a failure no other route can mend.
 // The error is the one failure, or all of them in order.
-func tryRoutes[T any](order []string, try func(kind string) (T, error), stop func(kind string, err error) bool) (T, error) {
+func tryRoutes[T any](order []string, try func(kind string) (T, error), stop func(error) bool) (T, error) {
 	var errs []error
 	for _, kind := range order {
 		v, err := try(kind)
@@ -436,7 +436,7 @@ func tryRoutes[T any](order []string, try func(kind string) (T, error), stop fun
 			return v, nil
 		}
 		errs = append(errs, err)
-		if stop(kind, err) {
+		if stop(err) {
 			break
 		}
 	}

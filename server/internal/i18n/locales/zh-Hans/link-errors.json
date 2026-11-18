@@ -17,6 +17,7 @@
   "proxy_invalid": "出站代理设置不是可用的 http:// 或 https:// 代理地址",
   "proxy_unreachable": "连不上出站代理",
   "proxy_tls_failed": "出站代理的证书不受信任",
+  "proxy_tls_handshake": "出站代理没有完成 TLS 握手（确认它是 https:// 代理）",
   "proxy_connect_failed": "出站代理没有建立到 hub 的连接",
   "proxy_rejected": "出站代理拒绝连接 hub（HTTP {status}）",
   "manual_reconnect": "手动重连",

@@ -33,8 +33,9 @@ type report struct {
 	Endpoints []link.Endpoint `json:"endpoints,omitempty"`
 	// SSH: the optional SSH tunnel in link.json.
 	SSH *link.SSH `json:"ssh,omitempty"`
-	// Proxy: link.json's outbound proxy without its user name and password, or "off"; missing when none is set
-	// (HTTPS_PROXY and ALL_PROXY apply). link.proxy says the one a link is connected through.
+	// Proxy: link.json's outbound proxy without its user name and password, "off", or "invalid" when it cannot be
+	// used; missing when none is set (HTTPS_PROXY and ALL_PROXY apply). link.proxy says the one a link is connected
+	// through.
 	Proxy string `json:"proxy,omitempty"`
 	// Trust: how the hub is checked, "pin" (its key, from the pairing) | "system" (behind an HTTPS reverse proxy:
 	// the system's CAs and the host name).
@@ -94,7 +95,9 @@ func gather(e *env) report {
 	}
 	if c, err := link.Read(cfg); err == nil {
 		r.Mode = c.CurrentMode()
-		r.Proxy = link.RedactedProxy(c.Proxy)
+		if r.Proxy = link.RedactedProxy(c.Proxy); r.Proxy == "" && c.Proxy != "" {
+			r.Proxy = proxyInvalid // nothing of an unusable setting is shown, but that there is one
+		}
 		if r.SSH == nil {
 			r.SSH = c.SSH
 		}
@@ -277,6 +280,8 @@ func (r report) text(now time.Time, user string) string {
 				if inUse == link.KindProxy {
 					proxy = st.Proxy
 					notes = append(notes, terminalText("link-cli.note_in_use"))
+				} else if proxy == proxyInvalid {
+					proxy = terminalText("link-errors.proxy_invalid")
 				}
 				if r.SSH != nil && r.SSH.Always {
 					notes = append(notes, terminalText("link-cli.note_skip_direct"))

@@ -69,6 +69,7 @@ func tlsClient(cfg *tls.Config, dial func(context.Context, string, string) (net.
 			Proxy:                 nil, // an outbound proxy is dial's (proxyDial), never one the transport picks itself
 			DialContext:           dial,
 			TLSClientConfig:       cfg,
+			TLSHandshakeTimeout:   dialTimeout, // the transport dials under a context a given-up request does not end
 			ResponseHeaderTimeout: dialTimeout,
 			MaxIdleConns:          1,
 			IdleConnTimeout:       30 * time.Second,
@@ -101,10 +102,11 @@ func hubTLSConfig(c *Config) *tls.Config {
 // hubClient dials c's hub, straight or through outbound proxy p when it is set (proxyDial), and checks it with
 // hubTLSConfig either way: inside the proxy's tunnel the check is the same.
 func hubClient(c *Config, p *url.URL, onConn func(net.Conn)) *http.Client {
+	dial := directDial(onConn)
 	if p != nil {
-		return tlsClient(hubTLSConfig(c), proxyDial(p, onConn))
+		dial = proxyDial(p, onConn)
 	}
-	return tlsClient(hubTLSConfig(c), directDial(onConn))
+	return tlsClient(hubTLSConfig(c), dial)
 }
 
 // trustOf is Status.Trust for c.

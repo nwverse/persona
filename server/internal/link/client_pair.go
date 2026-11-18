@@ -209,7 +209,7 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 			return redeemVia(eps, p)
 		}
 		return redeemVia(c.Endpoints, nil)
-	}, func(_ string, err error) bool { return ctx.Err() != nil || pairAnswered(err) })
+	}, func(err error) bool { return ctx.Err() != nil || pairAnswered(err) })
 	if err != nil {
 		return nil, newTextError("link-errors.pair_failed", err)
 	}

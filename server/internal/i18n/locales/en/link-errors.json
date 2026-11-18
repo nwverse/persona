@@ -17,6 +17,7 @@
   "proxy_invalid": "The outbound proxy setting is not a usable http:// or https:// proxy URL",
   "proxy_unreachable": "Cannot reach the outbound proxy",
   "proxy_tls_failed": "The outbound proxy's certificate is not trusted",
+  "proxy_tls_handshake": "The outbound proxy did not complete TLS (check that it is an https:// proxy)",
   "proxy_connect_failed": "The outbound proxy did not open a connection to the hub",
   "proxy_rejected": "The outbound proxy refused to connect to the hub (HTTP {status})",
   "manual_reconnect": "Manual reconnect",

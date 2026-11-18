@@ -208,6 +208,7 @@ var statusTemplateKeys = []string{
 	"link-errors.proxy_invalid",
 	"link-errors.proxy_unreachable",
 	"link-errors.proxy_tls_failed",
+	"link-errors.proxy_tls_handshake",
 	"link-errors.proxy_connect_failed",
 	"link-errors.proxy_rejected",
 	"link-errors.manual_reconnect",

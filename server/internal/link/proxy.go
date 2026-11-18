@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -50,6 +51,10 @@ var errProxyInvalid = &proxyError{key: "link-errors.proxy_invalid"}
 func ParseProxy(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host == "" {
+		// "https:user:pass@proxy" (no //): read as http://, its credentials would go out in plain text.
+		return nil, errProxyInvalid
+	}
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		if v, e := url.Parse("http://" + raw); e == nil {
 			u, err = v, nil
@@ -90,32 +95,46 @@ func SetProxy(path, raw string) error {
 	return Update(path, func(c *Config) error { c.Proxy = raw; return nil })
 }
 
-// proxied is the proxy c's candidates go through and those candidates, each marked KindProxy (race ranks them):
-// link.json's proxy, else HTTPS_PROXY or ALL_PROXY (either case). None when there is no proxy, it is off, or NO_PROXY exempts every
-// candidate (as for Go's net/http, localhost and loopback addresses never use one). A proxy that cannot be read is
-// the proxy route's error alone: direct candidates are tried all the same.
+// proxied is the proxy c's candidates go through and those candidates, each marked KindProxy: link.json's proxy,
+// else HTTPS_PROXY or ALL_PROXY (either case). None when there is no proxy, it is off, or NO_PROXY exempts every
+// candidate (as for Go's net/http, localhost and loopback addresses never use one). LAN addresses go last: a proxy
+// rarely reaches them. An environment proxy Persona cannot use (SOCKS, say) is left to the programs it is for; one in
+// link.json is the proxy route's error, and direct candidates are tried all the same.
 func proxied(c *Config) (*url.URL, []Endpoint, error) {
 	env := httpproxy.FromEnvironment() // https_proxy and no_proxy, lower case first, as Go's net/http reads them
-	raw := cmp.Or(c.Proxy, env.HTTPSProxy, os.Getenv("all_proxy"), os.Getenv("ALL_PROXY"))
+	raw, fromEnv := c.Proxy, c.Proxy == ""
+	if fromEnv {
+		raw = cmp.Or(env.HTTPSProxy, os.Getenv("all_proxy"), os.Getenv("ALL_PROXY"))
+	}
 	if raw == "" || raw == ProxyOff {
 		return nil, nil, nil
 	}
-	p, err := ParseProxy(raw)
-	if err != nil {
-		return nil, nil, err
-	}
 	// Only NO_PROXY's answer is wanted here: the stand-in keeps the real URL (and its credentials) out of httpproxy.
 	use := (&httpproxy.Config{HTTPSProxy: "http://proxy.invalid", NoProxy: env.NoProxy}).ProxyFunc()
-	var eps []Endpoint
-	for _, ep := range c.Endpoints {
-		if u, err := url.Parse(ep.URL); err == nil {
-			if via, _ := use(u); via != nil {
-				eps = append(eps, Endpoint{URL: ep.URL, Kind: KindProxy, Manual: ep.Manual})
-			}
+	var eps, lan []Endpoint
+	for _, ep := range ranked(c.Endpoints) {
+		u, err := url.Parse(ep.URL)
+		if err != nil {
+			continue
+		}
+		if via, _ := use(u); via == nil {
+			continue
+		}
+		if e := (Endpoint{URL: ep.URL, Kind: KindProxy, Manual: ep.Manual}); ep.Kind == "lan" {
+			lan = append(lan, e)
+		} else {
+			eps = append(eps, e)
 		}
 	}
-	if len(eps) == 0 {
+	if eps = append(eps, lan...); len(eps) == 0 {
 		return nil, nil, nil
+	}
+	p, err := ParseProxy(raw)
+	switch {
+	case err != nil && fromEnv:
+		return nil, nil, nil
+	case err != nil:
+		return nil, nil, err
 	}
 	return p, eps, nil
 }
@@ -144,7 +163,8 @@ func proxyDial(p *url.URL, onConn func(net.Conn)) func(context.Context, string, 
 		if err != nil {
 			return nil, &proxyError{key: "link-errors.proxy_unreachable", cause: err}
 		}
-		// Ending ctx ends the dial: a race's loser, or a link going away, does not wait for a slow proxy.
+		// Ending ctx ends the dial (pairing's CloseIdleConnections, say); the deadline in connectThrough bounds the rest,
+		// as the transport dials under a context a finished request does not end.
 		stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 		conn, err := connectThrough(ctx, raw, p, secure, addr)
 		if !stop() {
@@ -157,7 +177,7 @@ func proxyDial(p *url.URL, onConn func(net.Conn)) func(context.Context, string, 
 		if onConn != nil {
 			onConn(raw)
 		}
-		return conn, nil
+		return tunnel{conn}, nil
 	}
 }
 
@@ -169,7 +189,16 @@ func connectThrough(ctx context.Context, raw net.Conn, p *url.URL, secure *tls.C
 	if secure != nil {
 		t := tls.Client(raw, secure)
 		if err := t.HandshakeContext(ctx); err != nil {
-			return nil, &proxyError{key: "link-errors.proxy_tls_failed", cause: err}
+			key := "link-errors.proxy_tls_handshake" // not TLS at all (an http:// proxy given as https://), say
+			var cv *tls.CertificateVerificationError
+			var ne net.Error
+			switch {
+			case errors.As(err, &cv):
+				key = "link-errors.proxy_tls_failed"
+			case errors.As(err, &ne) && ne.Timeout():
+				key = "link-errors.proxy_unreachable"
+			}
+			return nil, &proxyError{key: key, cause: err}
 		}
 		conn = t
 	}
@@ -195,4 +224,26 @@ func connectThrough(ctx context.Context, raw net.Conn, p *url.URL, secure *tls.C
 	}
 	_ = raw.SetDeadline(time.Time{})
 	return conn, nil
+}
+
+// tunnel is a connection through the proxy whose errors leave out the addresses of the proxy's TCP connection: they
+// reach summaries and the log, which never name the proxy. errors.Is and Timeout still see the cause.
+type tunnel struct{ net.Conn }
+
+func (t tunnel) Read(b []byte) (int, error) {
+	n, err := t.Conn.Read(b)
+	return n, withoutAddrs(err)
+}
+
+func (t tunnel) Write(b []byte) (int, error) {
+	n, err := t.Conn.Write(b)
+	return n, withoutAddrs(err)
+}
+
+func withoutAddrs(err error) error {
+	var oe *net.OpError
+	if errors.As(err, &oe) && (oe.Source != nil || oe.Addr != nil) {
+		return &net.OpError{Op: oe.Op, Net: oe.Net, Err: oe.Err}
+	}
+	return err
 }

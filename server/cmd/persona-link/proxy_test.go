@@ -126,6 +126,29 @@ func TestStatusReportsTheProxyRoute(t *testing.T) {
 		t.Fatalf("status json = %+v %+v", rep, rep.Link)
 	}
 
+	// A hand-edited setting that cannot be used: status says so, without showing it.
+	if err := link.Update(f.configPath(), func(c *link.Config) error { c.Proxy = "socks5://corp-user:corp-secret@p"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	f.saveStatus(t, link.Status{State: "waiting", Mode: link.ModeActive, Machine: "pi"}, 4242)
+	f.out.Reset()
+	_ = status(f.env, nil)
+	noSecret(t, "status", f.out.String())
+	if !strings.Contains(f.out.String(), "  · 代理 "+i18n.T(i18n.Terminal(), "link-errors.proxy_invalid")+"\n") {
+		t.Fatalf("an unusable proxy setting is not in status:\n%s", f.out.String())
+	}
+	f.out.Reset()
+	_ = status(f.env, []string{"--json"})
+	noSecret(t, "status --json", f.out.String())
+	if err := json.Unmarshal(f.out.Bytes(), &rep); err != nil || rep.Proxy != proxyInvalid {
+		t.Fatalf("status json proxy = %q (%v)", rep.Proxy, err)
+	}
+	if err := link.SetProxy(f.configPath(), proxyWithSecret); err != nil {
+		t.Fatal(err)
+	}
+	f.saveStatus(t, link.Status{State: "connected", Mode: link.ModeActive, Machine: "pi", HubName: "home",
+		Address: "https://hub.example.com:18662", Kind: link.KindProxy, Proxy: "http://proxy.example:8080", Since: &since, Node: "online"}, 4242)
+
 	// The same in English.
 	t.Setenv("PERSONA_LANG", "en")
 	f.out.Reset()

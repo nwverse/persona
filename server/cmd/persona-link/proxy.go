@@ -10,6 +10,9 @@ import (
 	"github.com/nwverse/persona/server/internal/link"
 )
 
+// proxyInvalid is status --json's proxy for a link.json setting that cannot be used.
+const proxyInvalid = "invalid"
+
 // proxyFlag is --proxy <url> on pair and install: saved as persona-link proxy saves it, before pairing, so the
 // pairing goes through it too.
 type proxyFlag struct {
@@ -48,10 +51,11 @@ func proxyCmd(e *env, args []string) error {
 		case strings.HasPrefix(raw, "-"):
 			return errUsage
 		}
+		// No poke: a running link reads link.json itself and moves only when it is on a fallback route, so a working
+		// direct link stays.
 		if err := link.SetProxy(e.configPath(), raw); err != nil {
 			return err
 		}
-		pokeRunning(e.configPath())
 	}
 	c, err := link.Read(e.configPath())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
