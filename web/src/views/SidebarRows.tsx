@@ -424,7 +424,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
         </span>
       )}
       {source && <SourceTag s={s} className={aside} />}
-      {origin && <OriginMark origin={origin} size={16} className={aside} />}
+      {origin && <OriginMark origin={origin} size={16} className={aside} session={s} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
       {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
       {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}

@@ -48,6 +48,14 @@ export const ORIGIN_BRAND: Partial<Record<AutoOrigin, BrandId>> = { lark_agent: 
 export const EXTERNAL_ORIGINS = ["lark_agent", "extension"] as const;
 export type ExternalOrigin = (typeof EXTERNAL_ORIGINS)[number];
 
+/** The extension that opened an external conversation, by id (#10358): its `opened_by`, else its `origin_ref`, which for
+ *  these two origins is that extension too (the hub's start notes both, server/internal/assistant/start.go
+ *  requestOrigin); undefined for any other origin and for one nobody noted (a conversation the backfill judged). */
+export function openerOf(origin: string | undefined, s: Pick<Session, "opened_by" | "origin_ref"> | undefined): string | undefined {
+  if (!(EXTERNAL_ORIGINS as readonly string[]).includes(origin ?? "")) return undefined;
+  return s?.opened_by?.trim() || s?.origin_ref?.trim() || undefined;
+}
+
 /** Where an external conversation came from, by its origin with the spaces trimmed; undefined for every other one (the
  *  user's own, a channel's /new, the inbox's, a task's, one spawned from a chat, an origin this page doesn't know). */
 export function externalOrigin(s: Pick<Session, "origin"> | undefined): ExternalOrigin | undefined {

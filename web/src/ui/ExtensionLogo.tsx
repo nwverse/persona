@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { credentialOwner, subscribeCredentialOwner } from "../lib/api";
 import { acquireExtensionLogo, extensionLogoSource } from "../lib/extension-logo";
 import { defaultManager, managerHeaderFor, onDefaultManager, useChosenManager } from "../lib/manager-choice";
@@ -6,8 +6,9 @@ import { Icon } from "./icons";
 
 const subscribeDefault = (listener: () => void) => onDefaultManager(listener);
 
-/** Keep the caller's existing tile geometry and status tint, including when artwork fails. */
-export function ExtensionLogo({ url, manager, className, iconSize }: { url?: string; manager?: string; className: string; iconSize: number }) {
+/** Keep the caller's existing tile geometry and status tint, including when artwork fails. `fallback`: what is drawn
+ *  until the artwork is in and when it fails (the extensions symbol at `iconSize` when none). */
+export function ExtensionLogo({ url, manager, className, iconSize, fallback }: { url?: string; manager?: string; className: string; iconSize: number; fallback?: ReactNode }) {
   const source = extensionLogoSource(url);
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
   useChosenManager();
@@ -16,12 +17,12 @@ export function ExtensionLogo({ url, manager, className, iconSize }: { url?: str
   const tile = useRef<HTMLSpanElement>(null);
   // Remount on URL/owner changes: failed or retired artwork cannot replace a new request.
   return <span ref={tile} aria-hidden="true" data-extension-logo className={`relative ${className}`}>
-    {source?.path ? <HubLogo key={`${owner}:${resolvedManager}:${source.path}`} path={source.path} manager={resolvedManager} tile={tile} iconSize={iconSize} />
-      : <LogoImage key={source?.publicURL} src={source?.publicURL ?? null} iconSize={iconSize} />}
+    {source?.path ? <HubLogo key={`${owner}:${resolvedManager}:${source.path}`} path={source.path} manager={resolvedManager} tile={tile} iconSize={iconSize} fallback={fallback} />
+      : <LogoImage key={source?.publicURL} src={source?.publicURL ?? null} iconSize={iconSize} fallback={fallback} />}
   </span>;
 }
 
-function HubLogo({ path, manager, tile, iconSize }: { path: string; manager?: string; tile: RefObject<HTMLSpanElement | null>; iconSize: number }) {
+function HubLogo({ path, manager, tile, iconSize, fallback }: { path: string; manager?: string; tile: RefObject<HTMLSpanElement | null>; iconSize: number; fallback?: ReactNode }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
@@ -52,15 +53,16 @@ function HubLogo({ path, manager, tile, iconSize }: { path: string; manager?: st
       if (objectURL) URL.revokeObjectURL(objectURL);
     };
   }, [path, manager, tile]);
-  return <LogoImage key={src} src={src} iconSize={iconSize} />;
+  return <LogoImage key={src} src={src} iconSize={iconSize} fallback={fallback} />;
 }
 
-function LogoImage({ src, iconSize }: { src: string | null; iconSize: number }) {
+function LogoImage({ src, iconSize, fallback }: { src: string | null; iconSize: number; fallback?: ReactNode }) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  if (!src || failed) return <Icon name="extension" size={iconSize} />;
+  const generic = fallback ?? <Icon name="extension" size={iconSize} />;
+  if (!src || failed) return generic;
   return <>
-    {!loaded && <Icon name="extension" size={iconSize} />}
+    {!loaded && generic}
     <img src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" crossOrigin="anonymous"
       className={`absolute inset-0 size-full rounded-[inherit] object-contain ${loaded ? "bg-[var(--extension-logo-backing)]" : "opacity-0"}`}
       onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
