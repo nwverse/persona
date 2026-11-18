@@ -961,7 +961,7 @@ final class AppModel {
 
     /// What the demo's conversations left behind: drafts, and cached chats (a new demo starts over).
     private func forgetDemoChats() {
-        #if DEBUG
+        #if DEBUG && os(iOS)
         ProductionContinuityShadow.shared.closeAll()
         #endif
         let demo = DemoHub.shared.sessionKeys
@@ -989,7 +989,7 @@ final class AppModel {
         pairingEngineMachine = nil
         checklistPending = false
         if isDemo { leaveDemo() }
-        #if DEBUG
+        #if DEBUG && os(iOS)
         ProductionContinuityShadow.shared.closeAll()
         #endif
         for link in links { link.live.disconnect() }
@@ -1704,7 +1704,7 @@ final class AppModel {
 
     /// Forgets a chat held in memory (its group went away).
     func dropChat(_ key: SessionKey) {
-        #if DEBUG
+        #if DEBUG && os(iOS)
         if let store = chats[key] { ProductionContinuityShadow.shared.close(store) }
         #endif
         chats[key] = nil
@@ -1722,7 +1722,7 @@ final class AppModel {
         }
         guard idle.count > Self.keptChats else { return }
         for k in idle.sorted(by: { chatUse[$0, default: 0] < chatUse[$1, default: 0] }).prefix(idle.count - Self.keptChats) {
-            #if DEBUG
+            #if DEBUG && os(iOS)
             if let store = chats[k] { ProductionContinuityShadow.shared.close(store) }
             #endif
             chats[k] = nil
@@ -2249,7 +2249,7 @@ final class AppModel {
         var completed = false
         defer {
             filling.remove(key)
-            #if DEBUG
+            #if DEBUG && os(iOS)
             ProductionContinuityShadow.shared.fillCompleted(completed, in: store)
             #endif
         }
@@ -2272,7 +2272,7 @@ final class AppModel {
     /// Starts the chat over from the latest page (the hole was too big, or the transcript was replaced).
     func reload(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
         guard shouldApply?() ?? true, let api = api(key.group) else { return }
-        #if DEBUG
+        #if DEBUG && os(iOS)
         var completed = false
         let store = chat(key)
         defer {
@@ -2283,7 +2283,7 @@ final class AppModel {
             let page = try await api.items(key, beforeSeq: nil)
             guard shouldApply?() ?? true else { return }
             replaceBatch(chat(key), items: page.items, hasMore: page.hasMore, span: page.span)
-            #if DEBUG
+            #if DEBUG && os(iOS)
             completed = true
             #endif
             ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
@@ -2312,7 +2312,7 @@ final class AppModel {
         do {
             unfoldBatch(chat(key), fold: fold, items: try await task.value)
         } catch {
-            #if DEBUG
+            #if DEBUG && os(iOS)
             ProductionContinuityShadow.shared.failed(.rangeFailed, in: chat(key), fold: fold)
             #endif
             throw error
@@ -2327,7 +2327,7 @@ final class AppModel {
         let store = chat(key)
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
         store.isLoadingOlder = true
-        #if DEBUG
+        #if DEBUG && os(iOS)
         ProductionContinuityShadow.shared.loadOlder(store)
         #endif
         defer { store.isLoadingOlder = false }
@@ -2336,7 +2336,7 @@ final class AppModel {
             prependBatch(store, items: res.items, hasMore: res.hasMore)
             return true
         } catch {
-            #if DEBUG
+            #if DEBUG && os(iOS)
             ProductionContinuityShadow.shared.failed(.olderFailed, in: store)
             #endif
             if !error.isOffline { show(error) } // scrolling up while offline: the title says why nothing comes
