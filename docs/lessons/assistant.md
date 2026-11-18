@@ -452,7 +452,9 @@ their own and kept a step at two until they used the same path, so never call `s
 that count events right after a write must wait with `todosTold` first. A pass that runs on a timer and looks only at
 open tasks takes them with `todosWhere`, not `todosOf(ctx, "*")`, which deep-copies every finished one too (27 MB per
 30 s at 4,000). The direction tree is not such a pass: a finished task decides whether a failed start in its row
-still counts, so it reads them all.
+still counts, so it reads them all. The To-dos view's pushes (`todo_view_push.go`) need the same answer without that
+copy: their recheck and clock read only the to-dos they are about and take supersession from each to-do's title, PR,
+plan and close alone (`projection.Superseded`).
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 

@@ -335,6 +335,10 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 
 // purposeModel is purpose id's model, resolved at the start of every request.
 func (s *Service) purposeModel(id string) *ai.Client {
+	return s.purposeModelFor(id, "")
+}
+
+func (s *Service) purposeModelFor(id, operation string) *ai.Client {
 	return ai.NewResolved(func(ctx context.Context) (*ai.Client, error) {
 		b, err := s.resolveModel(ctx, id)
 		if err != nil {
@@ -344,7 +348,26 @@ func (s *Service) purposeModel(id string) *ai.Client {
 		if err != nil {
 			return nil, err
 		}
-		return s.aiClient(c), nil
+		route := "api"
+		if c.RunLauncher != "" {
+			route = "cli"
+		} else if c.ViaMachine != "" {
+			route = "api_via_node"
+		}
+		return s.aiClient(c).WithResult(func(reply ai.Reply, err error) {
+			u := reply.Usage
+			paused, _ := modelPaused(err)
+			if u == (ai.Usage{}) && (paused || ai.IsNotConfigured(err)) {
+				return
+			}
+			result := "ok"
+			if err != nil {
+				result = "error"
+			}
+			s.logf("model_usage purpose=%q operation=%q route=%s provider=%q model=%q result=%s usage_reported=%t input_tokens=%d output_tokens=%d cache_read_input_tokens=%d cache_creation_input_tokens=%d",
+				id, operation, route, b.Provider, cmp.Or(reply.Model, c.Model), result, u != (ai.Usage{}),
+				u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
+		}), nil
 	})
 }
 
