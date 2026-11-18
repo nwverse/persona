@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -212,6 +214,42 @@ func TestTaskStuckEstimateBoundaries(t *testing.T) {
 			tr.Section = triageWaiting
 			if !taskStuck(task, tr, true, now) {
 				t.Fatal("waiting task not stuck at threshold")
+			}
+		})
+	}
+}
+
+// A short task can be stuck within its first day. Neither the localized report nor the
+// assistant's supervision and briefing may turn that signal into a one-day age claim.
+func TestLeaderStuckSubDayWording(t *testing.T) {
+	now := time.Now().UTC()
+	task := Todo{Title: "Example task", Supervision: &Supervision{ExpectMinutes: 180},
+		Agents: []TodoAgent{{SessionID: "worked"}}}
+	last := now.Add(-270 * time.Minute)
+	for _, section := range []string{triageWaiting, triageOther} {
+		t.Run(section, func(t *testing.T) {
+			if !taskStuck(task, todoTriage{Section: section, Last: last}, true, now) {
+				t.Fatal("short task must be stuck at 270 minutes, before its first day")
+			}
+			for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+				t.Run(string(lang), func(t *testing.T) {
+					report := leaderReportText(lang, assistantwire.LeaderStuck, task, "", section)
+					supervision := prompts.RenderSupervise(prompts.Supervise{LeaderStuck: true,
+						Entries: []prompts.SuperviseEntry{{ID: "todo_example", Title: task.Title,
+							Kind: sigLeaderStuck, Detail: report}}})
+					briefing := prompts.RenderBriefFacts(prompts.BriefFacts{Hours: 12,
+						Leaders: []prompts.BriefLeader{{Name: "Example direction", Open: 1, Stuck: 1}}})
+					for name, text := range map[string]string{"report": report, "supervision": supervision, "briefing": briefing} {
+						for _, wrongAge := range []string{"over a day", "一天", "1 日以上"} {
+							if strings.Contains(text, wrongAge) {
+								t.Errorf("%s claims a day for 270 minutes: %s", name, text)
+							}
+						}
+						if name != "briefing" && !strings.Contains(text, task.Title) {
+							t.Errorf("%s lost the task title: %s", name, text)
+						}
+					}
+				})
 			}
 		})
 	}
