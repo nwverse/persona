@@ -24,6 +24,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+const assistantShellReady = "__PERSONA_ASSISTANT_SHELL_READY__"
+
 // An assistant process that exits within assistantEarlyExit of starting failed to start: its last assistantStderrTail
 // stderr lines go to the log.
 const (
@@ -279,7 +281,7 @@ func (n *Node) assistantCLICommand(shell, launcher, cwd string, itself bool, arg
 	if itself {
 		command = commandInProfile("command claude", envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath)
 	}
-	argv := append([]string{shell, "-ic", command + ` "$@"`, "persona"}, args...)
+	argv := append([]string{shell, "-ic", `echo ` + assistantShellReady + `; ` + command + ` "$@"`, "persona"}, args...)
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),
@@ -463,6 +465,9 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	started = true
 	processExecution := execution
 	processExecution.StartupContext = nil // a live or resident process must never keep the completed RPC's context
+	// Effort is deliberately unconfirmed here: --effort cannot express auto and
+	// launcher environment/policy can override a flag. syncAssistantModes must
+	// receive its ACK before the user's first input, just as for live changes.
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
 		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
@@ -586,6 +591,13 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 	if err := sc.Err(); err != nil {
 		logger.Printf("assistant %s: stderr read: %v", id[:8], err)
 		_, _ = io.Copy(io.Discard, stderr)
+	}
+	p.mu.Lock()
+	stopReason := p.stopReason
+	p.mu.Unlock()
+	if stopReason != "" {
+		logger.Printf("assistant %s: stopped by node after %s: %s", short(id), time.Since(born).Round(time.Millisecond), stopReason)
+		return
 	}
 	if lived := time.Since(born); lived < assistantEarlyExit && len(tail) > 0 {
 		logger.Printf("assistant %s: %s exited %s after it started: %s", id[:8], launcher, lived.Round(time.Millisecond),
