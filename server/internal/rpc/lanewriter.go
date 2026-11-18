@@ -28,7 +28,7 @@ type laneWriter struct {
 	seq     uint64 // the last data frame numbered
 	ackDue  uint64 // the reader has read every frame through this one, and wants it acknowledged
 	ackSent uint64
-	win     bulkWindow
+	win     creditWindow
 	totals  [laneCount]laneTotals
 }
 
@@ -60,7 +60,7 @@ type outLine struct {
 }
 
 func newLaneWriter(w io.Writer, closed <-chan struct{}, fail func(error), filter func([]byte) []byte) *laneWriter {
-	return &laneWriter{w: w, closed: closed, fail: fail, filter: filter, wake: make(chan struct{}, 1), win: newBulkWindow()}
+	return &laneWriter{w: w, closed: closed, fail: fail, filter: filter, wake: make(chan struct{}, 1), win: newCreditWindow()}
 }
 
 func (lw *laneWriter) poke() {
@@ -134,7 +134,7 @@ func (lw *laneWriter) acked(seq uint64) error {
 		return fmt.Errorf("%w: acknowledges frame %d, %d sent", errFrame, seq, lw.seq)
 	}
 	lw.win.acked(seq, time.Now())
-	if len(lw.lanes[LaneBulk].lines) > 0 { // credit is what bulk may wait for; nothing else does
+	if len(lw.lanes[LaneInteractive].lines)+len(lw.lanes[LaneBulk].lines) > 0 { // what may wait for credit
 		lw.poke()
 	}
 	return nil
@@ -193,7 +193,11 @@ func (lw *laneWriter) stop(err error) {
 	for i := range lw.lanes {
 		q := &lw.lanes[i]
 		for _, l := range q.lines {
-			l.done <- lw.err
+			if l.started {
+				l.done <- lw.err
+			} else {
+				l.done <- NotSent(lw.err) // none of it went out
+			}
 		}
 		*q = laneQueue{}
 	}
@@ -220,7 +224,7 @@ func (lw *laneWriter) fillLocked(batch []byte, finished []*outLine, now time.Tim
 		batch = append(append(batch, h[:]...), l.b[l.off:l.off+n]...)
 		l.off += n
 		lw.totals[l.lane].frames++
-		if l.lane == LaneBulk {
+		if creditLane(l.lane) {
 			lw.win.wrote(lw.seq, n, now)
 		}
 		if fin {
@@ -234,7 +238,10 @@ func (lw *laneWriter) fillLocked(batch []byte, finished []*outLine, now time.Tim
 }
 
 // pickLocked is the next frame: its line, advanced to its turn, and its size; ok false when there is none, or when
-// the next one would not fit in room (and the batch is not empty: first).
+// the next one would not fit in room (and the batch is not empty: first). Within a lane, lines that fit in one frame
+// take turns with the lane's oldest long line; the other long lines wait until it is through, as they would on the
+// one writer: taking turns among them would finish every one of them only at the end, each later than its caller can
+// wait (concurrent file chunks, each a minute's worth on a slow link).
 func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine, int, bool) {
 	for lane := LaneControl; lane < laneCount; lane++ {
 		q := &lw.lanes[lane]
@@ -242,22 +249,22 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 			continue
 		}
 		most := lw.frameSize(lane)
+		long := q.long(most)
 		for k := 0; k < len(q.lines); k++ {
 			i := (q.next + k) % len(q.lines)
 			l := q.lines[i]
+			if l != long && l.left() > most {
+				continue // a long line behind the one going out
+			}
 			if !l.started && q.slots == 1<<laneSlots-1 {
 				continue // every slot is busy with a line in progress: this one waits for its turn
 			}
-			left := len(l.b) - l.off
-			if !l.started {
-				left = len(bytes.TrimSuffix(l.b, newline)) // filter may change it a little: a hint is enough here
-			}
-			n := min(left, most)
+			n := min(l.left(), most) // before filter, which may change it a little: a hint is enough here
 			if !first && frameHeader+n > room {
 				return nil, 0, false
 			}
-			if lane == LaneBulk && !lw.win.canSend(n) {
-				break // no credit for bulk: lower lanes have nothing more to send
+			if creditLane(lane) && !lw.win.canSend(n) {
+				break // no credit: the lanes below that wait for it have none either
 			}
 			if !l.started {
 				// Filtered as it goes on the wire, as a line on the one writer was (the node hides values handed over
@@ -279,13 +286,36 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 	return nil, 0, false
 }
 
+// left is what of l is still to go: once it started, of the line as filtered and without its newline.
+func (l *outLine) left() int {
+	if l.started {
+		return len(l.b) - l.off
+	}
+	return len(bytes.TrimSuffix(l.b, newline))
+}
+
+// long is the lane's long line whose frames go now: the one in progress, else the oldest that needs more than one frame
+// of most bytes; nil when there is none.
+func (q *laneQueue) long(most int) *outLine {
+	var oldest *outLine
+	for _, l := range q.lines {
+		if l.started {
+			return l // a line started and not through is a long one: a short one starts and ends in one frame
+		}
+		if oldest == nil && l.left() > most {
+			oldest = l
+		}
+	}
+	return oldest
+}
+
 // LaneStats is a framed connection's writer as it is now (Peer.LaneStats).
 type LaneStats struct {
 	Framed   bool // this side's output is framed
 	Lanes    [laneCount]LaneCounters
-	Window   int           // bulk bytes that may be in flight
-	InFlight int           // bulk bytes sent and not acknowledged
-	RTT      time.Duration // the latest bulk round trip
+	Window   int           // bytes of the lanes with credit (interactive, bulk) that may be in flight
+	InFlight int           // those sent and not acknowledged
+	RTT      time.Duration // the latest round trip of such a frame
 	BaseRTT  time.Duration // the smallest lately
 }
 
@@ -329,7 +359,7 @@ func sizeText(n int64) string {
 
 // frameSize is the most a frame of lane carries now.
 func (lw *laneWriter) frameSize(lane Lane) int {
-	if lane == LaneBulk {
+	if creditLane(lane) {
 		return lw.win.frameSize()
 	}
 	return framePayloadMax

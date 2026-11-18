@@ -6,7 +6,7 @@ import (
 )
 
 // fill sends bulk frames of the window's size until it is full, all from at; it returns the last seq.
-func (w *bulkWindow) fillFrom(seq uint64, at time.Time) uint64 {
+func (w *creditWindow) fillFrom(seq uint64, at time.Time) uint64 {
 	for w.canSend(w.frameSize()) {
 		seq++
 		w.wrote(seq, w.frameSize(), at)
@@ -15,7 +15,7 @@ func (w *bulkWindow) fillFrom(seq uint64, at time.Time) uint64 {
 }
 
 func TestBulkWindowGrowsOnAnIdleLink(t *testing.T) {
-	w := newBulkWindow()
+	w := newCreditWindow()
 	now := time.Unix(1_000_000, 0)
 	seq := uint64(0)
 	for range 20 {
@@ -40,7 +40,7 @@ func TestBulkWindowGrowsOnAnIdleLink(t *testing.T) {
 // Round trips that grow past the link's own by more than queueTarget shrink the window, at most once a round trip,
 // never below windowMin; frames shrink with it.
 func TestBulkWindowShrinksWhenFramesQueue(t *testing.T) {
-	w := newBulkWindow()
+	w := newCreditWindow()
 	w.cwnd = 1 << 20
 	now := time.Unix(1_000_000, 0)
 	w.wrote(1, 1000, now)
@@ -74,7 +74,7 @@ func TestBulkWindowShrinksWhenFramesQueue(t *testing.T) {
 
 // A window bulk did not fill does not grow: a burst later would find it larger than the link has shown it can take.
 func TestBulkWindowGrowsOnlyWhenItWasTheLimit(t *testing.T) {
-	w := newBulkWindow()
+	w := newCreditWindow()
 	now := time.Unix(1_000_000, 0)
 	for i := uint64(1); i <= 50; i++ {
 		w.wrote(i, 1000, now)
@@ -87,7 +87,7 @@ func TestBulkWindowGrowsOnlyWhenItWasTheLimit(t *testing.T) {
 }
 
 func TestBulkWindowCanSend(t *testing.T) {
-	w := newBulkWindow()
+	w := newCreditWindow()
 	if !w.canSend(10 * windowInit) {
 		t.Fatal("nothing in flight: one frame of any size may go")
 	}
@@ -101,7 +101,7 @@ func TestBulkWindowCanSend(t *testing.T) {
 }
 
 func TestBulkWindowEntriesStayBounded(t *testing.T) {
-	w := newBulkWindow()
+	w := newCreditWindow()
 	start := time.Unix(1_000_000, 0)
 	for i := uint64(1); i <= 3*maxSentEntries; i++ {
 		w.wrote(i, 10, start.Add(time.Duration(i)))

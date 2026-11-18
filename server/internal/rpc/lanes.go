@@ -2,11 +2,12 @@ package rpc
 
 // Lanes (#10660, docs/protocol/protocol.md "Lanes"): a connection both of whose ends opt in (EnableLanes) can switch
 // from JSON lines to frames, each carrying a piece of one line on one of four lanes. The writer sends the lanes in
-// strict priority (control, interactive, events, bulk) and takes turns between the lines of a lane, so a pong or an
-// answer to a tap waits at most for one frame already on its way, not for a 1 MiB file chunk ahead of it on the one
-// writer. Bulk frames also wait for credit (bulkWindow): the other side acknowledges the frames it has read, and only
-// so many bulk bytes may be sent and not yet acknowledged, so what sits in the transport's own buffers (ssh, a relay,
-// TCP) ahead of a pong stays bounded too, and a peer that stops reading holds the bulk writer back.
+// strict priority (control, interactive, events, bulk), short lines of a lane taking turns with its oldest long one, so
+// a pong or an answer to a tap waits at most for one frame already on its way, not for a 1 MiB file chunk ahead of it
+// on the one writer. Interactive and bulk frames also wait for credit (creditWindow): the other side acknowledges the
+// frames it has read, and only so many of their bytes may be sent and not yet acknowledged, so what sits in the
+// transport's own buffers (ssh, a relay, TCP) ahead of a pong stays bounded too, and a peer that stops reading holds
+// those writers back (creditLane says why events and control never wait).
 //
 // The switch is negotiated on the connection itself, so old peers on either end, and every byte pipe in between,
 // see nothing new:
@@ -31,7 +32,7 @@ package rpc
 //	        number the sender has read, every frame before it included
 //
 // Sequence numbers and the cumulative acknowledgement are what a resumed connection (#10663) is built on: it keeps the
-// frames not yet acknowledged and sends them again after a reconnect. Version 1 uses them for the bulk window only.
+// frames not yet acknowledged and sends them again after a reconnect. Version 1 uses them for the window only.
 
 import (
 	"encoding/binary"
@@ -47,9 +48,15 @@ const (
 	LaneControl     Lane = iota // ping and its pong, rpc.cancel, flow control
 	LaneInteractive             // requests and their answers that are not bulk
 	LaneEvents                  // events that are not bulk
-	LaneBulk                    // file chunks, uploads, node update packages, port bytes: limited by the bulk window
+	LaneBulk                    // file chunks, uploads, node update packages, port bytes
 	laneCount
 )
+
+// creditLane: frames of lane wait for credit (creditWindow). Interactive and bulk lines are written by callers and
+// handlers, never by a read loop: a request from one would wait for its answer, which that loop alone reads, so it
+// never was. An event can be (a synchronous event handler that sends one), and waiting for credit there would wait for
+// an acknowledgement only that same loop can read; control is what credit itself travels on.
+func creditLane(l Lane) bool { return l == LaneInteractive || l == LaneBulk }
 
 var laneNames = [laneCount]string{"control", "interactive", "events", "bulk"}
 

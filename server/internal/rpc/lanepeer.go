@@ -19,9 +19,12 @@ type lineSource interface {
 	Err() error
 	// aheadActivity: input already read after the current line holds a reply, or the start of one (PingActivity).
 	aheadActivity() bool
+	// holding: a long line whose middle counted is still arriving (always false for lines: one arrives at a time).
+	holding() bool
 }
 
 func (s *lineReader) aheadActivity() bool { return bufferedActivity(s.buffered()) }
+func (s *lineReader) holding() bool       { return false }
 
 // lanesMarker is the params of the asking side's last line.
 var lanesMarker = json.RawMessage(fmt.Sprintf(`{"version":%d}`, lanesVersion))

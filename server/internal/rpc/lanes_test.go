@@ -123,8 +123,9 @@ func TestLaneWriterPriority(t *testing.T) {
 	}
 }
 
-// Two long lines of one lane take turns frame by frame, and a short line queued after them goes before either ends.
-func TestLaneWriterTurnsWithinLane(t *testing.T) {
+// Long lines of one lane go one after the other, as on the one writer: taking turns, each would end only when all end.
+// A short line queued behind them goes between the frames of the one going out.
+func TestLaneWriterLongLinesInTurn(t *testing.T) {
 	g := newGate()
 	closed := make(chan struct{})
 	defer close(closed)
@@ -132,12 +133,12 @@ func TestLaneWriterTurnsWithinLane(t *testing.T) {
 	block := queue(t, lw, LaneEvents, `{"event":"block"}`)
 	lw.start()
 	g.waitWrite(t)
-	a := queue(t, lw, LaneInteractive, strings.Repeat("a", 3*framePayloadMax))
-	b := queue(t, lw, LaneInteractive, strings.Repeat("b", 3*framePayloadMax))
+	a := queue(t, lw, LaneEvents, strings.Repeat("a", 3*framePayloadMax))
+	b := queue(t, lw, LaneEvents, strings.Repeat("b", 3*framePayloadMax))
 	g.release(1)
 	<-block.done
 	g.waitWrite(t) // a's first frame
-	short := queue(t, lw, LaneInteractive, `{"id":"h9","result":{}}`)
+	short := queue(t, lw, LaneEvents, `{"event":"short"}`)
 	g.release(100)
 	for _, l := range []*outLine{a, b, short} {
 		if err := <-l.done; err != nil {
@@ -147,26 +148,18 @@ func TestLaneWriterTurnsWithinLane(t *testing.T) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var seen []byte
-	var slots = map[byte]uint16{}
 	for _, w := range g.writes[1:] {
 		hs, ps := heads(t, w)
-		for i, h := range hs {
+		for i := range hs {
 			c := ps[i][0]
 			if c == '{' {
 				c = 's'
 			}
 			seen = append(seen, c)
-			if s, ok := slots[c]; ok && s != h.slot {
-				t.Fatalf("line %c changed slot", c)
-			}
-			slots[c] = h.slot
 		}
 	}
-	if got := string(seen); got != "absabab" {
-		t.Fatalf("frames in order %q, want absabab", got)
-	}
-	if slots['a'] == slots['b'] {
-		t.Fatal("two lines in progress share a slot")
+	if got := string(seen); got != "asaabbb" {
+		t.Fatalf("frames in order %q, want asaabbb", got)
 	}
 }
 
@@ -189,14 +182,21 @@ func (b *buffered) Len() int {
 	return b.b.Len()
 }
 
-// A peer that stops reading holds the bulk writer back once the window is full; bytes it acknowledges let more go.
-func TestLaneWriterBulkWindow(t *testing.T) {
+// A peer that stops reading holds the writer of interactive and bulk lines back once the window is full; what it
+// acknowledges lets more go; control and events go on meanwhile.
+func TestLaneWriterCreditWindow(t *testing.T) {
+	for _, lane := range []Lane{LaneInteractive, LaneBulk} {
+		t.Run(lane.String(), func(t *testing.T) { testCreditWindow(t, lane) })
+	}
+}
+
+func testCreditWindow(t *testing.T, lane Lane) {
 	var sink buffered
 	closed := make(chan struct{})
 	defer close(closed)
 	lw := newLaneWriter(&sink, closed, func(error) {}, nil)
 	lw.start()
-	line := &outLine{b: bytes.Repeat([]byte("z"), 1<<20), lane: LaneBulk, queued: time.Now(), done: make(chan error, 1)}
+	line := &outLine{b: bytes.Repeat([]byte("z"), 1<<20), lane: lane, queued: time.Now(), done: make(chan error, 1)}
 	if _, err := lw.enqueue(line); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestLaneWriterBulkWindow(t *testing.T) {
 		return sink.Len()
 	}
 	n := stalled()
-	if max := windowInit + windowInit/4 + 4*frameHeader; n > max {
+	if max := windowInit + 4*frameHeader; n > max {
 		t.Fatalf("%d bytes written to a peer that read none, window %d", n, windowInit)
 	}
 	select {
@@ -219,12 +219,13 @@ func TestLaneWriterBulkWindow(t *testing.T) {
 		t.Fatal("the transfer finished without acknowledgements")
 	default:
 	}
-	// Small lines still go while bulk waits for credit.
-	ping := queue(t, lw, LaneControl, `{"id":"h1","method":"ping"}`)
-	select {
-	case <-ping.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a ping waited for the bulk window")
+	// Control and events still go while the others wait for credit.
+	for _, l := range []*outLine{queue(t, lw, LaneControl, `{"id":"h1","method":"ping"}`), queue(t, lw, LaneEvents, `{"event":"e"}`)} {
+		select {
+		case <-l.done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("a %s line waited for the window", l.lane)
+		}
 	}
 	lw.mu.Lock()
 	sent := lw.seq
@@ -247,7 +248,7 @@ func TestLaneWriterWithdraw(t *testing.T) {
 	defer close(closed)
 	lw := newLaneWriter(g, closed, func(error) {}, nil)
 	lw.start()
-	busy := queue(t, lw, LaneInteractive, strings.Repeat("x", 2*framePayloadMax))
+	busy := queue(t, lw, LaneEvents, strings.Repeat("x", 2*framePayloadMax)) // a lane that waits for no credit
 	g.waitWrite(t)
 	waiting := queue(t, lw, LaneBulk, `{"event":"stream.data"}`)
 	if !lw.withdraw(waiting) {
@@ -578,19 +579,14 @@ func TestLanesWriteErrorsAsLines(t *testing.T) {
 		return len(lw.lanes[LaneBulk].lines) == 1 && len(lw.lanes[LaneEvents].lines) == 2
 	})
 	cancel()
-	// The cancelled one never went out; the other waits its turn behind the long line, then goes.
-	g.release(1000)
-	errs := []error{<-errc, <-errc}
-	notSent := 0
-	for _, err := range errs {
-		if errors.Is(err, ErrNotSent) && errors.Is(err, context.Canceled) {
-			notSent++
-		} else if err != nil {
-			t.Fatal(err)
-		}
+	// The cancelled one never went out, while the writer still holds the long line's first frame; the other waits its
+	// turn behind it, then goes.
+	if err := <-errc; !errors.Is(err, ErrNotSent) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled before it went out: %v", err)
 	}
-	if notSent != 1 {
-		t.Fatalf("%v", errs)
+	g.release(1000)
+	if err := <-errc; err != nil {
+		t.Fatal(err)
 	}
 }
 

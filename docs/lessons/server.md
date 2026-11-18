@@ -1905,12 +1905,21 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   window bounds what is ahead of it in the pipe, and only a delay-based one fits both 30 KB/s (where 64 KiB in flight
   is two seconds of queue) and a fast link (where it starves a transfer). Frames shrink with the window: on a slow
   link the frame an interactive frame waits behind is a few KiB.
-- **Credit only where no read loop writes.** A window on every lane would bound control's wait for every kind of
-  traffic, but a write made from inside a read loop (a synchronous event handler) that waits for credit waits for an
-  acknowledgement only that read loop's reading could release: a deadlock today's lines cannot have. Bulk writes come
-  from workers (transfers, handlers, the port pumps), never a read loop, so bulk alone waits for credit. Large
-  interactive answers and events still go to the transport at once; the middle of a long line keeps excusing a late
-  pong, as it did with lines.
+- **Credit only where no read loop writes.** A write made from inside a read loop (a synchronous event handler) that
+  waits for credit waits for an acknowledgement only that read loop's reading could release: a deadlock lines cannot
+  have. Requests and answers never come from a read loop (a request there would already wait forever for its answer),
+  so interactive and bulk wait for credit; events do not. Credit for bulk alone was the first version: a review showed
+  a large `model.http` body then filled ssh's buffer ahead of the ping, which with lines would have waited unwritten
+  (not counted) and framed was written and missed. Large events still go to the transport at once; the middle of a
+  long line keeps excusing a late pong, as with lines.
+- **Taking turns among long lines finishes all of them last.** Ten 200 KiB answers sharing a link frame by frame all
+  end at the end, so every caller with a deadline gives up where one after another most would finish. Within a lane,
+  short lines take turns with the oldest long line; the other long lines wait, as on the one writer.
+- **A frame is not a line, nor a read.** The heartbeat's signals are defined per line and per read: the read-ahead must
+  never judge a later piece of a line on its own (a closing piece does not decode, and counted as activity), the
+  middle of a line counts per read that goes on with it (not per whole frame), and it stands while the line still
+  arrives even when shorter lines finish beside it. Each was a divergence from lines that a review found by feeding a
+  peer of lines and a framed one the same bytes (`server/internal/rpc/lanes_activity_test.go`).
 - **Switch each direction on its own line.** One side cannot know where the other's lines end except by a line that
   says so: the answering side's last line is its answer, the asking side's a marker event. Both are written under the
   writer's lock (a writer that waited for it finds the output framed and queues frames), and each read loop switches

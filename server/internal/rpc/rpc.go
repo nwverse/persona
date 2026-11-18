@@ -306,8 +306,8 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 	// the last reply, so a large request or event the other side started cannot keep clearing misses once it is
 	// through: a pong behind it would then be the next line and arrive as a reply. Framed (lanes.go), a line's frames
 	// in between count the same way (frameReader.middle).
-	var lastReply int64
-	lr.middle = func() { p.pingActivity.Store(act.at) }
+	var lastReply, middleAt int64
+	lr.middle = func() { middleAt = act.at; p.pingActivity.Store(act.at) }
 	var sc lineSource = lr
 	framed := false
 	for sc.Scan() {
@@ -335,7 +335,13 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 		if replyMessage(m) && !deadlineMessage(m) || sc.aheadActivity() {
 			lastReply = readAt
 		}
-		p.pingActivity.Store(lastReply)
+		activity := lastReply
+		if middleAt > activity && sc.holding() {
+			// Framed, lines finish while a long one goes on arriving beside them: the activity its middle gave stands
+			// until it is whole, as it does with lines, where nothing finishes in between.
+			activity = middleAt
+		}
+		p.pingActivity.Store(activity)
 		if p.lanes != nil && m.Method == lanesMethod && m.ID != "" { // the other side asks for frames
 			go p.answerLanes(m)
 			continue

@@ -2,8 +2,9 @@ package rpc
 
 import "time"
 
-// bulkWindow is how many bulk bytes a framed connection may have sent and not yet seen acknowledged. It adapts to the
-// link by delay (as LEDBAT does): each acknowledgement gives a round trip for the newest bulk frame it covers, the
+// creditWindow is how many bytes of interactive and bulk frames a framed connection may have sent and not yet seen
+// acknowledged (creditLane). It adapts to the link by delay (as LEDBAT does): each acknowledgement gives a round trip
+// for the newest such frame it covers, the
 // smallest round trip seen lately is the link's own, and what a sample takes beyond it is time the frame spent queued
 // (in the transport's buffers, behind other frames). Below queueTarget the window grows, quickly while the queue is
 // short; above it the window shrinks once a round trip. On a link of 30 KB/s the window settles near what the link
@@ -12,7 +13,7 @@ import "time"
 //
 // Bulk frames are cut to a quarter of the window (bulkFrameSize): on a slow link a frame takes long to go out, and an
 // interactive frame behind it waits for the whole frame.
-type bulkWindow struct {
+type creditWindow struct {
 	cwnd     int
 	inFlight int
 	sent     []sentBulk // bulk sent and not acknowledged, oldest first; one entry per frame
@@ -40,15 +41,15 @@ const (
 	maxSentEntries = 4096
 )
 
-func newBulkWindow() bulkWindow { return bulkWindow{cwnd: windowInit} }
+func newCreditWindow() creditWindow { return creditWindow{cwnd: windowInit} }
 
 // frameSize is the payload of a bulk frame now.
-func (w *bulkWindow) frameSize() int {
+func (w *creditWindow) frameSize() int {
 	return min(max(w.cwnd/4, bulkFrameMin), framePayloadMax)
 }
 
 // canSend: a bulk frame of n bytes may go out now. With nothing in flight one frame always may, whatever its size.
-func (w *bulkWindow) canSend(n int) bool {
+func (w *creditWindow) canSend(n int) bool {
 	if w.inFlight == 0 || w.inFlight+n <= w.cwnd {
 		return true
 	}
@@ -57,7 +58,7 @@ func (w *bulkWindow) canSend(n int) bool {
 }
 
 // wrote records a bulk frame of n bytes, numbered seq, written from at.
-func (w *bulkWindow) wrote(seq uint64, n int, at time.Time) {
+func (w *creditWindow) wrote(seq uint64, n int, at time.Time) {
 	w.inFlight += n
 	if k := len(w.sent); k >= maxSentEntries {
 		w.sent[k-1].seq, w.sent[k-1].bytes = seq, w.sent[k-1].bytes+n
@@ -67,7 +68,7 @@ func (w *bulkWindow) wrote(seq uint64, n int, at time.Time) {
 }
 
 // acked takes an acknowledgement of every frame through seq, read at now, and adapts the window.
-func (w *bulkWindow) acked(seq uint64, now time.Time) {
+func (w *creditWindow) acked(seq uint64, now time.Time) {
 	var freed int
 	var at time.Time
 	i := 0
