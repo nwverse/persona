@@ -292,7 +292,8 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "success_review", return_value=None), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
                 patch.object(pr_watch, "verify", return_value=[]), \
-                patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
+                patch.object(pr_watch, "gh_json", side_effect=[[], [], []]), \
+                patch.object(self.watcher, "merge", return_value=False):
             self.watcher.process("example/one", 7)
         self.assertFalse(any("seven days" in body for body in self.comments))
         self.assertNotIn("stale_closed_at", self.watcher.state.get("example/one", 7))
@@ -2017,7 +2018,8 @@ class WatcherTests(unittest.TestCase):
                                semantic="passed", verification="passed", success_posted=True)
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
-                patch.object(pr_watch, "verify", return_value=[]):
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
             self.watcher.process("example/one", 7)
         review.assert_called_once()
 
@@ -2564,11 +2566,13 @@ class WatcherTests(unittest.TestCase):
         self.watcher.tasks.put((2, -1, ("", 0)))
         self.watcher.tasks.put((2, -1, ("", 0)))
         workers = [threading.Thread(target=self.watcher.worker) for _ in range(2)]
-        for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join(timeout=5)
-            self.assertFalse(worker.is_alive())
+        with patch.object(self.watcher, "process") as process:
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=5)
+                self.assertFalse(worker.is_alive())
+        process.assert_called_once_with("example/one", 7)
         self.assertTrue(self.watcher.tasks.empty())
 
     def test_findings_and_exhausted_repairs_do_not_get_migration_priority(self):
