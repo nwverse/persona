@@ -97,16 +97,16 @@ function RemovedLinks(props: Props & { onAllowed: () => void }) {
   return <section>
     <SectionTitle title={t("knowledge-relationships.removed_title")} count={rows.length} />
     <Card>
-      <p className="px-4 pt-3 text-[12px] leading-snug text-ink-3">{t("knowledge-relationships.removed_hint")}</p>
+      <p className="px-4 pt-3 text-label leading-snug text-ink-3">{t("knowledge-relationships.removed_hint")}</p>
       {rows.map(({ x, allowance, key }) => <div key={key}>
         <div className="flex items-center gap-3 px-4 py-2.5">
           <Tile entry={x} size={30} />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-2" title={x.name}>{x.name}</span>
+          <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink-2" title={x.name}>{x.name}</span>
           <Button size="sm" busy={busy === key} disabled={busy !== ""} aria-label={t("knowledge-relationships.allow_label", { name: x.name })} onClick={() => void allow(x, key, allowance)}>
             {t("knowledge-relationships.allow")}
           </Button>
         </div>
-        {failure?.key === key && <p role="alert" className="break-words px-4 pb-2.5 text-[12px] text-red">{failure.text}</p>}
+        {failure?.key === key && <p role="alert" className="break-words px-4 pb-2.5 text-label text-red">{failure.text}</p>}
       </div>)}
     </Card>
   </section>;
