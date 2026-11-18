@@ -35,8 +35,9 @@ func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
 //   - Needs you and Can wait: the soonest deadline first (the earlier of the decisions' deadlines on the row, a carried
 //     step's included, and the to-do's due), then the oldest ask (since).
 //   - Working: the latest activity first, its steps' included.
-//   - Waiting: the soonest wake first (a park's end, a usage limit's reset and its grace, a carried step's), then the
-//     longest waiting.
+//   - Waiting: the soonest wake first (a park's end, a usage limit's reset and its grace, the hub's next wake of a run
+//     that waits on another Agent or an outside event, a carried step's), rows with none last, then the longest
+//     waiting.
 //   - To do: by due (overdue, today, later), then priority (high, normal, low), then the newest.
 //   - Just finished and Done: the newest first.
 //   - Someday: the soonest back first, then the newest.
