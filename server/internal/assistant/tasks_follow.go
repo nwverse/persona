@@ -269,6 +269,10 @@ type receiptBody struct {
 	PR      string         `json:"pr,omitempty"`
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
+	// MachineID and SessionID name the run whose turn this is (#10465): a to-do's history gives the receipt to that run
+	// instead of guessing from the computer's name. Absent where no run started (a failed start) and on older receipts.
+	MachineID string `json:"machine_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 	// Criteria: a done receipt's list of its brief's criteria as they stood when the agent stopped (#3822,
 	// briefCriteriaNow): met or not met as the supervision ledger tracks them (#3635: the agent's reports and the
 	// reviews), unchecked while pending there, or dropped by a scope change.
@@ -490,7 +494,7 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		s.logf("task %s: interrupted: %s", t.ID, clip(oneLine(cut.TurnError), 200))
 		where := [2]string{cut.MachineID, cut.SessionID}
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(s.lang(cctx), "assistant-tasks.interrupted"), Machine: name,
-			Error: clip(strings.TrimSpace(cut.TurnError), 300)}
+			MachineID: cut.MachineID, SessionID: cut.SessionID, Error: clip(strings.TrimSpace(cut.TurnError), 300)}
 		s.appendInterrupted(cctx, t, body, false)
 		if s.closedWhileRead(t.ID) {
 			return settleTaken
@@ -529,7 +533,7 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		where := [2]string{last.MachineID, last.SessionID}
 		l := s.lang(cctx)
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(l, "assistant-tasks.interrupted"), Machine: name,
-			Error: silentTurnErrorIn(l)}
+			MachineID: last.MachineID, SessionID: last.SessionID, Error: silentTurnErrorIn(l)}
 		s.appendInterrupted(cctx, t, body, true)
 		if s.closedWhileRead(t.ID) {
 			return settleTaken
@@ -548,7 +552,7 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		return settleRefused
 	}
 	body := receiptBody{Title: t.Title, State: "done", Summary: clipMarkdown(text, 600), Machine: name,
-		Reroute: s.rerouteOfTask(cctx, t.ID, t.PlanID)}
+		MachineID: last.MachineID, SessionID: last.SessionID, Reroute: s.rerouteOfTask(cctx, t.ID, t.PlanID)}
 	// Persona follows up on a supervised stop through sigReview or sigIdle after judgment; the receipt need not wait.
 	// needs_user waits on the user instead. Read the latest todo in case it changed while reading the reply.
 	if current, ok := s.todoNow(t.ID); ok && current.DoneAt == nil {
@@ -797,7 +801,8 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 			return FeedItem{}, err
 		}
 		return s.appendFeed(ctx, conversation, feedRouted, todoID, map[string]string{"text": text,
-			"new_agent": started.SessionID, "new_agent_machine": started.MachineID})
+			"new_agent": started.SessionID, "new_agent_machine": started.MachineID,
+			"machine_id": started.MachineID, "session_id": started.SessionID})
 	}
 	return s.sendToTaskAgent(ctx, conversation, todoID, pickTaskAgent(live), text, relay, guard)
 }
@@ -876,7 +881,8 @@ func (s *Service) sendToTaskAgent(ctx context.Context, conversation, todoID stri
 	if err != nil {
 		return FeedItem{}, s.dialogRefusal(ctx, c, err) // a dialog_open refusal names the agent and the dialog (#7343)
 	}
-	body := map[string]string{"text": text}
+	// The run it went to (#10465): the app says "Delivered to" it, and the to-do's history puts the message on its line.
+	body := map[string]string{"text": text, "machine_id": c.MachineID, "session_id": c.SessionID}
 	if relay != "" {
 		body["relay"] = relay
 	}
