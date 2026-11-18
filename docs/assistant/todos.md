@@ -736,8 +736,10 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   the object's final path component and supply that URL as a `build` or `url` artifact.
   An unrelated artifact or a PR link alone is insufficient for a deployment object.
   Unbound "wait for a system message" stays idle.
-- An explicit upstream merge/review wait can name one exact GitHub PR in its closeout or final
-  reply. Admit it only when it is bound to the task and has fresh, open, non-draft,
+- An explicit upstream merge/review wait can name one exact PR/MR in the last closeout's
+  `waiting` field or artifacts. For example, a maintainer re-review wait need not repeat its
+  `artifact: pr` URL in `waiting`. A link found only outside that closeout is not binding evidence;
+  legacy delivery-only replies still use their final reply. Admit it only when it is bound to the task and has fresh, open, non-draft,
   non-conflicting facts with a known head, no requested changes and no failing checks.
   Multiple distinct PR links remain ambiguous. This is a passive `external_event` object,
   not a claim that a reviewer was contacted; it creates no contact or supervisor-inspection receipt.
@@ -762,6 +764,11 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   the supervisor instead. Replaying a stopped turn spends no attempt; merely running the Agent
   again does not reset this automatic streak. A new source/contact/date or an intervening manual
   review starts a new streak. Rewording a wait about the same source does not reset it.
+- On startup, the supervision sweep also reconciles open tasks whose sole current Agent stopped
+  before this manager started, even if their idle receipt was already told. Each ready task is
+  inspected once per manager start, at most four per supervision sweep, through the same admission and safety gates. Missing session
+  inventory, work state or fresh bound-PR facts defer inspection until available. A repeated
+  startup never spends another unchanged attempt for the same durable stopped-turn identity.
 - At the first supervision sweep at or after 09:00 hub-local time, starting the next calendar day,
   still-current, unexpired automatic parks enter one ordinary batched digest per supervisor.
   The summary is informational and does not ask to resume unchanged work. Existing effective

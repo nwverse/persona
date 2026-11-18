@@ -70,24 +70,50 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 		return false, time.Time{}
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
-	agents = currentTaskAgents(agents, supersededAgents(t, agents))
-	if !reached || len(agents) == 0 {
+	if !reached {
 		return false, time.Time{}
+	}
+	agents, wake, ok := s.mechanicalAgents(ctx, t, agents, now)
+	if !ok {
+		return false, time.Time{}
+	}
+	if wake.IsZero() && len(agents) == 1 && s.parkCloseout(ctx, t, agents[0], now) {
+		return true, time.Time{}
+	}
+	if st != "" {
+		return false, time.Time{} // only evidenced closeouts extend the existing mechanical path to rework
+	}
+	if g.Kind == sigAllStopped {
+		return false, wake // other all-stopped handling retains its existing group checks
+	}
+	return s.mechanicalPR(ctx, t, agents, now, wake)
+}
+
+// Callers establish reachability; both paths require the same safely stopped inventory.
+func (s *Service) mechanicalAgents(ctx context.Context, t Todo, agents []proto.Session, now time.Time) ([]proto.Session, time.Time, bool) {
+	v := t.Supervision
+	st := v.state(t)
+	if st != "" && st != reviewRework || v.Waits != nil || v.AutoReview != nil && v.AutoReview.State == autoRunning {
+		return nil, time.Time{}, false
+	}
+	agents = currentTaskAgents(agents, supersededAgents(t, agents))
+	if len(agents) == 0 {
+		return nil, time.Time{}, false
 	}
 	for _, c := range agents {
 		if c.Status != proto.StatusDone || c.State == proto.StateWorking || c.State == proto.StateNeedsYou ||
 			c.PendingInteractions > 0 || len(c.Queued) > 0 || c.TurnError != "" || c.ReadOnlyReason != "" {
-			return false, time.Time{}
+			return nil, time.Time{}, false
 		}
 	}
 	if !s.loadWork(ctx) {
-		return false, time.Time{}
+		return nil, time.Time{}, false
 	}
 	for _, c := range agents {
 		if e, exists := s.workEntry([2]string{c.MachineID, c.SessionID}); exists && sameTurn(c, e.TurnAt) &&
 			(e.Work.On == proto.WaitUser || e.Work.Phase == proto.WorkWorking ||
 				e.Work.Closeout != nil && closeoutDisproved(*e.Work.Closeout)) {
-			return false, time.Time{}
+			return nil, time.Time{}, false
 		}
 	}
 
@@ -117,15 +143,10 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 			wake = next
 		}
 	}
-	if wake.IsZero() && len(agents) == 1 && s.parkCloseout(ctx, t, agents[0], now) {
-		return true, time.Time{}
-	}
-	if st != "" {
-		return false, time.Time{} // only evidenced closeouts extend the existing mechanical path to rework
-	}
-	if g.Kind == sigAllStopped {
-		return false, wake // other all-stopped handling retains its existing group checks
-	}
+	return agents, wake, true
+}
+
+func (s *Service) mechanicalPR(ctx context.Context, t Todo, agents []proto.Session, now time.Time, wake time.Time) (bool, time.Time) {
 	d := t.Delivery
 	if d == nil || d.Unblock != unblockOther || d.Gate == "" || d.At.IsZero() ||
 		(d.State != deliveryPR && d.State != deliveryMerged) || t.PRURL == "" || len(agents) != 1 {
@@ -169,7 +190,7 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 			(a.ReleasedAt == nil) == (b.ReleasedAt == nil) && (a.DismissedAt == nil) == (b.DismissedAt == nil)
 	})
 	if !exists || cur.DoneAt != nil || cur.PRURL != t.PRURL || !sameAgents ||
-		cur.Supervision == nil || !cur.Supervision.UpdatedAt.Equal(v.UpdatedAt) ||
+		cur.Supervision == nil || !cur.Supervision.UpdatedAt.Equal(t.Supervision.UpdatedAt) ||
 		!present || latest.Status != proto.StatusDone || !sameTurn(latest, c.UpdatedAt) ||
 		latest.PendingInteractions > 0 || len(latest.Queued) > 0 || latest.TurnError != "" {
 		return false, time.Time{}

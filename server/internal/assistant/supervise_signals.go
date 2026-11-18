@@ -169,6 +169,8 @@ type superviseBook struct {
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
+	// closeoutScanned bounds startup reconciliation; durable Automatic.Turn prevents replay across restarts.
+	closeoutScanned map[string]bool
 	// lines are the reports being paraphrased for the Progress row (report_line.go; the tests wait on them).
 	lines sync.WaitGroup
 }
@@ -433,12 +435,20 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
+	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
 		agents := s.taskAgentsIn(ctx, t, lists)
+		if backfilled < closeoutBackfillMost {
+			var scanned bool
+			t, scanned = s.backfillCloseout(ctx, t, lists, now)
+			if scanned {
+				backfilled++
+			}
+		}
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
 		stalled := map[string]bool{}

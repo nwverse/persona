@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	maxAutomaticParks = 3
-	sigParkedSummary  = "parked_summary"
+	maxAutomaticParks    = 3
+	closeoutBackfillMost = 4
+	sigParkedSummary     = "parked_summary"
 )
 
 type automaticPark struct {
@@ -83,6 +84,17 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 		return Parked{}, false
 	}
 	if !explicit {
+		prText := c.Waiting
+		for _, a := range artifacts {
+			prText += "\n" + a.Ref
+		}
+		if !ok {
+			prText = reply // Legacy delivery-only replies have no structured artifact fields.
+		}
+		prSource := closeoutPRSource(prText)
+		if prSource != "" && prSource != closeoutPRSource(reply) {
+			return Parked{}, false
+		}
 		// Reuse an inspected receipt only when this closeout explicitly names the same target and source.
 		if previous != nil && previous.Evidence != nil && previous.Reply == nil && previous.Decided == "" &&
 			closeoutBinds(c, artifacts, previous.Evidence) {
@@ -100,7 +112,7 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 			}
 			input.WaitingOn, input.Until = parkDate, at.Format(time.RFC3339)
 			input.Evidence = &ParkEvidence{Kind: "date", Target: c.Waiting, Wake: c.Waiting}
-		} else if source := closeoutPRSource(reply); source != "" && upstreamCloseout(c.Waiting) {
+		} else if source := prSource; source != "" && upstreamCloseout(c.Waiting) {
 			// The PR is an external object, not proof that a reviewer was contacted.
 			input.WaitingOn = parkExternalEvent
 			input.Evidence = &ParkEvidence{Kind: "external_event", Target: c.Waiting, URL: source, Wake: c.Waiting}
@@ -151,14 +163,101 @@ func upstreamCloseout(waiting string) bool {
 
 func closeoutPRSource(reply string) string {
 	var source string
-	for _, link := range ciPRURL.FindAllString(reply, -1) {
-		link = triageNormalizePRURL(link)
+	for _, link := range closeoutSource.FindAllString(reply, -1) {
+		link = triageNormalizePRURL(strings.TrimRight(link, ".,;)]}`"))
+		if !parkReviewURL(link) {
+			continue
+		}
 		if source != "" && source != link {
 			return "" // Different PRs in the same reply need a supervisor to disambiguate the wait.
 		}
 		source = link
 	}
 	return source
+}
+
+// Reconcile pre-start stops even when their idle receipt was already told. Read each ready task only once.
+func (s *Service) backfillCloseout(ctx context.Context, t Todo, lists machineSessions, now time.Time) (Todo, bool) {
+	if t.Supervision == nil || t.DoneAt != nil {
+		return t, false
+	}
+	st := t.Supervision.state(t)
+	if st != "" && st != reviewRework {
+		return t, false
+	}
+	agents := s.taskAgentsIn(ctx, t, lists)
+	for _, a := range t.Agents {
+		if a.ReleasedAt == nil && a.DismissedAt == nil && lists[a.MachineID].err != nil {
+			return t, false
+		}
+	}
+	agents = currentTaskAgents(agents, supersededAgents(t, agents))
+	if len(agents) != 1 || agents[0].Status != proto.StatusDone || agents[0].UpdatedAt.After(s.born) {
+		return t, false
+	}
+	b := &s.supervise
+	b.mu.Lock()
+	scanned := b.closeoutScanned[t.ID]
+	for _, g := range b.pending {
+		if g.Todo != t.ID {
+			continue
+		}
+		switch g.Kind {
+		case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
+		default:
+			b.mu.Unlock()
+			return t, false
+		}
+	}
+	b.mu.Unlock()
+	if scanned {
+		return t, false
+	}
+	// PR inventory and the work ledger may arrive after the first startup sweep.
+	for _, source := range append([]string{t.PRURL}, t.PRs...) {
+		if source == "" {
+			continue
+		}
+		fact := prFacts(t, source)
+		if fact == nil || fact.CheckedAt.After(now) || now.Sub(fact.CheckedAt) > triagePRStatusFreshFor {
+			return t, false
+		}
+	}
+	agents, wake, ok := s.mechanicalAgents(ctx, t, agents, now)
+	if !ok || !wake.IsZero() || len(agents) != 1 || agents[0].UpdatedAt.After(s.born) {
+		return t, false
+	}
+	b.mu.Lock()
+	if b.closeoutScanned[t.ID] {
+		b.mu.Unlock()
+		return t, false
+	}
+	if b.closeoutScanned == nil {
+		b.closeoutScanned = map[string]bool{}
+	}
+	b.closeoutScanned[t.ID] = true
+	b.mu.Unlock()
+	// Reuse this sweep's reachable inventory; admission still rechecks current-turn identity before the write CAS.
+	if s.parkCloseout(ctx, t, agents[0], now) {
+		if e, ok := s.turnOf(ctx, t.ID); ok && e.Machine == agents[0].MachineID &&
+			e.Session == agents[0].SessionID && e.Rev == agents[0].Rev && e.Signal != nil && e.Signal.Kind == sigIdle {
+			s.turnsTold(ctx, []superviseSignal{{Todo: t.ID, Kind: sigIdle, Key: e.Signal.Key}})
+		}
+		b.mu.Lock()
+		for key, g := range b.pending {
+			if g.Todo == t.ID {
+				switch g.Kind {
+				case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
+					delete(b.pending, key)
+				}
+			}
+		}
+		b.mu.Unlock()
+	}
+	if current, ok := s.todoNow(t.ID); ok {
+		return current, true
+	}
+	return t, true
 }
 
 func externalCloseout(waiting string) bool {
@@ -231,6 +330,12 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 	if reply == "" {
 		reply = c.LastText
 	}
+	if reply == "" {
+		s.supervise.mu.Lock()
+		delete(s.supervise.closeoutScanned, t.ID)
+		s.supervise.mu.Unlock()
+		return false
+	}
 	var previous *TaskReview
 	if n := len(t.Supervision.Reviews); n > 0 {
 		previous = &t.Supervision.Reviews[n-1]
@@ -256,7 +361,7 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 	latest, present := s.session(ctx, c.MachineID, c.SessionID)
 	if !present || !sameTurn(latest, c.UpdatedAt) || latest.Status != proto.StatusDone ||
 		latest.State == proto.StateWorking || latest.State == proto.StateNeedsYou ||
-		latest.PendingInteractions > 0 || len(latest.Queued) != 0 || latest.TurnError != "" {
+		latest.PendingInteractions > 0 || len(latest.Queued) != 0 || latest.TurnError != "" || latest.ReadOnlyReason != "" {
 		return false
 	}
 	parked := false
@@ -302,6 +407,9 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		return true
 	})
 	if err != nil {
+		s.supervise.mu.Lock()
+		delete(s.supervise.closeoutScanned, t.ID)
+		s.supervise.mu.Unlock()
 		s.logf("task %s: closeout parking failed: %v", t.ID, err)
 		return false
 	}
