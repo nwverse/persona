@@ -177,7 +177,7 @@ export function runAction(id: string, o: { launcher?: string; onHelp: (topic: He
     case "confirm_computer":
       return o.onConfirm ? o.onConfirm() : navigate("/machines");
     case "connect_model":
-      return navigate(providersPath());
+      return navigate(providersPath(o.launcher?.trim() || undefined));
     case "edit_provider":
       return navigate(o.launcher ? providersPath(o.launcher) : "/settings?tab=models");
     case "main_chat_model": // the Main chat purpose of the model configuration: pick one of the machine's launchers
@@ -234,11 +234,12 @@ export function passesBySelf(e: unknown): boolean {
 
 /** A turn error's card: its words and what "Fix it" does (runAction; `retry`: the card offers Retry instead). A Persona
  *  chat adds its own model panel for `pick_model` and, while it keeps a pick, the way back to the default
- *  (views/chat/ModelPill.tsx useAssistantTurnFix). */
+ *  (views/chat/ModelPill.tsx useAssistantTurnFix). The launcher names and scopes the affected connection. */
 export interface TurnFix {
   title: string;
   detail: string;
   action: string;
+  launcher?: string;
   onPickModel?: () => boolean;
   back?: { label: string; run: () => void };
 }
@@ -247,14 +248,16 @@ export interface TurnFix {
  *  the chat can't run is fixed by picking another one for it (`pick_model`), not by adding a provider; a gateway that
  *  refused on-demand tool loading gets a retry, in words that promise nothing more: a current node sends that gateway
  *  every tool from then on, an older one does not, and the card can't tell which runs the chat. */
-export function turnErrorFix(code: string | undefined): TurnFix | null {
+export function turnErrorFix(code: string | undefined, launcher?: string): TurnFix | null {
+  const name = launcher?.trim() || undefined;
+  const title = (key: string) => name ? `${name} · ${t(key)}` : t(key);
   switch (code) {
     case "not_logged_in":
-      return { title: t("lib-readiness.turn_not_logged_in"), detail: t("lib-readiness.turn_not_logged_in_detail"), action: "connect_model" };
+      return { title: title("lib-readiness.turn_not_logged_in"), detail: t("lib-readiness.turn_not_logged_in_detail"), action: "connect_model", launcher: name };
     case "auth_failed":
-      return { title: t("lib-readiness.turn_auth_failed"), detail: t("lib-readiness.turn_auth_failed_detail"), action: "edit_provider" };
+      return { title: title("lib-readiness.turn_auth_failed"), detail: t("lib-readiness.turn_auth_failed_detail"), action: "edit_provider", launcher: name };
     case "model_route":
-      return { title: t("lib-readiness.turn_model_route"), detail: t("lib-readiness.turn_model_route_detail"), action: "pick_model" };
+      return { title: title("lib-readiness.turn_model_route"), detail: t("lib-readiness.turn_model_route_detail"), action: "pick_model", launcher: name };
     case "tool_search_unsupported":
       return { title: t("lib-readiness.turn_tool_search_unsupported"), detail: t("lib-readiness.turn_tool_search_unsupported_detail"), action: "retry" };
   }
