@@ -35,6 +35,7 @@ struct ContinuousMotionTests {
         "Persona/Views/Chat/ChatView.swift": Entry(count: 1, why: "A chat loading (skeleton)", stillIn: "Persona/Views/Chat/ChatView.swift"),
         "Persona/Views/Chat/ImagePager.swift": Entry(count: 1, why: "An image loading (the system spinner)", stillIn: nil),
         "PersonaWatch/WatchPetView.swift": Entry(count: 1, why: "The Milk Frog's page on the watch", stillIn: "PersonaWatch/WatchPetView.swift"),
+        "Persona/DesignSystem/ShellComponents.swift": Entry(count: 1, why: "iPhone Duo's tab bar: the lens gliding to a newly chosen item, for its 0.65 s, then paused", stillIn: "Persona/DesignSystem/ShellComponents.swift"),
     ]
 
     /// Loops per file, comments left out.
