@@ -1416,3 +1416,12 @@ nothing new say so. The node tells held from merely unconfirmed by the session's
 ### Flat work traces keep expansion separate from execution (#10247)
 
 Changing a live action group's header must not change its identity: search and jump-to-step open those keys, and folded history may replace the first visible item. Close a superseded run inside an already inspected trace, preserve explicit reopen/jump choices, and keep the outer summary's live override separate so completion still collapses it. Count action kinds from the complete group, not the progressive rendering budget; otherwise headers change as idle batches mount. Preview edits only in the current run, while every edit row still opens the complete changes view.
+
+## A terminal menu must own focus before taking typing keys (#10239)
+
+An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
+N, I and Backspace accelerators safe: a program or a field can regain focus while the menu is still open. The terminal
+toolbar opts into Menu's focus scope, accepts keys only from its own trigger or menu levels, and explicitly focuses the
+trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
+pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
+and lose the busy-Agent warning.
