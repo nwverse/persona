@@ -18,6 +18,8 @@ export type ModeChange = {
   applied?: "now" | "restart" | "";
   actor_kind?: string;
   device_name?: string;
+  /** What became of a restart, why: a code (docs/protocol/protocol.md "Session mode changes"). */
+  reason?: string;
   at: string;
 };
 

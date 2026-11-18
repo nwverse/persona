@@ -898,7 +898,8 @@ BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 
 
 # The machine's record of permission mode changes (#10297, GET /api/v1/sessions/{mid}/{sid}/mode-changes): what /modes
 # picks and what became of a queued restart, oldest first. MOCK_MODE_CHANGES=1 starts the widget agent with three: a
-# phone's pick before its exchange, a computer's pick of Full access by a restart after it, and that restart called off.
+# phone's pick before its exchange, a computer's pick of Full access by a restart after it, and that restart called off
+# (the session runs in another process now, #10296).
 MODE_CHANGES = {}
 
 
@@ -910,7 +911,7 @@ if os.environ.get("MOCK_MODE_CHANGES") == "1":
     MODE_CHANGES[("macbook", WIDGET)] = [
         {"kind": "set", "from": "default", "to": "acceptEdits", "applied": "now", "actor_kind": "device", "device_name": "iPhone", "at": ago(minutes=20)},
         {"kind": "set", "from": "acceptEdits", "to": "bypassPermissions", "applied": "restart", "actor_kind": "device", "device_name": "MacBook", "at": ago(minutes=1)},
-        {"kind": "restart_dropped", "to": "bypassPermissions", "reason": "another permission mode was picked", "at": ago(minutes=0)},
+        {"kind": "restart_dropped", "to": "bypassPermissions", "reason": "process_replaced", "at": ago(minutes=0)},
     ]
 
 
@@ -918,7 +919,7 @@ def bypass_restart(s, mode):
     """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
     if mode != "bypassPermissions":
         if mode and s.pop("bypass_pending", None):
-            note_mode_change(s, "restart_dropped", "bypassPermissions", reason="another permission mode was picked")
+            note_mode_change(s, "restart_dropped", "bypassPermissions", reason="replaced")
         return False
     if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
             or s.get("permission_mode") == "bypassPermissions":

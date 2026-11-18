@@ -50,13 +50,21 @@ describe("modeChangesOf", () => {
 });
 
 describe("ModeChangeDivider", () => {
-  it("says who changed what, and how a restart went (tests run in zh-Hans)", () => {
-    expect(modeChangeLabel(change(1, { to: "bypassPermissions", applied: "restart" }))).toBe("Phone 选了 完全访问：这一轮结束后会重启会话切过去");
-    expect(modeChangeLabel(change(1))).toBe("Phone 把权限模式从 默认权限 改成了 允许编辑");
-    expect(modeChangeLabel(change(1, { from: "" }))).toBe("Phone 把权限模式改成了 允许编辑");
-    expect(modeChangeLabel(change(1, { actor_kind: "hub", device_name: "" }))).toContain("hub 把权限模式");
-    expect(modeChangeLabel({ kind: "restart_done", to: "bypassPermissions", at: at(1) })).toBe("已重启，切到了 完全访问");
-    expect(modeChangeLabel({ kind: "restart_dropped", to: "bypassPermissions", at: at(1) })).toBe("取消了重启到 完全访问");
+  it("says who changed what in quotes, and how a restart went and why (tests run in zh-Hans)", () => {
+    expect(modeChangeLabel(change(1, { to: "bypassPermissions", applied: "restart" }))).toBe("Phone 选了「完全访问」，这一轮结束后会重启会话再切过去");
+    expect(modeChangeLabel(change(1))).toBe("Phone 把权限模式从「默认权限」改成了「允许编辑」");
+    expect(modeChangeLabel(change(1, { from: "" }))).toBe("Phone 把权限模式改成了「允许编辑」");
+    expect(modeChangeLabel(change(1, { actor_kind: "hub", device_name: "" }))).toBe("hub 把权限模式从「默认权限」改成了「允许编辑」");
+    const outcome = (kind: ModeChange["kind"], reason?: string) => modeChangeLabel({ kind, to: "bypassPermissions", reason, at: at(1) });
+    expect(outcome("restart_done")).toBe("已重启，切到了「完全访问」");
+    expect(outcome("restart_done", "already_in")).toBe("已经是「完全访问」了，不用重启");
+    expect(outcome("restart_dropped", "process_replaced")).toBe("已取消，不会重启到「完全访问」：会话换了进程");
+    expect(outcome("restart_dropped", "process_exited")).toBe("已取消，不会重启到「完全访问」：原进程已经退出");
+    expect(outcome("restart_dropped", "replaced")).toBe("已取消，不会重启到「完全访问」：被另一次切换取代");
+    expect(outcome("restart_failed", "start_failed")).toBe("没能重启到「完全访问」：新进程没起来，会话按原来的模式继续");
+    // no reason, or English words from before the codes: no colon
+    expect(outcome("restart_failed")).toBe("没能重启到「完全访问」");
+    expect(outcome("restart_dropped", "claude 4101, the process it was picked for, has exited")).toBe("已取消，不会重启到「完全访问」");
   });
 
   it("is a separator, not a control", () => {

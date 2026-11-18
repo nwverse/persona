@@ -3450,8 +3450,12 @@ on or off, and from which device:
   model-only changes, refused picks and calls that did not come through `/modes` are not recorded (the assistant's own
   changes and plan approvals: #10308).
 - **What became of a queued restart**: the node's `session.mode_restart` event becomes a `restart_done`,
-  `restart_failed` or `restart_dropped` row with its `reason` (another mode picked, the process it was picked for
-  gone, picked over two hours ago; docs/integrations/claude-integration.md "Full access by a restart").
+  `restart_failed` or `restart_dropped` row with its `reason`, a code the apps put in words (`proto.ModeRestartReason…`):
+  dropped for `replaced` (another mode picked first), `process_exited`, `process_replaced` or `process_unknown` (the
+  process it was picked for is gone, docs/integrations/claude-integration.md "Full access by a restart"), `expired`
+  (picked over two hours ago); done with `already_in` (put in the mode at the computer meanwhile); failed with
+  `not_stopped`, `start_failed` (it runs as before) or `stopped`. `""` says nothing more; rows from before the codes hold
+  English words, which the apps leave out.
 
 Rows are never changed or deleted. `GET /api/v1/sessions/{mid}/{sid}/mode-changes` gives a session's latest 200 to the
 owner's devices, which draw a line for each in the session's chat.
