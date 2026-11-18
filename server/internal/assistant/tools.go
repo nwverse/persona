@@ -409,7 +409,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				if err := exitRefused(c, t, a.Text, len(atts)); err != nil {
 					return "", err
 				}
-				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
+				text = prompts.RenderSideConversation(a.Text)
 			}
 		}
 		if a.Task != nil {

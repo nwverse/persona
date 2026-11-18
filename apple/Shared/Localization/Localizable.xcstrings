@@ -137279,6 +137279,29 @@
       },
       "extractionState" : "manual"
     },
+    "Retrying model request (%lld/%lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retrying model request (%1$lld/%2$lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルリクエストを再試行中（%1$lld/%2$lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重试模型请求（%1$lld/%2$lld）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Retrying…" : {
       "localizations" : {
         "en" : {

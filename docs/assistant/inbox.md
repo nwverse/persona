@@ -228,6 +228,13 @@ a summary up to 40 characters, and a short reason:
   no markers, so their absence there says nothing and the kind and text decide (#9124). Grouping's input names the other side of a direct chat in
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
+  For a `larkcli` human DM, the triage input also names the newest message's preview separately from the conversation.
+  This boundary belongs only to triage and its no-write preview; drafts, task judging and handling conversations keep
+  their existing item inputs without a repeated preview.
+  An older answer or acknowledgement does not resolve a later request. An `[Image: ...]` marker is an unread image,
+  not its contents: a new work-related DM screenshot still needs the owner to look or respond unless explicit text
+  makes it informational or confirms that the current issue is resolved. This does not add OCR or a fixed connector
+  tier; the model and the user's rules still decide. Already-triaged FYI items are not replayed automatically (#9124).
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
   records the one its tier was given under (`triage_rev`, kept, not listed; a rule tier given under the current criteria stays,
   unless it is provisional: below). Each triage pass also takes up to 8 open Needs you items tiered under an older revision (newest activity first): Lark and
@@ -309,6 +316,8 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
   uncertainty merges into an existing event; the prompt asks for at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
   + batch text. Existing events for the chat are preloaded (the no-query result of `events` below), saving one call. Each model response is JSON, either one tool call or a result.
+  Each touched event is tiered as a whole using its own assigned new activity and unresolved requests, not the batch's last message.
+  A reply or acknowledgement assigned to another event cannot resolve it; an earlier reply cannot close a later request in the same event.
   The output budget is `256 + 48 × new messages + 160 × min(new messages, candidate events + 3)`, clamped to 1024–4096 tokens on every model call.
   The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
