@@ -12,6 +12,7 @@ builds on are listed in ALLOWED_REPOS with the reason; adding one there is a del
 any service's internals lives here: such a list would itself describe what it guards.
 """
 from pathlib import Path
+import os
 import re
 import subprocess
 import tempfile
@@ -21,7 +22,16 @@ from unittest.mock import patch
 from compatibility_identifiers import registered_external_ref
 
 
-ROOT = Path(__file__).resolve().parents[2]
+def _source_root():
+    configured = os.environ.get("PERSONA_CI_SOURCE_ROOT")
+    if configured:
+        if not Path(configured).is_absolute():
+            raise ValueError("PERSONA_CI_SOURCE_ROOT must be absolute")
+        return Path(configured)
+    return Path(__file__).resolve().parents[2]
+
+
+ROOT = _source_root()
 
 # The organisation followed by a slash and any repository other than Persona's own: issue refs, bare URLs, blob links.
 REPO_REF = re.compile(r"\bnwverse/(?!persona\b)([\w.-]+)", re.IGNORECASE)
