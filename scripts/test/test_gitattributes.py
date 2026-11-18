@@ -1,9 +1,9 @@
 """Keeps .gitattributes' merge and generated-file lines true (#10617).
 
 merge=union lets two PRs that each add a line to the same list merge without a conflict: git keeps both sides' lines. It
-never sorts them, drops a duplicate or notices a line one side deleted, so it is safe only for a list a test compares
-exactly. Every merge=union line names one tracked file and has a "# guarded by <test> (<test file>)" comment right
-above it, and that file defines the test.
+never sorts them, drops a duplicate or notices a line one side deleted, so it is safe only for a list whose entries a
+test compares exactly. Every merge=union line names one tracked file and has a "# guarded by <test> (<test file>)"
+comment right above it, and that file defines the test, which names the list's file.
 
 linguist-generated marks generated outputs (GitHub folds their diffs, and conflicts in them are resolved by rerunning
 the generator). Every such pattern still matches a tracked file, so an output that moves is noticed here.
@@ -44,6 +44,18 @@ def entries(text):
     return out
 
 
+def definition(source, name):
+    """The text of the Go func or Python def called name in source, or None: from its first line up to the next line
+    indented no deeper than that one, closing brackets included."""
+    start = re.search(rf"^([ \t]*)(?:func|def) {re.escape(name)}\(", source, re.M)
+    if not start:
+        return None
+    lines = source[start.start():].splitlines()
+    end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() and not line.lstrip().startswith(("}", ")"))
+                and len(line) - len(line.lstrip()) <= len(start.group(1))), len(lines))
+    return "\n".join(lines[:end])
+
+
 def generated(attributes):
     return any(a in ("linguist-generated", "linguist-generated=true") for a in attributes)
 
@@ -55,21 +67,26 @@ def problems(text, files, read):
     for number, pattern, attributes, above in entries(text):
         where = f".gitattributes:{number} {pattern}"
         if "merge=union" in attributes:
+            named = None  # the list's file name, once the line names one tracked file
             if GLOB_CHARS.search(pattern):
                 found.append(f"{where}: name one file, not a pattern: a new file must not become union-merged unseen")
             elif files(pattern) != [pattern.lstrip("/")]:
                 found.append(f"{where}: no tracked file has this path: move the line with the file, or delete it")
+            else:
+                named = Path(pattern).name
             guard = GUARD.match(above)
             if not guard:
                 found.append(f"{where}: put \"# guarded by <test> (<test file>)\" right above it, naming the test that "
-                             "compares the whole file exactly")
+                             "compares the list exactly")
             else:
                 name, test_file = guard.groups()
                 source = read(test_file)
                 if source is None:
                     found.append(f"{where}: its guarding test file {test_file} does not exist")
-                elif not re.search(rf"\b(?:func|def) {re.escape(name)}\(", source):
+                elif (body := definition(source, name)) is None:
                     found.append(f"{where}: {test_file} defines no {name}")
+                elif named and named not in body:
+                    found.append(f"{where}: {name} never names {named}: name the test that reads the list")
             if generated(attributes):
                 found.append(f"{where}: a generated file is regenerated, not union-merged")
         if generated(attributes) and not files(pattern):
@@ -104,14 +121,22 @@ class GitAttributesTests(unittest.TestCase):
     def test_problems_are_found(self):
         guard = "# guarded by TestList (list_test.go)"
         files = {"list.txt": ["list.txt"], "gen/*.go": ["gen/a.go"]}.get
-        sources = {"list_test.go": "func TestList(t *testing.T) {}\n"}.get
+        sources = {
+            "list_test.go": 'func TestList(t *testing.T) {\n\treadList(t, "list.txt")\n}\n\n'
+                            "func TestOther(t *testing.T) {\n\tcheck(t)\n}\n",
+            "list_test.py": "class T:\n    def test_list(self):\n        read(\n            'list.txt',\n        )\n\n"
+                            "    def test_other(self):\n        pass\n",
+        }.get
         cases = [  # (.gitattributes text, the problems' ends)
             (f"{guard}\nlist.txt merge=union\ngen/*.go linguist-generated=true\n", []),
-            ("# a comment\nlist.txt merge=union\n", ["naming the test that compares the whole file exactly"]),
-            (f"{guard}\n\nlist.txt merge=union\n", ["naming the test that compares the whole file exactly"]),
+            ("# a comment\nlist.txt merge=union\n", ["naming the test that compares the list exactly"]),
+            (f"{guard}\n\nlist.txt merge=union\n", ["naming the test that compares the list exactly"]),
             (f"{guard}\ngone.txt merge=union\n", ["move the line with the file, or delete it"]),
             (f"{guard}\n*.txt merge=union\n", ["must not become union-merged unseen"]),
-            ("# guarded by TestOther (list_test.go)\nlist.txt merge=union\n", ["list_test.go defines no TestOther"]),
+            ("# guarded by TestNone (list_test.go)\nlist.txt merge=union\n", ["list_test.go defines no TestNone"]),
+            ("# guarded by TestOther (list_test.go)\nlist.txt merge=union\n", ["name the test that reads the list"]),
+            ("# guarded by test_list (list_test.py)\nlist.txt merge=union\n", []),
+            ("# guarded by test_other (list_test.py)\nlist.txt merge=union\n", ["name the test that reads the list"]),
             ("# guarded by TestList (gone_test.go)\nlist.txt merge=union\n", ["gone_test.go does not exist"]),
             (f"{guard}\nlist.txt merge=union linguist-generated\n", ["regenerated, not union-merged"]),
             ("old/*.go linguist-generated\n", ["point it at the generator's output"]),

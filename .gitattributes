@@ -5,9 +5,11 @@ native/app-core/licenses/** -text -whitespace
 
 # Union merge: lists of one entry a line that many PRs append to at once. Git keeps both sides' lines instead of a
 # conflict, without sorting them or dropping a duplicate or a line one side deleted, so a list goes here only when a
-# test compares it exactly and fails on such a line. Name that test right above the list's line ("# guarded by <test>
-# (<its file>)") and rerun it after merging main. One file a line, no patterns; scripts/test/test_gitattributes.py
-# checks this block. How to merge both kinds of file here:
+# test compares its entries exactly and fails on such an entry. Comment lines are not all checked: one that a side
+# reworded can keep its old wording next to the new. Name that test right above the list's line ("# guarded by <test>
+# (<its file>)"), and rerun it after merging main. Only merges and rebases on your machine use this; GitHub's merge
+# ignores it and still reports the conflict. One file a line, no patterns; scripts/test/test_gitattributes.py checks
+# this block. How to merge both kinds of file here:
 # docs/operations/collaboration.md, "Merging main: union-merged lists and generated files".
 # guarded by TestRouteScopes (server/internal/hub/route_scopes_test.go)
 server/internal/hub/testdata/route_scopes.txt merge=union
@@ -40,11 +42,10 @@ apple/Packages/PersonaCore/Sources/Serde/** linguist-generated=true
 harmony/entry/src/main/ets/core/rustcore/Wire.ts linguist-generated=true
 # scripts/gen/deno_adapter.sh
 server/internal/extension/denohost/adapter.mjs linguist-generated=true
-# scripts/assets/gen_tokens.py, gen_icon_meanings.py and gen_phosphor_icons.py
-# (commands: spec/tokens/README.md, spec/icons/README.md)
+# scripts/assets/gen_tokens.py --kotlin <this path>, from the repository root (as scripts/ci/android.sh checks it)
 android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt linguist-generated=true
+# scripts/assets/gen_icon_meanings.py (PhIcons.kt stays unmarked: its generator needs a Phosphor Icons checkout)
 android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/PersonaIcons.kt linguist-generated=true
-android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/PhIcons.kt linguist-generated=true
 # scripts/mock/make_demo_data.py, then android/core/demo/tools/export_data.py for Android's copy
 apple/Persona/Resources/Demo.json linguist-generated=true
 android/core/demo/src/main/assets/demo/Demo.json linguist-generated=true
