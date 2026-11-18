@@ -232,7 +232,9 @@ Link/release semantics:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority`, `project` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending); a to-do waiting for the owner also has `ask` ("Waiting for the owner"), an open one nobody works on `orphaned` ("Nobody is working on this"); the hub's merged answer carries `ETag: W/"t1-<hash of its bytes>"`, and a request whose `If-None-Match` names it gets `304` with no body (#9590: most `{"type":"todos"}` change nothing the list holds, and the list is about 200 KB on a busy hub; the iOS app reads it that way) |
+| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority`, `project` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending); a to-do waiting for the owner also has `ask` ("Waiting for the owner"), an open one nobody works on `orphaned` ("Nobody is working on this"); the hub's merged answer carries `ETag: W/"t1-<hash of its bytes>"`, and a request whose `If-None-Match` names it gets `304` with no body (#9590: most `{"type":"todos"}` change nothing the list holds, and the list is about 200 KB on a busy hub; the iOS app reads it that way); each row also has `view` and the answer `counts`, the To-dos view the manager works out (#10226, `docs/assistant/todo-status-sop.md` "The hub's view"), with the managers' counts added up by the hub before it takes the tag; they cover every manager only while the hub's features list `todo_view`, and clients order a merged section by `rank`, then `manager`, then `id` |
+| GET | `/api/v1/todos/{id}` | One to-do as the list has it, `view` included → `{"todo": row}` (#10226), without the list's `manager` stamp (clients keep the row's and send it as `?manager=`); missing 404 `todo_not_found`; to-dos not loaded yet 503; an older hub or manager answers 405 (`PATCH` / `DELETE` match the path); clients take 405, and a 404 with another `code`, as "not there" |
+| GET | `/api/v1/todos/places` | The To-dos sidebar's places with the list's counts → `{"places", "counts"}` (#10226, `assistantwire.TodoPlaces`): All To-dos, Today and Upcoming, then each project with an open to-do and its part of Needs you; across managers the hub adds All To-dos', Today's and Upcoming's numbers and the counts up and keeps each manager's projects, stamped with `manager`; no manager with the route 404 (a manager that failed otherwise: its answer), an older hub 405 |
 | POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?, "kind"?}` → `{"todo": Todo}`; `kind` `concern` records one of the owner's concerns ("Concerns"; without the hub's database 503), `todo` or none a to-do, anything else 400; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, `project` a knowledge-base project's slug or name (stored as its slug), anything else (or both due fields, or no such project) 400; read-only role (watch) 403 |
 | PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?, "part_of"?, "after"?}` → `{"todo": Todo}`; only supplied fields change; `part_of` / `after` as "Requests in pieces" says (`""` / `null` / `[]` clear them, a link the manager refuses 400); `null` (or `""`) clears a due date or reminder, `""` takes it out of its project; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; `"done": true` on a to-do whose agent never started (closed by the hub with `start_error`) is the owner closing it: `start_error` cleared, `done_at` now (#3713); `"done": true` on an open concern 409 (only its report closes it, "Concerns"); missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
@@ -517,7 +519,7 @@ while a hub-completed task reopens on new work as described below.
 
 After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent stops running (with Agent tasks on, `docs/assistant/unified-entry.md` "Agent tasks", that includes the Agents started from an app or another chat, whose to-dos have an `origin` too):
 assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion and Agent inactivity both reach 3 minutes (`taskCloseIdle`, measured from the latest of completion time, last activity and when the pass first saw the Agent running), it asks node to stop it (`session.stop` with `retire`, `node/retire.go`):
-the Agent process quits (Ctrl+C twice, up to three rounds, until the engine no longer shows the Agent in its pane) and **its terminal stays**: the tab keeps the shell the Agent ran in, ending with Claude's "Resume this session with: …". Stopping never closes it (#4754); the node closes the terminal itself only once it has sat unchanged for the grace period (#10111, `docs/integrations/engines.md` "Agents run in a terminal"); an Agent that does not quit is reported (`not_stopped`) and left running, never closed to make it go.
+the Agent process quits (Ctrl+C twice, up to three rounds, until the engine no longer shows the Agent in its pane) and **its terminal stays** (unless the owner turned on `close_ended_terminals`, #10355: then the same idle Agent is closed with `session.retire` and `close_terminal`, recording `task_completed`, as "Archive and close" closes it without archiving): the tab keeps the shell the Agent ran in, ending with Claude's "Resume this session with: …". Stopping never closes it (#4754); the node closes the terminal itself only once it has sat unchanged for the grace period (#10111, `docs/integrations/engines.md` "Agents run in a terminal"); an Agent that does not quit is reported (`not_stopped`) and left running, never closed to make it go.
 
 **What stays**: to-do Agent record (machine, session id, directory) remains, not released; node's launch information (launcher, directory, model, hub `node_sessions`), transcripts and the terminal remain.
 Results still read from transcripts (receipts, `agent_read`, chat page); Unread Agents may also stop.
@@ -844,10 +846,11 @@ they already do on seen (`docs/assistant/todo-status-sop.md` "Seen"):
   client reading the raw field. Closing the to-do keeps the mark; reopening it, or retrying a failed start, takes it out
   of Someday, since the owner is on it again.
 - Neither is an edit: `updated_at` stays, as with seen. Both send the settled `{"type":"todos"}`.
-- Today only the API carries them, and no status reads them yet. The hub's triage (`todo_triage.go`) still places
-  every to-do with no restore, and the web, iOS / Mac and Android keep their restores on the device
-  (`docs/assistant/todo-status-sop.md` "Shelving") until they read `restored_at`, from stage 2. The redesign's status
-  projection is the reader meant for both (the proposal's section 6.3, rows 12 and 13).
+- The manager's `view` on every row of `GET /api/v1/todos` reads both (the redesign's status projection, the
+  proposal's section 6.3, rows 12 and 13; `docs/assistant/todo-status-sop.md` "The hub's view"), but no client reads
+  `view` before stage 2. The hub's triage (`todo_triage.go`) still places every to-do with no restore, and the web,
+  iOS / Mac and Android keep their restores on the device (`docs/assistant/todo-status-sop.md` "Shelving") until they
+  read the view, from stage 2.
 - Clients use both routes only while the hub's features list `todo_view` (a manager capability, listed while every
   manager has it; the proposal's section 7.3, "Writes"); without it they keep the restore on the device and offer no
   Someday. An older hub or manager answers 404 `not_found`, which a client can't tell from a to-do that is gone except
@@ -1015,7 +1018,13 @@ repositories as rows with their issues and pull requests as links, so the
 associations the agent maintains are visible without opening an editor. Each
 repository row carries its provider's own mark and its project address on one
 line; a link shows its retained full title as the hyperlink, falling back to the
-localized type and number when no title is known. The association store holds no
+localized type and number when no title is known. A provider extension's
+repository has the extension mark and its source's name after the address (the
+`provider_name` saved with it, else "Another source", never the `ext:` id); its
+links open at their stored addresses, numbered `#N`, with the extension's own
+`link_kinds` words for issue and pull request. While its `provider_state` is
+`off` or `missing` the row shows an **Unavailable** pill and a note, and adding a
+link to it is turned off. The association store holds no
 physical workspace path, so a row shows no filesystem path; directory aliases
 are not paths, and physical paths belong to the workspace preparation service.
 Opening the editor holds the draft and the revision it began from: a to-do
@@ -1023,9 +1032,19 @@ version change while it is open never replaces them, and the newest store is
 read again when the dialog closes. Source options are disclosed per repository.
 No alias or base branch is required: an empty alias means no directory override
 and a missing ref means the remote default branch. This feature does no Git or
-remote issue lookup.
+remote issue lookup for GitHub and GitLab; a new link of a provider extension's
+repository is asked of that extension (`repo.link`) before the save, never while
+reading or opening a to-do.
 An issue/PR URL must belong to the saved provider, instance and target repository;
 links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+When a provider extension is switched off, not running or uninstalled, its rows
+and links still read and open from what was stored (`provider_state` `off` or
+`missing` on reads), saves keep the links already there without asking it, and
+only a new link for it fails with `task_repositories_provider_off` or
+`task_repositories_no_provider`. Right after a restart, before the extensions
+have listed their providers, a new link on a host no built-in owns waits for
+them within the save's budget and, if they are still starting, fails with
+`task_repositories_providers_starting` (409), never `task_repositories_no_provider`.
 
 | Method | Route | Contract |
 | --- | --- | --- |
@@ -1045,7 +1064,8 @@ never masquerade as an empty set.
 `todo_repository_links_add` expose the same manager-owned store. `todo_get` includes
 its canonical associations. The additive tool accepts `{id, links: [{url, title}]}`
 with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
-total), infers repository groups offline and needs no preconfigured catalog.
+total), infers repository groups offline (an address on a host a provider
+extension claims is read by that extension) and needs no preconfigured catalog.
 Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
 characters are rejected. The tool schemas describe this byte limit explicitly;
 their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
@@ -1077,8 +1097,16 @@ Imports and interactive edits lock the same Todo and commit atomically; changes
 broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
 Metadata import errors are logged without blocking the legacy progress path; explicit
 tool and HTTP failures remain errors. Link-derived repositories absent from the
-catalog have `catalog_state: "unlisted"`; recording a URL performs no repository
-verification, remote lookup or catalog mutation.
+catalog have `catalog_state: "unlisted"`; recording a GitHub or GitLab URL performs
+no repository verification, remote lookup or catalog mutation. In a report, a
+provider extension's URL that is new is read by that extension in the background,
+and not again on that to-do for 5 minutes once it has answered (an attempt that
+failed or found it unavailable is tried on the next reply). That covers every address on its hosts in
+an Agent's reply, even one that is then not kept (a file page, an issue, another repository),
+so the extension learns the addresses you and your Agents mention in a to-do's work,
+as its install permission says. Reports skip such addresses while the extension is
+unavailable, and the one-time import of older `pr_url` / `prs` references never
+asks an extension.
 
 Shared Go types and validators: `server/internal/assistant/repository/task.go`.
 Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
@@ -1093,7 +1121,10 @@ names are independent. A removed or identity-changed catalog entry is reported
 without replacing the saved source. Catalog clients omitting `clone_url` preserve
 its previous value when identity is unchanged; a changed identity gets its own
 canonical fallback. Adopting a new source requires removing and reselecting the
-association in separate saves.
+association in separate saves. A repository row a new link adds clones from the
+catalog entry's `clone_url` when there is one (`transport_origin: "catalog"`),
+else from the clone address a provider extension answered for its repository
+(`"provider"`), else from its canonical URL (`"canonical_default"`).
 
 Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
 select repository IDs through `repository.Snapshot`, and persist that value with

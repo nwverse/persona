@@ -149,6 +149,7 @@ leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/repositories
+-                    GET /api/v1/assistant/repositories/providers
 -                    GET /api/v1/assistant/repositories/{id}
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
@@ -329,6 +330,8 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/task-plans/{id}
 -                    GET /api/v1/task-trust
 todos.read           GET /api/v1/todos
+todos.read           GET /api/v1/todos/places
+todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
 -                    GET /api/v1/usage
