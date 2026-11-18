@@ -257,8 +257,9 @@ type relayBook struct {
 	holds    map[string]*time.Timer // by conversation: drains its queue again when the hold for the owner ends
 	stuck    map[string]relayMsg    // by conversation: the message that could not go in at the last drain (pickLocked)
 	// failedAt: by conversation, when a delivery into it last failed because it did not take the message (it did not
-	// start, its computer was away): the next try waits relayRetryGap, so a conversation that cannot start is not
-	// cold-started again on every session list (#10194). In memory: a restart tries at once.
+	// start, its computer was away): that message, when nothing else may go, waits relayRetryGap for its next try, so a
+	// conversation that cannot start is not cold-started again on every session list (#10194). In memory: a restart
+	// tries at once.
 	failedAt map[string]time.Time
 	doubted  map[string]time.Time // by relayMsgID: when a try that ended in doubt began, its line not found then (relay_once.go)
 	// ownerTurns: the conversations whose round the owner is on, in memory only (#6394). While one is set, every
@@ -571,11 +572,14 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	now := time.Now()
 	for _, c := range list {
 		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
-			if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
-				held[c.SessionID] = gap // it failed to take the last one a moment ago
-				continue
-			}
 			i, wait := b.pickLocked(c.SessionID, now)
+			if last, stuck := b.stuck[c.SessionID]; stuck && i >= 0 && b.st.Queue[c.SessionID][i] == last {
+				// Only the message it failed to take is left to go: tried again after a gap, not on every list.
+				if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
+					held[c.SessionID] = gap
+					continue
+				}
+			}
 			if i < 0 {
 				held[c.SessionID] = wait
 				continue

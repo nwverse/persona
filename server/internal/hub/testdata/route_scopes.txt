@@ -49,6 +49,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}
 -                    DELETE /api/v1/assistant/conversations/{id}/always/{hash}
 -                    DELETE /api/v1/assistant/conversations/{id}/model
+-                    DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}
 -                    DELETE /api/v1/assistant/directions/offers/{id}
 -                    DELETE /api/v1/assistant/followups/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
@@ -394,6 +395,7 @@ assistant.ask        POST /api/v1/assistant/conversations
 assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/today
 -                    POST /api/v1/assistant/conversations/{id}/unarchive
+-                    POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/actions
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/html-actions
 -                    POST /api/v1/assistant/directions/{id}/end
