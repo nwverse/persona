@@ -198,8 +198,7 @@ function FieldFooter({ ctl, field, can, resettable, dirty, count, countId, busy,
         {t("settings-configuration.default")} <span className="text-ink-2">{valueText(field, field.default)}</span>
       </span>
       {count !== undefined && <span id={countId} className="text-[11px] text-ink-3 tabular-nums">{count}</span>}
-      {/* The small buttons are h-7; min-h-7 reserves their height, so Reset / Cancel / Save or the save state appearing
-          never changes the row's height. */}
+      {/* Reserve the small buttons' height even when there is only text on this line. */}
       <span className="ml-auto flex min-h-7 shrink-0 items-center gap-1.5">
         <span aria-live="polite" className={busy || saved ? "flex items-center gap-1.5 text-[11.5px] leading-snug" : "sr-only"}>
           {busy && <><Spinner />{t("settings-configuration.saving")}</>}

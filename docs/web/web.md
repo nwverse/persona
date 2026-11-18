@@ -1984,9 +1984,9 @@ another without an invalid write in between. A multiselect whose maximum is one 
 wire value stays an array); a larger maximum keeps ordinary checks, whose pending count can pass through a temporary
 value. Every field ends in one footer row that holds its default value, the count where a text field has a maximum, the
 save state and the **Reset** / **Cancel** / **Save** actions that apply, so the actions never sit between the control and
-its explanation. The row reserves the small-button height (`min-h-7`), so Reset / Cancel / Save or the save state
-appearing never changes its height. Drafts stay through a failed write, a conflict, a re-read or a change elsewhere,
-including what is typed or checked while its save is on the way (that newer edit stays unsaved). One write at a time, each against the revision
+its explanation. The footer reserves the small-button height when no action is shown and can grow for wrapping content.
+Drafts stay through a failed write, a conflict, a re-read or a change elsewhere, including what is typed or checked
+while its save is on the way (that newer edit stays unsaved). One write at a time, each against the revision
 shown. A conflict, or a write whose outcome is unknown (`configuration_unavailable`, a request that threw or timed out, or
 a successful answer that isn't a Document), says so and offers **Reload**, which keeps every draft; nothing else is
 written until it has read again, and a version it can't write blocks writing altogether. A refusal the writer names (a

@@ -2276,9 +2276,8 @@ any notice (orange for a warning, `ink-3` for info), the disabled reason or "Rea
 two-column definition list in `text-[11.5px]` (`ink-3` terms, `ink-2` values, the page's existing `grid-cols-[auto_1fr]`).
 Every field ends in one footer row: the default value, the scalar count where a text field has a maximum, the polite save
 state (**Saving…** with a spinner, then a green **Saved**) and the quiet **Reset** / **Cancel** / **Save** actions that
-apply, so the actions never sit between the control and its explanation and a short default keeps them on one line. The
-row reserves the small-button height (`min-h-7`), so Reset / Cancel / Save or the save state appearing never changes its
-height.
+apply, so the actions never sit between the control and its explanation and a short default keeps them on one line.
+The footer reserves the small-button height when no action is shown, and longer content can still wrap.
 - Controls, all existing: a toggle is the `Switch` at the row's end; a select is the `Segmented` control at the end
   (`segmented`), a native select in the settings field style at the end (`dropdown`) or `ChoiceRows` under the text
   (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
