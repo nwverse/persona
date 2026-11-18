@@ -38,6 +38,9 @@ const (
 	relayHopMemory = time.Hour        // a hop count older than this no longer counts (the user has moved on)
 )
 
+// relayRetryGap is how long a conversation that did not take a message (relayBook.failedAt) waits for the next try.
+var relayRetryGap = 30 * time.Second
+
 type convArchived struct {
 	MachineID string    `json:"machine_id"`
 	At        time.Time `json:"at"`
@@ -253,7 +256,11 @@ type relayBook struct {
 	draining map[string]bool
 	holds    map[string]*time.Timer // by conversation: drains its queue again when the hold for the owner ends
 	stuck    map[string]relayMsg    // by conversation: the message that could not go in at the last drain (pickLocked)
-	doubted  map[string]time.Time   // by relayMsgID: when a try that ended in doubt began, its line not found then (relay_once.go)
+	// failedAt: by conversation, when a delivery into it last failed because it did not take the message (it did not
+	// start, its computer was away): the next try waits relayRetryGap, so a conversation that cannot start is not
+	// cold-started again on every session list (#10194). In memory: a restart tries at once.
+	failedAt map[string]time.Time
+	doubted  map[string]time.Time // by relayMsgID: when a try that ended in doubt began, its line not found then (relay_once.go)
 	// ownerTurns: the conversations whose round the owner is on, in memory only (#6394). While one is set, every
 	// queued message waits, whatever its rank: the owner's own message always goes before the queue. A restart falls
 	// back on the persisted Spoke presence window (relay_presence.go).
@@ -294,6 +301,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	b.st, b.loaded = rs, true
 	b.sent, b.draining, b.replacing, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]bool{}, map[string]*time.Timer{}
 	b.stuck = map[string]relayMsg{}
+	b.failedAt = map[string]time.Time{}
 	b.ownerTurns = map[string]ownerTurn{}
 	return true
 }
@@ -563,6 +571,10 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	now := time.Now()
 	for _, c := range list {
 		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
+			if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
+				held[c.SessionID] = gap // it failed to take the last one a moment ago
+				continue
+			}
 			i, wait := b.pickLocked(c.SessionID, now)
 			if i < 0 {
 				held[c.SessionID] = wait
@@ -622,6 +634,10 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			b.mu.Lock()
 			delete(b.draining, id)
 			delete(b.stuck, id)
+			delete(b.failedAt, id)
+			if err != nil && !keep && !relayInDoubt(err) && !strings.Contains(err.Error(), "is gone") {
+				b.failedAt[id] = time.Now()
+			}
 			// Delivered, answered just in time, or the conversation is gone for good: off the queue. An unreachable
 			// node or another delivery failure keeps it.
 			taken := false
@@ -1039,7 +1055,25 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		return fmt.Sprintf("%q has messages waiting, or the user is talking in it: the message is queued (%d waiting) and goes in after them.%s", name, n, back), nil
 	}
 	if err := s.deliverRelay(ctx, c.MachineID, c.SessionID, msg); err != nil {
-		return "", err
+		if strings.Contains(err.Error(), "is gone") || keptErrCode(err) == "conversation_deleted" || keptErrCode(err) == CodeBadRequest {
+			return "", err
+		}
+		// It could not take the message now (it did not start, its computer is away, the answer did not come): kept
+		// in its queue and tried again, under the same once_id, until it goes in (#10194). Never dropped.
+		b := &s.relays
+		b.mu.Lock()
+		if b.failedAt != nil && !relayInDoubt(err) {
+			b.failedAt[c.SessionID] = time.Now()
+		}
+		b.mu.Unlock()
+		n := s.queueRelay(c.SessionID, msg)
+		if n == 0 {
+			return "", err
+		}
+		s.spawnReported(self, c.SessionID)
+		s.publish(ctx)
+		s.drainAfter(c.MachineID, c.SessionID, relayRetryGap)
+		return fmt.Sprintf("%q could not take the message now (%v): it is queued (%d waiting) and goes in once it can.%s", name, err, n, back), nil
 	}
 	s.spawnReported(self, c.SessionID)
 	return fmt.Sprintf("Sent to 「%s」 (%s).%s", name, c.SessionID, back), nil

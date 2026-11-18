@@ -221,6 +221,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
 	"POST /api/v1/assistant/rule-suggestions/{id}/not-now",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
+	"POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry",
+	"DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",

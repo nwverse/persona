@@ -151,23 +151,24 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles     titleBook            // titles.go
-	phoneKept  keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames agentNamingBook      // agent_naming.go
-	prefs      settingsBook         // profile.go
-	main       mainBook             // start.go
-	archived   archiveBook          // conversations.go
-	tags       conversationTagsBook // conversation_tags.go
-	origins    originBook           // origins.go
-	guests     guestBook            // guest.go
-	relays     relayBook            // conversations.go
-	quotes     quoteBook            // relay_quote.go: the owner's messages relays carried, verified
-	avail      availBook            // availability.go
-	quiet      quietBook            // quiet.go
-	supervise  superviseBook        // supervise_signals.go
-	preempt    preemptBook          // owner_preempt.go
-	tbriefs    taskBriefBook        // task_brief.go
-	search     searchIndex          // search_index.go
+	titles      titleBook            // titles.go
+	phoneKept   keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames  agentNamingBook      // agent_naming.go
+	prefs       settingsBook         // profile.go
+	main        mainBook             // start.go
+	archived    archiveBook          // conversations.go
+	tags        conversationTagsBook // conversation_tags.go
+	origins     originBook           // origins.go
+	guests      guestBook            // guest.go
+	relays      relayBook            // conversations.go
+	undelivered undeliveredBook      // undelivered.go: the owner's messages that could not go in
+	quotes      quoteBook            // relay_quote.go: the owner's messages relays carried, verified
+	avail       availBook            // availability.go
+	quiet       quietBook            // quiet.go
+	supervise   superviseBook        // supervise_signals.go
+	preempt     preemptBook          // owner_preempt.go
+	tbriefs     taskBriefBook        // task_brief.go
+	search      searchIndex          // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	conversationWrites   sync.RWMutex
@@ -309,6 +310,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
+	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
@@ -755,6 +757,14 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	for id, q := range queued {
 		view(id, here).Queued = q // a conversation sent to is on the assistant's machine
 	}
+	kept, ok := s.undeliveredViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	for id, q := range kept {
+		for _, k := range q {
+			v := view(id, k.Machine)
+			v.Undelivered = append(v.Undelivered, k.wire()) // the owner's messages that could not go in (undelivered.go)
+		}
+	}
 	for _, id := range s.heldConversations() {
 		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise_digest.go)
 	}
@@ -886,6 +896,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	}
 	s.toolLoopsChanged(d)
 	s.drainRelays(d.MachineID, d.Sessions)
+	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
 	s.taskStageSessions(ctx, d)
