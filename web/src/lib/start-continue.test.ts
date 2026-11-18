@@ -106,8 +106,8 @@ describe("answering it", () => {
     keepFailed("mac", SID, { id: "m3", text: "unsure", images: [], at: 3 }, new ApiError(504, "no answer", { code: "timeout", delivered: "unknown" }));
     const launch: AgentLaunch = { id: "local-1", machineId: "mac", cwd: "/w", launcher: "", text: "fix it", attachments: [], phase: "failed",
       uploaded: {}, startOpId: "s1", startPromptOpId: "s2", messageId: "l1", session: { machine_id: "mac", session_id: SID } as Session,
-      outgoing: { text: "fix it", images: [] }, errorCode: "shell_waiting", errorArgs: args };
-    getState().launches = { [launch.id]: launch, other: { ...launch, id: "other", errorCode: "launcher_missing" } };
+      outgoing: { text: "fix it", images: [] }, shellWaiting: { code: "shell_waiting", ...args } };
+    getState().launches = { [launch.id]: launch, other: { ...launch, id: "other", shellWaiting: undefined } };
     const fetcher = vi.fn(async () => response({ ok: true }));
     vi.stubGlobal("fetch", fetcher);
     resendRefused("mac", SID);

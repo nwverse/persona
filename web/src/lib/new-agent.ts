@@ -44,10 +44,9 @@ export interface AgentLaunch {
   outgoing?: { text: string; images: { mime: string; data: string }[] };
   uploaded: Record<string, string>;
   error?: string;
-  /** The code the failure was refused with, and its details as text: shell_waiting's are the question its tab
-   *  stopped on, answered from the launch's page (lib/start-continue.ts). */
-  errorCode?: string;
-  errorArgs?: Record<string, string>;
+  /** The body of a shell_waiting refusal it failed with: the question the start's tab stopped on, answered from the
+   *  launch's page (lib/start-continue.ts). */
+  shellWaiting?: Record<string, unknown>;
   /** The start's op id (the hub does it once per id); `startPromptOpId` is for the Codex start with a first message. */
   startOpId: string;
   startPromptOpId: string;
@@ -111,7 +110,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     launch = { ...launch, ...patch };
     if (getState().launches[id]) putLaunch(launch);
   };
-  update({ phase: launch.session ? "uploading" : "creating", error: undefined, errorCode: undefined, errorArgs: undefined, uncertain: false, clearable: undefined, draft: undefined });
+  update({ phase: launch.session ? "uploading" : "creating", error: undefined, uncertain: false, clearable: undefined, draft: undefined });
   try {
     const imageBytes = launch.attachments.filter((a) => a.mime.startsWith("image/")).reduce((total, a) => total + Math.ceil(a.file.size / 3) * 4, 0);
     if (imageBytes + new TextEncoder().encode(launch.text).byteLength > 31 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_start"));
@@ -202,18 +201,12 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       error: noUltracode ? t("ultracode.start_refused", { error: ultracodeErrorText(e) }) : t(creating ? "lib-new-agent.start_failed" : sending ? "lib-new-agent.first_message_failed" : "lib-new-agent.attachments_failed", { error: errorText(e) }),
       clearable: e instanceof ApiError && e.code === "input_draft" && typeof e.body.clearable === "string" ? e.body.clearable : undefined,
       draft: e instanceof ApiError && e.code === "input_draft" ? String(e.body.draft ?? "") : undefined,
-      errorCode: e instanceof ApiError ? e.code : undefined,
-      errorArgs: e instanceof ApiError && e.code === "shell_waiting" ? textFields(e.body) : undefined,
+      shellWaiting: e instanceof ApiError && e.code === "shell_waiting" ? e.body : undefined,
     });
   } finally {
     clearTimeout(deadline);
     delivering.delete(id);
   }
-}
-
-/** The text fields of a refusal's body (its details, flattened into it by the hub). */
-function textFields(body: Record<string, unknown>): Record<string, string> {
-  return Object.fromEntries(Object.entries(body).filter((e): e is [string, string] => typeof e[1] === "string"));
 }
 
 // ── opening "New agent" from another page ──────────────

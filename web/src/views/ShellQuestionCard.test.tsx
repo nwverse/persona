@@ -28,7 +28,8 @@ import { setToken } from "../lib/api";
 import { clock } from "../lib/format";
 import type { AgentLaunch } from "../lib/new-agent";
 import { shellQuestion } from "../lib/start-continue";
-import { choiceLabel, SessionShellQuestion, ShellQuestionCard } from "./ShellQuestionCard";
+import ShellQuestion, { choiceLabel, SessionShellQuestion, ShellQuestionCard } from "./ShellQuestionCard";
+import type { Session } from "../lib/types";
 import { StartingAgent } from "./StartingAgent";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -119,6 +120,13 @@ describe("a session's start", () => {
     expect(resend).toHaveBeenCalledWith("mac", SID);
   });
 
+  it("is drawn from a chat's own start error", () => {
+    const session = { machine_id: "mac", session_id: SID, status: "offline", start_error: "stopped", start_error_code: "shell_waiting",
+      start_error_args: args({ line: "Press Enter to continue", kind: "press_key", choices: "enter", default: "" }) } as unknown as Session;
+    act(() => root.render(<ShellQuestion session={session} />));
+    expect(buttons()).toEqual([t("shellquestioncard.enter")]);
+  });
+
   it("is not offered by a hub that cannot take the answer", () => {
     state.features = ["sessions_list"];
     act(() => root.render(<SessionShellQuestion mid="mac" sid={SID} args={args()} />));
@@ -129,7 +137,7 @@ describe("a session's start", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ providers: [] }), { status: 200 })));
     const launch: AgentLaunch = { id: "l1", machineId: "mac", cwd: "/code/app", launcher: "", text: "fix it", attachments: [], phase: "failed",
       error: "stopped on a question", uploaded: {}, startOpId: "o1", startPromptOpId: "o2", messageId: "m1",
-      session: { machine_id: "mac", session_id: SID } as AgentLaunch["session"], errorCode: "shell_waiting", errorArgs: args() };
+      session: { machine_id: "mac", session_id: SID } as AgentLaunch["session"], shellWaiting: { code: "shell_waiting", ...args() } };
     act(() => root.render(<StartingAgent launch={launch} />));
     await flush();
     expect(card()).not.toBeNull();
@@ -141,7 +149,7 @@ describe("a session's start", () => {
     await flush();
     expect(buttons()).toEqual([t("shellquestioncard.compinit_yes", { key: "y" }), t("shellquestioncard.compinit_no", { key: "n" })]);
     state.sessions = {};
-    act(() => root.render(<StartingAgent launch={{ ...launch, errorCode: "launcher_missing", errorArgs: undefined }} />));
+    act(() => root.render(<StartingAgent launch={{ ...launch, shellWaiting: undefined }} />));
     await flush();
     expect(card()).toBeNull();
   });

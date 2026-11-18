@@ -72,7 +72,7 @@ export function resendRefused(mid: string, sid: string) {
     if (e.state === "failed" && e.code === SHELL_WAITING && !e.inDoubt) retryOutboxEntry(mid, sid, e.id);
   }
   for (const launch of Object.values(getState().launches)) {
-    if (launch.phase === "failed" && launch.machineId === mid && launch.session?.session_id === sid && launch.errorCode === SHELL_WAITING) {
+    if (launch.phase === "failed" && launch.machineId === mid && launch.session?.session_id === sid && launch.shellWaiting) {
       void deliverLaunch(launch.id);
     }
   }

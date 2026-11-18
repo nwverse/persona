@@ -2,13 +2,16 @@
 // question as the computer shows it, one button per answer it offers, until when the tab waits, and its last lines
 // folded. An Agents-surface card in plain words, laid out as the design system's notice (ErrorNotice) with the
 // terminal's mark instead of the red one. ShellQuestionCard takes how to send an answer, so a task's failed start can
-// reuse it; SessionShellQuestion is it for a session's own start, with the refused messages sent again after.
+// reuse it; SessionShellQuestion is it for a session's own start, with the refused messages sent again after; the
+// default export places it in the chat and on a New Agent launch's page, which load this file only for such a start.
 import { useState } from "react";
 import { t } from "../i18n";
 import { errorText } from "../lib/api";
 import { clock } from "../lib/format";
 import { continueStart, openQuestion, resendRefused, shellQuestion, START_CONTINUE_FEATURE, type ShellQuestion } from "../lib/start-continue";
 import { hubHas, useStore } from "../lib/store";
+import type { AgentLaunch } from "../lib/new-agent";
+import type { Session } from "../lib/types";
 import { Button, useNow } from "../ui/atoms";
 import { ErrorDetailsText, ErrorNotice } from "../ui/ErrorNotice";
 import { Icon } from "../ui/icons";
@@ -133,4 +136,16 @@ export function SessionShellQuestion({ mid, sid, args, onAnswered, className }: 
       }}
     />
   );
+}
+
+/** The card where a start stopped on its question (lazily loaded, the default export): a session's own (the chat's
+ *  start error), or a New Agent launch's whose first message was refused with shell_waiting, the started session's row
+ *  saying the question as it stands now (a renewed tab), the refusal's own body until it does. */
+export default function ShellQuestion({ session, launch }: { session?: Session; launch?: AgentLaunch }) {
+  const mid = session?.machine_id ?? launch?.machineId ?? "";
+  const sid = session?.session_id ?? launch?.session?.session_id ?? "";
+  const row = useStore((s) => (launch ? s.sessions[mid]?.find((x) => x.session_id === sid) : undefined));
+  if (!sid) return null;
+  const args = session ? session.start_error_args : row?.start_error_code === "shell_waiting" ? row.start_error_args : launch?.shellWaiting;
+  return <SessionShellQuestion className={launch ? "w-full" : undefined} mid={mid} sid={sid} args={args} />;
 }
