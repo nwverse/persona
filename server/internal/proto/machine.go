@@ -124,7 +124,7 @@ type MachineLinkSwitch struct {
 	Phase               string    `json:"phase,omitempty"`
 	Error               string    `json:"error,omitempty"`
 	RollbackUnconfirmed bool      `json:"rollback_unconfirmed,omitempty"`
-	At                  time.Time `json:"at,omitempty"` // when Phase last changed
+	At                  time.Time `json:"at,omitzero"` // when Phase last changed
 }
 
 // MachineLinkSwitch phases, in order; a switch ends succeeded or failed.
