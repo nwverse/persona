@@ -81,6 +81,9 @@ func (n *Node) launcherCheck(ctx context.Context, name string, models ...string)
 	// The flag that keeps the run off the disk goes between before and after: a transcript per check, a hundred a day on
 	// each computer, filled the newest offline sessions the list keeps and pushed the user's own Agents out (#2959).
 	before, noSave, after := checkArgs(agent, prompt)
+	if agent == "claude" {
+		model = n.claudeModelArg(name, model) // what a start of it passes (#10365)
+	}
 	if model != "" {
 		after += " --model " + shellQuote(model)
 	}

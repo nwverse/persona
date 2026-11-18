@@ -109,6 +109,12 @@ func (n *Node) noteModel(id, model, from string) {
 
 // setModel switches a running Claude Code session to model.
 func (n *Node) setModel(ctx context.Context, id, model string) error {
+	if st, ok := n.state.get(id); ok {
+		// A tier alias on a gateway provider is its model for that tier (#10365); one it has none for goes as typed.
+		if m := n.claudeModelArg(st.Launcher, strings.TrimSpace(model)); m != "" {
+			model = m
+		}
+	}
 	cmd, err := modelCommand(model)
 	if err != nil {
 		return err

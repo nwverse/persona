@@ -430,7 +430,8 @@ func readinessBlocks(st ReadinessStep) bool {
 	case StepTodo:
 		return true
 	case StepProblem:
-		return st.Code != proto.TurnErrorRateLimited && st.Code != proto.TurnErrorModelFallbackUnavailable
+		return st.Code != proto.TurnErrorRateLimited && st.Code != proto.TurnErrorModelFallbackUnavailable &&
+			st.Code != proto.TurnErrorToolSearchUnsupported // the node already loads every tool there: a retry works
 	}
 	return false
 }
@@ -579,6 +580,8 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 				alt = "test_assistant"
 			case proto.TurnErrorModelFallbackUnavailable:
 				action = "" // recovery is a new conversation or the TUI's /model, neither is a model-settings action
+			case proto.TurnErrorToolSearchUnsupported:
+				action = "test_assistant" // nothing to set up: the node sends every tool now, so try again
 			}
 			st := s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action)
 			if code == proto.TurnErrorRateLimited {

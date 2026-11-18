@@ -451,7 +451,7 @@ still counts, so it reads them all.
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
-Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. Never set it to false. `personad mcp` marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1` (since #7317 only those the manager did not defer), and other servers keep Claude Code's normal deferred loading. The assistant's processes carry `ENABLE_TOOL_SEARCH=true` instead (#7317, below), which keeps that deferral. A regression test checks both the metadata and the process environment.
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. Never set it to false on Anthropic's own API (behind a gateway it is the right value: #10365, below). `personad mcp` marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1` (since #7317 only those the manager did not defer), and other servers keep Claude Code's normal deferred loading. The assistant's processes carry `ENABLE_TOOL_SEARCH=true` instead (#7317, below), which keeps that deferral. A regression test checks both the metadata and the process environment.
 ## A leader writes to an owner who has seen nothing else (#5842)
 
 Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
@@ -497,7 +497,24 @@ Claude Code also holds tool search off for a conversation that once ran without 
 this conversation has run without ToolSearch, and stays so until it is compacted or cleared"), so conversations started
 before #5839 sent every tool, other servers' too, until their next compaction: about 8.7K tokens more per request on
 Claude Code 2.1.322. Any non-empty `ENABLE_TOOL_SEARCH` lifts the hold-off; the assistant sets exactly `true`, which
-keeps the default deferral (`false` is #5838).
+keeps the default deferral (`false` is #5838). Correction (#10365): `true` is the same mode as unset only on Anthropic's
+own API. Any value also lifts Claude Code's rule that keeps tool search off behind a Base URL that is not
+`api.anthropic.com`, so `true` for every conversation (#7371) sent deferred tools to gateways that refuse them; the
+"endpoint-refused fallback" #7371 relied on is not in the Claude Code the machines ran (2.1.291). The assistant now sets
+`true` only there (next lesson).
+
+## `ENABLE_TOOL_SEARCH=true` also lifts Claude Code's gateway rule (#10365)
+
+Claude Code keeps tool search off by itself when `ANTHROPIC_BASE_URL` is not `api.anthropic.com`, but only while the
+variable is unset: `true` (or any value) overrides that rule. #7371 set `true` on every assistant process, and on a
+gateway whose edge cannot represent `defer_loading` tools, `tool_reference` blocks or the `ToolSearch` tool, every
+conversation on some models failed with `400 request is not representable on this edge: ToolSearch is not supported`.
+Nothing caught it: the node's recovery takes a 400 as the user's, the hub had no code for it (the card said the request
+was malformed), and Test passed, since `claude -p` checks set nothing and kept Claude Code's rule. Set the variable by
+where the requests go (`toolSearchFor`): `true` on Anthropic's own API, `false` behind a known gateway (also in a managed
+provider's own environment, which may opt back in), nothing where the start cannot tell. Decide per (launcher, model):
+one gateway carried deferral for its Claude model and refused it for two others. Read the version you rely on: a
+behaviour measured on one Claude Code (2.1.322) is not proof for the one the machines run.
 
 ## A leader's split must be somewhere the owner can see (#5846)
 

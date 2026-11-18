@@ -331,6 +331,17 @@ What these agents do not do here, and why:
   of moving to a model the gateway does not serve. A provider with no `models` list, or one that lists all three, keeps Claude Code's fallback. The rule reads the declared list, not what the
   gateway serves: a provider imported from a computer's aliases lists only the model its alias names, so it has the fallback off until its list names all three or its `env` empties the variable. The provider's `env` wins either way:
   `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` keeps the fallback, `=1` turns it off (`docs/integrations/claude-integration.md`, "Refusal fallback behind a gateway").
+- **Tool search off behind a gateway** (#10365): a managed provider whose Base URL (its own `env`'s `ANTHROPIC_BASE_URL`, else the stored one) is not Anthropic's own API gets
+  `ENABLE_TOOL_SEARCH=false` (both in `personad launch` environment, which then drops an inherited value, and the settings `env` above): every tool is loaded up front, and no request carries
+  `defer_loading` tools, `tool_reference` blocks or the `ToolSearch` tool, which a gateway edge may refuse (`400 request is not representable on this edge: ToolSearch is not supported on this endpoint`).
+  Claude Code keeps tool search off behind such a Base URL by itself, but any value of the variable lifts that rule, and the assistant's processes carry one. The provider's `env` wins:
+  `ENABLE_TOOL_SEARCH=true` opts back in (deferral saves about 23K tokens per request where the gateway carries it); a refusal is then resent once with every tool loaded and remembered for that
+  provider and model (`docs/integrations/claude-integration.md`, "Tool search behind a gateway (#10365)").
+- **No tier alias behind a gateway** (#10365): Claude Code sends a tier variable's value (`ANTHROPIC_DEFAULT_OPUS_MODEL` …) to the gateway as the model's name, so a provider whose default model or tier
+  field held `opus` asked the gateway for "opus" (404). For a provider whose Base URL is not Anthropic's own API, a tier alias (`opus`, `sonnet`, `haiku`, `fable`, `best`, `opusplan`, `default`, `inherit`,
+  with or without `[1m]`) in its default model, a tier field or its `env` counts as unset: the tier's own model, else the default model, else nothing (Claude Code's own ID). A `--model <alias>` the node
+  passes (an assistant conversation, a terminal Agent, a launcher switch, Test, a typed `/model`) becomes the model the provider's environment gives that tier, or is left out (the provider's default);
+  `personad launch` does the same to whatever reaches it and says so on stderr when it leaves one out. Plain `claude`, shell launchers and providers on Anthropic's own API keep their aliases.
 - **Authentication method** (`auth`, 2026-11-04): which variable receives the key. `api_key` (default, used by existing launchers) sets `ANTHROPIC_API_KEY`; Claude Code sends
   `x-api-key`, the only method accepted by the official API. `bearer` sets `ANTHROPIC_AUTH_TOKEN` and sends `Authorization: Bearer`, for compatible gateways accepting only Bearer
   (common relay gateways accept both, requiring no change). When the manager directly calls the Messages API with a launcher (triage, translation, etc.), it follows this header choice too; Responses already uses Bearer and needs no selection.

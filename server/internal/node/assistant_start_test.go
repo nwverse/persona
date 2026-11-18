@@ -36,8 +36,9 @@ func fakeClaudeHome(t *testing.T, script string) {
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", home)
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
-	// The launcher assertions are about what the launcher declares, not what the developer's own shell exports.
-	for _, k := range []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "ENABLE_TOOL_SEARCH"} {
+	// The launcher assertions are about what the launcher declares, not what the developer's own shell exports (a
+	// gateway of its own included: tool search follows it, #10365).
+	for _, k := range []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "ENABLE_TOOL_SEARCH", "ANTHROPIC_BASE_URL"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
