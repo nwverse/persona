@@ -608,6 +608,12 @@ engine: the same pick, the same message that carries it out, the same time bound
   While the watcher looks, its pane counts as a Codex starting (`codexStarting`: a node self-update waits) and it
   answers Codex's trust and update screens there, for up to five minutes.
 
+## Live status and model retries (#887)
+
+Measured with Claude Code 2.1.326 against local synthetic 429 and 500 responses: while the turn is still active, the CLI draws `✻ 429 <error> · retrying in 4s · attempt 5/10` (or the corresponding 500 error) above its input box. An early line can say only `API Error`; a later one names the status and detail. Interrupting the turn removes the line. This is separate from `system/api_error` transcript rows: a CLI that writes those early gets the existing first/final retry notices, while one that writes them only after exhausting its attempts still needs the screen status.
+
+Node reads this banner through the same bounded, watched-session `session.live` path as the ordinary spinner. It sends only the observed error and current/max attempt, not the countdown, and never infers a model error from elapsed time. The last ordinary verb, elapsed baseline, output count and thought duration stay with the retry because the banner has no counters; current thinking is not carried over. Ordinary work replaces the retry; a disappeared line, turn end or unwatch sends `live: null`. Clients also forget it on unsubscribe, and a long backoff does not expire it. Web and Apple chats use their existing API-error classifiers for the plain reason, keep the observed error as secondary detail, and show a localized attempt count before the final failure.
+
 ## Session IDs and transcripts
 
 - Mac has herdr's Claude integration; `agent list` includes `agent_session.value` (= Claude session ID). **The hub machine does not**, so it lacks the ID.
