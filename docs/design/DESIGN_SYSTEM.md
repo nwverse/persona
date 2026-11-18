@@ -194,8 +194,8 @@ Dynamic Type behavior:
 
 - The user's Small, Standard or Large setting shifts the system size by -1, 0 or +1 (`apple/Persona/DesignSystem/TextSize.swift:6-36`). Web maps the same ratios (12/13, 1, 14/13) through a build-time rewrite. Android has no in-app setting.
 - Shapes scale with `scaledFrame`, capped at 1.6x (`apple/Persona/DesignSystem/TextSize.swift:98-108`). `tapTargetFrame` and `tapTargetHeight` never go below 44 pt.
-- The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
-- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes.
+- The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`), for the top bars and the Agents search field that rises into their row (#10165); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
+- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes, and the browser sign-in number (`Theme.Font.signInNumber`, 64 pt rounded bold with fixed-width digits, `apple/Shared/Design/BrowserLoginTokens.swift`, #10293): two digits read off the iPhone to be typed in a browser, already far above the interface's cap at every size.
 
 ### 2.3 Spacing
 
@@ -213,7 +213,7 @@ Dynamic Type behavior:
 | `xl` | 24 | `section` |
 | `xxl` | 32 | |
 
-`sm` (6) is smaller than `s` (8), which reads backwards (DS-17). Web has no spacing tokens (Tailwind 4 px steps; page margin 20/32 px). Android has the same names and values since 11-11 (`spec/tokens/dimension.json`, #4209); its old `xl` (20), which iOS's spacing lacks, became `Tokens.Size.iconXS` where it sized an icon and the gap iOS uses everywhere else (DS-05). Off-grid values in use: card padding default 14, watch card 10/12, chip vertical 2.5 (DS-09).
+`sm` (6) is smaller than `s` (8), which reads backwards (DS-17). Web has no spacing tokens (Tailwind 4 px steps; page margin 20/32 px). Android has the same names and values since 11-11 (`spec/tokens/dimension.json`, #4209); its old `xl` (20), which iOS's spacing lacks, became `Tokens.Size.iconXS` where it sized an icon and the gap iOS uses everywhere else (DS-05). Off-grid values in use: card padding default 14 (`CardStyle.padding`, #10233), watch card 10/12, chip vertical 2.5 (DS-09).
 
 Android has a device setting, Settings › Appearance › Layout density (#5564): Standard (the default) draws these values; Compact halves every `Tokens.Space` value (16 → 8, 12 → 6, 8 → 4) and the off-scale paddings written as `N.dp.dense`, takes the style page margin (`pagePadding`) to 0.625 (Glass 16 → 10), rounds corners less (`Tokens.Radius`, `PersonaTheme.shapes` and `N.dp.corner` × 0.6; pills stay pills) and lowers minimum row and button heights written as `N.dp.row` to 0.8 (40 → 32). Text and icons keep their sizes, so a spacing or radius token that sizes something (an icon, a dot, a spinner, a stroke) uses `Tokens.Space.Standard` / `Tokens.Radius.Standard`, which do not follow the setting; new code sizes things with `Tokens.Size` instead, and writes a hard-coded padding as `N.dp.dense`. iOS and web have no density setting yet.
 
@@ -319,6 +319,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
+- `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
 - Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Bundled catalog artwork (#5461) is a square PNG inside the versioned extension package; the hub verifies/reads it and returns an authenticated relative `icon_url`. Web uses its selected hub connection to fetch bytes and displays a local Blob URL; Android uses its authenticated hub image loader. Missing, stale or unavailable bundled files keep the same fallback. Legacy absolute HTTPS sources still load anonymously without hub or market credentials. Publisher limits and authenticated image routes are in `docs/extensions/extensions.md` ("Bundled catalog artwork"). Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
 
@@ -649,6 +650,17 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+  (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
+  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
+  restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
+  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
+  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
+  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
+  or the app back in front.
 
 ### 3.3 Cards and surfaces
 
@@ -764,6 +776,8 @@ Reply targets show a friendly name and a source-backed preview when available;
 opaque routing IDs and read diagnostics stay in details. The layout changes no
 sending identity or confirmation behavior.
 
+The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
+
 ### 3.4 Lists and rows
 
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
@@ -774,6 +788,7 @@ sending identity or confirmation behavior.
   preferences and Assistant directions stay independent (`docs/integrations/paseo.md`, "Pinned workspaces").
 
 - Tiles (an extension's `grid` and `carousel`, `ExtensionTiles.swift`, #827): `Theme.Radius.card` on the chip fill, `Theme.Size.tileMin` / `tileHeight` / `tileNarrow` / `tileRegular`; one that is on takes its named color's tint and a ring of it, the words never take the color.
+  A carousel scrolls to its section's edges and is cut there. On a page's list its row spans the section, its first tile at `Space.page`; inside a card (a section of `ExtensionViewStack`, a code page with tabs, a columns card) it takes the card's width, its first tile at `CardStyle.padding` in line with the card's other content, cut at the card's edges and never drawn over them (#10233).
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
 - A row without a background that reaches the edges of an inset-grouped cell (`listRowInsets` leading 0 and `listRowBackground(Color.clear)`, such as the Knowledge kind bar) adds `.unclippedListRow()` (`apple/Persona/DesignSystem/UnclippedListRow.swift`): the cell's 26 pt rounded corners clip it otherwise, and its first chips lose a corner (#7735). A row with a background keeps the clipping, or its square corners show.
@@ -1407,6 +1422,7 @@ before common choices. It introduces no visual style, color palette, model defau
 | Right drag on Assistant root | opens the drawer, unless a pushed page, a sideways scroller or typed text is under the finger |
 | Horizontal drag between pages | pager with 3x resistance past the ends; flick above 300 pt/s or past half way |
 | Edge swipe back | system on a pushed page (the pan yields to it). At a root, Android excludes a left-edge strip so the drawer or column opens there instead (`RootEdgeExclusion`, #9803); the right edge stays with Back |
+| Swipe back from anywhere (iOS 26) | the system's, on a pushed page that shows the system's Back: under iPhone Duo's side bars the Agents chat and a task's page use the system's Back for it (#9971). A page with its own header (the system's bar hidden) has the edge swipe only: UIKit gives the swipe from anywhere no touch there. A pane's own rightward swipe (files / Git back to the chat) comes first |
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
 | Drag on a conversation | puts the keyboard away as soon as the finger starts to drag, not at the touch, which may still be a tap; a field in a request card loses it too (#4210). iOS: `ChatView`'s `.interacting` scroll phase calls `Keyboard.dismiss()`; Android: `ChatListEffects` on the list's `DragInteraction.Start`, for the Agent chat, Persona's conversation and Lark chats, in every style. A tap on blank space does it as well; a scroll the app starts (following the newest message, a jump) does not; Android's keyboard does not follow the finger |
 | Long press on a message | your own folded long message opens in place, with no bar (#5676); otherwise a lifted menu with an action bar, over the whole page dimmed (a page's floating top bar included); a message taller than the room shows the part pressed and scrolls inside, the bar fixed; a selection handle held within `Theme.Lift.edgeScroll` of its top or bottom edge scrolls it on, up to `Theme.Lift.edgeScrollSpeed`; its selected words take touches `Theme.Lift.handleReach` past them, so a handle's knob over the first line or under the last can be dragged (#5291); the edit menu over selected words goes above them, or below when there is no room, never over the words or either handle (`Theme.Lift.handleReach` of room for each handle's knob, #6005); a message only on this device ends the bar in a red Delete (Don't Send while it waits), Undo in a toast (#4626); a sent message the chat can pick ends the bar in a row of its own under a hairline, Select Messages (#9468), as wide as the actions, which stay as they were |
@@ -3176,6 +3192,23 @@ keeps the draft on failure, and a browser timeout asks the user to refresh becau
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
 
+A provider extension's source (#10330, `docs/extensions/repository-providers.md`) changes nothing on screen while
+none is installed and no saved repository uses one: the list and the menu's three options stay as they were. The only
+difference then is one more read, the sources beside the list (a 404 or a failure means the built-ins only).
+Once there is one, the expanded area adds a **Sources** part, plain rows of each source's mark, name and either
+"Built in" or its hosts in small mono text, with a neutral `Pill` **Unavailable** for one that is off. The provider
+menu adds extensions by name after the built-ins, an off one disabled unless the edited repository uses it. The
+preview of an extension's address waits for the source: the shared `Loading` line names it ("Reading the address
+with Acme Code…"), then the inset preview names the source rather than its id; a host the source does not claim, an
+unavailable source or its refusal (the hub's words) is one status line, and Save stays off until an identity
+arrives. A refusal or failure is never final: a quiet **Try again** under it reads the address again, as does
+editing the address. Until the sources are read (or when they can't be), the page claims no source is unavailable:
+the repository being edited asks its own source through the hub, whose answer is shown. A saved repository of an
+extension names its source under the address and, when that source is off or gone, adds the neutral **Unavailable**
+pill and one `data-repository-note` line on what still works on this page (it stays saved and its details can be
+edited). A source whose extension was renamed is still the saved repository's: the hub keeps the id it was saved
+with, so the page matches it to the listed source with the same contribution that claims its host.
+
 ## Optional repository associations
 
 Coding-work metadata belongs in the Web to-do detail's **Repositories and
@@ -3191,7 +3224,19 @@ presented as filesystem paths. A link carries its complete source title as one
 hyperlink, wrapping at narrow widths, followed by its number and an external
 mark. An unknown title falls back to the localized kind and number. GitHub PRs
 use the pull-request mark, GitLab MRs the merge mark and issues the existing
-issue mark. The associations an agent keeps show without an editor. Editing is
+issue mark. A provider extension's repository uses the extension mark
+(`Icon` `extension` in the secondary ink, `data-repository-mark="extension"`,
+hidden from assistive technology; `git` would read as the branch mark of
+**Source options** beside it). Its source's name, never the `ext:` id, follows
+the address, so a narrow line cuts the name before the repository's path. Its
+links open at their stored addresses, are numbered `#N` and take
+the source's own `link_kinds` word for an untitled link. A pasted address of such
+a repository is a pending link row ("Checked when you save") until the hub
+reads it on save. When its source is off or uninstalled, the repository row adds
+the neutral `Pill` **Unavailable** before its count and a `data-repository-note`
+line beneath it; links keep opening and only adding one is turned off. The
+picker shows the same mark and the source's name after the host. The
+associations an agent keeps show without an editor. Editing is
 the existing `Dialog` with a compact text button (**Manage links**), never an
 always-open form. `TaskRepositoryBindingsEditor` is the controlled editor;
 `TodoRepositoryBindings` owns existing-todo reads and writes and
