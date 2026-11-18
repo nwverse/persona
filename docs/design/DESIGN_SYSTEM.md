@@ -467,9 +467,13 @@ on-demand model panel, not the everyday Assistant home (#6887).
   number (labels carry the index). Left, a 20 px drag handle (`grip` icon, 12 px, `ink-3`) shown with the row's actions;
   right, 20 px round buttons with a `line` ring on `surface` (↑ Send now 12 px, pencil and trash 11 px), shown on hover
   or focus and always on a screen without hover, a spinner in their place while the row's request is out. Send now acts
-  at one press (4.4), its tooltip saying what happens. A row from
-  another conversation has a send mark and **Another chat** (semibold 13 px, at most 120 px) before its words and no
-  handle or buttons. Four rows or fewer show in full; from five, three and a centered 12 px **N more** / **Show less**
+  at one press (4.4), its tooltip saying what happens. Messages from
+  other conversations come last, folded into one 32 px line: a `chat` mark in the rows' 20 px handle column, **N messages
+  from other chats** (12 px, `ink-2`, medium) and "· Arrives when this chat is free" (`ink-3`), a chevron at the end.
+  Opened, each row names the chat it came from once (medium, `ink`, at most 40%; the hub's 「来自「…」：」 prefix taken off)
+  and then its words, with no mark, handle or buttons; a line cut short has a chevron and opens in place to its whole
+  text (at most 132 px, then it scrolls, selectable). Only the groups that are there are drawn: with none of the owner's
+  rows the relayed line is the card's first thing, with no hairline over it (#9749). Four rows or fewer show in full; from five, three and a centered 12 px **N more** / **Show less**
   with a chevron under a `line` divider. On a phone on its side the queue is one "N queued" line beside the run's status
   that opens the same rows. Spec: `docs/web/web.md` ("Queued messages").
 - Duplicates: four composer implementations exist (DS-19).
@@ -1182,6 +1186,16 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
   typed-ID rows explicitly name the launcher they send. Why: identical letter tiles and a separate rail hid the account
   and model choices from people comparing several launchers. The single column exposes that information progressively.
+  Rows are two lines, with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no check.
+  Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
+  reference-price line where known, and a footer that says whether the setup is the recommended one, customized or saved.
+  A launcher summary adds a weekly-remaining bar only when the existing launcher quota answer supplies a weekly ratio;
+  its tooltip names the window and reset time.
+- Provider identity on model rows (#7360): search results and saved setups name their owning launcher at the start of the
+  second line, on web, Android and Apple. The rest of that line keeps the model ID, resolved model, description or
+  typed-model explanation; an expanded launcher may keep its description alone. A sign-in, key or model-availability error
+  that offers a repair names the affected launcher in its title, and the repair opens that launcher's provider settings.
+  This is a content rule, not a new badge, token or visual style.
 - Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider
   group, each family's name is a 11.5 px `text-submeta` line in `ink-3` (12 px side padding, 6 px above, 2 px below)
   over its rows; its right end holds the fold, a text button in the same size and colour ("Earlier versions · N" with
