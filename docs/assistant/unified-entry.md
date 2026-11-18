@@ -377,7 +377,7 @@ keeps one outage from filling the chat:
   `pending`. When a to-do changes or one of its agents starts a turn, the hub sends the receipts whose body changed again as
   `assistant_feed` (same id), so a card turns grey without a reload. The hub follows a chat's interrupted receipts for 48 hours.
 - **Batch**: an interrupted receipt with the same `cause` (`model_error`, `rate_limited`, `auth`, `model_route`, `no_output`,
-  from the error text) as one written in the same chat less than 10 minutes earlier joins that one's batch: it names the first
+  from the error text; `stopped` for a turn Persona's Stop interrupted before it had any output, #10187) as one written in the same chat less than 10 minutes earlier joins that one's batch: it names the first
   receipt in `group`. The first receipt carries `batch` (`total`, `pending`, `resolved`, `machine` when all ran on one
   computer, and `tasks` with each task's resolution), recomputed on every read; a page read with `since` after the first
   receipt still brings it along.

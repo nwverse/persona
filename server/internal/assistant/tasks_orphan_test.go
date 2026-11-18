@@ -30,6 +30,13 @@ func TestAgentGone(t *testing.T) {
 	}{
 		{"closed", func(*orphanAgent) {}, orphanClosed},
 		{"closed after a model error", func(a *orphanAgent) { a.c.TurnError = "API Error: 400 invalid request" }, orphanError},
+		// The hub's own word on a turn with no output is no error that ended it (#10187).
+		{"closed after a turn with no output", func(a *orphanAgent) {
+			a.c.TurnError, a.c.TurnErrorKind = "This turn had no output", proto.TurnErrorNoOutput
+		}, orphanClosed},
+		{"closed after Persona's Stop", func(a *orphanAgent) {
+			a.c.TurnError, a.c.TurnErrorKind = "Stopped with its conversation", proto.TurnErrorStopped
+		}, orphanClosed},
 		{"computer offline", func(a *orphanAgent) { a.reachable = false }, orphanOffline},
 		{"no longer listed", func(a *orphanAgent) { a.listed = false }, orphanClosed},
 		{"open in a tab, stopped", func(a *orphanAgent) { a.c.Status, a.c.PaneID = proto.StatusIdle, "w1:p1" }, ""},
