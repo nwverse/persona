@@ -139,6 +139,27 @@ func putMessageGrant(t *testing.T, st Store, scenario string) {
 	}
 }
 
+func TestOutboundMessageAndAgentTransferRemainAssistantTools(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	tools := s.Tools(context.Background())
+	for _, name := range []string{"message_send", "agent_transfer"} {
+		count := 0
+		for _, tool := range tools {
+			if tool.Name == name {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("assistant catalog has %d entries for %s, want exactly one", count, name)
+		}
+		for _, tool := range s.AgentTools() {
+			if tool.Name == name {
+				t.Fatalf("%s must not be exposed to ordinary agents", name)
+			}
+		}
+	}
+}
+
 func TestOutboundPromptsFitExistingBudget(t *testing.T) {
 	raw, err := os.ReadFile(promptSizeBaseline)
 	if err != nil {
