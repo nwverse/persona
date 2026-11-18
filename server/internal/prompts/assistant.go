@@ -992,8 +992,8 @@ func RenderTaskDoneWhen(criteria []string) string {
 	return render("assistant/task_done_when", struct{ Criteria []string }{criteria})
 }
 
-// RenderTaskGoal is a task's done_when as one checkable condition, for a Claude Code /goal typed before the task's
-// first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
+// RenderTaskGoal is a task's done_when as one checkable condition, for the Claude Code or Codex /goal typed after the
+// task's first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
 func RenderTaskGoal(criteria []string) string {
 	return strings.TrimSpace(render("assistant/task_goal", struct{ Criteria []string }{criteria}))
 }
