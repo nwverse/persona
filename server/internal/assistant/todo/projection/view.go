@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The decision table (docs/design/proposals/todos-redesign.md 6.3): the first row that holds places the to-do, except
@@ -35,6 +36,7 @@ const (
 	lineDeployed        = "deployed"
 	linePROpen          = "pr_open"
 	lineUsageLimit      = "usage_limit"
+	lineRunWaits        = "run_waits"
 	lineFinishedSeen    = "finished_seen"
 	lineCompleted       = "completed"
 	lineCanceled        = "canceled"
@@ -45,7 +47,8 @@ const (
 
 // placement is a view and what ranks it within its section, worked out from the facts together with the view (the
 // ranking never reads them back off it): the soonest deadline of the decisions on the row, when it wakes (a park's
-// end, a usage limit's reset and its grace) and when it comes back from Someday; a zero time is none.
+// end, a usage limit's reset and its grace, the hub's next wake of a run that waits) and when it comes back from
+// Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
 	deadline, wake, back time.Time
@@ -395,9 +398,9 @@ func (r *reading) canWait() (placement, bool) {
 
 // ---- row 5: someone works on it ----
 
-// working: Persona or an Agent works on it now, else a run starts, else one works in the background; within each
-// kind the first such run in the list's order (the newest link first) decides. queued needs the start's admission
-// queue, which the plan keeps and the list does not carry yet.
+// working: Persona or an Agent works on it now, else a run starts, else one works in the background or the hub
+// retries its moment's model failure; within each kind the first such run in the list's order (the newest link first)
+// decides. queued needs the start's admission queue, which the plan keeps and the list does not carry yet.
 func (r *reading) working() (placement, bool) {
 	for _, rn := range r.runs {
 		if rn.kind != runRunning && rn.kind != runPersona {
@@ -526,9 +529,10 @@ func (r *reading) finishedSeen() (placement, bool) {
 
 // ---- row 10: waiting on something named ----
 
-// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), or a run
-// stopped on a usage limit until it resets. computer_offline needs Start When It's Back, scheduled_report a report's
-// schedule: neither is kept yet; someone_else comes with a park (row 8).
+// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), else a run
+// stopped on a usage limit until it resets, else a run's turn ended blocked on another Agent or an outside event
+// (someone_else; it also comes with a park, row 8), in the order 6.3 lists them. computer_offline needs Start When
+// It's Back, scheduled_report a report's schedule: neither is kept yet.
 func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
@@ -538,9 +542,18 @@ func (r *reading) waiting() (placement, bool) {
 	if rn, ok := firstRun(r.runs, runLimited); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonUsageLimit)
 		p.Line, p.Since = line(lineUsageLimit, "run", rn.title()), utc(rn.since())
-		if reset := usageLimitReset(rn.s); reset != nil {
+		if reset := usageLimitReset(*rn.s); reset != nil {
 			p.Line = line(lineUsageLimit, "run", rn.title(), "resets_at", stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
+		}
+		return p, true
+	}
+	if rn, ok := firstRun(r.runs, runWaits); ok {
+		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonSomeoneElse)
+		p.Line, p.Since = line(lineRunWaits, "run", rn.title(), "on", waitsOn(*rn.s)), utc(rn.since())
+		// When the hub looks next ranks it; that moment passing changes nothing by itself, as a park's end does not.
+		if w := rn.s.Work.WakeAt; w != nil {
+			p.wake = *w
 		}
 		return p, true
 	}
@@ -732,8 +745,8 @@ func nextChange(f *Facts, now time.Time, v assistantwire.TodoSummary) time.Time 
 }
 
 // moments are the ends after now of every window the rules read for f and its steps: a failed start's 48 hours,
-// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, Someday's return, and the 48
-// hours to the Inactive mark or the end of a due day.
+// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, a scheduled retry's wake and
+// grace, Someday's return, and the 48 hours to the Inactive mark or the end of a due day.
 func moments(f *Facts, now time.Time) []time.Time {
 	var out []time.Time
 	add := func(t time.Time) {
@@ -760,6 +773,9 @@ func moments(f *Facts, now time.Time) []time.Time {
 	for _, s := range f.Sessions {
 		if reset := usageLimitReset(s); reset != nil {
 			add(reset.Add(usageLimitGrace))
+		}
+		if w := s.Work; w != nil && w.On == proto.WaitTransient && w.WakeAt != nil {
+			add(w.WakeAt.Add(retryGrace))
 		}
 	}
 	if u := f.SomedayUntil; u != nil {

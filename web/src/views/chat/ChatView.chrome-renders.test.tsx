@@ -135,6 +135,18 @@ it("a completed task remains a labelled, clickable owner, not a prompt to link i
   }
 });
 
+// Rename…, Rename space… and Delete… open dialogs from a chunk of their own (#10382): the ⋯ menu starts it as it opens, so
+// the click draws the dialog in its own render, with no wait for the chunk and no empty frame.
+it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws its dialog on the click", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+  await import("./SessionMenuDialogs"); // the chunk the menu asked for, in
+  await settle();
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent?.includes(t("chat-chatview.rename")))!;
+  act(() => item.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("chat-sessiondialogs.session_name"));
+});
+
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);

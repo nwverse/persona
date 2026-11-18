@@ -30,13 +30,13 @@ internal fun DevicesPage(
 ) {
     val features = LocalHubFeatures.current
     val feedback = LocalAppFeedback.current
-    val context = LocalContext.current
+    val invalidBrowserLogin = stringResource(R.string.settings_browser_login_invalid)
     var loginRequest by remember { mutableStateOf<BrowserLoginRequest?>(null) }
     val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
         result.contents?.let { value ->
             val request = browserLoginRequest(value)
             if (request != null) loginRequest = request
-            else feedback?.notice(context.getString(R.string.settings_browser_login_invalid))
+            else feedback?.notice(invalidBrowserLogin)
         }
     }
     val state by controller.state.collectAsState()
