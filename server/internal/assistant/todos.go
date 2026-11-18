@@ -1893,6 +1893,7 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	row := &db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now, Quiet: cur.Quiet}
 	cur.keepPlan(row)
+	row.SomedayUntil = nil // reopened: out of Someday, as db.TodoEdit.Apply does on the store
 	if st := s.todoDB(); st != nil {
 		open := false
 		r, err := st.UpdateTodo(ctx, id, nil, nil, &open, now)
@@ -1925,6 +1926,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	row := db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now}
 	cur.keepPlan(&row)
+	row.SomedayUntil = nil // retried: out of Someday, as db.RetryTodo does on the store
 	if st := s.todoDB(); st != nil {
 		r, ok, err := st.RetryTodo(ctx, id, now)
 		if err != nil {

@@ -61,7 +61,7 @@ type TodoRow struct {
 	// edit (updated_at stays). Nil when never. Only RestoreTodo writes it.
 	RestoredAt *time.Time `json:"restored_at"`
 	// SomedayUntil is when a to-do the owner put off to Someday comes back (#10226), SomedayNoDate for Someday with no
-	// date; nil while it is not put off. Only SetTodoSomeday writes it.
+	// date; nil while it is not put off. SetTodoSomeday writes it; reopening (TodoEdit.Apply) and RetryTodo clear it.
 	SomedayUntil *time.Time `json:"someday_until"`
 }
 
@@ -274,6 +274,7 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 			cur.DoneAt = nil
 			cur.StartError = "" // reopened: no longer failed
 			cur.DoneBy, cur.DoneReason = "", ""
+			cur.SomedayUntil = nil // reopened: the owner is on it again, not putting it off (#10226)
 		}
 	}
 	if e.SetDue {
@@ -338,9 +339,11 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		e.Apply(&cur, updatedAt)
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
-			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18, inbox_item = $19 WHERE id = $1`,
+			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18, inbox_item = $19,
+			someday_until = $20 WHERE id = $1`,
 			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
-			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After), cur.InboxItem)
+			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After), cur.InboxItem,
+			cur.SomedayUntil)
 		if err != nil {
 			return err
 		}
@@ -451,12 +454,13 @@ func (d *DB) FailTodo(ctx context.Context, id, startError string, at time.Time) 
 	return &r, nil
 }
 
-// RetryTodo reopens a todo whose agent did not start, to start it again (#1396): not done, no error, reopened now.
+// RetryTodo reopens a todo whose agent did not start, to start it again (#1396): not done, no error, reopened now, and
+// out of Someday (the owner is on it again, #10226).
 // False (and no error) when it is not failed any more: a retry that came first already reopened it.
 func (d *DB) RetryTodo(ctx context.Context, id string, at time.Time) (*TodoRow, bool, error) {
 	var r TodoRow
 	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = NULL, start_error = '', done_by = '', done_reason = '',
-		reopened_at = $2, updated_at = $2 WHERE id = $1 AND done_at IS NOT NULL AND start_error <> ''
+		reopened_at = $2, updated_at = $2, someday_until = NULL WHERE id = $1 AND done_at IS NOT NULL AND start_error <> ''
 		RETURNING `+todoColumns, id, at).
 		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {

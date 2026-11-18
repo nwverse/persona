@@ -10,15 +10,14 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // The owner's restore and Someday (#10226, docs/assistant/todos.md "Restores and Someday"), kept on the to-do so every
 // device agrees, as seen is (todo_seen.go). Restore brings a to-do back from Inactive: restored_at is activity for its
-// status only. Someday puts an open to-do off until someday_until (db.SomedayNoDate: no date). Neither is an edit:
-// updated_at stays, as it does for seen.
-
-// errSomedayClosed: only an open to-do is put off to Someday.
-var errSomedayClosed = errors.New("only an open to-do can be put off to Someday")
+// status only. Someday puts an open to-do off until someday_until (db.SomedayNoDate: no date); reopening or retrying it
+// takes it out again (db.TodoEdit.Apply, db.RetryTodo). Neither mark is an edit: updated_at stays, as it does for seen.
+// The refusals carry stable codes, so a client tells them from a route an older hub lacks (404 not_found there too).
 
 // markTodo writes one of the owner's marks on todo id: with the store through write, else on the memory row through
 // edit. Taken under todoBook.writing as seeTodo is, and the apps are told. db.ErrTodoNotFound when it is not there.
@@ -92,9 +91,9 @@ func (s *Service) markAllowed(w http.ResponseWriter, r *http.Request) bool {
 func answerMark(w http.ResponseWriter, t Todo, err error) {
 	switch {
 	case errors.Is(err, db.ErrTodoNotFound):
-		apierr.Write(w, http.StatusNotFound, errors.New("todo not found"))
+		apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
 	case errors.Is(err, db.ErrTodoCompleted):
-		apierr.Write(w, http.StatusConflict, errSomedayClosed)
+		apierr.WriteCode(w, http.StatusConflict, "todo_closed", i18n.Err("assistant-todos.someday_closed"))
 	case err != nil:
 		apierr.Write(w, http.StatusInternalServerError, err)
 	default:
@@ -125,11 +124,12 @@ func (s *Service) todoMarkRoutes() {
 		}
 		until := db.SomedayNoDate
 		if in.Until != nil {
-			if !in.Until.After(time.Now()) {
-				apierr.Write(w, http.StatusBadRequest, errors.New("until must be in the future"))
+			until = in.Until.UTC()
+			// Ahead, and no later than "no date": a later time (year 10000 in UTC) could not be written as JSON again.
+			if !until.After(time.Now()) || until.After(db.SomedayNoDate) {
+				apierr.WriteCode(w, http.StatusBadRequest, "someday_until", i18n.Err("assistant-todos.someday_until"))
 				return
 			}
-			until = in.Until.UTC()
 		}
 		t, err := s.setTodoSomeday(r.Context(), r.PathValue("id"), &until)
 		answerMark(w, t, err)

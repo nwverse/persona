@@ -259,8 +259,8 @@ concern never shelves either: it waits for its report, however long.
 - **Restore** on a shelved row counts as activity now: the to-do goes back to its section and shelves again only after
   another 48 hours without a move. The restore is kept in this browser (`localStorage`, `persona.todos.restored`);
   another browser or device still shows it shelved until it moves. The hub now stores restores too (`restored_at`,
-  `PUT /api/v1/todos/{id}/restored`, `docs/assistant/todos.md` "Restores and Someday"), but today's triage still goes by
-  the device's own restore on every client, and by none on the hub, until the clients switch to the status the hub
+  `PUT /api/v1/todos/{id}/restored`, `docs/assistant/todos.md` "Restores and Someday"), but today's triage still uses
+  each device's own restore, and the hub's copy of the triage uses none, until the clients switch to the status the hub
   works out (`view`, `docs/design/proposals/todos-redesign.md` section 6.1), from stage 2 of #10226.
 
 ## Related to-dos

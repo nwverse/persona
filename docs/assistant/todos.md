@@ -245,8 +245,8 @@ Link/release semantics:
 | PUT | `/api/v1/todos/{id}/agents/{mid}/{sid}` | Link an existing Agent (no message) → `{"ok": true}`; clears `dismissed_at`; completed to-do cannot be linked (409); missing 404; read-only role 403 |
 | DELETE | `/api/v1/todos/{id}/agents/{mid}/{sid}` | Remove Agent (soft removal: sets `released_at` and `dismissed_at`, excluded from API and never automatically relinked) → `{"ok": true}`; missing 404; read-only role 403 |
 | PUT / DELETE | `/api/v1/todos/{id}/seen` | The owner saw it in Just finished (`PUT`: Got it, or opening it, #5707) or not (`DELETE`: Undo) → `{"todo": Todo}` with `seen_at` set or gone; `updated_at` does not move; `{"type":"todos"}` is broadcast; missing 404; read-only role 403 (`docs/assistant/todo-status-sop.md` "Seen") |
-| PUT | `/api/v1/todos/{id}/restored` | The owner brought an inactive to-do back (Restore, #10226) → `{"todo": Todo}` with `restored_at` now; `updated_at` does not move; `{"type":"todos"}` is broadcast; missing 404; read-only role 403 ("Restores and Someday") |
-| PUT / DELETE | `/api/v1/todos/{id}/someday` | The owner put an open to-do off to Someday (`PUT {"until"?}`, #10226: until an RFC 3339 time ahead, or with no body or `null` with no date) or took it out (`DELETE`) → `{"todo": Todo}` with `someday_until` set or gone; `updated_at` does not move; `{"type":"todos"}` is broadcast; an `until` not ahead or unreadable 400; `PUT` on a closed to-do 409; missing 404; read-only role 403 ("Restores and Someday") |
+| PUT | `/api/v1/todos/{id}/restored` | The owner brought an inactive to-do back (Restore, #10226) → `{"todo": Todo}` with `restored_at` now; `updated_at` does not move; `{"type":"todos"}` is broadcast; missing 404 `todo_not_found`; read-only role 403; to-dos not loaded yet 503 ("Restores and Someday") |
+| PUT / DELETE | `/api/v1/todos/{id}/someday` | The owner put an open to-do off to Someday (`PUT {"until"?}`, #10226: until an RFC 3339 time ahead, or with no body or `null` with no date) or took it out (`DELETE`) → `{"todo": Todo}` with `someday_until` set or gone; `updated_at` does not move; `{"type":"todos"}` is broadcast; an `until` not ahead, later than `9999-12-31T00:00:00Z` or unreadable 400 `someday_until`; `PUT` on a closed to-do 409 `todo_closed`; missing 404 `todo_not_found`; read-only role 403; to-dos not loaded yet 503 ("Restores and Someday") |
 | PUT | `/api/v1/todos/{id}/thread` | Bind the to-do to a chat thread `{"channel", "chat_id", "thread_id", "title"?}` (replaces the one it had) → `{"todo": Todo}` with `thread`; the three ids are trimmed, required and at most 256 characters (400), the title is trimmed and clipped to 200; another to-do holds the thread 409; missing 404; read-only role 403 ("Chat thread") |
 | DELETE | `/api/v1/todos/{id}/thread` | Unbind it → `{"todo": Todo}`; a to-do with no thread stays as it is; missing 404; read-only role 403 |
 | GET | `/api/v1/todos/{id}/decisions` | Decision list → `{"decisions": [...]}`, chronological; effective only by default, `?all=1` includes superseded decisions (with `superseded_by`); `[]` when none; missing 404 |
@@ -836,15 +836,20 @@ they already do on seen (`docs/assistant/todo-status-sop.md` "Seen"):
   device's own restore does today.
 - **Someday** (`PUT` / `DELETE /api/v1/todos/{id}/someday`): the owner's own "not now". Only an open to-do is put off (a
   failed start counts as open: it waits on the owner to retry or close it); a closed one is refused with 409. Taking it
-  out works on any to-do. `someday_until` is when it comes back; Someday with no date is stored as
-  `9999-12-31T00:00:00Z`, so that "put off until" is the one rule for both. Closing or reopening the to-do leaves the mark.
+  out works on any to-do. `someday_until` is when it comes back, no later than `9999-12-31T00:00:00Z`; Someday with no
+  date is stored as that time, so that "put off until" is the one rule for both. A to-do is in Someday only while
+  `someday_until` is ahead: the field stays after the time passes, and the status the hub works out decides, never a
+  client reading the raw field. Closing the to-do keeps the mark; reopening it, or retrying a failed start, takes it out
+  of Someday, since the owner is on it again.
 - Neither is an edit: `updated_at` stays, as with seen. Both send the settled `{"type":"todos"}`.
-- Today only the API carries them. The hub's triage (`todo_triage.go`) still places every to-do with no restore, and
-  the web, iOS / Mac and Android keep their restores on the device (`docs/assistant/todo-status-sop.md` "Shelving")
-  until they read `restored_at`, from stage 2. The redesign's status projection is the reader meant for both (the
-  proposal's section 6.3, rows 12 and 13).
-- An older hub, or an older manager behind the hub, has neither route and answers 404: a client keeps its own restore
-  there and offers no Someday.
+- Today only the API carries them, and no status reads them yet. The hub's triage (`todo_triage.go`) still places
+  every to-do with no restore, and the web, iOS / Mac and Android keep their restores on the device
+  (`docs/assistant/todo-status-sop.md` "Shelving") until they read `restored_at`, from stage 2. The redesign's status
+  projection is the reader meant for both (the proposal's section 6.3, rows 12 and 13).
+- Clients use both routes only while the hub's features list `todo_view` (a manager capability, listed while every
+  manager has it; the proposal's section 7.3, "Writes"); without it they keep the restore on the device and offer no
+  Someday. An older hub or manager answers 404 `not_found`, which a client can't tell from a to-do that is gone except
+  by the code: these routes answer an unknown to-do with `todo_not_found`.
 
 ## Imported from Reminders
 

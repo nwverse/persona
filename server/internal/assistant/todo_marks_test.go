@@ -98,13 +98,18 @@ func TestTodoSomedayRequests(t *testing.T) {
 		someday(&until)
 		e.must("PUT", "/api/v1/todos/"+id+"/someday", `{"until":null}`)
 		someday(&db.SomedayNoDate)
-		// A date that is not ahead, one that is no RFC 3339 time and a broken body are refused and change nothing.
-		for _, body := range []string{`{"until":"` + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339) + `"}`, `{"until":"tomorrow"}`, `{`} {
+		// A date that is not ahead, one later than "no date" (year 10000 in UTC could not be written as JSON again), one
+		// that is no RFC 3339 time and a broken body are refused and change nothing; the list still reads.
+		for _, body := range []string{`{"until":"` + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339) + `"}`,
+			`{"until":"9999-12-31T23:59:59-01:00"}`, `{"until":"9999-12-31T12:00:00Z"}`, `{"until":"tomorrow"}`, `{`} {
 			if w := e.do("PUT", "/api/v1/todos/"+id+"/someday", body); w.Code != http.StatusBadRequest {
 				t.Fatalf("%s: %d", body, w.Code)
 			}
 		}
 		someday(&db.SomedayNoDate)
+		if w := e.must("GET", "/api/v1/todos", ""); !json.Valid(w.Body.Bytes()) || w.Body.Len() == 0 {
+			t.Fatalf("the list after the refusals: %q", w.Body)
+		}
 
 		events = todosEvents(e)
 		if a := markAnswer(t, e.must("DELETE", "/api/v1/todos/"+id+"/someday", "")); a.SomedayUntil != nil {
@@ -130,6 +135,40 @@ func TestTodoSomedayRequests(t *testing.T) {
 		}
 		someday(nil)
 		e.must("DELETE", "/api/v1/todos/"+id+"/someday", "")
+	})
+}
+
+// The marks stay through the owner's other edits, and reopening or retrying a to-do takes it out of Someday: the owner is
+// on it again (#10226).
+func TestTodoMarksAcrossEdits(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		id := e.create("Renew the passport").ID
+		e.must("PUT", "/api/v1/todos/"+id+"/restored", "")
+		e.must("PUT", "/api/v1/todos/"+id+"/someday", "")
+		e.must("PATCH", "/api/v1/todos/"+id, `{"notes":"the photo booth on the corner"}`)
+		if got := e.get(id); got == nil || got.RestoredAt == nil || got.SomedayUntil == nil {
+			t.Fatalf("after editing the notes: %+v", got)
+		}
+		e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
+		if got := e.get(id); got == nil || got.RestoredAt == nil || got.SomedayUntil == nil {
+			t.Fatalf("after closing it: %+v", got)
+		}
+		e.must("PATCH", "/api/v1/todos/"+id, `{"done":false}`)
+		if got := e.get(id); got == nil || got.RestoredAt == nil || got.SomedayUntil != nil {
+			t.Fatalf("after reopening it: %+v", got)
+		}
+
+		failed := e.create("Rebuild the index").ID
+		if err := e.s.failTodo(context.Background(), failed, "did not start"); err != nil {
+			t.Fatal(err)
+		}
+		e.must("PUT", "/api/v1/todos/"+failed+"/someday", "")
+		if _, ok, err := e.s.reopenFailedTodo(context.Background(), failed); err != nil || !ok {
+			t.Fatalf("retry: %v %v", ok, err)
+		}
+		if got := e.get(failed); got == nil || got.SomedayUntil != nil || got.DoneAt != nil {
+			t.Fatalf("after a retry: %+v", got)
+		}
 	})
 }
 
