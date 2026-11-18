@@ -401,9 +401,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // separate work.
 // #10358: a conversation an extension opened is marked with that extension's own icon. The icon and the installed
 // extensions it is picked from are a lazy chunk (ui/OpenerTile.tsx, lib/opener-icons.ts); the first screen keeps
-// OriginMark's check for an opener, the lazy entry and the opener handed to the first message's line. 45 B in each
-// language, measured in one environment against main 04cffd3d4 (ja 482,609 B to 482,654 B; en 479,521 B to 479,566 B,
-// zh-Hans 480,348 B to 480,393 B). Main had 74 B of room; the budget stays.
+// OriginMark's check for an opener, the lazy entry and the opener handed to the first message's line. 198 B in each
+// language, measured in one environment against main c2fec3548 (ja 482,217 B to 482,415 B; en 479,110 B to 479,308 B,
+// zh-Hans 479,948 B to 480,146 B), most of it the lazy entry's preload list: its three chunks' names in the App chunk's
+// dependency table, which renumbers the entries of every lazy import after it (against main 04cffd3d4 it was 45 B).
+// Main had 466 B of room; the budget stays.
 export const FIRST_SCREEN_BUDGET = 482_683;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
