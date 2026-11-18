@@ -76,6 +76,9 @@ def main():
     p.add_argument("--image", default="")
     p.add_argument("--web", default="")
     p.add_argument("--hold", type=int, default=0)
+    p.add_argument("--manual", action="store_true",
+                   help="start no switch: print READY with the hub's address and the file holding its token, and wait for "
+                        "one started from the web app (a browser test clicks it), then check it the same way")
     p.add_argument("--keep-logs", default="", help="copy the scrubbed hub log here")
     a = p.parse_args()
     if sys.platform != "linux":
@@ -126,6 +129,16 @@ def main():
             cmd = "su - testuser -c " + shq("export XDG_RUNTIME_DIR=/run/user/$(id -u); " + cmd)
         return run(["docker", "exec", box, "sh", "-c", cmd], check=check, timeout=timeout)
 
+    # SIGTERM ends a hold early; otherwise it stops the run with its cleanup (the default would leave the containers).
+    stop = {"holding": False, "now": False}
+
+    def on_term(*_):
+        if stop["holding"]:
+            stop["now"] = True
+        else:
+            raise SystemExit(1)
+
+    signal.signal(signal.SIGTERM, on_term)
     try:
         version = run([str(bindir / "personad"), "version"]).stdout.strip()
         image = a.image
@@ -217,16 +230,22 @@ def main():
             raise AssertionError(f"link_switch not available: {ls}")
 
         before_files = box_sh("ls -a ~/.persona ~/.persona/bin ~/.config/systemd/user 2>/dev/null; true").stdout
-        began = time.monotonic()
-        status, body = api(f"/api/v1/machines/{MACHINE}/link-switch", "POST", {})
-        took = (time.monotonic() - began) * 1000
-        say(f"STEP start: POST {status} in {took:.0f} ms: {json.dumps(body)}")
-        if status != 202:
-            raise AssertionError("the start was not accepted")
-        status2, body2 = api(f"/api/v1/machines/{MACHINE}/link-switch", "POST", {})
-        say(f"STEP second start: {status2} {json.dumps(body2)}")
-        if status2 != 409:
-            raise AssertionError("a second start was not refused")
+        if a.manual:
+            (root / "token").write_text(token)
+            say(f"READY {base} {root / 'token'} {MACHINE}")
+            wait(lambda: ((machine() or {}).get("link_switch") or {}).get("phase"), 900, "a switch started from the web app")
+            began = time.monotonic()
+        else:
+            began = time.monotonic()
+            status, body = api(f"/api/v1/machines/{MACHINE}/link-switch", "POST", {})
+            took = (time.monotonic() - began) * 1000
+            say(f"STEP start: POST {status} in {took:.0f} ms: {json.dumps(body)}")
+            if status != 202:
+                raise AssertionError("the start was not accepted")
+            status2, body2 = api(f"/api/v1/machines/{MACHINE}/link-switch", "POST", {})
+            say(f"STEP second start: {status2} {json.dumps(body2)}")
+            if status2 != 409:
+                raise AssertionError("a second start was not refused")
         phases = []
         first_phase_ms = None
 
@@ -298,7 +317,11 @@ def main():
             raise AssertionError("the pairing secret leaked")
         if a.hold:
             say(f"HOLD {a.hold} s at {base} (token in {state / 'hub.json'})")
-            time.sleep(a.hold)
+            stop["holding"] = True
+            until = time.monotonic() + a.hold
+            while time.monotonic() < until and not stop["now"]:
+                time.sleep(0.2)
+            stop["holding"] = False
         verdict = "PASS"
     except Exception as e:  # noqa: BLE001
         say("ERROR", type(e).__name__, str(e)[:2000])
