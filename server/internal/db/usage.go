@@ -187,14 +187,19 @@ type UsageBackfill struct {
 	Hours   int       // hours stored
 }
 
-// UsageLegacyAgents are the agents the backfill read before it kept agents apart (#9984): their history is one record
-// (UsageBackfillRecord ""), and an hour with any of their usage, or with usage stored before agents were kept (""),
-// has all of theirs.
-var UsageLegacyAgents = []string{"", "claude", "codex", "traex"}
+// UsageMeteredBefore are the agents the nodes metered before the manager kept agents apart (#9984): the usage stored
+// then ("") may hold theirs, so an hour with it has theirs, and their backfill does not add to it.
+var UsageMeteredBefore = []string{"claude", "codex", "traex"}
 
-// UsageBackfillRecord is the record an agent's backfill is kept in: "" for the legacy agents, its own otherwise.
+// usageFirstRecord are the agents whose backfill is the machine's first record (""): Claude Code's, read before
+// agents were kept apart, and an older node's. Codex's and traex's have records of their own since #10002 (their
+// first backfill read only two weeks of rollouts).
+var usageFirstRecord = []string{"", "claude"}
+
+// UsageBackfillRecord is the record an agent's backfill is kept in: "" for Claude Code (and an older node's), its own
+// otherwise.
 func UsageBackfillRecord(agent string) string {
-	if slices.Contains(UsageLegacyAgents, agent) {
+	if slices.Contains(usageFirstRecord, agent) {
 		return ""
 	}
 	return agent
@@ -219,10 +224,11 @@ func (d *DB) UsageBackfill(ctx context.Context, machine, agent string) (UsageBac
 }
 
 // PutUsageBackfill stores one request of machine's backfill of agents (the agents it read, an older node's none: the
-// legacy record): buckets (Minute an hour's start, any order) go in as hour rows, but only for the hours that had no
-// row of the machine and the bucket's agent (of any step; the legacy agents count together) before it, so the live
-// meter's count stays and a backfill sent again adds nothing; through (the last hour sent) and done move the agents'
-// records on. One transaction; stored is the hours added, an hour counted once an agent's record.
+// first record): buckets (Minute an hour's start, any order) go in as hour rows, but only for the hours that had no
+// row of the machine and the bucket's agent (of any step), nor one stored before agents were kept apart when the agent
+// was metered then (UsageMeteredBefore), before it: the live meter's count stays and a backfill sent again adds
+// nothing; through (the last hour sent) and done move the agents' records on. One transaction; stored is the hours
+// added, an hour counted once a record.
 func (d *DB) PutUsageBackfill(ctx context.Context, machine string, agents []string, buckets []proto.UsageBucket, through time.Time, done bool) (stored int, err error) {
 	n := len(buckets)
 	hours, models, launchers, names := make([]int64, n), make([]string, n), make([]string, n), make([]string, n)
@@ -240,17 +246,15 @@ func (d *DB) PutUsageBackfill(ctx context.Context, machine string, agents []stri
 	}
 	err = pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
 		if n > 0 {
-			// had: the machine's hours with a row of each record's agents, as the statement starts (its own rows are
+			// had: the machine's hours and the agents with a row in them, as the statement starts (its own rows are
 			// not in it).
 			rows, err := tx.Query(ctx, `WITH b AS (
-					SELECT date_bin('1 hour', to_timestamp(hour), timestamptz 'epoch') AS ts, model, launcher, agent,
-						CASE WHEN agent = ANY($11::text[]) THEN '' ELSE agent END AS rec, input, cache_write, cache_read,
-						output, requests
+					SELECT date_bin('1 hour', to_timestamp(hour), timestamptz 'epoch') AS ts, model, launcher, agent, input,
+						cache_write, cache_read, output, requests
 					FROM unnest($2::bigint[], $3::text[], $4::text[], $5::text[], $6::bigint[], $7::bigint[], $8::bigint[],
 						$9::bigint[], $10::bigint[]) AS u(hour, model, launcher, agent, input, cache_write, cache_read, output, requests)
 				), had AS (
-					SELECT DISTINCT date_bin('1 hour', ts, timestamptz 'epoch') AS ts,
-						CASE WHEN agent = ANY($11::text[]) THEN '' ELSE agent END AS rec
+					SELECT DISTINCT date_bin('1 hour', ts, timestamptz 'epoch') AS ts, agent
 					FROM machine_usage
 					WHERE machine_id = $1 AND ts >= (SELECT min(ts) FROM b) AND ts < (SELECT max(ts) FROM b) + interval '1 hour'
 				), added AS (
@@ -258,12 +262,14 @@ func (d *DB) PutUsageBackfill(ctx context.Context, machine string, agents []stri
 						output, requests)
 					SELECT $1, ts, 3600, model, launcher, agent, sum(input), sum(cache_write), sum(cache_read), sum(output),
 						sum(requests)
-					FROM b WHERE (ts, rec) NOT IN (SELECT ts, rec FROM had) GROUP BY ts, model, launcher, agent
+					FROM b WHERE NOT EXISTS (SELECT 1 FROM had h WHERE h.ts = b.ts
+						AND (h.agent = b.agent OR h.agent = '' AND b.agent = ANY($12::text[])))
+					GROUP BY ts, model, launcher, agent
 					ON CONFLICT (machine_id, ts, step, model, launcher, agent) DO NOTHING
 					RETURNING ts, CASE WHEN agent = ANY($11::text[]) THEN '' ELSE agent END AS rec
 				)
 				SELECT rec, count(DISTINCT ts) FROM added GROUP BY rec`,
-				machine, hours, models, launchers, names, in, cw, cr, out, req, UsageLegacyAgents)
+				machine, hours, models, launchers, names, in, cw, cr, out, req, usageFirstRecord, UsageMeteredBefore)
 			if err != nil {
 				return err
 			}

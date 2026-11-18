@@ -46,6 +46,11 @@ data class AssistantConfig(
      */
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
     /**
+     * "Close an Agent's terminal when it ends" (#10355, docs/integrations/engines.md "Agents run in a terminal"): off by
+     * default; null from a hub without it.
+     */
+    @SerialName("close_ended_terminals") val closeEndedTerminals: Boolean? = null,
+    /**
      * The background supervisor's conversation (its session id, on the assistant's machine) once the hub has made it;
      * read-only. Null until then and from a hub without it.
      */
@@ -90,6 +95,7 @@ data class AssistantConfigUpdate(
     @SerialName("recent_task_chats") val recentTaskChats: Boolean? = null,
     @SerialName("next_suggestions") val nextSuggestions: Boolean? = null,
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
+    @SerialName("close_ended_terminals") val closeEndedTerminals: Boolean? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
 ) {
     companion object {

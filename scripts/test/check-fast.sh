@@ -37,12 +37,15 @@
 #                              fall, never rise; comments, strings and a // sleep-ok: reason line do not count; a new
 #                              file starts at zero; --update only lowers). A rename out of those trees counts too.
 #                              --all runs it when the script is present.
-#   spec/fixtures/**, schema/extension/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
+#   spec/fixtures/**, schema/extension/**, schema/wire/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
 #                              also go test on each server package whose _test.go names that input (server-test.yml's
 #                              path filter), found at run time with git grep (comment lines are ignored)
 #   android/**                 scripts/app/android_i18n_check.py plus the android checkers' own unittests (no gradle)
 #   .github/**                 scripts/test/pr_needs_issue_test.mjs
 #   schema/**                  the extension-schema py, the sdk bundle py, and sdk/go go test (mirrors CI's job)
+#   schema/wire/**, spec/fixtures/**, scripts/gen/extension_schema.py, scripts/test/test_extension_schema.py
+#                              also scripts/test/test_wire_schema.py: it holds the fixtures' samples to the wire schemas
+#                              (and imports the extension test's validator); CI's guards step always runs it
 #   scripts/**                 privacy/PR/extension/refs/bundle/i18n checks picked by path; PR+extension when
 #                              ambiguous (a case "*" matches slashes, so scripts/* covers nested paths too); plus
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
@@ -400,10 +403,13 @@ job_i18n() {
     python3 -B test_android_i18n_check.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_token_baseline.py self-test" \
     python3 -B test_android_token_baseline.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_motion_baseline.py self-test" \
+    python3 -B test_android_motion_baseline.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_slot_order.py self-test" \
     python3 -B test_android_slot_order.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py || return $?
-  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_motion_baseline.py" python3 -B android_motion_baseline.py
 }
 
 job_external_refs() {
@@ -698,6 +704,7 @@ if [ "$ALL" -eq 0 ]; then
     case "$f" in
       spec/fixtures/*) _re='spec/fixtures|"spec", *"fixtures"' ;;
       schema/extension/*) _re='schema/extension|"schema", *"extension"' ;;
+      schema/wire/*) _re='schema/wire|"schema", *"wire"' ;;
       integrations/*/*) _re='integrations/|"integrations"' ;;
       scripts/test/server_test_env.py) _re='server_test_env\.py' ;;
       docs/*) _re=$(printf '%s' "$f" | sed 's/[][\.^$*+?(){}|]/\\&/g') ;;  # docs/example-guide.md -> docs/example-guide\.md
@@ -804,6 +811,11 @@ else
         script_test_add scripts/ci/test_changed_ratchets.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
     esac
     case "$f" in deploy/docker/*|docs/operations/docker.md|Dockerfile) script_test_add scripts/test/test_docker_entrypoint.py ;; esac
+    # test_wire_schema.py holds every sample the shared fixtures keep for a wire schema to that schema, at any depth.
+    case "$f" in
+      schema/wire/*|spec/fixtures/*|scripts/gen/extension_schema.py|scripts/test/test_extension_schema.py)
+        script_test_add scripts/test/test_wire_schema.py ;;
+    esac
   done <<< "$CHANGED"
 fi
 

@@ -250,8 +250,9 @@ func TestUsageBackfill(t *testing.T) {
 }
 
 // Usage by agent (#9984): a bucket of each agent is a row of its own, kept apart through the rollups and summed apart
-// by UsageSpans; the backfill keeps a record per agent (the legacy agents one), and stores an agent's hour when the
-// machine had none of that agent's usage in it (the legacy agents and the rows from before count together).
+// by UsageSpans; the backfill keeps a record per agent (Claude Code's the machine's first), and stores an agent's hour
+// when the machine had none of that agent's usage in it, nor usage from before agents were kept apart if the agent
+// was metered then (#10002).
 func TestUsageByAgent(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	now := time.Now().Truncate(time.Hour)
@@ -280,34 +281,43 @@ func TestUsageByAgent(t *testing.T) {
 		t.Fatalf("by agent = %+v", spans)
 	}
 
-	// The backfill: pi's hour goes in beside the legacy agents' usage, Claude Code's does not (the hour had theirs),
-	// and once pi's hour is there it is not stored again.
-	h1, h2 := old, old.Add(time.Hour)
-	sent := []proto.UsageBucket{b(h1, "pi", 16), b(h1, "claude", 32), b(h2, "claude", 64)}
-	stored, err := d.PutUsageBackfill(ctx, "agents", []string{"claude", "codex", "pi"}, sent, h2, false)
-	if err != nil || stored != 2 { // pi's h1 and Claude Code's h2
+	// The backfill: pi's hour goes in beside the usage from before agents were kept apart, Claude Code's and Codex's
+	// do not (that usage may hold theirs), and once pi's hour is there it is not stored again. h2 has Claude Code's
+	// usage only (after the split): Codex's goes in beside it; h3 has none.
+	h1, h2, h3 := old, old.Add(time.Hour), old.Add(2*time.Hour)
+	if err := d.PutUsage(ctx, "agents", []proto.UsageBucket{b(h2.Add(time.Minute), "claude", 1)}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	sent := []proto.UsageBucket{b(h1, "pi", 16), b(h1, "claude", 32), b(h1, "codex", 32), b(h2, "claude", 64), b(h2, "codex", 128), b(h3, "claude", 256)}
+	stored, err := d.PutUsageBackfill(ctx, "agents", []string{"claude", "codex", "pi"}, sent, h3, false)
+	if err != nil || stored != 3 { // pi's h1, Codex's h2, Claude Code's h3
 		t.Fatalf("stored %d, %v", stored, err)
 	}
 	if stored, err = d.PutUsageBackfill(ctx, "agents", []string{"pi"}, sent[:1], h1, true); err != nil || stored != 0 {
 		t.Fatalf("again: stored %d, %v", stored, err)
 	}
-	spans, err = d.UsageSpans(ctx, []time.Time{h1, h2, h2.Add(time.Hour)}, UsageByAgent)
+	spans, err = d.UsageSpans(ctx, []time.Time{h1, h2, h3, h3.Add(time.Hour)}, UsageByAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// h1: "", claude, codex and now pi; h2: claude.
-	if len(spans) != 5 || spans[3].Agent != "pi" || spans[3].Output != 16 || spans[4].Span != 1 || spans[4].Agent != "claude" || spans[4].Output != 64 {
+	// h1: "", claude, codex (the minutes') and pi; h2: claude, codex; h3: claude.
+	if len(spans) != 7 || spans[3].Agent != "pi" || spans[3].Output != 16 || spans[5].Span != 1 || spans[5].Agent != "codex" ||
+		spans[5].Output != 128 || spans[4].Output != 1 || spans[6].Span != 2 || spans[6].Output != 256 {
 		t.Fatalf("after the backfill = %+v", spans)
 	}
-	legacy, err := d.UsageBackfill(ctx, "agents", "codex")
-	if err != nil || legacy.Hours != 1 || !legacy.Through.Equal(h2) || !legacy.Done.IsZero() {
-		t.Fatalf("legacy record = %+v, %v", legacy, err)
+	first, err := d.UsageBackfill(ctx, "agents", "claude")
+	if err != nil || first.Hours != 1 || !first.Through.Equal(h3) || !first.Done.IsZero() {
+		t.Fatalf("Claude Code's (the first) record = %+v, %v", first, err)
+	}
+	codex, err := d.UsageBackfill(ctx, "agents", "codex")
+	if err != nil || codex.Hours != 1 || !codex.Through.Equal(h3) {
+		t.Fatalf("Codex's record = %+v, %v", codex, err)
 	}
 	pi, err := d.UsageBackfill(ctx, "agents", "pi")
-	if err != nil || pi.Hours != 1 || !pi.Through.Equal(h2) || pi.Done.IsZero() {
+	if err != nil || pi.Hours != 1 || !pi.Through.Equal(h3) || pi.Done.IsZero() {
 		t.Fatalf("pi's record = %+v, %v", pi, err)
 	}
-	if UsageBackfillRecord("traex") != "" || UsageBackfillRecord("opencode") != "opencode" {
+	if UsageBackfillRecord("claude") != "" || UsageBackfillRecord("traex") != "traex" || UsageBackfillRecord("opencode") != "opencode" {
 		t.Fatal("records")
 	}
 }

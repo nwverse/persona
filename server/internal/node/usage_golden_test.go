@@ -93,7 +93,7 @@ func TestUsageMeterGolden(t *testing.T) {
 	lim := &readLimiter{rate: 1 << 40, start: time.Now()}
 	since := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	files := n.backfillFiles(context.Background(), since, lim)
-	got.Backfill, err = n.backfillScan(context.Background(), files, since, time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), lim)
+	got.Backfill, err = n.backfillScan(context.Background(), files, nil, since, time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), lim)
 	if err != nil {
 		t.Fatal(err)
 	}

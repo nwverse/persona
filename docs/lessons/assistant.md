@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
+  `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
+  an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.
+  Keep a regression proving that building a snapshot leaves an unopened knowledge base unopened.
+
 - A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
 
 - Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
@@ -703,3 +708,15 @@ answer retryable. Tests must check both the in-memory receipt and stored one, pl
 
 Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
 that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.
+
+## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
+
+The background supervisor is replaced when its rounds outgrow it, and the first version checked that no queued message
+was going into the old one, released the relay book's lock, and only then started the replacement, which takes seconds.
+A session list pushed in that gap could drain the old one's queue into it (found in review): that round would run in a
+conversation archived moments later and no longer the background supervisor, so its `task_review` of a main-chat task
+would be refused, and a message queued before a manager restart, whose signals were not in memory, would leave the queue
+as delivered instead of moving to the replacement. A check that a resource is free is only good while the lock it was read under is held:
+mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
+delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
+failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).

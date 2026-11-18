@@ -66,7 +66,7 @@
   {
    "minute": 1767225600,
    "model": "gpt-5-codex",
-   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-ffffffffffff",
+   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-000000000015",
    "agent": "codex",
    "in": 52590,
    "cache_read": 138880,
@@ -98,7 +98,7 @@
   {
    "minute": 1767225660,
    "model": "gpt-5-codex",
-   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-ffffffffffff",
+   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-000000000015",
    "agent": "codex",
    "in": 383,
    "cache_read": 51712,
@@ -292,7 +292,7 @@
   {
    "minute": 1767307740,
    "model": "gpt-5-codex",
-   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-ffffffffffff",
+   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-000000000015",
    "agent": "codex",
    "in": 2643,
    "cache_read": 154496,
@@ -302,7 +302,7 @@
   {
    "minute": 1767311040,
    "model": "gpt-5-codex",
-   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-ffffffffffff",
+   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-000000000015",
    "agent": "codex",
    "in": 3193,
    "cache_read": 353536,
@@ -312,7 +312,7 @@
   {
    "minute": 1767311340,
    "model": "gpt-5-codex",
-   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-ffffffffffff",
+   "launcher": "launcher-of-0199a213-81c0-7800-8aa1-000000000015",
    "agent": "codex",
    "in": 496,
    "cache_read": 82944,
