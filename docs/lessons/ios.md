@@ -1180,6 +1180,11 @@ Use an invalidation revision as the task key and handle the flag after completio
     anything and `| --: |` drew leading (#3863). The cell aligns itself (`MarkdownTableText.alignments`, passed through the environment like the
     widths; the frame's alignment and `multilineTextAlignment`). Measure in the font the cells draw: tabular digits (`monospacedDigitSystemFont`
     with `FontDigitVariant(.monospaced)`), or a number measured in proportional digits can wrap at its last digit.
+  - A sideways `ScrollView` takes less height when it is offered less, a stack's paragraphs do not: the theme fixes them to their height
+    (`.paragraph`'s `fixedSize(horizontal: false, vertical: true)`), so a reply offered less than it needs gave the whole shortfall to the
+    table, cut under a row with the next paragraph drawn whole right under the cut (#10012). Fix every sideways scroll view in a reply
+    to its content's height the same way (table, code block); `ReplyBlockHeightTests` offers a reply less and compares heights. A
+    widened, narrowed or growing table already resized itself in that test; it did not reproduce on the simulator in the chat itself.
   - 表格尺寸已有共享缓存，不代表布局准备没有重活（2026-11-06，#5730）：先调用 `renderMarkdown()` 再查尺寸缓存，仍会每次序列化整张表。按完整 `MarkdownContent` 保留当前表的源文本和尺寸；字号变化只重测，内容变化同步替换，不能只按宽度或行数判断。
 - 代码高亮缓存超过上限时不能全表清空（2026-11-06，#5730）：用有界 LRU 保留仍在使用的块，键包含代码、语言和字号比例。300 项及 2 MiB 源文本 UTF-8 预算不是整个 `Text` 的内存上限；不把本来就跳过词法分析的 60,000 字节及以上纯文本块放进缓存，避免挤走昂贵的高亮热点。验证字号、内容、语言失效及冷项淘汰，不用帧率中位数代替持续达标。
 - Custom `Layout` `proposal.width` can be `.infinity`; check `isFinite` before `Int(...)` conversion or crash (Lark card columns).
@@ -1398,6 +1403,39 @@ Use an invalidation revision as the task key and handle the flag after completio
   Store results first when one argument changes a variable used by another.
 - Build-product Info.plist script stages (Settings › About › Build commit, `project.yml` `Stamp the commit`) must declare `$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)`
   as input, or Xcode may run the script then rewrite the plist, losing values (bundle-id changes trigger this, 2026-10-31). Reading `.git` requires disabling `ENABLE_USER_SCRIPT_SANDBOXING` for this target.
+
+### iOS 18.6 floor
+
+- **The iPhone and iPad app runs from iOS 18.6** (2026-11-17, #6730; the watch from watchOS 10, visionOS from 26). The
+  build at that target is the check: an unguarded iOS 26 symbol fails with "is only available in iOS 26.0 or newer". Wrap
+  it in `if #available(iOS 26.0, *)` with the older behavior under `else`, or go through
+  `apple/Persona/DesignSystem/SystemCompat.swift`. Running it needs the iOS 18.6 simulator runtime (8.86 GB,
+  `xcodebuild -downloadPlatform iOS -buildVersion 18.6`; an interrupted download resumes).
+- **A same-named stand-in calls itself on iOS.** visionOS's `apple/Vision/Compat/SwiftUICompat.swift` can reuse the system
+  names because visionOS marks those modifiers unavailable. On iOS the system modifier exists, only newer than the target:
+  the module's own overload wins, and its `if #available { navigationSubtitle(…) }` calls itself. iOS helpers get their
+  own names (`…WhenSupported`).
+- **`ToolbarContentBuilder` has no `buildLimitedAvailability`.** `if #available(iOS 26.0, *) { ToolbarSpacer(…) }` or
+  `.sharedBackgroundVisibility(.hidden)` inside a toolbar does not compile, and neither does a `ToolbarContent` wrapper
+  that branches. Choose on the view: an `@available(iOS 26.0, *)` set of items and one without, with `if #available`
+  around `.toolbar { … }` (`ChatsView.barItems` / `barItemsBeforeGlass`, `DrawerButtonItem`). `ViewBuilder` erases the
+  `if #available` branch to `AnyView`, which draws the same.
+- **App Intents' `supportedModes` (`IntentModes`) is iOS 26.** Mark it `@available(iOS 26.0, *)`. An intent that opens
+  the app also says `openAppWhenRun { true }` for iOS 18; the two agree, so whichever one a system reads, it opens the app.
+  `continueInForeground` has nothing to stand in for it in a file the widget extension also compiles
+  (`ForegroundContinuableIntent` is unavailable in extensions): on iOS 18 the meeting intent says what to do instead.
+- **iPadOS 18 puts an automatic search field in the bar beside the title.** A wide field squeezed Inbox's title to "In…",
+  where iPadOS 26 folds search into a button. `pageSearchable` without a placement uses `.navigationBarDrawer` (under
+  the title) before iOS 26 at regular width only; compact widths keep `.automatic`, which on an iOS 18 iPhone is that
+  drawer already (iOS 26 puts the field at the bottom instead).
+- **A `@backDeployed` API runs the SDK's copy inside the app on iOS 18, and it can fail where iOS 26's own does not.**
+  `AVAssetExportSession.export(to:as:)` is back-deployed before iOS 26: its copy awaits the imported `export()`, and on
+  an iOS 18.6 simulator it crashed the app as every export ended, done or failed (`EXC_BAD_ACCESS` resuming the
+  continuation; `VideoAttachTests`). `VideoPrep` waits on `exportAsynchronously` itself there. A test host that only
+  restarts ("Restarting after unexpected exit") hides such a crash from the totals: compare restarts with an iOS 26 run.
+- **`AppIntentsSSUTraining` failing with "Unable to parse Info.plist" means an empty bundle id** (`--bundle-id` with nothing
+  after it), not a bad plist: the machine's config has no `app.bundle_id`. Build with a placeholder config as
+  `scripts/ci/apple.sh` does (`{"app": {"bundle_id": "org.example.persona.ci"}}` through `PERSONA_CONFIG`).
 
 ## Recording and WatchConnectivity
 
@@ -2960,3 +2998,28 @@ The screenshot banner hides the chats' bars from captures with a secure text fie
 - The view comes out of a `UITextField` with `isSecureTextEntry` (its first subview; iOS 17 renamed its class, so never match the name). Keep the field: setting `isSecureTextEntry` back and forth turns the view's exclusion off and on, measured in place.
 - A view in a second hosting controller inside it takes every touch in its frame: overriding `hitTest` to pass the hosting view's own hits through also dropped the bar's SwiftUI buttons (they hit-test as the hosting view). `accessibilityHidden` on the banner's SwiftUI view left its text in the tree; `accessibilityElementsHidden` on its hosting view removes it.
 - The bar's and the banner's hosting controllers are the same trap as the drawer's sidebar (#4496, above): a copied `colorScheme` is only as new as SwiftUI's last update, and SwiftUI puts the same stale look into the controller's traits. On a phone, the first Agent chat opened drew its header and banner light above the dark chat (2026-11-17, #9829). In a system screenshot that shows as a white banner, and the status bar's text turns dark over it although the app is dark: forcing both hosts light in the simulator gave the same picture. No simulator flow reproduced the stale update (pushes from the list, links, `-showLookBlink`, Home and back, light or dark against the system), so `ScreenshotBannerTests.theBarAndTheBannerFollowTheirWindow` holds a stale page look against the window's. Any view hosted on its own takes its look from its window.
+
+## An animation timed by the wall clock jumps over the frame its own tap held up (2026-11-18, #10270)
+
+iPhone Duo's tab bar lens (#9837) stuttered on a real Duo. It was a `TimelineView(.animation)` drawn at `date - start`, its start
+stamped in the update that also swapped in the chosen page, and that update held the next frame up: 85–165 ms on the open Duo on
+its side (the system `TabView` swapping in the other tab's whole split), 54–77 ms and then 25–45 ms on the outer display (the
+shell's moving rail, then the pager's spring a run loop later), 460–620 ms on a tab's first visit (simulator, optimized build).
+The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to a third of it on a first visit.
+
+- A SwiftUI animation is worked out on the main thread, frame by frame: nothing keeps it moving through a frame the main thread
+  held up, and one timed by the wall clock makes up for it at once. An animation that starts with a page change is timed by the
+  frames it is drawn in, each moving it on by about a frame at most (`TabBarGlide.frame(at:)`, as #1123's capped `dt`).
+- Measure the animation as drawn, not only the frames: `LensCadence` records how far the glide went between two frames drawn
+  (`lens_steps_ms` in `frames.json`). A step much longer than a frame is a jump, whatever the hitch count says.
+- No UI test is needed to switch tabs under `FrameStats`: `FrameProbe` takes `com.persona.perf.tab.<assistant|chats|feishu>`
+  as the tab bar's tap (`selectHomeTab`); post it with `xcrun simctl spawn <udid> notifyutil -p <name>` between `frames.start`
+  and `frames.stop`, and read `Documents/frames-probe.json` from the app's data container.
+- Put the other work an animation's tap starts where nothing moves. The shell's strip comes to rest about 0.55 s into the
+  lens's 0.65 s, and putting the pages' own rails back then (glass and menus) held up a frame of the lens's fade by 33–42 ms;
+  under the Duo's side bars the moving rail now stands in until the lens is gone (`ShellPager.standsIn`).
+- A first drawing is slow too: on the open Duo, after the swap frame the main thread was idle (1 ms a frame) while the lens's
+  first two or three frames still came 25–50 ms apart. The lens waits where it starts through them (`longestWait`).
+- A mutating method on an observed struct property tells every reader even when it changes nothing (the Observation macro only
+  skips an equal value on a plain assignment): `UnifiedSidebar.forget` reset roots that were already at the conversation on every
+  choice of the Agents tab and redrew everything reading them, in the frame the switch is drawn in. Check first.
