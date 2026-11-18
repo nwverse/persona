@@ -34,16 +34,21 @@ type StartDefaults struct {
 	Effort string
 	// Ultracode: applied only to a Claude Code start whose caller did not say.
 	Ultracode *bool
-	// Goal: GoalFromDoneWhen turns the task's done_when into one checkable condition typed as /goal before the first
-	// message (docs/integrations/agent-goal.md "A goal set at the start"). Only new Claude Code and Codex starts take it.
+	// Goal: GoalFromDoneWhen turns the task's done_when into one checkable condition typed as /goal after the first
+	// message (docs/integrations/agent-goal.md "A goal set at the start"); GoalOff asks for none, not even the Codex
+	// default; "" leaves it to the default (startGoalSource). Only new Claude Code and Codex starts take a goal.
 	Goal string
 	// PlanFirst asks for the self-planning constraint in the task's prompt, for a launcher whose model does not act
 	// on a thinking-effort setting (the prompt is then the only lever).
 	PlanFirst bool
 }
 
-// GoalFromDoneWhen: build the start's goal from the task's done_when.
-const GoalFromDoneWhen = "done_when"
+// The goal sources a rule can name. GoalFromDoneWhen: build the start's goal from the task's done_when. GoalOff: no
+// goal for the tasks the rule matches, which turns the Codex default off (startGoalSource).
+const (
+	GoalFromDoneWhen = "done_when"
+	GoalOff          = "off"
+)
 
 // PresetChoice is one preset of StartDefaults: its name is a model profile tier, weight its share among usable ones.
 type PresetChoice struct {
@@ -134,8 +139,8 @@ func (p *StartDefaultsPolicy) validate(allowNoExpiry bool, now time.Time) error 
 		if r.Then.Effort != "" && !slices.Contains(proto.EffortLevels, r.Then.Effort) {
 			return fmt.Errorf("%s.then.effort must be one of %v", at, proto.EffortLevels)
 		}
-		if r.Then.Goal != "" && r.Then.Goal != GoalFromDoneWhen {
-			return fmt.Errorf("%s.then.goal must be %q", at, GoalFromDoneWhen)
+		if r.Then.Goal != "" && r.Then.Goal != GoalFromDoneWhen && r.Then.Goal != GoalOff {
+			return fmt.Errorf("%s.then.goal must be %q or %q", at, GoalFromDoneWhen, GoalOff)
 		}
 		if len(r.Then.Presets) > startDefaultsMaxPresets {
 			return fmt.Errorf("%s.then.presets has %d entries; at most %d", at, len(r.Then.Presets), startDefaultsMaxPresets)
@@ -292,10 +297,10 @@ func (s *Service) applyStartPreset(ctx context.Context, t *PlanTask, caller star
 	return note
 }
 
-// applyStartExtras adds the defaults' effort, ultracode, goal and self-planning prompt to a task's start, after the
-// launcher fit (agent: what runs, "claude" for Claude Code). caller is what the task named before any tier, Model
-// Settings, the fit or a preset filled something in. Explicit caller values always win; why is the preset's note, said
-// with the rest.
+// applyStartExtras adds the defaults' effort, ultracode and self-planning prompt to a task's start, after the launcher
+// fit (agent: what runs, "claude" for Claude Code); the goal is applyStartGoal's. caller is what the task named before
+// any tier, Model Settings, the fit or a preset filled something in. Explicit caller values always win; why is the
+// preset's note, said with the rest.
 func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller startPick, d StartDefaults, agent string, params map[string]any, why string) {
 	claude := agent == "claude"
 	// Effort, strongest first: the caller's own effort, then the effort of a tier the caller named; otherwise the
@@ -318,19 +323,51 @@ func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller star
 		t.Ultracode = &on
 		t.startFilled.ultracode = true
 	}
-	// The goal: Claude Code's /goal and Codex's alike, typed after the first message (docs/integrations/agent-goal.md).
-	if (claude || agent == "codex") && d.Goal == GoalFromDoneWhen && len(t.DoneWhen) > 0 {
-		goal := prompts.RenderTaskGoal(t.DoneWhen)
-		if utf8.RuneCountInString(goal) <= proto.StartGoalMax {
-			params["goal"] = goal
-		} else {
-			s.logf("task %s: goal longer than %d runes, no /goal set", t.TodoID, proto.StartGoalMax)
-		}
-	}
 	t.planFirst = d.PlanFirst
 	if d.By != "" && why != "" {
 		t.noteWhy(d.By + ": " + why)
 	}
+}
+
+// startGoalSource says where a task start's goal comes from: GoalFromDoneWhen, or "" for none. ruled says a policy
+// rule fits the task (d is its defaults). Only a new Claude Code or Codex start (not a resume) whose task has done_when
+// criteria takes a goal at all. A rule that names a goal decides: done_when sets it on both agents, off on neither.
+// Otherwise (no policy, an expired one, no rule that fits, or a rule silent on the goal) a Codex start takes its
+// done_when by default: Codex has no Stop hook, so its goal is the only thing that keeps it working toward the criteria
+// between the supervisor's reviews. Claude Code keeps starting without one.
+func startGoalSource(d StartDefaults, ruled bool, agent string, resume bool, doneWhen int) string {
+	if resume || doneWhen == 0 || agent != "claude" && agent != "codex" {
+		return ""
+	}
+	rule := ""
+	if ruled {
+		rule = d.Goal
+	}
+	switch {
+	case rule == GoalFromDoneWhen:
+		return GoalFromDoneWhen
+	case rule == GoalOff:
+		return ""
+	case agent == "codex":
+		return GoalFromDoneWhen // the default
+	}
+	return ""
+}
+
+// applyStartGoal adds the task's goal to its start when startGoalSource says so: Claude Code's /goal and Codex's
+// alike, typed after the first message (docs/integrations/agent-goal.md). It runs on every start try, with or without
+// a policy rule; a goal over proto.StartGoalMax is left out and logged.
+func (s *Service) applyStartGoal(t *PlanTask, d StartDefaults, ruled bool, agent string, params map[string]any) {
+	resume, _ := params["resume_session_id"].(string)
+	if startGoalSource(d, ruled, agent, resume != "", len(t.DoneWhen)) != GoalFromDoneWhen {
+		return
+	}
+	goal := prompts.RenderTaskGoal(t.DoneWhen)
+	if utf8.RuneCountInString(goal) > proto.StartGoalMax {
+		s.logf("task %s: goal longer than %d runes, no /goal set", t.TodoID, proto.StartGoalMax)
+		return
+	}
+	params["goal"] = goal
 }
 
 // chooseStartPreset picks the first usable preset, or one of the weighted usable ones. A usable preset is one the

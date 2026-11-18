@@ -98,10 +98,12 @@ node confirms `Goal set:` on the screen with a bounded wait; a refusal (an untru
 policy not read yet, an empty or too-long condition, a CLI without `/goal`) or no answer never stops the work, and a
 first message that never reaches the transcript gets no goal.
 
-The assistant attaches such a goal when a start-defaults rule asks for one (`goal: "done_when"`,
-[assistant.md](../assistant/assistant.md) "Start defaults") and the task's `done_when` gives it something checkable,
-rendered as one sentence (`prompts/assistant/task_goal.md`); tasks without criteria start without one, and only
-brand-new Claude Code and Codex sessions take one. Its transcript lines, `goal_status` attachment, `Session.goal` and
+The assistant attaches such a goal when the task's `done_when` gives it something checkable, rendered as one sentence
+(`prompts/assistant/task_goal.md`), and either a start-defaults rule asks for one (`goal: "done_when"`,
+[assistant.md](../assistant/assistant.md) "Start defaults") or the Agent is Codex and no rule decides the goal: a new
+Codex task Agent whose task has acceptance criteria gets them as its goal by default, since Codex has no Stop hook to
+keep it going. A rule with `goal: "off"` turns that default off for the tasks it matches. Claude Code gets a start goal
+only from a rule. Tasks without criteria start without one, and only brand-new Claude Code and Codex sessions take one. Its transcript lines, `goal_status` attachment, `Session.goal` and
 the goal bar are the ordinary goal's below; nothing else about goals changes.
 
 ### Codex

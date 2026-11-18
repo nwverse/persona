@@ -961,3 +961,134 @@ func TestStartDefaultsARuleThatFillsNothingStoresAsWithout(t *testing.T) {
 		t.Fatalf("with a rule that fills nothing: %+v\nwithout the feature: %+v", with, without)
 	}
 }
+
+// codexStart starts a task on a fresh defaultsHub (which also has the Codex launcher cx) with this launcher and these
+// criteria, after policy (nil: none stored) set up the start-defaults policy, and returns what session.start carried.
+func codexStart(t *testing.T, launcher string, doneWhen []string, policy func(*Service)) map[string]any {
+	t.Helper()
+	s, f := defaultsHub(t)
+	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
+	if policy != nil {
+		policy(s)
+	}
+	task := defaultsTask()
+	task.Launcher, task.DoneWhen = launcher, doneWhen
+	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+		t.Fatal(err)
+	}
+	return startsOf(f)[0]
+}
+
+// With no start-defaults rule deciding the goal, a new Codex task Agent whose task has criteria starts with them as its
+// goal (Codex has no Stop hook; the goal keeps it going). Without criteria it gets none, and Claude Code keeps starting
+// without one, as before.
+func TestStartDefaultsCodexGoalByDefault(t *testing.T) {
+	criteria := []string{"CI is green", "the fix is merged"}
+	want := prompts.RenderTaskGoal(criteria)
+	if st := codexStart(t, "cx", criteria, nil); st["goal"] != want || st["launcher"] != "cx" {
+		t.Fatalf("codex, no policy: %v", st)
+	}
+	// A stub that finds no rule, and a rule that fits but says nothing about the goal: the default still applies.
+	none := func(s *Service) {
+		stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return StartDefaults{}, false })
+	}
+	if st := codexStart(t, "cx", criteria, none); st["goal"] != want {
+		t.Fatalf("codex, no rule fits: %v", st)
+	}
+	silent := func(s *Service) {
+		stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return StartDefaults{Effort: "max", By: "Example"}, true })
+	}
+	if st := codexStart(t, "cx", criteria, silent); st["goal"] != want {
+		t.Fatalf("codex, a rule silent on the goal: %v", st)
+	}
+	if st := codexStart(t, "cx", nil, nil); st["goal"] != nil {
+		t.Fatalf("codex without criteria: %v", st)
+	}
+	if st := codexStart(t, "claude", criteria, nil); st["goal"] != nil || st["launcher"] != "claude" {
+		t.Fatalf("claude code, no policy: %v", st)
+	}
+	if st := codexStart(t, "claude", criteria, silent); st["goal"] != nil {
+		t.Fatalf("claude code, a rule silent on the goal: %v", st)
+	}
+}
+
+// The owner turns the default off with a rule saying goal "off" (through the route, as stored), and clearing the policy
+// brings it back. A rule asking for done_when still sets the goal, on Claude Code too; an unknown goal value is a 400.
+func TestStartDefaultsGoalOffAndExplicitRule(t *testing.T) {
+	criteria := []string{"CI is green"}
+	want := prompts.RenderTaskGoal(criteria)
+	put := func(body string) func(*Service) {
+		return func(s *Service) {
+			t.Helper()
+			if code, res := putStartDefaults(t, s, roleFull, "", body); code != http.StatusOK {
+				t.Fatalf("put %s: %d %s", body, code, res)
+			}
+		}
+	}
+	off := put(`{"start_defaults":{"rules":[{"when":{},"then":{"goal":"off"}}]}}`)
+	if st := codexStart(t, "cx", criteria, off); st["goal"] != nil {
+		t.Fatalf("codex with goal off: %v", st)
+	}
+	if st := codexStart(t, "claude", criteria, off); st["goal"] != nil {
+		t.Fatalf("claude code with goal off: %v", st)
+	}
+	// Off only where its rule matches: a read-only rule leaves this writable task to the default.
+	readonlyOff := put(`{"start_defaults":{"rules":[{"when":{"readonly":true},"then":{"goal":"off"}}]}}`)
+	if st := codexStart(t, "cx", criteria, readonlyOff); st["goal"] != want {
+		t.Fatalf("codex, an off rule that does not match: %v", st)
+	}
+	cleared := func(s *Service) {
+		off(s)
+		put(`{"start_defaults":{"rules":[]}}`)(s)
+	}
+	if st := codexStart(t, "cx", criteria, cleared); st["goal"] != want {
+		t.Fatalf("codex after the policy was cleared: %v", st)
+	}
+	asked := put(`{"start_defaults":{"rules":[{"when":{},"then":{"goal":"done_when"}}]}}`)
+	if st := codexStart(t, "cx", criteria, asked); st["goal"] != want {
+		t.Fatalf("codex with goal done_when: %v", st)
+	}
+	if st := codexStart(t, "claude", criteria, asked); st["goal"] != want {
+		t.Fatalf("claude code with goal done_when: %v", st)
+	}
+	s, _ := defaultsHub(t)
+	for _, v := range []string{"none", "on", "OFF"} {
+		if code, body := putStartDefaults(t, s, roleFull, "",
+			`{"start_defaults":{"rules":[{"when":{},"then":{"goal":"`+v+`"}}]}}`); code != http.StatusBadRequest {
+			t.Fatalf("goal %q: %d %s", v, code, body)
+		}
+	}
+}
+
+// Where a start's goal comes from, case by case: a resume never takes one (it would replace the thread's own), nor a
+// task without criteria or another agent; a rule decides when it names a goal; else Codex gets done_when by default.
+func TestStartGoalSource(t *testing.T) {
+	asked, off, silent := StartDefaults{Goal: GoalFromDoneWhen}, StartDefaults{Goal: GoalOff}, StartDefaults{Effort: "max"}
+	for _, c := range []struct {
+		name     string
+		d        StartDefaults
+		ruled    bool
+		agent    string
+		resume   bool
+		doneWhen int
+		want     string
+	}{
+		{"codex default", StartDefaults{}, false, "codex", false, 2, GoalFromDoneWhen},
+		{"codex, rule silent", silent, true, "codex", false, 2, GoalFromDoneWhen},
+		{"codex, no criteria", StartDefaults{}, false, "codex", false, 0, ""},
+		{"codex resume", StartDefaults{}, false, "codex", true, 2, ""},
+		{"codex resume, rule asks", asked, true, "codex", true, 2, ""},
+		{"codex, rule off", off, true, "codex", false, 2, ""},
+		{"codex, rule asks", asked, true, "codex", false, 2, GoalFromDoneWhen},
+		{"codex, an unmatched rule's goal does not count", off, false, "codex", false, 2, GoalFromDoneWhen},
+		{"claude, no rule", StartDefaults{}, false, "claude", false, 2, ""},
+		{"claude, rule silent", silent, true, "claude", false, 2, ""},
+		{"claude, rule asks", asked, true, "claude", false, 2, GoalFromDoneWhen},
+		{"claude resume, rule asks", asked, true, "claude", true, 2, ""},
+		{"another agent, rule asks", asked, true, "omp", false, 2, ""},
+	} {
+		if got := startGoalSource(c.d, c.ruled, c.agent, c.resume, c.doneWhen); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

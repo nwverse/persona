@@ -202,7 +202,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	t.planFirst = false
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
-	// its effort, ultracode and goal after the launcher fit.
+	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
 	presetNote := ""
 	if withDefaults {
@@ -277,6 +277,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
 		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
 	}
+	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource).
+	s.applyStartGoal(t, defaults, withDefaults, fit.agent, params)
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
 		// An explicit retry keeps that existing recovery path on the fixed target;

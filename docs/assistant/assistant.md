@@ -1647,7 +1647,8 @@ What a task Agent starts with beyond what its caller named can come from an opti
 (`internal/assistant/start_defaults.go`): rules matched by the kind of work, each saying which Agent presets to try,
 which thinking effort, whether ultracode is on, whether a goal is set from the task's acceptance criteria, and whether
 the prompt asks the Agent to plan first. With no policy stored, one past its expiry, or no rule that fits a task, the
-task starts exactly as it would without the feature. A policy's values belong to the one start they were applied to:
+task starts exactly as it would without the feature, except for one built-in default: a new Codex task Agent whose task
+has acceptance criteria starts with them as its goal (below, "The goal"). A policy's values belong to the one start they were applied to:
 every try of a task starts again from what the task named itself, whichever rule fits it now, and for whatever a policy
 filled in (a preset's launcher, model, effort, tier and the permission mode its agent sets; the policy's effort or
 ultracode) the task's plan keeps the task's own value (its why names a preset the policy picked), so a remedy, a queued
@@ -1674,7 +1675,13 @@ is in `docs/protocol/protocol.md` ("Start defaults").
 - **The goal** is the task's `done_when` as one checkable sentence (`prompts/assistant/task_goal.md`), set by the node
   after the first message is in the transcript, as Claude Code's `/goal` or Codex's own `/goal`
   ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). A computer whose node cannot set it
-  starts the Agent without it once, and the task's why says so, as for ultracode.
+  starts the Agent without it once, and the task's why says so, as for ultracode. Only a new start (never a resume) of
+  a task with `done_when` takes one (`startGoalSource`). A rule that fits and names `goal` decides: `done_when` sets it
+  on Claude Code and Codex, `off` on neither. Otherwise (no policy, no rule that fits, or a rule silent on `goal`) a
+  Codex start gets the `done_when` goal by default and a Claude Code start gets none. Codex has no Stop hook, so
+  without a goal it stops after one turn and only the supervisor's rework brings it back (#10510). To turn the default
+  off, store a rule with `"then":{"goal":"off"}` (with `when` narrowing it to some tasks, or empty for all); clearing
+  the policy brings the default back. Giving Claude Code the same default is a possible follow-up.
 - **Plan first** adds `prompts/agents/plan_first_task.md` to the prompt: for a launch whose model does not act on an
   effort setting, the prompt is the only lever.
 
