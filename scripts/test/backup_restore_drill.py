@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import secrets
 import shutil
@@ -45,6 +46,9 @@ FAULTS = ("restore-fails", "kb-drift", "approval-resolved", "outbox-settled", "w
 SECRET_KEY_SIZE = 32  # server/internal/secretkey Size
 FINGERPRINT_LABEL = b"persona secret.key fingerprint v1"  # secretkey.Fingerprint
 READ_ONLY_SQLSTATE = "25006"  # read_only_sql_transaction
+INSPECTOR = "persona-restore-drill"  # the application_name of the drill's own connections
+# ELF e_machine of the machines a static personad is built for, by platform.machine().
+ELF_MACHINES = {"x86_64": 62, "amd64": 62, "aarch64": 183, "arm64": 183}
 POSTGRES_URL = re.compile(r"postgres(?:ql)?://[^\s\"']+")
 # The tables the checks read, each with the order its rows are compared in. Whole tables, not only the seeded rows: a
 # row the restore (or anything else) added counts as a change too, such as a new client operation id.
@@ -128,6 +132,10 @@ def check_static_linux_binary(path):
             phoff, phentsize, phnum = struct.unpack_from(endian + "I", header, 28)[0], *struct.unpack_from(endian + "HH", header, 42)
         if header[7] not in (0, 3):  # ELFOSABI_NONE (System V) or ELFOSABI_LINUX
             raise UsageError("--personad is not a Linux executable")
+        machine = struct.unpack_from(endian + "H", header, 18)[0]
+        expected = ELF_MACHINES.get(platform.machine().lower())
+        if expected is not None and machine != expected:
+            raise UsageError(f"--personad is built for another processor than this {platform.machine()} machine")
         for index in range(phnum):
             binary.seek(phoff + index * phentsize)
             entry = binary.read(4)
@@ -138,11 +146,26 @@ def check_static_linux_binary(path):
     return path
 
 
-def check_pg_bin(path):
+def check_pg_bin(path, run=subprocess.run):
+    """Every program the drill and personad backup use, all of one PostgreSQL major version (pg_dump refuses a newer
+    server, and personad's backup wants the server's own)."""
     path = path.expanduser().absolute()
     missing = [name for name in PG_PROGRAMS if not os.access(path / name, os.X_OK)]
     if missing:
         raise UsageError("--pg-bin lacks " + ", ".join(missing))
+    majors = {}
+    for name in PG_PROGRAMS:
+        try:
+            result = run([str(path / name), "--version"], capture_output=True, text=True, timeout=30,
+                         env=minimal_environment(), stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            raise UsageError(f"--pg-bin's {name} does not run") from None
+        found = re.search(r"\(PostgreSQL\) (\d+)", result.stdout)
+        if result.returncode != 0 or not found:
+            raise UsageError(f"--pg-bin's {name} does not say its PostgreSQL version")
+        majors[name] = found.group(1)
+    if len(set(majors.values())) != 1:
+        raise UsageError("--pg-bin mixes PostgreSQL major versions: " + ", ".join(f"{k} {v}" for k, v in majors.items()))
     return path
 
 
@@ -175,16 +198,16 @@ class Processes:
         self.live[process.pid] = process
         try:
             stdout, stderr = process.communicate(stdin.encode() if stdin is not None else None, timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except BaseException as error:
+            # Stays in live until stopped, so an interruption here still leaves it to stop_all.
             self.stop(process)
             self.drain(process)
-            raise DrillTimeout() from None
-        except BaseException:
-            self.stop(process)
-            self.drain(process)
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise DrillTimeout() from None
             raise
-        finally:
-            self.live.pop(process.pid, None)
+        # What the step left in its group (a background child) goes with it.
+        kill_group_members(process.pid)
+        self.live.pop(process.pid, None)
         return process.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 
     @staticmethod
@@ -215,15 +238,46 @@ class Processes:
                 break
             except subprocess.TimeoutExpired:
                 continue
-        try:
-            os.killpg(process.pid, signal.SIGKILL)  # anything the leader left behind in its group
-        except (ProcessLookupError, PermissionError):
-            pass
-        self.live.pop(process.pid, None)
-        return process.poll() is not None
+        left = kill_group_members(process.pid)  # anything the leader left behind in its group
+        if process.poll() is not None and not left:
+            self.live.pop(process.pid, None)
+            return True
+        return False
 
     def stop_all(self):
         return all([self.stop(process) for process in list(self.live.values())])
+
+
+def group_members(pgid):
+    """The processes still in process group pgid, other than its (reaped) leader: Linux /proc. A pid still used as a
+    group id is never reused, so these are the group's; the pid itself may be reused once the group is empty."""
+    members = []
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        pid = int(stat.parent.name)
+        if pid != pgid and int(fields[2]) == pgid:
+            members.append(pid)
+    return members
+
+
+def kill_group_members(pgid, wait=5):
+    """SIGKILL what is left of a process group whose leader is gone; True if something could not be stopped."""
+    deadline = time.monotonic() + wait
+    while True:
+        members = group_members(pgid)
+        if not members:
+            return False
+        if time.monotonic() > deadline:
+            return True
+        for pid in members:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        time.sleep(0.05)
 
 
 def minimal_environment(**extra):
@@ -252,22 +306,27 @@ def tree_digest(root):
         if path.is_symlink():
             digest.update(b"L" + relative.encode() + b"\0" + os.readlink(path).encode() + b"\0")
             continue
-        digest.update(b"F" + relative.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+        mode = path.lstat().st_mode & 0o7777
+        digest.update(b"F" + relative.encode() + b"\0" + str(mode).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
+
+
+def root_forms(root):
+    return [str(root), quote(str(root), safe="")] if root else []
 
 
 def redact(text, secrets_list, root=None):
     for secret in sorted({s for s in secrets_list if s}, key=len, reverse=True):
         text = text.replace(secret, "<redacted>")
     text = POSTGRES_URL.sub("<database url>", text)
-    if root:
-        text = text.replace(str(root), "<drill dir>")
+    for form in root_forms(root):
+        text = text.replace(form, "<drill dir>")
     return text
 
 
-def leaked(text, secrets_list):
-    return [index for index, secret in enumerate(s for s in secrets_list if s) if secret in text] or \
-        (["database url"] if POSTGRES_URL.search(text) else [])
+def leaked(text, secrets_list, root=None):
+    """Whether text holds a secret, a database URL or the drill directory's path (plain or URL-encoded)."""
+    return any(secret in text for secret in [*secrets_list, *root_forms(root)] if secret) or bool(POSTGRES_URL.search(text))
 
 
 def migration_files(part, directory=MIGRATIONS):
@@ -364,8 +423,10 @@ def snapshot_sql(part):
     tables = MANAGER_TABLES if part == "manager" else HUB_TABLES
     fields = ["'read_only', current_setting('transaction_read_only')",
               "'schema', (SELECT coalesce(json_agg(json_build_array(version, name, part) ORDER BY version, name, part), '[]') FROM schema_migrations)",
-              # A hub or manager connected to the restored databases would show here: the drill starts neither.
-              "'other_sessions', (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend' AND pid <> pg_backend_pid())"]
+              # A hub, manager or anything else connected to this database would show here: the drill starts
+              # nothing, and its own connections (one at a time, the last perhaps still closing) say who they are.
+              "'other_sessions', (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+              f"AND backend_type = 'client backend' AND pid <> pg_backend_pid() AND application_name IS DISTINCT FROM '{INSPECTOR}')"]
     for table, order in tables.items():
         fields.append(f"'{table}', (SELECT coalesce(json_agg(to_jsonb(t) ORDER BY {order}), '[]') FROM {table} t)")
     return "SELECT json_build_object(" + ", ".join(fields) + ");\n"
@@ -378,6 +439,11 @@ def guarded_write_sql(part, fixture):
     else:
         statement = f"UPDATE client_ops SET state = 'done' WHERE id = {sql_literal(fixture.client_ops['pending'])};"
     return "\\set VERBOSITY verbose\n\\set ON_ERROR_STOP on\n" + statement + "\n"
+
+
+def rows(snapshot):
+    """A snapshot's content: schema and tables, without what describes the inspecting connection."""
+    return {key: value for key, value in snapshot.items() if key not in ("read_only", "other_sessions")}
 
 
 def state_counts(snapshot):
@@ -452,7 +518,7 @@ class Cluster:
     def env(self, read_only=False):
         env = minimal_environment(PATH=f"{self.bin}{os.pathsep}{os.defpath}", HOME=str(self.root / "home"),
                                   PGPASSWORD=self.password, PGPASSFILE=os.devnull, PGSERVICEFILE=os.devnull,
-                                  PGSYSCONFDIR=str(self.root / "home"), PGCONNECT_TIMEOUT="10")
+                                  PGSYSCONFDIR=str(self.root / "home"), PGCONNECT_TIMEOUT="10", PGAPPNAME=INSPECTOR)
         if read_only:
             env["PGOPTIONS"] = "-c default_transaction_read_only=on"
         return env
@@ -646,7 +712,7 @@ class Drill:
             self.cluster.psql(database, self.fixture.disaster_sql(part))
         damaged = self.snapshots()
         if not self.check("disaster changed both databases",
-                          all(damaged[part] != self.before[part] for part in ("hub", "manager"))):
+                          all(rows(damaged[part]) != rows(self.before[part]) for part in ("hub", "manager"))):
             raise DrillFailure("the injected disaster did not change the databases")
         shutil.rmtree(self.source)  # the runtime directory is lost with the machine
         self.target.mkdir(parents=True, mode=0o700)  # an empty one on the replacement machine
@@ -706,14 +772,11 @@ class Drill:
         if not self.check("sealed secrets name the restored manager key", sealing[0].get("fingerprint") == key_fingerprint(manager_key)):
             problems.append("the manager database is sealed with another key")
 
-        for table in list(HUB_TABLES):
-            detail = differing(self.before["hub"], after["hub"], table)
-            if not self.check(f"hub {table} unchanged", detail is None, detail):
-                problems.append(detail)
-        for table in list(MANAGER_TABLES):
-            detail = differing(self.before["manager"], after["manager"], table)
-            if not self.check(f"manager {table} unchanged", detail is None, detail):
-                problems.append(detail)
+        for part, tables in (("hub", HUB_TABLES), ("manager", MANAGER_TABLES)):
+            for table in tables:
+                detail = differing(self.before[part], after[part], table)
+                if not self.check(f"{part} {table} unchanged", detail is None, detail):
+                    problems.append(detail)
         merged = {**after["hub"], **after["manager"]}
         semantic = semantic_checks(merged, self.fixture)
         self.check("tasks, Agent links, pending approvals and outboxes still in flight", not semantic, "; ".join(semantic))
@@ -739,7 +802,7 @@ class Drill:
             if not self.check(f"guarded {part} write refused by the read-only connection", refused):
                 problems.append(f"a write to the restored {part} database was not refused")
         final = self.snapshots(read_only=True)
-        unchanged = all(final[part] == after[part] for part in ("hub", "manager"))
+        unchanged = all(rows(final[part]) == rows(after[part]) for part in ("hub", "manager"))
         if not self.check("restored rows unchanged after the guarded writes", unchanged):
             problems.append("the restored rows changed during inspection")
         if problems:
@@ -766,15 +829,22 @@ class Drill:
         return result
 
 
-def install_signal_handlers():
-    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
+
+def install_signal_handlers():
     def interrupted(signum, frame):
-        # Only the first signal interrupts: a second one (a repeated Ctrl-C) must not cut the cleanup short.
-        for other in signals:
+        # Only the first signal interrupts; cleanup then runs with signals only recorded (quiet_signals).
+        for other in SIGNALS:
             signal.signal(other, signal.SIG_IGN)
         raise Interrupted(signum)
-    return {signum: signal.signal(signum, interrupted) for signum in signals}
+    return {signum: signal.signal(signum, interrupted) for signum in SIGNALS}
+
+
+def quiet_signals(received):
+    """From here on a signal is noted, never raised: nothing may cut the cleanup short."""
+    for signum in SIGNALS:
+        signal.signal(signum, lambda number, frame: received.append(number))
 
 
 def main(argv=None, out=sys.stdout, drill_factory=Drill):
@@ -788,7 +858,7 @@ def main(argv=None, out=sys.stdout, drill_factory=Drill):
         print("REFUSED backup restore drill: it runs on Linux (the personad it drills is a static Linux build)", file=out)
         return EXIT_USAGE
     previous = install_signal_handlers()
-    code, verdict, reason, drill = EXIT_FAIL, "FAIL", "", None
+    code, verdict, reasons, drill, received = EXIT_FAIL, "FAIL", [], None, []
     root = Path(tempfile.mkdtemp(prefix="persona-drill-"))
     try:
         root.chmod(0o700)
@@ -799,47 +869,62 @@ def main(argv=None, out=sys.stdout, drill_factory=Drill):
             raise DrillFailure("failed checks: " + ", ".join(failed))
         code, verdict = EXIT_PASS, "PASS"
     except DrillTimeout:
-        code, verdict, reason = EXIT_TIMEOUT, "TIMEOUT", "the drill exceeded --timeout"
+        code, verdict = EXIT_TIMEOUT, "TIMEOUT"
+        reasons.append("the drill exceeded --timeout")
     except DrillFailure as error:
-        reason = str(error)
+        reasons.append(str(error))
     except Interrupted as error:
-        code, verdict, reason = 128 + error.signum, "INTERRUPTED", str(error)
+        code, verdict = 128 + error.signum, "INTERRUPTED"
+        reasons.append(str(error))
     except Exception as error:  # an unexpected error still ends in cleanup and a verdict
-        reason = f"{type(error).__name__}: {error}"
+        reasons.append(f"{type(error).__name__}: {error}")
     finally:
+        quiet_signals(received)
         try:
             if drill is not None:
                 cleanup = drill.cleanup()
             else:
                 shutil.rmtree(root, ignore_errors=True)
                 cleanup = {"directory_removed": not root.exists()}
-        finally:
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
-    if not all(cleanup.values()):
-        reason = (reason + "; " if reason else "") + "cleanup incomplete"
+        except Exception as error:
+            cleanup = {"cleanup_completed": False}
+            reasons.append(f"cleanup failed: {type(error).__name__}")
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+    def fail(reason):
+        nonlocal code, verdict
+        reasons.append(reason)
         if code == EXIT_PASS:
             code, verdict = EXIT_FAIL, "FAIL"
+    if received and code == EXIT_PASS:
+        code, verdict = 128 + received[0], "INTERRUPTED"
+        reasons.append(signal.Signals(received[0]).name + " during cleanup")
+    if not all(cleanup.values()):
+        fail("cleanup incomplete")
     secrets_list = drill.secrets if drill else []
     report = drill.report if drill else {"drill": "persona whole-install restore drill", "services_started": False}
-    report.update(verdict=verdict, reason=redact(reason, secrets_list, root) or None, cleanup=cleanup,
-                  seconds=round(time.monotonic() - started, 3))
-    text = json.dumps(report, indent=2, sort_keys=True)
-    if leaked(text, secrets_list):
-        text = json.dumps({"verdict": "FAIL", "reason": "the report would have contained a secret; withheld",
-                           "cleanup": cleanup}, indent=2, sort_keys=True)
-        code, verdict = (code if code != EXIT_PASS else EXIT_FAIL), ("FAIL" if verdict == "PASS" else verdict)
+
+    def render():
+        reason = redact("; ".join(reasons), secrets_list, root) or None
+        report.update(verdict=verdict, reason=reason, cleanup=cleanup, seconds=round(time.monotonic() - started, 3))
+        text = json.dumps(report, indent=2, sort_keys=True)
+        if leaked(text, secrets_list, root):
+            fail("the report would have contained a secret or a path of the drill; withheld")
+            text = json.dumps({"verdict": verdict, "reason": reasons[-1], "cleanup": cleanup}, indent=2, sort_keys=True)
+        return text
+    text = render()
     if args.report:
         try:
             fd = os.open(args.report, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except OSError as error:
+            fail(f"the report file could not be written ({error.strerror})")
+            text = render()
+        else:
             with os.fdopen(fd, "w") as output:
                 output.write(text + "\n")
-        except OSError as error:
-            reason = (reason + "; " if reason else "") + f"the report file could not be written ({error.strerror})"
-            if code == EXIT_PASS:
-                code, verdict = EXIT_FAIL, "FAIL"
     print(text, file=out)
-    shown = redact(reason, secrets_list, root)
+    shown = report.get("reason") or (reasons[-1] if reasons else "")
     print(f"{verdict} backup restore drill ({time.monotonic() - started:.1f}s, exit {code})" + (f": {shown}" if shown else ""),
           file=out, flush=True)
     return code

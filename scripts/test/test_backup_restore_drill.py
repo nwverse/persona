@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import signal
@@ -29,12 +30,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backup_restore_drill as drill  # noqa: E402
 
 
-def elf(interpreter=False, osabi=0):
+HOST_MACHINE = drill.ELF_MACHINES.get(platform.machine().lower(), 62)
+
+
+def elf(interpreter=False, osabi=0, machine=HOST_MACHINE):
     """A minimal 64-bit little-endian ELF header with one program header (PT_LOAD, or PT_INTERP)."""
     header = bytearray(64)
     header[:4] = b"\x7fELF"
     header[4], header[5], header[6], header[7] = 2, 1, 1, osabi
-    struct.pack_into("<HHI", header, 16, 2, 62, 1)  # ET_EXEC, x86-64, version
+    struct.pack_into("<HHI", header, 16, 2, machine, 1)  # ET_EXEC, e_machine, version
     struct.pack_into("<Q", header, 32, 64)  # e_phoff
     struct.pack_into("<HH", header, 54, 56, 1)  # e_phentsize, e_phnum
     program = bytearray(56)
@@ -55,9 +59,12 @@ class Inputs:
         self.pg_bin = directory / "pg"
         self.pg_bin.mkdir()
         for name in drill.PG_PROGRAMS:
-            program = self.pg_bin / name
-            program.write_text("#!/bin/sh\nexit 1\n")
-            program.chmod(0o755)
+            self.program(name, "16.2")
+
+    def program(self, name, version):
+        program = self.pg_bin / name
+        program.write_text(f"#!/bin/sh\necho '{name} (PostgreSQL) {version}'\n")
+        program.chmod(0o755)
 
     def argv(self, *extra):
         return ["--execute", "--personad", str(self.personad), "--pg-bin", str(self.pg_bin), *extra]
@@ -270,7 +277,9 @@ class ArgumentSafetyTests(unittest.TestCase):
     def test_personad_must_be_a_static_linux_executable(self):
         inputs = Inputs(self)
         self.assertEqual(drill.check_static_linux_binary(inputs.personad), inputs.personad)
-        cases = {"dynamic": elf(interpreter=True), "script": b"#!/bin/sh\n", "other os": elf(osabi=9), "truncated": b"\x7fELF\x02"}
+        other = 183 if HOST_MACHINE == 62 else 62
+        cases = {"dynamic": elf(interpreter=True), "script": b"#!/bin/sh\n", "other os": elf(osabi=9),
+                 "truncated": b"\x7fELF\x02", "other processor": elf(machine=other)}
         for label, data in cases.items():
             with self.subTest(label):
                 path = inputs.directory / label.replace(" ", "-")
@@ -296,8 +305,15 @@ class ArgumentSafetyTests(unittest.TestCase):
         else:
             self.skipTest("/bin/sh is statically linked here")
 
-    def test_pg_bin_needs_every_program(self):
+    def test_pg_bin_needs_every_program_of_one_major_version(self):
         inputs = Inputs(self)
+        self.assertEqual(drill.parse_arguments(inputs.argv()).pg_bin, inputs.pg_bin)
+        inputs.program("pg_dump", "18.1")
+        with self.assertRaisesRegex(drill.UsageError, "mixes PostgreSQL major versions"):
+            drill.parse_arguments(inputs.argv())
+        (inputs.pg_bin / "pg_dump").write_text("#!/bin/sh\necho hello\n")
+        with self.assertRaisesRegex(drill.UsageError, "does not say its PostgreSQL version"):
+            drill.parse_arguments(inputs.argv())
         (inputs.pg_bin / "pg_restore").unlink()
         with self.assertRaisesRegex(drill.UsageError, "pg_restore"):
             drill.parse_arguments(inputs.argv())
@@ -341,6 +357,10 @@ class HelperTests(unittest.TestCase):
         self.assertNotEqual(drill.tree_digest(root), first)
         (root / "a" / "one.md").write_text("one")
         self.assertEqual(drill.tree_digest(root), first)
+        (root / "a" / "one.md").chmod(0o600)
+        moded = drill.tree_digest(root)
+        (root / "a" / "one.md").chmod(0o644)
+        self.assertNotEqual(drill.tree_digest(root), moded)
         (root / "a" / "one.md").rename(root / "a" / "two.md")
         self.assertNotEqual(drill.tree_digest(root), first)
         self.assertIsNone(drill.tree_digest(root / "missing"))
@@ -351,7 +371,10 @@ class HelperTests(unittest.TestCase):
         for secret in ("hunter2", "abc123", "postgres://", "/tmp/persona-drill-x"):
             self.assertNotIn(secret, out)
         self.assertTrue(drill.leaked(text, ["abc123"]))
-        self.assertFalse(drill.leaked(out, ["hunter2", "abc123"]))
+        self.assertFalse(drill.leaked(out, ["hunter2", "abc123"], "/tmp/persona-drill-x"))
+        encoded = "socket host=%2Ftmp%2Fpersona-drill-x%2Fs"
+        self.assertTrue(drill.leaked(encoded, [], "/tmp/persona-drill-x"))
+        self.assertNotIn("persona-drill-x", drill.redact(encoded, [], "/tmp/persona-drill-x"))
 
     def test_changes_are_reported_by_column_without_values(self):
         before = {"interactions": [{"id": "a", "status": "pending", "payload": "secret body"}]}
@@ -398,11 +421,27 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(script.count("\nCOMMIT;\n"), len(files))
             self.assertIn("schema_migrations_version_part", script)
 
+    def test_migration_script_follows_db_open(self):
+        """The drill applies migrations itself (no personad command migrates without starting a hub). What it copies
+        from db.go must still be what db.go does: fail here when that changes, and update migration_script with it."""
+        source = (drill.ROOT / "server/internal/db/db.go").read_text()
+        squash = lambda text: " ".join(text.split())
+        for statement in ("CREATE TABLE IF NOT EXISTS schema_migrations ( version int NOT NULL, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), part text)",
+                          "CREATE UNIQUE INDEX IF NOT EXISTS schema_migrations_version_part ON schema_migrations (version, (coalesce(part, '')))",
+                          "INSERT INTO schema_migrations (version, name, part) VALUES ($1, $2, $3)",
+                          '{{HubSet, "hub"}, {ManagerSet, "manager"}}', "//go:embed migrations/hub/*.sql migrations/manager/*.sql"):
+            self.assertIn(squash(statement), squash(source))
+        script = squash(drill.migration_script("hub", drill.migration_files("hub")[:1]))
+        self.assertIn("CREATE TABLE IF NOT EXISTS schema_migrations (version int NOT NULL, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), part text);", script)
+        self.assertIn("CREATE UNIQUE INDEX IF NOT EXISTS schema_migrations_version_part ON schema_migrations (version, (coalesce(part, '')));", script)
+
     def test_snapshots_read_every_table_and_say_whether_they_are_read_only(self):
         for part, tables in (("hub", drill.HUB_TABLES), ("manager", drill.MANAGER_TABLES)):
             sql = drill.snapshot_sql(part)
             self.assertIn("current_setting('transaction_read_only')", sql)
             self.assertIn("backend_type = 'client backend'", sql)
+            self.assertIn("datname = current_database()", sql)  # another database's sessions are not this one's
+            self.assertIn(drill.INSPECTOR, sql)  # nor are the drill's own, one of which may still be closing
             for table in tables:
                 self.assertIn(f"FROM {table} t", sql)
             self.assertNotRegex(sql, r"(?i)\b(insert|update|delete|alter|drop|create)\b")
@@ -422,10 +461,12 @@ class HelperTests(unittest.TestCase):
             env = cluster.env()
         self.assertFalse({"PERSONA_DATABASE_URL", "PGHOST", "HTTPS_PROXY"} & set(env))
         self.assertEqual(env["PGPASSFILE"], os.devnull)
+        self.assertEqual(env["PGAPPNAME"], drill.INSPECTOR)
         self.assertIn("host=%2Ftmp%2Fdrill-root%2Fs", cluster.url("drill_x"))
         self.assertNotIn("localhost", cluster.url("drill_x"))
 
 
+@unittest.skipUnless(sys.platform == "linux", "process groups are read from Linux /proc")
 class ProcessTests(unittest.TestCase):
     def test_a_timeout_stops_the_whole_process_group(self):
         directory = Path(tempfile.mkdtemp(prefix="drill-group-"))
@@ -445,6 +486,25 @@ class ProcessTests(unittest.TestCase):
             self.fail("the background child of a timed-out step is still running")
         self.assertEqual(processes.live, {})
 
+    def test_what_a_finished_step_left_in_its_group_is_stopped(self):
+        directory = Path(tempfile.mkdtemp(prefix="drill-group-"))
+        self.addCleanup(shutil.rmtree, directory, True)
+        marker = directory / "child"
+        processes = drill.Processes()
+        code, _, _ = processes.run(["/bin/sh", "-c", f"sleep 30 > /dev/null 2>&1 & echo $! > {marker}"],
+                                   env=drill.minimal_environment(), timeout=10)
+        self.assertEqual(code, 0)
+        child = int(marker.read_text())
+        for _ in range(50):
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("a finished step's background child is still running")
+        self.assertEqual(processes.live, {})
+
     def test_deadline(self):
         now = [0.0]
         deadline = drill.Deadline(10, clock=lambda: now[0])
@@ -456,6 +516,7 @@ class ProcessTests(unittest.TestCase):
             deadline.remaining()
 
 
+@unittest.skipUnless(sys.platform == "linux", "the drill runs on Linux only")
 class DrillFlowTests(unittest.TestCase):
     def assert_cleaned(self, run):
         self.assertEqual(run.report["cleanup"], {"cluster_stopped": True, "processes_stopped": True, "directory_removed": True})
@@ -578,6 +639,47 @@ class DrillFlowTests(unittest.TestCase):
         self.assertIn("RuntimeError", run.report["reason"])
         self.assert_cleaned(run)
         self.assert_redacted(run)
+
+    def test_a_signal_during_cleanup_does_not_cut_it_short(self):
+        class Signalled(FakeDrill):
+            def cleanup(self):
+                os.kill(os.getpid(), signal.SIGTERM)
+                os.kill(os.getpid(), signal.SIGINT)
+                return super().cleanup()
+        previous = signal.getsignal(signal.SIGTERM)
+        run = Run(self, factory=Signalled)
+        self.assertEqual(run.code, 128 + signal.SIGTERM)
+        self.assertEqual(run.report["verdict"], "INTERRUPTED")
+        self.assertIn("SIGTERM during cleanup", run.report["reason"])
+        self.assert_cleaned(run)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+
+    def test_a_report_that_cannot_be_written_is_a_failure_everywhere(self):
+        directory = Path(tempfile.mkdtemp(prefix="drill-report-"))
+        self.addCleanup(shutil.rmtree, directory, True)
+        report = directory / "report.json"
+
+        class Racing(FakeDrill):
+            def offline_checks(self):
+                super().offline_checks()
+                report.write_text("{}")  # someone else made the file meanwhile
+        run = Run(self, "--report", str(report), factory=Racing)
+        self.assertEqual(run.code, drill.EXIT_FAIL)
+        self.assertEqual(run.report["verdict"], "FAIL")
+        self.assertIn("report file could not be written", run.report["reason"])
+        self.assertTrue(run.verdict_line.startswith("FAIL"))
+        self.assertEqual(report.read_text(), "{}")
+
+    def test_a_report_naming_the_drill_directory_is_withheld(self):
+        class Naming(FakeDrill):
+            def offline_checks(self):
+                super().offline_checks()
+                from urllib.parse import quote
+                self.report["note"] = quote(str(self.root), safe="")
+        run = Run(self, factory=Naming)
+        self.assertEqual(run.code, drill.EXIT_FAIL)
+        self.assertIn("withheld", run.output)
+        self.assertNotIn(run.drill.root.name, run.output)
 
     def test_the_report_file_is_private(self):
         inputs_dir = Path(tempfile.mkdtemp(prefix="drill-report-"))
