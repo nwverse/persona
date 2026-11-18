@@ -234,6 +234,7 @@ type Store interface {
 	// the code a switch made and the credential it became.
 	MachineLinkInUse(ctx context.Context, machine string) (bool, error)
 	RevokeLinkPair(ctx context.Context, hash, machine string) (credentialID string, found bool, err error)
+	LinkSwitchBegun(ctx context.Context, machine, operation string) (bool, error)
 }
 
 func Run(ctx context.Context, b update.Build) error {

@@ -629,6 +629,8 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusServiceUnavailable, "owners_unknown", err)
 		case errors.Is(err, errKeeperAway): // the manager that keeps it, or the one it goes to, is away (machines_kept.go)
 			writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", err)
+		case errors.Is(err, errLinkSwitchInProgress): // 409 link_switch_in_progress (link_switch.go)
+			writeAddMachineErr(w, err)
 		case err != nil:
 			writeErr(w, http.StatusInternalServerError, err)
 		default:

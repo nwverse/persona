@@ -111,7 +111,12 @@ func (h *Hub) adminUsageRoutesRelayed(mux *http.ServeMux) {
 // connected they are answered 503 assistant_offline.
 func (h *Hub) deviceRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range devicewire.Routes {
+		fullOnly := pattern == linkSwitchRoute // not an app's pairing code standing in for one (link_switch.go)
 		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			if fullOnly && !mayTrust(principalOf(r.Context())) {
+				writeErrCode(w, http.StatusForbidden, "forbidden", i18n.Err("hub-link_switch.forbidden"))
+				return
+			}
 			if h.localMachine(r.PathValue("mid")) == nil {
 				writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 				return

@@ -216,6 +216,10 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("DELETE /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if err := h.linkSwitchBusy(id); err != nil { // its manager runs the switch, and undoes it on failure (link_switch.go)
+			writeAddMachineErr(w, err)
+			return
+		}
 		// One waiting to be confirmed goes as rejecting it does: its pending row and place too (machine_trust.go).
 		if h.machinePending(id) {
 			switch err := h.rejectMachine(r.Context(), id, "admin", "remove"); {

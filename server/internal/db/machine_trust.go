@@ -99,6 +99,18 @@ func (d *DB) MachineLinkInUse(ctx context.Context, machine string) (bool, error)
 	return inUse, err
 }
 
+// LinkSwitchBegun: the machine's switch to Persona Link with this operation id got as far as its begin (its audit row,
+// action link_switch, step begun), which outlives a hub's restart.
+func (d *DB) LinkSwitchBegun(ctx context.Context, machine, operation string) (bool, error) {
+	if machine == "" || operation == "" {
+		return false, errors.New("machine and operation are required")
+	}
+	var begun bool
+	err := d.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM machine_audit WHERE machine_id = $1 AND action = 'link_switch'
+		AND detail->>'step' = 'begun' AND detail->>'operation' = $2)`, machine, operation).Scan(&begun)
+	return begun, err
+}
+
 // MachineAudit is one row of a computer's audit.
 type MachineAudit struct {
 	MachineID string          `json:"machine_id"`
