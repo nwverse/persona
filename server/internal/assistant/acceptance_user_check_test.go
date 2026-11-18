@@ -52,7 +52,8 @@ func TestUserCheckKeepsTaskAndAgentOpenUntilPass(t *testing.T) {
 	s.todos.todos[todo.ID].UpdatedAt = old
 	s.todos.mu.Unlock()
 	f.setSessions("box", idleAgent(old))
-	s.closeDoneTaskAgents(ctx, taskCloseRefused{})
+	seen := doneSeen{}
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, seen)
 	s.closeIdleAgents(ctx, taskCloseRefused{}, idleSeen{{"box", "s1"}: old})
 	if got := f.retires(); len(got) != 0 {
 		t.Fatalf("retired an Agent awaiting personal verification: %v", got)
@@ -78,7 +79,7 @@ func TestUserCheckKeepsTaskAndAgentOpenUntilPass(t *testing.T) {
 	idle := taskCloseIdle
 	taskCloseIdle = 0
 	t.Cleanup(func() { taskCloseIdle = idle })
-	s.closeDoneTaskAgents(ctx, taskCloseRefused{})
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, seen)
 	if got := f.retires(); len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("Pass did not permit normal completed-task retirement: %v", got)
 	}
