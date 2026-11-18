@@ -62,6 +62,12 @@ struct PersonaApp: App {
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
                     if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
+                    // The web sign-in page's code, read by the Camera app: only the scanner in Settings › Devices
+                    // approves a browser (#10293), so a link says where to scan it and does nothing else.
+                    if BrowserLoginLink.matches(url) {
+                        model.toast = Toast(String(localized: "To sign in a browser, scan its code in Settings › Devices › Scan Browser Sign-in Code."))
+                        return
+                    }
                     // A page of Persona's (persona://open<path>, an older persona:// form, #9926): only opens it.
                     if let opened = model.openOwnLink(url) {
                         if case .sheet(let page) = opened { model.linkSheet = page }

@@ -1052,7 +1052,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       setSendFailure(null);
       noteWritten(id, p.at);
       setPending((ps) => [...ps.filter((x) => x.id !== id), p]);
-      follow(true); // your own message: to the end, whatever you were reading
+      // Quote replies keep an earlier reader's place; at the end, every own message still follows (#10346).
+      if (!out.quoteReply || atEnd.current) follow(true);
       const key = outboxKey(mid, sid);
       const launcher = assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined;
       const model = assistant ? pickedModel(conversationKey(mid, sid)) : undefined;

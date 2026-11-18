@@ -1473,6 +1473,8 @@ nonisolated struct APIClient: Sendable {
         var taskWorkspacePreference: String?
         /// Every Agent Persona starts gets a quiet, supervised task (#3617). Off by default.
         var agentTasks: Bool?
+        /// Close an Agent's terminal tab when its session ends (#10355). Off by default.
+        var closeEndedTerminals: Bool?
         /// Hours an idle Agent Persona started runs before it is stopped, its terminal kept (#4754): 0 is never, at
         /// most 8760; 12 by default.
         var idleCloseHours: Int?
@@ -1497,6 +1499,7 @@ nonisolated struct APIClient: Sendable {
             case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case closeEndedTerminals = "close_ended_terminals"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
             case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
@@ -1601,6 +1604,7 @@ nonisolated struct APIClient: Sendable {
         var startRequestedTasks: Bool?
         var taskWorkspacePreference: String?
         var agentTasks: Bool?
+        var closeEndedTerminals: Bool?
         var idleCloseHours: Int?
         var archiveClosedDays: Int?
         var agentAutoNaming: Bool?
@@ -1617,6 +1621,7 @@ nonisolated struct APIClient: Sendable {
             case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case closeEndedTerminals = "close_ended_terminals"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
             case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
