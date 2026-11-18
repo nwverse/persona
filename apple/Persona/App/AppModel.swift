@@ -238,6 +238,9 @@ final class AppModel {
     @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
     /// Unit tests: every group's link counts as up (true) or down (false) without a socket (`isLive`, the outbox's sends).
     @ObservationIgnored var linksUpForTests: Bool?
+    /// Unit tests: the app's voice call (`VoiceCalls.shared` otherwise), whose call to Persona keeps its group's tunnels
+    /// open in the background (`callTunnelGroup`).
+    @ObservationIgnored var voiceCallsForTests: VoiceCalls?
     /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
     /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
     func forgetRestoredForTests() {
@@ -314,6 +317,13 @@ final class AppModel {
     var latestAnswerFor: SessionKey?
     /// A hub link's message to land on once its chat shows (HubPageRouting, #2696); taken by that chat.
     var messageJump: MessageJump?
+    /// An Inbox item a link asked to open (`HubPage.inboxItem`): the Inbox pushes it and clears this.
+    var inboxToOpen: InboxOpenRequest?
+    /// A to-do, knowledge entry or computer a link opened where no screen handles links itself (`HubLinkSheet`), over
+    /// everything.
+    var linkSheet: HubLinkSheet?
+    /// A pairing link from outside the app waiting for the user's Connect (`PairConfirmation`, #9929).
+    var pairToConfirm: PairConfirmation?
     /// A refused send's Open Terminal (a dialog holds that session's terminal, #3752): its chat opens the terminal
     /// and takes it.
     var terminalAsk: SessionKey?
@@ -360,7 +370,16 @@ final class AppModel {
     /// The chat a rebuilt list opens again (ChatsView): what the launch had (`dev.openChat`), then what rememberChat
     /// says. Kept here, not read back from UserDefaults: a launch argument of that name cannot be removed, and the
     /// list came back to a chat just closed (#1868).
-    static var rememberedChat: String? = UserDefaults.standard.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
+    static var rememberedChat: String? = savedPlace?.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
+    /// Where a launch reads the place the app was left (`app.tab`, `dev.openChat`, `assistant.current`). None in the app
+    /// hosting unit tests: it starts as a new install does, whatever earlier runs left on the simulator, which changed
+    /// the pages `MainPagesStackTests` measures (#9333). UI tests' target app is not such a host.
+    static var savedPlace: UserDefaults? {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return nil }
+        #endif
+        return .standard
+    }
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
         didSet {
@@ -558,14 +577,14 @@ final class AppModel {
         }
         #endif
         hubGroup = UserDefaults.standard.string(forKey: Self.hubGroupKey) ?? ""
-        if let raw = UserDefaults.standard.string(forKey: "app.tab"), let tab = AppTab(rawValue: raw) {
+        if let raw = Self.savedPlace?.string(forKey: "app.tab"), let tab = AppTab(rawValue: raw) {
             selectedTab = tab
         }
         // Remembered as `SessionKey.path`: no group in it is the default group.
-        if selectedTab == .chats, let v = UserDefaults.standard.string(forKey: "dev.openChat") {
+        if selectedTab == .chats, let v = Self.savedPlace?.string(forKey: "dev.openChat") {
             openChat = SessionKey(path: v)
         }
-        if let v = UserDefaults.standard.string(forKey: "assistant.current") {
+        if let v = Self.savedPlace?.string(forKey: "assistant.current") {
             assistantCurrent = SessionKey(path: v)
         }
         connection.lives = { [weak self] in self?.links.map(\.live) ?? [] }

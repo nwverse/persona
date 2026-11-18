@@ -45,9 +45,7 @@ struct PhoneScreenWindows: View {
             .navigationTitle("Windows on \(name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { dismiss() } label: { Text("Done").lineLimit(1) }
-                }
+                SheetClose { dismiss() }
             }
         }
         .task(id: link.phase) { await link.loadWindows() } // again once the display is up

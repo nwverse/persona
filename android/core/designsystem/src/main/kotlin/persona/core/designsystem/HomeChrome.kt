@@ -2,6 +2,7 @@ package persona.core.designsystem
 
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,9 +16,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.Composable
@@ -31,6 +35,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -220,15 +225,31 @@ fun JSidebarColumn(
     overlay: Boolean = false,
     onDismiss: () -> Unit = {},
     insetSidebar: Boolean = true,
+    drags: Boolean = false,
+    detailAtRoot: Boolean = true,
+    /**
+     * False while this pane is composed but not the selected tab (`Root.kt` keeps Persona with
+     * `Modifier.unplaced()`). An unplaced node can still publish exclusion rects, so the edge must
+     * stay with system Back on Agents and other tabs.
+     */
+    paneShown: Boolean = true,
+    onDragSettle: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    val progress by animateFloatAsState(if (shown) 1f else 0f,
-        sidebarColumnSpec(PersonaTheme.style, PersonaTheme.reduceMotion), label = "sidebar-column")
+    // The finger drag is SplitColumnControl (`SidebarColumnDrag.kt`). Idle, and a column that does not drag, keeps
+    // this layout and `sidebarColumnSpec` (the button, the scrim and Back).
+    val drag = if (drags && sidebar != null) rememberColumnDragController(width, onDragSettle) else null
+    val laidOut = drag?.layoutShown ?: shown
+    val progress by animateFloatAsState(if (laidOut) 1f else 0f,
+        if (drag?.snaps == true) snap() else sidebarColumnSpec(PersonaTheme.style, PersonaTheme.reduceMotion),
+        label = "sidebar-column")
     val palette = PersonaTheme.palette
     val visible = sidebar != null && progress > 0f
-    val modal = sidebar != null && overlay && shown
+    val presented = drag?.layoutShown ?: shown
+    val modal = sidebar != null && overlay && presented
     val close = stringResource(R.string.designsystem_close)
-    Box(modifier.fillMaxSize()) {
+    @Composable
+    fun panes() {
         if (visible) Box(Modifier.width(width).fillMaxHeight()
             .zIndex(if (overlay) 1f else 0f)
             .then(if (overlay) Modifier.pointerInput(Unit) {
@@ -242,13 +263,52 @@ fun JSidebarColumn(
             }
             Box(Modifier.align(Alignment.TopEnd).width(Tokens.Space.xxs / 2).fillMaxHeight().background(palette.line))
         }
-        Box(Modifier.fillMaxSize().padding(start = if (sidebar != null && !overlay) pageStart * progress else 0.dp)) {
+        // The detail stack is that column's own navigation controller, so a push stays inside it
+        // (SplitNavigation.swift:140-143). Clip after the inset, or the slide still paints the column.
+        // Over the page the column stays above the page (SplitNavigation.swift:202-208).
+        val beside = sidebar != null && !overlay
+        Box(
+            Modifier.fillMaxSize()
+                .padding(start = if (beside) pageStart * progress else 0.dp)
+                .then(if (beside) Modifier.clipToBounds() else Modifier),
+        ) {
             Box(Modifier.fillMaxSize().then(if (modal)
                 Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)) { content() }
             if (overlay && visible) Box(Modifier.fillMaxSize().padding(start = width * progress)
                 .background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
                 .clickable(enabled = shown, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
         }
+    }
+    // One slot for the page. A second branch when the drag controller appears (a phone unfolding into a regular
+    // window) composed the Assistant route twice in one frame. The pictures record `panes` only. The overlay is a
+    // sibling, drawn above them (`SplitColumnControl.swift:204`).
+    val gesture = if (drag != null) drag.gestureModifier(width, shown, detailAtRoot, overlay) else Modifier
+    // While this tab is shown, the column is hidden and the detail is at its root, reclaim the open-zone
+    // strip so system Back does not take it (`SplitColumnControl.swift:132-137`, `:160-169`). A pushed
+    // detail, an open column, or an unselected tab keeps Back (no exclusion).
+    val density = LocalDensity.current
+    val excludeEdge = if (paneShown && drag != null && !shown && detailAtRoot) {
+        val stripPx = with(density) { (Tokens.MinTouch.ios / 2).toPx() }
+        val bandPx = with(density) { RootEdgeExclusion.heightDp.dp.toPx() }
+        Modifier.systemGestureExclusion { coordinates ->
+            RootEdgeExclusion.rect(
+                active = true,
+                stripWidthPx = stripPx,
+                layoutWidthPx = coordinates.size.width.toFloat(),
+                layoutHeightPx = coordinates.size.height.toFloat(),
+                bandHeightPx = bandPx,
+                // Horizontal safe-drawing / cutout pads the shell (`Root.kt`); system Back is from window x=0.
+                layoutLeftInWindowPx = coordinates.positionInWindow().x,
+            ) ?: Rect.Zero
+        }
+    } else {
+        Modifier
+    }
+    // [progress] is this frame's layout. The picture waits until that value has caught up (`SplitColumnControl.swift:216-231`).
+    val record = if (drag != null) drag.recordModifier(progress) else Modifier
+    Box(modifier.fillMaxSize().then(excludeEdge).then(gesture)) {
+        Box(Modifier.fillMaxSize().then(record)) { panes() }
+        if (drag != null) ColumnDragOverlay(drag, drag.pagePicture, drag.columnPicture, drag.step)
     }
 }
 

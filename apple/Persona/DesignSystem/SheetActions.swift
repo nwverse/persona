@@ -14,11 +14,13 @@ import SwiftUI
 /// read 2–3:1 in dark, as the Cancel it replaces did (#9634). VoiceOver reads Close; Esc closes it from a keyboard.
 struct SheetClose: ToolbarContent {
     private let id: String
+    private let disabled: Bool
     private let action: () -> Void
 
-    /// `id`: the accessibility identifier UI tests find it by.
-    init(id: String = "sheet-close", action: @escaping () -> Void) {
+    /// `id`: the accessibility identifier UI tests find it by. `disabled`: while work that cannot be left runs.
+    init(id: String = "sheet-close", disabled: Bool = false, action: @escaping () -> Void) {
         self.id = id
+        self.disabled = disabled
         self.action = action
     }
 
@@ -27,6 +29,7 @@ struct SheetClose: ToolbarContent {
             // The ink on the icon itself: a bar ignores a foreground style set on the button (docs/lessons/ios.md).
             Button(role: .close, action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
                 .tint(Color.primary)
+                .disabled(disabled)
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel(Text("Close"))
                 .accessibilityIdentifier(id)
@@ -39,20 +42,36 @@ struct SheetClose: ToolbarContent {
 /// A verb that says more (Send, Connect, Install) stays a word at `.confirmationAction`.
 struct SheetConfirm: ToolbarContent {
     private let id: String
+    private let name: String?
     private let disabled: Bool
+    private let busy: Bool
     private let action: () -> Void
 
-    init(id: String = "sheet-confirm", disabled: Bool = false, action: @escaping () -> Void) {
+    /// `name`: what VoiceOver reads, the word the ✓ stands for (Save, Add); the system's Done without it. `busy`: a
+    /// spinner in its place while the save runs.
+    init(id: String = "sheet-confirm", name: String? = nil, disabled: Bool = false, busy: Bool = false,
+         action: @escaping () -> Void) {
         self.id = id
+        self.name = name
         self.disabled = disabled
+        self.busy = busy
         self.action = action
     }
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
-            Button(role: .confirm, action: action)
-                .disabled(disabled)
-                .accessibilityIdentifier(id)
+            if busy {
+                ProgressView().accessibilityIdentifier(id)
+            } else if let name {
+                Button(role: .confirm, action: action)
+                    .disabled(disabled)
+                    .accessibilityLabel(Text(name))
+                    .accessibilityIdentifier(id)
+            } else {
+                Button(role: .confirm, action: action)
+                    .disabled(disabled)
+                    .accessibilityIdentifier(id)
+            }
         }
     }
 }
@@ -74,6 +93,13 @@ extension View {
         foregroundStyle(Color.primary)
     }
 
+    /// The way out of a page that only shows things (#9653): `SheetClose`'s ✕ at the top leading corner on the iPhone
+    /// and iPad, Done in a Mac sheet's bottom row. Nothing when `detailPresentation` pushed the page into a column
+    /// (`detailPushed`): there its ‹ goes back.
+    func sheetDone(_ done: @escaping () -> Void) -> some View {
+        modifier(SheetDone(done: done))
+    }
+
     /// Done for a sheet that only shows things, in a Mac sheet's bottom row (Esc too). Nothing on iOS: there the page
     /// keeps its own Close or the swipe down.
     func macSheetDone(_ done: @escaping () -> Void) -> some View {
@@ -81,6 +107,19 @@ extension View {
         toolbar { ToolbarItem(placement: .cancellationAction) { Button(action: done) { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) } } }
         #else
         self
+        #endif
+    }
+}
+
+private struct SheetDone: ViewModifier {
+    var done: () -> Void
+    @Environment(\.detailPushed) private var pushed
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.macSheetDone(done)
+        #else
+        if pushed { content } else { content.pageToolbar { SheetClose(action: done) } }
         #endif
     }
 }

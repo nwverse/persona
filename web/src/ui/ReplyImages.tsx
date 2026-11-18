@@ -7,7 +7,7 @@
 // without the route (as #8162 had them, loaded straight from their host with no Referer once asked).
 // Its own chunk: loaded with a reply's first picture. Sizes are inline styles, not new utility classes (those would
 // land in every page's stylesheet).
-import { useContext, useMemo, useState, type CSSProperties } from "react";
+import { createContext, useContext, useMemo, useState, type CSSProperties } from "react";
 import type { Element } from "hast";
 import { t } from "../i18n";
 import { getToken } from "../lib/api";
@@ -37,6 +37,10 @@ import { ReplyPicturesContext } from "./reply-pictures-context";
 
 export { rehypeReplyImages } from "./reply-images-plugin";
 
+/** Set by Export image (#9469, views/chat/ExportImage.tsx): a run draws all its pictures, through the hub only, for a
+ *  picture that cannot be tapped (no "+N", no viewer, no waiting for a tap). Here, not with the first screen's context. */
+export const ReplyPicturesExport = createContext(false);
+
 const RADIUS = 10; // the turn's viewed images' tiles (TurnImages.tsx)
 const tileClass = "group relative shrink-0 overflow-hidden bg-field shadow-hairline outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
@@ -57,7 +61,9 @@ export function ReplyImages({ node }: { node?: Element }) {
   const narrow = useMedia(NARROW);
   const [asked, setAsked] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
+  const exporting = useContext(ReplyPicturesExport);
   if (!pictures.length) return null;
+  if (exporting) return <ExportPictures pictures={pictures} through={through} />;
   const height = narrow ? PICTURE_H_NARROW : PICTURE_H;
   const ratio = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
   const src = (p: ReplyPicture, size: number) => (through ? remoteImageURL(p.src, size, getToken()) : p.src);
@@ -215,5 +221,33 @@ function Asked({ pictures, height, onAsk }: { pictures: ReplyPicture[]; height: 
         <span className="max-w-full truncate text-submeta text-ink-3">{hostOf(pictures[0].src)}</span>
       </span>
     </button>
+  );
+}
+
+
+/** A run in an exported picture (#9469): one picture at most PICTURE_H_NARROW high and never larger than itself; several
+ *  as squares, every one of them; each through the hub's route, or, when the hub has none, a tile naming the site:
+ *  nothing is read from another site. */
+function ExportPictures({ pictures, through }: { pictures: ReplyPicture[]; through: boolean }) {
+  const size = remoteSize(PICTURE_H_NARROW * PLACEHOLDER, 3);
+  const src = (p: ReplyPicture) => remoteImageURL(p.src, size, getToken());
+  const tile = (p: ReplyPicture, style: CSSProperties) =>
+    through ? (
+      <img key={p.src} src={src(p)} alt={p.alt} style={{ ...style, objectFit: "cover", borderRadius: RADIUS, display: "block" }} data-export-picture="" />
+    ) : (
+      <div key={p.src} style={{ ...style, borderRadius: RADIUS }} className="flex flex-col items-center justify-center gap-1 bg-field text-ink-3" data-export-picture="away">
+        <Icon name="image" size={18} />
+        <span className="max-w-full truncate px-2 text-submeta">{hostOf(p.src)}</span>
+      </div>
+    );
+  if (pictures.length === 1) {
+    const p = pictures[0];
+    return <div style={{ margin: "8px 0" }}>{through ? tile(p, { maxHeight: PICTURE_H_NARROW, maxWidth: "100%" }) : tile(p, { height: PICTURE_H_NARROW * 0.6, width: PICTURE_H_NARROW })}</div>;
+  }
+  const g = grid(pictures.length, PICTURES_W);
+  return (
+    <div style={{ margin: "8px 0", display: "grid", gridTemplateColumns: `repeat(${g.columns}, minmax(0, 1fr))`, gap: PICTURE_GAP, width: `min(100%, ${PICTURES_W}px)` }}>
+      {pictures.map((p) => tile(p, { width: "100%", aspectRatio: "1 / 1" }))}
+    </div>
   );
 }

@@ -49,7 +49,7 @@ class DevelopmentFixtures(unittest.TestCase):
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.com")
-        for relative, content in {"server/build-tags.txt":"public", "web/package.json":"{}", "integrations/agent-sdk/package.json":"{}"}.items():
+        for relative, content in {"server/build-tags.txt":"public", "web/package.json":"{}"}.items():
             file = self.repo / relative
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text(content)

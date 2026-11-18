@@ -212,6 +212,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
+	"PUT /api/v1/assistant/conversations/{id}/tags",
 	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
@@ -381,6 +382,8 @@ var Routes = []string{
 	"PUT /api/v1/recordings/{id}/private",
 	"POST /api/v1/recordings/{id}/just-me",
 	"POST /api/v1/recordings/{id}/followup",
+	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
+	"POST /api/v1/recordings/{id}/handoff",
 	// Its photos (meeting_photos.go there, "Phase 3: photos").
 	"POST /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos",
