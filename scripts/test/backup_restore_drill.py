@@ -48,7 +48,7 @@ FINGERPRINT_LABEL = b"persona secret.key fingerprint v1"  # secretkey.Fingerprin
 READ_ONLY_SQLSTATE = "25006"  # read_only_sql_transaction
 INSPECTOR = "persona-restore-drill"  # the application_name of the drill's own connections
 # ELF e_machine of the machines a static personad is built for, by platform.machine().
-ELF_MACHINES = {"x86_64": 62, "amd64": 62, "aarch64": 183, "arm64": 183}
+ELF_MACHINES = {"x86_64": 62, "aarch64": 183}
 POSTGRES_URL = re.compile(r"postgres(?:ql)?://[^\s\"']+")
 # The tables the checks read, each with the order its rows are compared in. Whole tables, not only the seeded rows: a
 # row the restore (or anything else) added counts as a change too, such as a new client operation id.
@@ -99,6 +99,8 @@ def parse_arguments(argv):
     args = parser.parse_args(argv)
     if not args.execute:
         raise UsageError("pass --execute to run the drill: it starts a private PostgreSQL cluster and real backup commands")
+    if sys.platform != "linux":
+        raise UsageError("it runs on Linux (the personad it drills is a static Linux build)")
     if not 30 <= args.timeout <= 3600:
         raise UsageError("--timeout must be between 30 and 3600 seconds")
     args.personad = check_static_linux_binary(Path(args.personad))
@@ -146,22 +148,23 @@ def check_static_linux_binary(path):
     return path
 
 
-def check_pg_bin(path, run=subprocess.run):
+def check_pg_bin(path):
     """Every program the drill and personad backup use, all of one PostgreSQL major version (pg_dump refuses a newer
     server, and personad's backup wants the server's own)."""
     path = path.expanduser().absolute()
     missing = [name for name in PG_PROGRAMS if not os.access(path / name, os.X_OK)]
     if missing:
         raise UsageError("--pg-bin lacks " + ", ".join(missing))
-    majors = {}
+    majors, processes = {}, Processes()
     for name in PG_PROGRAMS:
         try:
-            result = run([str(path / name), "--version"], capture_output=True, text=True, timeout=30,
-                         env=minimal_environment(), stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.TimeoutExpired):
+            code, stdout, _ = processes.run([str(path / name), "--version"], env=minimal_environment(), timeout=10)
+        except (OSError, DrillTimeout):
             raise UsageError(f"--pg-bin's {name} does not run") from None
-        found = re.search(r"\(PostgreSQL\) (\d+)", result.stdout)
-        if result.returncode != 0 or not found:
+        finally:
+            processes.stop_all()
+        found = re.search(r"\(PostgreSQL\) (\d+)", stdout)
+        if code != 0 or not found:
             raise UsageError(f"--pg-bin's {name} does not say its PostgreSQL version")
         majors[name] = found.group(1)
     if len(set(majors.values())) != 1:
@@ -190,6 +193,7 @@ class Processes:
 
     def __init__(self):
         self.live = {}
+        self.unstoppable = []  # leaders or group members that would not stop: cleanup is incomplete
 
     def run(self, args, *, env, timeout, stdin=None, cwd=None):
         process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
@@ -206,7 +210,8 @@ class Processes:
                 raise DrillTimeout() from None
             raise
         # What the step left in its group (a background child) goes with it.
-        kill_group_members(process.pid)
+        if kill_group_members(process.pid):
+            self.unstoppable.append(process.pid)
         self.live.pop(process.pid, None)
         return process.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 
@@ -239,13 +244,15 @@ class Processes:
             except subprocess.TimeoutExpired:
                 continue
         left = kill_group_members(process.pid)  # anything the leader left behind in its group
+        self.live.pop(process.pid, None)
         if process.poll() is not None and not left:
-            self.live.pop(process.pid, None)
             return True
+        self.unstoppable.append(process.pid)  # not tried again: it already had every signal
         return False
 
     def stop_all(self):
-        return all([self.stop(process) for process in list(self.live.values())])
+        stopped = [self.stop(process) for process in list(self.live.values())]
+        return all(stopped) and not self.unstoppable
 
 
 def group_members(pgid):
@@ -258,7 +265,8 @@ def group_members(pgid):
         except (OSError, IndexError):
             continue
         pid = int(stat.parent.name)
-        if pid != pgid and int(fields[2]) == pgid:
+        # fields: state, ppid, pgrp. A zombie has exited (only its parent can reap it; SIGKILL changes nothing).
+        if pid != pgid and int(fields[2]) == pgid and fields[0] != "Z":
             members.append(pid)
     return members
 
@@ -854,50 +862,60 @@ def main(argv=None, out=sys.stdout, drill_factory=Drill):
     except UsageError as error:
         print(f"REFUSED backup restore drill: {error}", file=out, flush=True)
         return EXIT_USAGE
-    if sys.platform != "linux":
-        print("REFUSED backup restore drill: it runs on Linux (the personad it drills is a static Linux build)", file=out)
-        return EXIT_USAGE
     previous = install_signal_handlers()
-    code, verdict, reasons, drill, received = EXIT_FAIL, "FAIL", [], None, []
-    root = Path(tempfile.mkdtemp(prefix="persona-drill-"))
     try:
-        root.chmod(0o700)
-        drill = drill_factory(args, root, Processes(), Deadline(args.timeout))
-        drill.run()
-        failed = [entry["check"] for entry in drill.report["checks"] if not entry["ok"]]
-        if failed:
-            raise DrillFailure("failed checks: " + ", ".join(failed))
-        code, verdict = EXIT_PASS, "PASS"
-    except DrillTimeout:
-        code, verdict = EXIT_TIMEOUT, "TIMEOUT"
-        reasons.append("the drill exceeded --timeout")
-    except DrillFailure as error:
-        reasons.append(str(error))
-    except Interrupted as error:
-        code, verdict = 128 + error.signum, "INTERRUPTED"
-        reasons.append(str(error))
-    except Exception as error:  # an unexpected error still ends in cleanup and a verdict
-        reasons.append(f"{type(error).__name__}: {error}")
+        return run_drill(args, out, drill_factory, started)
     finally:
-        quiet_signals(received)
-        try:
-            if drill is not None:
-                cleanup = drill.cleanup()
-            else:
-                shutil.rmtree(root, ignore_errors=True)
-                cleanup = {"directory_removed": not root.exists()}
-        except Exception as error:
-            cleanup = {"cleanup_completed": False}
-            reasons.append(f"cleanup failed: {type(error).__name__}")
         for signum, handler in previous.items():
             signal.signal(signum, handler)
 
+
+def run_drill(args, out, drill_factory, started):
+    code, verdict, reasons, drill, root, received = EXIT_FAIL, "FAIL", [], None, None, []
+    try:
+        try:
+            root = Path(tempfile.mkdtemp(prefix="persona-drill-"))
+            root.chmod(0o700)
+            drill = drill_factory(args, root, Processes(), Deadline(args.timeout))
+            drill.run()
+            failed = [entry["check"] for entry in drill.report["checks"] if not entry["ok"]]
+            if failed:
+                raise DrillFailure("failed checks: " + ", ".join(failed))
+            code, verdict = EXIT_PASS, "PASS"
+        except DrillTimeout:
+            code, verdict = EXIT_TIMEOUT, "TIMEOUT"
+            reasons.append("the drill exceeded --timeout")
+        except DrillFailure as error:
+            reasons.append(str(error))
+        except Interrupted as error:
+            code, verdict = 128 + error.signum, "INTERRUPTED"
+            reasons.append(str(error))
+        except Exception as error:  # an unexpected error still ends in cleanup and a verdict
+            reasons.append(f"{type(error).__name__}: {error}")
+        finally:
+            quiet_signals(received)
+    except Interrupted as late:  # the first signal came while an outcome above was being taken down
+        received.append(late.signum)
+    quiet_signals(received)  # from here on signals are only noted: cleanup and the verdict always happen
+
+    try:
+        if drill is not None:
+            cleanup = drill.cleanup()
+        else:
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
+            cleanup = {"directory_removed": root is None or not root.exists()}
+    except Exception as error:
+        cleanup = {"cleanup_completed": False}
+        reasons.append(f"cleanup failed: {type(error).__name__}")
+
     def fail(reason):
         nonlocal code, verdict
-        reasons.append(reason)
+        if reason not in reasons:
+            reasons.append(reason)
         if code == EXIT_PASS:
             code, verdict = EXIT_FAIL, "FAIL"
-    if received and code == EXIT_PASS:
+    if received and verdict != "INTERRUPTED":
         code, verdict = 128 + received[0], "INTERRUPTED"
         reasons.append(signal.Signals(received[0]).name + " during cleanup")
     if not all(cleanup.values()):
@@ -905,13 +923,17 @@ def main(argv=None, out=sys.stdout, drill_factory=Drill):
     secrets_list = drill.secrets if drill else []
     report = drill.report if drill else {"drill": "persona whole-install restore drill", "services_started": False}
 
+    def reason_text():
+        text = redact("; ".join(reasons), secrets_list, root)
+        return text if not leaked(text, secrets_list, root) else "a reason was withheld: it would have named a secret"
+
     def render():
-        reason = redact("; ".join(reasons), secrets_list, root) or None
-        report.update(verdict=verdict, reason=reason, cleanup=cleanup, seconds=round(time.monotonic() - started, 3))
+        report.update(verdict=verdict, reason=reason_text() or None, cleanup=cleanup,
+                      seconds=round(time.monotonic() - started, 3))
         text = json.dumps(report, indent=2, sort_keys=True)
         if leaked(text, secrets_list, root):
             fail("the report would have contained a secret or a path of the drill; withheld")
-            text = json.dumps({"verdict": verdict, "reason": reasons[-1], "cleanup": cleanup}, indent=2, sort_keys=True)
+            text = json.dumps({"verdict": verdict, "reason": reason_text(), "cleanup": cleanup}, indent=2, sort_keys=True)
         return text
     text = render()
     if args.report:
@@ -924,7 +946,7 @@ def main(argv=None, out=sys.stdout, drill_factory=Drill):
             with os.fdopen(fd, "w") as output:
                 output.write(text + "\n")
     print(text, file=out)
-    shown = report.get("reason") or (reasons[-1] if reasons else "")
+    shown = reason_text()
     print(f"{verdict} backup restore drill ({time.monotonic() - started:.1f}s, exit {code})" + (f": {shown}" if shown else ""),
           file=out, flush=True)
     return code

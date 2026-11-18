@@ -305,6 +305,13 @@ class ArgumentSafetyTests(unittest.TestCase):
         else:
             self.skipTest("/bin/sh is statically linked here")
 
+    def test_other_systems_are_refused_before_any_input_runs(self):
+        inputs = Inputs(self)
+        with mock.patch.object(drill.sys, "platform", "darwin"), \
+                mock.patch.object(drill, "check_pg_bin", side_effect=AssertionError("must not run --pg-bin")):
+            with self.assertRaisesRegex(drill.UsageError, "Linux"):
+                drill.parse_arguments(inputs.argv())
+
     def test_pg_bin_needs_every_program_of_one_major_version(self):
         inputs = Inputs(self)
         self.assertEqual(drill.parse_arguments(inputs.argv()).pg_bin, inputs.pg_bin)
@@ -505,6 +512,13 @@ class ProcessTests(unittest.TestCase):
             self.fail("a finished step's background child is still running")
         self.assertEqual(processes.live, {})
 
+    def test_a_process_that_will_not_stop_makes_cleanup_incomplete(self):
+        processes = drill.Processes()
+        with mock.patch.object(drill, "kill_group_members", return_value=True):
+            processes.run(["/bin/true"], env=drill.minimal_environment(), timeout=10)
+        self.assertEqual(processes.live, {})
+        self.assertFalse(processes.stop_all())
+
     def test_deadline(self):
         now = [0.0]
         deadline = drill.Deadline(10, clock=lambda: now[0])
@@ -653,6 +667,31 @@ class DrillFlowTests(unittest.TestCase):
         self.assertIn("SIGTERM during cleanup", run.report["reason"])
         self.assert_cleaned(run)
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+
+    def test_a_signal_during_a_failed_runs_cleanup_is_reported(self):
+        class Signalled(FakeDrill):
+            def cleanup(self):
+                os.kill(os.getpid(), signal.SIGTERM)
+                return super().cleanup()
+        run = Run(self, "--inject", "kb-drift", factory=Signalled)
+        self.assertEqual(run.code, 128 + signal.SIGTERM)
+        self.assertIn("knowledge base differs", run.report["reason"])
+        self.assertIn("SIGTERM during cleanup", run.report["reason"])
+        self.assert_cleaned(run)
+
+    def test_a_first_signal_while_an_outcome_is_handled_still_ends_in_cleanup_and_a_verdict(self):
+        class Signalling(drill.DrillFailure):
+            def __str__(self):
+                os.kill(os.getpid(), signal.SIGTERM)  # the handler raises at the next bytecode, inside the except
+                return "a check failed"
+
+        class Failing(FakeDrill):
+            def offline_checks(self):
+                raise Signalling()
+        run = Run(self, factory=Failing)
+        self.assertEqual(run.code, 128 + signal.SIGTERM)
+        self.assertEqual(run.report["verdict"], "INTERRUPTED")
+        self.assert_cleaned(run)
 
     def test_a_report_that_cannot_be_written_is_a_failure_everywhere(self):
         directory = Path(tempfile.mkdtemp(prefix="drill-report-"))
