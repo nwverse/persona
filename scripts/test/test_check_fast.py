@@ -836,7 +836,8 @@ class CheckFastServerInputsTests(unittest.TestCase):
 
     @needs_go
     def test_a_test_only_change_runs_its_package_alone(self):
-        # No importer compiles a package's _test.go files or reads its testdata/: base runs without the 6 that import it.
+        # No importer compiles a package's _test.go files or its testdata/, and no other package's tests read this
+        # testdata/: base runs without the 6 that import it.
         self.write_graph()
         self.write("server/internal/base/base.go",
                    'package base\n\nimport _ "embed"\n\n//go:embed testdata/embedded.json\nvar embedded string\n')
@@ -856,6 +857,37 @@ class CheckFastServerInputsTests(unittest.TestCase):
         out, packages = self.check_fast()
         self.assertEqual(["./cmd/tool", "./internal/base", "./internal/base/leaf", "./internal/mid", "./internal/top",
                           "./internal/user", "./internal/xuser"], packages, out)
+
+    @needs_go
+    def test_a_fixture_change_also_runs_the_packages_whose_tests_read_it(self):
+        # Tests read other packages' fixtures by relative path: leaf (a subpackage, ../testdata), mid (a sibling,
+        # filepath.Join elements) and cmd/tool (a path string) read base's. Each runs alone, as base does: their code
+        # did not change, so top, user, xuser and above stay out. A comment naming the fixtures is no reader, nor is a
+        # test reading another directory whose name ends in "base".
+        self.write_graph()
+        self.write("server/internal/base/testdata/cases/one.json", "{}\n")
+        self.write("server/internal/base/leaf/leaf_test.go", 'package leaf\n\nconst dir = "../testdata/cases"\n')
+        self.write("server/internal/mid/mid_test.go",
+                   'package mid\n\nvar dir = filepath.Join("..", "base", "testdata", "cases")\n')
+        self.write("server/cmd/tool/tool_test.go",
+                   'package main\n\nconst one = "../../internal/base/testdata/cases/one.json"\n')
+        self.write("server/internal/top/top_test.go", 'package top\n\n// Unlike "../base/testdata/cases", ...\n')
+        self.write("server/internal/xuser/data_test.go", 'package xuser\n\nconst dir = "../database/testdata"\n')
+        self.commit_base()
+        self.write("server/internal/base/testdata/cases/one.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual(["./cmd/tool", "./internal/base", "./internal/base/leaf", "./internal/mid"], packages, out)
+        self.assertIn("check-fast: server packages changed: ./internal/base\n", out)
+        self.assertIn("check-fast: server packages reading their testdata: ./cmd/tool ./internal/base/leaf "
+                      "./internal/mid\n", out)
+        self.assertNotIn("packages importing them", out)
+        # A _test.go change reaches no other package: base alone.
+        self.go_log.unlink()
+        self.git("checkout", "--", "server/internal/base/testdata/cases/one.json")
+        self.write("server/internal/base/base_test.go", "package base\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/base"], packages, out)
+        self.assertNotIn("reading their testdata", out)
 
     @needs_go
     def test_a_test_only_change_keeps_the_importers_another_change_reaches(self):

@@ -29,7 +29,10 @@
 #                              enclosing one (embedded files, testdata/); internal/, cmd/ and plugins/ alike, and a
 #                              subpackage never pulls in its parent's other subpackages. A package whose changes are
 #                              all test-only (_test.go files, testdata/ files its code does not embed) runs alone: no
-#                              importer compiles them. A removed package's importers that still name it run too.
+#                              importer compiles them. Such a testdata/ file also runs, each alone, the packages whose
+#                              _test.go names that testdata/ by relative path (../screen/testdata from a sibling,
+#                              ../testdata from a subpackage; fixture_readers). A removed package's importers that
+#                              still name it run too.
 #                              Files no package encloses (go.mod, go.sum): go build ./...
 #                              When go list fails: go test ./...
 #   sdk/go/**                  the same inside the sdk/go module; files no package there encloses: go test ./... there
@@ -681,12 +684,36 @@ else
   done <<< "$CHANGED"
 fi
 
-# server_readers prints the package directory (relative to server/) of each server _test.go that matches the extended regex $1
-# outside a // comment line. Finding them at run time keeps a new reader mapped without an edit here.
-server_readers() {
-  git grep -nE "$1" -- 'server/*_test.go' 2>/dev/null \
+# test_readers <module dir> <git pathspec> <extended regex> prints the directory (relative to the module) of each file
+# the pathspec names that matches the regex outside a // comment line. Finding them at run time keeps a new reader
+# mapped without an edit here.
+test_readers() {
+  git grep -nE "$3" -- "$2" 2>/dev/null \
     | grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' | cut -d: -f1 | sort -u \
-    | while IFS= read -r _file; do _dir=$(dirname "$_file"); printf '%s\n' "${_dir#server/}"; done | sort -u
+    | while IFS= read -r _file; do _dir=$(dirname "$_file"); printf '%s\n' "${_dir#"$1"/}"; done | sort -u
+}
+
+# server_readers prints the package directory (relative to server/) of each server _test.go that matches the extended
+# regex $1 outside a // comment line.
+server_readers() {
+  test_readers server 'server/*_test.go' "$1"
+}
+
+# fixture_readers <module dir> <dir> prints the directory (relative to the module) of each _test.go file in the module
+# that names <dir>/testdata (<dir> relative to the module): by the last element of <dir> from anywhere in the module
+# ("../screen/testdata/x.txt", filepath.Join("..", "screen", "testdata")), or as ../testdata from under <dir>
+# ("../testdata/wire", filepath.Join("..", "..", "testdata")). That is how one package's tests read another's
+# fixtures, so a fixture change runs those packages too. A file that names another directory with the same last
+# element also counts: one package too many runs, none is missed.
+fixture_readers() {
+  local _base _up='\.\./testdata|"\.\.", *"testdata"'
+  if [ "$2" = . ]; then
+    test_readers "$1" "$1/*/*_test.go" "$_up"
+    return
+  fi
+  _base=$(printf '%s' "${2##*/}" | sed 's/[][\.^$*+?(){}|]/\\&/g')
+  { test_readers "$1" "$1/*_test.go" "(^|[/\"])$_base/testdata|\"$_base\", *\"testdata\""
+    test_readers "$1" "$1/$2/*/*_test.go" "$_up"; } | sort -u
 }
 
 # Repository inputs that server tests read (the extra paths in server-test.yml's filter): a change to one also runs go
@@ -734,13 +761,16 @@ fi
 #                             do. A test-only import goes no further: no other package compiles those test files.
 #                             For the same reason a package whose changes are all test-only (_test.go files, files
 #                             under testdata/ that its code does not embed) selects no importers.
+#   reader ./internal/qux     a package whose tests name the testdata/ directory of such a test-only change
+#                             (fixture_readers): tests read another package's fixtures by relative path. It runs
+#                             alone too: its code did not change.
 #   gone internal/baz         the directory of a changed .go file that is no package here: removed, or excluded by
 #                             build constraints on this platform. The packages that still import it are selected.
 #   unowned go.sum            a changed file that no package encloses, and the module's go.mod and go.sum
 # A subpackage's change selects its parent only when the parent imports it, never the parent's other subpackages. It
 # returns 1 when go list fails or times out; its stderr and exit code are kept in $WORK/go-list.<module>.err.
 go_select() {
-  local _dir=$1 _changed=$2 _mod _list _rc
+  local _dir=$1 _changed=$2 _mod _list _rc _fx
   _list="$WORK/go-list.$(printf '%s' "$_dir" | tr '/' '-')"
   _mod=$(awk '$1 == "module" { gsub(/"/, "", $2); print $2; exit }' "$_dir/go.mod" 2>/dev/null)
   if [ -z "$_mod" ]; then
@@ -780,9 +810,14 @@ go_select() {
       }
       while (1) {
         if (path(d) in pkg) {
-          # testdata/ is read by the tests of that package alone, unless its code embeds the file (EmbedFiles, relative).
+          # A file under testdata/ is test-only unless the code of the package embeds it (EmbedFiles, relative to
+          # the package): no importer builds it. Tests of other packages may read it, though; fixture names the
+          # directory that holds that testdata/ (no package path has a testdata element, so it lies below d).
           f = (d == ".") ? $0 : substr($0, length(d) + 2)
-          own(path(d), ("/" f) ~ /\/testdata\// && !((path(d) "|" f) in embed))
+          t = index("/" $0, "/testdata/")
+          fx = t > 0 && !((path(d) "|" f) in embed)
+          own(path(d), fx)
+          if (fx) print "fixture " (t == 1 ? "." : substr($0, 1, t - 2))
           next
         }
         if (d == ".") break
@@ -806,7 +841,18 @@ go_select() {
         for (j = 1; j <= m; j++) if (!(a[j] in hit)) print "importer " rel(a[j])
       }
       for (d in gone) print "gone " d
-    }' "$_list" "$_changed" | LC_ALL=C sort -u
+    }' "$_list" "$_changed" > "$_list.sel"
+  # The packages whose tests read a changed fixture, unless already selected; each a package of this module.
+  sed -n 's/^fixture //p' "$_list.sel" | LC_ALL=C sort -u \
+    | while IFS= read -r _fx; do fixture_readers "$_dir" "$_fx"; done \
+    | awk -v mod="$_mod" '
+        FILENAME == ARGV[1] { sub(/\|.*/, ""); pkg[$0] = 1; next }
+        FILENAME == ARGV[2] { if ($1 == "changed" || $1 == "importer") sel[$2] = 1; next }
+        $0 != "" {
+          r = ($0 == ".") ? "." : "./" $0
+          if (((($0 == ".") ? mod : mod "/" $0) in pkg) && !(r in sel)) print "reader " r
+        }' "$_list" "$_list.sel" - > "$_list.readers"
+  { grep -v '^fixture ' "$_list.sel"; cat "$_list.readers"; } | LC_ALL=C sort -u
 }
 
 # go_kind <kind> <go_select output> prints that kind's values on one line, space-separated.
@@ -830,9 +876,10 @@ go_pick() {
   go_select "$_dir" "$_changed" > "$_sel" || return 1
   _line=$(go_kind changed "$_sel"); [ -n "$_line" ] && echo "check-fast: $_label packages changed: $_line"
   _line=$(go_kind importer "$_sel"); [ -n "$_line" ] && echo "check-fast: $_label packages importing them: $_line"
+  _line=$(go_kind reader "$_sel"); [ -n "$_line" ] && echo "check-fast: $_label packages reading their testdata: $_line"
   _line=$(go_kind gone "$_sel")
   [ -n "$_line" ] && echo "check-fast: $_label has no package here for $_line (removed, or not built on this platform)"
-  awk '$1 == "changed" || $1 == "importer" { print $2 }' "$_sel" >> "$_out"
+  awk '$1 == "changed" || $1 == "importer" || $1 == "reader" { print $2 }' "$_sel" >> "$_out"
   if grep -q '^unowned ' "$_sel"; then return 2; fi
   return 0
 }
