@@ -86,10 +86,19 @@ private val CJK_SCRIPTS = setOf(Character.UnicodeScript.HAN, Character.UnicodeSc
 private fun isCjkLetter(point: Int): Boolean =
     Character.isLetter(point) && Character.UnicodeScript.of(point) in CJK_SCRIPTS
 
+private fun ASTNode.codeAt(offset: Int): ASTNode? {
+    if (type == MarkdownElementTypes.CODE_SPAN && startOffset == offset) return this
+    return children.firstOrNull { offset >= it.startOffset && offset < it.endOffset }?.codeAt(offset)
+}
+
 /** The Markdown renderer still owns the enclosing link. Only unlinked code gets a Copy action. */
-internal fun copyingCode(ink: Color, copy: ((String) -> Unit)?): MarkdownAnnotator = markdownAnnotator { content, child ->
+internal fun copyingCode(root: ASTNode?, ink: Color, copy: ((String) -> Unit)?): MarkdownAnnotator = markdownAnnotator { content, child ->
     if (child.type != MarkdownElementTypes.CODE_SPAN) return@markdownAnnotator false
-    val ancestors = generateSequence(child.parent) { it.parent }
+    // The renderer copies link labels into a detached tree. Recover their original context by source offset.
+    val original = if (root != null && generateSequence(child) { it.parent }.last() !== root) {
+        root.codeAt(child.startOffset) ?: child
+    } else child
+    val ancestors = generateSequence(original.parent) { it.parent }
     val link = ancestors.firstOrNull { it.type in LINKS }
     val customInk = ancestors.any { it.type == MarkdownElementTypes.BLOCK_QUOTE || it.type == GFMElementTypes.HIGHLIGHT }
     val style = SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.94.em,

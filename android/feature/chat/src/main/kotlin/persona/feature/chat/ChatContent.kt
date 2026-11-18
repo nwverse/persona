@@ -48,6 +48,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.model.markdownAnimations
 import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
+import com.mikepenz.markdown.model.State as MarkdownResult
 import persona.core.contracts.Item
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatRepository
@@ -143,7 +144,10 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     val codeInk = if (color == palette.ink) palette.replyCodeInk else Color.Unspecified
     // …except in a message whose words "Select" has selected in place: a tap there is the selection's (#4210).
     val selecting = LocalSelectionAbove.current
-    val annotator = remember(codeInk, copy, selecting) { copyingCode(codeInk, if (selecting) null else { words: String -> copy(words, null) }) }
+    val root = (parsed as? MarkdownResult.Success)?.node
+    val annotator = remember(root, codeInk, copy, selecting) {
+        copyingCode(root, codeInk, if (selecting) null else { words: String -> copy(words, null) })
+    }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         if (parsed == null) ChatLinkText(text, Modifier.fillMaxWidth(), bodyStyle.copy(color = color))
         else Markdown(parsed!!, modifier = Modifier.fillMaxWidth(), imageTransformer = rememberMathImages(color, bodyStyle),

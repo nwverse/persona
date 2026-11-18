@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -35,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
+import com.mikepenz.markdown.model.State as MarkdownResult
+import com.mikepenz.markdown.model.parseMarkdown
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -140,7 +143,7 @@ class ReplyBlocksShotsTest {
         val copied = mutableListOf<String>()
         val ink = Color.DarkGray
         val source = "漢${code}字、カ${code}な、한${code}글、ㄅ${code}ㄆ、𠀀${code}字、x${code}y、 $code 。"
-        val result = source.buildMarkdownAnnotatedString(TextStyle.Default, codeSettings(ink) { copied += it })
+        val result = annotatedCode(source, ink) { copied += it }
         assertEquals("漢\u2009cmd\u2009字、カ\u2009cmd\u2009な、한\u2009cmd\u2009글、ㄅ\u2009cmd\u2009ㄆ、𠀀\u2009cmd\u2009字、xcmdy、 cmd 。", result.text)
         val spans = result.spanStyles.filter { it.item.fontFamily == FontFamily.Monospace }
         assertEquals(7, spans.size)
@@ -159,9 +162,9 @@ class ReplyBlocksShotsTest {
     @Test fun linkedCodeKeepsTheOuterLinkAndSelectionDisablesCopy() {
         val code = "`docs/guide.md`"
         val source = PathLinks.markdown("看${code}吧，另见 [${code}](https://example.com/guide)。", setOf("docs/guide.md"))
-        val result = source.buildMarkdownAnnotatedString(TextStyle.Default, codeSettings(Color.DarkGray) {
+        val result = annotatedCode(source, Color.DarkGray) {
             error("Linked code must open its target")
-        })
+        }
         assertEquals("看\u2009docs/guide.md\u2009吧，另见 docs/guide.md。", result.text)
         val urls = result.getLinkAnnotations(0, result.length).map { it.item as LinkAnnotation.Url }
         assertEquals(listOf("docs/guide.md"), urls.mapNotNull { PathLinks.pathOf(it.url) })
@@ -169,15 +172,19 @@ class ReplyBlocksShotsTest {
         assertTrue(urls.all { it.styles?.style?.color == Color.Blue })
         assertEquals(listOf(Color.Unspecified, Color.Unspecified),
             result.spanStyles.filter { it.item.fontFamily == FontFamily.Monospace }.map { it.item.color })
-        val selected = code.buildMarkdownAnnotatedString(TextStyle.Default, codeSettings(Color.Unspecified))
+        val selected = annotatedCode(code, Color.Unspecified)
         assertEquals("docs/guide.md", selected.text)
         assertTrue(selected.getLinkAnnotations(0, selected.length).isEmpty())
     }
 
-    private fun codeSettings(ink: Color, copy: ((String) -> Unit)? = null) = DefaultAnnotatorSettings(
-        linkTextSpanStyle = TextLinkStyles(SpanStyle(color = Color.Blue)),
-        codeSpanStyle = SpanStyle(background = Color.Yellow),
-        annotator = copyingCode(ink, copy),
-        highlightSpanStyle = SpanStyle(),
-    )
+    private fun annotatedCode(source: String, ink: Color, copy: ((String) -> Unit)? = null): AnnotatedString {
+        val parsed = parseMarkdown(source) as MarkdownResult.Success
+        val settings = DefaultAnnotatorSettings(
+            linkTextSpanStyle = TextLinkStyles(SpanStyle(color = Color.Blue)),
+            codeSpanStyle = SpanStyle(background = Color.Yellow),
+            annotator = copyingCode(parsed.node, ink, copy),
+            highlightSpanStyle = SpanStyle(),
+        )
+        return source.buildMarkdownAnnotatedString(parsed.node.children.first(), TextStyle.Default, settings)
+    }
 }
