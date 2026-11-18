@@ -74,12 +74,20 @@ export function withModeChanges(rows: readonly ChatDayRow[], changes: readonly M
   return out;
 }
 
-/** Loads a session's changes into `set` now and once more shortly after (the manager writes a change as the node
- *  answers, which can be a moment after the session's row says the new mode), until `signal` ends. No changes, or the
- *  same answer again, keeps what `set` holds; a failure (an older hub, a refused token, offline) changes nothing. `kit` is this
- *  module as ChatView loaded it, kept with the changes to merge and draw them. */
-export function watchModeChanges(mid: string, sid: string, signal: AbortSignal, kit: ModeChanges["kit"], set: (update: (prev?: ModeChanges) => ModeChanges | undefined) => void): void {
+/** The mode key each chat's changes were last read for (`watchModeChanges`), while the page lives. */
+const readFor = new Map<string, string>();
+
+/** Loads a session's changes into `set` (#10297), until `signal` ends. ChatView asks when an Agent's chat opens and when
+ *  its mode or a waiting restart changes (`modeKey`), never on a timer, a refresh or the page coming back: one request.
+ *  After a change of mode it looks once more 2 s later, since the manager records the change as the node answers, which
+ *  can be a moment after the session's row says the new mode. No changes, or the same answer again, keeps what `set`
+ *  holds; a failure (an older hub, a refused token, offline) changes nothing. `kit` is this module as ChatView loaded
+ *  it, kept with the changes to merge and draw them. */
+export function watchModeChanges(mid: string, sid: string, modeKey: string, signal: AbortSignal, kit: ModeChanges["kit"],
+  set: (update: (prev?: ModeChanges) => ModeChanges | undefined) => void): void {
   const scope = `${mid}/${sid}`;
+  const before = readFor.get(scope);
+  readFor.set(scope, modeKey);
   const load = () => void api<unknown>(`${sessionPath(mid, sid)}/mode-changes`, { signal })
     .then((body) => {
       if (signal.aborted) return;
@@ -92,6 +100,7 @@ export function watchModeChanges(mid: string, sid: string, signal: AbortSignal, 
     })
     .catch(() => {});
   load();
-  const again = window.setTimeout(load, 2000);
-  signal.addEventListener("abort", () => window.clearTimeout(again));
+  if (before === undefined || before === modeKey) return;
+  const again = setTimeout(load, 2000);
+  signal.addEventListener("abort", () => clearTimeout(again));
 }

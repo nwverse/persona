@@ -1,10 +1,14 @@
 // Permission mode change lines in an Agent's chat (#10297): each change among the rows at its time, worded by kind,
 // keys that survive the list growing or losing its oldest entry.
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatLine, Segment } from "../../lib/turns";
+
+const api = vi.hoisted(() => vi.fn(async (_path: string, _opts?: unknown) => ({ changes: [] })));
+vi.mock("../../lib/api", async (orig) => ({ ...(await orig<object>()), api }));
 import type { ChatDayRow } from "./day-dividers";
 import { modeChangeLabel, ModeChangeDivider } from "./ModeChangeDivider";
+import * as kit from "./mode-changes";
 import { modeChangesOf, withModeChanges, type ModeChange } from "./mode-changes";
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 18, 9, min)).toISOString();
@@ -72,5 +76,22 @@ describe("ModeChangeDivider", () => {
     expect(html).toContain('role="separator"');
     expect(html).toContain('data-mode-change="set"');
     expect(html).not.toContain("<button");
+  });
+});
+
+describe("watchModeChanges", () => {
+  afterEach(() => { vi.useRealTimers(); api.mockClear(); });
+
+  it("asks once when a chat opens or is shown again, twice only after its mode changed", async () => {
+    vi.useFakeTimers();
+    const look = (key: string) => kit.watchModeChanges("m", "s-count", key, new AbortController().signal, kit, () => {});
+    look("default|false"); // opened
+    look("default|false"); // shown again, the page back in front, a re-render: the same mode
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(api).toHaveBeenCalledTimes(2);
+    look("bypassPermissions|false"); // the mode changed: now and once more 2 s later
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(api).toHaveBeenCalledTimes(4);
+    expect(api.mock.calls.every((c) => String(c[0]).endsWith("/mode-changes"))).toBe(true);
   });
 });

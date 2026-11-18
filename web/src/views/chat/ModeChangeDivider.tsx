@@ -1,6 +1,7 @@
 // A permission mode change in an Agent's chat (#10297, mode-changes.ts): a hairline across the chat with what happened
-// in the middle, as the compaction divider draws (Steps.tsx CompactDivider); words that wrap have no hairlines. Not a
-// control: there is nothing to open.
+// in the middle, as the compaction divider draws (Steps.tsx CompactDivider); words that would not leave 16 px of rule
+// each side have none. Not a control: there is nothing to open.
+import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { clock } from "../../lib/format";
 import { listedModeOption, listedModesOf, modeTitle } from "../../lib/session-actions";
@@ -43,15 +44,35 @@ export function modeChangeLabel(c: ModeChange, session?: Session): string {
   return from && from !== to ? t("chat-modes.changed_from", { who: who(c), from, to }) : t("chat-modes.changed_to", { who: who(c), to });
 }
 
+/** The hairlines' least width and the gaps beside them (16 px each, `min-w-4`; `gap-3`). */
+const RULE = 16;
+const GAP = 12;
+
 export function ModeChangeDivider({ change, session }: { change: ModeChange; session?: Session }) {
   const label = modeChangeLabel(change, session);
+  const box = useRef<HTMLDivElement>(null);
+  const words = useRef<HTMLSpanElement>(null);
+  // Hairlines only where the words fit on one line with at least 16 px of rule each side: rules a pixel or two long read
+  // as dots, and rules beside the first of two lines read as crooked (the owner, 2026-11-18). Measured on the words set
+  // on one line out of sight, so drawing the rules or not never changes what is measured.
+  const [rules, setRules] = useState(true);
+  useLayoutEffect(() => {
+    const el = box.current, w = words.current;
+    if (!el || !w) return;
+    // the words' width unrounded and a pixel to spare: a fraction over the room still wraps
+    const fit = () => setRules(Math.ceil(w.getBoundingClientRect().width) + 1 + 2 * (RULE + GAP) <= el.clientWidth);
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(fit);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [label]);
   return (
-    <div role="separator" aria-label={label} title={clock(change.at) || undefined} className="flex min-w-0 items-center gap-3 py-1 text-submeta text-ink-3" data-mode-change={change.kind}>
-      {/* The words wrap rather than cut (on a phone the restart's "once this turn ends" is what matters); the hairlines
-          only take the room the words leave, so a line that wraps has none instead of rules off its middle. */}
-      <span aria-hidden className="h-px min-w-0 flex-1 bg-line-strong" />
-      <span className="text-center">{label}</span>
-      <span aria-hidden className="h-px min-w-0 flex-1 bg-line-strong" />
+    <div ref={box} role="separator" aria-label={label} title={clock(change.at) || undefined} className="relative flex min-w-0 items-center justify-center gap-3 py-1 text-submeta text-ink-3" data-mode-change={change.kind}>
+      {rules && <span aria-hidden className="h-px min-w-4 flex-1 bg-line-strong" />}
+      <span className={rules ? "whitespace-nowrap" : "text-center"}>{label}</span>
+      {rules && <span aria-hidden className="h-px min-w-4 flex-1 bg-line-strong" />}
+      <span ref={words} aria-hidden className="pointer-events-none invisible absolute top-0 left-0 whitespace-nowrap">{label}</span>
     </div>
   );
 }

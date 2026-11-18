@@ -1286,16 +1286,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }),
     [lines, dayTaken],
   );
-  // the permission mode changes the hub recorded (#10297), each among the rows at its time, read again when the mode or a
-  // waiting restart changes; their code and words load with an Agent's chat (mode-changes.ts). While older history is
+  // the permission mode changes the hub recorded (#10297), each among the rows at its time, read when the chat opens and
+  // when its mode or a waiting restart changes, nothing else; their code and words load with an Agent's chat. While older history is
   // still to load (or sits in an earlier engine's stretch), a change from before the first loaded item waits for it.
   const [modes, setModes] = useState<ModeChanges>();
+  const modeKey = `${session?.permission_mode}|${session?.bypass_pending}`;
   useEffect(() => {
     if (assistant) return;
     const ctl = new AbortController();
-    void import("./mode-changes").then((kit) => kit.watchModeChanges(mid, sid, ctl.signal, kit, setModes), () => {});
+    void import("./mode-changes").then((kit) => kit.watchModeChanges(mid, sid, modeKey, ctl.signal, kit, setModes), () => {});
     return () => ctl.abort();
-  }, [mid, sid, assistant, session?.permission_mode, session?.bypass_pending]);
+  }, [mid, sid, assistant, modeKey]);
   const chatRows: ChatRowWithModes[] = useMemo(
     () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
     [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],

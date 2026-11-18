@@ -646,9 +646,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
   device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
   restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
-  colon. The words wrap rather than cut, and the hairlines only take the room the words leave, so a line that wraps has
-  none (the owner found rules beside the first of two lines crooked, 2026-11-18). The web loads its code and words
-  (`chat-modes`) with an Agent's chat, off the first screen.
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
+  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
+  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
+  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
+  or the app back in front.
 
 ### 3.3 Cards and surfaces
 

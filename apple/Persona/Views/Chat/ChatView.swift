@@ -232,8 +232,10 @@ struct ChatView: View {
     /// The right-edge navigator while a finger is on it (new conversation layout, `ChatEdgeScrub`).
     @State private var scrub = EdgeScrubState()
     @State private var userInputIndex: (key: SessionKey, index: ChatUserInputIndex)?
-    /// The permission mode changes the hub recorded for an Agent's chat (#10297, `loadModeChanges`), by session.
+    /// The permission mode changes the hub recorded for an Agent's chat (#10297, `loadModeChanges`), by session, and
+    /// the chat and mode they were last read for.
     @State private var modeChanges: (key: SessionKey, changes: [APIClient.ModeChange])?
+    @State private var modeChangesRead: String?
     @State private var navigationJump: EdgeMark?
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
@@ -2328,7 +2330,8 @@ struct ChatView: View {
                     .tabActiveTask(id: "\(shownKey)|\(store.resets)|\(lastPromptID ?? "")") {
                         await loadUserInputIndex()
                     }
-                    .tabActiveTask(id: "\(shownKey)|\(session?.permissionMode ?? "")") {
+                    // not `tabActiveTask`: the app coming back to the front asks nothing (#10297)
+                    .task(id: "\(shownKey)|\(session?.permissionMode ?? "")") {
                         await loadModeChanges()
                     }
                     .tabActiveTask(id: navigationJump) {
@@ -2485,15 +2488,20 @@ struct ChatView: View {
         }
     }
 
-    /// An Agent's chat reads its permission mode changes when it opens and when the mode changes, and once more shortly
-    /// after (the manager records a change as the node answers, which can be a moment after the row says the new mode).
-    /// Off the main actor; a failure (an older hub, offline) keeps what there was. Persona's own conversations have none.
+    /// An Agent's chat reads its permission mode changes when it opens and when its mode changes, nothing else: not on a
+    /// timer, a refresh, the page shown again or the app back in front (one request; the energy lane counts them). After a
+    /// change of mode it looks once more 2 s later: the manager records the change as the node answers, which can be a
+    /// moment after the row says the new mode. Off the main actor; a failure (an older hub, offline) keeps what there was
+    /// and asks again next time. Persona's own conversations have none.
     private func loadModeChanges() async {
         guard style == .dev, let api = model.api(shownKey.group) else { return }
-        let key = shownKey
-        for wait in [0, 2] {
+        let key = shownKey, read = "\(key)|\(session?.permissionMode ?? "")"
+        guard modeChangesRead != read else { return }
+        let modeChanged = modeChangesRead?.hasPrefix("\(key)|") == true
+        for wait in modeChanged ? [0, 2] : [0] {
             if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
             guard !Task.isCancelled, let changes = try? await api.modeChanges(key), !Task.isCancelled, shownKey == key else { continue }
+            modeChangesRead = read
             // none (most chats), or the same again: nothing to draw again
             if changes.isEmpty && modeChanges?.key != key { continue }
             if modeChanges?.key == key && modeChanges?.changes == changes { continue }

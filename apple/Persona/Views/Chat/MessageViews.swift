@@ -853,8 +853,9 @@ nonisolated enum ModeChangeWords {
 }
 
 /// A permission mode change in an Agent's chat (#10297, `ChatLines.mergeModeChanges`): rules either side of a line of
-/// words, as the compaction divider draws (`CompactDivider`), but not a control. The words wrap rather than cut; the
-/// rules only take the room the words leave, so a line that wraps has none instead of rules off its middle.
+/// words, as the compaction divider draws (`CompactDivider`), but not a control. Rules only where the words fit on one
+/// line with at least `Theme.Space.l` of rule each side; otherwise the words alone, wrapped and centered: rules a point
+/// or two long read as dots, and rules beside the first of two lines read as crooked (the owner, 2026-11-18).
 struct ModeChangeLine: View {
     var change: APIClient.ModeChange
     var session: Session?
@@ -863,21 +864,24 @@ struct ModeChangeLine: View {
         let beautiful = AppStyle.current.usesBeautifulUI
         return Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator))
             .frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
-            .frame(maxWidth: .infinity)
+            .frame(minWidth: Theme.Space.l, maxWidth: .infinity)
     }
 
     var body: some View {
         let label = ModeChangeWords.label(change, session: session)
-        HStack(spacing: Theme.Space.s) {
-            rule
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Space.s) {
+                rule
+                Text(label).lineLimit(1).fixedSize()
+                rule
+            }
             Text(label)
-                .font(Theme.Font.label)
-                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-            rule
+                .frame(maxWidth: .infinity)
         }
+        .font(Theme.Font.label)
+        .foregroundStyle(.secondary)
         .padding(.vertical, Theme.Space.s)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
