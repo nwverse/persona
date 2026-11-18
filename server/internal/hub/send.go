@@ -381,8 +381,9 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			h.conversationSent(m.cfg.ID, sid, f.status, f.body, outcome)
 		}
 		if assistantConv && (outcome == sendUnknown || f.status >= http.StatusInternalServerError) && asSent != nil {
-			// Nothing was typed, or the connection ended before the outcome was known: the manager keeps the message and
-			// sends it again only after its landed-check, and the app is told it is kept (#10194, #10503).
+			// Nothing was typed, or the connection ended before the outcome was known: the manager keeps the message,
+			// sends it again in the first case and only looks for it in the second (the owner decides when it is not
+			// found), and the app is told it is kept (#10194, #10503, #10669).
 			keepCode := errorCodeOf(f.body)
 			if outcome == sendUnknown {
 				keepCode = assistantwire.CodeDeliveryUnknown

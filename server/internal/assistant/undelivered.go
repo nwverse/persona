@@ -519,10 +519,10 @@ func (s *Service) undeliveredLook(id string, k keptMessage) bool {
 		return true
 	}
 	now := time.Now().UTC()
-	failed, owners := false, false
+	failed, retried := false, false
 	err := s.updateKeptLocked(id, k.ID, func(m *keptMessage) {
-		if !m.inDoubt() || m.State != proto.UndeliveredWaiting {
-			owners = true // the owner's Retry came meanwhile: it goes now
+		if !m.inDoubt() {
+			retried = true // the owner's Retry came meanwhile: it goes now
 			return
 		}
 		if m.LookUntil.IsZero() {
@@ -545,7 +545,7 @@ func (s *Service) undeliveredLook(id string, k keptMessage) bool {
 	case failed:
 		s.logf("undelivered: a kept message to %s whose try was in doubt is not in the conversation; the owner decides", short(id))
 	}
-	return failed || owners
+	return failed || retried
 }
 
 func keptErrCode(err error) string {

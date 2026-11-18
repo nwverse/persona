@@ -1259,8 +1259,8 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Kept.** The hub hands such a message (a 5xx with nothing delivered, or a transport outcome whose delivery is
   unknown, with a `client_msg_id`) to the conversation's manager, `assistant.keep_undelivered`, with the app's own fields
   (`text`, `images`, `launcher`, `model`, `effort`), never what `assistant.send_params` added. An unknown first attempt
-  is marked `delivery_unknown` and carries `tried_at`, the original send's start, so the manager looks for it before
-  trying again rather than either dropping it or resending blindly. The manager keeps it in its Postgres (setting `assistant.undelivered`,
+  is marked `delivery_unknown` and carries `tried_at`, the original send's start: the manager only looks for it, never
+  sends it again by itself (below). The manager keeps it in its Postgres (setting `assistant.undelivered`,
   `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
   (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
   cannot keep it leaves the failure as before.
@@ -1273,14 +1273,27 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Sent by itself, once.** The manager tries again with backoff (15 s, 30 s, 1 min, 2 min, then every 5 min), at once
   when the conversation is seen running again on a session list, oldest first, one pass per conversation at a time.
   A try runs `SendParams` again (the live snapshot and the pick of now) and the node's `session.send` under the
-  message's own `client_msg_id`: the node sends an id once, and its transcript line is tied to the id, so the bubble
-  turns into the real line. A try that may have gone in (no answer in time, or the manager stopped during it) is
-  looked for in the conversation's latest turns first, by id, or by its words written since the try where the node
-  forgot the tie.
+  message's own `client_msg_id`: its transcript line is tied to the id, so the bubble turns into the real line. Before
+  each try the manager saves the try's start (`tried_at`); when that save fails, the try is not made and waits for the
+  next backoff step, so a manager stopped during a try always finds the mark. A try refused before anything was typed
+  (the process did not start, the computer is away) clears the mark and is tried again by itself.
+- **A try in doubt is never sent again by itself (#10669).** A try that may have gone in (no answer in time, the link
+  dropped, the manager stopped or restarted during it, or the hub's own first try unknown) cannot be settled by
+  sending again: the node remembers ids only in memory for ten minutes (`server/internal/node/sendsafe.go`), and the
+  transcript can be late or unreadable. Such a message is only looked for in the conversation's latest turns, by id,
+  or by its words written since the try where the node forgot the tie (it restarted), at 15 s, 45 s, 1 min 45 s and
+  3 min after the doubt began (`undeliveredLookFor`: long enough for a line a busy computer writes late or a read
+  that fails once, short enough that the owner hears within minutes). Found, it went in and leaves the list. Not
+  found by then (the transcript could not be read, a message of pictures alone has no words to know it by once the id
+  is forgotten, or it is not there), it is marked failed with "It may already have gone in. Check the conversation
+  before you retry", and the owner decides.
 - **In order.** While a conversation has kept messages, `assistant.send_params` answers `undelivered_ahead` for a newer
   owner message, and the hub keeps it behind them instead of letting it overtake.
 - **Gives up after a day.** A message not delivered within 24 hours is marked failed; the owner picks Retry (a new day
-  of tries) or Delete. A conversation that was deleted fails it at once.
+  of tries) or Delete. A conversation that was deleted fails it at once. Retry sends the message even after a try in
+  doubt (the owner looked and said so; a line found by a last look still counts as delivered), and a Retry that cannot
+  be saved answers an error and changes nothing. If the Retry's own try ends in doubt, it is again only looked for and
+  then left to the owner.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.

@@ -565,9 +565,9 @@ func TestUndeliveredLateLineIsFoundWithinTheLook(t *testing.T) {
 // owner's without words is not taken for it. It is not sent again; by the end of the look the owner decides.
 func TestUndeliveredPicturesOnlyInDoubtIsNotSentAgain(t *testing.T) {
 	s, f := newQuietServiceOn(t, &memStore{})
+	pictures := []any{map[string]any{"mime": "image/png", "data": "iVBORw0KGgo="}}
 	if _, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{MachineID: "server", SessionID: "conv1",
-		Params: map[string]any{"images": []any{map[string]any{"mime": "image/png", "data": "iVBORw0KGgo="}}, "client_msg_id": "msg-1"},
-		Human: true}); err != nil {
+		Params: map[string]any{"images": pictures, "client_msg_id": "msg-1"}, Human: true}); err != nil {
 		t.Fatal(err)
 	}
 	tryInDoubt(t, s, f, "msg-1")
