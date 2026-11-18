@@ -96,6 +96,52 @@ struct ModelSwitchTests {
         #expect(second == ["effort": "high"]) // an older caller's body is unchanged
     }
 
+    @Test func busyEffortReturnsThePendingChoice() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/sessions/box/s1/modes", json: #"{"ok":true,"pending_effort":"high"}"#)
+        let key = SessionKey(machineID: "box", sessionID: "s1")
+        #expect(try await hub.client.setModes(key, effort: "high") == "high")
+        let row = try session(#","effort":"low","pending_effort":"high","effort_change_failed":true"#)
+        #expect(row.effort == "low")
+        #expect(row.pendingEffort == "high")
+        #expect(row.effortChangeFailed == true)
+    }
+
+    @MainActor @Test func followUpsWaitForConfirmationAndGoInOrder() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/box/s1"
+        hub.on("POST", path + "/modes", json: #"{"ok":true,"pending_effort":"high"}"#)
+        hub.on("POST", path + "/messages", json: #"{"ok":true}"#)
+        let app = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        app.forgetRestoredForTests()
+        app.apiForTests = hub.client
+        app.linksUpForTests = true
+        let row = try session(#","effort":"low","agent":"claude""#, state: "working")
+        let key = row.key
+        app.applySessions([key.machineRef: [row]])
+
+        #expect(await app.setModes(key, effort: "high"))
+        #expect(app.latest(key)?.effort == "low")
+        #expect(app.latest(key)?.pendingEffort == "high")
+        #expect(app.sendNow(key, text: "first"))
+        #expect(app.sendNow(key, text: "second"))
+        #expect(app.chat(key).pending.map(\.state) == [.waiting, .waiting])
+        #expect(hub.sent("POST", path + "/messages").isEmpty)
+
+        var confirmed = row
+        confirmed.effort = "high"
+        app.applySessions([key.machineRef: [confirmed]])
+        for _ in 0..<300 where app.chat(key).pending.contains(where: { $0.state != .sent }) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let texts = try hub.sent("POST", path + "/messages").map { request in
+            let body = try #require(request.body)
+            return (try JSONSerialization.jsonObject(with: body) as? [String: Any])?["text"] as? String
+        }
+        #expect(texts == ["first", "second"])
+        #expect(app.chat(key).pending.map(\.state) == [.sent, .sent])
+    }
+
     /// "Other Model…" (#1644): a typed ID goes through …/modes like a listed one; the list it comes with is the
     /// session's launcher's.
     @Test func aTypedModelGoesThroughModes() async throws {

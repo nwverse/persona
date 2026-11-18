@@ -1498,10 +1498,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
 		return n.assistantGuestDelete(params)
 	case "session.modes":
-		if err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort); err != nil { // model: model_switch.go
+		pending, err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort)
+		if err != nil {
 			return nil, err
 		}
-		return n.modesAnswer(p.SessionID, p.PermissionMode), nil
+		answer := n.modesAnswer(p.SessionID, p.PermissionMode)
+		if pending {
+			answer["pending_effort"] = p.Effort
+		}
+		return answer, nil
 	case "assistant.compact": // the user compacting an assistant conversation, or the hub a meeting's room (assistant_compact.go)
 		return ok(n.assistantCompact(ctx, p.SessionID, p.OnlyRunning))
 	case "assistant.handoff": // what a new main conversation is told about the old one

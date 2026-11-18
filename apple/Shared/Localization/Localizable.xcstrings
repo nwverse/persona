@@ -31894,6 +31894,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't change thinking effort. Choose it again to send waiting messages." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't change thinking effort. Choose it again to send waiting messages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さを変更できませんでした。待機中のメッセージを送るには、もう一度選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更改思考强度。请重新选择，以发送等待中的消息。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
         "en" : {
@@ -70059,6 +70082,29 @@
           }
         }
       }
+    },
+    "Keep Current Effort" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Current Effort"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の思考の強さを維持"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留当前思考强度"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Terminals [Agent Follow-Up]" : {
       "extractionState" : "manual",
@@ -172352,6 +172398,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "思考 %1$lld"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort after this turn: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort after this turn: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このターンの後の思考の強さ：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本轮结束后的思考强度：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort change failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort change failed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さを変更できませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度更改失败"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort could not be confirmed. Choose it again before resending." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort could not be confirmed. Choose it again before resending."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さを確認できませんでした。再送信する前にもう一度選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认思考强度。请重新选择后再发送。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort will change after this turn." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort will change after this turn."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このターンが終わると、思考の強さが変わります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度将在本轮结束后更改。"
           }
         }
       },

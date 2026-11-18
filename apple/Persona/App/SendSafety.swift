@@ -25,7 +25,15 @@ extension AppModel {
     func sendPending(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) async -> SendOutcome {
         noteFailure(key, msg.id, nil)
         // Restored outbox entries wait for metadata; opaque IDs do not identify a writable source.
-        guard let session = session(key) else { return .waiting }
+        guard let session = latest(key) else { return .waiting }
+        if let effort = effortRequests[key] ?? session.pendingEffort {
+            holdForEffort(key, msg.id, effort: effort)
+            return .effortWaiting
+        }
+        if let effort = msg.requiredEffort, session.effort != effort {
+            noteFailure(key, msg.id, String(localized: "Thinking effort could not be confirmed. Choose it again before resending."))
+            return .failed
+        }
         guard session.canSend else {
             noteFailure(key, msg.id, session.sourceSubtitle ?? String(localized: "This session is view-only"))
             return .failed
@@ -61,6 +69,15 @@ extension AppModel {
                 toast = Toast(String(localized: "Sent. The Agent will read it after the question on the computer is answered."))
             }
             return .sent
+        } catch let e as APIError where e.code == "effort_change_pending" {
+            // The node refused before typing. The operation receipt keeps the refusal under this ID.
+            markRefused(key, msg.id)
+            guard let effort = e.fields["effort"] else {
+                noteFailure(key, msg.id, e.shown ?? e.localizedDescription)
+                return .failed
+            }
+            holdForEffort(key, msg.id, effort: effort)
+            return .effortWaiting
         } catch let e as APIError where e.code == "input_draft" {
             Haptics.attention()
             markRefused(key, msg.id)
@@ -135,6 +152,11 @@ extension AppModel {
             try await api(key.group)?.deleteUndelivered(conversation: key.sessionID, id: id)
             patchListedSession(key) { row in row.undelivered = row.undelivered?.filter { $0.id != id } }
         } catch { show(error) }
+    }
+
+    private func holdForEffort(_ key: SessionKey, _ id: UUID, effort: String) {
+        guard let i = chat(key).pending.firstIndex(where: { $0.id == id }) else { return }
+        chat(key).pending[i].requiredEffort = effort
     }
 
     private func noteFailure(_ key: SessionKey, _ id: UUID, _ reason: String?) {

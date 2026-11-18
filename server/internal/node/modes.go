@@ -240,6 +240,10 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 
 // setModes changes a running session's permission mode and / or effort level ("" leaves one as it is).
 func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
+	return n.updateModes(ctx, id, mode, effort, nil)
+}
+
+func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending *bool) error {
 	if !n.isAssistantSession(id) {
 		if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 			return err
@@ -327,33 +331,32 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 			n.dropModeRestart(id)
 		}
 	}
+	if effort != "" {
+		unlock, err := n.inputTurn(ctx, id)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	unlockModes := n.switches().modesInput.lock(id)
+	defer unlockModes()
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
 		return n.noPaneForModes(id)
 	}
-	// The /effort picker makes herdr report the agent as blocked; the hub would turn that into a "needs you" push.
-	n.mu.Lock()
-	n.driving[id] = true
-	n.mu.Unlock()
-	defer func() {
-		n.mu.Lock()
-		delete(n.driving, id)
-		n.mu.Unlock()
-	}()
 	if mode != "" {
-		if err := n.tuiSetMode(ctx, pane, mode); err != nil {
+		stopDriving := n.driveModes(id)
+		err := n.tuiSetMode(ctx, pane, mode)
+		stopDriving()
+		if err != nil {
 			return err
 		}
 		n.noteModes(id, mode, "")
 	}
 	if effort != "" {
-		if a, ok := n.agent(id); ok && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
-			return fmt.Errorf("Agent 正在工作，这一轮结束后再改思考强度")
-		}
-		if err := n.tuiSetEffort(ctx, pane, effort); err != nil {
+		if err := n.setTerminalEffort(ctx, id, pane, effort, pending); err != nil {
 			return err
 		}
-		n.noteModes(id, "", effort)
 	}
 	n.notifySessions()
 	return nil

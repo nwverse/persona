@@ -597,6 +597,12 @@ External sends also use `/messages`, must carry `client_msg_id`, and must succes
 
 Approval IDs contain machine / instance / connection generation / thread / the original typed request ID. Only an explicit answer from the phone replies on the original connection; unknown requests, cancels and disconnects don't automatically send error/decline. `serverRequest/resolved` only marks the card dismissed and takes it down; it never produces an approval. External interrupt doesn't clean up all background terminals; directly driving child threads from a parent isn't open yet.
 
+## Queued Claude Code thinking effort (#10428)
+
+For a Claude Code terminal session whose turn is active, `POST …/modes {effort}` can return `{"ok":true,"pending_effort":"high"}`. The session row keeps the confirmed `effort` and adds `pending_effort`. The node waits for an idle prompt, applies the choice for this session only, then publishes the confirmed effort and drops the pending field. If the picker cannot confirm it, the pending field stays with `effort_change_failed: true`. Another effort choice replaces it. Choosing the confirmed effort clears it.
+
+While the change is pending or failed, `POST …/messages` can receive `409 effort_change_pending` with `delivered: "none"` and the pending `effort`. The client can hold the message until the session row confirms the choice and retry with a fresh operation ID, since the old ID records the refusal. The node keeps pending changes across Hub reconnects in the resident process. Messages already in Claude Code's native queue stay there.
+
 ## Claude Code ultracode (#3427)
 
 ultracode is independent of reasoning effort and adds no level to `EffortLevels`. It applies only to the current Claude process, defaults to off, and does not remember the last choice or change launcher settings or the user's default effort.

@@ -2548,7 +2548,19 @@ final class AppModel {
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
         summariesChanged()
+        var effortSettled = false
         for (old, new) in olds {
+            for session in new {
+                if let effort = session.pendingEffort {
+                    if effortRequests[session.key] == nil { updateOutboxEffort(session.key, to: effort) }
+                    if session.effortChangeFailed == true, visibleSession == session.key,
+                       old.first(where: { $0.key == session.key })?.effortChangeFailed != true {
+                        toast = Toast(String(localized: "Couldn't change thinking effort. Choose it again to send waiting messages."), style: .error)
+                    }
+                } else if existingChat(session.key)?.pending.contains(where: { $0.state == .waiting && $0.requiredEffort != nil }) == true {
+                    effortSettled = true
+                }
+            }
             for session in new where session.assistant == true {
                 chats[session.key]?.updateQueuePhotoMarks(queued: session.queued, own: session.ownQueuedCount)
             }
@@ -2558,6 +2570,7 @@ final class AppModel {
             notifyTransitions(old: old, new: new)
             AgentSync.shared.sessions(new)
         }
+        if effortSettled { flushOutbox() }
         readSettingsForNewTaskConversations(olds)
         // A link may have opened a child before this list held its parent. Once the parent row is here, that page is
         // the parent's. An ordinary open is not a child, so a list update does not move it.
@@ -3370,10 +3383,16 @@ final class AppModel {
         msg.via = via
         // The composer says "queued" while the agent works: such a message is drawn in the queue strip (#1461).
         if session(key)?.status.isActive == true { msg.queuedMode = true }
-        chat(key).pending.append(msg)
+        let store = chat(key)
+        msg.requiredEffort = effortRequests[key] ?? latest(key)?.pendingEffort
+            ?? store.pending.first(where: {
+                $0.requiredEffort != nil && ($0.state == .waiting || $0.state == .sending)
+            })?.requiredEffort
+        if msg.requiredEffort != nil { msg.state = .waiting }
+        store.pending.append(msg)
         saveOutbox()
         Haptics.tap()
-        deliver(key, msg)
+        if msg.state == .waiting { flushOutbox() } else { deliver(key, msg) }
         return true
     }
 
@@ -3603,18 +3622,46 @@ final class AppModel {
         } catch { show(error) }
     }
 
-    /// Changes a session's permission mode / effort level / model (nil leaves one). Shown right away; the hub's next session
-    /// list confirms it. Returns whether it worked.
+    /// An effort request has not answered yet. Follow-ups typed now wait in the same outbox as those typed once
+    /// the node has accepted the change.
+    @ObservationIgnored var effortRequests: [SessionKey: String] = [:]
+
+    /// Changes a session's permission mode, effort or model (nil leaves it). Returns whether the node took it.
     @discardableResult
     func setModes(_ key: SessionKey, permissionMode: String? = nil, effort: String? = nil, model claudeModel: String? = nil) async -> Bool {
         guard allowSend(key), let api = api(key.group) else { return false }
+        if let effort {
+            guard effortRequests[key] == nil else { return false }
+            effortRequests[key] = effort
+        }
+        defer {
+            if effort != nil {
+                effortRequests[key] = nil
+                flushOutbox()
+            }
+        }
         do {
-            try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel)
-            if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) {
-                if let permissionMode { list[i].permissionMode = permissionMode }
-                if let effort { list[i].effort = effort }
-                if let claudeModel { list[i].model = claudeModel } // the node lists the pick too until the transcript moves on
-                sessionsByMachine[key.machineRef] = list
+            let pending = try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel)
+            landPendingSessions()
+            patchSession(key) { row in
+                if let permissionMode { row.permissionMode = permissionMode }
+                if let claudeModel { row.model = claudeModel } // the node lists the pick until the transcript moves on
+                if let effort {
+                    if let pending {
+                        if row.pendingEffort != pending, row.pendingEffort != nil || row.effort != pending {
+                            row.pendingEffort = pending
+                            row.effortChangeFailed = nil
+                        }
+                    } else {
+                        row.effort = effort
+                        row.pendingEffort = nil
+                        row.effortChangeFailed = nil
+                    }
+                }
+            }
+            if let effort { updateOutboxEffort(key, to: effort) }
+            if pending != nil, latest(key)?.effortChangeFailed != true {
+                toast = Toast(String(localized: "Thinking effort will change after this turn."))
             }
             Haptics.success()
             return true

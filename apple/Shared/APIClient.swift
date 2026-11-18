@@ -1360,8 +1360,14 @@ nonisolated struct APIClient: Sendable {
         }
     }
     /// Changes a session's permission mode, effort level and / or model (nil leaves it); a TUI agent takes a second or two.
-    func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil) async throws {
-        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
+    @discardableResult
+    func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil) async throws -> String? {
+        let data = try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
+        struct Answer: Decodable {
+            var pendingEffort: String?
+            enum CodingKeys: String, CodingKey { case pendingEffort = "pending_effort" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.pendingEffort
     }
 
     /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with

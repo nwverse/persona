@@ -223,6 +223,10 @@ type Session struct {
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
+	// PendingEffort is a terminal change waiting for this Claude Code turn to end. If the attempt fails, the
+	// target stays visible and messages remain held until the user chooses an effort again.
+	PendingEffort      string `json:"pending_effort,omitempty"`
+	EffortChangeFailed bool   `json:"effort_change_failed,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -526,7 +530,8 @@ const (
 	// effort change only there. Its row's capabilities say modes: false.
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
-	CodeModesNotRunning = "modes_not_running"
+	CodeModesNotRunning     = "modes_not_running"
+	CodeEffortChangePending = "effort_change_pending"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an

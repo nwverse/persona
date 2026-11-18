@@ -51,6 +51,9 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return err
 	}
 	defer unlock()
+	if change := n.switches().effortChange(id); change.target != "" {
+		return change.refusal()
+	}
 	selectionText := text
 	if opts.SwitchNow {
 		// The assistant's agent_switch (#5973): the switch it picked goes with this message now, or nothing does

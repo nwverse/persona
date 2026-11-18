@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3b11d3e1bfabc8cc
+const sessionWireLayout = 0xbb9004c9d34e3d5e
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -129,6 +129,8 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"model":`, s.Model, true)
 	w.str(`"permission_mode":`, s.PermissionMode, true)
 	w.str(`"effort":`, s.Effort, true)
+	w.str(`"pending_effort":`, s.PendingEffort, true)
+	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}
