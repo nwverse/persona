@@ -2670,6 +2670,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # Close an Agent's terminal when its session ends (#10355), off by default.
+                    "close_ended_terminals": False,
                     # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
                     "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
@@ -2712,7 +2714,7 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
+        out.update(agent_tasks=cfg["agent_tasks"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
@@ -14707,6 +14709,16 @@ def listed_model_configuration(lang="zh-Hans"):
         own += [meeting_model_purpose(pid, lang, catalog)["purpose"] for pid in MEETING_PURPOSES]
     at = next((n for n, x in enumerate(catalog["purposes"]) if x["id"].startswith(("extension.", "plugin."))), len(catalog["purposes"]))
     catalog["purposes"][at:at] = own
+    # MOCK_MODEL_USAGE=1 (#10498, docs/assistant/model-config.md "Counting"): the last 7 days' calls of two purposes,
+    # Inbox screening's many small ones on a CLI and Information processing's few; the others had none.
+    if os.environ.get("MOCK_MODEL_USAGE") == "1":
+        usage = {"inbox.triage": dict(calls=1234, failures=12, input_tokens=61_700, output_tokens=148_080,
+                                      cache_read_input_tokens=24_680_000, cache_creation_input_tokens=5_430_000),
+                 "kb": dict(calls=1, failures=0, input_tokens=820, output_tokens=96,
+                            cache_read_input_tokens=0, cache_creation_input_tokens=0)}
+        for purpose in catalog["purposes"]:
+            if purpose["id"] in usage:
+                purpose["usage"] = usage[purpose["id"]]
     return catalog
 
 
@@ -26124,6 +26136,7 @@ class H(BaseHTTPRequestHandler):
         if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if _web_push and _web_push.route(self, "GET", p): return
+        if _todo_view and _todo_view.route(self, "GET", p): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
         if net_control(p, q): return self.send_json({"ok": True, **NET})
@@ -26354,9 +26367,15 @@ class H(BaseHTTPRequestHandler):
             METRICS_ASKED = METRICS_ASKED or time.time()
             if MOCK_METRICS_FAIL == "1" or (MOCK_METRICS_FAIL == "after" and time.time() - METRICS_ASKED > 5):
                 return self.send_json({"error": "hub 暂时取不到监控数据"}, 503)
+            # With a roster, an overview is one manager's answer: no scope means the default, while the established
+            # header or query names another. A legacy hub keeps serving every computer, whatever the request names.
+            other = other_manager(self) if _stamps() else None
+            if other and other[1] is not None:
+                return self.send_json(*other[1])
+            owner = (other[0] if other else MANAGERS["default"]) if _stamps() else ""
             cards = []
             for m in MACHINES:
-                if kept(m["id"]):
+                if kept(m["id"]) and (not owner or machine_manager(m["id"]) == owner):
                     c = machine_metrics(m["id"], 3600, 60)
                     if (u := usage_card(m["id"])) is not None:
                         c["usage"] = u
@@ -27273,6 +27292,7 @@ class H(BaseHTTPRequestHandler):
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
         if _web_push and _web_push.route(self, self.command, p, self.last_body): return
+        if _todo_view and _todo_view.route(self, self.command, p): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -28669,6 +28689,8 @@ class H(BaseHTTPRequestHandler):
                     ASSISTANT_CONFIG[key] = body[key]
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("close_ended_terminals"), bool):
+                ASSISTANT_CONFIG["close_ended_terminals"] = body["close_ended_terminals"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
             if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
@@ -31502,6 +31524,33 @@ if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_FAMILIES") == "1":
     ]}
     LAUNCHER_MODELS["agy"] = {"agent": "agy", "models": [{"id": "默认", "name": "默认", "default": True}]}
 
+# MOCK_MODEL_GATEWAY=1 (with MOCK_MODEL_PICK=1, #10365, docs/assistant/model-config.md "One row per model"): the main chat
+# runs on gateway-api, a Persona-managed gateway provider whose Claude Code tiers all name one model, with the /model list
+# the hub serves for it: one Opus 5.5 row with the tier aliases folded into it, the gateway's other route of that model
+# told apart by its route, Default apart. =raw: the list as the hub served it before, each tier alias a row of its own,
+# every one of them and the route's row reading "Opus 5.5". For the web model panel's before / after screenshots.
+MODEL_GATEWAY_MODE = os.environ.get("MOCK_MODEL_GATEWAY", "")
+if MODEL_PICK_MODE and MODEL_GATEWAY_MODE:
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "gateway-api", "display_name": "Gateway API", "model": "claude-opus-5-5", "agent": "claude", "source": "persona"},
+        {"name": "claude", "model": "opus", "source": "builtin"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "gateway-api"
+    _gateway_default = {"id": "default", "name": "Default (recommended)", "description": "Use the default model (currently claude-opus-5-5)",
+                        "resolved": "claude-opus-5-5", "default": True, "efforts": _CLAUDE_EFFORTS}
+    _gateway_route = {"id": "kiro/claude-opus-5-5", "name": "Opus 5.5", "description": "From gateway"}
+    if MODEL_GATEWAY_MODE == "raw":
+        LAUNCHER_MODELS["gateway-api"] = {"agent": "claude", "models": [_gateway_default] + [
+            {"id": tier, "name": "Opus 5.5", "description": "Custom %s model (claude-opus-5-5)" % tier.title(), "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS}
+            for tier in ("opus", "fable", "sonnet", "haiku")] + [_gateway_route]}
+    else:
+        LAUNCHER_MODELS["gateway-api"] = {"agent": "claude", "models": [
+            _gateway_default,
+            {"id": "claude-opus-5-5", "name": "Opus 5.5", "description": "Custom Opus model (claude-opus-5-5)", "efforts": _CLAUDE_EFFORTS,
+             "aliases": ["opus", "fable", "sonnet", "haiku"]},
+            dict(_gateway_route, name="Opus 5.5 (kiro)"),
+        ]}
+
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
@@ -31592,6 +31641,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
+MOCK_HELP.append("MOCK_MODEL_GATEWAY=1|raw  With MOCK_MODEL_PICK: the main chat defaults to gateway-api, a gateway provider whose Claude Code tiers all name one model; 1: the list as the hub folds it (one Opus 5.5 row, the route's row says its route, #10365), raw: as it served it before (five Opus 5.5 rows)")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
@@ -32219,6 +32269,13 @@ def mock_turn_usage(mode):
 
 if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
     mock_turn_usage(MOCK_TURN_USAGE)
+
+
+# MOCK_TODO_VIEW=1|old|late, MOCK_TODO_MANAGERS=2 (#10465, scripts/mock/todo_view_mock.py): the To-dos view, counts and
+# places from the design prototype's to-dos. Last, so it replaces the to-dos the other switches made and the features.
+import todo_view_mock  # noqa: E402
+MOCK_HELP.extend(todo_view_mock.HELP)
+_todo_view = todo_view_mock if todo_view_mock.install(globals()) else None
 
 
 if __name__ == "__main__":
