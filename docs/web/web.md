@@ -2089,7 +2089,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
   (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
   families. Vendors come in the order the list first names them, other families by first mention. Within a family the
-  newest version leads (every row of it, a 1M-context one too) and says **Latest** (最新; 最新) when older ones exist; the
+  newest version leads (every row of it the hub lists: a 1M-context one, a gateway route's "Opus 5.5 (kiro)") and says
+  **Latest** (最新; 最新) when older ones exist. Spellings of one model are not rows of their own: the hub sends one row
+  whose `aliases` hold the others (Claude Code's tier aliases on a gateway whose tiers name one model,
+  `docs/assistant/model-config.md` "One row per model", #10365), and a setup saved with one of them (a kept pick, a
+  favorite, a recent setup, Model configuration's model) is that row's (`isCurrentModel`, `listedModel`); the
   older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
   opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
   everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
@@ -2116,7 +2120,9 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   for a chat that can't switch engines, they are off: "Switching from Claude Code to Codex needs a new conversation". A Codex thread keeps its model
   ("Codex can't change the model of a running session"), but the model it runs still opens its flyout, where the thinking
   effort and Fast apply at once. While the Agent works or waits on you, picks are off and the panel says why. A launcher
-  of the session's own that fixes its `--model` says so and takes no pick. Claude Code and Codex take a model ID typed into
+  of the session's own that fixes its `--model` says so and takes no pick. The search reads a row's name, ID, the model
+  it stands for, the spellings folded into it (`aliases`: "sonnet" finds the gateway's one Opus 5.5 row) and its
+  description. Claude Code and Codex take a model ID typed into
   the search ("Use “…”", #1644, `lib/model-id.ts`) in each launcher that can take a pick here, offered only when none of
   that launcher's models answers the search (a word that names a listed model is a search); IDs typed before are listed
   and can be forgotten.

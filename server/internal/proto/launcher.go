@@ -173,6 +173,10 @@ type AgentModel struct {
 	Custom bool `json:"custom,omitempty"`
 	// Price is the built-in catalog's exact-entry reference price; nil when unknown or inherited from another model.
 	Price *ModelPrice `json:"price,omitempty"`
+	// Aliases: the other spellings the manager folded into this row because they run the same model with the same
+	// context window on this launcher (Claude Code's tier aliases on a gateway whose tiers name one model, #10365,
+	// assistant/models_launchers_fold.go). Each still picks this row: a saved pick of one keeps working.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 type LauncherEnv struct {
