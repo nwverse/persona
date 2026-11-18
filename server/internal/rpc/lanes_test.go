@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/netshape"
 )
 
 // gate is a transport whose writes wait for the test: each write is recorded, then held until release lets it return.
@@ -198,16 +200,15 @@ func TestLaneWriterBulkWindow(t *testing.T) {
 	if _, err := lw.enqueue(line); err != nil {
 		t.Fatal(err)
 	}
+	// Held back by the window: the writer idle, with more bulk to send than credit for it. It writes nothing more until
+	// an acknowledgement wakes it.
 	stalled := func() int {
-		last := -1
-		for {
-			time.Sleep(20 * time.Millisecond)
-			n := sink.Len()
-			if n == last {
-				return n
-			}
-			last = n
-		}
+		eventually(t, func() bool {
+			lw.mu.Lock()
+			defer lw.mu.Unlock()
+			return !lw.busy && lw.win.inFlight > 0 && lw.win.inFlight+lw.win.frameSize() > lw.win.cwnd
+		})
+		return sink.Len()
 	}
 	n := stalled()
 	if max := windowInit + windowInit/4 + 4*frameHeader; n > max {
@@ -228,13 +229,13 @@ func TestLaneWriterBulkWindow(t *testing.T) {
 	lw.mu.Lock()
 	sent := lw.seq
 	lw.mu.Unlock()
-	if err := lw.acked(sent, time.Now()); err != nil {
+	if err := lw.acked(sent); err != nil {
 		t.Fatal(err)
 	}
 	if m := stalled(); m <= n {
 		t.Fatalf("an acknowledgement let nothing more go (%d, then %d)", n, m)
 	}
-	if err := lw.acked(sent+1000, time.Now()); !errors.Is(err, errFrame) {
+	if err := lw.acked(sent + 1000); !errors.Is(err, errFrame) {
 		t.Fatalf("an acknowledgement of frames never sent: %v", err)
 	}
 }
@@ -397,7 +398,7 @@ func eventually(t *testing.T, ok func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatal("not in time")
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) // sleep-ok: the polling interval of a wait for a condition, not a fixed wait
 	}
 }
 
@@ -477,8 +478,9 @@ func TestLanesUpgradeWithTrafficInFlight(t *testing.T) {
 
 // Over a framed connection a short call is answered while a long answer of the bulk lane is still on its way.
 func TestLanesShortCallPassesBulk(t *testing.T) {
-	slow := newSlowPipe(64 << 10) // 64 KiB a second each way
-	h, n := New("h", slow.a), New("n", slow.b)
+	link := netshape.Config{Rate: 64 << 10, Delay: 20 * time.Millisecond} // 64 KiB a second each way
+	a, b := netshape.Pipe(link, link)
+	h, n := New("h", a), New("n", b)
 	h.EnableLanes(testControl, testBulk)
 	n.EnableLanes(testControl, testBulk)
 	big := strings.Repeat("c", 250_000)
@@ -488,9 +490,9 @@ func TestLanesShortCallPassesBulk(t *testing.T) {
 		}
 		return map[string]bool{"ok": true}, nil
 	}
-	go func() { _ = h.Serve(context.Background(), slow.a) }()
-	go func() { _ = n.Serve(context.Background(), slow.b) }()
-	defer slow.close()
+	go func() { _ = h.Serve(context.Background(), a) }()
+	go func() { _ = n.Serve(context.Background(), b) }()
+	defer func() { a.Close(); b.Close() }()
 	if err := h.UpgradeLanes(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +501,7 @@ func TestLanesShortCallPassesBulk(t *testing.T) {
 		var out map[string]string
 		chunk <- h.Call(context.Background(), "file.chunk", map[string]any{}, &out)
 	}()
-	time.Sleep(500 * time.Millisecond) // the answer is under way: about 4 s of it at this rate
+	eventually(t, func() bool { return n.LaneStats().Lanes[LaneBulk].SentFrames > 0 }) // the answer is under way
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -517,45 +519,6 @@ func TestLanesShortCallPassesBulk(t *testing.T) {
 	if err := <-chunk; err != nil {
 		t.Fatal(err)
 	}
-}
-
-// slowPipe is a duplex pipe whose directions each carry rate bytes a second, with a buffer of a quarter second.
-type slowPipe struct{ a, b *slowEnd }
-
-type slowEnd struct {
-	r    *io.PipeReader
-	w    *io.PipeWriter
-	rate int
-}
-
-func (e *slowEnd) Read(p []byte) (int, error) { return e.r.Read(p) }
-
-func (e *slowEnd) Write(p []byte) (int, error) {
-	written := 0
-	for len(p) > 0 {
-		n := min(len(p), max(e.rate/50, 1))
-		time.Sleep(time.Duration(n) * time.Second / time.Duration(e.rate))
-		k, err := e.w.Write(p[:n])
-		written += k
-		if err != nil {
-			return written, err
-		}
-		p = p[n:]
-	}
-	return written, nil
-}
-
-func newSlowPipe(rate int) *slowPipe {
-	ar, bw := io.Pipe()
-	br, aw := io.Pipe()
-	return &slowPipe{a: &slowEnd{r: ar, w: aw, rate: rate}, b: &slowEnd{r: br, w: bw, rate: rate}}
-}
-
-func (s *slowPipe) close() {
-	s.a.r.Close()
-	s.a.w.Close()
-	s.b.r.Close()
-	s.b.w.Close()
 }
 
 // LineFilter rewrites what goes out and LineWritten sees what was meant, framed or not.
@@ -609,7 +572,11 @@ func TestLanesWriteErrorsAsLines(t *testing.T) {
 	errc := make(chan error, 1)
 	go func() { errc <- n.Notify("stream.data", map[string]int{}) }()
 	go func() { _, err := n.writeContextObserved(ctx, message{Event: "e2"}, LaneEvents); errc <- err }()
-	time.Sleep(20 * time.Millisecond)
+	eventually(t, func() bool { // both queued behind the long line
+		lw.mu.Lock()
+		defer lw.mu.Unlock()
+		return len(lw.lanes[LaneBulk].lines) == 1 && len(lw.lanes[LaneEvents].lines) == 2
+	})
 	cancel()
 	// The cancelled one never went out; the other waits its turn behind the long line, then goes.
 	g.release(1000)
@@ -639,8 +606,9 @@ func TestLaneTable(t *testing.T) {
 		{tab.event("stream.ack"), LaneControl},
 		{tab.event("stream.data"), LaneBulk},
 		{tab.event("session.items"), LaneEvents},
-		{(*laneTable)(nil).method("ping"), LaneInteractive},
-		{(*laneTable)(nil).event("rpc.cancel"), LaneControl},
+		{laneTable(nil).method("ping"), LaneInteractive},
+		{laneTable(nil).event("rpc.cancel"), LaneControl},
+		{newLaneTable([]string{"x"}, []string{"x"}).method("x"), LaneControl},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s, want %s", c.got, c.want)
@@ -668,7 +636,12 @@ func TestLanesPingActivityInTheMiddleOfALine(t *testing.T) {
 	if _, err := pw.Write(wire[:frameHeader+framePayloadMax]); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// An acknowledgement of nothing is read only once the reader took in the frame before it.
+	var ack [frameHeader]byte
+	putHead(ack[:], frameHead{kind: frameAck})
+	if _, err := pw.Write(ack[:]); err != nil {
+		t.Fatal(err)
+	}
 	if !p.PingActivity().IsZero() {
 		t.Fatal("the first frame of a line counted")
 	}

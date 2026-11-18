@@ -86,46 +86,36 @@ func lanesAccepted(m message) bool {
 	return json.Unmarshal(m.Result, &a) == nil && a.Version == lanesVersion
 }
 
-// laneTable says which lane a message goes on. A request and its answer go on the same lane (the method's).
-type laneTable struct {
-	control, bulk map[string]bool
-}
+// laneTable says which lane a message goes on, by method (a request and its answer) or event; nil for a peer without
+// lanes. A name on no list goes interactive (a request, an answer) or on the events lane (an event).
+type laneTable map[string]Lane
 
-func newLaneTable(control, bulk []string) *laneTable {
-	t := &laneTable{control: map[string]bool{}, bulk: map[string]bool{}}
-	for _, n := range control {
-		t.control[n] = true
-	}
+func newLaneTable(control, bulk []string) laneTable {
+	t := laneTable{}
 	for _, n := range bulk {
-		t.bulk[n] = true
+		t[n] = LaneBulk
+	}
+	for _, n := range control { // a name on both lists is control: it cannot wait for credit
+		t[n] = LaneControl
 	}
 	return t
 }
 
 // method is the lane of a request for method, and of its answer.
-func (t *laneTable) method(method string) Lane {
-	switch {
-	case t == nil:
-		return LaneInteractive
-	case t.control[method]:
-		return LaneControl
-	case t.bulk[method]:
-		return LaneBulk
+func (t laneTable) method(method string) Lane {
+	if l, ok := t[method]; ok {
+		return l
 	}
 	return LaneInteractive
 }
 
 // event is the lane of an event.
-func (t *laneTable) event(event string) Lane {
-	switch {
-	case event == cancelEvent:
+func (t laneTable) event(event string) Lane {
+	if l, ok := t[event]; ok {
+		return l
+	}
+	if event == cancelEvent {
 		return LaneControl
-	case t == nil:
-		return LaneEvents
-	case t.control[event]:
-		return LaneControl
-	case t.bulk[event]:
-		return LaneBulk
 	}
 	return LaneEvents
 }

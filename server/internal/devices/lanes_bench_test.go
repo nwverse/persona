@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"slices"
@@ -99,13 +98,6 @@ type laneBenchResult struct {
 	closes, reconnects  int
 }
 
-func laneMode(lanes bool) string {
-	if lanes {
-		return "on"
-	}
-	return "off"
-}
-
 // percentile is the nearest-rank p-th percentile of sorted.
 func percentile(sorted []time.Duration, p int) time.Duration {
 	if len(sorted) == 0 {
@@ -182,9 +174,9 @@ func laneBenchMachine(t *testing.T, d *Devices, b laneBench, lanes bool, data []
 		managerSide, nodeSide := netshape.Pipe(b.link, b.link)
 		p := rpc.New("n", nodeSide)
 		caps := slices.Clone(nodeproto.Required) // what this manager cannot drive a node without
-		if lanes {
-			more, _ := laneBenchNode(p)
-			caps = append(caps, more...)
+		if lanes {                               // as a node does (node.Serve)
+			p.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+			caps = append(caps, nodeproto.NodeLanes)
 		}
 		p.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
 			switch method {
@@ -283,11 +275,6 @@ func (r *laneBenchResult) measure(ctx context.Context, d *Devices, m *Machine, l
 // runLaneBench runs the transfer, the interactive calls and the heartbeat once.
 func runLaneBench(t *testing.T, b laneBench, lanes bool) *laneBenchResult {
 	t.Helper()
-	if lanes {
-		if _, ok := laneBenchNode(rpc.New("n", io.Discard)); !ok {
-			t.Skip("this build has no lane framing (laneBenchNode)")
-		}
-	}
 	d := newTestDevices(t)
 	logs := &benchLog{}
 	quiet := d.logf
@@ -387,8 +374,8 @@ func TestLaneBench(t *testing.T) {
 		interactiveEvery: time.Second, measureEvery: 5 * time.Second, tail: 3}
 	b.fromEnv(t)
 	for _, lanes := range []bool{false, true} {
-		t.Run(laneMode(lanes), func(t *testing.T) {
-			line := runLaneBench(t, b, lanes).summary(b, laneMode(lanes))
+		t.Run(onOff(lanes), func(t *testing.T) {
+			line := runLaneBench(t, b, lanes).summary(b, onOff(lanes))
 			t.Log(line)
 			if out := os.Getenv("PERSONA_LANE_BENCH_OUT"); out != "" {
 				f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

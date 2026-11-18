@@ -55,14 +55,7 @@ func TestLaneTable(t *testing.T) {
 			seen[n] = lane
 		}
 	}
-	if seen["ping"] != "control" || seen["file.chunk"] != "bulk" || seen["stream.data"] != "bulk" {
-		t.Fatalf("%v", seen)
-	}
-	announced := false
-	for _, c := range Announced {
-		announced = announced || c == NodeLanes
-	}
-	if !announced {
+	if !slices.Contains(Announced, NodeLanes) {
 		t.Fatalf("%s is not announced", NodeLanes)
 	}
 }

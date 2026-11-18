@@ -47,7 +47,7 @@ func (p *Peer) UpgradeLanes(ctx context.Context) error {
 	id := fmt.Sprintf("%s%d", p.prefix, p.nextID.Add(1))
 	ch := make(chan message, 1)
 	p.mu.Lock()
-	if p.lanesCall != "" || p.lanesAsked || p.lw != nil {
+	if !p.unnegotiatedLocked() {
 		p.mu.Unlock()
 		return errors.New("rpc: lanes already negotiated")
 	}
@@ -102,7 +102,7 @@ func (p *Peer) Framed() bool { return p.out.Load() != nil }
 // LaneStats is the frame writer's counters; zero (Framed false) while the output is lines.
 func (p *Peer) LaneStats() LaneStats {
 	if lw := p.out.Load(); lw != nil {
-		return lw.stats(time.Now())
+		return lw.stats()
 	}
 	return LaneStats{}
 }
@@ -114,7 +114,7 @@ func (p *Peer) answerLanes(m message) {
 	ok := json.Unmarshal(m.Params, &req) == nil && slices.Contains(req.Versions, lanesVersion)
 	p.mu.Lock()
 	// Once only, and not while this side asks itself: both asking at once keep lines.
-	ok = ok && !p.lanesAsked && p.lanesCall == "" && p.lw == nil
+	ok = ok && p.unnegotiatedLocked()
 	if ok {
 		p.lanesAsked = true
 	}
@@ -126,6 +126,9 @@ func (p *Peer) answerLanes(m message) {
 	result, _ := marshal(lanesAnswer{Version: lanesVersion})
 	p.switchOutput(message{ID: m.ID, Result: result})
 }
+
+// unnegotiatedLocked: neither side asked for lanes yet, nor did either direction switch (p.mu held).
+func (p *Peer) unnegotiatedLocked() bool { return p.lanesCall == "" && !p.lanesAsked && p.lw == nil }
 
 // answeredLanes: this side accepted the other side's rpc.lanes, so its marker line is the last before its frames.
 func (p *Peer) answeredLanes() bool {
@@ -167,7 +170,7 @@ func (p *Peer) switchOutput(last message) {
 		return
 	default:
 	}
-	if _, err := p.w.Write(b); err != nil {
+	if err := p.writeLine(b); err != nil {
 		p.Close(err)
 		return
 	}
@@ -186,7 +189,7 @@ func (p *Peer) framedInput(lr *lineReader, act *readActivity, maximum int) *fram
 	fr := newFrameReader(io.MultiReader(bytes.NewReader(bytes.Clone(lr.buffered())), rest), maximum)
 	lw := p.frameWriter()
 	fr.ack = lw.ack
-	fr.acked = func(seq uint64) error { return lw.acked(seq, time.Now()) }
+	fr.acked = lw.acked
 	fr.middle = lr.middle
 	return fr
 }

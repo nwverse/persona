@@ -31,6 +31,9 @@ func TestUpdateRestartsOnlyAfterSuccessfulRPCResponseWrite(t *testing.T) {
 			{"failed", updateFailWriter{}, 0},
 			{"short", updateShortWriter{}, 0},
 		} {
+			if framed && tc.want == 0 {
+				continue // a writer that fails cannot take the switch: framed, it is the line case again
+			}
 			t.Run(fmt.Sprintf("%s framed=%t", tc.name, framed), func(t *testing.T) {
 				var calls atomic.Int32
 				p := rpc.New("n", tc.writer)
@@ -43,17 +46,20 @@ func TestUpdateRestartsOnlyAfterSuccessfulRPCResponseWrite(t *testing.T) {
 						t.Fatal("restart signaled before complete reply reached transport")
 					}
 				})
-				p.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
+				p.TrackReplies = true
+				replied := make(chan struct{})
+				p.OnRequest = func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+					rpc.AfterReply(ctx, func() { close(replied) }) // once the answer's write returned, LineWritten told or not
 					return proto.NodeUpdateCommitResult{Accepted: true, ID: "upload-1"}, nil
 				}
-				send, end := servePeer(t, p, framed && tc.want > 0) // a writer that fails cannot take the switch
+				send, end := servePeer(t, p, framed)
 				send(`{"id":"h1","method":"node.update.commit","params":{}}`)
 				defer end()
-				deadline := time.Now().Add(2 * time.Second)
-				for int(calls.Load()) < tc.want && time.Now().Before(deadline) {
-					time.Sleep(time.Millisecond)
+				select {
+				case <-replied:
+				case <-time.After(5 * time.Second):
+					t.Fatal("no answer")
 				}
-				time.Sleep(20 * time.Millisecond)
 				if int(calls.Load()) != tc.want {
 					t.Fatalf("restart calls=%d, want %d", calls.Load(), tc.want)
 				}
@@ -169,13 +175,7 @@ func servePeer(t *testing.T, p *rpc.Peer, framed bool) (send func(line string), 
 	if framed {
 		p.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
 		send(`{"id":"h0","method":"rpc.lanes","params":{"versions":[1]}}`)
-		deadline := time.Now().Add(5 * time.Second)
-		for !p.Framed() {
-			if time.Now().After(deadline) {
-				t.Fatal("not framed")
-			}
-			time.Sleep(time.Millisecond)
-		}
+		waitFor(t, "the output framed", p.Framed)
 	}
 	return send, func() { w.Close(); <-done }
 }

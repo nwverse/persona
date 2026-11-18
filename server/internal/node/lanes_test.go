@@ -22,12 +22,7 @@ import (
 // writes JSON lines as before (docs/protocol/protocol.md "Lanes").
 func TestNodeServesLanes(t *testing.T) {
 	for _, managerLanes := range []bool{true, false} {
-		home, err := os.MkdirTemp("/tmp", "pnl")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(home) })
-		t.Setenv("HOME", home)
+		home := shortHome(t)
 		t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
 		file := filepath.Join(home, "big.txt")
 		if err := os.WriteFile(file, bytes.Repeat([]byte("persona lanes\n"), 30_000), 0o600); err != nil {
@@ -84,8 +79,8 @@ func TestNodeServesLanes(t *testing.T) {
 			t.Fatalf("the ping went on no control frame: %s", stats)
 		}
 		// Every line before the switch, and all of them without it, are JSON.
-		if seen.first() != '{' {
-			t.Fatalf("the node's output began with %q", seen.first())
+		if seen.b != '{' {
+			t.Fatalf("the node's output began with %q", seen.b)
 		}
 		cancel()
 		h2nW.Close()
@@ -112,8 +107,6 @@ func (f *firstBytes) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
-
-func (f *firstBytes) first() byte { return f.b }
 
 // The lane table names the node's own methods and events: a renamed method would quietly leave bulk.
 func TestLaneTableNamesTheNodesMethods(t *testing.T) {

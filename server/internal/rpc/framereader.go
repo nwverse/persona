@@ -2,11 +2,9 @@ package rpc
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 )
 
 // frameReader reads a framed connection's lines (lanes.go) for Serve, as a lineReader reads plain ones: Scan, Bytes,
@@ -20,15 +18,14 @@ type frameReader struct {
 	buf        []byte
 	start, end int
 	err        error
-	seq        uint64            // the last data frame read
-	bulkRead   bool              // a bulk frame was read since the last ack asked for
-	partial    map[uint32][]byte // lines in progress, by lane<<16 | slot
+	seq        uint64               // the last data frame read
+	bulkRead   bool                 // a bulk frame was read since the last ack asked for
+	partial    map[uint32]*partLine // lines in progress, by lane<<16 | slot
 	token      []byte
 	owned      bool
 	ack        func(seq uint64)       // ask for an acknowledgement of every frame read through seq
 	acked      func(seq uint64) error // the other side read every frame this side sent through seq
 	middle     func()                 // the middle of a line already past pingFrameMiddleBytes came in (PingActivity)
-	now        func() time.Time
 }
 
 // maxPartialLines bounds the lines a reader puts together at once: a writer has at most laneSlots per lane.
@@ -38,7 +35,7 @@ const maxPartialLines = int(laneCount) * laneSlots
 const frameReadBuf = 2 * frameMax
 
 func newFrameReader(r io.Reader, maximum int) *frameReader {
-	return &frameReader{r: r, max: maximum, buf: make([]byte, frameReadBuf), partial: map[uint32][]byte{}, now: time.Now}
+	return &frameReader{r: r, max: maximum, buf: make([]byte, frameReadBuf), partial: map[uint32]*partLine{}}
 }
 
 func (s *frameReader) Bytes() []byte { return s.token }
@@ -110,6 +107,9 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 	}
 	key := uint32(h.lane)<<16 | uint32(h.slot)
 	part, going := s.partial[key]
+	if going && part.n+h.size > s.max || !going && h.size > s.max {
+		return nil, false, bufio.ErrTooLong
+	}
 	if !going {
 		if h.fin {
 			return payload, true, nil // in the read buffer: valid until the next Scan, as a short line's is
@@ -117,31 +117,58 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 		if len(s.partial) >= maxPartialLines {
 			return nil, false, fmt.Errorf("%w: more than %d lines in progress", errFrame, maxPartialLines)
 		}
-		if h.size > s.max {
-			return nil, false, bufio.ErrTooLong
-		}
-		s.partial[key] = append(make([]byte, 0, 2*h.size), payload...)
-		return nil, false, nil
+		part = &partLine{reply: bufferedActivity(payload)}
+		s.partial[key] = part
 	}
-	if len(part)+h.size > s.max {
-		return nil, false, bufio.ErrTooLong
-	}
-	part = append(part, payload...)
 	if h.fin {
 		delete(s.partial, key)
 		s.owned = true
-		if cap(part)-len(part) > len(part)/4 && len(part) > linePiece {
-			// The line is kept as long as its params are (unmarshalOwned): not with up to as much again of room the
-			// doubling left behind it.
-			part = bytes.Clone(part)
-		}
-		return part, true, nil
+		return part.join(payload), true, nil
 	}
-	s.partial[key] = part
-	if s.middle != nil && len(part) > pingFrameMiddleBytes {
+	part.add(payload)
+	if going && s.middle != nil && part.n > pingFrameMiddleBytes {
 		s.middle()
 	}
 	return nil, false, nil
+}
+
+// partLine is a line being put together from its frames, in pieces taken from grownBufs and joined once in a buffer of
+// the line's size, which is the line's own (as lineReader puts a long line together): a line grown by append would be
+// copied each time it outgrew its buffer, and keep up to as much again of room for as long as its params are kept.
+type partLine struct {
+	pieces [][]byte
+	n      int
+	// reply: the envelope of its first frame says it answers a call (bufferedActivity), which aheadActivity takes for
+	// the whole line rather than put the line together to decode it.
+	reply bool
+}
+
+// partPiece is the size of a partLine's pieces: grownBufs' smallest.
+const partPiece = lineStart << 2
+
+func (p *partLine) add(b []byte) {
+	for len(b) > 0 {
+		k := len(p.pieces) - 1
+		if k < 0 || len(p.pieces[k]) == cap(p.pieces[k]) {
+			p.pieces = append(p.pieces, takeGrown(partPiece)[:0])
+			k++
+		}
+		c := min(len(b), cap(p.pieces[k])-len(p.pieces[k]))
+		p.pieces[k] = append(p.pieces[k], b[:c]...)
+		p.n += c
+		b = b[c:]
+	}
+}
+
+// join is the whole line, tail its last piece; the pieces go back to grownBufs.
+func (p *partLine) join(tail []byte) []byte {
+	line := make([]byte, 0, p.n+len(tail))
+	for _, piece := range p.pieces {
+		line = append(line, piece...)
+		giveGrown(piece[:cap(piece)])
+	}
+	p.pieces = nil
+	return append(line, tail...)
 }
 
 // fill reads more input, after asking for an acknowledgement of the bulk frames read.
@@ -192,19 +219,19 @@ func (s *frameReader) aheadActivity() bool {
 		if h.kind == frameData {
 			part, going := s.partial[uint32(h.lane)<<16|uint32(h.slot)]
 			switch {
+			case going:
+				// The rest of a long line: a whole one counts when its first frame named a result (a deadline is never
+				// this long); a middle piece says nothing.
+				if have == h.size && h.fin && part.reply {
+					return true
+				}
 			case have == h.size && h.fin:
-				line := payload
-				if going {
-					line = append(bytes.Clone(part), payload...)
-				}
 				var m message
-				if err := json.Unmarshal(line, &m); err != nil || replyMessage(m) && !deadlineMessage(m) {
+				if err := json.Unmarshal(payload, &m); err != nil || replyMessage(m) && !deadlineMessage(m) {
 					return true
 				}
-			case !going:
-				if bufferedActivity(payload) {
-					return true
-				}
+			case bufferedActivity(payload): // the start of a line, maybe of a reply
+				return true
 			}
 		}
 		if have < h.size {

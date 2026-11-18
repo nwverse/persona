@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,6 @@ type laneWriter struct {
 
 	mu      sync.Mutex
 	wake    chan struct{} // 1: lines queued, credit or an acknowledgement due
-	running bool          // run started: output is framed
 	busy    bool          // a write is under way
 	err     error         // why the writer stopped; nil while it goes on
 	lanes   [laneCount]laneQueue
@@ -44,8 +44,8 @@ type laneQueue struct {
 }
 
 type laneTotals struct {
-	frames, bytes int64
-	maxWait       time.Duration
+	frames  int64
+	maxWait time.Duration
 }
 
 // outLine is a line queued on a laneWriter.
@@ -71,12 +71,7 @@ func (lw *laneWriter) poke() {
 }
 
 // start begins writing: from now on everything this side sends is frames.
-func (lw *laneWriter) start() {
-	lw.mu.Lock()
-	lw.running = true
-	lw.mu.Unlock()
-	go lw.run()
-}
+func (lw *laneWriter) start() { go lw.run() }
 
 // enqueue queues l; delayed: something was being written or waiting already.
 func (lw *laneWriter) enqueue(l *outLine) (delayed bool, err error) {
@@ -99,26 +94,25 @@ func (lw *laneWriter) enqueue(l *outLine) (delayed bool, err error) {
 func (lw *laneWriter) withdraw(l *outLine) bool {
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
-	if l.started {
-		return false
+	if !l.started {
+		lw.lanes[l.lane].drop(l) // not found: the writer stopped and let it go
 	}
-	q := &lw.lanes[l.lane]
-	for i, x := range q.lines {
-		if x == l {
-			q.remove(i)
-			return true
-		}
-	}
-	return true // the writer stopped and let it go
+	return !l.started
 }
 
-func (q *laneQueue) remove(i int) {
-	q.lines = append(q.lines[:i], q.lines[i+1:]...)
-	if i < q.next {
-		q.next--
-	}
-	if q.next >= len(q.lines) {
-		q.next = 0
+// drop takes l out of the turn order, which goes on with the line after it.
+func (q *laneQueue) drop(l *outLine) {
+	for i, x := range q.lines {
+		if x == l {
+			q.lines = append(q.lines[:i], q.lines[i+1:]...)
+			if i < q.next {
+				q.next--
+			}
+			if q.next >= len(q.lines) {
+				q.next = 0
+			}
+			return
+		}
 	}
 }
 
@@ -133,14 +127,16 @@ func (lw *laneWriter) ack(seq uint64) {
 }
 
 // acked takes the other side's acknowledgement of every frame through seq.
-func (lw *laneWriter) acked(seq uint64, now time.Time) error {
+func (lw *laneWriter) acked(seq uint64) error {
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
 	if seq > lw.seq {
 		return fmt.Errorf("%w: acknowledges frame %d, %d sent", errFrame, seq, lw.seq)
 	}
-	lw.win.acked(seq, now)
-	lw.poke()
+	lw.win.acked(seq, time.Now())
+	if len(lw.lanes[LaneBulk].lines) > 0 { // credit is what bulk may wait for; nothing else does
+		lw.poke()
+	}
 	return nil
 }
 
@@ -155,10 +151,6 @@ func (lw *laneWriter) run() {
 		default:
 		}
 		lw.mu.Lock()
-		if lw.err != nil {
-			lw.mu.Unlock()
-			return
-		}
 		var batch []byte
 		batch, finished = lw.fillLocked(buf[:0], finished[:0], time.Now())
 		if len(batch) == 0 {
@@ -227,21 +219,14 @@ func (lw *laneWriter) fillLocked(batch []byte, finished []*outLine, now time.Tim
 		putHead(h[:], frameHead{kind: frameData, lane: l.lane, fin: fin, slot: l.slot, size: n, seq: lw.seq})
 		batch = append(append(batch, h[:]...), l.b[l.off:l.off+n]...)
 		l.off += n
-		t := &lw.totals[l.lane]
-		t.frames++
-		t.bytes += int64(n)
+		lw.totals[l.lane].frames++
 		if l.lane == LaneBulk {
 			lw.win.wrote(lw.seq, n, now)
 		}
-		q := &lw.lanes[l.lane]
 		if fin {
+			q := &lw.lanes[l.lane]
 			q.slots &^= 1 << l.slot
-			for i, x := range q.lines {
-				if x == l {
-					q.remove(i)
-					break
-				}
-			}
+			q.drop(l)
 			finished = append(finished, l)
 		}
 	}
@@ -256,10 +241,7 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 		if len(q.lines) == 0 {
 			continue
 		}
-		most := framePayloadMax
-		if lane == LaneBulk {
-			most = lw.win.frameSize()
-		}
+		most := lw.frameSize(lane)
 		for k := 0; k < len(q.lines); k++ {
 			i := (q.next + k) % len(q.lines)
 			l := q.lines[i]
@@ -285,12 +267,7 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 				}
 				l.b = bytes.TrimSuffix(l.b, newline)
 				n = min(len(l.b), most)
-				for s := uint16(0); s < laneSlots; s++ {
-					if q.slots&(1<<s) == 0 {
-						l.slot = s
-						break
-					}
-				}
+				l.slot = uint16(bits.TrailingZeros16(^q.slots)) // a free one: not every slot is busy (above)
 				q.slots |= 1 << l.slot
 				l.started = true
 				lw.totals[lane].maxWait = max(lw.totals[lane].maxWait, now.Sub(l.queued))
@@ -312,13 +289,13 @@ type LaneStats struct {
 	BaseRTT  time.Duration // the smallest lately
 }
 
-// LaneCounters is one lane's: what waits now, what went out, and the longest a line waited for its first frame.
+// LaneCounters is one lane's: what waits now, the frames sent, and the longest a line waited for its first frame (one
+// still waiting included).
 type LaneCounters struct {
-	QueuedLines, QueuedFrames int
-	QueuedBytes               int64
-	SentFrames, SentBytes     int64
-	MaxWait                   time.Duration
-	OldestWait                time.Duration // how long the oldest line still waiting has
+	QueuedFrames int
+	QueuedBytes  int64
+	SentFrames   int64
+	MaxWait      time.Duration
 }
 
 // String is the counters on one line, for a log, each field per lane in priority order (control/interactive/events/
@@ -350,27 +327,31 @@ func sizeText(n int64) string {
 	return fmt.Sprintf("%dB", n)
 }
 
-func (lw *laneWriter) stats(now time.Time) LaneStats {
+// frameSize is the most a frame of lane carries now.
+func (lw *laneWriter) frameSize(lane Lane) int {
+	if lane == LaneBulk {
+		return lw.win.frameSize()
+	}
+	return framePayloadMax
+}
+
+func (lw *laneWriter) stats() LaneStats {
+	now := time.Now()
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
-	s := LaneStats{Framed: lw.running, Window: lw.win.cwnd, InFlight: lw.win.inFlight, RTT: lw.win.rtt, BaseRTT: lw.win.base.min()}
+	s := LaneStats{Framed: true, Window: lw.win.cwnd, InFlight: lw.win.inFlight, RTT: lw.win.rtt, BaseRTT: lw.win.base.min()}
 	for i := range lw.lanes {
 		c := &s.Lanes[i]
-		c.SentFrames, c.SentBytes, c.MaxWait = lw.totals[i].frames, lw.totals[i].bytes, lw.totals[i].maxWait
-		most := framePayloadMax
-		if Lane(i) == LaneBulk {
-			most = lw.win.frameSize()
-		}
+		c.SentFrames, c.MaxWait = lw.totals[i].frames, lw.totals[i].maxWait
+		most := lw.frameSize(Lane(i))
 		for _, l := range lw.lanes[i].lines {
 			left := len(l.b) - l.off
-			c.QueuedLines++
 			c.QueuedBytes += int64(left)
 			c.QueuedFrames += max((left+most-1)/most, 1)
 			if !l.started {
-				c.OldestWait = max(c.OldestWait, now.Sub(l.queued))
+				c.MaxWait = max(c.MaxWait, now.Sub(l.queued))
 			}
 		}
-		c.MaxWait = max(c.MaxWait, c.OldestWait)
 	}
 	return s
 }

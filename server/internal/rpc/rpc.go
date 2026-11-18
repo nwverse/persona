@@ -162,7 +162,7 @@ type Peer struct {
 	// Lanes (lanes.go): the table EnableLanes set (nil: this peer never frames), the frame writer once either direction
 	// is framed (mu), set as out once this side's output is, this side's rpc.lanes call until its answer is read (mu),
 	// whether this side answered one (mu), and closed once this side's output is framed.
-	lanes      *laneTable
+	lanes      laneTable
 	lw         *laneWriter
 	out        atomic.Pointer[laneWriter]
 	lanesCall  string
@@ -378,7 +378,7 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 			}
 			delete(p.pending, m.ID)
 			delete(p.methods, m.ID)
-			lanesAnswer := p.lanesCall != "" && m.ID == p.lanesCall
+			lanesAnswer := m.ID == p.lanesCall
 			if lanesAnswer {
 				p.lanesCall = ""
 			}
@@ -543,6 +543,16 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message, lane Lane) (
 		return observation, NotSent(ErrClosed)
 	default:
 	}
+	err = p.writeLine(b)
+	if deadline, ok := ctx.Deadline(); ok {
+		observation.remaining = deadline.Sub(time.Now())
+	}
+	return observation, err
+}
+
+// writeLine writes b, a whole line, as a line (the caller holds wsem): through LineFilter, all of it or an error, then
+// LineWritten.
+func (p *Peer) writeLine(b []byte) error {
 	line := b
 	if p.LineFilter != nil {
 		line = p.LineFilter(b)
@@ -554,10 +564,7 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message, lane Lane) (
 	if err == nil && p.LineWritten != nil {
 		p.LineWritten(b)
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		observation.remaining = deadline.Sub(time.Now())
-	}
-	return observation, err
+	return err
 }
 
 // Call sends a request and decodes the result into out (if non-nil). Params that are Appended are written straight
