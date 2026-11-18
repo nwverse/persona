@@ -1161,7 +1161,9 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web and iOS draw each as the
   owner's bubble marked "Not delivered", with why and "It will be sent automatically", and Delete; one that gave up
   in red with Retry and Delete. Every device sees it, not only the one that sent it (`web/src/lib/undelivered.ts`;
-  iOS and Android follow in their own changes).
+  iOS and Android follow in their own changes). On the web the line under the bubble, Retry and Delete are a chunk of
+  their own (`web/src/views/chat/UndeliveredBubbles.tsx`, strings in `chat-undeliveredbubbles`), off the first screen;
+  until it is in, the message shows as the owner's failed bubble alone, so it never blinks out (#10357).
 - **Sent by itself, once.** The manager tries again with backoff (15 s, 30 s, 1 min, 2 min, then every 5 min), at once
   when the conversation is seen running again on a session list, oldest first, one pass per conversation at a time.
   A try runs `SendParams` again (the live snapshot and the pick of now) and the node's `session.send` under the
