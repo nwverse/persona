@@ -323,11 +323,12 @@ func TestConversationNewAndSend(t *testing.T) {
 	if _, isErr = tool(t, h, n, "trip-0002", "conversation_send", `{"id":"main-0001","text":"d"}`); isErr {
 		t.Fatal("after the user spoke")
 	}
-	// trip → main twice so far in ten minutes; a third is fine, a fourth is not.
+	// trip → main twice so far in ten minutes; a third and a fourth go too: one-way messages only meet a loose cost
+	// cap, past which they queue (#10400).
 	if _, isErr = tool(t, h, n, "trip-0002", "conversation_send", `{"id":"main-0001","text":"e"}`); isErr {
 		t.Fatal("the third")
 	}
-	if out, isErr = tool(t, h, n, "trip-0002", "conversation_send", `{"id":"main-0001","text":"f"}`); !isErr || !strings.Contains(out, "Wait for its answer") {
+	if out, isErr = tool(t, h, n, "trip-0002", "conversation_send", `{"id":"main-0001","text":"f"}`); isErr || strings.Contains(out, "Queued for") {
 		t.Fatalf("the fourth to one conversation: %s", out)
 	}
 }
