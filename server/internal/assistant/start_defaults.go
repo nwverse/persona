@@ -246,6 +246,18 @@ var presetIntN = func(n int) int { return rand.IntN(n) }
 // was handed to. A task leader's worker takes the class of the conversation that follows up its leader's task. ""
 // when no conversation follows the task up.
 func (s *Service) taskSupervisorClass(ctx context.Context, t *PlanTask) string {
+	sup := s.taskSupervisorOf(t)
+	if sup == "" || s.isLeaderRef(sup) {
+		return ""
+	}
+	return s.dispatchConversationClass(ctx, s.settings(ctx).MachineID, sup)
+}
+
+// taskSupervisorOf is the conversation that follows task t up: the one its supervision ledger names (written when the
+// plan started, before the agent), else the leader conversation the plan was handed to (PlanTask.Supervisor, set only
+// when the main conversation hands a task over: a leader's own plan leaves it empty). A task leader's worker is
+// followed up through its leader's task, so it takes that task's. "" when no conversation follows the task up.
+func (s *Service) taskSupervisorOf(t *PlanTask) string {
 	sup := t.Supervisor
 	todoID := t.TodoID
 	if t.Parent != "" {
@@ -256,10 +268,7 @@ func (s *Service) taskSupervisorClass(ctx context.Context, t *PlanTask) string {
 			sup = todo.Supervision.Supervisor
 		}
 	}
-	if sup == "" || s.isLeaderRef(sup) {
-		return ""
-	}
-	return s.dispatchConversationClass(ctx, s.settings(ctx).MachineID, sup)
+	return sup
 }
 
 // roleOf is the task's role as a fact: roleLeader for a task leader, else worker.
