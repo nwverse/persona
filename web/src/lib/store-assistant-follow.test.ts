@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recentConversations } from "./conversation-origins";
 import { chooseManager } from "./manager-choice";
-import { applyCompleteSessions, connect, getState, reset } from "./store";
+import { applyCompleteSessions, connect, getState, refreshAssistant, reset } from "./store";
 import type { Session } from "./types";
 
 // #9049: on a socket in list mode the hub sends hints only, so the assistant's conversations (the Persona sidebar, All
@@ -25,12 +25,14 @@ let changed: Session[];
 let conversations: Session[];
 let assistantReads: number;
 let assistantFails: number; // the next reads of /assistant that answer 503
+let assistantHeld: Promise<void> | null; // the next read of /assistant answers once this settles, with what it read when asked
 
 beforeEach(() => {
   vi.useFakeTimers();
   changed = [];
   assistantReads = 0;
   assistantFails = 0;
+  assistantHeld = null;
   conversations = [working("main"), working("leader", { turn_error: "API Error: 503", turn_error_kind: "server" })];
   vi.stubGlobal("WebSocket", Socket);
   vi.stubGlobal("location", { protocol: "http:", host: "demo" });
@@ -41,7 +43,11 @@ beforeEach(() => {
     if (url.pathname === "/api/v1/assistant") {
       assistantReads++;
       if (assistantFails > 0 && assistantFails--) return Response.json({ error: "database down" }, { status: 503 });
-      return Response.json({ machine_id: "hub", main: "main", background_supervisor: "bg", conversations });
+      const answer = Response.json({ machine_id: "hub", main: "main", background_supervisor: "bg", conversations });
+      const held = assistantHeld;
+      assistantHeld = null;
+      if (held) await held;
+      return answer;
     }
     if (url.pathname === "/api/v1/sessions") {
       if (url.searchParams.has("counts")) return Response.json({ total: 3, machine: { hub: 3 }, project: {}, group: {}, state: {}, revision: "r1" });
@@ -161,6 +167,26 @@ describe("a conversation made elsewhere comes into Recent (#10190)", () => {
     changed = [lark({ state: "working", status: "working", waiting: false })];
     await hint("r3");
     expect(assistantReads).toBe(3);
+    expect(recent()).toEqual(["lark", "leader"]);
+  });
+
+  it("one whose answer was not taken (a later one was in place) is asked about again at its next row", async () => {
+    await listMode();
+    let release!: () => void;
+    assistantHeld = new Promise<void>((r) => (release = r));
+    changed = [lark({ waiting: false })];
+    await hint("r2"); // its read waits
+    expect(assistantReads).toBe(2);
+    await refreshAssistant(); // a later read (a send, opening a chat) is answered first, before the hub listed it
+    expect(assistantReads).toBe(3);
+    release();
+    await settle();
+    await settle();
+    expect(recent()).toEqual(["leader"]);
+    conversations = [...conversations, lark()];
+    changed = [lark({ state: "working", status: "working", waiting: false })];
+    await hint("r3");
+    expect(assistantReads).toBe(4);
     expect(recent()).toEqual(["lark", "leader"]);
   });
 

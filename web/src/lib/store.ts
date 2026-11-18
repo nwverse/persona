@@ -1165,7 +1165,8 @@ export function upsertSession(s: Session) {
 
 /** The conversations the assistant was read again for (unlistedConversations), each for the page it was read for
  *  (pageOf: another manager's page reads its own answer, review of #10199): once each, whatever that read answered; one
- *  whose read failed is asked about again at its next row. */
+ *  whose read failed, or whose answer was not taken (a later one was in place, or the page showed another manager by
+ *  then), is asked about again at its next row. */
 const askedForUnlisted = new Set<string>();
 
 /** `rows` (of the assistant's machine) bring conversations the held answer does not list (#10190): one another client
@@ -1178,7 +1179,8 @@ function askAboutUnlisted(rows: readonly Session[]) {
   const keys = a ? unlistedConversations(a, rows).map((id) => `${page}\u0000${id}`).filter((k) => !askedForUnlisted.has(k)) : [];
   if (!keys.length) return;
   keys.forEach((k) => askedForUnlisted.add(k));
-  void refreshAssistant().catch(() => keys.forEach((k) => askedForUnlisted.delete(k)));
+  const again = () => keys.forEach((k) => askedForUnlisted.delete(k));
+  void refreshAssistant().then((taken) => taken || again(), again);
 }
 
 // The assistant's conversations are sessions on its machine too: the change that keeps the copy in `assistant`
@@ -1499,12 +1501,14 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
-export async function refreshAssistant() {
+/** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
+ *  manager's page, made old meanwhile). */
+export async function refreshAssistant(): Promise<boolean> {
   const asked = assistantAsked.ask();
   const from = pageOf();
   try {
     const a = await asked.answer;
-    if (!asked.fresh() || from !== pageOf()) return;
+    if (!asked.fresh() || from !== pageOf()) return false;
     const assistant = { ...a, conversations: (a.conversations ?? []).filter(availableConversation) };
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
@@ -1516,6 +1520,7 @@ export async function refreshAssistant() {
     for (const c of assistant.conversations) noteConversation(c.session_id, owner);
     if (assistant.main) noteConversation(assistant.main, owner);
     set({ assistant, assistantError: null });
+    return true;
   } catch (err) {
     if (asked.fresh() && from === pageOf()) {
       set({ assistantError: errorText(err) });
