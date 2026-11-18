@@ -3,10 +3,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../../../../spec/fixtures/todo-view/todo_view.json";
 import type { TodoSummary } from "../../../lib/todo-view-wire";
-import { triage } from "../../../lib/todo-triage";
+import { openMergePRs, triage } from "../../../lib/todo-triage";
 import { makeSessionLookup, type Todo } from "../../../lib/todos";
 import type { Session } from "../../../lib/types";
-import { classify, restoredAt, runFacts, type ByDesign } from "./view-legacy";
+import { classify, restoredAt, rowFacts, type ByDesign } from "./view-legacy";
 
 interface Case {
   now: string;
@@ -55,14 +55,14 @@ function compare(input: Case) {
   const todo: Todo = { ...input.todo, restored_at: input.restored_at, someday_until: input.someday_until };
   const lookup = makeSessionLookup(input.sessions ?? []);
   const local = triage(todo, lookup, now, restoredAt(todo, 0, now), input.superseded ?? false);
-  return { local, runs: runFacts(todo, lookup, now), now };
+  return { local, facts: rowFacts(todo, lookup, now, { prOpen: openMergePRs(todo, now).length > 0 }), now };
 }
 
 describe("the hub's view against today's web triage (spec/fixtures/todo-view)", () => {
   for (const c of fixture.cases) {
     it(c.name, () => {
-      const { local, runs, now } = compare(c.input as unknown as Case);
-      const got = classify(local, c.expected.view as TodoSummary, runs, now);
+      const { local, facts, now } = compare(c.input as unknown as Case);
+      const got = classify(local, c.expected.view as TodoSummary, facts, now);
       const want = DECIDED[c.name];
       expect(got, `web ${local.section}/${local.rule}`).toEqual(want ? { kind: "by_design", why: want } : { kind: "same" });
     });

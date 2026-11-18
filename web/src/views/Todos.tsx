@@ -80,7 +80,7 @@ import { DirectionCountsText } from "./DirectionMarks";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import { orderWaitGroups } from "../lib/task-wait";
 import { viewDrawOn } from "../features/todos/model/view-gates";
-import { drawnFromView } from "../features/todos/model/view-triage";
+import { drawnFromView, openAsDrawn } from "../features/todos/model/view-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -307,7 +307,7 @@ export function TodosView({
   const triaged = useMemo(
     () => {
       const r = orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r) : r;
+      return fromView ? drawnFromView(r, Date.now()) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
   );
@@ -316,7 +316,7 @@ export function TodosView({
     () => {
       if (!search.trim()) return triaged;
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r) : r;
+      return fromView ? drawnFromView(r, Date.now()) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
   );
@@ -331,10 +331,10 @@ export function TodosView({
       for (const g of triaged.sections[sec])
         for (const m of g.members) {
           row.set(m.id, sec);
-          if (countsAsOpen(m, g.triage.get(m.id)!)) open.add(m.id);
+          if ((fromView ? openAsDrawn : countsAsOpen)(m, g.triage.get(m.id)!)) open.add(m.id);
         }
     return { row, open };
-  }, [triaged]);
+  }, [triaged, fromView]);
   const filteredUncompleted = useSteady(
     useMemo(() => sortTodos(todos.filter((td) => placed.row.has(td.id) && placed.row.get(td.id) !== "done"), lookup), [todos, placed, lookup]),
     sameList,

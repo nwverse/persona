@@ -36,20 +36,54 @@ export function legacyOf(view: TodoSummary): TriageSection | undefined {
   return LEGACY[view.section as keyof typeof LEGACY];
 }
 
-/** What the to-do's runs say that today's rules read differently from the hub's, from the same sessions. */
-export interface RunFacts {
+/** What the row's facts say that today's rules read differently from the hub's: its runs, read from the same sessions
+ *  as the hub reads them, and the few facts the table below needs besides today's (section, rule). */
+export interface RowFacts {
   /** A linked run the session lookup does not have: the web reads it as offline, the hub may list it. */
   missing: boolean;
   /** A run stopped on a usage limit that has not reset yet. */
   usageLimit: boolean;
-  /** A run whose turn ended blocked on another Agent or an outside event. */
+  /** A run whose turn ended blocked on another Agent or on an outside event it names (the hub's waitsOn). */
   waits: boolean;
-  /** A run whose moment's model failure the hub retries ("Continue"). */
+  /** A run whose moment's model failure the hub retries ("Continue" on its way: the hub's retrying). */
   transient: boolean;
+  /** A run that stopped on a plain-text question nobody answered. */
+  awaitsReply: boolean;
+  /** A failed start whose failure is 48 hours old or more: the hub files it as nothing works on it (D4). */
+  failedLong: boolean;
+  /** It has a due date: the hub ends the day in the owner's zone, the web in the browser's. */
+  due: boolean;
+  /** This browser restored it after the hub's last restore, which the hub has no record of. */
+  restoredHere: boolean;
+  /** Fresh facts say one of its PRs is open (lib/todo-triage.ts openMergePRs). */
+  prOpen: boolean;
 }
 
-export function runFacts(todo: Todo, lookup: SessionLookup | undefined, now: number): RunFacts {
-  const out: RunFacts = { missing: false, usageLimit: false, waits: false, transient: false };
+/** The hub's failedStartFor: a failed start needs the owner this long after the failure. */
+const FAILED_START_MS = 48 * 3_600_000;
+/** The hub's retryGrace: a scheduled retry still counts this long past its wake. */
+const RETRY_GRACE_MS = 5 * 60_000;
+
+/** What the shadow knows beside the row: this browser's own restore of it, and whether a PR of it is open, both read
+ *  through today's code. */
+export interface RowHere {
+  restored?: number;
+  prOpen?: boolean;
+}
+
+export function rowFacts(todo: Todo, lookup: SessionLookup | undefined, now: number, here: RowHere = {}): RowFacts {
+  const failedAt = todo.start_error ? ms(todo.done_at) || ms(todo.updated_at) : 0;
+  const out: RowFacts = {
+    missing: false,
+    usageLimit: false,
+    waits: false,
+    transient: false,
+    awaitsReply: false,
+    failedLong: failedAt > 0 && now - failedAt >= FAILED_START_MS,
+    due: Boolean(todo.due_at || todo.due_date),
+    restoredHere: (here.restored ?? 0) > ms(todo.restored_at),
+    prOpen: Boolean(here.prOpen),
+  };
   for (const a of todo.agents ?? []) {
     if (a.released_at || a.start_error) continue;
     const s = lookup?.(a.machine_id, a.session_id);
@@ -59,9 +93,14 @@ export function runFacts(todo: Todo, lookup: SessionLookup | undefined, now: num
     }
     if (usageLimitAgent(s, now)) out.usageLimit = true;
     const st = stateOf(s);
-    if (s.work?.phase !== "blocked" || st === "needs_you" || st === "unread") continue;
-    if (s.work.on === "agent" || s.work.on === "external") out.waits = true;
-    if (s.work.on === "transient") out.transient = true;
+    if (s.awaits_reply && (st === "unread" || st === "idle")) out.awaitsReply = true;
+    // the hub's blockedOn: what a turn that is over and not on a card ended blocked on
+    const w = s.work;
+    if (w?.phase !== "blocked" || st === "working" || st === "needs_you" || st === "unread") continue;
+    // another Agent, or an outside event it names; never a usage limit's own wait, nor background commands or a /loop
+    if (w.on === "agent" || (w.on === "external" && (w.wait || w.agent) && !w.resets_at)) out.waits = true;
+    const wake = ms(w.wake_at);
+    if (w.on === "transient" && wake && now < wake + RETRY_GRACE_MS) out.transient = true;
   }
   return out;
 }
@@ -93,37 +132,60 @@ export type ByDesign =
 
 const FINISHED_DONE: ReadonlySet<TriageRule> = new Set(["seen", "accepted", "deployed"]);
 const AT_REST: ReadonlySet<TriageRule> = new Set(["rest", "stale"]);
+/** Today's rules for what the hub places above row 4 (rows 1 to 3) or as closed (rows 6 and 7). */
+const ABOVE_CAN_WAIT: ReadonlySet<TriageRule> = new Set(["failed_start", "superseded", "agent_asks", "owner_decides", "closed"]);
+/** The reasons a run places a to-do by: what the web's one usage-limit status hides of its other runs. */
+const RUN_PLACED: ReadonlySet<string> = new Set(["agent_running", "starting", "background", "persona_working", "usage_limit", "someone_else", "finished_unseen"]);
+/** The sections a step carries its parent into (the hub's stepOrder), and those a step's Can wait lifts it from. */
+const STEP_SECTIONS: ReadonlySet<string> = new Set(["needs_you", "working", "waiting", "can_wait"]);
+const CAN_WAIT_LIFTS: ReadonlySet<TriageSection> = new Set(["other", "just_done", "shelved", "done"]);
+/** lib/todo-triage.ts TRIAGE_SECTIONS, which this chunk may not import (view-legacy.test.ts keeps the two equal). */
+export const PAGE_ORDER: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done"];
+const ahead = (a: TriageSection | undefined, b: TriageSection) => a !== undefined && PAGE_ORDER.indexOf(a) < PAGE_ORDER.indexOf(b);
 
 /** The decided differences, first that holds: each names the view it expects and the web's (section, rule) it replaces.
  *  Parked in Waiting and Can wait under Needs you need no entry: the mapping above files them where the web does. */
-export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: TodoSummary, runs: RunFacts) => boolean }[] = [
-  // D4, row 1: a failed start stays open, Needs you for 48 h from the failure, then To do; the web counts its 48 h from
-  // the last activity and files it in Done after them
-  { why: "failed_start", holds: (l, v) => l.rule === "failed_start" && (v.reason === "failed_start" || v.section === "todo") },
-  // 3.4 "Steps roll up": the row carries its most urgent step's state (its line names the step); the web reads it alone
-  { why: "steps", holds: (_l, v) => v.line?.args?.step !== undefined },
-  // D11: a run that waits on another Agent or an outside event leaves Working; a moment's model failure the hub retries
-  // is Working (background), which the web reads as cut off
+export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: TodoSummary, facts: RowFacts) => boolean }[] = [
+  // D4, row 1: a failed start needs the owner for 48 h from the failure, then is filed as nothing works on it (To do,
+  // or Someday); the web counts its 48 h from the last activity and files it in Done (an open concern in Other open)
+  { why: "failed_start", holds: (l, v, f) => f.failedLong && (l.rule === "failed_start" || AT_REST.has(l.rule)) && (v.section === "todo" || v.section === "someday") },
+  // 3.4 "Steps roll up": the row carries its most urgent step's state (its line names the step) when that is ahead of
+  // its own; a step's Can wait lifts only a parent in To do, Just finished or Someday. The web reads the parent alone
+  {
+    why: "steps",
+    holds: (l, v) =>
+      v.line?.args?.step !== undefined && STEP_SECTIONS.has(v.section) && ahead(legacyOf(v), l.section) && (v.section !== "can_wait" || CAN_WAIT_LIFTS.has(l.section)),
+  },
+  // D11: a run that waits on another Agent or an outside event leaves Working for Waiting (or Just finished, when row 9
+  // holds first); a moment's model failure the hub retries is Working (background), which the web reads as cut off
   {
     why: "run_waits",
-    holds: (l, v, r) => (l.rule === "agent_running" && r.waits && v.section !== "working") || (l.rule === "agent_asks" && r.transient && v.section === "working"),
+    holds: (l, v, f) =>
+      (l.rule === "agent_running" && f.waits && (v.section === "waiting" || v.section === "just_finished")) ||
+      (l.rule === "agent_asks" && f.transient && v.reason === "background"),
   },
-  // row 10: a usage limit waits for its reset, after finished work (row 9); the web has no rule for it and files the
-  // to-do at rest, an unread run's finish included
-  { why: "usage_limit", holds: (l, v, r) => r.usageLimit && AT_REST.has(l.rule) && (v.reason === "usage_limit" || v.reason === "finished_unseen") },
-  // row 4: a run that ended on a plain-text question is Can wait, not finished work
-  { why: "awaits_reply", holds: (l, v) => v.reason === "awaits_reply" && (l.rule === "finished_unseen" || l.rule === "seen" || AT_REST.has(l.rule)) },
+  // row 10: a usage limit waits for its reset; the web's one status for it hides every other run, so it files the to-do
+  // at rest where the hub places it by its runs (one that works, waits or finished unseen first)
+  { why: "usage_limit", holds: (l, v, f) => f.usageLimit && AT_REST.has(l.rule) && RUN_PLACED.has(v.reason) },
+  // row 4: a run that ended on a plain-text question is Can wait, ahead of everything below row 3 but closed work
+  { why: "awaits_reply", holds: (l, v, f) => v.reason === "awaits_reply" && f.awaitsReply && !ABOVE_CAN_WAIT.has(l.rule) },
   // row 9: accepted or deployed work nobody has seen stays in Just finished however long (the web: Done after 24 h)
   { why: "finished_unseen", holds: (l, v) => v.reason === "finished_unseen" && (l.rule === "accepted" || l.rule === "deployed") && l.section === "done" },
-  // row 9: finished work stays in Just finished for 24 h after it was seen (the web: Done once seen)
-  { why: "finished_recent", holds: (l, v) => v.reason === "finished_recent" && FINISHED_DONE.has(l.rule) && l.section === "done" },
+  // row 9: finished work stays in Just finished for 24 h after it was seen (the web: Done once seen), ahead of an open
+  // PR (row 10), which the web puts first, or reads as no wait at all for a review not done yet
+  {
+    why: "finished_recent",
+    holds: (l, v, f) =>
+      v.reason === "finished_recent" && ((FINISHED_DONE.has(l.rule) && l.section === "done") || l.rule === "pr_open" || (l.rule === "rest" && f.prOpen)),
+  },
   // row 11, rule 9a: finished work seen over 24 h ago and still open is a To do to tick, never Done
   { why: "finished_seen", holds: (l, v) => v.reason === "finished_seen" && FINISHED_DONE.has(l.rule) && l.section === "done" },
   // row 12 (D7): Someday is the hub's alone; the web may shelve a to-do put off for long
   { why: "someday", holds: (l, v) => v.section === "someday" && AT_REST.has(l.rule) },
-  // row 13: Inactive is a mark the hub sets (its restores, a computer that does not answer, the owner's zone for a due
-  // day), not the web's Shelved section
-  { why: "inactive", holds: (l, v) => v.section === "todo" && AT_REST.has(l.rule) },
+  // row 13: the hub reads the last activity and who may be shelved as the web does (the shadow gives today's triage the
+  // hub's restores), so the Inactive mark differs from Shelved only where the hub knows otherwise: a computer that does
+  // not answer (whose runs the web lacks too), a due day in the owner's zone, and a restore of this browser's own
+  { why: "inactive", holds: (l, v, f) => v.section === "todo" && AT_REST.has(l.rule) && (f.missing || f.due || f.restoredHere) },
 ];
 
 /** How a row's view compares with today's triage of the same row. */
@@ -146,12 +208,12 @@ function outdated(view: TodoSummary, now: number): boolean {
   return at > 0 && at <= now + BOUNDARY_MS;
 }
 
-export function classify(local: Triage, view: TodoSummary, runs: RunFacts, now: number): ViewVerdict {
+export function classify(local: Triage, view: TodoSummary, facts: RowFacts, now: number): ViewVerdict {
   if (!knownView(view)) return { kind: "unknown" };
   if (legacyOf(view) === local.section) return { kind: "same" };
-  const hit = BY_DESIGN.find((d) => d.holds(local, view, runs));
+  const hit = BY_DESIGN.find((d) => d.holds(local, view, facts));
   if (hit) return { kind: "by_design", why: hit.why };
-  if (runs.missing) return { kind: "client_gap" };
+  if (facts.missing) return { kind: "client_gap" };
   if (outdated(view, now)) return { kind: "boundary" };
   return { kind: "mismatch" };
 }
