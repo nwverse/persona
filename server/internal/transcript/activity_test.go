@@ -43,6 +43,9 @@ func TestActivitySaysWhatAToolCallDoes(t *testing.T) {
 		{"TodoWrite", `{"todos":[]}`, "在更新计划"},
 		{"Skill", `{"skill":"code-review"}`, "在用技能 code-review"},
 		{"ScheduleWakeup", `{"delaySeconds":270}`, "在等待"},
+		{"sleep", `{"duration":"25s","duration_ms":25000}`, "在等待"},
+		{"wait_agent", `{}`, "在等待"},
+		{"subagent", `{"name":"review_api","event":"started"}`, "在派子任务 review_api"},
 		{"mcp__persona__phone_calendar_events", `{}`, "在调用 phone_calendar_events"},
 		{"SomethingNew", `{}`, "在调用 SomethingNew"},
 	}

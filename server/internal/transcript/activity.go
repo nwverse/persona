@@ -81,6 +81,8 @@ func Activity(name string, input json.RawMessage) string {
 		s = join("在搜网页", str("query"))
 	case "Task", "Agent":
 		s = join("在派子任务", str("description"))
+	case "subagent": // Codex's subagent activity (codex.go)
+		s = join("在派子任务", str("name"))
 	case "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet":
 		s = "在更新计划"
 	case "Skill":
@@ -89,7 +91,7 @@ func Activity(name string, input json.RawMessage) string {
 		s = "在问你问题"
 	case "ExitPlanMode":
 		s = "在等你批准计划"
-	case "ScheduleWakeup", "Monitor", "Sleep":
+	case "ScheduleWakeup", "Monitor", "Sleep", "sleep", "wait_agent":
 		s = "在等待"
 	case "BashOutput", "TaskOutput":
 		s = "在等后台任务"
