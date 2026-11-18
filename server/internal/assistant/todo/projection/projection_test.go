@@ -158,3 +158,85 @@ func TestOwnerDecidesWithoutAReview(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// A run's ask is what its oldest pending card asks, by the card's id, and only a question with options to choose from
+// is safe: a password, fields to fill in, an MCP server's form, a tool approval, a plan, a question to answer in
+// words, a dialog on the screen, and a run whose card the hub does not hold are open, and open_only on the lock screen.
+// The to-do's own decision is as risky as the list says, and open when the list says nothing it knows.
+func TestRunAskKindAndRiskFromItsCard(t *testing.T) {
+	asks := func(cards ...proto.Interaction) assistantwire.OwnerAsk {
+		f := Facts{ID: "todo_c", CreatedAt: hours(-5), UpdatedAt: hours(-5), Origin: "conv_main",
+			Agents:       []Agent{{MachineID: "m1", SessionID: "s1", Title: "Visa form"}},
+			Sessions:     []proto.Session{{MachineID: "m1", SessionID: "s1", State: proto.StateNeedsYou, StateSince: hours(-1)}},
+			Interactions: cards}
+		v := View(f, testNow)
+		if len(v.Asks) != 1 {
+			t.Fatalf("asks %+v", v.Asks)
+		}
+		return v.Asks[0]
+	}
+	card := func(id, kind string, edit func(*proto.Interaction)) proto.Interaction {
+		c := proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: kind, CreatedAt: hours(-1)}
+		if edit != nil {
+			edit(&c)
+		}
+		return c
+	}
+	one := func(kind string, edit func(*proto.Interaction)) []proto.Interaction {
+		return []proto.Interaction{card("ix", kind, edit)}
+	}
+	choose := []proto.Question{{Question: "Which office?",
+		Options: []proto.QuestionOption{{Label: "Tokyo"}, {Label: "Osaka"}}}}
+	safe, open := assistantwire.OwnerAskRiskSafe, assistantwire.OwnerAskRiskOpen
+	for _, tc := range []struct {
+		name       string
+		cards      []proto.Interaction
+		kind, risk string
+	}{
+		{"a question with options", one(proto.IxQuestion, func(c *proto.Interaction) { c.Questions = choose }),
+			assistantwire.OwnerAskKindQuestion, safe},
+		{"one of its questions in words", one(proto.IxQuestion, func(c *proto.Interaction) {
+			c.Questions = append(slices.Clone(choose), proto.Question{Question: "Anything else?"})
+		}), assistantwire.OwnerAskKindQuestion, open},
+		{"a tool approval", one(proto.IxPermission, nil), assistantwire.OwnerAskKindTool, open},
+		{"an approval with fields", one(proto.IxPermission, func(c *proto.Interaction) {
+			c.Fields = []proto.Field{{Key: "passport", Label: "Passport number"}}
+		}), assistantwire.OwnerAskKindForm, open},
+		{"an approval that needs a password", one(proto.IxPermission, func(c *proto.Interaction) {
+			c.Fields = []proto.Field{{Key: "user", Label: "User"}, {Key: "password", Label: "Password", Secret: true}}
+		}), assistantwire.OwnerAskKindSecret, open},
+		{"a screen that asks for a password", one(proto.IxScreen, func(c *proto.Interaction) { c.Secret = true }),
+			assistantwire.OwnerAskKindSecret, open},
+		{"a dialog on the screen", one(proto.IxScreen, nil), assistantwire.OwnerAskKindQuestion, open},
+		{"an MCP server's form", one(proto.IxElicitation, nil), assistantwire.OwnerAskKindForm, open},
+		{"a plan", one(proto.IxPlan, nil), assistantwire.OwnerAskKindPlan, open},
+		{"the oldest of two cards", []proto.Interaction{
+			card("newer", proto.IxPermission, func(c *proto.Interaction) { c.CreatedAt = hours(-1) }),
+			card("ix", proto.IxQuestion, func(c *proto.Interaction) { c.Questions, c.CreatedAt = choose, hours(-2) }),
+		}, assistantwire.OwnerAskKindQuestion, safe},
+	} {
+		a := asks(tc.cards...)
+		wantLock := assistantwire.OwnerAskLockscreenOpenOnly
+		if tc.risk == safe {
+			wantLock = assistantwire.OwnerAskLockscreenAnswer
+		}
+		if a.Kind != tc.kind || a.Risk != tc.risk || a.Lockscreen != wantLock || a.Interaction != "ix" {
+			t.Errorf("%s: kind %s, risk %s, lockscreen %s, interaction %q; want %s, %s, %s, ix", tc.name, a.Kind, a.Risk,
+				a.Lockscreen, a.Interaction, tc.kind, tc.risk, wantLock)
+		}
+	}
+	another := card("ix_other", proto.IxQuestion, func(c *proto.Interaction) { c.SessionID, c.Questions = "s2", choose })
+	if a := asks(another); a.Kind != assistantwire.OwnerAskKindQuestion || a.Interaction != "" || a.Risk != open ||
+		a.Lockscreen != assistantwire.OwnerAskLockscreenOpenOnly {
+		t.Errorf("a run whose card the hub does not hold: %+v", a)
+	}
+
+	for listed, want := range map[string]string{safe: safe, open: open, "": open, "later": open} {
+		f := Facts{ID: "todo_d", CreatedAt: hours(-5), UpdatedAt: hours(-5), Origin: "conv_main", Agents: []Agent{},
+			Ask: &Ask{Outcome: outcomeDecide, Verdict: "Needs your decision", AskedAt: hours(-2), Question: "Which hotel?",
+				Risk: listed}}
+		if v := View(f, testNow); len(v.Asks) != 1 || v.Asks[0].Risk != want {
+			t.Errorf("a decision listed %q: %+v", listed, v.Asks)
+		}
+	}
+}

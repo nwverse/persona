@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -419,5 +420,87 @@ func TestDecisionOfAMutedConversationIsNotPushed(t *testing.T) {
 	}
 	if listedAsk(t, s, todo.ID) == nil {
 		t.Fatal("no ask on the to-do")
+	}
+}
+
+// How risky answering an ask is (askRisk): open when it cannot be undone or other people will see it, or when Persona
+// would take it at a deadline it cannot undo, also once that deadline was handled; else safe, a Please verify too.
+func TestAskRisk(t *testing.T) {
+	deadline := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		a    acceptAsk
+		want string
+	}{
+		{"a call on priority", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority}, assistantwire.OwnerAskRiskSafe},
+		{"taken at a deadline it can undo", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyAcceptance, Deadline: deadline,
+			Reversible: true}, assistantwire.OwnerAskRiskSafe},
+		{"cannot be undone", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyIrreversible}, assistantwire.OwnerAskRiskOpen},
+		{"others will see it", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyVisible, Deadline: deadline, Reversible: true},
+			assistantwire.OwnerAskRiskOpen},
+		{"taken at a deadline it cannot undo", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority, Deadline: deadline},
+			assistantwire.OwnerAskRiskOpen},
+		{"that deadline handled", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority, Deadline: deadline,
+			DueAt: deadline}, assistantwire.OwnerAskRiskOpen},
+		{"a Please verify", acceptAsk{}, assistantwire.OwnerAskRiskSafe},
+	} {
+		if got := askRisk(&tc.a); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The list's ask carries its risk, and the view's own decision reads it, with the lock-screen action that follows: a
+// call on priority is safe, a step that cannot be undone open, and so is one Persona would take at a deadline it
+// cannot undo, also once that deadline was handled and the list no longer shows it.
+func TestTodoListCarriesTheAskRisk(t *testing.T) {
+	atDeadline := func() map[string]any {
+		a := rolloutDecision()
+		a["deadline"], a["reversible"] = "2h", false
+		return a
+	}
+	for _, tc := range []struct {
+		name    string
+		review  map[string]any
+		handled bool
+		want    string
+	}{
+		{"a call on priority", rolloutDecision(), false, assistantwire.OwnerAskRiskSafe},
+		{"a step that cannot be undone", dropTableDecision(), false, assistantwire.OwnerAskRiskOpen},
+		{"taken at a deadline it cannot undo", atDeadline(), false, assistantwire.OwnerAskRiskOpen},
+		{"that deadline handled", atDeadline(), true, assistantwire.OwnerAskRiskOpen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			if _, err := reviewErr(s, todo.ID, tc.review); err != nil {
+				t.Fatal(err)
+			}
+			if tc.handled {
+				s.accept.mu.Lock()
+				s.accept.asks[todo.ID].DueAt = time.Now()
+				s.accept.mu.Unlock()
+			}
+			row := listedTodos(t, s)[todo.ID]
+			ask, _ := row["ask"].(map[string]any)
+			if ask == nil || ask["risk"] != tc.want || tc.handled && ask["deadline"] != nil {
+				t.Fatalf("ask %v", ask)
+			}
+			lock := assistantwire.OwnerAskLockscreenAnswer
+			if tc.want == assistantwire.OwnerAskRiskOpen {
+				lock = assistantwire.OwnerAskLockscreenOpenOnly
+			}
+			view, _ := row["view"].(map[string]any)
+			asks, _ := view["asks"].([]any)
+			var own map[string]any
+			for _, a := range asks {
+				if m, _ := a.(map[string]any); m["kind"] == assistantwire.OwnerAskKindDecision {
+					own = m
+				}
+			}
+			if own == nil || own["risk"] != tc.want || own["lockscreen"] != lock {
+				t.Fatalf("the view's decision %v, of %v", own, view)
+			}
+		})
 	}
 }

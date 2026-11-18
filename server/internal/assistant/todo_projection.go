@@ -26,7 +26,8 @@ type todoProjection struct {
 // todoProjectionOf works out the view of every to-do of list at now. list holds the rows as GET /api/v1/todos lists
 // them (formatTodo, with ask, decision_review and orphaned). The sessions read are those of the active runs of the
 // to-dos the projection reads as open (a failed start included, whose runs still date its last activity), each
-// computer asked once (todoRunSessions).
+// computer asked once (todoRunSessions), and with them the pending cards of those runs (pendingInteractions), which say
+// what a run that asks is asking.
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
 	want := map[string]map[string]bool{} // by computer, the session ids of the open to-dos' active runs
 	for i := range list {
@@ -56,19 +57,31 @@ func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now t
 			sessions[[2]string{machine, c.SessionID}] = c
 		}
 	}
+	cards := map[[2]string][]proto.Interaction{} // the pending cards of those runs, oldest first
+	if len(want) > 0 {
+		for _, c := range s.pendingInteractions() {
+			if want[c.MachineID][c.SessionID] {
+				k := [2]string{c.MachineID, c.SessionID}
+				cards[k] = append(cards[k], c)
+			}
+		}
+	}
 	loc := s.location(ctx)
 	p := todoProjection{facts: make([]projection.Facts, len(list))}
 	for i := range list {
 		t := &list[i]
 		p.facts[i] = projectionFacts(*t, sessions, loc)
-		// A computer that did not answer lists nothing: its runs read as offline, and the to-do gets no Inactive mark.
-		if t.DoneAt == nil || t.StartError != "" {
-			for _, a := range t.Agents {
-				if a.ReleasedAt == nil && a.DismissedAt == nil && failed[a.MachineID] {
-					p.facts[i].Unreached = true
-					break
-				}
+		if t.DoneAt != nil && t.StartError == "" {
+			continue
+		}
+		for _, a := range t.Agents {
+			if a.ReleasedAt != nil || a.DismissedAt != nil {
+				continue
 			}
+			// A computer that did not answer lists nothing: its runs read as offline, and the to-do gets no Inactive
+			// mark.
+			p.facts[i].Unreached = p.facts[i].Unreached || failed[a.MachineID]
+			p.facts[i].Interactions = append(p.facts[i].Interactions, cards[[2]string{a.MachineID, a.SessionID}]...)
 		}
 	}
 	p.views = projection.Views(p.facts, now)
@@ -208,7 +221,7 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 	}
 	if a := t.Ask; a != nil {
 		f.Ask = &projection.Ask{Outcome: a.Outcome, Verdict: a.Verdict, Recommend: a.Recommend, AskedAt: a.AskedAt,
-			Question: a.Question, Deadline: a.Deadline, Default: a.Default, ForBriefing: a.ForBriefing}
+			Risk: a.Risk, Question: a.Question, Deadline: a.Deadline, Default: a.Default, ForBriefing: a.ForBriefing}
 		for _, o := range a.Options {
 			f.Ask.Options = append(f.Ask.Options, assistantwire.OwnerAskOption{Label: o.Label, LeadsTo: o.LeadsTo})
 		}

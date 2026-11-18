@@ -164,6 +164,32 @@ object OwnerAskHome {
 }
 
 /**
+ * How risky answering an ask is (proposal 3.7, decision 4(a)): safe, the row, the card or a push may answer it in
+ * place; open, it cannot be undone or other people will see it, or nothing says it can, so the owner answers it after
+ * a look, on its page or at its run. The manager's rule: a decision is open when why only the owner decides is
+ * irreversible or visible_to_others, or Persona would take it at a deadline that cannot be undone; a retry is safe; a
+ * run's question card whose every question offers options is safe, and anything else a run asks is open (a question
+ * in words, a dialog on the screen, a plan, a tool approval, a form, a secret, or a card the hub does not hold).
+ * Open: a newer hub may send other values, which clients read as open.
+ */
+object OwnerAskRisk {
+    const val SAFE = "safe"
+    const val OPEN = "open"
+    val ALL = listOf("safe", "open")
+}
+
+/**
+ * What a push about the ask may offer on the lock screen (proposal 3.7): answer, its answers as actions, each needing
+ * the phone unlocked; open_only, no action, a tap opens it. open_only exactly when the risk is open. Open: a newer
+ * hub may send other values, which clients read as open_only.
+ */
+object OwnerAskLockscreen {
+    const val ANSWER = "answer"
+    const val OPEN_ONLY = "open_only"
+    val ALL = listOf("answer", "open_only")
+}
+
+/**
  * One option of a decision, as its card lists it.
  */
 @Serializable
@@ -179,8 +205,9 @@ data class OwnerAskOption(
 )
 
 /**
- * One ask that holds the to-do in Needs you or Can wait: the to-do's own (home todo) or one of its runs' (home run).
- * Its risk, lock-screen action and state come with answering in place, after stage 1.
+ * One ask that holds the to-do in Needs you or Can wait: the to-do's own (home todo) or one of its runs' (home run),
+ * with how risky answering it is and what a push about it may offer on the lock screen. Its state (answered, held for
+ * Undo) comes with answering in place.
  */
 @Serializable
 data class OwnerAsk(
@@ -222,6 +249,19 @@ data class OwnerAsk(
      * When Persona takes the recommendation unless the owner answers first; absent when it never does.
      */
     @SerialName("default_at") val defaultAt: String? = null,
+    /**
+     * How risky answering it is. Absent from an older manager: clients read it as open.
+     */
+    val risk: String? = null,
+    /**
+     * What a push about it may offer on the lock screen. Absent from an older manager: clients read it as open_only.
+     */
+    val lockscreen: String? = null,
+    /**
+     * The id of the run's pending card this ask is, answered through POST /api/v1/interactions/{id}/resolve; only on
+     * a run's ask, and absent while the hub holds no card for the run (its kind is then question).
+     */
+    val interaction: String? = null,
 )
 
 /**

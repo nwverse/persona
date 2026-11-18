@@ -39,13 +39,15 @@ const (
 	runPersona                    // one of Persona's own conversations works now
 )
 
-// run is one active linked run: its link, its session when the hub lists it (else noSession), and how it stands. s
-// points into the facts' Sessions: a session is 1.5 KB, and every read of the list makes a run of each active link.
+// run is one active linked run: its link, its session when the hub lists it (else noSession), how it stands, and its
+// oldest pending card (nil: none the hub holds). s and card point into the facts: a session is 1.5 KB, and every read
+// of the list makes a run of each active link.
 type run struct {
 	link  Agent
 	s     *proto.Session
 	found bool
 	kind  runKind
+	card  *proto.Interaction
 }
 
 // noSession is the session of a run the hub does not list: the zero session, never written.
@@ -80,6 +82,15 @@ func activeRuns(f *Facts, now time.Time) []run {
 			if s := &f.Sessions[i]; s.MachineID == a.MachineID && s.SessionID == a.SessionID {
 				r.s, r.found = s, true
 				break
+			}
+		}
+		for i := range f.Interactions {
+			c := &f.Interactions[i]
+			if c.MachineID != a.MachineID || c.SessionID != a.SessionID {
+				continue
+			}
+			if r.card == nil || c.CreatedAt.Before(r.card.CreatedAt) {
+				r.card = c
 			}
 		}
 		r.kind = runReading(r, now)

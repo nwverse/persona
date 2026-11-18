@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -373,5 +374,66 @@ func TestProjectionReadsOnlyTheLinkedRunsOnTheFleet(t *testing.T) {
 	}
 	if v := got.views[0]; v.Reason != assistantwire.TodoReasonAgentRunning {
 		t.Errorf("the working run's to-do: %+v", v)
+	}
+}
+
+// The adapter hands the projection the pending cards of the open to-dos' active runs: a run that asks is asked by its
+// card, whose id rides on the ask and whose kind says what it asks, and a card of a session no run of the to-do is on
+// is no ask of its. The same state read twice is the same bytes, so the list's ETag holds; once the card is answered
+// the run's ask is a question again until the session moves on.
+func TestProjectionAsksByTheRunsCard(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	began := time.Now().UTC().Add(-time.Minute)
+	e.sessions("server", proto.Session{SessionID: "s1", Title: "Visa form", Status: proto.StatusBlocked,
+		State: proto.StateNeedsYou, StateSince: began, UpdatedAt: began, PendingInteractions: 1,
+		AttentionReason: "Wants to run a command"})
+	todo := e.create("Fill in the visa form")
+	e.must("PUT", "/api/v1/todos/"+todo.ID+"/agents/server/s1", "")
+	cards := []proto.Interaction{
+		{ID: "ix_other", MachineID: "server", SessionID: "s2", Kind: proto.IxQuestion, CreatedAt: began.Add(-time.Hour),
+			ExpiresAt: began.Add(time.Hour), Questions: []proto.Question{{Question: "Which folder?",
+				Options: []proto.QuestionOption{{Label: "Documents"}}}}},
+		{ID: "ix_visa", MachineID: "server", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash", CreatedAt: began,
+			ExpiresAt: began.Add(time.Hour)},
+	}
+	e.s.fleet.mu.Lock()
+	if e.s.fleet.interactions == nil {
+		e.s.fleet.interactions = map[string]*pending{}
+	}
+	for _, c := range cards {
+		e.s.fleet.interactions[c.ID] = &pending{ix: c}
+	}
+	e.s.fleet.mu.Unlock()
+
+	runAsk := func(body []byte) assistantwire.OwnerAsk {
+		t.Helper()
+		var got struct{ Todos []listedTodo }
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range got.Todos {
+			if r.ID == todo.ID && r.View != nil && len(r.View.Asks) == 1 {
+				return r.View.Asks[0]
+			}
+		}
+		t.Fatalf("no one ask on %s: %s", todo.ID, body)
+		return assistantwire.OwnerAsk{}
+	}
+	body := e.must("GET", "/api/v1/todos", "").Body.Bytes()
+	if a := runAsk(body); a.Kind != assistantwire.OwnerAskKindTool || a.Interaction != "ix_visa" ||
+		a.Home != assistantwire.OwnerAskHomeRun || a.Risk != assistantwire.OwnerAskRiskOpen ||
+		a.Lockscreen != assistantwire.OwnerAskLockscreenOpenOnly || a.Text != "Wants to run a command" {
+		t.Fatalf("the run's ask %+v", a)
+	}
+	if again := e.must("GET", "/api/v1/todos", "").Body.Bytes(); !bytes.Equal(again, body) {
+		t.Fatalf("unchanged state read twice:\n%s\n%s", body, again)
+	}
+
+	e.s.fleet.mu.Lock()
+	delete(e.s.fleet.interactions, "ix_visa")
+	e.s.fleet.mu.Unlock()
+	if a := runAsk(e.must("GET", "/api/v1/todos", "").Body.Bytes()); a.Kind != assistantwire.OwnerAskKindQuestion ||
+		a.Interaction != "" || a.Risk != assistantwire.OwnerAskRiskOpen {
+		t.Fatalf("the run's ask with its card answered %+v", a)
 	}
 }
