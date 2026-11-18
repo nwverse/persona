@@ -1165,24 +1165,51 @@ export function upsertSession(s: Session) {
   set({ sessions: { ...state.sessions, [s.machine_id]: next }, ...syncAssistant(s.machine_id, [s]) });
 }
 
-/** The conversations the assistant was read again for (unlistedConversations), each for the page it was read for
- *  (pageOf: another manager's page reads its own answer, review of #10199): once each, whatever that read answered; one
- *  whose read failed, or whose answer was not taken (a later one was in place, or the page showed another manager by
- *  then), is asked about again at its next row. */
-const askedForUnlisted = new Set<string>();
+/** What became of each conversation the assistant was read again for (unlistedConversations), by the page it was read
+ *  for (pageOf: another manager's page reads its own answer): the reads so far, at most UNLISTED_TRIES; whether one is
+ *  on its way; and whether a row of it came meanwhile (archived, renamed: a state newer than that read's), in which case
+ *  another read follows it. A read that failed, was not taken or did not list it leaves it to be asked about again at
+ *  its next row (review of #10199: the hub can list a new conversation a moment after its row comes). */
+const askedForUnlisted = new Map<string, { tries: number; reading: boolean; changed: boolean }>();
+const UNLISTED_TRIES = 3;
 
 /** `rows` (of the assistant's machine) bring conversations the held answer does not list (#10190): one another client
- *  made, or a background supervisor the hub made since (#5082). The answer is read again, once for each, so the
- *  conversation comes in with everything it gives one (its manager noted for its requests, its title, its details), not
- *  as a list row laid in by this page. */
+ *  made, or a background supervisor the hub made since (#5082). The answer is read again for them, so the conversation
+ *  comes in with everything it gives one (its manager noted for its requests, its title, its details), not as a list row
+ *  laid in by this page. */
 function askAboutUnlisted(rows: readonly Session[]) {
   const a = state.assistant;
+  if (!a) return;
   const page = pageOf();
-  const keys = a ? unlistedConversations(a, rows).map((id) => `${page}\u0000${id}`).filter((k) => !askedForUnlisted.has(k)) : [];
+  const key = (id: string) => `${page}\u0000${id}`;
+  for (const r of rows) {
+    const e = askedForUnlisted.get(key(r.session_id));
+    if (e?.reading) e.changed = true;
+  }
+  readUnlisted(unlistedConversations(a, rows).map(key).filter((k) => {
+    const e = askedForUnlisted.get(k);
+    return !e || (!e.reading && e.tries < UNLISTED_TRIES);
+  }));
+}
+
+function readUnlisted(keys: string[]) {
   if (!keys.length) return;
-  keys.forEach((k) => askedForUnlisted.add(k));
-  const again = () => keys.forEach((k) => askedForUnlisted.delete(k));
-  void refreshAssistant().then((taken) => taken || again(), again);
+  for (const k of keys) {
+    const e = askedForUnlisted.get(k) ?? { tries: 0, reading: false, changed: false };
+    askedForUnlisted.set(k, { tries: e.tries + 1, reading: true, changed: false });
+  }
+  // Once listed, its rows are no longer unlisted ones: only a row that came while this read was on its way reads again.
+  const settle = () => {
+    const again: string[] = [];
+    for (const k of keys) {
+      const e = askedForUnlisted.get(k);
+      if (!e) continue; // signed out meanwhile (reset)
+      e.reading = false;
+      if (e.changed && e.tries < UNLISTED_TRIES) again.push(k);
+    }
+    readUnlisted(again);
+  };
+  void refreshAssistant().then(settle, settle);
 }
 
 // The assistant's conversations are sessions on its machine too: the change that keeps the copy in `assistant`

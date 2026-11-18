@@ -143,15 +143,47 @@ describe("a conversation made elsewhere comes into Recent (#10190)", () => {
     expect(conversation("lark")).toMatchObject({ title: "Weekly report", origin: "lark_agent", manager: "m-1", queued: ["next"] });
   });
 
-  it("asks once for a conversation, whatever the answer said", async () => {
+  // review of #10199: the hub can list a new conversation a moment after its row comes
+  it("asks again at its next rows while the answer does not list it, three reads in all", async () => {
     await listMode();
-    // an answer that does not list it yet: a later change of its row reads nothing more
+    for (const [i, reads] of [[2, 2], [3, 3], [4, 4], [5, 4], [6, 4]]) {
+      changed = [lark({ state: i % 2 ? "working" : "idle", status: i % 2 ? "working" : "idle", waiting: false })];
+      await hint(`r${i}`);
+      expect(assistantReads).toBe(reads);
+    }
+    expect(recent()).toEqual(["leader"]);
+  });
+
+  it("once the answer lists it, its later rows read nothing more", async () => {
+    await listMode();
+    conversations = [...conversations, lark()];
     changed = [lark({ waiting: false })];
     await hint("r2");
     expect(assistantReads).toBe(2);
+    expect(recent()).toEqual(["lark", "leader"]);
     changed = [lark({ state: "working", status: "working", waiting: false })];
     await hint("r3");
     expect(assistantReads).toBe(2);
+  });
+
+  // review of #10199: a row that comes while the read is on its way is newer than that read's answer
+  it("a row of it that comes while its read is on its way has it read again: archived meanwhile, it leaves Recent", async () => {
+    await listMode();
+    conversations = [...conversations, lark()];
+    let release!: () => void;
+    assistantHeld = new Promise<void>((r) => (release = r));
+    changed = [lark({ waiting: false })];
+    await hint("r2"); // its read waits, with the conversation as the hub had it then
+    expect(assistantReads).toBe(2);
+    conversations = conversations.map((c) => (c.session_id === "lark" ? { ...c, archived: true } : c));
+    changed = [lark({ archived: true, waiting: false })];
+    await hint("r3"); // archived on another device
+    expect(assistantReads).toBe(2);
+    release();
+    await settle();
+    await settle();
+    await settle();
+    expect(assistantReads).toBe(3);
     expect(recent()).toEqual(["leader"]);
   });
 
