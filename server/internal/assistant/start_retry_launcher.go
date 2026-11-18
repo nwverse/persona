@@ -72,6 +72,14 @@ func (s *Service) personadMissing(ctx context.Context, t PlanTask) bool {
 	return s.managedLauncher(ctx, cmp.Or(a["launcher"], t.Launcher))
 }
 
+// ranLauncher is the launcher task t's last start ran: the one its refusal names (runPlanTaskStart adds it when the
+// node's does not), else the one its plan names or the default. A tier, a start-defaults policy or the agent.new
+// binding may have chosen it, and the plan keeps only what the task named itself (storedLaunch), so the plan's
+// launcher alone is not what failed.
+func (s *Service) ranLauncher(ctx context.Context, t PlanTask) string {
+	return cmp.Or(t.ErrorArgs["launcher"], s.startLauncher(ctx, t.Launcher))
+}
+
 // managedLauncher: name is a Persona-managed launcher (Settings › Models), which a node runs through personad launch.
 func (s *Service) managedLauncher(ctx context.Context, name string) bool {
 	return name != "" && slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == name })
@@ -93,7 +101,7 @@ func (s *Service) retryLaunchers(ctx context.Context, m Device, t PlanTask, err 
 // the terminal could not run personad itself (personadMissing). A list that can't be read gives plain claude alone, when
 // m has it and t's launcher runs Claude Code.
 func (s *Service) launcherAlternatives(ctx context.Context, m Device, t PlanTask, except ...string) []string {
-	failed := s.startLauncher(ctx, t.Launcher)
+	failed := s.ranLauncher(ctx, t)
 	list, known := s.launchersHere(withUnhidden(ctx, failed), m.ID)
 	var configured []ConfiguredLauncher
 	if known {
@@ -142,8 +150,11 @@ func (s *Service) launcherAlternatives(ctx context.Context, m Device, t PlanTask
 // read-only task read-only. A managed one is taken even after the terminal could not run personad itself: it is only
 // left out of the suggestions (launcherAlternatives), since the owner may have fixed the terminal (or the node, which
 // now hands terminals the home's spelling of its program) since that record. t keeps its
-// computer, directory and workspace; its tier goes (it named the launcher before), the permission is settled again
-// for the agent that runs, and its why says what changed. The same launcher it has, or none, changes nothing.
+// computer, directory and workspace; its tier goes (it named the launcher before), and so does a start-defaults
+// policy's pick (the task names the launcher now). Its permission mode stays when the launcher runs the same agent
+// as the one that failed (a Codex task in plan mode stays in plan mode), and is settled again for another agent or
+// when it was what Allow all made it; its why says what changed. None, or the launcher the task names itself with no
+// tier and no model, changes nothing.
 func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retryWith) error {
 	name, model := strings.TrimSpace(with.launcher), strings.TrimSpace(with.model)
 	if name == "" {
@@ -155,8 +166,10 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 	if err := checkModelID(model); err != nil {
 		return planInvalid{err}
 	}
-	from := s.startLauncher(ctx, t.Launcher)
-	if name == from && model == "" {
+	// Compared with what the failed start ran (ranLauncher), not with the plan's launcher: a task whose tier or
+	// start-defaults policy chose the launcher names none itself, and kept so, it would start on that one again.
+	from := s.ranLauncher(ctx, *t)
+	if name == t.Launcher && t.Tier == "" && model == "" {
 		return nil
 	}
 	machine := firstNonEmpty(m.Name, m.ID)
@@ -186,19 +199,34 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 		t.Effort = ""
 	}
 	if !t.preservePermission {
-		// Settled again for the agent that runs now, as task_plan settles it: what the last launcher ran with (Allow
-		// all for Claude Code) is not carried onto another kind.
-		t.Permission = ""
-		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		if agent.allowAll() {
 			t.Permission = "bypassPermissions"
-		}
-		if t.Permission == "" && modes {
-			t.Permission = s.taskPermission(ctx, t.Machine, nil)
+		} else {
+			// Settled again, as task_plan settles it, only for another agent than the one that failed, or when the
+			// mode is what Allow all gave that one (Claude Code's, Auto Accept's): the same agent keeps the task's own.
+			if was := s.launcherAgentOn(ctx, m, from); was.agent != agent.agent || was.allowAll() {
+				t.Permission = ""
+			}
+			t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
+			if t.Permission == "" && modes {
+				t.Permission = s.taskPermission(ctx, t.Machine, nil)
+			}
 		}
 	}
 	t.RetryWith = nil
-	t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.retried_on_launcher", i18n.Args{"to": name, "from": from, "machine": machine}))
-	s.logf("task %s: retrying its start on %s with launcher %s instead of %s", t.TodoID, m.ID, name, from)
+	if name != from {
+		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.retried_on_launcher", i18n.Args{"to": name, "from": from, "machine": machine}))
+		s.logf("task %s: retrying its start on %s with launcher %s instead of %s", t.TodoID, m.ID, name, from)
+	}
 	return nil
+}
+
+// launcherAgentOn is what launcher name runs on computer m, as fitLauncher reads it for a start; nothing when it
+// can't be told (the computer does not have it).
+func (s *Service) launcherAgentOn(ctx context.Context, m Device, name string) startAgent {
+	_, agent, err := s.fitLauncher(ctx, m, startPick{launcher: name}, map[string]any{"launcher": name})
+	if err != nil {
+		return startAgent{}
+	}
+	return agent
 }

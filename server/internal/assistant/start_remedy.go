@@ -271,20 +271,30 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 		return "", fmt.Errorf("already started again %d times: tell the user why it does not start and what to check", startRemedyRetries)
 	}
 	with := retryWith{launcher: strings.TrimSpace(a.Launcher), model: strings.TrimSpace(a.Model)}
-	from := s.startLauncher(ctx, pt.Launcher)
+	from := s.ranLauncher(ctx, pt) // what the failed start ran, which a tier or a policy may have chosen
 	step := startRemedyBody{Action: "retry", By: "assistant", Attempt: attempt, Reason: reason}
 	switch {
 	case pt.Start != nil && pt.Start.State == remedying:
 	case todo.failedStart(): // failed for good: reopened, in a new tab
 		// Marked first: the start retryTask runs reads its task as the plan has it, and tells the supervisor how it ends.
 		prev := pt.Start
-		if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
-			pt.Start = &StartRemedy{State: remedying, Attempt: attempt, By: "assistant", Reason: todo.StartError, At: time.Now().UTC()}
-		}); err != nil {
+		mark := &StartRemedy{State: remedying, Attempt: attempt, By: "assistant", Reason: todo.StartError, At: time.Now().UTC()}
+		if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) { pt.Start = mark }); err != nil {
 			return "", err
 		}
-		if _, err := s.retryTaskWith(ctx, todo.ID, with); err != nil {
-			_ = s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) { pt.Start = prev })
+		// Nothing started (another start is on its way, the owner's Retry say, or it started since): the mark goes
+		// again, while it is still this call's, so no remedy is left waiting for a start that is not this one, and
+		// nothing says it moved launcher.
+		_, started, err := s.retryTaskStart(ctx, todo.ID, with)
+		if err != nil || !started {
+			_ = s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
+				if r := pt.Start; r != nil && r.State == mark.State && r.Attempt == mark.Attempt && r.At.Equal(mark.At) {
+					pt.Start = prev
+				}
+			})
+			if err == nil {
+				err = errors.New("it is starting again already, or it started since: nothing was started (nor moved to another launcher); how that start ends comes as a supervision message")
+			}
 			return "", err
 		}
 		on := ""
@@ -310,9 +320,10 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 	if !claimed {
 		return "", errors.New("it is starting again already")
 	}
-	moved := pt.Launcher != p.Tasks[i].Launcher || pt.Model != p.Tasks[i].Model
+	moved := pt.Launcher != p.Tasks[i].Launcher || pt.Model != p.Tasks[i].Model // retryOn pinned another
+	switched := pt.Launcher != p.Tasks[i].Launcher && pt.Launcher != from       // not the launcher that failed
 	inPane := ""
-	if time.Now().Before(pt.Start.Until) && !moved {
+	if time.Now().Before(pt.Start.Until) && !switched && pt.Model == p.Tasks[i].Model {
 		inPane = pt.Start.Pane // another launcher starts in a new tab: an agent of the old one may hold the kept tab
 	}
 	if err := s.patchPlanTask(ctx, p.ID, i, func(t *PlanTask) {
@@ -325,7 +336,7 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 		s.endTaskStart(todo.ID, st, proto.Session{})
 		return "", err
 	}
-	if pt.Launcher != p.Tasks[i].Launcher {
+	if switched {
 		step.LauncherFrom, step.LauncherTo = from, pt.Launcher
 	}
 	s.remedyStep(ctx, p.Conversation, todo.ID, step)
