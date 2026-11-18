@@ -232,6 +232,11 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             (schema / "examples/invalid/View.fixture.json").write_text('{"valid":false}\n')
             schema_capture = root / "schema-sync.json"
             remote_schema = remote / ".cache/persona-test-checkout/schema/extension"
+            wire = checkout / "schema/wire"
+            wire.mkdir(parents=True)
+            (wire / "todo-view.schema.json").write_text('{"wire":true}\n')
+            wire_capture = root / "wire-sync.json"
+            remote_wire = remote / ".cache/persona-test-checkout/schema/wire"
             shutil.copy2(ROOT / "scripts/test/test-server.sh", checkout / "scripts/test/test-server.sh")
             shutil.copy2(ROOT / "scripts/test/server_test_env.py", checkout / "scripts/test/server_test_env.py")
             # test-server.sh stages the internal/node partition runner beside server_test_env.py (#5594).
@@ -284,7 +289,9 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "if str(source)=='sdk/go':\n"
                  f" pathlib.Path({str(sdk_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
                  "if str(source)=='schema/extension':\n"
-                 f" pathlib.Path({str(schema_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+                 f" pathlib.Path({str(schema_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+                 "if str(source)=='schema/wire':\n"
+                 f" pathlib.Path({str(wire_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n")
             packages = ["github.com/example/fixture/server/internal/example",
                         "github.com/example/fixture/server/internal/node"]
             node_tests = ["TestNodeA", "TestNodeB", "TestNodeC", "ExampleNode"]
@@ -312,6 +319,9 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "assert (schema/'examples/View.fixture.json').read_text()=='{\"valid\":true}\\n'\n"
                  "assert (schema/'examples/invalid/View.fixture.json').read_text()=='{\"valid\":false}\\n'\n"
                  "assert not (schema/'stale.json').exists()\n"
+                 "wire=base/'schema/wire'\n"
+                 "assert (wire/'todo-view.schema.json').read_text()=='{\"wire\":true}\\n'\n"
+                 "assert not (wire/'stale.json').exists()\n"
                  "assert (base/'docs/guide.md').read_text()=='# Fixture guide\\n'\n"
                  "assert (base/'web/src/i18n/locales/en/fixture.json').read_text()=='{\"locale\":true}\\n'\n"
                  "assert (base/'sdk/templates/go/persona-extension.json').read_text()=='{\"template\":true}\\n'\n"
@@ -359,6 +369,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                     (remote_sdk / "stale.go").write_text("package stale\n")
                 if index and remote_schema.is_dir():
                     (remote_schema / "stale.json").write_text("{}\n")
+                if index and remote_wire.is_dir():
+                    (remote_wire / "stale.json").write_text("{}\n")
                 with self.subTest(args=args, extra=extra):
                     result = subprocess.run(["bash", str(checkout / "scripts/test/test-server.sh"), *args],
                                             env={**environment, **extra}, capture_output=True, text=True, timeout=30)
@@ -382,6 +394,10 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                                      ["-a", "--delete", "schema/extension/",
                                       "fake-hub:.cache/persona-test-checkout/schema/extension/"])
                     self.assertFalse((remote_schema / "stale.json").exists())
+                    self.assertEqual(json.loads(wire_capture.read_text()),
+                                     ["-a", "--delete", "schema/wire/",
+                                      "fake-hub:.cache/persona-test-checkout/schema/wire/"])
+                    self.assertFalse((remote_wire / "stale.json").exists())
                     for record in records:
                         child = record["env"]
                         # the pinned Bun lives in the hub user's ~/.local/bin, which a non-interactive shell may lack (#1947)

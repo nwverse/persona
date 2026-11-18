@@ -19,6 +19,21 @@ unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call`
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
   `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
 
+## Compact unattended delivery from actual context and user activity (#8658)
+
+Supervision and scheduled messages are inputs but are not user activity. Keep their structured source when deciding
+whether the owner has been away; reset the idle clock when the owner's input arrives, before a send lock can wait.
+Claude's `result.usage` and `modelUsage` aggregate requests and cannot stand in for context size. Use the last
+main-model request's input plus cache-read and cache-creation tokens, or `compact_boundary`'s `post_tokens`.
+Wait for the compaction command's result, not just its boundary, before writing the next message: the result still
+ends that command. Persist the attempt latch with the session, and rearm only after user activity or a context drop
+below the threshold followed by another idle interval. Failed compactions must not turn every background wake into
+another summary attempt.
+
+Node-only JSON round trips do not prove this state survives a restart. The manager decodes `state.put` through
+`db.NodeSession`, then writes the `node_model` settings value and projects it back for `state.load`. Carry the opaque
+idle state through every boundary, and test the real manager entry points against Postgres after reopening the store.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
@@ -548,6 +563,14 @@ oh-my-zsh asks "[oh-my-zsh] Would you like to update? [Y/n]" while `~/.zshrc` lo
 
 The node now waits for the new tab's shell to settle before typing (`node/shellsettle.go`): only shells in front of the pane (no `git` or `nvm` an rc file runs) and the screen unchanged for 600 ms, at most 15 s. A question on the last line is never answered for the user: after 20 s the start ends with `shell_waiting` and the tab is kept open for 10 minutes. A typed line the shell still answers for (`rejects` / `rejectedLine` in `node/shellmiss.go`) is typed once more right away instead of waiting out `claudeStartWait`. Avoid fixed sleeps before typing into a fresh shell; read its screen and foreground processes instead.
 
+Waiting made the question certain to show, and a kept tab nobody could reach left the start failed for good (#10365): the phone could not type into it, a resend got the stored error for 10 minutes, and a Retry opened another tab that stopped on the same question. Three things together fix it:
+
+- **Turn the question off where it is asked**: what the node types arrives after the rc files ran, so it cannot help. The start tab is created with `DISABLE_AUTO_UPDATE=true` + `DISABLE_UPDATE_PROMPT=true` (never the second alone: that updates silently) and `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true` in its shell's environment, in the same create that gives it the Agent mark `PERSONA_AGENT=1` (#10111; herdr's `tab.create` `env`, asked again without it by a herdr that refuses the field; the Herdr App's `terminal.run` `env`), and the start line unsets them again, keeping the mark, so the Agent's environment stays the user's. A second way to hand a new shell variables (ours first carried them on the context and probed `--help`) was folded into the one #10111 added: one `host.EnvLauncher` create, one old-herdr fallback. Never put them in the herdr server's environment: the user's own tabs would stop updating.
+- **Let the owner answer**: a question no variable turns off is still never answered *for* the user, but its answers go with `shell_waiting` (`questionChoices`) and a full device's pick is typed into the kept tab by `start.continue`, only while the same question is still the tab's last line and only one of the offered keys; never anything into a password prompt. The record goes back to starting under the same id (`startLog.restart`), so a resend waits for the new start instead of the old error.
+- **A retry in the kept tab fails fast**: one whose question is still open ends with `shell_waiting` at once and a renewed `kept_until`, instead of a new tab with the same question. After an answer, though, the question stays the last non-blank line until the shell prints its prompt (oh-my-zsh only moves the cursor), so that start waits it out as a new tab does. That holds for anything typed into the kept tab since its start failed, the assistant's `start.keys` too (`keptStart.typed`): its remedy is keys and then a Retry, often within a second, and a fast fail there spent a retry and invited the same key again, typed at the prompt.
+- **A key that shows after the question is not always a line waiting for Enter**: compinit's `read -q` echoes the key with no newline and has already read it (measured in a pty, 2026-11-18). An Enter "for the echo" goes to whatever reads next: a later `[Y/n]` takes its default, or the prompt gets an empty command. Questions known to read one key (`shellAsk.SingleKey`: compinit, zsh-newuser-install, powerlevel10k's wizard, oh-my-zsh's update question) get the key alone; only a line reader, or one not known (a bare `[Y/n]`), is watched for the echo.
+- **A question answered at the computer is no refusal**: the card's answer then types nothing (an answer at the prompt could run as a command) and the start runs again in the tab all the same, where the shell settles or the question there now ends it with its own answers. A `prompt_changed` refusal ("refresh before answering") left every button on the card failing until the tab closed, though the words had offered the computer as an equal way.
+
 ## Recheck a kept tab after terminal lookup (2026-11-17, #9633)
 
 A stalled Orca Agent can bind its pane while the closer looks up the terminal. A check made before that lookup
@@ -611,6 +634,8 @@ other engines' panes (Orca) keep their original error.
 - **The model service returns 200 with empty content, and the turn ends silently** (measured 2026-11-05, one gateway upstream account): the transcript contains no assistant item and no `isApiErrorMessage`, error, or `stop_reason`;
   Claude Code inserts an `isMeta` "[Your previous response had no visible output. Please continue…]" and retries once; another empty response ends the turn without terminal error, so there is no `turn_error`.
   Tasks once wrote "completed" receipts, sent done notifications, and auto-closed (#2349). Now inspect the turn's items: no reply, tool call, or image counts as interrupted.
+  A verdict that only reaches the receipt is not enough: the Agent's row still said done, so the task read "done, not seen" on every client, in the snapshot and in `agents_list` (#10187). Everything that counts a task interrupted keys on the row's `turn_error`, so the hub puts its own verdict there (`turn_error_kind` `no_output` / `stopped`, `silent_turns.go`) and keeps Session Triage from treating it as a model error.
+  Persona's own Stop (`stopReporting`'s Esc to a task Agent mid first request) can end a turn with no output and no "[Request interrupted by user]" line, so the transcript alone reads it as a model failure; the hub notes the agents it interrupts and calls such a turn stopped.
 - **Codex writes no reply when interrupted by the model service** (measured 2026-11-05, Codex 0.166, fake service returning 503): rollout has only this turn's `task_complete`, with `last_agent_message`
   `null` and the error in `error` (`{"message":"unexpected status 503 …","codex_error_info":{"http_connection_failed":{"http_status_code":503}}}`);
   app-server reports `turn/completed` with `turn.status: "failed"` + `turn.error` (camelCase `codexErrorInfo`). Last-text-only `turn_error` is always empty for Codex:
@@ -686,6 +711,7 @@ Quota can recover before the reported reset. Skipping every on-demand probe unti
 ## Claude status line (2026-11-05, #1963)
 
 - Working Claude draws `✻ Frosting… (16m 15s · ↓ 22.8k tokens · thinking with xhigh effort)` above the input box: spinner characters change each frame, parenthesized segments may be absent or reordered (`thought for 1s`, `esc to interrupt`), and ↑ means input tokens. An identical line quoted in the conversation isn't a status line; take the last line above the input box (`screen.AboveInputBox`, `node/claudestatus.go`). When a pane is scrolled up, visible content has no status line.
+- A model retry does not use the ordinary `verb… (…)` grammar: 2.1.326 draws `✻ 429 <error> · retrying in 4s · attempt 5/10` (a 500 has the same shape, and an early line can be only `API Error`). Parse the observed error and attempts before the normal spinner pattern, leave the countdown out, and clear on normal work, line removal, turn end and unwatch; elapsed time alone is not error evidence (#887).
 
 ## Changing Codex app-server effort: validate levels yourself; `null` means model default (2026-11-04, #1709)
 
@@ -1198,6 +1224,16 @@ workspace sharing the probe prefix while it still exists.
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
 IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
 explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+
+## A long-running agy acp keeps the account it saw (#10368)
+
+`agy acp` kept the model list it read when the plan lapsed after the user renewed and signed in again: `session/set_model`
+failed with `Unknown model ID` until the process was restarted, and each `session/new` published the stale list over the
+five-minute `agy models` discovery. Treat a discovery that began after the ACP process started as the newer source, and
+compare by process generation rather than wall-clock time. Pending requests do not show who uses the process: a call
+between two requests, or a native read over HTTP, has none. Hold a lease for each call, turn and read, replace only when
+no other lease is held, with no await between that check and the replacement, and make new users wait for it. Retry once,
+and test with a fake whose ACP side reads the account once at startup.
 
 ## Codex speed has separate native metadata (#3865)
 

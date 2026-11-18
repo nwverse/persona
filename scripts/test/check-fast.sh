@@ -15,7 +15,7 @@
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
 #                              node_modules against package-lock.json, typecheck, vitest run
 #   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
-#   spec/fixtures/chat-search/**, scripts/mock/inbox_events.json
+#   spec/fixtures/chat-search/**, spec/fixtures/triage/**, spec/fixtures/todo-view/**, scripts/mock/inbox_events.json
 #                              also the web check: web/src and its vitest suite read these files. They are the inputs
 #                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
@@ -46,6 +46,12 @@
 #   schema/wire/**, spec/fixtures/**, scripts/gen/extension_schema.py, scripts/test/test_extension_schema.py
 #                              also scripts/test/test_wire_schema.py: it holds the fixtures' samples to the wire schemas
 #                              (and imports the extension test's validator); CI's guards step always runs it
+#   spec/fixtures/todo-{detail,layout}/**, spec/fixtures/todo-view/README.md, spec/fixtures/agent-names/**,
+#   schema/wire/todo-view.schema.json, server/internal/assistant/{todos,todo_ask}.go, scripts/test/test_wire_schema.py,
+#   scripts/test/test_extension_schema.py
+#                              also scripts/test/test_todo_fixtures.py: it holds the to-do page and window fixtures to
+#                              their READMEs' rules, the view schema, the todo-view line keys, the agent names and the
+#                              fields the hub writes on a listed to-do (and imports the wire and extension schema tests)
 #   scripts/**                 privacy/PR/extension/refs/bundle/i18n checks picked by path; PR+extension when
 #                              ambiguous (a case "*" matches slashes, so scripts/* covers nested paths too); plus
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
@@ -620,7 +626,7 @@ else
     # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
     # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
     case "$f" in
-      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|spec/fixtures/chat-search/*|scripts/mock/inbox_events.json) WEB=1 ;;
+      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|spec/fixtures/chat-search/*|spec/fixtures/triage/*|spec/fixtures/todo-view/*|scripts/mock/inbox_events.json) WEB=1 ;;
     esac
     case "$f" in server/*|sdk/go/*) GO_GUARDS=1 ;; esac  # on top of the mapping below (job_go_guards)
     case "$f" in
@@ -815,6 +821,13 @@ else
     case "$f" in
       schema/wire/*|spec/fixtures/*|scripts/gen/extension_schema.py|scripts/test/test_extension_schema.py)
         script_test_add scripts/test/test_wire_schema.py ;;
+    esac
+    # test_todo_fixtures.py holds the to-do page and window fixtures to their READMEs' rules; it also reads the view
+    # schema, the todo-view line keys, the agent names and the row fields of the hub's Todo and listedTodo, and imports
+    # the wire and extension schema tests.
+    case "$f" in
+      spec/fixtures/todo-detail/*|spec/fixtures/todo-layout/*|spec/fixtures/todo-view/README.md|spec/fixtures/agent-names/*|schema/wire/todo-view.schema.json|server/internal/assistant/todos.go|server/internal/assistant/todo_ask.go|scripts/test/test_wire_schema.py|scripts/test/test_extension_schema.py)
+        script_test_add scripts/test/test_todo_fixtures.py ;;
     esac
   done <<< "$CHANGED"
 fi
