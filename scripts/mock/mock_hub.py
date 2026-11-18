@@ -30363,6 +30363,75 @@ def plugins_route(handler, p, body):
     return _plugins_route_without_extensions(handler, p, body)
 
 
+# MOCK_OPENER_ICONS=1 (with MOCK_EXTENSIONS=1 MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1, #10358): the extensions that opened
+# the external conversations are installed, each with the icon its package brings, on the hub's installed-icon route
+# (`icon_url`, served here as the hub does: a PNG for the installed version, 404 for any other). `larkext`, which opened
+# the Lark /agent conversation, stands in for a made-up third-party extension that reuses lark.agent ("Chat Bridge", a
+# chat bubble; it brings no Lark connector or messaging source), `example-ext` for the other one ("Example Docs", a page).
+# The apps draw and name those extensions on the conversations' rows and under their first messages; without the flag
+# neither is installed, and the rows keep the origin's mark, as before.
+OPENER_ICONS = PLUGINS_MODE and os.environ.get("MOCK_OPENER_ICONS") == "1"
+MOCK_HELP.append("MOCK_OPENER_ICONS=1  With MOCK_EXTENSIONS=1 MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1: the two extensions that opened "
+                 "the external conversations are installed with icons (larkext as a made-up third-party Chat Bridge that reuses "
+                 "lark.agent, example-ext as Example Docs), which their rows and first messages draw and name (#10358)")
+
+
+def _opener_icon_png(kind, side=128):
+    """A made-up extension icon: a white chat bubble on teal, or a white page with lines on indigo."""
+    bg, ink, line = ((20, 184, 166), (255, 255, 255), None) if kind == "bubble" else ((99, 102, 241), (255, 255, 255), (165, 180, 252))
+    raw = bytearray()
+    for y in range(side):
+        raw.append(0)
+        for x in range(side):
+            c = bg
+            if kind == "bubble":
+                if 26 <= x < 102 and 30 <= y < 86 and not ((x - 26 < 8 or 101 - x < 8) and (y - 30 < 8 or 85 - y < 8)):
+                    c = ink
+                elif 40 <= x < 58 and 86 <= y < 104 and x - 40 <= 103 - y:
+                    c = ink
+            else:
+                if 38 <= x < 90 and 22 <= y < 106:
+                    c = ink
+                    if line and 46 <= x < 82 and any(r <= y < r + 5 for r in (40, 54, 68, 82)):
+                        c = line
+            raw.extend(bytes(c))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+if OPENER_ICONS:
+    _OPENER_ICONS = {"larkext": ("Chat Bridge", "Hands a chat app's /agent messages to Persona (an example).", "bubble"),
+                     "example-ext": ("Example Docs", "Hands documents to Persona to tidy up (an example).", "page")}
+    for _id, (_name, _desc, _kind) in _OPENER_ICONS.items():
+        PLUGINS[_id] = {"id": _id, "name": _name, "kind": "", "status": "running", "version": "1.0.0", "source": "installed",
+                        "enabled": True, "description": _desc, "contributes": {}, "icon_url": "/api/v1/extensions/%s/-/icon?v=1.0.0" % _id,
+                        "form": {"fields": []}, "config": {}, "secrets": [], "permissions": []}
+    _PLUGIN_VIEW.append("icon_url")
+
+_plugins_route_without_opener_icons = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OPENER_ICONS: GET /api/v1/extensions/{id}/-/icon?v=<installed version> answers that extension's icon."""
+    parts = p.split("/")  # ['', 'api', 'v1', 'extensions', id, '-', 'icon']
+    if OPENER_ICONS and handler.command == "GET" and len(parts) == 7 and parts[:4] == ["", "api", "v1", "extensions"] and parts[5:] == ["-", "icon"]:
+        q = {k: v[0] for k, v in parse_qs(urlparse(handler.path).query).items()}
+        pl = PLUGINS.get(parts[4])
+        if parts[4] not in _OPENER_ICONS or not pl or q.get("v") != pl.get("version"):
+            handler.send_response(404)
+            handler.send_header("Cache-Control", "no-store"); handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return True
+        data = _opener_icon_png(_OPENER_ICONS[parts[4]][2])
+        handler.send_response(200)
+        handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "private, max-age=300")
+        handler.end_headers(); handler.wfile.write(data)
+        return True
+    return _plugins_route_without_opener_icons(handler, p, body)
+
+
 # MOCK_EXTENSION_COLUMNS=1 (with MOCK_EXTENSIONS=1): a made-up extension's "Today" page, a dashboard of UI version 8
 # (#9158): a full-width "Needs me" card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents,
 # each card with an icon, a link beside its title, a summary line, a list and a link at the bottom. The links and the
