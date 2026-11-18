@@ -173,7 +173,7 @@ func providerOffers(l storedLauncher, model string) bool {
 	return slices.ContainsFunc(l.Models, func(m proto.ProviderModel) bool { return m.ID == model })
 }
 
-func launcherLabel(l storedLauncher) string { return cmp.Or(l.DisplayName, l.Name) }
+func providerLabel(l storedLauncher) string { return cmp.Or(l.DisplayName, l.Name) }
 
 // offeredCandidate finds model on the providers the user configured (candidateProviders' order).
 func (s *Service) offeredCandidate(ctx context.Context, first, model string) modelCandidate {
@@ -185,11 +185,11 @@ func (s *Service) offeredCandidate(ctx context.Context, first, model string) mod
 		config, err := s.apiConfig(ctx, ModelBinding{Provider: "launcher." + l.Name, Model: model})
 		if err != nil || config.RunLauncher != "" || !config.Configured() {
 			if err != nil {
-				problem = launcherLabel(l) + ": " + i18n.Localize(err, s.lang(ctx))
+				problem = providerLabel(l) + ": " + i18n.Localize(err, s.lang(ctx))
 			}
 			continue
 		}
-		return modelCandidate{model: model, provider: launcherLabel(l), id: "launcher." + l.Name, config: config}
+		return modelCandidate{model: model, provider: providerLabel(l), id: "launcher." + l.Name, config: config}
 	}
 	return modelCandidate{model: model, problem: problem}
 }
@@ -205,11 +205,11 @@ func (s *Service) pickedCandidate(ctx context.Context, b ModelBinding) modelCand
 		model := cmp.Or(b.Model, config.Model, l.Model)
 		switch {
 		case err != nil:
-			return modelCandidate{model: model, id: b.Provider, problem: launcherLabel(l) + ": " + i18n.Localize(err, s.lang(ctx))}
+			return modelCandidate{model: model, id: b.Provider, problem: providerLabel(l) + ": " + i18n.Localize(err, s.lang(ctx))}
 		case config.RunLauncher != "" || !config.Configured():
-			return modelCandidate{model: model, id: b.Provider, problem: launcherLabel(l) + " cannot be called directly"}
+			return modelCandidate{model: model, id: b.Provider, problem: providerLabel(l) + " cannot be called directly"}
 		}
-		return modelCandidate{model: model, provider: launcherLabel(l), id: "launcher." + l.Name, config: config}
+		return modelCandidate{model: model, provider: providerLabel(l), id: "launcher." + l.Name, config: config}
 	}
 	return modelCandidate{model: cmp.Or(b.Model, name), id: b.Provider, problem: "the provider " + name + " is gone or cannot be called directly"}
 }
