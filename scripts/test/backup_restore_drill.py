@@ -43,6 +43,7 @@ FAULTS = ("restore-fails", "kb-drift", "approval-resolved", "outbox-settled", "c
 MIGRATION_NAME = re.compile(r"^(\d+)_[a-z0-9_]+\.sql$")
 IMAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]*$")  # a reference, never an option
 READ_ONLY_SQLSTATE = "25006"
+ELF_MACHINES = {"amd64": 62, "arm64": 183}  # Docker's architecture names: ELF e_machine
 KEY_FINGERPRINT_LABEL = b"persona secret.key fingerprint v1"  # secretkey.Fingerprint
 SERVICE_APPLICATIONS = ("persona-hub", "persona-manager")  # db.AppHub, db.AppManager
 
@@ -59,16 +60,24 @@ class DrillTimeout(DrillError):
 # Inputs
 
 
+RUNTIME_MARKERS = ("hub.json", "secret.key")
+
+
 def runtime_roots(environment=os.environ):
-    """Directories that hold a real install's runtime: the drill accepts nothing from inside them."""
-    home = Path(environment.get("HOME", "~")).expanduser()
-    roots = [home / ".persona", home / ".jarvis"]
-    roots += [Path(environment[key]).expanduser() for key in ("PERSONA_HOME", "JARVIS_HOME") if environment.get(key)]
+    """Runtime directories named by the environment: the drill accepts nothing from inside them."""
+    roots = [Path(environment.get("HOME", "~")).expanduser() / ".persona"]
+    if environment.get("PERSONA_HOME"):
+        roots.append(Path(environment["PERSONA_HOME"]).expanduser())
     return [root.resolve() for root in roots]
 
 
 def inside(path, roots):
-    return any(path == root or root in path.parents for root in roots)
+    """path is in a runtime directory: one of roots, or any directory holding a hub.json or secret.key (which is also
+    how an install from before the rename is recognised)."""
+    if any(path == root or root in path.parents for root in roots):
+        return True
+    return any((directory / marker).is_file() for directory in (path, *path.parents)
+               if directory != Path(directory.anchor) for marker in RUNTIME_MARKERS)
 
 
 def static_linux_executable(path):
@@ -82,6 +91,8 @@ def static_linux_executable(path):
                 return "is not a 64-bit little-endian ELF executable"
             if header[7] not in (0, 3):
                 return "is not a Linux ELF executable"
+            if struct.unpack_from("<H", header, 18)[0] not in ELF_MACHINES.values():
+                return "is for an architecture the drill does not know"
             phoff, = struct.unpack_from("<Q", header, 32)
             phentsize, phnum = struct.unpack_from("<HH", header, 54)
             if phentsize < 4:
@@ -96,6 +107,12 @@ def static_linux_executable(path):
     except OSError as error:
         return "cannot be read (" + error.__class__.__name__ + ")"
     return None
+
+
+def elf_machine(path):
+    with open(path, "rb") as source:
+        header = source.read(20)
+    return struct.unpack_from("<H", header, 18)[0]
 
 
 def parse_args(argv, environment=os.environ):
@@ -146,10 +163,14 @@ def parse_args(argv, environment=os.environ):
         if inside(work, roots):
             parser.error("--work-dir is inside a Persona runtime directory")
         args.work_dir = work
+    elif inside(Path(tempfile.gettempdir()).resolve(), roots):
+        parser.error("TMPDIR is inside a Persona runtime directory; pass --work-dir")
     if args.report:
         report = Path(args.report).expanduser().resolve()
         if report.exists():
             parser.error("--report exists; the drill never overwrites a file")
+        if not report.parent.is_dir():
+            parser.error("--report's directory does not exist")
         if inside(report, roots):
             parser.error("--report is inside a Persona runtime directory")
         args.report = report
@@ -327,6 +348,11 @@ class Processes:
                 os.killpg(process.pid, sig)
             except ProcessLookupError:
                 return
+            except PermissionError:  # a group this user may not signal (a privileged wrapper): the leader at least
+                try:
+                    os.kill(process.pid, sig)
+                except OSError:
+                    pass
             try:
                 process.wait(timeout=5)
                 return
@@ -383,7 +409,7 @@ class Drill:
             else:
                 self.docker("network", "rm", name, label="remove network", check=False, cleanup=True)
             return self.docker(kind, "inspect", name, label="inspect", check=False, cleanup=True).returncode != 0
-        except (DrillError, OSError):
+        except (DrillError, OSError, KeyboardInterrupt):
             return False
 
     def psql(self, database, sql, label, read_only=True, check=True):
@@ -447,6 +473,9 @@ class Drill:
         os.chmod(self.root / "bin", 0o755)
         if self.docker("image", "inspect", self.args.image, label="image", check=False).returncode != 0:
             raise DrillError("the image is not on this machine; the drill never pulls (docker pull it first)")
+        architecture = self.docker("version", "--format", "{{.Server.Arch}}", label="docker architecture").stdout
+        if ELF_MACHINES.get(architecture.strip()) != elf_machine(self.args.binary):
+            raise DrillError("--binary is not built for the Docker server's architecture (" + architecture.strip() + ")")
         self.docker("network", "create", "--internal", "--label", LABEL + "=" + self.run_id, self.network,
                     label="internal network")
         self.network_created = True
@@ -459,15 +488,18 @@ class Drill:
         environment.unlink()
         deadline = time.monotonic() + min(90, self.processes.remaining())
         while True:
-            ready = self.docker("exec", self.postgres, "psql", "--no-psqlrc", "--host", "127.0.0.1", "--username",
-                                "postgres", "--dbname", "postgres", "--tuples-only", "--command", "SELECT 1",
-                                label="database readiness", check=False, timeout=10)
-            if ready.returncode == 0:
+            try:
+                ready = self.docker("exec", self.postgres, "psql", "--no-psqlrc", "--host", "127.0.0.1", "--username",
+                                    "postgres", "--dbname", "postgres", "--tuples-only", "--command", "SELECT 1",
+                                    label="database readiness", check=False, timeout=10).returncode == 0
+            except DrillTimeout:  # one slow attempt while the server starts; the loop's own deadline decides
+                ready = False
+            if ready:
                 break
             if time.monotonic() >= deadline:
                 raise DrillTimeout("database readiness timed out")
             time.sleep(0.5)
-        published = self.docker("port", self.postgres, label="published ports", check=False).stdout.strip()
+        published = self.docker("port", self.postgres, label="published ports").stdout.strip()
         self.check("no_published_ports", published == "", "the database container publishes no port")
         if published:
             raise DrillError("the database container publishes a port")
@@ -650,14 +682,13 @@ class Drill:
             verdict, error = "TIMEOUT", exc.args[0]
         except DrillError as exc:
             error = exc.args[0]
-            detail = [line for line in (exc.args[1] if len(exc.args) > 1 else "").splitlines() if line.strip()]
-            if detail:
-                error += ": " + detail[-1]
+            error += error_detail(exc.args[1] if len(exc.args) > 1 else "")
         except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as exc:
             error = exc.__class__.__name__ + ": " + str(exc)
         except KeyboardInterrupt:
             verdict, error = "INTERRUPTED", "interrupted"
         finally:
+            shield_signals()
             cleanup_started = time.monotonic()
             cleanup = self.cleanup()
             self.phases.append({"name": "cleanup", "ok": cleanup["ok"],
@@ -676,6 +707,14 @@ class Drill:
         return self.report
 
 
+def error_detail(stderr):
+    """The line that says what failed: psql's (verbose) ERROR line, else the last line."""
+    lines = [line for line in stderr.splitlines() if line.strip()]
+    errors = [line for line in lines if re.match(r"^(psql:.*)?ERROR:", line.strip())]
+    chosen = errors[-1] if errors else (lines[-1] if lines else "")
+    return ": " + chosen if chosen else ""
+
+
 def damage_member(bundle, member):
     """Flip one byte in the middle of a bundle member's content, so its SHA-256 no longer matches the manifest."""
     with tarfile.open(bundle) as archive:
@@ -686,6 +725,15 @@ def damage_member(bundle, member):
         byte = damaged.read(1)
         damaged.seek(offset)
         damaged.write(bytes([byte[0] ^ 0xFF]))
+
+
+def shield_signals():
+    """From cleanup on, SIGINT and SIGTERM are ignored so they cannot cut it short (main thread only)."""
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, signal.SIG_IGN)
+    except ValueError:
+        pass
 
 
 def write_private(path, content):
@@ -817,24 +865,24 @@ def main(argv=None):
     drill = Drill(args)
 
     def interrupted(signum, frame):
-        # The first signal stops the drill; later ones are ignored so they cannot cut its cleanup short.
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, signal.SIG_IGN)
+        shield_signals()  # the first signal stops the drill; later ones cannot cut its cleanup short
         raise KeyboardInterrupt
 
-    previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
-    try:
-        report = drill.run()
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, interrupted)
+    report = drill.run()  # returns with both signals ignored, so the report is always printed
     text = json.dumps(report, indent=2, sort_keys=True)
-    if args.report:
-        write_private(args.report, text + "\n")
     print(text, flush=True)
-    print(report["verdict"] + ": restore drill " + report["run"] + (" (" + report["error"] + ")" if
-                                                                    report.get("error") else ""), flush=True)
-    return 0 if report["verdict"] == "PASS" else 1
+    verdict = report["verdict"]
+    if args.report:
+        try:
+            write_private(args.report, text + "\n")
+        except OSError as error:
+            print("the report could not be written to --report (" + error.__class__.__name__ + ")", flush=True)
+            verdict = "FAIL" if verdict == "PASS" else verdict
+    print(verdict + ": restore drill " + report["run"] + (" (" + report["error"] + ")" if
+                                                          report.get("error") else ""), flush=True)
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":

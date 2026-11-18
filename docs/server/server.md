@@ -389,8 +389,9 @@ python3 scripts/test/backup_restore_drill.py --execute --binary /tmp/personad-dr
 ```
 
 - **What it runs.** A disposable `postgres:18-alpine` container (`--image`, never pulled) on a Docker `--internal`
-  network with no published ports; databases created with the checkout's own migrations (what `db.Open` does on a new
-  database); a synthetic runtime (random `hub.json` token, both `secret.key` files, a `sealing_key` record, a small
+  network with no published ports; databases created with the checkout's own migration files, applied as `db.Open`
+  applies them to a new database (each file in a transaction, recorded in `schema_migrations` with its part; a change
+  to that procedure in `server/internal/db/db.go` has to be mirrored in the drill's `migration_script`); a synthetic runtime (random `hub.json` token, both `secret.key` files, a `sealing_key` record, a small
   knowledge base); and markers of each kind of work in flight: tasks and their Agent links, pending and resolved
   interactions (approvals), the manager's outbox, and client operations in every state. The caller's static personad
   then runs `backup create --writes-quiesced` and `verify` in a throwaway client container on the same network.
@@ -410,8 +411,9 @@ python3 scripts/test/backup_restore_drill.py --execute --binary /tmp/personad-dr
   the private temporary directory are removed on success, failure, timeout (`--timeout`, `--step-timeout`) and
   SIGINT/SIGTERM; exit 0 only on `PASS`.
 - **Inputs it refuses.** Nothing runs without `--execute`. There is no flag for a hub URL, database URL, runtime
-  directory or existing bundle, and a binary, `--work-dir` or `--report` inside `~/.persona`, `~/.jarvis` or
-  `PERSONA_HOME` is refused, as is a dynamically linked binary (the Alpine client image could not run it).
+  directory or existing bundle. A binary, `--work-dir`, `--report` or `TMPDIR` inside `~/.persona`, `PERSONA_HOME` or
+  any directory holding a `hub.json` or `secret.key` is refused, as is a dynamically linked binary (the Alpine client
+  image could not run it) or one built for another architecture than the Docker server's.
 - **Tests.** `scripts/test/test_backup_restore_drill.py` covers the arguments, the comparisons, redaction, and timeouts,
   failures and interrupts against a fake docker. With `PERSONA_RESTORE_DRILL_BINARY` (and `PERSONA_RESTORE_DRILL_DOCKER`)
   it also runs the real drill: a passing restore, `--checks verify-only` passing a restore whose approval was resolved

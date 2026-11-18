@@ -29,10 +29,10 @@ import backup_restore_drill as drill  # noqa: E402
 DRILL = HERE / "backup_restore_drill.py"
 
 
-def elf(interpreter=False):
+def elf(interpreter=False, machine=62):
     """A minimal ELF64 header with one program header: PT_LOAD, or PT_INTERP for a dynamically linked program."""
     ident = b"\x7fELF" + bytes([2, 1, 1, 0]) + bytes(8)
-    header = ident + struct.pack("<HHIQQQIHHHHHH", 2, 62, 1, 0x400000, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    header = ident + struct.pack("<HHIQQQIHHHHHH", 2, machine, 1, 0x400000, 64, 0, 0, 64, 56, 1, 0, 0, 0)
     program = struct.pack("<IIQQQQQQ", 3 if interpreter else 1, 5, 0, 0, 0, 0, 0, 0)
     return header + program
 
@@ -52,6 +52,8 @@ def mark(name, present=True):
         (state / name).unlink()
 if args[:2] == ["image", "inspect"]:
     sys.exit(0)
+if args[0] == "version":
+    print("amd64"); sys.exit(0)
 if args[:2] == ["network", "create"]:
     mark("network"); sys.exit(0)
 if args[:2] == ["network", "rm"]:
@@ -125,14 +127,30 @@ class ArgumentSafetyTest(Fixture):
         self.assertIsNone(args)
 
     def test_a_runtime_directory_binary_is_refused(self):
-        for root in (self.home / ".persona", self.home / ".jarvis"):
+        # ~/.persona, and any directory with a hub.json or secret.key (an install under another or an older name).
+        for root, marker in ((self.home / ".persona", None), (self.home / "old-install", "hub.json"),
+                             (self.home / "other", "secret.key")):
             with self.subTest(root=root.name):
                 binary = root / "bin" / "personad"
                 binary.parent.mkdir(parents=True)
                 binary.write_bytes(elf())
+                if marker:
+                    (root / marker).write_text("{}")
                 args, error = self.parse("--execute", "--binary", str(binary))
                 self.assertIsNone(args)
                 self.assertIn("runtime directory", error)
+
+    def test_tmpdir_in_a_runtime_directory_is_refused(self):
+        runtime = self.home / ".persona" / "tmp"
+        runtime.mkdir(parents=True)
+        previous = drill.tempfile.tempdir
+        drill.tempfile.tempdir = str(runtime)
+        try:
+            args, error = self.parse("--execute", "--binary", str(self.binary))
+        finally:
+            drill.tempfile.tempdir = previous
+        self.assertIsNone(args)
+        self.assertIn("TMPDIR", error)
 
     def test_persona_home_counts_as_a_runtime_directory(self):
         runtime = self.tmp / "elsewhere"
@@ -152,7 +170,9 @@ class ArgumentSafetyTest(Fixture):
         dynamic.write_bytes(elf(interpreter=True))
         script = self.tmp / "script"
         script.write_text("#!/bin/sh\n")
-        for binary, reason in ((dynamic, "dynamically linked"), (script, "not an ELF")):
+        foreign = self.tmp / "foreign"
+        foreign.write_bytes(elf(machine=40))  # 32-bit ARM's e_machine
+        for binary, reason in ((dynamic, "dynamically linked"), (script, "not an ELF"), (foreign, "architecture")):
             with self.subTest(reason=reason):
                 args, error = self.parse("--execute", "--binary", str(binary))
                 self.assertIsNone(args)
@@ -164,6 +184,9 @@ class ArgumentSafetyTest(Fixture):
         args, error = self.parse("--execute", "--binary", str(self.binary), "--report", str(report))
         self.assertIsNone(args)
         self.assertIn("never overwrites", error)
+        args, error = self.parse("--execute", "--binary", str(self.binary), "--report", str(self.tmp / "no" / "r.json"))
+        self.assertIsNone(args)
+        self.assertIn("does not exist", error)
 
     def test_limits(self):
         for extra in (["--timeout", "5"], ["--step-timeout", "0"], ["--image", "bad image"], ["--docker", ""],
@@ -265,10 +288,18 @@ class AcceptanceTest(unittest.TestCase):
         self.assertIsNone(drill.tree_digest(Path(root)))
 
     def test_key_fingerprint_matches_secretkey(self):
-        # secretkey.Fingerprint: the first 16 bytes of HMAC-SHA256(key, label), in hex.
-        self.assertEqual(drill.key_fingerprint(b"k" * 32), drill.key_fingerprint(b"k" * 32))
-        self.assertEqual(len(drill.key_fingerprint(b"k" * 32)), 32)
+        # Known answer from server/internal/secretkey.Fingerprint for the key 00 01 02 … 1f.
+        self.assertEqual(drill.key_fingerprint(bytes(range(32))), "577562a1d8d8b402fa2b69a7ca995e68")
         self.assertNotEqual(drill.key_fingerprint(b"k" * 32), drill.key_fingerprint(b"w" * 32))
+
+    def test_error_detail_is_the_error_line(self):
+        verbose = ("psql:<stdin>:3: ERROR:  23505: duplicate key value violates unique constraint\n"
+                   "DETAIL:  Key (id)=(x) already exists.\nLOCATION:  _bt_check_unique, nbtinsert.c:666\n")
+        self.assertIn("23505", drill.error_detail(verbose))
+        self.assertNotIn("LOCATION", drill.error_detail(verbose))
+        self.assertEqual(drill.error_detail("first\nSHA-256 mismatch for db/manager.dump\n"),
+                         ": SHA-256 mismatch for db/manager.dump")
+        self.assertEqual(drill.error_detail(""), "")
 
 
 class RedactionTest(unittest.TestCase):
@@ -300,6 +331,9 @@ class ProcessTest(Fixture):
 
     def setUp(self):
         super().setUp()
+        # Drill.run leaves SIGINT and SIGTERM ignored for main() to print its report; give them back.
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        self.addCleanup(lambda: [signal.signal(sig, handler) for sig, handler in handlers.items()])
         self.state = self.tmp / "state"
         self.state.mkdir()
         self.work = self.tmp / "work"
@@ -360,6 +394,17 @@ class ProcessTest(Fixture):
         self.assert_cleaned_up(report)
         self.assertFalse(any(instance.password in arg for call in self.calls() for arg in call),
                          "the database password was on a command line")
+
+    def test_a_binary_for_another_architecture_stops_before_any_resource(self):
+        arm = self.tmp / "personad-arm64"
+        arm.write_bytes(elf(machine=183))
+        args = drill.parse_args(["--execute", "--binary", str(arm), "--docker", self.docker("hang-ready"),
+                                 "--work-dir", str(self.work), "--timeout", "30"], self.environment)
+        report = drill.Drill(args, self.environment).run()
+        self.assertEqual(report["verdict"], "FAIL")
+        self.assertIn("architecture", report["error"])
+        self.assertFalse(any(call[:2] == ["network", "create"] for call in self.calls()))
+        self.assert_cleaned_up(report)
 
     def test_an_interrupt_cleans_up(self):
         report_path = self.tmp / "report.json"
