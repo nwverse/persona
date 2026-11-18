@@ -286,8 +286,8 @@ func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc
 func runActive(ctx context.Context, o Options, rep *reporter) {
 	rep.switchTo(ModeActive)
 	var b backoff
-	// last is the kind of route that worked last when it was not direct (KindSSH, KindProxy): the next attempt
-	// tries it first. A new credential, tunnel or proxy setting starts over from direct.
+	// last is the kind of the link that worked last: a proxy or SSH route goes first next time (routeOrder). A new
+	// credential, tunnel or proxy setting starts over from direct.
 	var last, lastToken, lastProxy string
 	var lastSSHConfig *SSH
 	for ctx.Err() == nil {
@@ -319,10 +319,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			end = err
 		} else {
 			for {
-				last = ""
-				if l.ep.Kind == KindSSH || l.ep.Kind == KindProxy {
-					last = l.ep.Kind
-				}
+				last = l.ep.Kind
 				start := time.Now()
 				rep.links++
 				l.gen = rep.links
@@ -387,53 +384,67 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 	}
 }
 
-// dialActive tries c's routes in turn: direct candidates, then the outbound proxy, then the SSH tunnel; the route
-// that worked last (last: KindProxy, KindSSH) goes first, as it is likely what this network needs. Always use SSH
-// leaves only the tunnel. A pinned hub that refused the credential on its own route ends the attempt: no other route
-// can do better (docs/operations/link.md "Outbound proxy").
+// dialActive dials c's hub over its routes in routeOrder. A pinned hub that refused the credential on its own route
+// ends the attempt: no other route can do better.
 func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*link, error) {
-	if c.SSH != nil && (c.SSH.Always || len(c.Endpoints) == 0) {
-		return dialSSH(ctx, c, sshBin)
-	}
-	type route struct {
-		kind string
-		dial func() (*link, error)
-	}
-	routes := []route{{"", func() (*link, error) { return dial(ctx, c) }}}
-	if p, _, err := proxied(c); p != nil || err != nil {
-		routes = append(routes, route{KindProxy, func() (*link, error) { return dialProxy(ctx, c) }})
-	}
-	if c.SSH != nil {
-		routes = append(routes, route{KindSSH, func() (*link, error) { return dialSSH(ctx, c, sshBin) }})
-	}
-	if i := slices.IndexFunc(routes, func(r route) bool { return r.kind == last }); i > 0 {
-		first := routes[i] // before Delete, which clears the slot it frees
-		routes = slices.Insert(slices.Delete(routes, i, i+1), 0, first)
-	}
-	var errs []error
-	for _, r := range routes {
-		l, err := r.dial()
-		if err == nil {
-			return l, nil
+	p, eps, perr := proxied(c)
+	return tryRoutes(routeOrder(c, p != nil || perr != nil, last), func(kind string) (*link, error) {
+		switch kind {
+		case KindSSH:
+			return dialSSH(ctx, c, sshBin)
+		case KindProxy:
+			if perr != nil {
+				return nil, perr
+			}
+			return dialVia(ctx, c, eps, p)
 		}
-		errs = append(errs, err)
-		if ctx.Err() != nil {
-			break
-		}
+		return dial(ctx, c)
+	}, func(kind string, err error) bool {
 		var he *httpError
-		if r.kind != KindSSH && c.FP != "" && errors.As(err, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden) {
-			break
-		}
-	}
-	return nil, joinErrors(errs)
+		return ctx.Err() != nil || (kind != KindSSH && c.FP != "" && errors.As(err, &he) &&
+			(he.status == http.StatusUnauthorized || he.status == http.StatusForbidden))
+	})
 }
 
-// joinErrors is errors.Join that leaves a single error as it is (and none as nil).
-func joinErrors(errs []error) error {
-	if len(errs) == 1 {
-		return errs[0]
+// routeOrder is the order c's routes are tried in (docs/operations/link.md "Outbound proxy"): direct candidates
+// (""), the outbound proxy when there is one, the SSH tunnel when there is one; last, the kind of the link that worked
+// last, first when it is one of these. Always use SSH, or a tunnel and no candidates, leaves the tunnel alone.
+func routeOrder(c *Config, proxy bool, last string) []string {
+	if c.SSH != nil && (c.SSH.Always || len(c.Endpoints) == 0) {
+		return []string{KindSSH}
 	}
-	return errors.Join(errs...)
+	order := []string{""}
+	if proxy {
+		order = append(order, KindProxy)
+	}
+	if c.SSH != nil {
+		order = append(order, KindSSH)
+	}
+	if i := slices.Index(order, last); i > 0 {
+		order = slices.Insert(slices.Delete(order, i, i+1), 0, last)
+	}
+	return order
+}
+
+// tryRoutes tries each route in order until one works; stop ends it early after a failure no other route can mend.
+// The error is the one failure, or all of them in order.
+func tryRoutes[T any](order []string, try func(kind string) (T, error), stop func(kind string, err error) bool) (T, error) {
+	var errs []error
+	for _, kind := range order {
+		v, err := try(kind)
+		if err == nil {
+			return v, nil
+		}
+		errs = append(errs, err)
+		if stop(kind, err) {
+			break
+		}
+	}
+	var zero T
+	if len(errs) == 1 {
+		return zero, errs[0]
+	}
+	return zero, errors.Join(errs...)
 }
 
 // wait sleeps up to d, less if the network changed, a reconnect was asked for or link.json changed (paired again,

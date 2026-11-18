@@ -43,7 +43,7 @@ func pinned(fp string, onConn func(net.Conn)) *http.Client {
 	return tlsClient(pinnedTLSConfig(fp, ""), directDial(onConn))
 }
 
-// systemRoots replaces the system's CAs for systemTrusted (UseRootsForTesting); nil means the system's.
+// systemRoots replaces the system's CAs for systemTLSConfig and an https proxy (UseRootsForTesting); nil means the system's.
 var systemRoots atomic.Pointer[x509.CertPool]
 
 // UseRootsForTesting makes the system-trust client trust pool instead of the system's CAs, until restore is called.
@@ -53,13 +53,9 @@ func UseRootsForTesting(pool *x509.CertPool) (restore func()) {
 	return func() { systemRoots.Store(old) }
 }
 
-// systemTrusted is the HTTP/1.1 client for a hub without a pin: it sits behind an HTTPS reverse proxy whose
-// certificate comes from a public CA (docs/operations/link.md "Hub behind a reverse proxy"). The certificate must chain to the system's
-// CAs and name the host dialed; nothing else is accepted. onConn is pinned's.
-func systemTrusted(onConn func(net.Conn)) *http.Client {
-	return tlsClient(systemTLSConfig(), directDial(onConn))
-}
-
+// systemTLSConfig checks a hub without a pin: it sits behind an HTTPS reverse proxy whose certificate comes from a
+// public CA (docs/operations/link.md "Hub behind a reverse proxy"). The certificate must chain to the system's CAs and
+// name the host dialed (the transport sets ServerName); nothing else is accepted.
 func systemTLSConfig() *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}, RootCAs: systemRoots.Load()}
 }
@@ -102,14 +98,13 @@ func hubTLSConfig(c *Config) *tls.Config {
 	return systemTLSConfig()
 }
 
-// hubClient dials c's hub straight, checked by hubTLSConfig.
-func hubClient(c *Config, onConn func(net.Conn)) *http.Client {
+// hubClient dials c's hub, straight or through outbound proxy p when it is set (proxyDial), and checks it with
+// hubTLSConfig either way: inside the proxy's tunnel the check is the same.
+func hubClient(c *Config, p *url.URL, onConn func(net.Conn)) *http.Client {
+	if p != nil {
+		return tlsClient(hubTLSConfig(c), proxyDial(p, onConn))
+	}
 	return tlsClient(hubTLSConfig(c), directDial(onConn))
-}
-
-// proxyHubClient is hubClient through proxy p (proxyDial): the same check of the hub, inside the proxy's tunnel.
-func proxyHubClient(c *Config, p *url.URL, onConn func(net.Conn)) *http.Client {
-	return tlsClient(hubTLSConfig(c), proxyDial(p, onConn))
 }
 
 // trustOf is Status.Trust for c.

@@ -127,6 +127,9 @@ func kindText(l i18n.Lang, kind string) string {
 	}
 }
 
+// textKinds are the kinds kindText names ("other" for the rest).
+var textKinds = []string{"lan", "ipv6", "name", "ipv4", KindSSH, KindProxy, "other"}
+
 // summary says in one line why the link failed, in the canonical language saved for other processes.
 func summary(err error) string { return summaryText(i18n.Default, err) }
 
@@ -280,7 +283,7 @@ type statusTemplate struct {
 
 var statusTemplates = sync.OnceValue(func() []statusTemplate {
 	kinds := []string{}
-	for _, kind := range []string{"lan", "ipv6", "name", "ipv4", KindSSH, KindProxy, "other"} {
+	for _, kind := range textKinds {
 		kinds = append(kinds, regexp.QuoteMeta(kindText(i18n.Default, kind)))
 	}
 	out := []statusTemplate{}
@@ -424,7 +427,7 @@ func listenErrorText(l i18n.Lang, text string) (string, bool) {
 }
 
 func localizedKindName(l i18n.Lang, canonical string) string {
-	for _, kind := range []string{"lan", "ipv6", "name", "ipv4", KindSSH, KindProxy, "other"} {
+	for _, kind := range textKinds {
 		if canonical == kindText(i18n.Default, kind) {
 			return kindText(l, kind)
 		}

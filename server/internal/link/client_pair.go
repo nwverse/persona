@@ -158,20 +158,9 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 		}
 		return out, nil
 	}
-	redeemDirect := func() (redeemed, error) {
-		client := hubClient(&c, nil)
-		defer client.CloseIdleConnections()
-		got, _, err := race(ctx, c.Endpoints, func(ctx context.Context, ep Endpoint) (redeemed, error) {
-			return redeemOne(ctx, client, ep.URL)
-		}, func(redeemed) {})
-		return got, err
-	}
-	redeemProxy := func() (redeemed, error) {
-		p, eps, err := proxied(&c)
-		if err != nil {
-			return redeemed{}, err
-		}
-		client := proxyHubClient(&c, p, nil)
+	// redeemVia races eps, straight to the hub or through outbound proxy p when it is set.
+	redeemVia := func(eps []Endpoint, p *url.URL) (redeemed, error) {
+		client := hubClient(&c, p, nil)
 		defer client.CloseIdleConnections()
 		got, _, err := race(ctx, eps, func(ctx context.Context, ep Endpoint) (redeemed, error) {
 			return redeemOne(ctx, client, ep.URL)
@@ -206,33 +195,21 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 		return redeemed{}, &SSHError{Code: SSHUnreachable, Server: c.SSH.Server, Target: c.SSH.Target}
 	}
 
-	var got redeemed
-	if c.SSH != nil && c.SSH.Always {
-		got, err = redeemSSH()
-	} else {
-		// The link's order (dialActive): direct candidates, the outbound proxy, the SSH tunnel. A hub that answered
-		// (refused the pairing, or has another key) ends it there.
-		tries := []func() (redeemed, error){redeemDirect}
-		if p, _, perr := proxied(&c); p != nil || perr != nil {
-			tries = append(tries, redeemProxy)
-		}
-		if c.SSH != nil {
-			tries = append(tries, redeemSSH)
-		}
-		var errs []error
-		for _, try := range tries {
-			var tryErr error
-			if got, tryErr = try(); tryErr == nil {
-				errs = nil
-				break
+	// The link's routes, in its order (routeOrder). A hub that answered (refused the pairing, or has another key) ends
+	// it there.
+	p, eps, perr := proxied(&c)
+	got, err := tryRoutes(routeOrder(&c, p != nil || perr != nil, ""), func(kind string) (redeemed, error) {
+		switch kind {
+		case KindSSH:
+			return redeemSSH()
+		case KindProxy:
+			if perr != nil {
+				return redeemed{}, perr
 			}
-			errs = append(errs, tryErr)
-			if ctx.Err() != nil || pairAnswered(tryErr) {
-				break
-			}
+			return redeemVia(eps, p)
 		}
-		err = joinErrors(errs)
-	}
+		return redeemVia(c.Endpoints, nil)
+	}, func(_ string, err error) bool { return ctx.Err() != nil || pairAnswered(err) })
 	if err != nil {
 		return nil, newTextError("link-errors.pair_failed", err)
 	}

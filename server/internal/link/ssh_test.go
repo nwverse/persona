@@ -646,7 +646,8 @@ func (g *gatedDirectListener) serve(c net.Conn, targetAddr string) {
 	pipeForwardConn(&replayConn{Conn: c, r: io.MultiReader(bytes.NewReader(first), c)}, targetAddr)
 }
 
-// replayConn is a connection whose first bytes were already read, put back in front of the rest.
+// replayConn is a connection whose first bytes were already read, put back in front of the rest. It embeds the
+// net.Conn interface, not *net.TCPConn, whose WriteTo io.Copy would use around Read.
 type replayConn struct {
 	net.Conn
 	r io.Reader

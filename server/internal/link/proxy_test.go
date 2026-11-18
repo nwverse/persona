@@ -165,6 +165,36 @@ func proxyableLocalhost(t *testing.T) string {
 	return host
 }
 
+// dialProxy is the proxy route alone: c's candidates through its proxy (proxied).
+func dialProxy(ctx context.Context, c *Config) (*link, error) {
+	p, eps, err := proxied(c)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return nil, errors.New("no proxy for these candidates")
+	}
+	return dialVia(ctx, c, eps, p)
+}
+
+// runLink runs o until the test ends, or stop; its statuses come on the channel.
+func runLink(t *testing.T, o Options) (chan Status, func()) {
+	t.Helper()
+	ch := make(chan Status, 256)
+	o.Status = func(s Status) {
+		select {
+		case ch <- s:
+		default:
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = Run(ctx, o) }()
+	stop := sync.OnceFunc(func() { cancel(); <-done })
+	t.Cleanup(stop)
+	return ch, stop
+}
+
 func portOf(raw string) string {
 	u, _ := url.Parse(raw)
 	return u.Port()
@@ -237,15 +267,15 @@ func TestProxiedFollowsTheSettingAndTheEnvironment(t *testing.T) {
 	if p, _ := via(c); p != "http://all.example:1" {
 		t.Fatalf("ALL_PROXY: %s", p)
 	}
-	t.Setenv("https_proxy", "lower.example:2")
-	if p, _ := via(c); p != "http://lower.example:2" {
-		t.Fatalf("https_proxy before ALL_PROXY: %s", p)
+	t.Setenv("HTTPS_PROXY", "upper.example:2")
+	if p, _ := via(c); p != "http://upper.example:2" {
+		t.Fatalf("HTTPS_PROXY before ALL_PROXY: %s", p)
 	}
-	t.Setenv("HTTPS_PROXY", "http://upper.example:3")
+	t.Setenv("https_proxy", "http://lower.example:3") // lower case first, as Go's net/http reads them
 	p, got := via(c)
 	// Loopback and localhost never go through a proxy; the others keep link.json's order.
-	if p != "http://upper.example:3" || !slices.Equal(got, []string{"https://192.0.2.2:18662", "https://hub.example.com:18662"}) {
-		t.Fatalf("HTTPS_PROXY: %s %v", p, got)
+	if p != "http://lower.example:3" || !slices.Equal(got, []string{"https://192.0.2.2:18662", "https://hub.example.com:18662"}) {
+		t.Fatalf("https_proxy: %s %v", p, got)
 	}
 	c.Proxy = "http://u:pw@set.example:4"
 	if p, _ := via(c); p != "http://u:pw@set.example:4" {
@@ -266,7 +296,7 @@ func TestProxiedFollowsTheSettingAndTheEnvironment(t *testing.T) {
 	}
 	// A proxy that cannot be used is the proxy route's error, never a quoted URL.
 	c.Proxy = ""
-	t.Setenv("HTTPS_PROXY", "socks5://user:pw-secret@127.0.0.1:1080")
+	t.Setenv("https_proxy", "socks5://user:pw-secret@127.0.0.1:1080")
 	if _, _, err := proxied(c); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("socks5: %v", err)
 	}
@@ -324,8 +354,7 @@ func TestProxyKeepsTheHubsCheck(t *testing.T) {
 	wrong := *cfg
 	wrong.FP = "not-its-pin"
 	_, viaErr := dialProxy(ctx, &wrong)
-	direct := Config{Machine: "laptop", FP: "not-its-pin", Token: "jd_x", Endpoints: []Endpoint{{URL: unroutable, Kind: "ipv4"}}}
-	direct.Endpoints[0].URL = hub.URL
+	direct := Config{Machine: "laptop", FP: "not-its-pin", Token: "jd_x", Endpoints: []Endpoint{{URL: hub.URL, Kind: "ipv4"}}}
 	_, directErr := dial(ctx, &direct)
 	if !errors.Is(viaErr, errPin) || !errors.Is(directErr, errPin) || describe(viaErr) != describe(directErr) || describe(viaErr) != defaultText("link-errors.pin_mismatch") {
 		t.Fatalf("pin through the proxy: %v (%s); direct: %v (%s)", viaErr, describe(viaErr), directErr, describe(directErr))
@@ -430,7 +459,6 @@ func TestProxyFailuresNameNeitherTheProxyNorItsCredentials(t *testing.T) {
 			t.Fatalf("%s: saved status in English = %q, want %q", name, got, want)
 		}
 	}
-	proxy.refuse.Store(0)
 }
 
 // dialActive's order: direct candidates, then the proxy, then (with one) the SSH tunnel; the route that worked last first.
@@ -522,21 +550,8 @@ func TestProxyRouteCarriesTheLinkAndItsStreams(t *testing.T) {
 	}
 	var logMu sync.Mutex
 	var logs strings.Builder
-	ch := make(chan Status, 256)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = Run(ctx, Options{Path: path, Target: node.path, PairCheck: 30 * time.Millisecond, DirectRetryEvery: time.Hour,
-			Logf: func(f string, a ...any) { logMu.Lock(); fmt.Fprintf(&logs, f+"\n", a...); logMu.Unlock() },
-			Status: func(s Status) {
-				select {
-				case ch <- s:
-				default:
-				}
-			}})
-	}()
-	t.Cleanup(func() { cancel(); <-done })
+	ch, stop := runLink(t, Options{Path: path, Target: node.path, PairCheck: 30 * time.Millisecond, DirectRetryEvery: time.Hour,
+		Logf: func(f string, a ...any) { logMu.Lock(); fmt.Fprintf(&logs, f+"\n", a...); logMu.Unlock() }})
 
 	st := waitFor(t, ch, func(s Status) bool { return s.State == "connected" })
 	if st.Kind != KindProxy || st.Address != ep.URL || st.Proxy != RedactedProxy(proxy.url) || direct.attempts.Load() == 0 {
@@ -584,8 +599,7 @@ func TestProxyRouteCarriesTheLinkAndItsStreams(t *testing.T) {
 	if proxy.connects.Load() != 3 || strings.Contains(off.Error, kindText(i18n.Default, KindProxy)) {
 		t.Fatalf("off: %+v (CONNECTs %d)", off, proxy.connects.Load())
 	}
-	cancel()
-	<-done
+	stop()
 	logMu.Lock()
 	defer logMu.Unlock()
 	for _, secret := range []string{proxyUser, proxySecret, portOf(proxy.url)} {
@@ -613,25 +627,12 @@ func TestProxyRouteSwitchesBackToDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HTTPS_PROXY", proxy.url)
-	ch := make(chan Status, 256)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = Run(ctx, Options{Path: path, PairCheck: 30 * time.Millisecond, DirectRetryEvery: 200 * time.Millisecond,
-			Status: func(s Status) {
-				select {
-				case ch <- s:
-				default:
-				}
-			}})
-	}()
-	t.Cleanup(func() { cancel(); <-done })
+	ch, _ := runLink(t, Options{Path: path, PairCheck: 30 * time.Millisecond, DirectRetryEvery: 200 * time.Millisecond})
 	st := waitFor(t, ch, func(s Status) bool { return s.State == "connected" })
 	if st.Kind != KindProxy || st.Proxy != RedactedProxy(proxy.url) {
 		t.Fatalf("status %+v", st)
 	}
-	proxied := <-hub.links
+	overProxy := <-hub.links
 	direct.allowed.Store(true)
 	back := waitFor(t, ch, func(s Status) bool { return s.State == "connected" && s.Kind != KindProxy })
 	if back.Kind != "name" || back.Address != ep.URL || back.Proxy != "" {
@@ -639,7 +640,7 @@ func TestProxyRouteSwitchesBackToDirect(t *testing.T) {
 	}
 	<-hub.links
 	select {
-	case <-proxied.ended:
+	case <-overProxy.ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the link through the proxy stayed open")
 	}
@@ -675,7 +676,7 @@ func TestPairThroughTheProxy(t *testing.T) {
 	}
 }
 
-func TestRepairedFollowsTheProxyOnlyOverIt(t *testing.T) {
+func TestRepairedFollowsTheProxyOnAFallbackRoute(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "link.json")
 	c := &Config{Hub: "h1", Machine: "laptop", FP: "pin", Token: "jd_x", Endpoints: []Endpoint{{URL: unroutable, Kind: "ipv4"}}}
 	if err := Update(path, func(f *Config) error { *f = *c; return nil }); err != nil {
@@ -688,6 +689,6 @@ func TestRepairedFollowsTheProxyOnlyOverIt(t *testing.T) {
 		t.Fatal("a direct link reconnects for a new proxy setting")
 	}
 	if !repaired(path, c, true) {
-		t.Fatal("a link over the proxy keeps the old proxy setting")
+		t.Fatal("a link on a fallback route keeps the old proxy setting")
 	}
 }

@@ -218,22 +218,14 @@ func optionalValue(args []string, i int, name string) (value string, next int, o
 func pairCmd(e *env, args []string) error {
 	var machine, raw, listen string
 	var addrs []string
-	var sshFlags sshPairFlags
-	var proxy proxyFlag
+	var flags routeFlags
 	seen, passive := false, false
 	for i := 0; i < len(args); i++ {
 		if v, next, ok := optionalValue(args, i, "--listen"); ok {
 			passive, listen, i = true, v, next
 			continue
 		}
-		if next, ok, err := proxy.consume(args, i); ok || err != nil {
-			if err != nil {
-				return err
-			}
-			i = next
-			continue
-		}
-		if next, ok, err := sshFlags.consume(args, i); ok || err != nil {
+		if next, ok, err := flags.consume(args, i); ok || err != nil {
 			if err != nil {
 				return err
 			}
@@ -259,10 +251,10 @@ func pairCmd(e *env, args []string) error {
 		}
 	}
 	if passive || len(addrs) > 0 {
-		if sshFlags.any() {
+		if flags.any() {
 			return link.NewTextError("link-cli.pair_listen_ssh", nil)
 		}
-		if proxy.set {
+		if flags.proxy.set {
 			return link.NewTextError("link-cli.listen_proxy", nil)
 		}
 		if seen || machine != "" {
@@ -270,10 +262,10 @@ func pairCmd(e *env, args []string) error {
 		}
 		return pairListen(e, listen, addrs)
 	}
-	if err := proxy.save(e); err != nil {
+	if err := flags.proxy.save(e); err != nil {
 		return err
 	}
-	c, err := pairWithSSH(e, raw, machine, sshFlags)
+	c, err := pairWithSSH(e, raw, machine, flags)
 	if err != nil {
 		return err
 	}
@@ -290,10 +282,10 @@ func pairCmd(e *env, args []string) error {
 
 // pair redeems a pairing link: raw, or read from stdin when raw is "" or "-" (with a prompt on a terminal).
 func pair(e *env, raw, machine string) (*link.Config, error) {
-	return pairWithSSH(e, raw, machine, sshPairFlags{})
+	return pairWithSSH(e, raw, machine, routeFlags{})
 }
 
-func pairWithSSH(e *env, raw, machine string, sshFlags sshPairFlags) (*link.Config, error) {
+func pairWithSSH(e *env, raw, machine string, flags routeFlags) (*link.Config, error) {
 	if raw == "" || raw == "-" {
 		in := bufio.NewReader(io.LimitReader(e.stdin, 16<<10))
 		if e.stdinIsTerminal() {
@@ -316,7 +308,7 @@ func pairWithSSH(e *env, raw, machine string, sshFlags sshPairFlags) (*link.Conf
 	if strings.TrimSpace(raw) == "" {
 		return nil, link.NewTextError("link-cli.pair_link_required", nil)
 	}
-	sshCfg, err := sshFlags.build(raw)
+	sshCfg, err := flags.build(raw)
 	if err != nil {
 		return nil, err
 	}

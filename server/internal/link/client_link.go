@@ -83,30 +83,12 @@ func (l *link) getEndpoints() []Endpoint {
 
 func dial(ctx context.Context, c *Config) (*link, error) { return dialVia(ctx, c, c.Endpoints, nil) }
 
-// dialProxy is dial through c's outbound proxy (proxied): the same race, credential and check of the hub, and every
-// stream later opened on the link takes the same proxy.
-func dialProxy(ctx context.Context, c *Config) (*link, error) {
-	p, eps, err := proxied(c)
-	if err != nil {
-		return nil, err
-	}
-	if p == nil {
-		return nil, newTextError("link-errors.no_candidates", nil)
-	}
-	return dialVia(ctx, c, eps, p)
-}
-
-// dialVia races eps for the link: straight to the hub, or through proxy p when it is set.
+// dialVia races eps for the link: straight to the hub, or through outbound proxy p when it is set (proxied); every
+// stream later opened on the link takes the same route.
 func dialVia(ctx context.Context, c *Config, eps []Endpoint, p *url.URL) (*link, error) {
-	client := func(onConn func(net.Conn)) *http.Client {
-		if p != nil {
-			return proxyHubClient(c, p, onConn)
-		}
-		return hubClient(c, onConn)
-	}
 	l, ep, err := race(ctx, eps, func(ctx context.Context, ep Endpoint) (*link, error) {
 		var local netip.Addr
-		hc := client(func(raw net.Conn) {
+		hc := hubClient(c, p, func(raw net.Conn) {
 			if a, err := netip.ParseAddrPort(raw.LocalAddr().String()); err == nil {
 				local = a.Addr().Unmap()
 			}
@@ -116,7 +98,7 @@ func dialVia(ctx context.Context, c *Config, eps []Endpoint, p *url.URL) (*link,
 			return nil, handshakeError(resp, err)
 		}
 		conn.SetReadLimit(1 << 20)
-		return &link{conn: conn, local: local, streams: client(nil), token: c.Token}, nil
+		return &link{conn: conn, local: local, streams: hubClient(c, p, nil), token: c.Token}, nil
 	}, func(l *link) { l.closeNow() })
 	if err != nil {
 		return nil, err
@@ -196,9 +178,11 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 		// it drops. The zero stamp makes the first look compare: a pairing written while this link was dialing counts.
 		pairT := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 		defer pairT.Stop()
-		// Over a proxy, or over SSH it need not use, direct candidates are probed now and then to switch back.
+		// On a fallback route (a proxy, or SSH it need not use), direct candidates are probed now and then to switch
+		// back, and a new proxy setting is followed at once.
+		fallback := l.ep.Kind == KindProxy || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always)
 		var directC <-chan time.Time
-		if l.ep.Kind == KindProxy || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always) {
+		if fallback {
 			directT := time.NewTicker(cmp.Or(o.DirectRetryEvery, DirectRetryEvery))
 			defer directT.Stop()
 			directC = directT.C
@@ -339,7 +323,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
 				if now := stampOf(o.Path); !looked || !now.Equal(seen) {
 					looked, seen = true, now
-					if repaired(o.Path, c, l.ep.Kind == KindProxy) {
+					if repaired(o.Path, c, fallback) {
 						reconnect(errRepaired)
 						return
 					}
@@ -491,15 +475,15 @@ func (l *link) pairedAgain() {
 }
 
 // repaired: link.json now holds another credential, computer, hub or SSH tunnel than c, or another proxy setting for
-// a link over the proxy (viaProxy), or was removed (unpaired). A file that cannot be read for another reason changes
-// nothing: the link stays as it is.
-func repaired(path string, c *Config, viaProxy bool) bool {
+// a link on a fallback route (the proxy comes before SSH), or was removed (unpaired). A file that cannot be read for
+// another reason changes nothing: the link stays as it is.
+func repaired(path string, c *Config, fallback bool) bool {
 	f, err := Read(path)
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
 	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH) ||
-		(viaProxy && f.Proxy != c.Proxy)
+		(fallback && f.Proxy != c.Proxy)
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).

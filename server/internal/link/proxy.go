@@ -2,6 +2,7 @@ package link
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -89,25 +90,13 @@ func SetProxy(path, raw string) error {
 	return Update(path, func(c *Config) error { c.Proxy = raw; return nil })
 }
 
-// firstEnv is the first of the variables that is set, as Go's net/http reads them (upper case first).
-func firstEnv(names ...string) string {
-	for _, name := range names {
-		if v := os.Getenv(name); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // proxied is the proxy c's candidates go through and those candidates, each marked KindProxy (race ranks them):
-// link.json's proxy, else HTTPS_PROXY or ALL_PROXY. None when there is no proxy, it is off, or NO_PROXY exempts every
+// link.json's proxy, else HTTPS_PROXY or ALL_PROXY (either case). None when there is no proxy, it is off, or NO_PROXY exempts every
 // candidate (as for Go's net/http, localhost and loopback addresses never use one). A proxy that cannot be read is
 // the proxy route's error alone: direct candidates are tried all the same.
 func proxied(c *Config) (*url.URL, []Endpoint, error) {
-	raw := c.Proxy
-	if raw == "" {
-		raw = firstEnv("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")
-	}
+	env := httpproxy.FromEnvironment() // https_proxy and no_proxy, lower case first, as Go's net/http reads them
+	raw := cmp.Or(c.Proxy, env.HTTPSProxy, os.Getenv("all_proxy"), os.Getenv("ALL_PROXY"))
 	if raw == "" || raw == ProxyOff {
 		return nil, nil, nil
 	}
@@ -116,7 +105,7 @@ func proxied(c *Config) (*url.URL, []Endpoint, error) {
 		return nil, nil, err
 	}
 	// Only NO_PROXY's answer is wanted here: the stand-in keeps the real URL (and its credentials) out of httpproxy.
-	use := (&httpproxy.Config{HTTPSProxy: "http://proxy.invalid", NoProxy: firstEnv("NO_PROXY", "no_proxy")}).ProxyFunc()
+	use := (&httpproxy.Config{HTTPSProxy: "http://proxy.invalid", NoProxy: env.NoProxy}).ProxyFunc()
 	var eps []Endpoint
 	for _, ep := range c.Endpoints {
 		if u, err := url.Parse(ep.URL); err == nil {
@@ -139,9 +128,17 @@ func proxyDial(p *url.URL, onConn func(net.Conn)) func(context.Context, string, 
 	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
 	port := p.Port()
 	if port == "" {
-		port = map[string]string{"http": "80", "https": "443"}[p.Scheme]
+		port = "80"
+		if p.Scheme == "https" {
+			port = "443"
+		}
 	}
 	at := net.JoinHostPort(p.Hostname(), port)
+	var secure *tls.Config // an https proxy's check; its session cache spares each stream a full handshake
+	if p.Scheme == "https" {
+		secure = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: p.Hostname(), RootCAs: systemRoots.Load(),
+			ClientSessionCache: tls.NewLRUClientSessionCache(4)}
+	}
 	return func(ctx context.Context, _, addr string) (net.Conn, error) {
 		raw, err := d.DialContext(ctx, "tcp", at)
 		if err != nil {
@@ -149,7 +146,7 @@ func proxyDial(p *url.URL, onConn func(net.Conn)) func(context.Context, string, 
 		}
 		// Ending ctx ends the dial: a race's loser, or a link going away, does not wait for a slow proxy.
 		stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
-		conn, err := connectThrough(ctx, raw, p, addr)
+		conn, err := connectThrough(ctx, raw, p, secure, addr)
 		if !stop() {
 			return nil, &proxyError{key: "link-errors.proxy_unreachable", cause: ctx.Err()}
 		}
@@ -164,16 +161,13 @@ func proxyDial(p *url.URL, onConn func(net.Conn)) func(context.Context, string, 
 	}
 }
 
-// connectThrough asks the proxy on raw for a tunnel to addr: TLS to the proxy first when it is an https one.
-func connectThrough(ctx context.Context, raw net.Conn, p *url.URL, addr string) (net.Conn, error) {
-	deadline := time.Now().Add(dialTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = raw.SetDeadline(deadline)
+// connectThrough asks the proxy on raw for a tunnel to addr: TLS to the proxy first (secure) when it is an https
+// one. Ending ctx closes raw (proxyDial), so the deadline only bounds a proxy that never answers.
+func connectThrough(ctx context.Context, raw net.Conn, p *url.URL, secure *tls.Config, addr string) (net.Conn, error) {
+	_ = raw.SetDeadline(time.Now().Add(dialTimeout))
 	conn := raw
-	if p.Scheme == "https" {
-		t := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: p.Hostname(), RootCAs: systemRoots.Load()})
+	if secure != nil {
+		t := tls.Client(raw, secure)
 		if err := t.HandshakeContext(ctx); err != nil {
 			return nil, &proxyError{key: "link-errors.proxy_tls_failed", cause: err}
 		}
