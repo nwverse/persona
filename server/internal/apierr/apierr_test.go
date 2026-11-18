@@ -487,9 +487,34 @@ func TestStartTabRefusalsAreWorded(t *testing.T) {
 	}
 }
 
+// shell_waiting is a session's start_error, a planned task's start failure and a refused message's 409 on every app
+// (#10365): only the web lists the question's answers, and only from a computer that offers them (not an older one,
+// nor a start that took a hand-off's values), so its words never say an answer is picked "here" or "in the chat".
+func TestShellWaitingWordsHoldOnEveryClient(t *testing.T) {
+	promised := map[i18n.Lang][]string{
+		i18n.En:     {"Pick an answer here", "Pick an answer in the chat"},
+		i18n.ZhHans: {"在这里选一个回答", "在对话里选一个回答"},
+		i18n.Ja:     {"ここで回答を選ぶ", "チャットで回答を選ぶ"},
+	}
+	for lang, words := range promised {
+		refused, _ := LocalizedBody(http.StatusConflict, proto.CodeShellWaiting, errors.New("node text"), lang)["error"].(string)
+		for _, got := range []string{
+			Sentence(lang, proto.CodeShellWaiting, map[string]any{"machine_name": "Studio", "line": "Update now? [Y/n]"}),
+			Sentence(lang, proto.CodeShellWaiting, nil),
+			refused,
+		} {
+			for _, w := range words {
+				if got == "" || strings.Contains(got, w) {
+					t.Errorf("%s: %q", lang, got)
+				}
+			}
+		}
+	}
+}
+
 // The refusals of an answer to that question from the app (#10365, node/startcontinue.go) read in every language.
 func TestStartContinueRefusalsAreWorded(t *testing.T) {
-	for _, code := range []string{"start_tab_gone", "start_not_waiting", "choice_not_offered", "prompt_changed"} {
+	for _, code := range []string{"start_tab_gone", "start_not_waiting", "choice_not_offered", "prompt_changed", proto.CodeSecretEnvGone} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			body := LocalizedBody(http.StatusConflict, code, errors.New("node text"), lang)
 			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" || body["error"] == "node text" {

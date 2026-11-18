@@ -54,27 +54,28 @@ func TestShellQuestion(t *testing.T) {
 	}
 }
 
-// What the app offers for each startup question (start.continue): the answers, whether it reads a line or a secret,
-// and what Enter alone answers. A secret prompt gets Ctrl-C alone and ssh's host key never a "yes".
+// What the app offers for each startup question (start.continue): the answers, whether it reads a line, one key (no
+// Enter after it, even echoed) or a secret, and what Enter alone answers. A secret prompt gets Ctrl-C alone and ssh's
+// host key never a "yes".
 func TestShellQuestionChoices(t *testing.T) {
 	for _, tc := range []struct {
-		line, kind, choices string
-		lineMode, secret    bool
-		def                 string
+		line, kind, choices         string
+		lineMode, singleKey, secret bool
+		def                         string
 	}{
-		{"[oh-my-zsh] Would you like to update? [Y/n]", "update", "y,n,enter", false, false, "y"},
-		{"[Oh My Bash] Would you like to check for updates? [Y/n]:", "update", "y,n,enter", true, false, "y"},
-		{"Proceed with the upgrade? [y/N]:", "yes_no", "y,n,enter", true, false, "n"},
-		{"Continue (y/n)?", "yes_no", "y,n,enter", false, false, ""},
-		{"Overwrite the existing file? (yes/no)", "yes_no", "yes,no", true, false, ""},
-		{"Press Enter to continue", "press_key", "enter", false, false, ""},
-		{"Ignore insecure directories and continue [y] or abort compinit [n]?", "compinit", "y,n", false, false, ""},
-		{"Are you sure you want to continue connecting (yes/no/[fingerprint])?", "ssh_host_key", "no,cancel", true, false, ""},
-		{"--- Type one of the keys in parentheses ---", "zsh_newuser", "q,0", false, false, ""},
-		{"Choice [ynq]:", "p10k_wizard", "q", false, false, ""},
-		{"Do you wish to trust '/p/.rvmrc'? y[es], n[o], v[iew], c[ancel]>", "rvm_trust", "n,c", true, false, ""},
-		{"Enter passphrase for key '/home/me/.ssh/id_ed25519':", "secret", "cancel", true, true, ""},
-		{"[sudo] password for me:", "secret", "cancel", true, true, ""},
+		{"[oh-my-zsh] Would you like to update? [Y/n]", "update", "y,n,enter", false, true, false, "y"},
+		{"[Oh My Bash] Would you like to check for updates? [Y/n]:", "update", "y,n,enter", true, false, false, "y"},
+		{"Proceed with the upgrade? [y/N]:", "yes_no", "y,n,enter", true, false, false, "n"},
+		{"Continue (y/n)?", "yes_no", "y,n,enter", false, false, false, ""},
+		{"Overwrite the existing file? (yes/no)", "yes_no", "yes,no", true, false, false, ""},
+		{"Press Enter to continue", "press_key", "enter", false, false, false, ""},
+		{"Ignore insecure directories and continue [y] or abort compinit [n]?", "compinit", "y,n", false, true, false, ""},
+		{"Are you sure you want to continue connecting (yes/no/[fingerprint])?", "ssh_host_key", "no,cancel", true, false, false, ""},
+		{"--- Type one of the keys in parentheses ---", "zsh_newuser", "q,0", false, true, false, ""},
+		{"Choice [ynq]:", "p10k_wizard", "q", false, true, false, ""},
+		{"Do you wish to trust '/p/.rvmrc'? y[es], n[o], v[iew], c[ancel]>", "rvm_trust", "n,c", true, false, false, ""},
+		{"Enter passphrase for key '/home/me/.ssh/id_ed25519':", "secret", "cancel", true, false, true, ""},
+		{"[sudo] password for me:", "secret", "cancel", true, false, true, ""},
 	} {
 		if shellQuestion(tc.line) != tc.line {
 			t.Errorf("%q is not a question", tc.line)
@@ -82,7 +83,8 @@ func TestShellQuestionChoices(t *testing.T) {
 		ask := questionChoices(tc.line)
 		data := map[string]any{}
 		ask.data(data)
-		if ask.Kind != tc.kind || data["choices"] != tc.choices || ask.LineMode != tc.lineMode || ask.Secret != tc.secret || ask.Default != tc.def {
+		if ask.Kind != tc.kind || data["choices"] != tc.choices || ask.LineMode != tc.lineMode || ask.SingleKey != tc.singleKey ||
+			ask.Secret != tc.secret || ask.Default != tc.def {
 			t.Errorf("%q: %+v (%v)", tc.line, ask, data)
 		}
 		for _, c := range ask.Choices {

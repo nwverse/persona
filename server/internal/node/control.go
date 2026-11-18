@@ -91,6 +91,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		defer func() { // this start took the ticket: failed, nothing else may fetch its values (secretenv.go)
 			if startErr != nil {
 				n.handoffs().take(execution.SecretTicket, false)
+				startErr = withoutAnswers(startErr) // nor can an answer start it again with them (start.continue)
 			}
 		}()
 	}
