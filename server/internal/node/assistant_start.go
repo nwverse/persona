@@ -57,6 +57,12 @@ func (p *assistantProc) awaitStart(d time.Duration) error {
 	case <-p.ready:
 		return nil
 	case <-t.C:
+		if proto.IsExternalLauncher(p.launcher) {
+			if p.cmd != nil && p.cmd.Process != nil {
+				_ = osproc.StopGroup(p.cmd.Process.Pid, true)
+			}
+			return externalRefusal(context.Background(), "adapter_timeout")
+		}
 		return nil
 	case <-p.exited:
 	}
@@ -84,7 +90,18 @@ func (p *assistantProc) startFailure() error {
 	}
 	p.mu.Lock()
 	tail := strings.Join(p.stderrTail, " | ")
+	lines := slices.Clone(p.stderrTail)
 	p.mu.Unlock()
+	if proto.IsExternalLauncher(p.launcher) {
+		code := "adapter_unavailable"
+		if len(lines) > 0 {
+			code = externalStderrCode(lines[len(lines)-1])
+		}
+		if code == "" {
+			code = "adapter_unavailable"
+		}
+		return externalRefusal(context.Background(), code)
+	}
 	if tail == "" {
 		tail = "没有输出"
 	}
@@ -282,7 +299,17 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, errors.New("a supervision round resumes a Claude conversation")
 	}
 	execution := executionOption(options)
+	startCtx := context.Background()
+	if proto.IsExternalLauncher(launcher) {
+		startCtx = externalStartContext(execution)
+		if err := startCtx.Err(); err != nil {
+			return nil, externalAdapterError(startCtx, err)
+		}
+	}
 	if err := execution.check("claude"); err != nil {
+		return nil, err
+	}
+	if err := n.checkExternalAssistant(startCtx, id, launcher, execution, spare); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(cwd, 0o700); err != nil {
@@ -372,10 +399,12 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		gateEnv, releaseGates = nil, func() {} // no commands to gate: it has no Bash
 	}
 	cleanupMCP := func() {}
+	cleanupAdapter := func() {}
 	started := false
 	defer func() {
 		if !started {
 			cleanupMCP()
+			cleanupAdapter()
 			releaseGates()
 		}
 	}()
@@ -392,19 +421,29 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if itself {
 		n.logger.Printf("assistant %s: started on the Agent SDK: resumes with claude itself in its recorded profile, not the claude launcher", short(id))
 	}
-	cmd := n.assistantCLICommand(shell, launcher, cwd, itself, args, env)
+	var cmd *exec.Cmd
 	// Interactive Claude Code in place of claude -p when the setting asks for it (assistant_tui.go): the bridge gets
-	// both commands, and runs the print-mode one when the interactive one does not start.
-	tui, tuiNote := tuiWanted(execution, guest, spare, round, wantMode)
-	var tuiMode, tuiEffort string
+	// both commands, and runs the print-mode one when the interactive one does not start. Not for an external
+	// launcher, whose adapter is the command.
+	var tui bool
+	var tuiNote, tuiMode, tuiEffort string
 	var tuiLine []byte
-	if tui {
-		tuiMode, tuiEffort = n.tuiStartModes(id, wantMode, execution)
-		full := withStartModes(args, tuiMode, tuiEffort)
-		interactive := n.assistantCLICommand(shell, launcher, cwd, itself, tuiArgs(full), env)
-		printCmd := n.assistantCLICommand(shell, launcher, cwd, itself, full, env)
-		cmd, tuiLine = n.assistantTUICommand(tuiSpec{Session: id, Cwd: cwd, Resume: resume, AcceptBypass: tuiMode == proto.ModeBypass,
-			ConfigDirs: slices.Compact(append([]string{envValue(env, "CLAUDE_CONFIG_DIR")}, n.claudeConfigDirs()...))}, interactive, printCmd)
+	if proto.IsExternalLauncher(launcher) {
+		cmd, cleanupAdapter, err = n.externalCLICommand(startCtx, id, launcher, cwd, execution, args, env)
+		if err != nil {
+			cleanupAdapter = func() {}
+			return nil, err
+		}
+	} else {
+		cmd = n.assistantCLICommand(shell, launcher, cwd, itself, args, env)
+		if tui, tuiNote = tuiWanted(execution, guest, spare, round, wantMode); tui {
+			tuiMode, tuiEffort = n.tuiStartModes(id, wantMode, execution)
+			full := withStartModes(args, tuiMode, tuiEffort)
+			interactive := n.assistantCLICommand(shell, launcher, cwd, itself, tuiArgs(full), env)
+			printCmd := n.assistantCLICommand(shell, launcher, cwd, itself, full, env)
+			cmd, tuiLine = n.assistantTUICommand(tuiSpec{Session: id, Cwd: cwd, Resume: resume, AcceptBypass: tuiMode == proto.ModeBypass,
+				ConfigDirs: slices.Compact(append([]string{envValue(env, "CLAUDE_CONFIG_DIR")}, n.claudeConfigDirs()...))}, interactive, printCmd)
+		}
 	}
 	cmd.SysProcAttr = osproc.GroupAttr() // so stop() can kill the whole group
 	msysCmdLine(cmd)
@@ -421,10 +460,18 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, err
 	}
 	instructions := instructionsDigest(cwd)
-	startErr := cmd.Start()
+	var startErr error
+	if proto.IsExternalLauncher(launcher) {
+		startErr = startExternalCommand(startCtx, cmd, stdin)
+	} else {
+		startErr = cmd.Start()
+	}
 	closeStderrWriter()
 	if startErr != nil {
 		_ = stderr.Close()
+		if proto.IsExternalLauncher(launcher) {
+			return nil, externalAdapterError(startCtx, startErr)
+		}
 		return nil, fmt.Errorf("start %s: %w", launcher, startErr)
 	}
 	started = true
@@ -432,8 +479,10 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		// The bridge reads its spec before anything else; one that cannot take it is a start that failed (awaitStart).
 		_, _ = stdin.Write(tuiLine)
 	}
+	processExecution := execution
+	processExecution.StartupContext = nil // a live or resident process must never keep the completed RPC's context
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
-		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: execution, fingerprint: n.executionFingerprint(launcher, execution),
+		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
 		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
 		round: round.anchor != "", toolSet: round.toolSet, tui: tui, tuiNote: tuiNote}
 	if tui {
@@ -449,7 +498,11 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	go n.readAssistant(p, stdout)
 	go func() {
 		_ = cmd.Wait()
+		if proto.IsExternalLauncher(launcher) && !osproc.SweepGroup(cmd.Process.Pid, externalAdapterGroupSweep) {
+			n.logger.Printf("assistant %s: external process group cleanup budget exhausted", short(id))
+		}
 		cleanupMCP()
+		cleanupAdapter()
 		releaseGates()
 		liveAssistants.Delete(p)
 		close(p.exited)
@@ -478,6 +531,28 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		n.emitDelta(id, "")
 		n.notifySessions()
 	}()
+	if proto.IsExternalLauncher(launcher) {
+		ctx, cancel := context.WithTimeout(startCtx, 5*time.Second)
+		err := p.control(ctx, map[string]any{"subtype": "initialize"})
+		cancel()
+		if err != nil || startCtx.Err() != nil {
+			_ = osproc.StopGroup(cmd.Process.Pid, true)
+			// The same waiter owns descendant cleanup and private settings. Bound the join; an exhausted budget is
+			// unknown cleanup evidence, never a reason to claim the process group is empty.
+			select {
+			case <-p.exited:
+			case <-time.After(externalAdapterGroupSweep + externalAdapterPipeGrace):
+				n.logger.Printf("assistant %s: external initialization cleanup budget exhausted", short(id))
+			}
+			if startCtx.Err() != nil {
+				return nil, externalAdapterError(startCtx, startCtx.Err())
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, externalRefusal(startCtx, "adapter_timeout")
+			}
+			return nil, p.startFailure()
+		}
+	}
 	return p, nil
 }
 
@@ -511,6 +586,12 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 	sc := bufio.NewScanner(stderr)
 	for sc.Scan() {
 		l := sc.Text()
+		if proto.IsExternalLauncher(launcher) {
+			l = externalStderrCode(l)
+			if l == "" {
+				continue
+			}
+		}
 		if strings.Contains(l, "rror") {
 			logger.Printf("assistant %s: %s", id[:8], l)
 		}
