@@ -16,18 +16,22 @@ import "time"
 type creditWindow struct {
 	cwnd     int
 	inFlight int
-	sent     []sentBulk // bulk sent and not acknowledged, oldest first; one entry per frame
-	limited  bool       // a bulk frame waited for the window since it last grew
+	sent     []sentFrame // sent and not acknowledged, oldest first; one entry per frame
+	limited  bool        // a frame waited for the window since it last grew
 	base     baseRTT
 	lastCut  time.Time
 	rtt      time.Duration // the latest sample
 }
 
-// sentBulk is a bulk frame (or, past maxSentEntries, the frames through seq): its bytes, written from at.
-type sentBulk struct {
+// sentFrame is a frame with credit (or, past maxSentEntries, the frames through seq): its bytes, written from at.
+// full: it was cut to the frame size of its time, so its round trip is a sample. A shorter frame (a short line, a
+// long one's last piece) takes less time to go out than the frames the window is judged by, and would make their own
+// time on the wire look like queueing: on a 30 KB/s link a 4 KiB frame takes 137 ms, more than queueTarget.
+type sentFrame struct {
 	seq   uint64
 	bytes int
 	at    time.Time
+	full  bool
 }
 
 const (
@@ -57,30 +61,32 @@ func (w *creditWindow) canSend(n int) bool {
 	return false
 }
 
-// wrote records a bulk frame of n bytes, numbered seq, written from at.
-func (w *creditWindow) wrote(seq uint64, n int, at time.Time) {
+// wrote records a frame of n bytes with credit, numbered seq, written from at; full: cut to the frame size.
+func (w *creditWindow) wrote(seq uint64, n int, at time.Time, full bool) {
 	w.inFlight += n
 	if k := len(w.sent); k >= maxSentEntries {
 		w.sent[k-1].seq, w.sent[k-1].bytes = seq, w.sent[k-1].bytes+n
 		return
 	}
-	w.sent = append(w.sent, sentBulk{seq: seq, bytes: n, at: at})
+	w.sent = append(w.sent, sentFrame{seq: seq, bytes: n, at: at, full: full})
 }
 
 // acked takes an acknowledgement of every frame through seq, read at now, and adapts the window.
 func (w *creditWindow) acked(seq uint64, now time.Time) {
 	var freed int
-	var at time.Time
+	var at time.Time // of the newest full frame acknowledged
 	i := 0
 	for ; i < len(w.sent) && w.sent[i].seq <= seq; i++ {
 		freed += w.sent[i].bytes
-		at = w.sent[i].at
-	}
-	if i == 0 {
-		return
+		if w.sent[i].full {
+			at = w.sent[i].at
+		}
 	}
 	w.sent = append(w.sent[:0], w.sent[i:]...)
 	w.inFlight -= freed
+	if at.IsZero() { // no sample: the window stays as it is
+		return
+	}
 	rtt := max(now.Sub(at), 0)
 	w.rtt = rtt
 	w.base.add(rtt, now)

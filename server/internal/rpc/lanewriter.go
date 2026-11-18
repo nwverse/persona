@@ -225,7 +225,7 @@ func (lw *laneWriter) fillLocked(batch []byte, finished []*outLine, now time.Tim
 		l.off += n
 		lw.totals[l.lane].frames++
 		if creditLane(l.lane) {
-			lw.win.wrote(lw.seq, n, now)
+			lw.win.wrote(lw.seq, n, now, n == lw.frameSize(l.lane))
 		}
 		if fin {
 			q := &lw.lanes[l.lane]

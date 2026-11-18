@@ -220,17 +220,16 @@ func (p *Peer) writeFramed(ctx context.Context, lw *laneWriter, b []byte, lane L
 		if lw.withdraw(l) {
 			return observation, NotSent(ctx.Err())
 		}
-		select {
-		case err = <-l.done:
-		case <-p.closed:
-			err = ErrClosed
-		}
+		err = <-l.done
 	case <-p.closed:
 		if lw.withdraw(l) {
 			return observation, NotSent(ErrClosed)
 		}
-		err = ErrClosed
+		err = <-l.done
 	}
+	// Once begun, a line's fate is its writes', as a line's on the one writer was: the writer tells it when its last
+	// frame is written, or when the writer stops (the peer closed, a write failed), so an accepted update's answer that
+	// went out whole while the peer closed is still told to LineWritten.
 	if err == nil && p.LineWritten != nil {
 		p.LineWritten(b)
 	}

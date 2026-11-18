@@ -270,3 +270,27 @@ func TestFrameReaderAsksAcksForCreditOnly(t *testing.T) {
 		}
 	}
 }
+
+// A line whose write is under way when the peer closes is told how the write went, as a line on the one writer is: an
+// accepted update's answer that went out whole is still seen by LineWritten.
+func TestLanesLineWrittenAcrossClose(t *testing.T) {
+	g := newGate()
+	n := New("n", g)
+	n.EnableLanes(testControl, testBulk)
+	written := make(chan []byte, 1)
+	n.LineWritten = func(b []byte) { written <- b }
+	lw := n.frameWriter()
+	lw.start()
+	n.out.Store(lw)
+	errc := make(chan error, 1)
+	go func() { errc <- n.Notify("evt", map[string]string{"x": "y"}) }()
+	g.waitWrite(t) // its only frame is being written
+	n.Close(errors.New("gone"))
+	g.release(10)
+	if err := <-errc; err != nil {
+		t.Fatalf("written whole across the close: %v", err)
+	}
+	if b := <-written; !bytes.Contains(b, []byte(`"evt"`)) {
+		t.Fatalf("LineWritten saw %q", b)
+	}
+}
