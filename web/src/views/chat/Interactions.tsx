@@ -549,15 +549,15 @@ const PermissionCard = lazyPage(() => import("./PermissionCard").then((m) => m.P
 export function PermissionCardLoading({ ix }: { ix: Interaction }) {
   return (
     <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })} footer={null}>
-      <Loading label={t("chat-interactions.permission_loading")} />
+      <Loading label={t("common.loading")} />
     </Card>
   );
 }
 
 /** One failed permission chunk must not blank its card or take down the chat. A retry remounts lazyPage, whose failed
  *  import is deliberately not cached; a different card also starts without the previous card's failure. */
-export class PermissionCardBoundary extends Component<{ ix: Interaction; children: ReactNode }, { error: unknown; attempt: number }> {
-  state = { error: null as unknown, attempt: 0 };
+export class PermissionCardFrame extends Component<{ ix: Interaction; children?: ReactNode }, { error: unknown }> {
+  state = { error: null as unknown };
 
   static getDerivedStateFromError(error: unknown) {
     return { error };
@@ -568,34 +568,22 @@ export class PermissionCardBoundary extends Component<{ ix: Interaction; childre
   }
 
   componentDidUpdate(prev: { ix: Interaction }) {
-    if (this.state.error && prev.ix.id !== this.props.ix.id) this.setState((s) => ({ error: null, attempt: s.attempt + 1 }));
+    if (this.state.error && prev.ix.id !== this.props.ix.id) this.setState({ error: null });
   }
 
   render() {
-    const { ix } = this.props;
+    const { ix, children } = this.props;
     if (this.state.error) {
       return (
         <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })}
-          footer={<Button size="sm" onClick={() => this.setState((s) => ({ error: null, attempt: s.attempt + 1 }))}>{t("chat-interactions.permission_load_retry")}</Button>}>
+          footer={<Button size="sm" onClick={() => this.setState({ error: null })}>{t("app.retry")}</Button>}>
           <ErrorNotice role="alert" className="border-0 bg-transparent p-0" message={t("chat-interactions.permission_load_failed")}
             description={t("chat-interactions.permission_load_hint")} />
         </Card>
       );
     }
-    return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>;
+    return <Suspense fallback={<PermissionCardLoading ix={ix} />}>{children ?? <PermissionCard ix={ix} />}</Suspense>;
   }
-}
-
-export function PermissionCardFrame({ ix, children }: { ix: Interaction; children: ReactNode }) {
-  return (
-    <PermissionCardBoundary ix={ix}>
-      <Suspense fallback={<PermissionCardLoading ix={ix} />}>{children}</Suspense>
-    </PermissionCardBoundary>
-  );
-}
-
-function PermissionCardSlot({ ix }: { ix: Interaction }) {
-  return <PermissionCardFrame ix={ix}><PermissionCard ix={ix} /></PermissionCardFrame>;
 }
 
 /** A terminal dialog's words under its question (#6638): at most six lines in view, the rest a scroll inside them. */
@@ -1429,7 +1417,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
-    : ix.kind === "permission" ? <PermissionCardSlot ix={ix} />
+    : ix.kind === "permission" ? <PermissionCardFrame ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here

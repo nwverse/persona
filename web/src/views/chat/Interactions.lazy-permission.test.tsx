@@ -47,7 +47,7 @@ describe("a lazy permission card", () => {
     let arrive!: (card: CardComponent) => void;
     const Lazy = lazyPage(() => new Promise<CardComponent>((resolve) => { arrive = resolve; }));
     await render(Lazy);
-    await vi.waitFor(() => expect(host.querySelector('[role="status"]')?.textContent).toBe(t("chat-interactions.permission_loading")));
+    await vi.waitFor(() => expect(host.querySelector('[role="status"]')?.textContent).toBe(t("common.loading")));
     expect(host.querySelector("[data-pending-card]")?.getAttribute("aria-label")).toBe(t("chat-interactions.permission_title", { tool: "Bash" }));
     const Loaded = () => <button type="button">Loaded approval</button>;
     await act(async () => arrive(Loaded));
@@ -67,7 +67,7 @@ describe("a lazy permission card", () => {
       expect(host.textContent).toContain(t("chat-interactions.permission_load_hint"));
       expect(host.textContent).not.toContain("Recovered approval");
       expect(reported).toHaveBeenCalledWith(failure, "permission_card", true, expect.anything());
-      const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("chat-interactions.permission_load_retry"))!;
+      const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("app.retry"))!;
       act(() => retry.click());
       await vi.waitFor(() => expect(host.textContent).toContain("Recovered approval"), { timeout: 20_000 });
       expect(load).toHaveBeenCalledTimes(2);
