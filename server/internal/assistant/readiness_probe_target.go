@@ -13,8 +13,9 @@ import (
 // kept pick, else Model configuration › Main chat, a launcher that can't run it given way), its profile, and shaped as
 // a turn of it (launchers.check assistant_turn, node/launchercheck_assistant.go). It used to check the Main chat
 // launcher's own default model with the plain one-word check: a pass there cleared a model the chat could not run, and
-// the next message failed again. A probe now speaks for one model of one launcher: its pass clears nothing that another
-// model said, nor the conversation's real turn when an older node ran a Claude Code launcher's plain check instead.
+// the next message failed again. A probe now speaks for one model of one launcher, the one the next turn runs, which is
+// what the model step is judged on (readinessTurnLauncher): a pass of another model or launcher clears nothing, nor
+// does one from an older node that ran a Claude Code launcher's plain check instead of the conversation's real turn.
 // An external adapter's launcher is not checked at all (readinessProbe).
 
 // readinessTargetWait bounds working out what the next turn runs (the conversation, the machine's launcher list).
@@ -73,13 +74,14 @@ func (p readinessProbe) checks(machine string, t readinessTarget) bool {
 	return p.Targeted && p.Machine == machine && p.Launcher == t.launcher && p.Model == t.model
 }
 
-// readinessProbeEvidence is what the last probe p says for the model step of launcher on machine: only a probe of the
-// model the main conversation's next turn asks for there (readinessTurnModel), and a pass only from a check the node
-// shaped as the assistant's turn when the conversation's own last turn, on that launcher, failed and the node shapes
-// that launcher's check (readinessCheckShaped). A probe an older manager kept checked the launcher's default with the
-// plain check: its failure still counts, its pass says nothing.
+// readinessProbeEvidence is what the last probe p says for the model step of launcher on machine, the one the main
+// conversation's next turn runs (readinessTurnLauncher): only a probe of the model that turn asks for there
+// (readinessTurnModel), and a pass only from a check the node shaped as the assistant's turn when the conversation's
+// own last turn failed (turnFailed, as readinessModel counts it) and the node shapes that launcher's check
+// (readinessCheckShaped). A probe an older manager kept checked the launcher's default with the plain check: its
+// failure still counts, its pass says nothing.
 func (s *Service) readinessProbeEvidence(ctx context.Context, p readinessProbe, machine, launcher string, binding ModelBinding,
-	main proto.Session, hasMain bool) (readinessEvidence, bool) {
+	turnFailed bool) (readinessEvidence, bool) {
 	if p.Machine != machine || p.Launcher != launcher || !p.Targeted && p.Check.OK {
 		return readinessEvidence{}, false
 	}
@@ -88,8 +90,7 @@ func (s *Service) readinessProbeEvidence(ctx context.Context, p readinessProbe, 
 			return readinessEvidence{}, false
 		}
 	}
-	if p.Check.OK && !p.Check.AssistantTurn && hasMain && main.TurnError != "" && (main.Launcher == "" || main.Launcher == launcher) &&
-		s.readinessCheckShaped(ctx, machine, launcher, p.Check.Agent) {
+	if p.Check.OK && !p.Check.AssistantTurn && turnFailed && s.readinessCheckShaped(ctx, machine, launcher, p.Check.Agent) {
 		return readinessEvidence{}, false
 	}
 	return readinessEvidence{at: p.At, ok: p.Check.OK, text: p.Check.Error}, true
@@ -105,6 +106,21 @@ func (s *Service) readinessCheckShaped(ctx context.Context, machine, launcher, a
 	}
 	kind, _ := s.readinessLauncher(ctx, machine, launcher)
 	return kind != "runtime"
+}
+
+// readinessTurnLauncher is the launcher the main conversation's next turn on machine runs, as readinessProbeTarget
+// resolves it but read from what the manager keeps (no node asked): the conversation's kept pick's launcher, else
+// mainLauncher (Model configuration › Main chat's). A pick only records the launcher; the turn after it moves the
+// conversation there (sendModel), so until then readiness judges the pick's launcher and model, as "Try it" checks
+// them, not the one the conversation last ran. A pick on an external adapter's launcher, which no probe tries, leaves
+// mainLauncher.
+func (s *Service) readinessTurnLauncher(ctx context.Context, machine, mainLauncher string) string {
+	if main := s.settings(ctx).Main; main != "" {
+		if pick, ok := s.modelPickOf(ctx, machine, main); ok && pick.Launcher != "" && !proto.IsExternalLauncher(pick.Launcher) {
+			return pick.Launcher
+		}
+	}
+	return mainLauncher
 }
 
 // readinessTurnModel is the model the main conversation's next turn on launcher asks for, as readinessProbeTarget

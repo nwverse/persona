@@ -72,10 +72,80 @@ func TestReadinessProbeUsesConversationPick(t *testing.T) {
 	if p["name"] != "gw" || p["model"] != "vendor/m2" || p["effort"] != "low" || p["conversation"] != "m1" || p["assistant_turn"] != true {
 		t.Fatalf("the check did not run the pick: %v", p)
 	}
-	// Main chat's launcher is still the one readiness shows; the pick's pass says nothing for it.
-	if r.Launcher != "claude" {
-		t.Fatalf("readiness launcher: %s", r.Launcher)
+	// Main chat's launcher is still the one readiness names; the model step is the pick's, which the next turn runs.
+	if m := readinessStep(t, r, StepModel); r.Launcher != "claude" || m.State != StepOK || m.Launcher != "gw" {
+		t.Fatalf("readiness launcher %s, model step %+v", r.Launcher, m)
 	}
+}
+
+// A pick on another launcher than Main chat's, after the main conversation's turn failed with model_route there: the
+// pick alone clears nothing, and "Try it", which runs the pick, does: its pass of the picked model on the pick's
+// launcher is what the next turn runs, so the chat can send again. A pass of anything else (another model of the
+// pick's launcher, Main chat's own model there before the pick, a plain check from an older node) clears nothing, and
+// a failure of the picked model's own turn is cleared only by a pass of that model.
+func TestReadinessProbePickOnAnotherLauncherClearsModelRoute(t *testing.T) {
+	failedTurn := proto.Session{SessionID: "m1", Assistant: true, Launcher: "claude", State: proto.StateIdle, LastText: routeText,
+		UpdatedAt: time.Now().Add(-time.Minute)}
+	setup := func(t *testing.T) (*fakeHub, *Service) {
+		f, s, _ := readyMachine(t, failedTurn)
+		putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: "https://gw.example", Model: "m1"}})
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "model-a"})
+		if err := s.setModelPick(context.Background(), "m1", &modelPick{MachineID: "server", Launcher: "gw", Model: "vendor/m2", At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		return f, s
+	}
+	seed := func(t *testing.T, s *Service, p readinessProbe) {
+		t.Helper()
+		if err := s.readinessUpdate(context.Background(), func(r *readinessRecord) { r.Probe = &p }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blocked := func(t *testing.T, r Readiness, why string) {
+		t.Helper()
+		if m := readinessStep(t, r, StepModel); r.Mode != ReadinessSetup || m.State != StepProblem || m.Code != proto.TurnErrorModelRoute {
+			t.Fatalf("%s: %s %+v", why, r.Mode, m)
+		}
+	}
+
+	t.Run("try it", func(t *testing.T) {
+		f, s := setup(t)
+		blocked(t, getReadiness(t, s, "", "en"), "the pick alone")
+		r := getReadiness(t, s, "probe=1", "en")
+		if p := lastCheck(t, f); p["name"] != "gw" || p["model"] != "vendor/m2" || r.Probe == nil || !r.Probe.OK || !r.Probe.AssistantTurn {
+			t.Fatalf("the try did not run the pick: %v %+v", p, r.Probe)
+		}
+		if m := readinessStep(t, r, StepModel); r.Mode != ReadinessFull || m.State != StepOK || m.Launcher != "gw" {
+			t.Fatalf("the pass of the picked model left the chat blocked: %s %+v", r.Mode, m)
+		}
+	})
+	t.Run("a pass of something else", func(t *testing.T) {
+		for _, p := range []readinessProbe{
+			{Machine: "server", Launcher: "gw", Model: "vendor/m1", Targeted: true, Check: proto.LauncherCheck{OK: true, AssistantTurn: true}},
+			{Machine: "server", Launcher: "claude", Model: "model-a", Targeted: true, Check: proto.LauncherCheck{OK: true, AssistantTurn: true}},
+			{Machine: "other", Launcher: "gw", Model: "vendor/m2", Targeted: true, Check: proto.LauncherCheck{OK: true, AssistantTurn: true}},
+			{Machine: "server", Launcher: "gw", Model: "vendor/m2", Targeted: true, Check: proto.LauncherCheck{OK: true}}, // a plain check's
+		} {
+			_, s := setup(t)
+			p.At = time.Now()
+			seed(t, s, p)
+			blocked(t, getReadiness(t, s, "", "en"), p.Machine+"/"+p.Launcher+"/"+p.Model)
+		}
+	})
+	t.Run("the picked model's own turn failed", func(t *testing.T) {
+		f, s := setup(t)
+		turn := failedTurn
+		turn.Launcher, turn.Model, turn.UpdatedAt = "gw", "vendor/m2", time.Now().Add(-time.Second)
+		f.setSessions("server", turn)
+		seed(t, s, readinessProbe{Machine: "server", Launcher: "claude", Model: "model-a", Targeted: true, At: time.Now(),
+			Check: proto.LauncherCheck{OK: true, AssistantTurn: true}})
+		blocked(t, getReadiness(t, s, "", "en"), "a pass of Main chat's own model")
+		seed(t, s, readinessProbe{Machine: "server", Launcher: "gw", Model: "vendor/m2", Targeted: true, At: time.Now(),
+			Check: proto.LauncherCheck{OK: true, AssistantTurn: true}})
+		if m := readinessStep(t, getReadiness(t, s, "", "en"), StepModel); m.State != StepOK {
+			t.Fatalf("a pass of the picked model did not clear its turn's failure: %+v", m)
+		}
+	})
 }
 
 // A pass on another model of the launcher, or one an older manager kept for the launcher's default, never clears the
