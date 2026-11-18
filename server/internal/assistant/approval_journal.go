@@ -158,8 +158,9 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 // durable relay queue. There is deliberately no fallback to today's main chat.
 // A single drain prevents concurrent accepts; a result added during a drain
 // triggers one more pass. Transient failures wait for the retry timer; a result
-// handed to the conversation or durable queue is removed, as is an undeliverable
-// result whose originating conversation has permanently gone.
+// handed to the conversation or durable queue is removed. A result is
+// permanently undeliverable only when the deletion ledger names its original
+// conversation; an uncertain execution outcome stays durable even then.
 func (s *Service) deliverApprovalResults() {
 	b := &s.approvals
 	b.mu.Lock()
@@ -205,6 +206,12 @@ func (s *Service) deliverApprovalResults() {
 				s.logf("deliver approval result %s: %v", a.ID, err)
 				continue
 			}
+			if gone && a.Status == "failed" {
+				// A deleted destination cannot receive the warning, but its durable
+				// record is the last evidence that execution may have happened.
+				s.logf("retain uncertain approval result %s for recovery: %v", a.ID, err)
+				continue
+			}
 			if gone {
 				s.logf("discard approval result %s: %v", a.ID, err)
 			}
@@ -247,6 +254,11 @@ func (s *Service) scheduleApprovalResultRetryLocked() {
 func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	if _, deleted, err := s.deletedConversation(ctx, a.MachineID, a.SessionID); err != nil {
+		return fmt.Errorf("check the originating conversation's deletion record: %w", err)
+	} else if deleted {
+		return errApprovalConversationGone
+	}
 	var res struct {
 		OK bool `json:"ok"`
 	}
@@ -254,7 +266,9 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 		return err
 	}
 	if !res.OK {
-		return errApprovalConversationGone
+		// session.get reads the manager's current cache. A restart, an offline
+		// node, or a list that has not arrived yet says nothing about deletion.
+		return errors.New("the originating conversation is not currently listed")
 	}
 	msg := relayMsg{From: "approval-result-" + a.ID, FromTitle: "Approval result", Tool: askAnswerTool,
 		Text: a.Result, At: a.UpdatedAt, Private: a.Private}
