@@ -30,6 +30,7 @@
   "model_unverified_title": "还没确认模型能用",
   "model_unverified_detail": "发一句试试，确认模型能回答。",
   "model_key_unverified_detail": "{machine} 上的 Claude Code 用的是配好的账号或 Key，还没试过。发一句试试它能不能用。",
+  "probe_external": "这个对话的模型走的是一个不能单独试的连接。发一句消息来确认它能用。",
   "never_tried_title": "试一句",
   "never_tried_detail": "发一句「你好」，看看 Persona 能不能回答。",
   "suggest_what_can_you_do": "你能帮我做什么？",

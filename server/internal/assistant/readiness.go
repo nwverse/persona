@@ -777,6 +777,12 @@ func (s *Service) readinessProbe(ctx context.Context, machine string, v Settings
 	if err != nil {
 		return &proto.LauncherCheck{Error: i18n.Localize(err, s.requestCtxLang(ctx))} // the message's refusal: said, not kept
 	}
+	if proto.IsExternalLauncher(t.launcher) {
+		// An external adapter's launcher runs only through the adapter, and the node refuses to check one
+		// (adapter_probe_unsupported): there is nothing to try. Said, not kept: a failure would count against a chat that
+		// works, and the first message stays unanswered until it is.
+		return &proto.LauncherCheck{Error: i18n.T(s.requestCtxLang(ctx), "assistant-readiness.probe_external")}
+	}
 	b := &s.ready
 	for {
 		b.mu.Lock()

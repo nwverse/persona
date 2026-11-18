@@ -79,15 +79,16 @@ export function blockingStep(r: Readiness | null | undefined): ReadinessStep | n
   return next && next.state !== "ok" && next.state !== "skipped" ? next : null;
 }
 
-/** What the send button says while the main conversation cannot answer (4.4: "Connect a model first" / "Add a computer first"). */
-export function sendLabel(step: ReadinessStep): string {
+/** What the send button says while the main conversation cannot answer (4.4: "Connect a model first" / "Add a computer first");
+ *  a model it can't run, what its button does (`main`, stepActions). */
+export function sendLabel(step: ReadinessStep, main?: string): string {
   if (step.id === "computer") {
     if (step.code === "node_unreachable") return t("lib-readiness.send_wake_computer");
     if (step.code === "machine_pending") return t("lib-readiness.send_confirm_computer");
     if (step.code === "node_outdated") return t("lib-readiness.send_update_computer");
     return t("lib-readiness.send_add_computer");
   }
-  return t("lib-readiness.send_connect_model");
+  return main && step.code === "model_route" ? actionLabel(main) : t("lib-readiness.send_connect_model");
 }
 
 // ── actions ─────────────────────────────────────────────
@@ -103,10 +104,23 @@ export function helpTopic(id: string): HelpTopic {
 }
 
 /** The action ids a card can draw a button for (5.1); an id this page does not know is text only (5, general rules). */
-const ACTIONS = new Set(["add_computer", "confirm_computer", "wake_computer", "install_claude", "login_claude", "connect_model", "edit_provider", "test_assistant", "main_chat_model", "enable_tls", "open_admin"]);
+const ACTIONS = new Set(["add_computer", "confirm_computer", "wake_computer", "install_claude", "login_claude", "connect_model", "edit_provider", "test_assistant", "main_chat_model", "pick_model", "enable_tls", "open_admin"]);
 
 export function knownAction(id: string | undefined): boolean {
   return Boolean(id && ACTIONS.has(id));
+}
+
+/**
+ * A step's buttons here: the main one (none: undefined) and the others, the ones this page knows. A model the main chat
+ * can't run (model_route) is picked again in the chat's own panel (`pick_model`, as its model error's Fix it), not added
+ * as a new provider: the hub says connect_model, which the other clients follow. Once another model is picked
+ * (`picked`), "Try it" comes first: only a try of it clears the failed turn and lets the chat send again.
+ */
+export function stepActions(step: ReadinessStep, picked?: boolean): [string | undefined, string[]] {
+  const ids = [step.action?.id ?? "", ...(step.alt_actions ?? []).map((a) => a.id)].map((id) => (id === "connect_model" && step.code === "model_route" ? "pick_model" : id));
+  if (picked) ids.sort((a, b) => +(b === "test_assistant") - +(a === "test_assistant"));
+  const main = knownAction(ids[0]) ? ids[0] : undefined;
+  return [main, ids.slice(1).filter((id) => knownAction(id) && id !== main)];
 }
 
 export function actionLabel(id: string): string {
@@ -129,6 +143,8 @@ export function actionLabel(id: string): string {
       return t("lib-readiness.action_test_assistant");
     case "main_chat_model":
       return t("lib-readiness.action_main_chat_model");
+    case "pick_model":
+      return t("lib-readiness.action_pick_model");
     case "enable_tls":
     case "open_admin":
       return t("lib-readiness.action_open_admin");
@@ -278,9 +294,10 @@ const FRESH_MS = 5_000;
 const BLOCKED_RETRY_MS = 2_000;
 const BLOCKED_RETRY_MAX_MS = 60_000;
 
-/** The hub's own limit for "Try it": the one-word check (healthCheckTimeout, 100 s) and then the node's self-check
+/** The hub's own limit for "Try it": working out what the chat's next turn runs (readinessTargetWait, 20 s), the
+ *  one-word check (healthCheckTimeout, 170 s; the node's own bound is 150 s) and then the node's self-check
  *  (readinessWaitGet, 12 s). The read waits past it (`pastHub`), so a slow check still ends in its result (#1892). */
-export const PROBE_HUB_MS = 112_000;
+export const PROBE_HUB_MS = 202_000;
 
 /**
  * Asks the hub again (a visit, a machine coming or going, after a failure, "Try it"'s probe). `force` asks even with a

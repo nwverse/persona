@@ -14,7 +14,8 @@ import (
 // a turn of it (launchers.check assistant_turn, node/launchercheck_assistant.go). It used to check the Main chat
 // launcher's own default model with the plain one-word check: a pass there cleared a model the chat could not run, and
 // the next message failed again. A probe now speaks for one model of one launcher: its pass clears nothing that another
-// model, or the conversation's real turn when the node could not shape the check as one, said.
+// model said, nor the conversation's real turn when an older node ran a Claude Code launcher's plain check instead.
+// An external adapter's launcher is not checked at all (readinessProbe).
 
 // readinessTargetWait bounds working out what the next turn runs (the conversation, the machine's launcher list).
 var readinessTargetWait = 20 * time.Second
@@ -74,8 +75,9 @@ func (p readinessProbe) checks(machine string, t readinessTarget) bool {
 
 // readinessProbeEvidence is what the last probe p says for the model step of launcher on machine: only a probe of the
 // model the main conversation's next turn asks for there (readinessTurnModel), and a pass only from a check the node
-// shaped as the assistant's turn when the conversation's own last turn, on that launcher, failed. A probe an older
-// manager kept checked the launcher's default with the plain check: its failure still counts, its pass says nothing.
+// shaped as the assistant's turn when the conversation's own last turn, on that launcher, failed and the node shapes
+// that launcher's check (readinessCheckShaped). A probe an older manager kept checked the launcher's default with the
+// plain check: its failure still counts, its pass says nothing.
 func (s *Service) readinessProbeEvidence(ctx context.Context, p readinessProbe, machine, launcher string, binding ModelBinding,
 	main proto.Session, hasMain bool) (readinessEvidence, bool) {
 	if p.Machine != machine || p.Launcher != launcher || !p.Targeted && p.Check.OK {
@@ -86,10 +88,23 @@ func (s *Service) readinessProbeEvidence(ctx context.Context, p readinessProbe, 
 			return readinessEvidence{}, false
 		}
 	}
-	if p.Check.OK && !p.Check.AssistantTurn && hasMain && main.TurnError != "" && (main.Launcher == "" || main.Launcher == launcher) {
+	if p.Check.OK && !p.Check.AssistantTurn && hasMain && main.TurnError != "" && (main.Launcher == "" || main.Launcher == launcher) &&
+		s.readinessCheckShaped(ctx, machine, launcher, p.Check.Agent) {
 		return readinessEvidence{}, false
 	}
 	return readinessEvidence{at: p.At, ok: p.Check.OK, text: p.Check.Error}, true
+}
+
+// readinessCheckShaped says a check of launcher on machine, which answered as agent, could have run as the main
+// conversation's turn: the node shapes only a Claude Code launcher it runs itself (node/launchercheck_assistant.go).
+// Codex, another agent and a runtime's launcher (the runtime's own probe) get the one check there is, and its pass of
+// the turn's model counts, or "Try it" could never clear such a chat's failed turn. One the list can't tell is shaped.
+func (s *Service) readinessCheckShaped(ctx context.Context, machine, launcher, agent string) bool {
+	if agent != "" && agent != "claude" {
+		return false
+	}
+	kind, _ := s.readinessLauncher(ctx, machine, launcher)
+	return kind != "runtime"
 }
 
 // readinessTurnModel is the model the main conversation's next turn on launcher asks for, as readinessProbeTarget
