@@ -28,8 +28,13 @@ func (n *Node) visualizationHTML(sessionID, itemID string) (string, error) {
 		return "", fmt.Errorf("no visualization %s in session %s", itemID, sessionID)
 	}
 	home := n.codexHome()
-	base := filepath.Join(home, "visualizations")
-	// EvalSymlinks resolves any link inside the tree before the prefix check.
+	// Both sides are symlink-resolved before the prefix check: the home itself may be reached through a link
+	// ("/home/me" -> "/data/home/me"), and the marker records the physical path Codex saw, so comparing it against
+	// the unresolved root rejects every fragment on such machines.
+	base, err := filepath.EvalSymlinks(filepath.Join(home, "visualizations"))
+	if err != nil {
+		return "", err
+	}
 	clean, err := filepath.EvalSymlinks(filepath.Clean(it.Visualization.Path))
 	if err != nil {
 		return "", err

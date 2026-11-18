@@ -96,6 +96,38 @@ func TestVisualizationHTMLGuard(t *testing.T) {
 	}
 }
 
+// A home reached through a symlink ("/home/me" -> "/data/home/me") still serves a marker whose path is the
+// physical one Codex recorded.
+func TestVisualizationHTMLSymlinkedHome(t *testing.T) {
+	n, physicalHome := testNode(t)
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(physicalHome, link); err != nil {
+		t.Fatal(err)
+	}
+	n.home = link
+	codexHome := n.codexHome()
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	sessDir := filepath.Join(codexHome, "visualizations", "2026", "11", "01", vizThread)
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessDir, "chart.html"), []byte("<div>hi</div>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	physicalPath := filepath.Join(physicalHome, ".codex", "visualizations", "2026", "11", "01", vizThread, "chart.html")
+	lines := []string{`{"type":"session_meta","payload":{"id":"` + vizThread + `"}}`,
+		vizAgentLine(t, "a1", nodeVizMarker(`{"path":`+strQuote(physicalPath)+`}`))}
+	rolloutAt(t, codexHome, now, vizThread, lines...)
+
+	got, err := n.visualizationHTML(vizThread, "a1#0")
+	if err != nil {
+		t.Fatalf("fragment under a symlinked home: %v", err)
+	}
+	if got != "<div>hi</div>" {
+		t.Fatalf("html = %q", got)
+	}
+}
+
 func strQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
