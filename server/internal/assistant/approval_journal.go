@@ -136,8 +136,11 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 	}
 	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID })
 	if i < 0 {
-		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID})
+		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, Private: ix.Private})
 		i = len(b.list) - 1
+	} else if ix.Private {
+		// Upgrade a legacy or recovered entry before its terminal delivery.
+		b.list[i].Private = true
 	}
 	if b.list[i].Result == "" {
 		b.list[i].Status = status

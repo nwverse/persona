@@ -30,7 +30,12 @@ type preparedSetting struct {
 // preparedSettingPauseBudget matches the coordinator's cumulative clarification
 // budget. The handle also covers the decision time left before and after that
 // pause, plus the same answer grace as an ordinary hub-owned card.
-const preparedSettingPauseBudget = 24 * time.Hour
+// preparedSettingWaitingWindow matches the coordinator's additional unanswered
+// waiting window (#10132), which can be followed by a clarification pause.
+const (
+	preparedSettingPauseBudget   = 24 * time.Hour
+	preparedSettingWaitingWindow = 24 * time.Hour
+)
 
 func (h *Hub) retainPreparedSetting(manager string, ix proto.Interaction, apply func(context.Context, proto.Resolution) (string, error)) error {
 	if manager == "" || ix.ID == "" || apply == nil {
@@ -156,11 +161,22 @@ func (h *Hub) waitPreparedSetting(ctx context.Context, manager string, ix proto.
 		return approval.Outcome{}, err
 	}
 	keep = out.Clarifying
-	if keep && ix.ExpiresAt.IsZero() {
+	if keep {
 		p := &h.prepared
 		p.mu.Lock()
-		if entry := p.byID[ix.ID]; entry != nil && entry.manager == manager && entry.timer == nil {
-			h.armPreparedSettingLocked(manager, ix.ID, entry, time.Now().Add(preparedSettingPauseBudget+cardAnswerGrace))
+		if entry := p.byID[ix.ID]; entry != nil && entry.manager == manager {
+			switch {
+			case out.Text == approval.WaitingText:
+				// The unanswered waiting window can be followed by the full
+				// cumulative clarification pause. Do not expire between them.
+				if entry.timer != nil {
+					entry.timer.Stop()
+				}
+				h.armPreparedSettingLocked(manager, ix.ID, entry,
+					time.Now().Add(preparedSettingWaitingWindow+preparedSettingPauseBudget+cardAnswerGrace))
+			case ix.ExpiresAt.IsZero() && entry.timer == nil:
+				h.armPreparedSettingLocked(manager, ix.ID, entry, time.Now().Add(preparedSettingPauseBudget+cardAnswerGrace))
+			}
 		}
 		p.mu.Unlock()
 	}

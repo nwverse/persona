@@ -98,3 +98,27 @@ func TestPrivateApprovalQueuedResultRenewsJustMeAfterRestart(t *testing.T) {
 		t.Fatal("a Private result delivered from the queue after restart was not Just me")
 	}
 }
+
+func TestPrivateApprovalRecoveredJournalKeepsJustMe(t *testing.T) {
+	ft := newFleetTest(t)
+	preparedTestConversation(ft)
+	ft.f.mu.Lock()
+	ft.f.known["s1"] = true
+	ft.f.mu.Unlock()
+	ft.s.justMeSent("mac", "s1")
+	ft.s.justMeStarted("mac", "s1", true, false)
+	ft.s.justMeEnded("mac", "s1", false)
+
+	// No earlier journal row: the terminal fallback must not silently drop the
+	// Private marker while recovering the delivery record.
+	ft.s.approvalJournalFinished(context.Background(), proto.Interaction{
+		ID: "ix_private_recovered", MachineID: "mac", SessionID: "s1", Private: true,
+	}, "cancelled", "nothing was executed")
+	if result := waitApprovalResult(t, ft, "ix_private_recovered"); !strings.Contains(result, "nothing was executed") {
+		t.Fatalf("recovered Private approval result = %q", result)
+	}
+	ft.s.justMeStarted("mac", "s1", true, false)
+	if !ft.s.justMeNow("mac", "s1") {
+		t.Fatal("a recovered Private journal entry lost Just me on terminal delivery")
+	}
+}

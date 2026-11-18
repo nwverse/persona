@@ -202,6 +202,55 @@ func TestPreparedSettingHandleOutlivesPauseBudgetButNotItsGrace(t *testing.T) {
 	})
 }
 
+func TestPreparedSettingWaitingCardOutlivesWaitingAndPauseBudgets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newTestHub(t)
+		h.askVia = nil
+		mgr := playManager(t, h, func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil })
+		mgr.peer.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
+			time.Sleep(15 * time.Minute) // the coordinator's first decision window
+			return approval.Outcome{Clarifying: true, Text: approval.WaitingText}, nil
+		}
+		start := time.Now()
+		var applies atomic.Int32
+		ix := proto.Interaction{ID: "ix_hub_waiting_deadline", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission,
+			ExpiresAt: start.Add(15 * time.Minute)}
+		out, err := h.waitPreparedSetting(context.Background(), assistantwire.AssistantID, ix, "",
+			func(context.Context, proto.Resolution) (string, error) {
+				applies.Add(1)
+				return "unexpected", nil
+			}, nil)
+		if err != nil || !out.Clarifying || out.Text != approval.WaitingText || time.Since(start) != 15*time.Minute {
+			t.Fatalf("waiting prepared setting = %+v, %v after %s", out, err, time.Since(start))
+		}
+
+		// The original pause-only deadline ends here. A waiting card must still
+		// retain its handle for the clarification budget that can follow.
+		time.Sleep(preparedSettingPauseBudget + cardAnswerGrace)
+		synctest.Wait()
+		h.prepared.mu.Lock()
+		_, kept := h.prepared.byID[ix.ID]
+		h.prepared.mu.Unlock()
+		if !kept {
+			t.Fatal("the handle expired between the unanswered window and its clarification budget")
+		}
+		time.Sleep(preparedSettingPauseBudget)
+		synctest.Wait()
+		h.prepared.mu.Lock()
+		_, kept = h.prepared.byID[ix.ID]
+		h.prepared.mu.Unlock()
+		if kept {
+			t.Fatal("the waiting plus clarification handle survived its bounded lifetime")
+		}
+		allow := true
+		params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: proto.Resolution{Allow: &allow}})
+		raw, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: assistantwire.AssistantID}}, params)
+		if err != nil || !raw.(assistantwire.FleetApprovalApplyResult).Stale || applies.Load() != 0 {
+			t.Fatalf("expired waiting handle apply = %#v, %v, applies=%d; want definite not applied", raw, err, applies.Load())
+		}
+	})
+}
+
 func TestPreparedSettingRestartLosesExecutableHandle(t *testing.T) {
 	oldHub := &Hub{}
 	var applies atomic.Int32
