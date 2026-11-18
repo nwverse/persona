@@ -877,6 +877,51 @@ Long assistant chats can grow to hundreds of thousands of tokens. After the prom
 - **Scope history (#6481, #3008, #3028, #7314)**: the assistant manager still sends `is_main` with starts and messages (relays get it in `Service.call`). Alone it changes no compaction limit; the main conversation's window comes with `main_compact_window` (above). The node records both with the conversation, and both are part of the execution fingerprint (the window only on a managed launcher), so warm spares and restarts still match by main scope and window.
 - **Rolling upgrades and activation**: the rule is the node's; the main conversation's window also needs the manager that sends it. Update **the resident node's personad binary**; the new limits apply on the next assistant-process start; an idle existing process is resumed with the new policy on its next marked message, while active background tasks are not killed. A hub-only deploy or a download-channel publication without installing the node update is not enough. Publishing and deployment remain separate, approval-gated operations.
 
+### Idle-aware unattended delivery
+
+The main chat can receive supervision, scheduled follow-ups and messages from other conversations while the user is
+away. Before delivering one of these non-user messages, a Claude node can compact the existing conversation in place
+(#8658). This does not change the launcher's window or replace the model's automatic compaction or the idle-process
+reclamation rule above. Other conversations, Codex and external runtimes keep their existing behavior.
+
+Three advanced assistant settings are available through `persona_settings` (changes need the usual user approval),
+and through the assistant settings API:
+
+| Setting | Default | Allowed values |
+| --- | --- | --- |
+| `assistant.idle_auto_compact` | `true` | `true` or `false`; `false` disables this additional compaction |
+| `assistant.idle_auto_compact_minutes` | `30` | Whole minutes, 1-1440 |
+| `assistant.idle_auto_compact_tokens` | `300000` | Whole tokens, 10000-10000000 |
+
+Both limits must be reached. Idle means time since the last **user message received**, not time since the assistant
+last answered: unattended rounds do not restart that clock. Context means the last actual main-model request's
+`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`, or the post-compaction token count, not the
+cumulative totals in `result.usage` or `modelUsage`. Unknown context never triggers compaction.
+
+The manager attaches `idle_compaction: {enabled, idle_minutes, context_tokens}` to the main chat's `assistant.send`
+and `session.send` calls. The node uses structured `message_source` (or the existing protected source metadata), not
+keywords in the message, to distinguish unattended messages. Older nodes ignore the optional policy; a missing
+policy from an older manager leaves delivery unchanged. Upgrade the main chat's node as well as the manager to use
+this feature.
+
+The node sends `/compact` through the same path as manual compaction and reports it in `session.compaction`. The
+unattended message is written only after the compaction command ends, not merely when its boundary is reported.
+A failed compaction still allows the original message through. Delivery waits at most 30 seconds, below the manager's
+90-second relay deadline; a still-running compaction returns a retryable `compacting` refusal and leaves the original
+message unsent in the sender's existing queue. Further unattended retries refuse immediately while compaction is in
+flight, without issuing another `/compact` or consuming another attempt. Delivery can resume after the real result,
+not merely its boundary. The compaction itself retains its separate ten-minute limit. A cancelled request or exited
+process also leaves the message unsent for the existing retry path.
+
+The idle clock, last actual context and attempt latch are kept in the node's existing Postgres-backed session
+record. User activity resets the clock on receipt, even while a send lock is held. A context reduction also restarts
+the idle interval. Dropping below the token threshold rearms compaction; context must then grow back over it and the
+new interval must elapse. Otherwise there is at most one attempt per idle interval, including failed attempts and
+node restarts. The manager carries this node-owned state opaquely through `db.NodeSession` and the existing
+`node_model` settings row, including the policy, idle timestamp, last actual context and attempt latch; no new table
+or migration is needed. A newly observed conversation or a changed policy starts a conservative fresh idle interval rather
+than guessing when the user last spoke.
+
 ### Impossible gateway usage (2026-11-06, #3300)
 
 Claude Code estimates context from the last reply's `usage`. Some gateways report zero for every reply in a turn, then total all request inputs in the last reply (85k-token chat reported 1.7M):
