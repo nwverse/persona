@@ -137,7 +137,9 @@ func (s *Service) launcherAlternatives(ctx context.Context, m Device, t PlanTask
 // with.model or that launcher's default), checked before anything changes: the launcher runs on m (fitLauncher: one
 // m's list lacks is refused with the ones it has), is not one a health record says cannot run there now (a terminal
 // record excepted: only a real start clears it, as an explicit retry on a fixed computer goes back to it), holds a
-// read-only task read-only, and is not a managed one while the terminal could not run personad itself. t keeps its
+// read-only task read-only. A managed one is taken even after the terminal could not run personad itself: it is only
+// left out of the suggestions (launcherAlternatives), since the owner may have fixed the terminal (or the node, which
+// now hands terminals the home's spelling of its program) since that record. t keeps its
 // computer, directory and workspace; its tier goes (it named the launcher before), the permission is settled again
 // for the agent that runs, and its why says what changed. The same launcher it has, or none, changes nothing.
 func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retryWith) error {
@@ -158,10 +160,6 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 	machine := firstNonEmpty(m.Name, m.ID)
 	alternatives := func() string {
 		return cmp.Or(strings.Join(s.launcherAlternatives(ctx, m, *t, name), ", "), "—")
-	}
-	if name != from && s.managedLauncher(ctx, name) && s.personadMissing(ctx, *t) {
-		return retryRefused{i18n.Err("assistant-tasks.retry_launcher_managed_missing", i18n.Args{
-			"launcher": name, "missing": t.ErrorArgs["missing"], "machine": machine, "launchers": alternatives()})}
 	}
 	params := map[string]any{"launcher": name}
 	if model != "" {

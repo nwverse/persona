@@ -390,8 +390,9 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   first. Any other failure (offline, a dropped link, a stalled tab) suggests none.
 - **Asked for**: `task_retry` with `launcher` (and `model`), or the apps' **Use <launcher> instead** (`POST
   /api/v1/todos/{id}/retry` with `{"launcher","model"?}`, hello feature `task_retry_launcher`). The launcher is checked
-  before anything is reopened: it must be on that computer, usable there now, hold a read-only task read-only, and not be
-  a managed one while `personad` was missing. The task keeps its computer, directory and workspace (the checkout its
+  before anything is reopened: it must be on that computer, usable there now, and hold a read-only task read-only. A
+  managed one asked for by name is taken even after `personad` was missing (only the suggestions leave it out): the
+  terminal may have been fixed since. The task keeps its computer, directory and workspace (the checkout its
   first start made is used again), takes that launcher's default model unless one is given (a gateway's model id never
   carries over to another launcher), drops its tier, settles its permission again for the agent that runs, and its
   `why` says what changed. The step is a `start_remedy` feed item with `launcher_from` / `launcher_to`.

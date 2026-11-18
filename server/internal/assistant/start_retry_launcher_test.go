@@ -165,7 +165,7 @@ func TestTaskRetryLauncherOverrideRefusesUnknownOrUnusable(t *testing.T) {
 
 // While the terminal could not run personad itself, every Persona-managed launcher would fail the same way: retrying
 // on one is refused, and none is suggested; the computer's own launchers are still taken.
-func TestTaskRetryRefusesManagedLauncherWhenPersonadMissing(t *testing.T) {
+func TestTaskRetrySuggestsNoManagedLauncherWhenPersonadMissing(t *testing.T) {
 	s, f := launcherRetryHub(t)
 	ctx := withManagedSnapshot(context.Background(), []storedLauncher{
 		{ManagedLauncher: proto.ManagedLauncher{Name: "gw-a", Kind: "api", BaseURL: "https://gateway.example.com", Model: "m"}},
@@ -182,11 +182,10 @@ func TestTaskRetryRefusesManagedLauncherWhenPersonadMissing(t *testing.T) {
 		!slices.Contains(got, "claude") {
 		t.Fatalf("suggested %v", got)
 	}
+	// Asked for by name, a managed one is still taken: the terminal may have been fixed since that record.
 	task := failed
-	err := s.retryOn(ctx, &task, m, retryWith{launcher: "gw-b"})
-	var refused retryRefused
-	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "/opt/persona/bin/personad") || task.Launcher != "gw-a" {
-		t.Fatalf("a managed launcher taken: %v, task %+v", err, task)
+	if err := s.retryOn(ctx, &task, m, retryWith{launcher: "gw-b"}); err != nil || task.Launcher != "gw-b" {
+		t.Fatalf("a managed launcher asked for by name refused: %v, task %+v", err, task)
 	}
 	task = failed
 	if err := s.retryOn(ctx, &task, m, retryWith{launcher: "claude"}); err != nil {
