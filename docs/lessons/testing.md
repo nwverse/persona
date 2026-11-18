@@ -1,5 +1,12 @@
 # Lessons: testing and validation
 
+- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
+  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
+  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
+  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
+  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
+  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
+
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
   owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
