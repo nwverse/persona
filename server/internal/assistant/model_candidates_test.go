@@ -321,13 +321,17 @@ func TestModelSingleCandidateFailsWithItsOwnCode(t *testing.T) {
 }
 
 // servingGateway is a provider named name (a keyed Messages launcher) whose fake API answers "<name> served <model>"
-// for any model but "missing" (404), listing listed (none: no models list) with def as its default. asked has the
+// for any model but "missing" (400), listing listed (none: no models list) with def as its default. asked has the
 // models it was asked for.
 func servingGateway(t *testing.T, s *Service, name, def string, listed ...string) (storedLauncher, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/messages") { // probes are not calls
+			http.NotFound(w, r)
+			return
+		}
 		var c upstreamCall
 		_ = json.NewDecoder(r.Body).Decode(&c)
 		mu.Lock()
@@ -335,8 +339,8 @@ func servingGateway(t *testing.T, s *Service, name, def string, listed ...string
 		mu.Unlock()
 		if c.Model == "missing" {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"not_found_error","message":"model: missing"}}`))
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"synthetic failure"}}`))
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -385,9 +389,14 @@ func TestModelCandidatesOnTheOwnProviderWithoutAList(t *testing.T) {
 	if !slices.Equal(listedAsked(), []string{"g-listed"}) || len(otherAsked()) != 0 || len(kbCalls()) != 0 {
 		t.Fatalf("listed %v, other (no list, not the purpose's) %v, purpose %d", listedAsked(), otherAsked(), len(kbCalls()))
 	}
+	// Settings resolves the same way: the first list (now the older one) has g-any on own and g-listed on listed.
 	p := purposeOf(t, s, "extension.kb-curator")
-	if len(p.Candidates.Requested) == 0 || !p.Candidates.Requested[0].Models[0].Available || p.Candidates.Requested[0].Models[0].Provider != "launcher.own" {
+	if len(p.Candidates.Requested) != 2 {
 		t.Fatalf("settings view %+v", p.Candidates.Requested)
+	}
+	first := p.Candidates.Requested[1].Models
+	if len(first) != 3 || first[1].Provider != "launcher.own" || !first[1].Available || first[2].Provider != "launcher.listed" {
+		t.Fatalf("settings view %+v", first)
 	}
 }
 
