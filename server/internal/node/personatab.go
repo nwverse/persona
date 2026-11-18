@@ -27,3 +27,31 @@ func markPersonaTab(ctx context.Context, launch host.Launcher, pane host.PaneRef
 	}
 	_ = r.ReportMetadata(ctx, pane, "persona", map[string]*string{personaTabToken: &id})
 }
+
+// namePersonaTab gives a pane Persona marked before its session was known ("agent": a Codex start, whose thread id
+// comes once Codex runs) the session id (#10111): the mark then names the session as a Claude start's does, so the
+// terminal is the session's kept shell (keptPane) and the grace-period close takes the session's recovery lock. A pane
+// with no mark, or one naming another session, is left as it is.
+func (n *Node) namePersonaTab(ctx context.Context, pane, id string) {
+	if pane == "" || !validID(id) {
+		return
+	}
+	r, ref, err := paneCap[host.MetadataReporter](n, pane)
+	if err != nil {
+		return
+	}
+	n.mu.Lock()
+	mark, found := "", false
+	for _, l := range n.layouts {
+		for _, p := range l.panes {
+			if p.PaneID == pane {
+				mark, found = p.Tokens[personaTabToken], true
+			}
+		}
+	}
+	n.mu.Unlock()
+	if found && mark != "agent" {
+		return
+	}
+	_ = r.ReportMetadata(ctx, ref, "persona", map[string]*string{personaTabToken: &id})
+}

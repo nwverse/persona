@@ -313,3 +313,19 @@ func claudePane(session, pane, tab, ws, cwd string) map[string]any {
 	p["agent"] = "claude"
 	return p
 }
+
+// A Codex start marks its tab "agent" before the thread is known; once it is, the mark names the thread, as a Claude
+// start's names its session (#10111). A mark naming another session is not overwritten.
+func TestNamePersonaTabUpgradesAgentMark(t *testing.T) {
+	n, f, cwd := keptAgent(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, []any{
+		shellPane("w2:p1", "w2:t1", "w2", cwd, "agent"), shellPane("w1:p1", "w1:t1", "w1", cwd, sidA)}))
+	listSessions(t, n)
+	f.reset()
+	n.namePersonaTab(t.Context(), "w2:p1", sidB)
+	n.namePersonaTab(t.Context(), "w1:p1", sidB)
+	got := f.trace("pane.report_metadata")
+	if len(got) != 1 || !strings.Contains(got[0], `"pane_id":"w2:p1"`) || !strings.Contains(got[0], sidB) {
+		t.Fatalf("report_metadata %q", got)
+	}
+}
