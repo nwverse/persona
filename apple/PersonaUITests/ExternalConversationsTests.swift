@@ -89,11 +89,12 @@ final class ExternalConversationsTests: XCTestCase {
         }
     }
 
-    /// The extension that opened them (#10358): with MOCK_OPENER_ICONS=1 the mock installs the Lark /agent conversation's
-    /// opener as a made-up third-party extension with an icon (its name in PERSONA_OPENER_NAME, "Chat Bridge"), and the
-    /// rows and the first message draw it and name it 「来自 Chat Bridge」 once its icon is in. Without the flag nothing
-    /// is installed: Lark's mark and 「来自 飞书 /agent」, as before. Light and dark, at the default and the largest text
-    /// size; PERSONA_SHOTS keeps the screenshots, PERSONA_SHOTS_SUFFIX names the run.
+    /// The extension that opened them (#10358): with MOCK_EXTENSIONS=1 MOCK_OPENER_ICONS=1 the mock installs the Lark
+    /// /agent conversation's opener as a made-up third-party extension with an icon (its name in PERSONA_OPENER_NAME,
+    /// "Chat Bridge"), and its row in the sidebar's Recent and the line under its first message draw it and name it
+    /// 「来自 Chat Bridge」 once its icon is in. Without MOCK_OPENER_ICONS nothing is installed: Lark's mark and
+    /// 「来自 飞书 /agent」, as before. Light and dark, at the default and the largest text size; PERSONA_SHOTS keeps the
+    /// screenshots, PERSONA_SHOTS_SUFFIX names the run.
     @MainActor func testTheOpenersIconAndName() {
         let name = ProcessInfo.processInfo.environment["PERSONA_OPENER_NAME"]
         let words = name.map { "来自 \($0)" } ?? "来自 飞书 /agent"
@@ -101,21 +102,28 @@ final class ExternalConversationsTests: XCTestCase {
                                            ("ax5", ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])]
         for (size, extra) in sizes {
             for scheme in ["light", "dark"] {
-                // All Chats filtered to Lark /agent: its one row, named by its opener once that one's icon is in.
+                // The sidebar's Recent: the row, named by its opener once that one's icon is in.
                 launch(scheme, extra: extra)
-                openSidebar().tap()
-                let lark = app.buttons["auto-filter-lark_agent"].firstMatch
-                XCTAssertTrue(lark.waitForExistence(timeout: 5), "no 飞书 /agent filter:\n\(app.debugDescription)")
-                lark.tap()
-                let row = app.buttons.matching(NSPredicate(format: "identifier == 'auto-conversation' AND label CONTAINS %@", words)).firstMatch
-                XCTAssertTrue(row.waitForExistence(timeout: 15), "no row saying \(words):\n\(app.debugDescription)")
+                let menu = app.buttons["assistant-sidebar-button"].firstMatch
+                XCTAssertTrue(menu.waitForExistence(timeout: 20), "no sidebar button:\n\(app.debugDescription)")
                 sleep(1)
-                shot("opener-list-\(size)-\(scheme)")
+                menu.tapCenter()
+                XCTAssertTrue(app.buttons["sidebar-main"].firstMatch.waitForExistence(timeout: 10), "no sidebar:\n\(app.debugDescription)")
+                let row = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-conversation' AND label CONTAINS %@", words)).firstMatch
+                for _ in 0..<8 where !(row.exists && row.isHittable && row.frame.maxY < app.frame.maxY - 40) {
+                    // The drawer's own list, left of the page it slid from under.
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.75))
+                        .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.45)))
+                }
+                XCTAssertTrue(row.waitForExistence(timeout: 15), "no Recent row saying \(words):\n\(app.debugDescription)")
+                sleep(1)
+                shot("opener-recent-\(size)-\(scheme)")
                 app.terminate()
 
                 // Opened: the line under the message it was opened with.
                 launch(scheme, open: "b2e4d6f8-0000-4000-8000-000000000308", extra: extra)
-                let line = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'message-external-source' AND label CONTAINS %@", words)).firstMatch
+                let line = app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "identifier == 'message-external-source' AND label CONTAINS %@", words)).firstMatch
                 XCTAssertTrue(line.waitForExistence(timeout: 20), "no 「\(words)」 under the first message:\n\(app.debugDescription)")
                 sleep(1)
                 shot("opener-chat-\(size)-\(scheme)")
