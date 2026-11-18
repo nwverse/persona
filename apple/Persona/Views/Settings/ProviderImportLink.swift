@@ -15,6 +15,12 @@ enum ProviderImportLink {
     }
 }
 
+/// One external import and the providers route that owns it. A repeated link is a new request, not the old page's request.
+nonisolated struct ProviderImportRequest: Hashable, Sendable {
+    var id = UUID()
+    var link: String
+}
+
 /// A provider as an import link's draft carries it (the hub's `pastedProvider`): the fields the wizard pre-fills.
 /// Unlike `LauncherView`, a draft may carry `api_key` — whoever opens a link with a key in it saves it as their own.
 nonisolated struct ProviderImportProvider: Decodable, Sendable {
@@ -98,6 +104,9 @@ nonisolated struct ProviderImportResult: Decodable, Sendable {
     var format: String?
     var drafts: [ProviderImportDraft]?
     var notes: [ProviderImportNote]?
+
+    /// Older hubs can answer the shared paste route with another format; only a link answer may open an import draft.
+    var isProviderLink: Bool { format == "link" }
 }
 
 extension APIClient {

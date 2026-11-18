@@ -144,6 +144,7 @@ internal fun NewProviderPage(
     }
     BackHandler {
         when {
+            state.step == WizardStep.Paste && state.paste.fromLink -> onBack()
             state.step == WizardStep.Paste -> model.leavePaste()
             state.pasteContinued && state.step == WizardStep.Form -> model.backToPaste()
             state.editing -> leave()
@@ -160,6 +161,7 @@ internal fun NewProviderPage(
         else -> stringResource(R.string.settings_src_provider_new)
     }
     val pageBack: () -> Unit = when {
+        state.step == WizardStep.Paste && state.paste.fromLink -> onBack
         state.step == WizardStep.Paste -> model::leavePaste
         state.pasteContinued && state.step == WizardStep.Form -> model::backToPaste
         state.editing -> leave

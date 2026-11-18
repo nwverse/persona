@@ -6,6 +6,9 @@ final class ProviderImportLinkUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = true }
 
     private var hub: String { ProcessInfo.processInfo.environment["PERSONA_RUN_HUB"] ?? "http://127.0.0.1:18760" }
+    private var pairLink: String {
+        "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+    }
 
     private func link(_ payload: String, version: Int = 1) -> URL {
         let data = Data(payload.utf8).base64EncodedString()
@@ -15,8 +18,7 @@ final class ProviderImportLinkUITests: XCTestCase {
 
     @MainActor private func launch(_ scheme: String, largest: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-openChatsFresh", "YES", "-ui.scheme", scheme]
+        app.launchArguments = ["-pairURL", pairLink, "-openChatsFresh", "YES", "-ui.scheme", scheme]
         if largest { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launchPinned()
         sleep(8) // pairing and the hub's first answer settle before the external link arrives
@@ -68,6 +70,25 @@ final class ProviderImportLinkUITests: XCTestCase {
             XCTAssertEqual(launcherNames(), before, "opening and reviewing the link saves nothing")
             app.terminate()
         }
+    }
+
+    @MainActor func testImportLinkArrivingBeforePairingOpensAfterConnect() throws {
+        let payload = #"{"kind":"custom","name":"Example Gateway","endpoints":[{"protocol":"openai-chat","baseUrl":"https://example.invalid/v1","models":["m1"]}]}"#
+        let before = launcherNames()
+        let app = XCUIApplication()
+        app.launchArguments = ["-openChatsFresh", "YES", "-ui.scheme", "light"]
+        app.launchPinned()
+        dismissPermissionPrompt(in: app)
+        // No paired API exists yet: the import must stay pending through the user's explicit Connect.
+        open(link(payload), in: app)
+        open(URL(string: pairLink)!, in: app)
+        let confirm = app.buttons["pair.confirm"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "the pairing link asks before connecting:\n\(app.debugDescription)")
+        confirm.tap()
+        let base = app.textFields.matching(NSPredicate(format: "value CONTAINS[c] %@", "example.invalid")).firstMatch
+        XCTAssertTrue(base.waitForExistence(timeout: 20), "the pending import opens after pairing:\n\(app.debugDescription)")
+        XCTAssertEqual(launcherNames(), before, "the delayed review still saves nothing")
+        app.terminate()
     }
 
     @MainActor func testRefusedImportLinkShowsPlainNote() throws {

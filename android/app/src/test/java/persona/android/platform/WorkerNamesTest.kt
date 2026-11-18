@@ -50,7 +50,8 @@ class WorkerNamesTest {
         assertEquals(persona.core.contracts.ProtocolCompatibility.appSchemes.flatMap { scheme ->
             listOf(scheme to "pair") +
                 (if (scheme == "persona") listOf(scheme to "password-login") else emptyList()) +
-                listOf(scheme to "open")
+                listOf(scheme to "open") +
+                (if (scheme == "persona") listOf(scheme to "provider") else emptyList())
         }, routes)
         assertTrue(activity.getAttributeNS(namespace, "exported").toBoolean())
     }

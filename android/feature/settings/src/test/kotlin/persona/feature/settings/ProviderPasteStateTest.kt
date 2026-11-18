@@ -139,6 +139,7 @@ class ProviderPasteStateTest {
         val updated = mutableListOf<ProviderUpdate>()
         var launchersCalls = 0
         var unsupported = false
+        var nonLink = false
         val existing = HubLauncher("work", source = "persona", baseUrl = "https://work.example.com", model = "old",
             models = listOf(PresetModel("old")), hasKey = true, sonnetModel = "old-mid")
         val aliases = listOf(existing, HubLauncher("cc_work", source = "zshrc", baseUrl = "https://work.example.com", machines = listOf("mac")))
@@ -150,7 +151,7 @@ class ProviderPasteStateTest {
         override suspend fun parse(text: String): ProviderPasteResult {
             parsed += text
             if (unsupported) throw HubFailure(HubError.Server, "HTTP 404", status = 404)
-            return gates[text]?.await() ?: ProviderPasteResult(format = "shell", drafts = listOf(ProviderPasteDraft(label = text,
+            return gates[text]?.await() ?: ProviderPasteResult(format = if (text.startsWith("persona://provider/import") && !nonLink) "link" else "shell", drafts = listOf(ProviderPasteDraft(label = text,
                 provider = PastedProvider(name = "new_$text", baseUrl = "https://$text.example.com", apiKey = "secret", model = "new-model"),
                 matches = listOf(ProviderPasteMatch("work", sameKey = true)))))
         }
@@ -193,6 +194,17 @@ class ProviderPasteStateTest {
         assertTrue(model.state.value.paste.error != null)
         assertTrue(model.state.value.paste.fromLink)
         assertTrue(model.state.value.step == WizardStep.Paste)
+        assertTrue(hub.updated.isEmpty())
+    }
+
+    @Test fun anImportLinkRejectsASuccessfulAnswerWithAnotherFormat() = runBlocking {
+        val hub = PasteHub().apply { nonLink = true }
+        val model = NewProviderModel(hub)
+        model.load(importParse = true)
+        model.openImportLink("persona://provider/import?v=1&data=fixture")
+        assertTrue(model.state.value.paste.fromLink)
+        assertTrue("a non-link answer is an unsupported hub, not a draft", model.state.value.paste.error != null)
+        assertEquals(null, model.state.value.paste.answer)
         assertTrue(hub.updated.isEmpty())
     }
 

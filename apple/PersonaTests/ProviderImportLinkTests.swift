@@ -37,4 +37,33 @@ struct ProviderImportLinkTests {
         #expect(wizard.name == displayName)
         #expect(wizard.nameProblem == nil)
     }
+
+    @Test func onlyALinkResponseCanOpenAnImportDraft() throws {
+        let json = #"{"format":"shell","drafts":[{"provider":{"name":"must-not-open"}}]}"#
+        var result = try JSON.decoder.decode(ProviderImportResult.self, from: Data(json.utf8))
+        #expect(!result.isProviderLink)
+        result.format = "link"
+        #expect(result.isProviderLink)
+    }
+
+    @Test func importTaskIdentityCannotCrossAnAssistantOrHub() {
+        let owner = ProviderImportOwner(group: "hub-one", manager: "assistant-one")
+        let request = ProviderImportRequest(link: "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY")
+        let task = ProviderImportTask(request: request, apiReady: false, owner: owner)
+        #expect(task != ProviderImportTask(request: request, apiReady: task.apiReady,
+                                           owner: ProviderImportOwner(group: "hub-two", manager: owner.manager)))
+        #expect(task != ProviderImportTask(request: request, apiReady: task.apiReady,
+                                           owner: ProviderImportOwner(group: owner.group, manager: "assistant-two")))
+        #expect(task == ProviderImportTask(request: request, apiReady: task.apiReady, owner: owner))
+    }
+
+    @Test func reopeningTheSameLinkCannotBeCancelledByTheReplacedRoute() {
+        let first = ProviderImportRequest(link: "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY")
+        let replacement = ProviderImportRequest(link: first.link)
+        #expect(first.id != replacement.id)
+        #expect(ModelLaunchersRoute(id: first.id).id != ModelLaunchersRoute(id: replacement.id).id)
+        let owner = ProviderImportOwner(group: "hub-one", manager: "assistant-one")
+        #expect(ProviderImportTask(request: first, apiReady: false, owner: owner) !=
+            ProviderImportTask(request: replacement, apiReady: false, owner: owner))
+    }
 }

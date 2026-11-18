@@ -1,6 +1,7 @@
 package persona.feature.settings
 
 import android.graphics.Bitmap
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -17,9 +18,10 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -45,7 +47,7 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-xhdpi")
 class ProviderPasteShotsTest {
-    @get:Rule val rule = createComposeRule()
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     private val machines = listOf(Machine("mac", "Work Mac", online = false), Machine("linux", "Build box", online = true))
     private val existing = HubLauncher("work", displayName = "Work", source = "persona", baseUrl = "https://work.example.com",
@@ -171,6 +173,28 @@ class ProviderPasteShotsTest {
         rule.onNodeWithText("Save").assertExists()
         assertTrue("the prefilled form still has not saved", api.added.isEmpty())
         capture("provider-import-link-prefill-$suffix")
+    }
+
+    @Test fun systemBackCancelsAnExternalImportReview() = externalImportBackCancels(toolbar = false)
+
+    @Test fun toolbarBackCancelsAnExternalImportReview() = externalImportBackCancels(toolbar = true)
+
+    private fun externalImportBackCancels(toolbar: Boolean) {
+        val api = Providers()
+        var closed = false
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                NewProviderPage(api, onBack = { closed = true }, onSaved = {}, machines = machines,
+                    importLink = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY")
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Opened from a link", substring = true).assertExists()
+        if (toolbar) rule.onNodeWithContentDescription("Back").performClick()
+        else rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.waitForIdle()
+        assertTrue("the first Back leaves the import-owned wizard", closed)
+        assertTrue("Back never saves the imported draft", api.added.isEmpty())
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")

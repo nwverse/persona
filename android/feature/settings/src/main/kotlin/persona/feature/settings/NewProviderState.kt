@@ -372,7 +372,10 @@ internal class NewProviderModel(
             val answer = api.parse(text)
             mutable.update {
                 if (seq != pasteSeq || it.paste.text != text) it
-                else it.copy(paste = it.paste.copy(answer = answer, answerText = text, draft = if (answer.drafts.size == 1) 0 else -1,
+                else if (it.paste.fromLink && answer.format != "link") {
+                    it.copy(paste = it.paste.copy(answer = null, draft = -1, action = null, reading = false,
+                        error = ResText.of(R.string.settings_provider_import_link_unsupported)))
+                } else it.copy(paste = it.paste.copy(answer = answer, answerText = text, draft = if (answer.drafts.size == 1) 0 else -1,
                     action = null, reading = false, error = null))
             }
         } catch (cancelled: CancellationException) {

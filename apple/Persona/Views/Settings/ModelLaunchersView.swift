@@ -1,7 +1,20 @@
 import SwiftUI
 
-/// Pushes Settings › Model (value-based, like the other settings pages).
-struct ModelLaunchersRoute: Hashable {}
+/// The assistant and hub a pending provider import belongs to; roster refreshes do not change this identity.
+struct ProviderImportOwner: Hashable {
+    var group: String
+    var manager: String?
+}
+
+/// Re-runs a pending import when its API client becomes available after a cold start or pairing.
+struct ProviderImportTask: Hashable {
+    var request: ProviderImportRequest?
+    var apiReady: Bool
+    var owner: ProviderImportOwner
+}
+
+/// Pushes Settings › Model (value-based, like the other settings pages). Each push has its own import ownership.
+struct ModelLaunchersRoute: Hashable { var id = UUID() }
 /// One launcher's page.
 struct ModelLauncherRoute: Hashable { var name: String }
 
@@ -9,6 +22,7 @@ struct ModelLauncherRoute: Hashable { var name: String }
 /// and key), found in a machine's rc file (~/.zshrc, ~/.bashrc) or on its PATH (synced each time this opens), or the built-in
 /// claude of each machine — the hidden ones, and how each machine's list came in (offline, timed out, failed).
 struct ModelLaunchersView: View {
+    var route: ModelLaunchersRoute? = nil
     @Environment(AppModel.self) private var model
     private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @State private var launchers: [LauncherView]?
@@ -32,6 +46,11 @@ struct ModelLaunchersView: View {
     #endif
 
     /// Name, model, gateway host, or a machine's name.
+    private var importOwner: ProviderImportOwner { ProviderImportOwner(group: requestScope.group, manager: requestScope.manager) }
+    /// Only the route created for a request may read or clear it; a replaced page cannot cancel its replacement.
+    private var importRequest: ProviderImportRequest? {
+        model.providerImport.flatMap { $0.id == route?.id ? $0 : nil }
+    }
     private func matches(_ l: LauncherView) -> Bool {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return true }
@@ -168,7 +187,9 @@ struct ModelLaunchersView: View {
         } message: { _ in Text("The key stored on the hub is deleted too. This can't be undone.") }
         // Again whenever a launcher changes anywhere, its own page included (hide, restore, delete): this page stays
         // built under the one pushed on it, so without this it showed the old list when you came back (#1433).
-        .task(id: model.providerImport) { await openImport() }
+        .task(id: ProviderImportTask(request: importRequest, apiReady: requestScope.api(model) != nil, owner: importOwner)) { await openImport() }
+        .onChange(of: importOwner) { _, _ in if importRequest != nil { model.providerImport = nil } }
+        .onDisappear { if importRequest != nil { model.providerImport = nil } }
         .alert(String(localized: "Can't Open Import Link"), isPresented: Binding(get: { importNote != nil }, set: { if !$0 { importNote = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(importNote ?? "") }
@@ -350,15 +371,20 @@ struct ModelLaunchersView: View {
     /// An import link opened from outside (#5428): read it through the hub's parse route and open the wizard with the
     /// draft, or say why it can't be opened. The link is dropped here, never shown or kept.
     private func openImport() async {
-        guard let link = model.providerImport else { return }
-        // A newer link supersedes this task. Only this link's own task may clear it or show its result.
-        defer { if model.providerImport == link { model.providerImport = nil } }
-        // The hello may not have arrived yet when a link opens the app. The parse route is the authority here;
-        // an older hub answers 404, which is the same "can't open import links yet" the web shows.
+        guard let request = importRequest else { return }
+        // A cold start or an unfinished pairing has no client yet. Keep the request pending; the API-ready id retries it.
         guard let api = requestScope.api(model) else { return }
+        // A newer request supersedes this task. Only this request's own route may clear it or show its result.
+        defer { if model.providerImport?.id == request.id { model.providerImport = nil } }
+        // The hello may not have arrived yet when a link opens the app. The parse route is the authority here;
+        // an older hub answers 404 or another paste format, which is the same "can't open import links yet" the web shows.
         do {
-            let result = try await api.parseProviderImport(text: link)
-            guard model.providerImport == link else { return }
+            let result = try await api.parseProviderImport(text: request.link)
+            guard model.providerImport?.id == request.id else { return }
+            guard result.isProviderLink else {
+                importNote = String(localized: "This hub can't open import links yet. Update the hub to open them.")
+                return
+            }
             if let draft = result.drafts?.first {
                 let wizard = ProviderWizardModel()
                 wizard.applyImport(draft.provider)
@@ -370,11 +396,12 @@ struct ModelLaunchersView: View {
         } catch is CancellationError {
             return
         } catch let error as APIError where error.status == 404 {
-            guard model.providerImport == link else { return }
+            guard model.providerImport?.id == request.id else { return }
             importNote = String(localized: "This hub can't open import links yet. Update the hub to open them.")
         } catch {
-            guard model.providerImport == link else { return }
-            importNote = String(localized: "Couldn't read the import link: \(error.localizedDescription)")
+            guard model.providerImport?.id == request.id else { return }
+            // A request error can contain the secret-bearing link or body; show only the fixed, localized refusal.
+            importNote = String(localized: "This import link couldn't be read.")
         }
     }
 
