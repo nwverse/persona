@@ -195,7 +195,7 @@ Dynamic Type behavior:
 - The user's Small, Standard or Large setting shifts the system size by -1, 0 or +1 (`apple/Persona/DesignSystem/TextSize.swift:6-36`). Web maps the same ratios (12/13, 1, 14/13) through a build-time rewrite. Android has no in-app setting.
 - Shapes scale with `scaledFrame`, capped at 1.6x (`apple/Persona/DesignSystem/TextSize.swift:98-108`). `tapTargetFrame` and `tapTargetHeight` never go below 44 pt.
 - The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
-- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes.
+- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes, and the browser sign-in number (`Theme.Font.signInNumber`, 64 pt rounded bold with fixed-width digits, `apple/Shared/Design/BrowserLoginTokens.swift`, #10293): two digits read off the iPhone to be typed in a browser, already far above the interface's cap at every size.
 
 ### 2.3 Spacing
 
@@ -649,6 +649,17 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+  (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
+  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
+  restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
+  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
+  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
+  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
+  or the app back in front.
 
 ### 3.3 Cards and surfaces
 

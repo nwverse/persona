@@ -1546,7 +1546,11 @@ What the numbers do and do not say:
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:
 
-- Title = `MMDD | Type | Topic`. MMDD is the chat's start date in **user timezone** (`Hub.userLocation()`; hub runs UTC, but a 00:30 start uses the user's local date).
+- **Active direction exception**: every client shows the existing canonical direction name as its session title,
+  without a date or task-kind prefix. `conversation_rename` accepts a plain `name` from the main conversation and uses
+  the existing direction-name operation; user-chosen names require `user_asked`. The ordinary stored title is retained
+  and returns when the direction ends. Explicit name changes publish immediately.
+- Ordinary title = `MMDD | Type | Topic`. MMDD is the chat's start date in **user timezone** (`Hub.userLocation()`; hub runs UTC, but a 00:30 start uses the user's local date).
   Types: Feature / Design / Fix / Optimization / Release / Exploration / Docs / Research / Review / Scheduled; topic ≤ 14 characters, no project / repo names. Example: `1101 | 修复 | 搜索框和顶栏重叠` ("1101 | Fix | Search and top bar overlap").
 - **When generated**: new hub chats (App `POST /api/v1/assistant/conversations`) are recorded "pending title". After the first turn (working → done / idle),
   the assistant uses the "Chat title" purpose model in the background (`assistant.title`, Model Configuration › Information processing), reading first message / reply to produce "Type | Topic". No interruption, not delegated to the assistant chat itself, replies don't wait.
@@ -1627,7 +1631,7 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
 
 - **Archive only hides**: hub settings `assistant.archived` (session id → machine, time, actor), session list `archived: true`;
   `GET /api/v1/assistant` excludes by default, includes with `?archived=1`. No transcript deletion / hard delete. Main chat can't archive (API 400, tool error); replace through "New main chat" ("Compaction" above).
-  - **Archive itself**: allowed ("We're done, archive this" in a side chat is natural). Finish the turn normally; an open App chat isn't closed, only hidden from lists;
+  - **Archive itself**: allowed ("We're done, archive this" in a side chat is natural). Finish the turn normally; an open chat on iOS, Android or the web stays open and is only hidden from lists;
     new user messages restore it (`unarchiveOnSend` in `sendMessage`), as does another chat's `conversation_send`.
   - node lists only recent sessions: old archived chats can disappear from Archived (as they do from normal lists), but archive records remain and `conversation_unarchive` can retrieve by id.
 - **Delete a conversation** (#6172, server and web): after confirmation, an ordinary or archived former main chat disappears permanently from Persona lists and history reads. A Postgres setting (`assistant.deleted_conversations`) retains only machine/session identity, space and deletion time. Old links say **Conversation deleted**; task plans, to-dos, run records, saved briefs and extracted knowledge keep their references and content, and delegated Agents continue untouched. The computer's transcript file is retained; this is not an erasure of previously derived knowledge or a filesystem cleanup. A new node inventory, send or unarchive never restores a deleted chat. Active turns, compaction, queued messages and pending requests must finish or be stopped first. A chat that still owns or supervises an unfinished task also refuses deletion (409); finish or move that task first. Former-main work uses the existing handover once a successor main exists, so a historical reference alone does not block deletion; an idle process is allowed because later Persona sends, tool calls and reads are refused. The main chat and built-in supervisor cannot be deleted. To remove the main chat's previous history, use **Clear context**, then delete the archived former main chat. Native deletion controls are not included in this phase; native Clear context remains #5100.
