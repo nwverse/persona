@@ -11661,8 +11661,22 @@ def _codex_settings():  # Settings › Codex Settings: the node's whitelist (ser
     ]
 
 
+def _agy_settings():  # Settings › Antigravity Settings: the node's whitelist (server/internal/node/agyompconfig.go)
+    return [
+        {"key": "model", "title": "默认模型", "detail": "没有指定模型时使用 Antigravity 自己的默认模型", "type": "string", "default": "", "value": None},
+        {"key": "agentMode", "title": "执行模式", "detail": "改文件、跑命令时的默认模式；auto 自动放行安全操作，需要时仍会询问", "type": "enum",
+         "options": ["default", "accept-edits", "auto", "plan"], "default": "default", "value": "default"},
+        {"key": "toolPermission", "title": "工具权限", "detail": "调用工具或跑命令前要不要问你；选 always-proceed 会自动放行所有权限检查（全部放行）", "type": "enum",
+         "options": ["ask", "always-proceed"], "default": "ask", "value": None},
+        {"key": "modelProvider", "title": "模型接入方式", "detail": "oauth 走 Google / Antigravity 登录；填了 GOOGLE_GEMINI_BASE_URL + GEMINI_API_KEY 时选 gemini", "type": "enum",
+         "options": ["oauth", "gemini"], "default": "oauth", "value": None},
+        {"key": "showFeedbackSurvey", "title": "显示反馈问卷", "detail": "在终端里偶尔弹出反馈调查", "type": "bool", "default": True, "value": None},
+    ]
+
+
 CLAUDE_SETTINGS = {}  # machine id → its settings, made on first use
 CODEX_SETTINGS = {}
+AGY_SETTINGS = {}
 
 # Settings › Claude Code › Blocked configuration directories (server/internal/hub/claudedirs.go): machine id → blocked patterns; the directories
 # every machine has (home written as ~ here, expanded with the machine's home).
@@ -27037,6 +27051,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(_claude_dirs_state(p.split("/")[4]))
         if p.startswith("/api/v1/machines/") and p.endswith("/codex-settings"):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
+        if p.startswith("/api/v1/machines/") and p.endswith("/agy-settings"):
+            return self.send_json({"settings": AGY_SETTINGS.setdefault(p.split("/")[4], _agy_settings())})
         if p.startswith("/api/v1/sessions/") and p.endswith("/items"):
             sid = unquote(p.split("/")[5])  # a subagent's is "<session>@<agent>" (the web app sends %40)
             if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:  # MOCK_PASEO_NOT_LOADED: no watch has loaded it yet
@@ -28913,11 +28929,13 @@ class H(BaseHTTPRequestHandler):
                     pats.append(x)
             CLAUDE_DIRS_BLOCKED[mid] = pats
             return self.send_json(_claude_dirs_state(mid))
-        if p.startswith("/api/v1/machines/") and (p.endswith("/claude-settings") or p.endswith("/codex-settings")) and self.command == "PUT":
+        if p.startswith("/api/v1/machines/") and (p.endswith("/claude-settings") or p.endswith("/codex-settings") or p.endswith("/agy-settings")) and self.command == "PUT":
             body, mid = json.loads(self.last_body or b"{}"), p.split("/")[4]
             if not machine_online(mid):
                 return self.send_json({"error": "machine is offline"}, 503)
-            store, make = (CODEX_SETTINGS, _codex_settings) if p.endswith("/codex-settings") else (CLAUDE_SETTINGS, _claude_settings)
+            store, make = ((AGY_SETTINGS, _agy_settings) if p.endswith("/agy-settings")
+                           else (CODEX_SETTINGS, _codex_settings) if p.endswith("/codex-settings")
+                           else (CLAUDE_SETTINGS, _claude_settings))
             for st in store.setdefault(mid, make()):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
