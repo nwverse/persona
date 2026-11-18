@@ -612,6 +612,20 @@ checks the largest text. Set actual appearance with `xcrun simctl ui <udid> appe
 Run `PersonaTests/AgentsTabNavigationTests` too: explicit selection cancels restoration, reselection returns to the list,
 notification/link targets are preserved, and a consumed newer target invalidates an older deferred list reset.
 
+### Live Activities a run leaves (#10109)
+
+`xcodebuild test-without-building` installs the app again at the start of every run. A Live Activity the last run left up
+(a meeting still recording when its test ended) is stopped by that install, and liveactivitiesd wakes the app in the
+background to deliver it (`OpenApplication … ForRequester(liveactivitiesd)` in SpringBoard's log), a few milliseconds
+before the test's own launch. The test's launch then lands in that process, started without its arguments: the page
+in the simulator's language, none of `-openShellPage` / `-showMeetingSample` / `-AppleLanguages`. It shows when classes
+run one by one on one simulator (the lanes' scripts), after a class that ended mid-meeting.
+
+A Debug build ends every Live Activity on SIGTERM before it exits (`TerminationActivities`, `apple/Persona/Debug/`):
+the runner's SIGTERM between runs takes them with the app, and a launch that isn't recording ends a recording's
+activity it finds (`RecordingActivity`). If a test lands on a page in English with nothing it asked for, look for that
+`OpenApplication … liveactivitiesd` line before its launch.
+
 ### Simulators: always `scripts/app/sim-boot.sh`, slim by default (simslim, #2287, #2801)
 
 **Create, reuse and boot simulators through `scripts/app/sim-boot.sh`**, not direct `simctl create` / `simctl boot` or letting `xcodebuild test` create one.
@@ -704,8 +718,8 @@ Terminal keys/selection (`TerminalKeysTests`: tap/double-lock/hold ctrl/alt/shif
 (mock `GET /mock/keys` returns recorded keys).
 
 Search results open chats with only one title line, remain after return, and find/open Agents inside collapsed spaces (`SearchOpenTests`, with non-search control and edge-swipe back;
-`-openAgentsFresh YES` avoids old collapse state) against ordinary mock:
-`PORT=18793 python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18793 xcodebuild test … -only-testing:PersonaUITests/SearchOpenTests`.
+`-openAgentsFresh YES` avoids old collapse state) against a mock with one assistant (the default mock's MacBook, where weather runs, is another assistant's and not listed):
+`MOCK_MANAGERS=1 PORT=18793 python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18793 xcodebuild test … -only-testing:PersonaUITests/SearchOpenTests`.
 
 Assistant `ask_user` renders as Question (`AskUserRowTests`, #677): tool row says Question + first question, not raw name; expanded questions/options check user choices (including multi-select),
 unanswered says No answer. `-openAllWork YES -showToolDetails YES` expands work/tool rows (inverted-list taps unreliable):
@@ -869,6 +883,7 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
 - `NavigationLink` row accessibility identifiers appear twice (cell/button); count/select nth with `app.buttons.matching(identifier:)`.
 - `SearchOpenTests` formerly omitted `-dev.openChat ""`: previous open chat restored, swipe-back couldn't reach list; both failed on master too.
 - Both `SearchOpenTests` couldn't find weather header/Add weather row on master (#1051): five pending requests filled first screen, lazy list hadn't built rows. `bringAboveTabBar` scroll to them, back to top before search; after return use row to verify list (original scroll position, filter absent from tree).
+- All three `SearchOpenTests` failed against the default mock (#10164): its several assistants give the MacBook to another one, and the Agents list shows only the current assistant's computers (#5587), so no weather row or space was listed and the search found nothing. They run on `MOCK_MANAGERS=1` and fail at launch, naming it, on a hub with several. The folded-space case then cleared the search with the at-rest field's clear button, which that field no longer exposes (it is one element now): it taps the field and ends the search with ✕.
 - `ShellAvatarTests` also omitted `-dev.openChat ""`: prior Agents chat restored, no list header/avatar, also failed on master.
 - Compact-list shots (`CompactListShots`, demo not mock): All (many spaces), Mac Studio (many unread/idle spaces), Unread, Needs you, Mac mini (all idle),
   by-state, card comparison; all three text sizes (`-ui.textSize small|standard|large`; `TEST_RUNNER_PERSONA_TEXT_SIZES=standard` one only).

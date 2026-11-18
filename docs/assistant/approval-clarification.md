@@ -37,4 +37,6 @@ The coordinator makes one final claim under the fleet mutex. An in-flight questi
 
 Once a card has clarified, every terminal path sends exactly one result containing the literal interaction ID to the original conversation, including Allow, Deny, expiry, replacement, stale cancellation, and restart cancellation. Delivery uses the stable ID `approval-result-<interaction-id>` and the durable relay queue. The journal stores only the ID, original target, delivery state, status, and result text—never field values, callbacks, or executable closures.
 
+Before the first question, a card whose caller still waits is normally kept waiting when its window ends ("Unanswered cards keep waiting" above). When it cannot be (its journal entry could not be written) or its caller already went away, an unanswered expiry returns through the original tool result instead of starting a second delivery. It contains the literal interaction ID, says the approval expired, and explicitly says nothing was executed. Expiry remains distinct from the owner's Deny: it never becomes a user refusal.
+
 An unfinished Clarifying card fails closed on restart without executing. If the process stops after recording `applying`, recovery reports the execution outcome as uncertain rather than claiming success or reapplying it.
