@@ -502,6 +502,10 @@ type BriefFacts struct {
 	// InboxWaiting and InboxDue are read-only follow-up facts for the model only; neither is on the card or in the push.
 	InboxWaiting, InboxDue []BriefFollow
 	Leaders                []BriefLeader // one per direction (#3609)
+	// Directions are the deterministic per-direction wait lists, main included. Every direction keeps all owner-wait
+	// rows and folds only its non-owner tail; More says how many rows the direction link holds beyond it.
+	Directions       []BriefDirection
+	DisabledRoutines []BriefDisabledRoutine
 	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
 	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
 	Briefs, BriefsDone []BriefTask
@@ -599,6 +603,35 @@ type BriefLeader struct {
 	Name                     string
 	Open, Waiting, Stuck     int
 	Reached, Doing, NeedsYou string
+}
+
+// BriefDirection is one direction's open-work count and deterministic wait rows. Main and leader directions alike keep
+// every owner-wait row; only the non-owner tail is folded into More. Line is ready to read in the owner's language.
+type BriefDirection struct {
+	ID, Name, Link             string
+	Owner                      bool
+	Open, Active, Undispatched int
+	Waits                      []BriefWait
+	More                       int
+}
+
+// BriefWait is one stopped task or unanswered card. Kind is needs_user, review, question, permission, private,
+// parked, capacity, orphaned, overdue or stalled. Since/Until are zero when the ledger did not record them.
+type BriefWait struct {
+	TodoID, InteractionID string
+	Title, Kind           string
+	Since                 time.Time
+	Until                 time.Time
+	WaitingOn, Reason     string
+	Link, Line            string
+}
+
+// BriefDisabledRoutine is a disabled daily report or patrol. DisabledAt is nil for routines saved before the hub
+// recorded the transition; Line says "disable time not recorded" rather than substituting LastRun.
+type BriefDisabledRoutine struct {
+	ID, Title, Direction, Kind string
+	DisabledAt                 *time.Time
+	Link, Line                 string
 }
 
 // BriefFailed is one thing that did not go through: a task whose agent did not start, a scheduled run that failed

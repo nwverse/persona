@@ -317,6 +317,9 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 	}
 	place := s.pushPlace(machine, sess)
 	head, text := doneAlert(s.lang(context.Background()), sess)
+	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil {
+		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
+	}
 	// A routine with facts says the counts it worked out (briefing.go) when it ended normally and asks nothing: a question
 	// is what the owner acts on, and a health conversation says only that there is news.
 	if !strings.HasPrefix(head, "⚠️") && !strings.HasPrefix(head, "⏳") && !sess.AwaitsReply && spaceOf(sess) != SpaceHealth {

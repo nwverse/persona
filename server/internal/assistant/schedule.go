@@ -114,7 +114,9 @@ type Task struct {
 	// CreatedBy is "assistant" for tasks Persona set up from a conversation.
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
-	// Set by the hub.
+	// Set by the hub. DisabledAt is when Enabled last became false (or when a routine was created disabled). Zero on a
+	// routine saved before this transition was recorded: briefings say the disable time was not recorded, never LastRun.
+	DisabledAt    time.Time `json:"disabled_at,omitempty"`
 	LastRun       time.Time `json:"last_run,omitempty"`
 	LastSessionID string    `json:"last_session_id,omitempty"`
 	LastStatus    string    `json:"last_status,omitempty"` // of the last run: ok / failed / skipped
@@ -128,10 +130,24 @@ type Task struct {
 	ArmedAt time.Time `json:"armed_at,omitempty"`
 }
 
+// disabledTransition keeps the actual off/on transition. A zero old ID is a newly created routine; the POST route's
+// old task already has its generated ID and CreatedAt=now, which is the same case. Legacy zero values stay zero.
+func disabledTransition(old Task, t *Task, now time.Time) {
+	if t.Enabled {
+		t.DisabledAt = time.Time{}
+		return
+	}
+	created := old.ID == "" || (!old.CreatedAt.IsZero() && old.CreatedAt.Equal(now) && old.LastRun.IsZero())
+	if old.Enabled || created {
+		t.DisabledAt = now.UTC()
+	}
+}
+
 // rearm notes that t starts counting from now when it was just created, switched on, or its daily time, weekdays or
 // cron expression changed (old: as it was; a new task's has no ID or is off). Without it the scheduler took the run due
 // earlier today for one the hub missed while it was down, and recorded "Persona was down and missed the time" (#3816).
 func rearm(old Task, t *Task, now time.Time) {
+	disabledTransition(old, t, now)
 	if !t.calendar() || !t.Enabled {
 		return
 	}
@@ -272,6 +288,8 @@ const (
 	routinesKey  = "assistant.routines"  // before 2026-10-31
 	followupsKey = "assistant.followups" // before 2026-10-31
 	runsKey      = "assistant.runs"
+	// briefFallbacksKey is durable idempotency for model-failure facts cards, independent of the bounded run history.
+	briefFallbacksKey = "assistant.brief_fallbacks"
 )
 
 type schedule struct {
@@ -279,7 +297,9 @@ type schedule struct {
 	loaded bool // false after a failed read: nothing is saved over what Postgres has, the next call reads again
 	tasks  []Task
 	runs   []ScheduleRun // newest last
-	wake   chan struct{} // the list changed: scheduleLoop recomputes when to wake up
+	// briefFallbacks: routine+due receipts persisted before a fallback is sent, so retries and restarts cannot repeat it.
+	briefFallbacks map[string]time.Time
+	wake           chan struct{} // the list changed: scheduleLoop recomputes when to wake up
 	// sending: tasks whose run is being sent right now (runTask), so two can't go into one conversation at once.
 	sending     map[string]bool
 	stateDrafts map[string]taskStateDraft
@@ -377,6 +397,7 @@ func (s *Service) loadSchedule(ctx context.Context) *schedule {
 	if st == nil {
 		sc.loaded = true
 		sc.tasks = tasksFrom(defaultRoutines(s.lang(ctx)), nil)
+		sc.briefFallbacks = map[string]time.Time{}
 		return sc
 	}
 	var tasks []Task
@@ -420,7 +441,15 @@ func (s *Service) loadSchedule(ctx context.Context) *schedule {
 		s.logf("load schedule runs: %v", err)
 		return sc
 	}
-	sc.tasks, sc.runs, sc.loaded = tasks, runs, true
+	var briefFallbacks map[string]time.Time
+	if _, err := st.Setting(ctx, briefFallbacksKey, &briefFallbacks); err != nil {
+		s.logf("load briefing fallback receipts: %v", err)
+		return sc
+	}
+	if briefFallbacks == nil {
+		briefFallbacks = map[string]time.Time{}
+	}
+	sc.tasks, sc.runs, sc.briefFallbacks, sc.loaded = tasks, runs, briefFallbacks, true
 	upgraded := slices.Clone(sc.tasks)
 	if upgradeDefaultRoutines(upgraded) {
 		if err := s.saveLocked(sc, upgraded); err == nil {
@@ -1519,6 +1548,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 		if t.Repeat != repeatOnce && !t.Until.IsZero() && !now.Before(t.Until) {
 			reason := i18n.T(s.lang(ctx), "assistant-schedule.until")
 			t.Enabled = false
+			t.DisabledAt = now.UTC()
 			t.LastRun = now.UTC()
 			t.LastStatus, t.LastError = runSkipped, reason
 			skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: t.Until.UTC(), At: now.UTC(),
@@ -1688,7 +1718,7 @@ func (s *Service) recordRun(r ScheduleRun) string {
 // task's last status when this run is still the newest.
 // updateRun returns whether it pushed the streak notice (#4658), which then stands for the run's own failure push;
 // false when the notice was left out (a muted conversation, #4785), so that push still goes.
-func (s *Service) updateRun(r ScheduleRun, status, errText string) bool {
+func (s *Service) updateRun(r ScheduleRun, status, errText string, suppressPush ...bool) bool {
 	sc, err := s.lockedSchedule(context.Background())
 	if err != nil {
 		return false
@@ -1715,7 +1745,7 @@ func (s *Service) updateRun(r ScheduleRun, status, errText string) bool {
 	}
 	sc.mu.Unlock()
 	s.broadcastSchedule()
-	return streak && s.pushStreak(streakTask, streakN, streakRun)
+	return streak && !slices.Contains(suppressPush, true) && s.pushStreak(streakTask, streakN, streakRun)
 }
 
 // errTaskBusy: the task's last run is still going; this one is skipped (and recorded) rather than queued behind it.
@@ -1928,13 +1958,18 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	return err
 }
 
-// oneOffNotStarted: a one-off's scheduled run could not even start (its machine offline, the launcher not starting, no
-// model). A one-off is off as soon as it is due and has no next time, so this was its only run: recorded as failed and
-// nothing else, the follow-up the user counted on was gone without a word (#5030). The user is told, as a run whose turn
-// failed is (watchScheduledRun), and it is tried once more after runRetryDelay, as the task is then (deleted: not). A
-// failed retry is told too, and not tried again. A repeating task runs again at its next time and has its streak notice
-// (#4658); Run now is answered in the app.
+// oneOffNotStarted handles an ordinary one-off whose scheduled run could not even start (its machine offline, the
+// launcher not starting, no model). Facts/Report runs divert to briefNotStarted's fixed-facts fallback first. A one-off
+// is off as soon as it is due and has no next time, so this was its only run: recorded as failed and nothing else, the
+// follow-up the user counted on was gone without a word (#5030). The user is told, as a run whose turn failed is
+// (watchScheduledRun), and it is tried once more after runRetryDelay, as the task is then (deleted: not). A failed retry
+// is told too, and not tried again. A repeating task runs again at its next time and has its streak notice (#4658);
+// Run now is answered in the app.
 func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun) {
+	if t.Facts || t.Report {
+		s.briefNotStarted(ctx, t, run)
+		return
+	}
 	if t.Repeat != repeatOnce || run.Manual {
 		return
 	}
@@ -2051,7 +2086,7 @@ func (s *Service) startScheduledRun(run ScheduleRun, t Task, m *Device) {
 	s.sched.mu.Lock()
 	delete(s.sched.waitTold, t.ID) // it runs again: a later wait on the user is news again
 	s.sched.mu.Unlock()
-	if t.Facts {
+	if t.Facts || t.Report {
 		s.briefSent(t.ID, run.SessionID, run.Retried)
 	}
 	if !t.pushesOnlyAsked() {
@@ -2104,12 +2139,15 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	full := text
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
-	streak := s.updateRun(run, runFailed, text)
+	briefing := t.Facts || t.Report
+	streak := s.updateRun(run, runFailed, text, briefing)
 	name := t.labelIn(s.lang(ctx))
 	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
 		name, _ = healthNotice(s.lang(ctx))
 	}
-	if !streak { // the streak notice already said it failed, with this reason
+	if briefing {
+		s.briefFallback(ctx, run, t, m)
+	} else if !streak { // the streak notice already said it failed, with this reason
 		s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
 	}
 	if run.Retried {
@@ -2167,7 +2205,11 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	if !ok {
 		return
 	}
-	if _, err := s.runTask(cur, time.Now(), time.Now(), false, true); err != nil {
+	due := time.Now()
+	if briefing {
+		due = run.Due // one scheduled occurrence keeps its identity across the automatic retry
+	}
+	if _, err := s.runTask(cur, due, time.Now(), false, true); err != nil {
 		s.logf("task %s retry: %v", t.ID, err)
 	}
 }
@@ -2603,6 +2645,7 @@ func editTask(old, in Task, now time.Time) Task {
 	t.Time, t.Weekdays, t.EveryMinutes, t.Cron = in.Time, in.Weekdays, in.EveryMinutes, in.Cron
 	t.PermissionMode = in.PermissionMode
 	t.Launcher, t.Model, t.Effort = "", "", ""
+	disabledTransition(old, &t, now)
 	if in.SessionID == "" {
 		t.SessionID = ""
 	}

@@ -140,7 +140,11 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	label := i18n.T(l, "assistant-feishu_cards.main_chat")
 	if !main {
 		label = i18n.T(l, "assistant-feishu_cards.scheduled_task", i18n.Args{"task": task})
-		if run := s.briefClaim(session, asked, sess.TurnError != "" || cutOff(answer)); run != nil { // a routine with facts: one card Persona lays out (briefing.go)
+		cut := sess.TurnError != "" || cutOff(answer)
+		if s.briefFailure(session, asked, cut) {
+			return // watchScheduledRun sends the persisted one-per-occurrence facts fallback instead
+		}
+		if run := s.briefClaim(session, asked, cut); run != nil { // a routine with facts: fixed cards Persona lays out
 			s.briefMirror(ctx, machine, session, label, run, answer, turn)
 			return
 		}
