@@ -813,7 +813,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		case werr != nil && !retryControl:
 			werr = p.startFailure() // it is gone already: say why, not that the pipe is closed (#2581)
 		case werr != nil:
-			werr = fmt.Errorf("%s: %w", i18n.T(i18n.Default, "node-assistant-start.stopped_before_delivery"), werr)
+			werr = fmt.Errorf("%s: %w", i18n.T(i18n.Default, "node-assistant-start.not_delivered"), werr)
 		case fresh:
 			werr = p.awaitStart(assistantStartWait)
 			if werr != nil {
