@@ -257,7 +257,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned, sigOverdue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned, sigOverdue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	if verdict == reviewAccepted || verdict == reviewCancelled {
@@ -623,7 +623,8 @@ func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bo
 		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err
 		}
-		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant})
+		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant,
+			"machine_id": c.MachineID, "session_id": c.SessionID}) // the run it told (#10465)
 		return err
 	}
 	if c.Status == proto.StatusOffline && wait {
