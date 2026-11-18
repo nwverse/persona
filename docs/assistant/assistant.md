@@ -561,6 +561,7 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
 - **Switch**: `claude_interactive` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
   `assistant.claude_interactive`), **off by default**. While it is on the manager adds `claude_interactive: true` to every
   `assistant.send`, `assistant.warm` and `session.send` it sends or fills in (`SendParams`); the node's `modelExecution.Interactive`
+  stays with a message that picks no model (a supervision message, a relay: it runs on what the conversation ran) and
   is part of the execution fingerprint, so an idle conversation resumes in the other kind of process with its next message and a
   busy one finishes its turn first.
 - **Risk, said where it is turned on**: Persona then drives a program made for a person. Anthropic may read that as a different
@@ -616,7 +617,7 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
   `TestPrintModeStartNeverRunsTheBridge`, `TestBridgeFallsBackToPrintModeVisibly`, `TestUndeliveredMessagesFailTheirTurn`,
   `TestFallbackForwardsOnlyMessages`, `TestCompactingAStoppedConversationKeepsInteractive`, `TestFallbackThatDiesIsAFailedStart`,
   `TestFallbackThatCannotRunSaysNothing`, `TestALongInteractiveCommandStartsInTmux`, `TestATmuxThatRefusesToStartSaysWhy`,
-  `TestTUIScriptQuotesEveryArgument` (`node/assistant_tui_test.go`),
+  `TestTUIScriptQuotesEveryArgument`, `TestAMessageWithNoModelPickKeepsInteractive` (`node/assistant_tui_test.go`),
   `TestSendParamsClaudeInteractive`, `TestClaudeInteractiveSetting` (`assistant/claude_interactive_test.go`).
 
 ## Next-message suggestions (#4644)

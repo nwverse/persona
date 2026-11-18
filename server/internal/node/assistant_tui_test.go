@@ -558,3 +558,32 @@ func TestTUIScriptQuotesEveryArgument(t *testing.T) {
 		t.Fatalf("got %q, want %q", out, want)
 	}
 }
+
+// A message that picks no model (the hub's own: a supervision message, a relay, a digest) runs the conversation on what
+// it ran; claude_interactive is the manager's switch, not a model pick, and stays with it. It was dropped with the
+// pick, so a conversation such messages start (a background supervisor's) never ran interactive Claude Code.
+func TestAMessageWithNoModelPickKeepsInteractive(t *testing.T) {
+	fakeClaudeHome(t, "while read line; do echo '{\"type\":\"system\",\"subtype\":\"init\"}'; done\n")
+	resetTUICooldown(t)
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	cwd := t.TempDir()
+	id, err := n.assistantSend(context.Background(), "", cwd, "claude", "hello", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.stopAssistant(id)
+	specFile := fakeTUIBridge(t, n)
+	if _, err := n.assistantSend(context.Background(), id, cwd, "", "a supervision message", nil, "", "", modelExecution{Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer n.stopAssistant(id)
+	var spec tuiSpec
+	waitFor(t, "the bridge's spec", func() bool {
+		raw, _ := os.ReadFile(specFile)
+		return json.Unmarshal(bytes.TrimSpace(raw), &spec) == nil
+	})
+	if spec.Session != id {
+		t.Fatalf("spec %+v", spec)
+	}
+}
