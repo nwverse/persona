@@ -677,3 +677,32 @@ func TestUndeliveredNothingTypedIsTriedAgainByItself(t *testing.T) {
 		t.Fatalf("still kept: %+v", q)
 	}
 }
+
+// A try that fails before session.send (SendParams cannot read the deletion ledger in time) typed nothing, even with an
+// error that reads like a timeout: it is no doubt. Its mark is cleared, it is tried again by itself, and the node gets
+// the message once.
+func TestUndeliveredFailureBeforeTheSendIsNoDoubt(t *testing.T) {
+	st := &memStore{}
+	s, f := newQuietServiceOn(t, st)
+	keepFor(t, s, "msg-1", "hello")
+	// A non-durable store caches the ledger's first read: make the next one fail.
+	s.deletedConversations.mu.Lock()
+	s.deletedConversations.loaded, s.deletedConversations.rows = false, nil
+	s.deletedConversations.mu.Unlock()
+	st.failKey(deletedConversationsKey, context.DeadlineExceeded)
+	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+	if n := sendCalls(f, "msg-1"); n != 0 {
+		t.Fatalf("session.send was reached %d times", n)
+	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 1 || q[0].State != proto.UndeliveredWaiting || q[0].inDoubt() || !q[0].TriedAt.IsZero() {
+		t.Fatalf("a failure before the send was taken as a try in doubt: %+v", q)
+	}
+	st.failKey(deletedConversationsKey, nil)
+	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+	if n := sendCalls(f, "msg-1"); n != 1 {
+		t.Fatalf("sent %d times, want once", n)
+	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+		t.Fatalf("still kept: %+v", q)
+	}
+}
