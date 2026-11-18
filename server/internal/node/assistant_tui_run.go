@@ -90,7 +90,7 @@ func (b *tuiBridge) control(ctx context.Context, l []byte, started bool) bool {
 	var err error
 	switch subtype {
 	case "initialize":
-	case "interrupt":
+	case "interrupt": // the stream-json request; the apps' Stop ends the process, as for claude -p (assistantInterrupt)
 		if now, _ := c.Request["send_now"].(bool); now {
 			err = errors.New("send now is not available while the assistant runs in interactive Claude Code")
 		} else if !started {

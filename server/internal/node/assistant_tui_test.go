@@ -218,7 +218,7 @@ func TestBridgeFallsBackToPrintModeVisibly(t *testing.T) {
 	t.Setenv("PATH", dir) // no tmux
 	spec, _ := json.Marshal(tuiSpec{Session: "s1", Cwd: dir, TUI: []string{"claude"}, Print: []string{printer}})
 	in := string(spec) + "\n" + `{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n"
-	var out, errb bytes.Buffer
+	var out, errb tuiTestOut
 	r, w := io.Pipe()
 	go func() {
 		_, _ = io.WriteString(w, in)
@@ -389,7 +389,7 @@ func TestFallbackForwardsOnlyMessages(t *testing.T) {
 		time.Sleep(4 * time.Second)
 		_ = w.Close()
 	}()
-	var out, errb bytes.Buffer
+	var out, errb tuiTestOut
 	if status := AssistantTUI(nil, r, &out, &errb); status != 7 {
 		t.Fatalf("status %d, stderr %s", status, errb.String())
 	}
@@ -441,3 +441,68 @@ func TestCompactingAStoppedConversationKeepsInteractive(t *testing.T) {
 		t.Fatalf("the compaction's start did not go through the bridge: %+v", spec)
 	}
 }
+
+// A fallback whose claude -p prints nothing and exits failed to start, as claude -p without the bridge would: the
+// bridge's notice is no start, so the send is refused instead of taken.
+func TestFallbackThatDiesIsAFailedStart(t *testing.T) {
+	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	resetTUICooldown(t)
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "personad")
+	script := "#!/bin/sh\nIFS= read -r spec\n" +
+		`echo '{"reason":"tmux is not installed on this computer","subtype":"persona_tui_fallback","type":"system"}'` + "\n" +
+		"echo 'the launcher refused to start' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n.bin = bin
+	if id, err := n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "", "", modelExecution{Interactive: true}); err == nil {
+		n.stopAssistant(id)
+		t.Fatal("a fallback that exited at once was taken as a start")
+	} else if !strings.Contains(err.Error(), "the launcher refused to start") {
+		t.Fatalf("the start error does not say why: %v", err)
+	}
+}
+
+// A print-mode command that cannot even be run gets no fallback notice: the bridge exits 1 having printed nothing.
+func TestFallbackThatCannotRunSaysNothing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir) // no tmux
+	spec, _ := json.Marshal(tuiSpec{Session: "s1", Cwd: dir, TUI: []string{"claude"}, Print: []string{filepath.Join(dir, "missing")}})
+	r, w := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(w, string(spec)+"\n")
+		time.Sleep(time.Second) // stdin stays open while the start fails, as the node's does
+		_ = w.Close()
+	}()
+	var out, errb tuiTestOut
+	if status := AssistantTUI(nil, r, &out, &errb); status != 1 || out.Len() != 0 {
+		t.Fatalf("status %d, output %q", status, out.String())
+	}
+	if !strings.Contains(errb.String(), "start claude -p") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+}
+
+// tuiTestOut collects what a bridge prints, from its own writes and from the print-mode command's: a bytes.Buffer is
+// filled by exec's copy through ReadFrom, which writes over what the bridge emits meanwhile (os.Stdout, a file, is not).
+type tuiTestOut struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (o *tuiTestOut) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.Write(p)
+}
+
+func (o *tuiTestOut) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
+
+func (o *tuiTestOut) Len() int { return len(o.String()) }

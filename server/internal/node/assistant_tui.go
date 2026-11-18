@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"encoding/json"
 	"os/exec"
 	"runtime"
@@ -196,4 +197,9 @@ func (p *assistantProc) executionMode() (mode, note string) {
 		return executionModePrint, p.tuiNote
 	}
 	return executionModePrint, "this conversation runs in print mode (a guest, a supervision round or plan mode)"
+}
+
+// tuiFallbackLine says line is the bridge's fallback notice ({"reason":…,"subtype":"persona_tui_fallback",…}).
+func tuiFallbackLine(line []byte) bool {
+	return bytes.Contains(line, []byte(`"subtype":"`+tuiFallbackSubtype+`"`))
 }

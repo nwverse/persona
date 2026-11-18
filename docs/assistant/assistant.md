@@ -556,7 +556,8 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
   input box takes it; the transcript becomes `system/init` as a turn starts, a `stream_event` per assistant message (usage, model,
   its text), `compact_boundary`, and `result` at `turn_duration` or an interruption; running background work is read off the mode
   line (`background_tasks_changed`). A turn the screen shows over without a line ending it (a local command such as `/compact`)
-  ends after 15 quiet seconds. Interrupt is Esc and `background_tasks` is Ctrl+B, as in a terminal.
+  ends after 15 quiet seconds. An `interrupt` control request is Esc and `background_tasks` is Ctrl+B, as in a terminal; the apps' Stop
+  still ends the process, as it does for claude -p (background tasks included), and the next message resumes the conversation.
 - **What changes**: live text arrives a content block at a time (an interactive Claude Code writes no partial messages); a long
   message (any message with its live snapshot) reaches the model inside Claude Code's own `<pasted_content>` wrapper, as a long
   message typed into an Agent's terminal does (the transcript readers drop it); an image is saved to a private file and the
@@ -574,8 +575,9 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
   the print-mode fallback; only messages do.
 - **Visible fallback**: when the interactive start fails (no tmux, Claude Code exiting, a start-up screen Persona does not
   answer, no input box within 2 minutes, a Claude Code that keeps no transcript because it was started from inside another Claude
-  Code session), the bridge prints `{"type":"system","subtype":"persona_tui_fallback","reason":…}` and runs
-  the print-mode command in its place, handing it the messages written meanwhile: nothing is lost. The node logs it, the
+  Code session), the bridge runs the print-mode command in its place and, once it runs, prints
+  `{"type":"system","subtype":"persona_tui_fallback","reason":…}` (a command that cannot run gets no notice; the node never takes
+  the notice for a start, so a claude -p that exits before printing anything fails the send as it would without the bridge), handing it the messages written meanwhile: nothing is lost. The node logs it, the
   conversation's execution report (`assistant.execution`; for the main chat Settings › Assistant › Runs on shows "Main chat runs
   with: Claude Code (print mode)" and the reason under it) carries `mode: "print"` with the reason in `mode_note`, and new starts on
   that node stay in print mode for 10 minutes before trying again. A process running as asked reports `mode: "interactive"`
@@ -587,7 +589,8 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
 - Tests: `TestTUITranslatorReadsATranscriptAsStreamJSON`, `TestTUIArgsDropPrintFlagsAndCarryTheStartModes`,
   `TestTUIProcessRestartsForModeAndEffort`, `TestInteractiveStartGoesThroughTheBridgeAndItsFallbackIsVisible`,
   `TestPrintModeStartNeverRunsTheBridge`, `TestBridgeFallsBackToPrintModeVisibly`, `TestUndeliveredMessagesFailTheirTurn`,
-  `TestFallbackForwardsOnlyMessages`, `TestCompactingAStoppedConversationKeepsInteractive` (`node/assistant_tui_test.go`),
+  `TestFallbackForwardsOnlyMessages`, `TestCompactingAStoppedConversationKeepsInteractive`, `TestFallbackThatDiesIsAFailedStart`,
+  `TestFallbackThatCannotRunSaysNothing` (`node/assistant_tui_test.go`),
   `TestSendParamsClaudeInteractive`, `TestClaudeInteractiveSetting` (`assistant/claude_interactive_test.go`).
 
 ## Next-message suggestions (#4644)

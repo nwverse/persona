@@ -89,17 +89,18 @@ func (o *tuiOut) answer(id string, err error) {
 // messages written meanwhile (pending) go to it first, then the rest of stdin. Its output is the bridge's.
 func (b *tuiBridge) fallback(ctx context.Context, reason string, pending [][]byte, lines <-chan []byte, stdout io.Writer) int {
 	fmt.Fprintf(b.stderr, "assistant-tui: interactive Claude Code did not start: %s; running claude -p instead\n", reason)
-	b.out.emit(map[string]any{"type": "system", "subtype": tuiFallbackSubtype, "reason": reason})
 	cmd := exec.Command(b.spec.Print[0], b.spec.Print[1:]...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = b.spec.Cwd, stdout, b.stderr
 	w, err := cmd.StdinPipe()
 	if err == nil {
 		err = cmd.Start()
 	}
-	if err != nil {
+	if err != nil { // no notice: the node sees a process that printed nothing and exited, a failed start
 		fmt.Fprintf(b.stderr, "assistant-tui: start claude -p: %v\n", err)
 		return 1
 	}
+	// Said once claude -p runs; the node does not take it for a start (tuiFallbackLine): claude -p's own lines are.
+	b.out.emit(map[string]any{"type": "system", "subtype": tuiFallbackSubtype, "reason": reason})
 	go func() {
 		defer w.Close()
 		for _, l := range pending {

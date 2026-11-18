@@ -879,9 +879,14 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			continue
 		}
 		p.printed()
-		if p.round {
+		switch {
+		case p.round:
 			n.settleSoon(p) // its row says working until it settled (assistant_round.go); it starts with its init (below)
-		} else {
+		case p.tui && tuiFallbackLine(line):
+			// the bridge's notice that it runs claude -p instead (assistant_tui_bridge.go fallback) is no start: the
+			// print-mode command's own first line is, and one that exits before printing any fails the start as it
+			// would without the bridge
+		default:
 			p.started()
 		}
 		var ev struct {
