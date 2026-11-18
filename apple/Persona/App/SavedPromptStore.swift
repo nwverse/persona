@@ -21,6 +21,11 @@ import SwiftUI
     @ObservationIgnored private let deps: AssistantDeps
     /// The latest read: an older one that answers after it does not land, nor one from before a change made here.
     @ObservationIgnored private var reads = 0
+    /// Which assistant the list is: `forget()` moves it on, and a change that answers after that leaves the list alone
+    /// (the assistant before's prompts would show in the new one's chats).
+    @ObservationIgnored private var epoch = 0
+    /// Prompts deleted here (on their way or done): a move that answers after a delete does not bring one back.
+    @ObservationIgnored private var deleted: Set<String> = []
 
     init(deps: AssistantDeps) { self.deps = deps }
 
@@ -54,6 +59,8 @@ import SwiftUI
     /// Another hub or assistant: nothing of the one before stays (its list would be offered in the wrong chats).
     func forget() {
         reads += 1
+        epoch += 1
+        deleted = []
         prompts = []
         loaded = false
         supported = true
@@ -65,7 +72,9 @@ import SwiftUI
     @discardableResult
     func save(id: String?, name: String, text: String) async throws -> SavedPrompt {
         guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub.")) }
+        let mine = epoch
         let saved = try await api.saveSavedPrompt(id: id, name: SavedPromptRules.cleanName(name), text: text)
+        guard mine == epoch else { return saved }
         reads += 1 // a read under way from before this change would put the old list back
         if let i = prompts.firstIndex(where: { $0.id == saved.id }) { prompts[i] = saved } else { prompts.append(saved) }
         return saved
@@ -77,17 +86,23 @@ import SwiftUI
         guard let api = deps.api(), let from = prompts.firstIndex(where: { $0.id == id }) else { return }
         let to = from + step
         guard prompts.indices.contains(to), pending.isEmpty else { return }
-        let before = prompts
+        let before = prompts, mine = epoch, deletedBefore = deleted
         prompts.swapAt(from, to)
         pending.insert(id)
         reads += 1
         defer { pending.remove(id) }
         do {
-            prompts = try await api.orderSavedPrompts(prompts.map(\.id))
+            let answer = try await api.orderSavedPrompts(prompts.map(\.id))
+            guard mine == epoch else { return }
+            prompts = answer.filter { !deleted.contains($0.id) }
         } catch {
-            prompts = before
+            guard mine == epoch else { return }
+            prompts = before.filter { !deleted.contains($0.id) }
             if (error as? APIError)?.status == 409 {
-                deps.toast(Toast(String(localized: "The list changed on another device. Here it is as it is now.")))
+                // a delete made here meanwhile changed the ids the order was sent with: nothing to tell
+                if deleted == deletedBefore {
+                    deps.toast(Toast(String(localized: "The list changed on another device. Here it is as it is now.")))
+                }
                 await load()
             } else {
                 deps.report(error)
@@ -98,13 +113,16 @@ import SwiftUI
     /// Deletes a prompt: gone at once, back in its place with the reason if the hub refuses.
     func delete(_ id: String) async {
         guard let api = deps.api(), let at = prompts.firstIndex(where: { $0.id == id }) else { return }
-        let removed = prompts.remove(at: at)
+        let removed = prompts.remove(at: at), mine = epoch
         pending.insert(id)
+        deleted.insert(id)
         reads += 1
         defer { pending.remove(id) }
         do {
             try await api.deleteSavedPrompt(id)
         } catch {
+            guard mine == epoch else { return }
+            deleted.remove(id)
             prompts.insert(removed, at: min(at, prompts.count))
             deps.report(error)
         }

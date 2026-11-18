@@ -3,8 +3,9 @@ import Testing
 @testable import Persona
 
 /// Saved prompts on iOS (#9436): the shared store against a FakeHub (read, an old hub, a failed read keeping the list, save
-/// and the hub's refusal, delete and move at once with their rollback, a list changed elsewhere), which assistant an
-/// event is about, the hub's rules said before asking it, and the rows the composers' "/" lists get.
+/// and the hub's refusal, delete and move at once with their rollback, a list changed elsewhere, a change answering after
+/// the assistant changed, a delete during a move), which assistant an event is about, the hub's rules said before asking
+/// it, and the rows the composers' "/" lists get.
 @MainActor
 struct SavedPromptsTests {
     private static let list = #"""
@@ -119,6 +120,49 @@ struct SavedPromptsTests {
         #expect(store.prompts.map(\.id) == ["p1", "p2", "p3"])
         #expect(sink.toasts.count == 1 && sink.errors.isEmpty)
         #expect(hub.sent("GET", "/api/v1/assistant/saved-prompts").count == 2)
+    }
+
+    @Test func aChangeAnsweringAfterTheAssistantChangedLeavesTheNewListAlone() async throws {
+        let hub = hub()
+        let sink = Sink()
+        let store = make(hub, sink)
+        await store.load()
+        hub.on("PUT", "/api/v1/assistant/saved-prompts/order") { _ in
+            store.forget() // another assistant became the current one while the move was on its way
+            return Data(#"{"prompts":[{"id":"p2","name":"commit","text":"c"},{"id":"p1","name":"review","text":"r"},{"id":"p3","name":"规范","text":"g"}]}"#.utf8)
+        }
+        await store.move("p2", by: -1)
+        #expect(store.prompts.isEmpty && store.pending.isEmpty)
+
+        await store.load()
+        hub.on("DELETE", "/api/v1/assistant/saved-prompts/p2") { _ in store.forget(); throw APIError(status: 500, message: "hub down") }
+        await store.delete("p2")
+        #expect(store.prompts.isEmpty, "no rollback into the new assistant's list")
+
+        await store.load()
+        hub.on("POST", "/api/v1/assistant/saved-prompts") { _ in
+            store.forget()
+            return Data(#"{"prompt":{"id":"p4","name":"plan","text":"Plan first."}}"#.utf8)
+        }
+        let saved = try await store.save(id: nil, name: "plan", text: "Plan first.")
+        #expect(saved.id == "p4", "the editor still gets the hub's answer")
+        #expect(store.prompts.isEmpty)
+        #expect(sink.errors.isEmpty && sink.toasts.isEmpty)
+    }
+
+    @Test(arguments: [false, true]) func aDeleteDuringAMoveStaysDeleted(moveFails: Bool) async {
+        let hub = hub()
+        hub.on("DELETE", "/api/v1/assistant/saved-prompts/p3", json: "{}")
+        let store = make(hub)
+        await store.load()
+        hub.onAsync("PUT", "/api/v1/assistant/saved-prompts/order") { _ in
+            await store.delete("p3") // the user deletes another row while the move is on its way
+            if moveFails { throw APIError(status: 500, message: "hub down") }
+            // the order was sent with the ids from before the delete, so the answer still has p3
+            return Data(#"{"prompts":[{"id":"p2","name":"commit","text":"c"},{"id":"p1","name":"review","text":"r"},{"id":"p3","name":"规范","text":"g"}]}"#.utf8)
+        }
+        await store.move("p1", by: 1)
+        #expect(store.prompts.map(\.id) == (moveFails ? ["p1", "p2"] : ["p2", "p1"]))
     }
 
     @Test func forgetLeavesNothingOfTheAssistantBefore() async {
