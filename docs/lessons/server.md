@@ -2704,3 +2704,23 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Switching an ssh computer to Persona Link over ssh (#10662)
+
+- Every gate on the Persona Link path checks the entry's kind: making a code for an existing computer, redeeming it, the hub
+  taking `/api/v1/link`, and the manager taking the relayed link. A switch that pairs first and changes the kind later would
+  have to widen one of them. Change the kind first, in one hub step with the code (`devices.link_switch.begin`). The cost
+  is a few seconds offline, while the old ssh connection ends and the new link comes up.
+- `persona-link install` is meant for a person at the computer. It does not refuse an existing `link.json`. It always restarts
+  the connector, and exits 0 when the link connects even if its node step failed. `persona-link node uninstall` removes
+  any `personad-node.service`, whoever wrote it. A remote flow must find out what is there before it starts, record that, and
+  undo only what it added. It judges success by the node answering over the new link, not by the installer's exit code.
+- Without linger (`/var/lib/systemd/linger/<user>`), the user's systemd manager ends with the last session. Over ssh, that
+  session is the switch's own. The connector would start, connect, and stop again once the installer's ssh session closed.
+  Refuse instead.
+- ssh reads `~/.ssh/config` from the passwd entry's home directory, not from `$HOME`. To keep a test hub's ssh off the
+  user's config and keys, put a wrapper named `ssh` that runs `/usr/bin/ssh -F <own config>` first on its PATH
+  (`scripts/test/link_switch_e2e.py`).
+- systemd as PID 1 in a container needs a writable cgroup. Plain `docker run` (cgroup v2, private namespace) exits 255 with
+  "Failed to create /init.scope control group: Read-only file system". `--privileged --cgroupns=private` works, and
+  `loginctl enable-linger` then gives `testuser` a user manager reachable over ssh.
