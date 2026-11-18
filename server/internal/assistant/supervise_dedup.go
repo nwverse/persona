@@ -19,14 +19,15 @@ type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo makes an all_stopped fingerprint last until its key changes or the task closes.
+	// Todo keeps inactivity and unhandled-event fingerprints until the task closes.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
-	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
-		// Keep every task/PR/head independently, including a head that returns after another one.
+	if g.Kind == sigPRConflict || g.Kind == sigDraftPR ||
+		g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		// An unhandled source, like a PR head, is not new when its recipient or last reply changes.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
 		return string(key), hex.EncodeToString(sum[:])
@@ -131,7 +132,8 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			pending = append(pending, id)
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if signals[i].Kind == sigAllStopped {
+		if g := signals[i]; g.Kind == sigAllStopped ||
+			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 			fingerprint.Todo = signals[i].Todo
 		}
 		next[key] = fingerprint
@@ -201,7 +203,7 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 	b.dedup = next
 }
 
-// Inactivity fingerprints are bounded by open tasks, not elapsed time. Load once
+// Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once
 // after restart; reservations keep the same cache current under dedupMu.
 func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	b := &s.supervise

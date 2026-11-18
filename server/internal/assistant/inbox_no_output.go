@@ -84,7 +84,8 @@ func (s *Service) taskInboxRecipient(ctx context.Context, todo, machine, session
 func inboxUnhandledSignal(e taskInboxEvent) superviseSignal {
 	in := e.Inbox
 	in.ToAgent = "unhandled"
-	return superviseSignal{Todo: e.Todo, Kind: sigInbox, Key: e.ID, Detail: e.Failure + " Source event: " + e.Key, Inbox: &in}
+	return superviseSignal{Todo: e.Todo, Kind: sigInbox, Key: e.ID, Machine: e.Machine, Session: e.Session,
+		Detail: e.Failure + " Source event: " + e.Key, Inbox: &in}
 }
 
 func (s *Service) taskInboxUnhandled(ctx context.Context, id string) bool {

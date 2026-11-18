@@ -589,6 +589,14 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigAllStopped {
 		return e, true // Detail covers every participant; no arbitrary last agent in the fingerprint
 	}
+	if g.Kind == sigInbox && g.Inbox.ToAgent == "unhandled" {
+		// This failure belongs to the delivered turn, not a successor's current reply.
+		e.AgentID, e.Session, e.Machine = g.Session, short(g.Session), g.Machine
+		if m, ok := s.device(ctx, g.Machine); ok {
+			e.Machine = m.Name
+		}
+		return e, true
+	}
 	// Where its agent is and what it said last: the whole last answer when it stopped, a line while it works.
 	agents := s.taskAgents(ctx, t)
 	var last proto.Session
