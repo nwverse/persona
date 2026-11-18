@@ -13,43 +13,48 @@ import (
 // places (proposal 3.3, 3.4, 3.7; spec/fixtures/todo-counts/README.md).
 
 // Views is the view of every to-do of list at now, in the list's order: each related to the rest of the list (its
-// steps, a superseded failed start: Relate), then ranked within its section (Rank).
+// steps, a superseded failed start), then ranked within its section.
 func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
-	related := Relate(list)
-	views := make([]assistantwire.TodoSummary, len(related))
+	related := relate(list)
+	placed := make([]placement, len(related))
 	for i := range related {
-		views[i] = View(related[i], now)
+		placed[i] = place(&related[i], now)
 	}
-	Rank(related, views)
+	rank(related, placed, now)
+	views := make([]assistantwire.TodoSummary, len(placed))
+	for i := range placed {
+		views[i] = placed[i].TodoSummary
+	}
 	return views
 }
 
-// Rank sets each view's rank: its place among the views of the same section, 0 first, by its section's rule
-// (proposal 3.4 "Within a section"); views[i] is list[i]'s. Every to-do of the list is ranked, a step its parent
-// carries too, and ties go by id, so the order never depends on the list's.
+// rank sets each placement's rank: its place among the rows of the same section, 0 first, by its section's rule
+// (proposal 3.4 "Within a section"); placed[i] is list[i]'s, list related (its steps attached). Every to-do of the list
+// is ranked, a step its parent carries too, and ties go by id, so the order never depends on the list's.
 //
-//   - Needs you and Can wait: the soonest deadline first (a decision's deadline, else the to-do's due), then the
-//     oldest ask.
-//   - Working: the latest activity first.
-//   - Waiting: the soonest wake first (a park's end, a usage limit's reset), then the longest waiting.
+//   - Needs you and Can wait: the soonest deadline first (the earlier of the decisions' deadlines on the row, a carried
+//     step's included, and the to-do's due), then the oldest ask (since).
+//   - Working: the latest activity first, its steps' included.
+//   - Waiting: the soonest wake first (a park's end, a usage limit's reset and its grace, a carried step's), then the
+//     longest waiting.
 //   - To do: by due (overdue, today, later), then priority (high, normal, low), then the newest.
 //   - Just finished and Done: the newest first.
 //   - Someday: the soonest back first, then the newest.
-func Rank(list []Facts, views []assistantwire.TodoSummary) {
+func rank(list []Facts, placed []placement, now time.Time) {
 	bySection := map[string][]int{}
-	for i := range views {
-		bySection[views[i].Section] = append(bySection[views[i].Section], i)
+	for i := range placed {
+		bySection[placed[i].Section] = append(bySection[placed[i].Section], i)
 	}
 	for section, rows := range bySection {
 		keys := make(map[int]rankKey, len(rows))
 		for _, i := range rows {
-			keys[i] = rankKeyOf(&list[i], &views[i])
+			keys[i] = rankKeyOf(&list[i], &placed[i], now)
 		}
 		slices.SortFunc(rows, func(a, b int) int {
 			return cmp.Or(compareRank(section, keys[a], keys[b]), strings.Compare(list[a].ID, list[b].ID))
 		})
-		for rank, i := range rows {
-			views[i].Rank = rank
+		for n, i := range rows {
+			placed[i].Rank = n
 		}
 	}
 }
@@ -60,38 +65,15 @@ type rankKey struct {
 	priority                                            int
 }
 
-func rankKeyOf(f *Facts, v *assistantwire.TodoSummary) rankKey {
-	k := rankKey{since: v.Since, created: f.CreatedAt, activity: lastActivity(f)}
+func rankKeyOf(f *Facts, p *placement, now time.Time) rankKey {
+	k := rankKey{since: p.Since, wake: p.wake, back: p.back, created: f.CreatedAt, activity: lastActivity(f, now)}
 	for i := range f.Steps {
-		k.activity = later(k.activity, ptr(lastActivity(&f.Steps[i])))
+		k.activity = latest(k.activity, lastActivity(&f.Steps[i], now))
 	}
 	if due, ok := dueEnd(f); ok {
 		k.due = due
 	}
-	k.deadline = k.due
-	own := ""
-	if a := openAsk(f); a != nil {
-		own = "todo:decision@" + listed(a.AskedAt)
-	}
-	for _, a := range v.Asks {
-		if !a.DefaultAt.IsZero() {
-			k.deadline = earlier(k.deadline, a.DefaultAt)
-		}
-		if a.ID == own && f.Ask.Deadline != nil {
-			k.deadline = earlier(k.deadline, *f.Ask.Deadline)
-		}
-	}
-	switch v.Reason {
-	case assistantwire.TodoReasonParked, assistantwire.TodoReasonSomeoneElse:
-		if v.Line != nil {
-			k.wake, _ = time.Parse(time.RFC3339Nano, v.Line.Args["until"])
-		}
-	case assistantwire.TodoReasonUsageLimit:
-		k.wake = v.NextChangeAt
-	}
-	if v.Section == assistantwire.TodoListSectionSomeday {
-		k.back = v.NextChangeAt
-	}
+	k.deadline = earliest(p.deadline, k.due)
 	switch f.Priority {
 	case priorityHigh:
 		k.priority = -1
@@ -99,14 +81,6 @@ func rankKeyOf(f *Facts, v *assistantwire.TodoSummary) rankKey {
 		k.priority = 1
 	}
 	return k
-}
-
-// earlier is the earlier of a and b, a zero a being none.
-func earlier(a, b time.Time) time.Time {
-	if a.IsZero() || b.Before(a) {
-		return b
-	}
-	return a
 }
 
 // soonest compares two times where the earlier leads and none goes last.

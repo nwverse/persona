@@ -355,8 +355,8 @@ is not done yet.
 
 ## The hub's view (#10226)
 
-The manager now works out each to-do's `view` (`schema/wire/todo-view.schema.json`: phase, section, reason, line 2,
-times, marks, asks, steps and rank) and the list's counts and places, by the redesign's decision table
+The manager now works out each to-do's `view` (not served yet; `schema/wire/todo-view.schema.json`: phase, section,
+reason, line 2, times, marks, asks, steps and rank) and the list's counts and places, by the redesign's decision table
 (`docs/design/proposals/todos-redesign.md` 6.3), in `server/internal/assistant/todo/projection`, fed by
 `server/internal/assistant/todo_projection.go`. The rules' source is the shared cases: `spec/fixtures/todo-view` and
 `spec/fixtures/todo-counts`, whose READMEs list every rule, field, line key (a stable key with string arguments, never
@@ -367,8 +367,9 @@ redesign changes them:
   Done, though `done_at` stays stored (rule 1). One whose work finished in a related to-do is closed (rule 1a).
 - **Rule 9a**: finished work the owner has seen stays in Just finished for 24 hours after `seen_at`, then is a To do to
   tick (`finished_seen`), never Done while it is open. Finished work nobody has seen stays in Just finished however
-  long, accepted and deployed work included (rules 6 and 7).
-- **Parked is Waiting** (the web's rule 5a, now on the hub, above finished work), with an open PR and a usage limit.
+  long, accepted and deployed work included (this table's rules 6 and 7).
+- **Parked is Waiting**, on the hub too (this table's rule 5a, until now the web's alone) and above finished work; an
+  open PR and a usage limit wait there with it.
 - **Can wait**: a decision marked for the briefing (`can_wait`) and a run that ended on a plain-text question
   (`awaits_reply`) are listed under Needs you's fold, not counted in its number.
 - **Inactive is a mark, not a section**: the to-do keeps its section (To do) with the time activity stopped. A restore

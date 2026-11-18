@@ -1589,6 +1589,253 @@
           ]
         }
       }
+    },
+    {
+      "name": "ranked_steps",
+      "description": "Plans ranked by what their steps carry: a plan carrying its step's decision due at 13:00 comes before a decision due at 15:00 asked earlier, and a plan carrying its step's usage limit that resets at 17:00 comes after a limit that resets at 14:00, though its own Inactive mark would come sooner; each carried step ranks beside its plan (ties go by id) and counts nowhere.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.4 \"Within a section\"",
+        "docs/design/proposals/todos-redesign.md 3.4 \"Steps roll up\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todos": [
+          {
+            "id": "todo_rs_w2",
+            "title": "Draft the day plan",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-09T08:00:00Z",
+            "updated_at": "2026-11-09T08:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-plan",
+                "linked_at": "2026-11-09T08:01:00Z",
+                "title": "Day plan",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          },
+          {
+            "id": "todo_rs_s2",
+            "title": "Check the shrine hours",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T07:05:00Z",
+            "updated_at": "2026-11-08T07:05:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-shrine",
+                "linked_at": "2026-11-08T07:06:00Z",
+                "title": "Shrine hours",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false,
+            "part_of": "todo_rs_p2"
+          },
+          {
+            "id": "todo_rs_p2",
+            "title": "Plan the Nikko day",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T07:00:00Z",
+            "updated_at": "2026-11-08T13:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [],
+            "quiet": false
+          },
+          {
+            "id": "todo_rs_n2",
+            "title": "Choose the rental car",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T09:00:00Z",
+            "updated_at": "2026-11-10T09:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [],
+            "quiet": false,
+            "ask": {
+              "outcome": "decide",
+              "verdict": "Needs your decision",
+              "recommend": "A minivan",
+              "asked_at": "2026-11-10T09:00:00Z",
+              "question": "Which car?",
+              "options": [
+                {
+                  "label": "A compact car",
+                  "leads_to": "Easy to park, two small bags"
+                },
+                {
+                  "label": "A minivan",
+                  "leads_to": "Room for everyone and the luggage"
+                }
+              ],
+              "responses": [
+                "decide_yourself",
+                "not_what_i_asked",
+                "explain_first"
+              ],
+              "deadline": "2026-11-10T15:00:00Z"
+            }
+          },
+          {
+            "id": "todo_rs_s1",
+            "title": "Pick the onsen",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:05:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [],
+            "quiet": false,
+            "part_of": "todo_rs_p1",
+            "ask": {
+              "outcome": "decide",
+              "verdict": "Needs your decision",
+              "recommend": "Tenseien",
+              "asked_at": "2026-11-10T11:00:00Z",
+              "question": "Which onsen?",
+              "options": [
+                {
+                  "label": "Tenseien",
+                  "leads_to": "An open-air bath by the river"
+                },
+                {
+                  "label": "Hakone Yuryo",
+                  "leads_to": "Private baths, booked by the hour"
+                }
+              ],
+              "responses": [
+                "decide_yourself",
+                "not_what_i_asked",
+                "explain_first"
+              ],
+              "deadline": "2026-11-10T13:00:00Z"
+            }
+          },
+          {
+            "id": "todo_rs_p1",
+            "title": "Plan the Hakone day",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:00:00Z",
+            "updated_at": "2026-11-08T08:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [],
+            "quiet": false
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-plan",
+            "title": "Day plan",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T10:00:00Z",
+            "updated_at": "2026-11-10T10:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "You've hit your usage limit",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-10T14:00:00Z"
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-shrine",
+            "title": "Shrine hours",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "You've hit your usage limit",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-10T17:00:00Z"
+          }
+        ]
+      },
+      "expected": {
+        "counts": {
+          "open": 4,
+          "needs_you": 2,
+          "in_progress": 2,
+          "sections": {
+            "needs_you": 2,
+            "can_wait": 0,
+            "working": 0,
+            "waiting": 2,
+            "todo": 0,
+            "just_finished": 0,
+            "someday": 0,
+            "done": 0
+          }
+        },
+        "places": {
+          "places": [
+            {
+              "id": "all",
+              "kind": "all",
+              "title": "",
+              "needs_you": 2
+            },
+            {
+              "id": "today",
+              "kind": "today",
+              "title": "",
+              "needs_you": 0
+            },
+            {
+              "id": "upcoming",
+              "kind": "upcoming",
+              "title": "",
+              "needs_you": 0
+            }
+          ],
+          "counts": {
+            "open": 4,
+            "needs_you": 2,
+            "in_progress": 2,
+            "sections": {
+              "needs_you": 2,
+              "can_wait": 0,
+              "working": 0,
+              "waiting": 2,
+              "todo": 0,
+              "just_finished": 0,
+              "someday": 0,
+              "done": 0
+            }
+          }
+        },
+        "order": {
+          "needs_you": [
+            "todo_rs_p1",
+            "todo_rs_s1",
+            "todo_rs_n2"
+          ],
+          "waiting": [
+            "todo_rs_w2",
+            "todo_rs_p2",
+            "todo_rs_s2"
+          ]
+        }
+      }
     }
   ]
 }

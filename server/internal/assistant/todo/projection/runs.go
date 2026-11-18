@@ -39,7 +39,7 @@ const (
 
 // run is one active linked run: its link, its session when the hub lists it, and how it stands.
 type run struct {
-	link  Run
+	link  Agent
 	s     proto.Session
 	found bool
 	kind  runKind
@@ -191,7 +191,7 @@ func firstRun(runs []run, k runKind) (run, bool) {
 	return run{}, false
 }
 
-// later is the later of a and *b.
+// later is the later of a and *b, a nil b being none.
 func later(a time.Time, b *time.Time) time.Time {
 	if b != nil && b.After(a) {
 		return *b
@@ -199,10 +199,21 @@ func later(a time.Time, b *time.Time) time.Time {
 	return a
 }
 
-// lastActivity is the last moment the to-do or any of its active runs moved: its own times, its ledger's, its
-// delivery's and ask's, the owner's restore, and each active run's session (docs/assistant/todo-status-sop.md
-// "Principle: real signals only").
-func lastActivity(f *Facts) time.Time {
+// latest is the later of a and b.
+func latest(a, b time.Time) time.Time { return later(a, &b) }
+
+// earliest is the earlier of a and b, a zero time being none.
+func earliest(a, b time.Time) time.Time {
+	if a.IsZero() || !b.IsZero() && b.Before(a) {
+		return b
+	}
+	return a
+}
+
+// lastActivity is the last moment at now that the to-do or any of its active runs moved: its own times, its ledger's,
+// its delivery's and ask's, the owner's restore, its return from Someday once that passed, and each active run's
+// session (docs/assistant/todo-status-sop.md "Principle: real signals only").
+func lastActivity(f *Facts, now time.Time) time.Time {
 	last := later(f.UpdatedAt, &f.CreatedAt)
 	last = later(last, f.ReopenedAt)
 	last = later(last, f.DoneAt)
@@ -222,6 +233,9 @@ func lastActivity(f *Facts) time.Time {
 		last = later(last, &f.Ask.AskedAt)
 	}
 	last = later(last, f.RestoredAt)
+	if u := f.SomedayUntil; u != nil && !now.Before(*u) {
+		last = later(last, u)
+	}
 	for _, a := range f.Agents {
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
 			continue
@@ -273,6 +287,8 @@ func openAsk(f *Facts) *Ask {
 	return nil
 }
 
+// normalizePRURL is a PR's URL as two of them compare: trimmed, without a fragment or query, without a trailing
+// slash, lower case.
 func normalizePRURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if i := strings.IndexAny(raw, "#?"); i >= 0 {

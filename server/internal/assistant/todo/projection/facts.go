@@ -35,13 +35,13 @@ type Facts struct {
 	Origin     string     `json:"origin,omitempty"`
 	PlanID     string     `json:"plan_id,omitempty"`
 	StartError string     `json:"start_error,omitempty"`
-	// DoneBy as the list sends it: auto, review (also for a cancellation: CancelledAt tells them apart), reported, or
-	// "" when the owner closed it.
+	// DoneBy as the list sends it: auto, review (also for a cancellation: the ledger's cancelled state tells them
+	// apart), reported, or "" when the owner closed it.
 	DoneBy          string       `json:"done_by,omitempty"`
 	ReopenedAt      *time.Time   `json:"reopened_at,omitempty"`
 	CancelledAt     *time.Time   `json:"cancelled_at,omitempty"`
 	CancelledReason string       `json:"cancelled_reason,omitempty"`
-	Agents          []Run        `json:"agents"`
+	Agents          []Agent      `json:"agents"`
 	Quiet           bool         `json:"quiet"`
 	Supervision     *Supervision `json:"supervision,omitempty"`
 	PRURL           string       `json:"pr_url,omitempty"`
@@ -59,24 +59,28 @@ type Facts struct {
 	Ask            *Ask            `json:"ask,omitempty"`
 	DecisionReview *DecisionReview `json:"decision_review,omitempty"`
 	// RestoredAt: the owner's latest restore from Inactive, which counts as activity; SomedayUntil: until when the owner
-	// put it off (SomedayNoDate and later: with no date). The list carries both once the hub keeps them (#10226).
+	// put it off (somedayNoDate and later: with no date), which counts as activity once it passed. The list carries both
+	// once the hub keeps them (#10226).
 	RestoredAt   *time.Time `json:"restored_at,omitempty"`
 	SomedayUntil *time.Time `json:"someday_until,omitempty"`
 
 	// Sessions are the to-do's linked runs' sessions as the hub sends them to the apps (state worked out); a linked
 	// run whose session is not among them is offline.
 	Sessions []proto.Session `json:"-"`
-	// Steps are the to-dos whose part_of names this one, oldest first (Relate fills them from a list).
+	// Unreached: a computer one of its active runs is on did not answer, so their sessions are unknown; it then gets no
+	// Inactive mark, since a run there may be working on it (as the direction tree judges no task stuck then).
+	Unreached bool `json:"-"`
+	// Steps are the to-dos whose part_of names this one, oldest first (Views fills them from the list).
 	Steps []Facts `json:"-"`
-	// Superseded: a failed start whose work finished in a related to-do (Relate works it out over a list); it reads as
+	// Superseded: a failed start whose work finished in a related to-do (Views works it out over the list); it reads as
 	// closed.
 	Superseded bool `json:"-"`
 	// Loc is the owner's time zone, for a due day; nil is UTC.
 	Loc *time.Location `json:"-"`
 }
 
-// Run is one of the to-do's Agent sessions as the list links it (agents[]).
-type Run struct {
+// Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).
+type Agent struct {
 	MachineID   string     `json:"machine_id"`
 	SessionID   string     `json:"session_id"`
 	ReleasedAt  *time.Time `json:"released_at,omitempty"`
@@ -123,10 +127,12 @@ type Parked struct {
 	WaitingOn string    `json:"waiting_on"`
 }
 
-// Review is one review of the ledger: when, its verdict, and a needs_user review's question and recommended option.
+// Review is one review of the ledger: when, its verdict, its note (a cancellation's why), and a needs_user review's
+// question and recommended option.
 type Review struct {
 	At        time.Time `json:"at"`
 	Verdict   string    `json:"verdict"`
+	Note      string    `json:"note,omitempty"`
 	Reason    string    `json:"reason,omitempty"`
 	Recommend string    `json:"recommend,omitempty"`
 }
@@ -154,7 +160,8 @@ type PRStatus struct {
 const (
 	kindConcern = "concern"
 
-	doneByCancelled = "cancelled" // the stored value; the list sends review with cancelled_at
+	doneByCancelled = "cancelled" // the stored value; the list sends review, with the ledger cancelled
+	doneByReview    = "review"
 	doneByReported  = "reported"
 
 	reviewPending   = "pending_review"
@@ -177,9 +184,9 @@ const (
 	priorityLow  = "low"
 )
 
-// SomedayNoDate is the someday_until of a to-do put off with no date: the hub stores Someday with no date as this
+// somedayNoDate is the someday_until of a to-do put off with no date: the hub stores Someday with no date as this
 // moment, so "put off until" is one rule for both.
-var SomedayNoDate = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+var somedayNoDate = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
 
 // closed: the to-do's lifecycle is closed. A failed start keeps done_at as stored but reads as open, unless its work
 // finished in a related to-do (6.2 invariant 1; #10226).
@@ -187,10 +194,10 @@ func (f *Facts) closed() bool {
 	return f.DoneAt != nil && (f.StartError == "" || f.Superseded)
 }
 
-// Relate fills in what a to-do's facts take from the rest of the list: its steps (the to-dos whose part_of names it,
+// relate fills in what a to-do's facts take from the rest of the list: its steps (the to-dos whose part_of names it,
 // oldest first) and whether a failed start is superseded (a Superseded already set stays). It returns a new list; the
 // steps it attaches carry no steps of their own (steps are one level deep).
-func Relate(list []Facts) []Facts {
+func relate(list []Facts) []Facts {
 	out := slices.Clone(list)
 	superseded := supersededFailedStarts(list)
 	steps := map[string][]Facts{}
@@ -214,7 +221,6 @@ func Relate(list []Facts) []Facts {
 
 var (
 	relatedIssueRef  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`#(\d{2,7})\b`) })
-	relatedPRTail    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[#?].*$`) })
 	relatedTitleDrop = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[\s\p{Z}\p{P}\p{S}]+`) })
 )
 
@@ -223,7 +229,7 @@ var (
 // (docs/assistant/todo-status-sop.md "Related to-dos").
 func relatedKeys(f Facts) []string {
 	var keys []string
-	if pr := strings.ToLower(strings.TrimRight(relatedPRTail().ReplaceAllString(strings.TrimSpace(f.PRURL), ""), "/")); pr != "" {
+	if pr := normalizePRURL(f.PRURL); pr != "" {
 		keys = append(keys, "pr:"+pr)
 	}
 	if m := relatedIssueRef().FindStringSubmatch(f.Title); m != nil {

@@ -2,10 +2,14 @@ package projection
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -185,7 +189,7 @@ func TestProjectionFollowsTheViewCases(t *testing.T) {
 	for _, c := range readCases[viewInput](t, "todo-view/todo_view.json") {
 		t.Run(c.Name, func(t *testing.T) {
 			list := viewList(t, c.Input)
-			v := View(Relate(list)[0], c.Input.Now)
+			v := View(relate(list)[0], c.Input.Now)
 			sameJSON(t, "TodoSummary", v, c.Expected.View)
 			// Read with its steps as a list, it ranks 0 in its section and reads the same.
 			if all := Views(list, c.Input.Now); !reflect.DeepEqual(all[0], v) {
@@ -211,16 +215,13 @@ func TestProjectionFollowsTheCountsCases(t *testing.T) {
 			if c.Expected.Order == nil {
 				return
 			}
-			got := map[string][]string{}
+			got, rankOf := map[string][]string{}, map[string]int{}
 			for i, v := range views {
 				got[v.Section] = append(got[v.Section], list[i].ID)
+				rankOf[list[i].ID] = v.Rank
 			}
-			for s, ids := range got {
-				slices.SortFunc(ids, func(a, b string) int {
-					return views[slices.IndexFunc(list, func(f Facts) bool { return f.ID == a })].Rank -
-						views[slices.IndexFunc(list, func(f Facts) bool { return f.ID == b })].Rank
-				})
-				got[s] = ids
+			for _, ids := range got {
+				slices.SortFunc(ids, func(a, b string) int { return rankOf[a] - rankOf[b] })
 			}
 			if !reflect.DeepEqual(got, c.Expected.Order) {
 				t.Errorf("order by rank:\n got  %v\n want %v", got, c.Expected.Order)
@@ -229,19 +230,27 @@ func TestProjectionFollowsTheCountsCases(t *testing.T) {
 	}
 }
 
-// Every reason a case expects is a TodoReason, and every line key one the README lists.
+// Every line key the projection writes is in spec/fixtures/todo-view/README.md's "Line keys" table and every key
+// there is one it writes; every view of every case, expected or worked out over a list, has a TodoReason and one of
+// those keys.
 func TestProjectionCasesUseKnownNames(t *testing.T) {
-	keys := []string{lineFailedStart, lineAgentAsks, lineInterrupted, lineDecision, lineDecisionDefault, lineCannot,
-		lineAwaitsReply, lineWorking, linePersonaWorking, lineStarting, lineBackground, lineParked, lineFinished,
-		lineAccepted, lineDeployed, linePROpen, lineUsageLimit, lineFinishedSeen, lineCompleted, lineCanceled,
-		lineReported, lineSuperseded, lineSomeday}
-	readme, err := os.ReadFile(fixtures + "todo-view/README.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys, documented := sourceLineKeys(t), readmeLineKeys(t)
 	for _, k := range keys {
-		if !slices.Contains(splitCells(string(readme)), "`"+k+"`") {
-			t.Errorf("line key %s is not in spec/fixtures/todo-view/README.md's table", k)
+		if !slices.Contains(documented, k) {
+			t.Errorf("line key %s is not in spec/fixtures/todo-view/README.md's \"Line keys\"", k)
+		}
+	}
+	for _, k := range documented {
+		if !slices.Contains(keys, k) {
+			t.Errorf("spec/fixtures/todo-view/README.md's \"Line keys\" lists %s, which the projection never writes", k)
+		}
+	}
+	known := func(where string, v assistantwire.TodoSummary) {
+		if !slices.Contains(assistantwire.TodoReasons, v.Reason) {
+			t.Errorf("%s: reason %s", where, v.Reason)
+		}
+		if v.Line != nil && !slices.Contains(keys, v.Line.Key) {
+			t.Errorf("%s: line key %s", where, v.Line.Key)
 		}
 	}
 	for _, c := range readCases[viewInput](t, "todo-view/todo_view.json") {
@@ -249,24 +258,112 @@ func TestProjectionCasesUseKnownNames(t *testing.T) {
 		if err := json.Unmarshal(c.Expected.View, &v); err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Contains(assistantwire.TodoReasons, v.Reason) {
-			t.Errorf("%s: reason %s", c.Name, v.Reason)
-		}
-		if v.Line != nil && !slices.Contains(keys, v.Line.Key) {
-			t.Errorf("%s: line key %s", c.Name, v.Line.Key)
+		known(c.Name, v)
+	}
+	for _, c := range readCases[countsInput](t, "todo-counts/todo_counts.json") {
+		list := listFacts(t, c.Input)
+		for i, v := range Views(list, c.Input.Now) {
+			known(c.Name+"/"+list[i].ID, v)
 		}
 	}
 }
 
-// splitCells are the first cells of the README's table rows.
-func splitCells(md string) []string {
+// sourceLineKeys are the values of the package's line* constants: every line key the projection writes.
+func sourceLineKeys(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out []string
-	for line := range strings.Lines(md) {
-		if cell, ok := strings.CutPrefix(line, "|"); ok {
-			if i := strings.IndexByte(cell, '|'); i >= 0 {
-				out = append(out, strings.TrimSpace(cell[:i]))
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.CONST {
+				for _, spec := range g.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, n := range vs.Names {
+						if lit, ok := valueAt(vs, i).(*ast.BasicLit); ok && strings.HasPrefix(n.Name, "line") {
+							v, _ := strconv.Unquote(lit.Value)
+							out = append(out, v)
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no line* constants found")
+	}
+	return out
+}
+
+func valueAt(vs *ast.ValueSpec, i int) ast.Expr {
+	if i < len(vs.Values) {
+		return vs.Values[i]
+	}
+	return nil
+}
+
+// readmeLineKeys are the keys of the "### Line keys" table of spec/fixtures/todo-view/README.md.
+func readmeLineKeys(t *testing.T) []string {
+	t.Helper()
+	readme, err := os.ReadFile(fixtures + "todo-view/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(readme), "\n### Line keys\n")
+	if !ok {
+		t.Fatal(`spec/fixtures/todo-view/README.md has no "### Line keys"`)
+	}
+	if end := strings.Index(section, "\n#"); end >= 0 {
+		section = section[:end]
+	}
+	var out []string
+	for line := range strings.Lines(section) {
+		if cell, ok := strings.CutPrefix(line, "| `"); ok {
+			if key, _, ok := strings.Cut(cell, "`"); ok {
+				out = append(out, key)
 			}
 		}
 	}
 	return out
+}
+
+// next_change_at is the first moment time alone changes the view, and windows are half open: just before it the view
+// reads as it does now, at it the view reads differently, and a view without one reads the same a week on. Every view
+// case, and every row of every list case.
+func TestNextChangeAtOfEveryCase(t *testing.T) {
+	check := func(t *testing.T, where string, now time.Time, at func(time.Time) assistantwire.TodoSummary) {
+		v := at(now)
+		if v.NextChangeAt.IsZero() {
+			if later := at(now.Add(7 * 24 * time.Hour)); !sameView(later, v) {
+				t.Errorf("%s has no next_change_at, but a week on it reads %+v", where, later)
+			}
+			return
+		}
+		if before := at(v.NextChangeAt.Add(-time.Nanosecond)); !sameView(before, v) || !before.NextChangeAt.Equal(v.NextChangeAt) {
+			t.Errorf("%s: just before next_change_at %v it reads %+v, not %+v", where, v.NextChangeAt, before, v)
+		}
+		if after := at(v.NextChangeAt); sameView(after, v) {
+			t.Errorf("%s: at next_change_at %v it still reads %+v", where, v.NextChangeAt, after)
+		}
+	}
+	for _, c := range readCases[viewInput](t, "todo-view/todo_view.json") {
+		list := viewList(t, c.Input)
+		check(t, c.Name, c.Input.Now, func(at time.Time) assistantwire.TodoSummary { return Views(list, at)[0] })
+	}
+	for _, c := range readCases[countsInput](t, "todo-counts/todo_counts.json") {
+		list := listFacts(t, c.Input)
+		for i := range list {
+			check(t, c.Name+"/"+list[i].ID, c.Input.Now,
+				func(at time.Time) assistantwire.TodoSummary { return Views(list, at)[i] })
+		}
+	}
 }

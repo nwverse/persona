@@ -10,7 +10,7 @@ values to the schema and the generated types read them back unchanged (the tests
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `todo_counts.json` | A list → its counts, places and order | 6: an empty list, one to-do in each section, a failed start counted open, a superseded failed start, a step counted once, rows ranked in every section |
+| `todo_counts.json` | A list → its counts, places and order | 7: an empty list, one to-do in each section, a failed start counted open, a superseded failed start, a step counted once, rows ranked in every section, rows ranked by what their steps carry |
 
 ## Format
 
@@ -58,16 +58,19 @@ All data is made up.
   Someday in would keep such a project in the sidebar; change `mixed_list` with this line.
 - **A project the knowledge base does not name still gets a place**, titled by its slug (`errands` in
   `failed_start_counts_open`), so its to-dos stay reachable from the sidebar; 3.3 lists knowledge-base projects only.
-- **The order within a section** (`rank`, proposal 3.4 "Within a section"; `ranked_list`): Needs you and Can wait by
-  the soonest deadline (a decision's deadline, else the to-do's due), then the oldest ask (`since`); Working by the
-  latest activity, a carried step's included; Waiting by the soonest wake (a park's end, a usage limit's reset plus
-  its grace), rows with none (an open PR) last, then the longest waiting; To do by due (overdue, today, later), then
+- **The order within a section** (`rank`, proposal 3.4 "Within a section"; `ranked_list`, `ranked_steps`): Needs you
+  and Can wait by the soonest deadline (the earliest of the deadlines of the decisions on the row, a step's included,
+  and the to-do's own due), then the oldest ask (`since`); Working by the latest activity, its steps' included;
+  Waiting by the soonest wake (a park's end, a usage limit's reset plus its grace, the leading step's when a step
+  leads the row), rows with none (an open PR) last, then the longest waiting; To do by due (overdue, today, later), then
   priority (high, normal, low), then the newest; Just finished and Done newest first (`since`); Someday by the soonest
   return, no date last, then the newest. Ties go by id, so the order never depends on the list's. The proposal's "the
   owner's order" for To do has no input yet: priority and age stand in.
 - Every to-do is ranked within its section, a step its parent carries too: clients sort the rows they draw by rank,
   and a gap left by a step they do not draw changes nothing.
 - Not pinned yet: Today's and Upcoming's own rows, and what the hub does across several managers (its own test).
+  `rank` is worked out per manager's list, and the hub only joins the lists, so a merged section can hold equal ranks:
+  clients order by `rank`, then the manager, then the id.
 
 ## Run
 

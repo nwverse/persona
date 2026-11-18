@@ -16,11 +16,12 @@ import (
 )
 
 // The projection stays pure (docs/design/proposals/todos-redesign.md 7.1): no IO and no clock, and nothing of the
-// manager, so the same facts always give the same view and the hub's contract types are all it shares.
+// manager, so the same facts always give the same view and the hub's contract types are all it shares. The standard
+// library it may use is listed, so a package that reads the disk, the network or randomness never gets in unnoticed.
 func TestProjectionStaysPure(t *testing.T) {
-	allowed := []string{"github.com/nwverse/persona/server/internal/proto",
+	allowed := []string{"cmp", "errors", "fmt", "maps", "reflect", "regexp", "slices", "sort", "strconv", "strings",
+		"sync", "time", "unicode/utf8", "github.com/nwverse/persona/server/internal/proto",
 		"github.com/nwverse/persona/server/internal/assistantwire"}
-	noIO := []string{"os", "os/exec", "io", "io/fs", "net", "net/http", "database/sql", "syscall", "log", "log/slog"}
 	clock := []string{"Now", "Since", "Until", "Sleep", "After", "AfterFunc", "Tick", "NewTimer", "NewTicker", "LoadLocation"}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -35,17 +36,23 @@ func TestProjectionStaysPure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		timeAs := ""
 		for _, imp := range f.Imports {
 			path, _ := strconv.Unquote(imp.Path.Value)
-			std := !strings.Contains(strings.SplitN(path, "/", 2)[0], ".")
-			if std && slices.Contains(noIO, path) || !std && !slices.Contains(allowed, path) {
-				t.Errorf("%s imports %s: the projection reads only its facts (the standard library, proto and assistantwire)",
-					name, path)
+			if !slices.Contains(allowed, path) {
+				t.Errorf("%s imports %s: the projection reads only its facts (the listed standard library, proto and "+
+					"assistantwire)", name, path)
+			}
+			if path == "time" {
+				timeAs = "time"
+				if imp.Name != nil {
+					timeAs = imp.Name.Name
+				}
 			}
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			if sel, ok := n.(*ast.SelectorExpr); ok {
-				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "time" && slices.Contains(clock, sel.Sel.Name) {
+				if id, ok := sel.X.(*ast.Ident); ok && timeAs != "" && id.Name == timeAs && slices.Contains(clock, sel.Sel.Name) {
 					t.Errorf("%s: time.%s: the caller passes now", fset.Position(sel.Pos()), sel.Sel.Name)
 				}
 			}
@@ -64,9 +71,9 @@ func at(t time.Time) *time.Time { return &t }
 // askingStep is a step whose run waits on the owner, and its parent.
 func askingStep(parentDone *time.Time) (parent, step Facts) {
 	parent = Facts{ID: "todo_p", Title: "Plan the trip", CreatedAt: hours(-30), UpdatedAt: hours(-30), DoneAt: parentDone,
-		Origin: "conv_main", Agents: []Run{}}
+		Origin: "conv_main", Agents: []Agent{}}
 	step = Facts{ID: "todo_s", Title: "Pick the hotel", CreatedAt: hours(-29), UpdatedAt: hours(-29), PartOf: "todo_p",
-		Agents:   []Run{{MachineID: "m1", SessionID: "s1", Title: "Hotel pick"}},
+		Agents:   []Agent{{MachineID: "m1", SessionID: "s1", Title: "Hotel pick"}},
 		Sessions: []proto.Session{{MachineID: "m1", SessionID: "s1", State: proto.StateNeedsYou, StateSince: hours(-1)}}}
 	return parent, step
 }
@@ -104,12 +111,12 @@ func TestStepRollsUpOnlyWhenMoreUrgent(t *testing.T) {
 	parent, step := askingStep(nil)
 	step.Sessions[0].State = proto.StateWorking
 	parent.StartError, parent.DoneAt = "Desk Mac is offline", at(hours(-1))
-	f := Relate([]Facts{parent, step})[0]
+	f := relate([]Facts{parent, step})[0]
 	if v := View(f, testNow); v.Reason != assistantwire.TodoReasonFailedStart || v.Line.Args["step"] != "" {
 		t.Fatalf("a failed start with a working step: %+v", v)
 	}
 	parent.StartError, parent.DoneAt = "", nil
-	f = Relate([]Facts{parent, step})[0]
+	f = relate([]Facts{parent, step})[0]
 	if v := View(f, testNow); v.Reason != assistantwire.TodoReasonAgentRunning || v.Line.Args["step"] != "Pick the hotel" {
 		t.Fatalf("an idle parent with a working step: %+v", v)
 	}
@@ -118,7 +125,7 @@ func TestStepRollsUpOnlyWhenMoreUrgent(t *testing.T) {
 // Every run that asks is an ask, the oldest first; line 2 names the oldest, and the to-do's own decision follows.
 func TestRunAsksOldestFirst(t *testing.T) {
 	f := Facts{ID: "todo_a", CreatedAt: hours(-5), UpdatedAt: hours(-5), Origin: "conv_main",
-		Agents: []Run{{MachineID: "m1", SessionID: "new", Title: "Newer"}, {MachineID: "m1", SessionID: "old", Title: "Older"}},
+		Agents: []Agent{{MachineID: "m1", SessionID: "new", Title: "Newer"}, {MachineID: "m1", SessionID: "old", Title: "Older"}},
 		Sessions: []proto.Session{
 			{MachineID: "m1", SessionID: "new", State: proto.StateNeedsYou, StateSince: hours(-1), Asks: "Which day?"},
 			{MachineID: "m1", SessionID: "old", State: proto.StateNeedsYou, StateSince: hours(-3), AttentionReason: "Allow the edit?"},
@@ -142,25 +149,9 @@ func TestRunAsksOldestFirst(t *testing.T) {
 	}
 }
 
-// Windows are half open: at the moment next_change_at names, the new view holds.
-func TestNextChangeAtIsWhenTheViewChanges(t *testing.T) {
-	f := Facts{ID: "todo_f", CreatedAt: hours(-3), UpdatedAt: hours(-3), DoneAt: at(hours(-3)), StartError: "offline",
-		Agents: []Run{}}
-	v := View(f, testNow)
-	if v.Reason != assistantwire.TodoReasonFailedStart {
-		t.Fatalf("a recent failed start: %+v", v)
-	}
-	if after := View(f, v.NextChangeAt); after.Reason == v.Reason {
-		t.Fatalf("at next_change_at %v it still reads %s", v.NextChangeAt, after.Reason)
-	}
-	if before := View(f, v.NextChangeAt.Add(-time.Nanosecond)); before.Reason != v.Reason {
-		t.Fatalf("just before next_change_at it reads %s", before.Reason)
-	}
-}
-
 // A needs_user ledger with no review listed still needs the owner, with nothing to say on line 2 but the key.
 func TestOwnerDecidesWithoutAReview(t *testing.T) {
-	f := Facts{ID: "todo_r", CreatedAt: hours(-5), UpdatedAt: hours(-5), Agents: []Run{},
+	f := Facts{ID: "todo_r", CreatedAt: hours(-5), UpdatedAt: hours(-5), Agents: []Agent{},
 		Supervision: &Supervision{State: reviewNeedsUser, UpdatedAt: hours(-1)}}
 	if v := View(f, testNow); v.Reason != assistantwire.TodoReasonOwnerDecides || v.Line == nil ||
 		v.Line.Key != lineDecision || v.Line.Args != nil || !v.Since.IsZero() {

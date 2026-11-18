@@ -1053,7 +1053,7 @@
     },
     {
       "name": "canceled_seen",
-      "description": "A cancelled to-do the owner has seen is in Done at once; cancelled_at says it was cancelled, though the list sends done_by review for a cancellation.",
+      "description": "A cancelled to-do the owner has seen is in Done at once. The list sends a cancellation as done_by review with the ledger cancelled; the reason is the cancelling review's note, never done_reason, which leads with the hub's own word.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 7",
         "docs/assistant/todo-status-sop.md \"Seen\""
@@ -1069,11 +1069,27 @@
           "updated_at": "2026-11-10T08:00:00Z",
           "origin": "conv_main",
           "done_by": "review",
-          "cancelled_at": "2026-11-10T08:00:00Z",
-          "cancelled_reason": "The trip moved to spring",
+          "done_reason": "取消：The trip moved to spring",
           "spaces": [],
           "agents": [],
           "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [
+              "The limousine is booked"
+            ],
+            "criteria": [],
+            "state": "cancelled",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-10T08:00:00Z",
+                "verdict": "cancelled",
+                "note": "The trip moved to spring"
+              }
+            ],
+            "updated_at": "2026-11-10T08:00:00Z"
+          },
           "seen_at": "2026-11-10T09:00:00Z"
         },
         "sessions": []
@@ -1259,7 +1275,7 @@
     },
     {
       "name": "usage_limit_until_reset",
-      "description": "A run stopped on a usage limit that resets at 14:00: Waiting with the run and the reset; ten minutes past the reset the limit no longer holds.",
+      "description": "A run stopped on a usage limit that resets at 14:00: Waiting with the run and the reset. Ten minutes past the reset the limit no longer holds and the stopped run reads as cut off: Needs you, interrupted, which next_change_at names.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 10",
         "docs/assistant/todo-status-sop.md \"Principle: real signals only\""
@@ -2273,6 +2289,418 @@
           "section": "todo",
           "reason": "rest",
           "next_change_at": "2026-11-11T05:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "step_and_parent_both_ask",
+      "description": "The plan's own decision can wait for the briefing, and its step's run asks: the step leads the row into Needs you, and the row lists both asks, the step's first, then the plan's own.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.4 \"Steps roll up\"",
+        "docs/design/proposals/todos-redesign.md 3.7 \"Homes\"",
+        "docs/design/proposals/todos-redesign.md 6.2 invariant 6"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_sb1",
+          "title": "Plan the Nara day",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-08T08:00:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "ask": {
+            "outcome": "decide",
+            "verdict": "Needs your decision",
+            "recommend": "Morning",
+            "asked_at": "2026-11-10T09:00:00Z",
+            "question": "Go in the morning or the afternoon?",
+            "options": [
+              {
+                "label": "Morning",
+                "leads_to": "The deer park before the crowds, lunch in town"
+              },
+              {
+                "label": "Afternoon",
+                "leads_to": "Lunch first, the temples in the late light"
+              }
+            ],
+            "responses": [
+              "decide_yourself",
+              "not_what_i_asked",
+              "explain_first"
+            ],
+            "for_briefing": true
+          }
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-guide",
+            "title": "Guide booking",
+            "status": "blocked",
+            "state": "needs_you",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 1,
+            "asks": "Which guide should I book?"
+          }
+        ],
+        "steps": [
+          {
+            "id": "todo_sb2",
+            "title": "Book the deer park guide",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:05:00Z",
+            "updated_at": "2026-11-08T08:05:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-guide",
+                "linked_at": "2026-11-08T08:06:00Z",
+                "title": "Guide booking",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false,
+            "part_of": "todo_sb1"
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "needs_you",
+          "reason": "agent_asks",
+          "line": {
+            "key": "agent_asks",
+            "args": {
+              "run": "Guide booking",
+              "text": "Which guide should I book?",
+              "step": "Book the deer park guide"
+            }
+          },
+          "since": "2026-11-10T11:00:00Z",
+          "rank": 0,
+          "asks": [
+            {
+              "id": "step:todo_sb2/run:m1/s-guide@2026-11-10T11:00:00Z",
+              "kind": "question",
+              "home": "run",
+              "text": "Which guide should I book?",
+              "run": {
+                "machine_id": "m1",
+                "session_id": "s-guide",
+                "title": "Guide booking"
+              }
+            },
+            {
+              "id": "todo:decision@2026-11-10T09:00:00Z",
+              "kind": "decision",
+              "home": "todo",
+              "round": "2026-11-10T09:00:00Z",
+              "text": "Go in the morning or the afternoon?",
+              "recommend": "Morning",
+              "options": [
+                {
+                  "label": "Morning",
+                  "leads_to": "The deer park before the crowds, lunch in town"
+                },
+                {
+                  "label": "Afternoon",
+                  "leads_to": "Lunch first, the temples in the late light"
+                }
+              ],
+              "can_wait": true
+            }
+          ],
+          "steps": {
+            "done": 0,
+            "total": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "steps_working_and_limited",
+      "description": "One step works, one stopped on a usage limit that resets at 14:00, and one has a decision that can wait: the working step leads the plan into Working (a step's Can wait never pulls work into the fold, and Working rows list no asks), and next_change_at is the other step's limit ending, when that step reads as cut off and the plan needs the owner.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.4 \"Steps roll up\"",
+        "docs/design/proposals/todos-redesign.md 3.4 \"Rows never move under a finger\"",
+        "docs/design/proposals/todos-redesign.md 3.7 \"Counts\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_sw1",
+          "title": "Plan the Osaka evening",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-08T08:00:00Z",
+          "updated_at": "2026-11-08T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-dinner",
+            "title": "Dinner search",
+            "status": "working",
+            "state": "working",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:50:00Z",
+            "pending_interactions": 0,
+            "activity": "comparing two izakaya",
+            "activity_at": "2026-11-10T11:50:00Z"
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-castle",
+            "title": "Castle hours",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "You've hit your usage limit",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-10T14:00:00Z"
+          }
+        ],
+        "steps": [
+          {
+            "id": "todo_sw2",
+            "title": "Find a dinner place",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:05:00Z",
+            "updated_at": "2026-11-08T08:05:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-dinner",
+                "linked_at": "2026-11-08T08:06:00Z",
+                "title": "Dinner search",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false,
+            "part_of": "todo_sw1"
+          },
+          {
+            "id": "todo_sw3",
+            "title": "Check the castle hours",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:06:00Z",
+            "updated_at": "2026-11-08T08:06:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-castle",
+                "linked_at": "2026-11-08T08:07:00Z",
+                "title": "Castle hours",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false,
+            "part_of": "todo_sw1"
+          },
+          {
+            "id": "todo_sw4",
+            "title": "Choose the river cruise",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:07:00Z",
+            "updated_at": "2026-11-10T10:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [],
+            "quiet": false,
+            "part_of": "todo_sw1",
+            "ask": {
+              "outcome": "decide",
+              "verdict": "Needs your decision",
+              "recommend": "The 18:00 cruise",
+              "asked_at": "2026-11-10T10:00:00Z",
+              "question": "The 18:00 or the 19:30 cruise?",
+              "options": [
+                {
+                  "label": "The 18:00 cruise",
+                  "leads_to": "Back by 19:00, dinner after"
+                },
+                {
+                  "label": "The 19:30 cruise",
+                  "leads_to": "The lights on the river, a late dinner"
+                }
+              ],
+              "responses": [
+                "decide_yourself",
+                "not_what_i_asked",
+                "explain_first"
+              ],
+              "for_briefing": true
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "working",
+          "section": "working",
+          "reason": "agent_running",
+          "line": {
+            "key": "working",
+            "args": {
+              "run": "Dinner search",
+              "text": "comparing two izakaya",
+              "step": "Find a dinner place"
+            }
+          },
+          "since": "2026-11-10T11:30:00Z",
+          "next_change_at": "2026-11-10T14:10:00Z",
+          "rank": 0,
+          "steps": {
+            "done": 0,
+            "total": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "finished_with_a_limited_run",
+      "description": "One run finished a turn nobody has seen, another stopped on a usage limit that resets at 14:00: Just finished, and next_change_at is the limit ending, when the stopped run reads as cut off and the to-do needs the owner, though the row says nothing of the limit now.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 2, 9 and 10",
+        "docs/design/proposals/todos-redesign.md 3.4 \"Rows never move under a finger\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_fl1",
+          "title": "Compare the airport transfers",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T07:00:00Z",
+          "updated_at": "2026-11-10T07:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-bus",
+              "linked_at": "2026-11-10T07:02:00Z",
+              "title": "Bus transfer",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            },
+            {
+              "machine_id": "m1",
+              "session_id": "s-taxi",
+              "linked_at": "2026-11-10T07:01:00Z",
+              "title": "Taxi transfer",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-bus",
+            "title": "Bus transfer",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:20:00Z",
+            "updated_at": "2026-11-10T11:20:00Z",
+            "pending_interactions": 0
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-taxi",
+            "title": "Taxi transfer",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "You've hit your usage limit",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-10T14:00:00Z"
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "ready",
+          "section": "just_finished",
+          "reason": "finished_unseen",
+          "line": {
+            "key": "finished",
+            "args": {
+              "run": "Bus transfer"
+            }
+          },
+          "since": "2026-11-10T11:20:00Z",
+          "next_change_at": "2026-11-10T14:10:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "someday_back",
+      "description": "Put off until 10:00 today, and untouched for weeks before: back in To do, its return counted as activity, so it gets no Inactive mark for 48 hours.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 12, 13 and 14",
+        "docs/assistant/todo-status-sop.md \"Shelving\""
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_sd3",
+          "title": "Plan the autumn leaves trip",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-10-01T08:00:00Z",
+          "updated_at": "2026-10-01T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [],
+          "quiet": false
+        },
+        "sessions": [],
+        "someday_until": "2026-11-10T10:00:00Z"
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "next_change_at": "2026-11-12T10:00:00Z",
           "rank": 0
         }
       }
