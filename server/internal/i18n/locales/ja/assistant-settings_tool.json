@@ -22,6 +22,8 @@
   "change_done_needs_delivery": "「リリースして確認できたら完了」：{before} → {after}",
   "title_leaders": "リーダー会話",
   "change_leaders": "リーダー会話（自分が出したタスクを監督する）：{before} → {after}",
+  "title_briefing_waits": "朝夕のブリーフィングの停滞一覧",
+  "change_briefing_waits": "朝夕のブリーフィングの停滞一覧：{before} → {after}",
   "title_interject_background": "割り込んだら実行中の作業をバックグラウンドへ",
   "change_interject_background": "「割り込んだら実行中の作業をバックグラウンドへ」：{before} → {after}",
   "title_claude_interactive": "Claude のチャットを対話型 Claude Code で動かす",
