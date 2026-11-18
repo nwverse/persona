@@ -32,9 +32,9 @@ vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" })
 
 
 import { Suspense } from "react";
-import { lazyPage } from "../../lib/lazy-page";
 import { initI18n, t } from "../../i18n";
 import { PageBoundary } from "../PageBoundary";
+import { ChatView as Chat } from "./ChatView";
 const chunk = vi.hoisted(() => {
   let reject!: (error: Error) => void;
   const pending = new Promise<never>((_, no) => { reject = no; });
@@ -51,7 +51,6 @@ it("keeps the composer and its draft when the kept-message module fails", async 
     undelivered: [{ id: "kept-example", text: "Synthetic kept message", at: "2026-11-17T10:00:00Z", state: "waiting", attempts: 1 }] } as Session;
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const Chat = lazyPage(() => import("./ChatView").then((m) => m.ChatView));
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); };

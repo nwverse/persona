@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => { window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia; });
 vi.mock("../../ui/Markdown", () => ({ Markdown: () => null }));
 vi.mock("./ModelProfiles", () => ({ ModelProfiles: () => null }));
@@ -38,6 +38,8 @@ async function current(id: string) {
   await flush();
 }
 const permission = "settings-assistantsettings.default_permissions";
+// Check ownership and preference gating independently of loading the optional editor.
+beforeAll(async () => { await import("../../ui/WorkspaceNaming"); });
 beforeEach(async () => {
   await initI18n("en");
   history.replaceState(null, "", "/settings?tab=assistant");
