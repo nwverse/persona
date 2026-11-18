@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Allow All for a running Claude Code Agent that cannot reach it with shift+tab (#6476).
@@ -203,12 +204,12 @@ func (n *Node) dropModeRestart(id string) {
 	}
 	n.switches().setRestart(id, "", time.Time{}, 0, "")
 	n.logf("session %s: waiting restart in another permission mode dropped", id)
-	n.reportModeRestart(id, mode, proto.ModeRestartDropped, "another permission mode was picked")
+	n.reportModeRestart(id, mode, proto.ModeRestartDropped, proto.ModeRestartReasonReplaced)
 	n.notifySessions()
 }
 
-// reportModeRestart tells the manager what became of session id's restart in mode (#10297): kept with the session's
-// mode changes.
+// reportModeRestart tells the manager what became of session id's restart in mode and why (a ModeRestartReason… code,
+// #10297): kept with the session's mode changes.
 func (n *Node) reportModeRestart(id, mode, outcome, reason string) {
 	if n.peer == nil {
 		return
@@ -216,10 +217,11 @@ func (n *Node) reportModeRestart(id, mode, outcome, reason string) {
 	_ = n.peer.Notify(proto.EventModeRestart, proto.ModeRestartEvent{SessionID: id, Mode: mode, Outcome: outcome, Reason: reason})
 }
 
-// restartGoneError: the claude a restart was picked for is gone (restartGone), so it is dropped, not failed.
-type restartGoneError string
+// restartGoneError: the claude a restart was picked for is gone (restartGone), so it is dropped, not failed: why in
+// words for the log, and as a ModeRestartReason… code.
+type restartGoneError struct{ why, code string }
 
-func (e restartGoneError) Error() string { return string(e) }
+func (e restartGoneError) Error() string { return e.why }
 
 // agentProcess is the claude process session id runs in: as its hooks last reported it, else as the sessions/<pid>.json
 // of a running claude with that session open says; 0 when neither can tell.
@@ -236,19 +238,20 @@ func (n *Node) agentProcess(id string) (pid int, start string) {
 }
 
 // restartGone says why session id's waiting restart no longer belongs to a running agent, "" while it does: the claude
-// process it was picked for has exited, or the hooks report the session in another process (a resume) since.
-func (n *Node) restartGone(id string) string {
+// process it was picked for has exited, or the hooks report the session in another process (a resume) since. code is
+// the same as a ModeRestartReason….
+func (n *Node) restartGone(id string) (why, code string) {
 	pid, start := n.switches().restartProcess(id)
 	if pid <= 0 {
-		return "it was not picked for a known claude process"
+		return "it was not picked for a known claude process", proto.ModeRestartReasonProcessUnknown
 	}
 	if !processAlive(pid, start) {
-		return fmt.Sprintf("claude %d, the process it was picked for, has exited", pid)
+		return fmt.Sprintf("claude %d, the process it was picked for, has exited", pid), proto.ModeRestartReasonProcessExited
 	}
 	if hp, hs := n.hooks.process(id); hp > 0 && (hp != pid || hs != "" && start != "" && hs != start) {
-		return fmt.Sprintf("the session runs in claude %d now, not in claude %d it was picked for", hp, pid)
+		return fmt.Sprintf("the session runs in claude %d now, not in claude %d it was picked for", hp, pid), proto.ModeRestartReasonProcessReplaced
 	}
-	return ""
+	return "", ""
 }
 
 // dropGoneRestart drops session id's waiting restart when its process is gone (restartGone), and says whether it did.
@@ -258,13 +261,13 @@ func (n *Node) dropGoneRestart(id string) bool {
 	if n.switches().restartApplying(id) {
 		return false
 	}
-	why := n.restartGone(id)
+	why, code := n.restartGone(id)
 	if why == "" {
 		return false
 	}
 	mode := n.switches().restartMode(id)
 	n.switches().setRestart(id, "", time.Time{}, 0, "")
-	n.reportModeRestart(id, mode, proto.ModeRestartDropped, why)
+	n.reportModeRestart(id, mode, proto.ModeRestartDropped, code)
 	n.logf("session %s: waiting restart in another permission mode dropped: %s", id, why)
 	return true
 }
@@ -277,7 +280,7 @@ func (n *Node) modeRestartRow(s *proto.Session) {
 	}
 	if s.PermissionMode == mode && s.BypassAvailable {
 		n.switches().setRestart(s.SessionID, "", time.Time{}, 0, "") // in it already (set at the computer)
-		n.reportModeRestart(s.SessionID, mode, proto.ModeRestartDone, "the agent runs in it already")
+		n.reportModeRestart(s.SessionID, mode, proto.ModeRestartDone, proto.ModeRestartReasonAlreadyIn)
 		return
 	}
 	if n.dropGoneRestart(s.SessionID) { // the claude it was picked for is gone (#10296)
@@ -295,7 +298,7 @@ func (n *Node) tryModeRestart(id string) {
 	if mode := n.switches().expireRestart(id, time.Now()); mode != "" {
 		why := fmt.Sprintf("picked over %v ago", modeRestartMaxAge)
 		n.logf("session %s: restart in permission mode %s dropped: %s", id, mode, why)
-		n.reportModeRestart(id, mode, proto.ModeRestartDropped, why)
+		n.reportModeRestart(id, mode, proto.ModeRestartDropped, proto.ModeRestartReasonExpired)
 		n.notifySessions()
 		return
 	}
@@ -315,10 +318,10 @@ func (n *Node) tryModeRestart(id string) {
 	case errors.Is(err, errRestartLater):
 	case errors.As(err, &gone):
 		n.logf("session %s: restart in permission mode %s dropped: %v", id, mode, err)
-		n.reportModeRestart(id, mode, proto.ModeRestartDropped, err.Error())
+		n.reportModeRestart(id, mode, proto.ModeRestartDropped, gone.code)
 	default:
 		n.logf("session %s: restart in permission mode %s dropped: %v", id, mode, err)
-		n.reportModeRestart(id, mode, proto.ModeRestartFailed, err.Error())
+		n.reportModeRestart(id, mode, proto.ModeRestartFailed, restartFailure(err))
 	}
 	n.notifySessions()
 }
@@ -333,8 +336,8 @@ func (n *Node) runModeRestart(ctx context.Context, id, mode string) error {
 	if n.switches().restartMode(id) != mode {
 		return nil // dropped while it waited for the input
 	}
-	if why := n.restartGone(id); why != "" {
-		return restartGoneError(why) // the claude it was picked for is gone: a later one is never restarted by it (#10296)
+	if why, code := n.restartGone(id); why != "" {
+		return restartGoneError{why, code} // the claude it was picked for is gone: a later one is never restarted by it (#10296)
 	}
 	if why := n.switchBusy(ctx, id); why != "" {
 		return errRestartLater
@@ -426,4 +429,21 @@ func (n *Node) modesAnswer(id, mode string) map[string]any {
 		out["applied"] = "restart"
 	}
 	return out
+}
+
+// restartFailure is the ModeRestartReason… of a restart that did not work, "" for one the node cannot name.
+func restartFailure(err error) string {
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return ""
+	}
+	switch re.Code {
+	case proto.CodeSwitchNotStopped:
+		return proto.ModeRestartReasonNotStopped
+	case proto.CodeSwitchFailed:
+		return proto.ModeRestartReasonStartFailed
+	case proto.CodeSwitchFailedStopped:
+		return proto.ModeRestartReasonStopped
+	}
+	return ""
 }

@@ -264,6 +264,9 @@ type SnapshotOwner struct {
 type SnapshotOpenTodo struct {
 	ID, Title, Link string
 	Owner           SnapshotOwner
+	// Failed: its agent did not start, and it still waits on the owner (stored done with its start error, counted open
+	// as the app's To-dos count it).
+	Failed bool
 }
 
 // SnapshotReport is a supervised task's agent's latest report: its kind (progress, question, blocked, done), the step
@@ -506,6 +509,10 @@ type BriefFacts struct {
 	// InboxWaiting and InboxDue are read-only follow-up facts for the model only; neither is on the card or in the push.
 	InboxWaiting, InboxDue []BriefFollow
 	Leaders                []BriefLeader // one per direction (#3609)
+	// Directions are the deterministic per-direction wait lists, main included. Every direction keeps all owner-wait
+	// rows and folds only its non-owner tail; More says how many rows the direction link holds beyond it.
+	Directions       []BriefDirection
+	DisabledRoutines []BriefDisabledRoutine
 	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
 	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
 	Briefs, BriefsDone []BriefTask
@@ -605,6 +612,35 @@ type BriefLeader struct {
 	Reached, Doing, NeedsYou string
 }
 
+// BriefDirection is one direction's open-work count and deterministic wait rows. Main and leader directions alike keep
+// every owner-wait row; only the non-owner tail is folded into More. Line is ready to read in the owner's language.
+type BriefDirection struct {
+	ID, Name, Link             string
+	Owner                      bool
+	Open, Active, Undispatched int
+	Waits                      []BriefWait
+	More                       int
+}
+
+// BriefWait is one stopped task or unanswered card. Kind is needs_user, review, question, permission, private,
+// parked, capacity, orphaned, overdue or stalled. Since/Until are zero when the ledger did not record them.
+type BriefWait struct {
+	TodoID, InteractionID string
+	Title, Kind           string
+	Since                 time.Time
+	Until                 time.Time
+	WaitingOn, Reason     string
+	Link, Line            string
+}
+
+// BriefDisabledRoutine is a disabled daily report or patrol. DisabledAt is nil for routines saved before the hub
+// recorded the transition; Line says "disable time not recorded" rather than substituting LastRun.
+type BriefDisabledRoutine struct {
+	ID, Title, Direction, Kind string
+	DisabledAt                 *time.Time
+	Link, Line                 string
+}
+
 // BriefFailed is one thing that did not go through: a task whose agent did not start, a scheduled run that failed
 // (Run) or was skipped (Skipped).
 type BriefFailed struct {
@@ -673,6 +709,9 @@ type TaskNotice struct {
 	Earlier        []string // what else it went through since the last notice ("waiting on the user", "done"), oldest first
 	Ask            string   // needs: what it asks
 	Text           string   // what its agent said last, or why it did not start
+	// RetryWith: failed because of its launcher there, the launcher the assistant may start it with instead when the
+	// user asks (task_retry's launcher; only the web's card has a button for it, #10365).
+	RetryWith string
 	// Reporting: the notice goes into the conversation that opened the task (one started with report_tasks, such as
 	// a Feishu /agent's, #3192), not the main conversation.
 	Reporting bool
@@ -818,6 +857,9 @@ type SuperviseEntry struct {
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
+	// RetryWith: failed because of its launcher on that computer, the other launchers there task_retry may start it
+	// with (PlanTask.RetryWith, #10365), the first suggested.
+	RetryWith []string
 	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered), which
 	// parked_due and park_decided carry too; escalated: the cards a leader gave the user.
 	Asks      []SuperviseAsk
