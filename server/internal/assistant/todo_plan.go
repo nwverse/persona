@@ -23,8 +23,8 @@ import (
 // dayLayout is how a due day is written (the API's due_date, the tools' due).
 const dayLayout = "2006-01-02"
 
-// setPlan takes the plan of row (a stored todo, or one made in memory), the project it is in (todo_project.go) and when
-// the owner last saw it (todo_seen.go).
+// setPlan takes the plan of row (a stored todo, or one made in memory), the project it is in (todo_project.go), when
+// the owner last saw it (todo_seen.go) and their restore and Someday (todo_marks.go).
 func (t *Todo) setPlan(row db.TodoRow) {
 	t.DueAt, t.DueDate = row.DueAt, ""
 	if row.DueDate != nil {
@@ -34,12 +34,13 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Project = row.Project
 	t.Kind = row.Kind
 	t.SeenAt = row.SeenAt
+	t.RestoredAt, t.SomedayUntil = row.RestoredAt, row.SomedayUntil
 	t.InboxItem = row.InboxItem
 	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
 }
 
-// keepPlan writes t's plan, project and seen mark into row: a row made in memory for a change that is not to them keeps
-// them.
+// keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
+// change that is not to them keeps them.
 func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.DueAt, row.DueDate = t.DueAt, nil
 	if d, err := time.Parse(dayLayout, t.DueDate); err == nil {
@@ -49,6 +50,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Project = t.Project
 	row.Kind = t.Kind
 	row.SeenAt = t.SeenAt
+	row.RestoredAt, row.SomedayUntil = t.RestoredAt, t.SomedayUntil
 	row.InboxItem = t.InboxItem
 	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)
 }
