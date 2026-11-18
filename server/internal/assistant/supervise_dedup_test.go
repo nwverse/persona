@@ -169,6 +169,7 @@ func TestSupervisionAutomaticSummaryDedupPrunesClosedTasks(t *testing.T) {
 	restarted.supervise.dedup = nil
 	restarted.supervise.dedupMu.Unlock()
 	restarted.pruneAllStoppedDedup(ctx)
+	history = nil
 	if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
 		t.Fatal(err)
 	}
