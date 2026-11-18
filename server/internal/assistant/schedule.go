@@ -1852,6 +1852,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID
+				s.scheduledWake(t.SessionID, time.Now()) // a new chain of messages between conversations (#10099)
 				s.logf("task %s ran %s after its time", t.ID, lateness(due, time.Now()))
 				startRun(&m)
 				return proto.Session{MachineID: t.MachineID, SessionID: t.SessionID}, nil
@@ -1901,6 +1902,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.RunMachineID, t.RunSessionID
+				s.scheduledWake(t.RunSessionID, time.Now()) // a new chain of messages between conversations (#10099)
 				s.logf("task %s ran %s after its time (its conversation %s)", t.ID, lateness(due, time.Now()), short(t.RunSessionID))
 				startRun(&m)
 				return proto.Session{MachineID: t.RunMachineID, SessionID: t.RunSessionID}, nil
