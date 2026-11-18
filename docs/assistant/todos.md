@@ -767,7 +767,8 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
 - On startup, the supervision sweep also reconciles open tasks whose sole current Agent stopped
   before this manager started, even if their idle receipt was already told. Each ready task is
   inspected once per manager start, at most four per supervision sweep, through the same admission and safety gates. Missing session
-  inventory, work state or fresh bound-PR facts defer inspection until available. A repeated
+  inventory, work state or fresh facts for the wait's bound PR defer inspection until available.
+  Unrelated task PRs do not gate a deployment/date wait or a different evidenced PR. A repeated
   startup never spends another unchanged attempt for the same durable stopped-turn identity.
 - At the first supervision sweep at or after 09:00 hub-local time, starting the next calendar day,
   still-current, unexpired automatic parks enter one ordinary batched digest per supervisor.

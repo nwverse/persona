@@ -252,6 +252,31 @@ func TestAutomaticCloseoutStartupBackfillConsumesOldIdle(t *testing.T) {
 	}
 }
 
+func TestAutomaticCloseoutStartupBackfillChecksOnlyItsSource(t *testing.T) {
+	for _, deployment := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deployment=%v", deployment), func(t *testing.T) {
+			s, f, task, c, now := reviewArtifactFixture(t)
+			source := reviewArtifactURL
+			if deployment {
+				source = "https://example.org/deployments/rollout-42"
+				c.LastText = automaticCloseout("deployment rollout-42", "build "+source, nil)
+				f.setSessions(c.MachineID, c)
+			}
+			s.todos.mu.Lock()
+			cur := s.todos.todos[task.ID]
+			cur.PRs = []string{"https://github.com/example/project/pull/41"}
+			if deployment {
+				cur.PRStatus = nil
+			}
+			s.todos.mu.Unlock()
+			current, _ := s.backfillCloseout(context.Background(), todoNow(s, task.ID), backfillInventory(c), now)
+			if current.Supervision.State != reviewParked || current.Supervision.parking().Evidence.URL != source {
+				t.Fatalf("unrelated missing PR facts blocked the evidenced wait: %+v", current.Supervision)
+			}
+		})
+	}
+}
+
 func TestAutomaticCloseoutStartupBackfillInspectsOnce(t *testing.T) {
 	s, f, task, c, now := reviewArtifactFixture(t)
 	c.LastText = "No structured closeout."

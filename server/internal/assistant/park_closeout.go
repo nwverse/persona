@@ -213,16 +213,6 @@ func (s *Service) backfillCloseout(ctx context.Context, t Todo, lists machineSes
 	if scanned {
 		return t, false
 	}
-	// PR inventory and the work ledger may arrive after the first startup sweep.
-	for _, source := range append([]string{t.PRURL}, t.PRs...) {
-		if source == "" {
-			continue
-		}
-		fact := prFacts(t, source)
-		if fact == nil || fact.CheckedAt.After(now) || now.Sub(fact.CheckedAt) > triagePRStatusFreshFor {
-			return t, false
-		}
-	}
 	agents, wake, ok := s.mechanicalAgents(ctx, t, agents, now)
 	if !ok || !wake.IsZero() || len(agents) != 1 || agents[0].UpdatedAt.After(s.born) {
 		return t, false
@@ -258,6 +248,13 @@ func (s *Service) backfillCloseout(ctx context.Context, t Todo, lists machineSes
 		return current, true
 	}
 	return t, true
+}
+
+// Missing transcript/facts and failed writes do not consume the one startup inspection.
+func (s *Service) retryCloseoutBackfill(id string) {
+	s.supervise.mu.Lock()
+	delete(s.supervise.closeoutScanned, id)
+	s.supervise.mu.Unlock()
 }
 
 func externalCloseout(waiting string) bool {
@@ -331,9 +328,7 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		reply = c.LastText
 	}
 	if reply == "" {
-		s.supervise.mu.Lock()
-		delete(s.supervise.closeoutScanned, t.ID)
-		s.supervise.mu.Unlock()
+		s.retryCloseoutBackfill(t.ID)
 		return false
 	}
 	var previous *TaskReview
@@ -348,11 +343,16 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 	prWait := p.Evidence.Kind == "merge_review" ||
 		p.Evidence.Kind == "external_event" && parkReviewURL(p.Evidence.URL)
 	if prWait {
+		if t.PRURL != p.Evidence.URL && !slices.Contains(t.PRs, p.Evidence.URL) {
+			return false
+		}
 		fact := prFacts(t, p.Evidence.URL)
-		if t.PRURL != p.Evidence.URL && !slices.Contains(t.PRs, p.Evidence.URL) ||
-			fact == nil || fact.State != "open" || fact.HeadOID == "" || fact.Draft || fact.Conflicts || fact.Review == "changes_requested" ||
-			fact.Checks == "failure" || fact.Checks == "failing" || fact.CheckedAt.After(now) ||
-			now.Sub(fact.CheckedAt) > triagePRStatusFreshFor {
+		if fact == nil || fact.CheckedAt.After(now) || now.Sub(fact.CheckedAt) > triagePRStatusFreshFor {
+			s.retryCloseoutBackfill(t.ID)
+			return false
+		}
+		if fact.State != "open" || fact.HeadOID == "" || fact.Draft || fact.Conflicts || fact.Review == "changes_requested" ||
+			fact.Checks == "failure" || fact.Checks == "failing" {
 			return false
 		}
 		dependency += "|" + fact.HeadOID + "|" + fact.Review + "|" + fact.Checks
@@ -407,9 +407,7 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		return true
 	})
 	if err != nil {
-		s.supervise.mu.Lock()
-		delete(s.supervise.closeoutScanned, t.ID)
-		s.supervise.mu.Unlock()
+		s.retryCloseoutBackfill(t.ID)
 		s.logf("task %s: closeout parking failed: %v", t.ID, err)
 		return false
 	}
