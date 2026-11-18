@@ -1015,11 +1015,13 @@ repositories as rows with their issues and pull requests as links, so the
 associations the agent maintains are visible without opening an editor. Each
 repository row carries its provider's own mark and its project address on one
 line; a link shows its retained full title as the hyperlink, falling back to the
-localized type and number when no title is known. A provider extension's row
-(`docs/extensions/repository-providers.md`) shows a generic mark and the provider's
-name, and its links use the provider's own `link_kinds` words and `#number`; while
-the provider is unavailable the row is marked so, its links still open and adding
-one there is off. The association store holds no
+localized type and number when no title is known. A provider extension's
+repository has the extension mark and its source's name after the address (the
+`provider_name` saved with it, else "Another source", never the `ext:` id); its
+links open at their stored addresses, numbered `#N`, with the extension's own
+`link_kinds` words for issue and pull request. While its `provider_state` is
+`off` or `missing` the row shows an **Unavailable** pill and a note, and adding a
+link to it is turned off. The association store holds no
 physical workspace path, so a row shows no filesystem path; directory aliases
 are not paths, and physical paths belong to the workspace preparation service.
 Opening the editor holds the draft and the revision it began from: a to-do
