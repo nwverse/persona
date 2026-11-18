@@ -248,10 +248,8 @@
 /* the chosen chip is at least as wide as it is tall (All). All is pinned at the end of the capsule, before the grouping
    icon; the scrolling row is the chips' offset parent and its fade is set per frame after render (fitBar in screens.js) */
 [data-variant="V2"] .k-sbar-in { position: relative; }
-[data-variant="V2"] .k-sbar-chip { min-width: 44px; justify-content: center; }
-[data-variant="V2"] .k-sbar-trail { gap: 4px; }
 [data-variant="V2"] .k-sbar-trail .k-btn { color: var(--ink-2); }
-[data-variant="V2"].k-web .k-sbar-chip.is-on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); box-shadow: none; font-weight: 600; }
+[data-variant="V2"].k-web .k-sbar-chip.is-on .k-sbar-pill { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); box-shadow: none; }
 [data-variant="V2"].k-web .k-sbar-chip.is-on .k-sbar-n { color: var(--accent); }
 [data-variant="V2"] .v2-opt-open .k-tr-ans .k-ans--ok { display: none; }
 [data-variant="V2"] .v2-row-chose { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--positive); font-weight: 500; }
@@ -356,7 +354,6 @@
 [data-variant="V2"].k-web .k-tch-c, [data-variant="V2"].k-web .k-tch-add, [data-variant="V2"].k-web .k-res-c, [data-variant="V2"].k-web .k-ach { border-radius: 6px; }
 [data-variant="V2"].k-web .k-tc-cap { border-radius: 12px; padding-top: 6px; padding-bottom: 6px; }
 [data-variant="V2"].k-web .k-tc-f { padding-top: 4px; padding-bottom: 4px; }
-[data-variant="V2"].k-web .k-sbar-chip { min-width: 32px; }
 [data-variant="V2"].k-web .v2-thread .v2-rnd-h, [data-variant="V2"].k-web .v2-thread .k-rd-reply, [data-variant="V2"].k-web .v2-sess-text { font-size: 15px; line-height: 22px; }
 [data-variant="V2"].k-web .v2-thread .v2-it::after { top: 15px; }
 [data-variant="V2"].k-web .v2-thread .v2-it:last-child::before { height: 15.5px; }

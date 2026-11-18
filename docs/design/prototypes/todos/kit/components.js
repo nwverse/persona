@@ -645,7 +645,9 @@
     o = o || {};
     const list = arr(items);
     const sel = typeof o.selected === 'number' ? o.selected : Math.max(0, list.findIndex((x) => x.id === (o.selected || 'all')));
-    return `<div class="k-sbar${o.cls ? ' ' + o.cls : ''}"><div class="k-sbar-in">${list.map((it, i) => `<span class="k-sbar-chip${i === sel ? ' is-on' : ''}"${nav(it)}><span>${it.label}</span>${it.count != null ? (it.look === 'needs' ? ui.badge(it.count, { look: 'needs' }) : `<span class="k-sbar-n">${it.count}</span>`) : ''}</span>`).join('')}</div>${o.trailing ? `<span class="k-sbar-trail">${o.trailing}</span>` : ''}</div>`;
+    // A choice is its 44 × 44 tap target (.k-sbar-chip) around the visible pill (.k-sbar-pill), as CapsuleFilterItem is;
+    // the trailing control follows the hairline the bar draws, as CapsuleFilterBar's showsTrailing does.
+    return `<div class="k-sbar${o.cls ? ' ' + o.cls : ''}"><div class="k-sbar-in">${list.map((it, i) => `<span class="k-sbar-chip${i === sel ? ' is-on' : ''}"${nav(it)}><span class="k-sbar-pill"><span>${it.label}</span>${it.count != null ? (it.look === 'needs' ? ui.badge(it.count, { look: 'needs' }) : `<span class="k-sbar-n">${it.count}</span>`) : ''}</span></span>`).join('')}</div>${o.trailing ? `<i class="k-sbar-sep"></i><span class="k-sbar-trail">${o.trailing}</span>` : ''}</div>`;
   };
   /** SectionBar from Data.bar(place). o: { place, selected, go: { all: 'frameId', needs: …, … }, trailing } */
   ui.sectionBarFor = (o) => {
