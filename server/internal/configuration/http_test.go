@@ -139,6 +139,29 @@ func TestHTTPRevisionIsCheckedAtTheCommitBoundary(t *testing.T) {
 	}
 }
 
+func TestHTTPRejectsNonContractUpdateKeysBeforeCallingProvider(t *testing.T) {
+	p := &memoryProvider{doc: example(t), err: errors.New("provider update should not be called")}
+	h := NewHandler(func(*http.Request) (Provider, error) { return p, nil })
+	for _, tc := range []struct {
+		key, value string
+	}{
+		{"Schema_Version", "1"},
+		{"ID", `"example-preferences"`},
+		{"Revision", `"revision-1"`},
+		{"Changes", `{"compact":true}`},
+		{"RESET", `["label"]`},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			body := fmt.Sprintf(`{"schema_version":1,"id":"example-preferences","revision":"revision-1","changes":{"compact":true},%q:%s}`, tc.key, tc.value)
+			w := callHandler(h, http.MethodPatch, body)
+			var e Error
+			if w.Code != http.StatusBadRequest || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Code != "configuration_bad_request" {
+				t.Fatalf("got %d %s; want configuration_bad_request before calling Update", w.Code, w.Body)
+			}
+		})
+	}
+}
+
 func TestHTTPAuthorizationAndFailureDoNotInventDefaults(t *testing.T) {
 	p := &memoryProvider{doc: example(t)}
 	h := NewHandler(func(*http.Request) (Provider, error) {

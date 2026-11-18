@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -203,15 +204,18 @@ func ValueError(f Field, raw json.RawMessage) string {
 			return "max_selected"
 		}
 	case Number:
-		var n float64
-		if f.Number == nil || json.Unmarshal(raw, &n) != nil {
+		token := string(bytes.TrimSpace(raw))
+		// json.Valid already checked the grammar. A number starts with a digit
+		// or a minus; in particular a quoted number is still a string.
+		if f.Number == nil || (token[0] != '-' && (token[0] < '0' || token[0] > '9')) {
 			return "type"
 		}
-		if !numberBound(&n) {
-			return "range"
+		if code := wireNumberError(token, f.Number.Integer); code != "" {
+			return code
 		}
-		if f.Number.Integer && math.Trunc(n) != n {
-			return "integer"
+		n, err := strconv.ParseFloat(token, 64)
+		if err != nil {
+			return "range"
 		}
 		if f.Number.Minimum != nil && n < *f.Number.Minimum {
 			return "minimum"
@@ -221,6 +225,37 @@ func ValueError(f Field, raw json.RawMessage) string {
 		}
 	default:
 		return "unsupported"
+	}
+	return ""
+}
+
+// wireNumberError checks the exact portable magnitude and integrality of a
+// valid JSON number. Float64 can round a fractional number onto an integer or
+// onto the portable boundary. Keep the exponent as a count, so even an enormous
+// exponent needs no more storage than its spelling.
+func wireNumberError(token string, integer bool) string {
+	mantissa := strings.TrimPrefix(token, "-")
+	var exponent int64
+	if i := strings.IndexAny(mantissa, "eE"); i >= 0 {
+		// On overflow ParseInt saturates in the correct direction. The
+		// maximum document size is far smaller than either limit.
+		exponent, _ = strconv.ParseInt(mantissa[i+1:], 10, 32)
+		mantissa = mantissa[:i]
+	}
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	digits := strings.TrimLeft(whole+fraction, "0")
+	if digits == "" {
+		return ""
+	}
+	// Position of the decimal point relative to the first significant digit.
+	point := int64(len(digits)-len(fraction)) + exponent
+	digits = strings.TrimRight(digits, "0")
+	limit := strconv.FormatInt(maxNumber, 10)
+	if point > int64(len(limit)) || (point == int64(len(limit)) && digits > limit) {
+		return "range"
+	}
+	if integer && point < int64(len(digits)) {
+		return "integer"
 	}
 	return ""
 }

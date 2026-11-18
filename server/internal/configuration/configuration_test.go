@@ -131,3 +131,29 @@ func TestEmptyCollectionAndPortableNumber(t *testing.T) {
 		}
 	}
 }
+
+func TestNumberChecksWireRangeAndIntegralityBeforeRounding(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		integer bool
+		want    string
+	}{
+		{"9007199254740991.01", false, "range"},
+		{"-9007199254740991.01", false, "range"},
+		{"9.00719925474099101e15", false, "range"},
+		{"-900719925474099100e-2", true, ""},
+		{"0.90071992547409910e16", true, ""},
+		{"9007199254740990.99", false, ""},
+		{"9007199254740990.99", true, "integer"},
+		{"1.00000000000000001", true, "integer"},
+		{"30e-1", true, ""},
+		{"1e-99999999999999999", true, "integer"},
+		{"1e99999999999999999", false, "range"},
+		{"-0.0e99999999999999999", true, ""},
+	} {
+		f := Field{Kind: Number, Number: &NumberOptions{Integer: tc.integer}}
+		if code := ValueError(f, json.RawMessage(tc.raw)); code != tc.want {
+			t.Errorf("ValueError(%s, integer=%v) = %q; want %q", tc.raw, tc.integer, code, tc.want)
+		}
+	}
+}

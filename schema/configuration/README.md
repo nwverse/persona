@@ -43,6 +43,8 @@ field. Exactly the options member selected by `kind` is present; a toggle has no
 options member. Bounds are nonnegative counts or finite numbers, with minimum no
 greater than maximum. A multiselect's minimum cannot exceed its option count.
 Defaults must satisfy the same constraints as writes.
+The Go validator checks a JSON number's portable magnitude and integrality
+before converting it to a floating-point value.
 
 `values` contains a valid effective value for **every** declared field and no
 other keys. A source resolves missing stored overrides to defaults before
@@ -70,8 +72,9 @@ An update identifies the exact snapshot it was edited from:
 }
 ```
 
-Only named fields change. Omitted fields remain untouched, including fields an
-older client cannot render. `reset` removes an override; the current default is
+The update member names above are case-sensitive. Only named fields change.
+Omitted fields remain untouched, including fields an older client cannot render.
+`reset` removes an override; the current default is
 then effective. It does not pin today's default as a stored user choice. At least
 one change or reset is required. Duplicate resets, a field named in both operations,
 unknown IDs, read-only fields and invalid values reject the **whole** update.

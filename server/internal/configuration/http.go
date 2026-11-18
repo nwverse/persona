@@ -72,21 +72,24 @@ func decodeUpdate(w http.ResponseWriter, r *http.Request) (Update, error) {
 		}
 		return u, &Error{Code: "configuration_bad_request"}
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&u) != nil || dec.Decode(new(any)) != io.EOF {
-		return u, &Error{Code: "configuration_bad_request"}
-	}
-	// Go accepts null for several scalar/optional fields; the wire contract does
-	// not. In particular, null changes must not be mistaken for an omitted patch.
+	// Go's struct decoder also accepts case variants and null for certain
+	// members. Check the exact wire names and reject null before decoding them.
 	var object map[string]json.RawMessage
 	if json.Unmarshal(raw, &object) != nil || object == nil {
 		return u, &Error{Code: "configuration_bad_request"}
 	}
-	for _, v := range object {
+	for key, v := range object {
+		switch key {
+		case "schema_version", "id", "revision", "changes", "reset":
+		default:
+			return u, &Error{Code: "configuration_bad_request"}
+		}
 		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
 			return u, &Error{Code: "configuration_bad_request"}
 		}
+	}
+	if json.Unmarshal(raw, &u) != nil {
+		return u, &Error{Code: "configuration_bad_request"}
 	}
 	if u.SchemaVersion != Version {
 		return u, &Error{Code: "configuration_version"}
