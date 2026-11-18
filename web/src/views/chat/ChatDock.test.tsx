@@ -29,7 +29,7 @@ const session = {
 const sibling = { ...session, session_id: "s2" } as Session;
 
 const header = (extra: Partial<Parameters<typeof Header>[0]> = {}) =>
-  renderToStaticMarkup(<Header session={session} title="补齐网络层的单元测试" machineName="MacBook" siblings={[session, sibling]} onInterrupt={() => {}} onStopLoop={() => {}} onToggleSidebar={() => {}} {...extra} />);
+  renderToStaticMarkup(<Header session={session} title="补齐网络层的单元测试" machineName="MacBook" siblings={[session, sibling]} onInterrupt={() => {}} onToggleSidebar={() => {}} {...extra} />);
 
 describe("Header", () => {
   it("puts the switch it is given in the middle on a narrow screen, in place of the title", () => {

@@ -70,7 +70,7 @@ export function ShellSwitchView({ page, waiting }: { page: ShellPage; waiting: n
             aria-current={on ? "page" : undefined}
             aria-label={badge ? t("shellswitch.waiting_label", { label: p.label, count: badge }) : p.label}
             className={cx(
-              "touch-hit flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 text-[13px] transition-[background-color,color,box-shadow] duration-150",
+              "touch-hit flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 text-[13px] transition-[background-color,color,box-shadow] duration-150 max-[360px]:px-2",
               on ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:text-ink",
             )}
           >

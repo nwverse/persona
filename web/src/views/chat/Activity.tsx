@@ -1,99 +1,81 @@
-// What keeps an agent going, beside the chat's title (iOS ActivityChips / ActivitySheet): a /loop (its next wakeup, a
-// way to stop it) and the background tasks (their output). Subagents are cards in the chat where they were launched
-// (SubagentCard.tsx).
-import { useState } from "react";
+// Session activity in the chat header's overview: loops, workflows and background tasks.
+import { useLayoutEffect, useRef, useState } from "react";
 import { openPanel } from "../../lib/panel";
 import { t } from "../../i18n";
-import { goalHeadline, goalStatusLabel, goalTone, goalUsage } from "../../lib/goal";
-import { backgroundTitle, elapsed, loopCadence, loopLabel, loopNext, loopShortLabel, loopTask } from "../../lib/tasks";
-import type { BackgroundTask, GoalInfo, LoopInfo, Session } from "../../lib/types";
-import { backgroundCount, otherBackground, recentWorkflows } from "../../lib/workflows";
+import { backgroundTitle, elapsed, loopCadence, loopNext, loopTask, taskLabel, taskPill, type FinishedTask } from "../../lib/tasks";
+import type { BackgroundTask, LoopInfo, Session } from "../../lib/types";
+import { otherBackground, recentWorkflows } from "../../lib/workflows";
 import { WorkflowCard } from "./WorkflowCard";
-import { Button, copyText, cx, Dialog, useNow } from "../../ui/atoms";
+import { Button, copyText, cx, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 
-/** "⟳ 11:57" and "Background 2" in the chat's header (on a phone one icon: ⟳, or ⚙ 2); a click opens them.
- *  `onJumpToCall`: a workflow card's "Show in chat" brings the call that launched it into view. */
-export function ActivityChips({ session, onStopLoop, onJumpToCall }: { session: Session; onStopLoop: () => void; onJumpToCall?: (call: string) => void }) {
-  const [open, setOpen] = useState(false);
+export function SessionActivity({ session, finished, onStopLoop, onJumpToCall }: {
+  session: Session;
+  finished: readonly FinishedTask[];
+  onStopLoop: () => void;
+  onJumpToCall?: (call: string) => void;
+}) {
   const loop = session.loop;
-  // Workflow runs have their own cards (WorkflowCard); an older hub lists a run only as a background task (#2935). An
-  // ended run keeps the chip for a day after it ended (#3434, the node's workflowKeep): what became of it.
-  const bg = otherBackground(session);
-  const now = useNow(30_000, Boolean(loop) || (session.workflows?.length ?? 0) > 0);
+  const now = useNow(30_000, Boolean(session.workflows?.length));
   const runs = recentWorkflows(session, now);
-  const count = backgroundCount(session);
-  const hasBg = bg.length > 0 || runs.length > 0;
-  // the chip speaks of workflows (the ai color, their mark) while one runs, or when ended runs are all it has
-  const aboutRuns = runs.some((w) => w.running) || (runs.length > 0 && !bg.length);
-  if (!loop && !hasBg) return null;
-  const label = loop && count
-    ? t("chat-activity.label_loop_and_background", { loop: loopLabel(loop, now), count })
-    : loop
-      ? t("chat-activity.label_loop", { loop: loopLabel(loop, now) })
-      : count
-        ? t("chat-activity.label_background", { count })
-        : t("lib-workflows.title");
+  const agents = new Set(session.subagents?.map((a) => a.id));
+  const bg = otherBackground(session).filter((b) => b.kind !== "agent" || !agents.has(b.id));
+  const active = new Set(bg.map((b) => b.id));
+  const ended = finished.filter((row) => !active.has(row.id));
+  const [showFinished, setShowFinished] = useState(false);
+  const finishedList = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => {
+    if (showFinished) finishedList.current?.firstElementChild?.scrollIntoView({ block: "nearest" });
+  }, [showFinished]);
+  const viewOutput = (path: string) => {
+    openPanel({ kind: "file", mid: session.machine_id, path, cwd: session.cwd });
+  };
+  if (!loop && !bg.length && !runs.length && !ended.length) return null;
   return (
-    <>
-      <button type="button" onClick={() => setOpen(true)} aria-label={t("chat-activity.open_label", { label })} title={label} className="touch-hit flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1 transition-colors hover:bg-hover">
-        {loop && (
-          <span className="flex h-5.5 items-center gap-1 rounded-full bg-accent-tint px-2 text-[11.5px] font-medium whitespace-nowrap text-accent-ink">
-            <Icon name="loop" size={12} stroke={2.2} />
-            <span className="hidden @min-[640px]:inline">{loopShortLabel(loop, now)}</span>
-          </span>
-        )}
-        {hasBg && (
-          <span className={cx("flex h-5.5 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium whitespace-nowrap", aboutRuns ? "bg-ai-tint text-ai" : "bg-orange-tint text-orange", loop && "@max-[640px]:hidden")} data-background-chip={aboutRuns ? "workflow" : "tasks"}>
-            <Icon name={aboutRuns ? "workflow" : "gear"} size={12} stroke={2.2} />
-            <span className="hidden @min-[640px]:inline">{t("chat-activity.background_chip")}</span> {count > 0 && count}
-          </span>
-        )}
-      </button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={loop && !hasBg ? t("chat-activity.title_loop") : !loop ? t("chat-activity.title_background") : t("chat-activity.title_both")} width={520}>
-        <div className="flex flex-col gap-3">
-          {loop && (
-            <LoopCard
-              loop={loop}
-              onStop={() => {
-                setOpen(false);
-                onStopLoop();
-              }}
-            />
+    <section className="flex flex-col gap-2 border-t border-line py-3">
+      <h3 className="text-xs font-semibold text-ink-2">{loop && !bg.length && !runs.length && !ended.length ? t("chat-activity.title_loop") : t("chat-activity.title_background")}</h3>
+      {bg.length > 0 && <BackgroundList tasks={bg} onOutput={(task) => viewOutput(task.output_file!)} />}
+      {ended.length > 0 && (
+        <>
+          <button type="button" aria-expanded={showFinished} onClick={() => setShowFinished(!showFinished)}
+            className="flex min-h-8 items-center gap-2 rounded-control px-2 text-left text-xs text-ink-2 hover:bg-hover">
+            <Icon name="check" size={14} className="text-green" />
+            <span className="flex-1">{t("chat-sessionoverview.finished_count", { count: ended.length })}</span>
+            <Icon name="chevron" size={13} className={cx("text-ink-3", showFinished && "rotate-180")} />
+          </button>
+          {showFinished && (
+            <ul ref={finishedList} className="divide-y divide-line rounded-control border border-line">
+              {ended.map(({ id, task, title, call, at, startedAt }) => {
+                const pill = taskPill(task, startedAt, at);
+                return (
+                  <li key={id} className="flex min-w-0 flex-col gap-1 px-2.5 py-2 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="min-w-0 break-words text-ink">{title || taskLabel(task)}</span>
+                      <span className={cx("shrink-0 whitespace-nowrap", pill?.tone === "red" ? "text-red" : "text-ink-3")}>{pill?.text}</span>
+                    </div>
+                    {(task.output_file || (onJumpToCall && call)) && (
+                      <div className="flex flex-wrap gap-2 text-accent-ink">
+                        {task.output_file && <button type="button" onClick={() => viewOutput(task.output_file!)} className="hover:underline">{t("chat-activity.view_output")}</button>}
+                        {onJumpToCall && call && <button type="button" onClick={() => onJumpToCall(call)} className="hover:underline">{t("chat-sessionoverview.show_in_chat")}</button>}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           )}
-          {runs.length > 0 && (
-            <section aria-label={t("lib-workflows.title")} className="flex flex-col gap-2">
-              {runs.some((w) => w.running) && <p className="text-[12px] leading-relaxed text-ink-3">{t("lib-workflows.waiting_note")}</p>}
-              {runs.map((w) => (
-                <WorkflowCard
-                  key={w.task_id}
-                  run={w}
-                  mid={session.machine_id}
-                  scope={`${session.machine_id}/${session.session_id}:`}
-                  onOpen={() => setOpen(false)}
-                  onJump={
-                    onJumpToCall &&
-                    ((call) => {
-                      setOpen(false);
-                      onJumpToCall(call);
-                    })
-                  }
-                />
-              ))}
-            </section>
-          )}
-          {bg.length > 0 && (
-            <BackgroundList
-              tasks={bg}
-              onOutput={(task) => {
-                setOpen(false);
-                openPanel({ kind: "file", mid: session.machine_id, path: task.output_file!, cwd: session.cwd });
-              }}
-            />
-          )}
-        </div>
-      </Dialog>
-    </>
+        </>
+      )}
+      {runs.length > 0 && (
+        <section aria-label={t("lib-workflows.title")} className="flex flex-col gap-2">
+          {runs.some((w) => w.running) && <p className="text-xs leading-relaxed text-ink-3">{t("lib-workflows.waiting_note")}</p>}
+          {runs.map((w) => (
+            <WorkflowCard key={w.task_id} run={w} mid={session.machine_id} scope={`${session.machine_id}/${session.session_id}:`} onJump={onJumpToCall} />
+          ))}
+        </section>
+      )}
+      {loop && <LoopCard loop={loop} onStop={onStopLoop} />}
+    </section>
   );
 }
 
@@ -135,7 +117,7 @@ function LoopCard({ loop, onStop }: { loop: LoopInfo; onStop: () => void }) {
             <Button tone="quiet" onClick={() => setConfirming(false)}>
               {t("common.cancel")}
             </Button>
-            <Button tone="danger" onClick={onStop}>
+            <Button tone="danger" onClick={() => { setConfirming(false); onStop(); }}>
               {t("chat-activity.stop_loop")}
             </Button>
           </div>
@@ -150,10 +132,6 @@ function BackgroundList({ tasks, onOutput }: { tasks: BackgroundTask[]; onOutput
   const now = useNow(1000);
   return (
     <div className="flex flex-col overflow-hidden rounded-card bg-surface shadow-hairline">
-      <div className="flex items-center gap-1.5 border-b border-line bg-inset px-3.5 py-2 text-[12px] font-medium text-ink-2">
-        <Icon name="gear" size={12} className="text-orange" />
-        {t("chat-activity.background_count", { count: tasks.length })}
-      </div>
       {tasks.map((task, i) => {
         const cmd = task.command && task.command !== backgroundTitle(task) ? task.command : "";
         return (
@@ -180,52 +158,5 @@ function BackgroundList({ tasks, onOutput }: { tasks: BackgroundTask[]; onOutput
         );
       })}
     </div>
-  );
-}
-
-const goalChipTone = {
-  active: "bg-accent-tint text-accent-ink",
-  done: "bg-green-tint text-green",
-  stopped: "bg-orange-tint text-orange",
-} as const;
-const goalTextTone = { active: "text-accent-ink", done: "text-green", stopped: "text-orange" } as const;
-
-/** The goal it works toward (docs/integrations/agent-goal.md, iOS GoalBar / GoalSheet): ◎ and its status in the chat's header (the
- *  first line too where there is room); a click shows all of it, the latest check's reason and what it has spent. */
-export function GoalChip({ goal }: { goal: GoalInfo }) {
-  const [open, setOpen] = useState(false);
-  const status = goalStatusLabel(goal);
-  const headline = goalHeadline(goal);
-  const usage = goalUsage(goal);
-  const tone = goalChipTone[goalTone(goal)];
-  const textTone = goalTextTone[goalTone(goal)];
-  return (
-    <>
-      <button type="button" onClick={() => setOpen(true)} aria-label={t("agent-goal.chip_label", { status, headline })} title={t("agent-goal.chip_title", { status, headline })}
-        className="touch-hit flex h-7 min-w-0 shrink items-center rounded-[8px] px-1 transition-colors hover:bg-hover">
-        <span className={cx("flex h-5.5 min-w-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium whitespace-nowrap", tone)}>
-          <Icon name="target" size={12} stroke={2.2} className="shrink-0" />
-          <span className="hidden max-w-[220px] truncate @min-[800px]:inline">{headline}</span>
-          <span className="shrink-0 @max-[640px]:hidden @min-[800px]:before:content-['·_']">{status}</span>
-        </span>
-      </button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={t("agent-goal.title")} width={520}>
-        <div className="flex flex-col gap-3">
-          <div className={cx("flex items-center gap-1.5 text-[12.5px] font-semibold", textTone)}>
-            <Icon name="target" size={14} stroke={2.2} className="shrink-0" />
-            <span className="whitespace-nowrap">{status}</span>
-            {usage && <span className="truncate font-normal text-ink-3">{usage}</span>}
-          </div>
-          <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap text-ink select-text">{goal.objective}</p>
-          {goal.reason && (
-            <div className="flex flex-col gap-1 rounded-card bg-stripe-bg px-3.5 py-3 shadow-hairline">
-              <span className="text-[11.5px] font-semibold text-ink-3">{t(goal.status === "complete" ? "agent-goal.reason_met" : "agent-goal.reason_check")}</span>
-              <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2 select-text">{goal.reason}</p>
-            </div>
-          )}
-          <p className="text-[12px] text-ink-3">{t("agent-goal.hint")}</p>
-        </div>
-      </Dialog>
-    </>
   );
 }

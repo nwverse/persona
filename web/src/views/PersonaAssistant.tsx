@@ -256,7 +256,6 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
           siblings={NO_SESSIONS}
           onToggleSidebar={onToggleSidebar}
           onInterrupt={noop}
-          onStopLoop={noop}
           topCenter={main ? <ShellSwitch page="assistant" /> : undefined}
         />
       ) : (

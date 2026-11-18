@@ -6,7 +6,7 @@ summary), a call whose run the hub no longer lists stays a plain row; a long run
 block's last 12 rows with "更早的 n 个没有列出" and "还有 n 个" above them; a phase with failed agents has a red ✕; counts
 roll when they change and do not move on the first draw nor with reduced motion; the running bar says
 "后台 workflow · <phase> · N/M+ · 还有 n 个" from the run's start, its count whole at 390 wide in English and Japanese too;
-the header's chip and the background dialog use the same cards; the sidebar row's count. Light / dark × 1280 / 390.
+the session overview uses the same workflow cards; the sidebar row's count. Light / dark × 1280 / 390.
 
     MOCK_WORKFLOW_CARDS=1 PORT=18772 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18772 npx vite --port 5182 --strictPort &)
@@ -233,20 +233,22 @@ def run(browser, base, hub, token, size, theme, shots, reduce):
     shot("completed-page")
     ok(f"{tag}: completed in place: the chip says 完成, the + goes, the card folds to its head and summary")
 
-    # the header's chip and its dialog: the same cards, and "在对话中查看"
-    chip = page.locator('[data-background-chip="workflow"]').first
-    expect(chip).to_be_visible()
-    chip.click()
-    dialog = page.get_by_role("dialog")
-    expect(dialog.locator("[data-workflow-card]")).to_have_count(4)
-    expect(dialog.locator('[data-workflow-card="failed"]')).to_contain_text("2 agents failed")
-    expect(dialog.locator('[data-workflow-card="running"] [data-phase]').first).to_be_visible()
+    # The session overview uses the same cards and can jump to the chat.
+    overview = page.locator("[data-session-overview-trigger]").first
+    expect(overview).to_be_visible()
+    overview.click()
+    panel = page.locator("[data-session-overview]")
+    expect(panel.locator("[data-workflow-card]")).to_have_count(4)
+    expect(panel.locator('[data-workflow-card="failed"]')).to_contain_text("2 agents failed")
+    expect(panel.locator('[data-workflow-card="running"] [data-phase]').first).to_be_visible()
     page.wait_for_timeout(350)
-    shot("dialog")
-    dialog.locator('[data-workflow-card="failed"] [data-workflow-jump]').click()
-    expect(dialog).to_have_count(0)
+    shot("overview")
+    panel.locator('[data-workflow-card="failed"] [data-workflow-jump]').click()
+    expect(panel).to_be_visible()
     expect(main.locator('[data-tool-use="toolu_wf_failed"]')).to_be_in_viewport()
-    ok(f"{tag}: the dialog's cards; 在对话中查看 brings the call into view")
+    overview.click()
+    expect(panel).to_have_count(0)
+    ok(f"{tag}: the overview stays open when 在对话中查看 brings the call into view")
 
     if size == "wide":
         row = page.locator("nav a[aria-current=page], aside a[aria-current=page]").first

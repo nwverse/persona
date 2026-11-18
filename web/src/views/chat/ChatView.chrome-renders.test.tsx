@@ -208,6 +208,29 @@ it("after the pushes, sending and stopping still go out", async () => {
   expect(pressed()).toBeNull();
 });
 
+it("toggles the session overview and leaves it open while using the chat", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  const composer = host.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  const overview = document.getElementById(trigger.getAttribute("aria-controls")!);
+  expect(overview?.tagName).toBe("ASIDE");
+  expect(trigger.getAttribute("aria-pressed")).toBe("true");
+  act(() => composer.click());
+  expect(overview?.isConnected).toBe(true);
+  act(() => overview!.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+  expect(overview?.isConnected).toBe(true);
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  expect(overview?.isConnected).toBe(false);
+  expect(host.querySelector("textarea")).toBe(composer);
+});
+
 it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   fetcher.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify({ state: "unknown" }), { status: 202 })));
