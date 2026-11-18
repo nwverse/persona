@@ -1021,7 +1021,14 @@ A plan of a leader's (its own, or one the main chat handed to it) that waits for
 report (`leader.report` with `plan`, told once), as the owner ruled after H1. The waiting plans are read from the plans
 themselves every 10 minutes and right after a leader's plan is made, not on every change.
 
-**Names and progress (#3679).** A direction is shown by its `name` (`direction_progress.go`): the one the owner gave
+**Names and progress (#3679).** Active directions use their canonical name as the shared session title on every
+client: conversation lists, headers and sidebars show the same project-supervisor identity, without an automatic
+date or task-kind prefix. `conversation_rename` accepts `name` for a direction through the existing main-only
+`direction_name` operation; ordinary conversations still use `kind` / `topic`. The stored ordinary title is preserved
+and shown again when the direction ends. Explicit name changes publish the updated session title immediately. The App’s existing Rename action also updates
+the canonical direction name, marked as user-chosen, while retaining its ordinary stored title.
+
+A direction is shown by its `name` (`direction_progress.go`): the one the owner gave
 it (`PUT /api/v1/assistant/directions/{id}/name`, or Start direction's offered name) or the secretary gave it
 (`direction_name`, main chat only), else its kb project's name, else its title without the `MMDD | kind | ` prefix (and without a `你是「X」…` role wrapping: just `X`, #3744).
 `leader.changed` and `GET /api/v1/assistant/leaders` carry it. Besides the hub's own reached / decision / stuck
