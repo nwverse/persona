@@ -134,9 +134,11 @@ func (b *interruptBook) follow(conv string, at time.Time) {
 	}
 }
 
-// appendInterrupted writes an interrupted receipt for task t: its cause, and the batch it joins when another receipt
-// in the same conversation with the same cause began one less than interruptBatchWindow ago.
-func (s *Service) appendInterrupted(ctx context.Context, t Todo, body receiptBody, silent bool) {
+// appendInterrupted writes an interrupted receipt for task t's turn on run, which its body names (#10465): its cause,
+// and the batch it joins when another receipt in the same conversation with the same cause began one less than
+// interruptBatchWindow ago.
+func (s *Service) appendInterrupted(ctx context.Context, t Todo, run SessionRef, body receiptBody, silent bool) {
+	body.MachineID, body.SessionID = run.MachineID, run.SessionID
 	body.Cause = interruptCause(body.Error, silent)
 	body.Resolution = resolutionPending
 	b := &s.interrupts

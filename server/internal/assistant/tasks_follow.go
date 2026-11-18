@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -269,8 +270,9 @@ type receiptBody struct {
 	PR      string         `json:"pr,omitempty"`
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
-	// MachineID and SessionID name the run whose turn this is (#10465): a to-do's history gives the receipt to that run
-	// instead of guessing from the computer's name. Absent where no run started (a failed start) and on older receipts.
+	// MachineID and SessionID name the run whose turn this is (#10465), so a reader of the to-do's history can give the
+	// receipt to that run instead of guessing from the computer's name. Absent where no run started (a failed start)
+	// and on older receipts.
 	MachineID string `json:"machine_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	// Criteria: a done receipt's list of its brief's criteria as they stood when the agent stopped (#3822,
@@ -468,8 +470,14 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	defer s.taskJudging(t.ID, -1)
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	name := machine
-	if m, ok := s.device(cctx, machine); ok {
+	// The computer named is the one of the run the receipt names (#10465), not of the session whose end set this off:
+	// with a task's Agents on two computers the two can differ.
+	run := last
+	if cut.SessionID != "" {
+		run = cut
+	}
+	name := cmp.Or(run.MachineID, machine)
+	if m, ok := s.device(cctx, name); ok {
 		name = m.Name
 	}
 	if !s.taskWorkCurrent(t.ID, since) || !s.taskRuntimeSettled(cctx, t) {
@@ -494,8 +502,8 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		s.logf("task %s: interrupted: %s", t.ID, clip(oneLine(cut.TurnError), 200))
 		where := [2]string{cut.MachineID, cut.SessionID}
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(s.lang(cctx), "assistant-tasks.interrupted"), Machine: name,
-			MachineID: cut.MachineID, SessionID: cut.SessionID, Error: clip(strings.TrimSpace(cut.TurnError), 300)}
-		s.appendInterrupted(cctx, t, body, false)
+			Error: clip(strings.TrimSpace(cut.TurnError), 300)}
+		s.appendInterrupted(cctx, t, SessionRef{MachineID: cut.MachineID, SessionID: cut.SessionID}, body, false)
 		if s.closedWhileRead(t.ID) {
 			return settleTaken
 		}
@@ -533,8 +541,8 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		where := [2]string{last.MachineID, last.SessionID}
 		l := s.lang(cctx)
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(l, "assistant-tasks.interrupted"), Machine: name,
-			MachineID: last.MachineID, SessionID: last.SessionID, Error: silentTurnErrorIn(l)}
-		s.appendInterrupted(cctx, t, body, true)
+			Error: silentTurnErrorIn(l)}
+		s.appendInterrupted(cctx, t, SessionRef{MachineID: last.MachineID, SessionID: last.SessionID}, body, true)
 		if s.closedWhileRead(t.ID) {
 			return settleTaken
 		}
@@ -800,9 +808,11 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 		if err != nil {
 			return FeedItem{}, err
 		}
-		return s.appendFeed(ctx, conversation, feedRouted, todoID, map[string]string{"text": text,
-			"new_agent": started.SessionID, "new_agent_machine": started.MachineID,
-			"machine_id": started.MachineID, "session_id": started.SessionID})
+		body := map[string]string{"text": text, "new_agent": started.SessionID, "new_agent_machine": started.MachineID}
+		if started.SessionID != "" { // the run it reached (#10465); a start that named no session leaves it unknown
+			body["machine_id"], body["session_id"] = started.MachineID, started.SessionID
+		}
+		return s.appendFeed(ctx, conversation, feedRouted, todoID, body)
 	}
 	return s.sendToTaskAgent(ctx, conversation, todoID, pickTaskAgent(live), text, relay, guard)
 }
@@ -881,7 +891,7 @@ func (s *Service) sendToTaskAgent(ctx context.Context, conversation, todoID stri
 	if err != nil {
 		return FeedItem{}, s.dialogRefusal(ctx, c, err) // a dialog_open refusal names the agent and the dialog (#7343)
 	}
-	// The run it went to (#10465): the app says "Delivered to" it, and the to-do's history puts the message on its line.
+	// The run it went to (#10465), so a client can say which run the message reached.
 	body := map[string]string{"text": text, "machine_id": c.MachineID, "session_id": c.SessionID}
 	if relay != "" {
 		body["relay"] = relay

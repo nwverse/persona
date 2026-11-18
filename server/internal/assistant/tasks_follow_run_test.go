@@ -9,63 +9,102 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Every receipt a turn's end writes names the run whose turn it was (#10465), so a to-do's history gives it to that
-// run without guessing from the computer's name; an interrupted receipt keeps the run through the reads that work out
-// its resolution. A named turn's receipt keeps the feed id it had before.
+// Every receipt a turn's end writes names the run whose turn it was (#10465), so a reader of the to-do's history can
+// give it to that run without guessing from the computer's name; an interrupted receipt keeps the run through the
+// reads that work out its resolution. With two Agents on two computers it is the run whose turn the receipt reports,
+// and the computer's name is that run's too. A named turn's receipt keeps the feed id it had before, so a turn a
+// manager before #10465 receipted gets no second receipt.
 func TestReceiptNamesItsRun(t *testing.T) {
-	prompt := proto.Item{Kind: proto.KindText, Role: "user", Text: "修登录崩溃"}
-	reply := "修好了，提了 https://github.com/o/r/pull/901"
-	for _, c := range []struct {
-		name      string
-		items     []proto.Item
-		lastText  string
-		turnError string
-		state     string
-		turnKey   string // the turn's end, when the transcript names it: the receipt's id is receiptID's
-	}{
-		{name: "done", items: turnPage("turn-1", reply, true), lastText: reply, state: "done", turnKey: "turn-1"},
-		{name: "cut off by the model service", items: []proto.Item{prompt}, turnError: "API Error: 529 overloaded", state: "interrupted"},
-		{name: "no output", items: []proto.Item{prompt, {Kind: proto.KindThinking, Role: "assistant", Text: "…"}}, state: "interrupted"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			s, f := newQuietService(t)
-			f.judge = `{"verdict":"not_done","reason":"还没验"}`
-			todo := startedTask(t, s, f)
-			ctx := context.Background()
-			f.setItems(c.items...)
-			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
-				Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-			s.taskWorking(ctx, "box", "s1")
-			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
-				Status: proto.StatusDone, State: proto.StateUnread, TurnError: c.turnError, LastText: c.lastText, UpdatedAt: time.Now()})
-			s.taskTurnEnded(ctx, "box", "s1")
+	prompt := proto.Item{Kind: proto.KindText, Role: "user", Text: "Fix the login crash"}
+	reply := "Fixed it and opened https://github.com/o/r/pull/901"
+	for _, backend := range []string{"memory", "database"} {
+		for _, c := range []struct {
+			name      string
+			items     []proto.Item
+			lastText  string
+			turnError string
+			state     string
+			turnKey   string // the turn's end, when the transcript names it: the receipt's id is receiptID's
+			other     bool   // a second Agent, on mac, last updated after the one whose end set this off
+			before    bool   // the turn has the receipt an older manager wrote under the same id, naming no run
+		}{
+			{name: "done", items: turnPage("turn-1", reply, true), lastText: reply, state: "done", turnKey: "turn-1"},
+			{name: "cut off by the model service", items: []proto.Item{prompt}, turnError: "API Error: 529 overloaded", state: "interrupted"},
+			{name: "no output", items: []proto.Item{prompt, {Kind: proto.KindThinking, Role: "assistant", Text: "…"}}, state: "interrupted"},
+			{name: "done by the later of two Agents", items: turnPage("turn-1", reply, true), lastText: reply, state: "done",
+				turnKey: "turn-1", other: true},
+			{name: "done, receipted before the upgrade", items: turnPage("turn-1", reply, true), lastText: reply, state: "done",
+				turnKey: "turn-1", before: true},
+		} {
+			t.Run(backend+"/"+c.name, func(t *testing.T) {
+				var store Store
+				if backend == "database" {
+					store = taskRecoveryDatabase(t)
+				}
+				s, f := newQuietServiceOn(t, store)
+				f.judge = `{"verdict":"not_done","reason":"not verified yet"}`
+				todo := startedTask(t, s, f)
+				ctx := context.Background()
+				f.setItems(c.items...)
+				machine, session := "box", "s1"
+				ended := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+					Status: proto.StatusDone, State: proto.StateUnread, TurnError: c.turnError, LastText: c.lastText, UpdatedAt: time.Now()}
+				if c.other {
+					if err := s.linkTodoAgent(ctx, todo.ID, "mac", "s2", todo.Title, "/code/app", "claude"); err != nil {
+						t.Fatal(err)
+					}
+					later := ended
+					later.MachineID, later.SessionID, later.UpdatedAt = "mac", "s2", ended.UpdatedAt.Add(time.Minute)
+					ended.LastText = "Still reading the crash log"
+					f.setSessions("mac", later)
+					machine, session = "mac", "s2"
+				}
+				var old receiptBody
+				if c.before {
+					old = receiptBody{Title: todo.Title, State: "done", Summary: "Fixed before the upgrade", Machine: "box"}
+					id := receiptID(todo.ID, taskTurn{Machine: "box", Session: "s1", Key: c.turnKey})
+					if _, err := s.appendFeedOnce(ctx, id, "conv1", feedReceipt, todo.ID, old); err != nil {
+						t.Fatal(err)
+					}
+				}
+				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+					Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
+				s.taskWorking(ctx, "box", "s1")
+				f.setSessions("box", ended)
+				s.taskTurnEnded(ctx, "box", "s1")
 
-			items, _, err := s.feed(ctx, "conv1", time.Time{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var receipt *FeedItem
-			for i := range items {
-				if items[i].Kind == feedReceipt && items[i].Ref == todo.ID {
-					receipt = &items[i]
+				items, _, err := s.feed(ctx, "conv1", time.Time{})
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			if receipt == nil {
-				t.Fatalf("no receipt: %s", feedKinds(s, "conv1"))
-			}
-			var rb receiptBody
-			if err := json.Unmarshal(receipt.Body, &rb); err != nil {
-				t.Fatal(err)
-			}
-			if rb.State != c.state || rb.MachineID != "box" || rb.SessionID != "s1" || rb.Machine == "" {
-				t.Fatalf("receipt = %s", receipt.Body)
-			}
-			if c.turnKey != "" {
-				if want := receiptID(todo.ID, taskTurn{Machine: "box", Session: "s1", Key: c.turnKey}); receipt.ID != want {
-					t.Fatalf("receipt id = %q, want %q", receipt.ID, want)
+				var receipts []FeedItem
+				for _, it := range items {
+					if it.Kind == feedReceipt && it.Ref == todo.ID {
+						receipts = append(receipts, it)
+					}
 				}
-			}
-		})
+				if len(receipts) != 1 {
+					t.Fatalf("%d receipts: %s", len(receipts), feedKinds(s, "conv1"))
+				}
+				receipt := receipts[0]
+				var rb receiptBody
+				if err := json.Unmarshal(receipt.Body, &rb); err != nil {
+					t.Fatal(err)
+				}
+				if c.before {
+					if rb.Summary != old.Summary || rb.MachineID != "" || rb.SessionID != "" {
+						t.Fatalf("the receipt written before was replaced: %s", receipt.Body)
+					}
+				} else if rb.State != c.state || rb.MachineID != machine || rb.SessionID != session || rb.Machine != machine {
+					t.Fatalf("receipt = %s, want the run %s/%s", receipt.Body, machine, session)
+				}
+				if c.turnKey != "" {
+					if want := receiptID(todo.ID, taskTurn{Machine: machine, Session: session, Key: c.turnKey}); receipt.ID != want {
+						t.Fatalf("receipt id = %q, want %q", receipt.ID, want)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -77,79 +116,99 @@ func TestReceiptIDKeepsItsInputs(t *testing.T) {
 	}
 }
 
-// What the owner tells a task, and what the hub words for them, names the run it reached (#10465): the route's answer
-// says where it was delivered, and the to-do's history puts the line on that run. A message that started a new Agent
-// names that one, beside the new_agent fields older apps read.
+// Every line of what a task's Agent was told names the run it reached (#10465): the owner's words, so the route's answer
+// says where they were delivered; the hub's wording of an answer; and Persona's own lines (agent_send with task, a
+// rework). A message that started a new Agent names that one, beside the new_agent fields older apps read.
 func TestRoutedItemNamesItsRun(t *testing.T) {
-	s, f := newQuietService(t)
-	secretary(f)
-	ctx := context.Background()
-	if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下",
-		"task": map[string]any{"title": "拉周报数据"}}); err != nil {
-		t.Fatal(err)
-	}
-	todo := onlyTodo(s)
-	type routed struct {
-		Text            string `json:"text"`
-		Relay           string `json:"relay"`
-		From            string `json:"from"`
-		MachineID       string `json:"machine_id"`
-		SessionID       string `json:"session_id"`
-		NewAgent        string `json:"new_agent"`
-		NewAgentMachine string `json:"new_agent_machine"`
-	}
-	bodyOf := func(it FeedItem) routed {
-		t.Helper()
-		var b routed
-		if err := json.Unmarshal(it.Body, &b); err != nil {
-			t.Fatalf("routed body %s: %v", it.Body, err)
-		}
-		return b
-	}
+	for _, backend := range []string{"memory", "database"} {
+		t.Run(backend, func(t *testing.T) {
+			var store Store
+			if backend == "database" {
+				store = taskRecoveryDatabase(t)
+			}
+			s, f := newQuietServiceOn(t, store)
+			secretary(f)
+			ctx := context.Background()
+			if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001",
+				"text": "Pull the weekly report's numbers", "task": map[string]any{"title": "Weekly report numbers"}}); err != nil {
+				t.Fatal(err)
+			}
+			todo := onlyTodo(s)
+			type routed struct {
+				Text            string `json:"text"`
+				Relay           string `json:"relay"`
+				From            string `json:"from"`
+				MachineID       string `json:"machine_id"`
+				SessionID       string `json:"session_id"`
+				NewAgent        string `json:"new_agent"`
+				NewAgentMachine string `json:"new_agent_machine"`
+			}
+			bodyOf := func(it FeedItem) routed {
+				t.Helper()
+				var b routed
+				if err := json.Unmarshal(it.Body, &b); err != nil {
+					t.Fatalf("routed body %s: %v", it.Body, err)
+				}
+				return b
+			}
 
-	item, err := s.routeToTask(ctx, "conv1", todo.ID, "顺便加一列环比")
-	if err != nil {
-		t.Fatalf("the owner's message: %v", err)
-	}
-	if b := bodyOf(item); b.MachineID != "box" || b.SessionID != "sec00001" || b.Relay != "" || b.From != "" {
-		t.Fatalf("the owner's message: %s", item.Body)
-	}
-	item, err = s.relayToTask(ctx, "conv1", todo.ID, "选方案 B", nil)
-	if err != nil {
-		t.Fatalf("a relayed answer: %v", err)
-	}
-	if b := bodyOf(item); b.MachineID != "box" || b.SessionID != "sec00001" || b.Relay != routedRelay {
-		t.Fatalf("a relayed answer: %s", item.Body)
-	}
+			item, err := s.routeToTask(ctx, "conv1", todo.ID, "Add a week-over-week column too")
+			if err != nil {
+				t.Fatalf("the owner's message: %v", err)
+			}
+			if b := bodyOf(item); b.MachineID != "box" || b.SessionID != "sec00001" || b.Relay != "" || b.From != "" {
+				t.Fatalf("the owner's message: %s", item.Body)
+			}
+			item, err = s.relayToTask(ctx, "conv1", todo.ID, "Go with option B", nil)
+			if err != nil {
+				t.Fatalf("a relayed answer: %v", err)
+			}
+			if b := bodyOf(item); b.MachineID != "box" || b.SessionID != "sec00001" || b.Relay != routedRelay {
+				t.Fatalf("a relayed answer: %s", item.Body)
+			}
+			if _, err := s.sendToTask(ctx, onlyTodo(s), "The totals row is missing: add it"); err != nil {
+				t.Fatalf("a rework: %v", err)
+			}
 
-	// Its agent stops (read-only, #4754): the owner's next message starts a new one, and the line names that one.
-	f.setSessions("box", proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "秘书",
-		Launcher: "work", LastText: "表格在 /code/desk/out.xlsx", Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: time.Now(),
-		Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, ReadOnlyReason: "stopped"})
-	item, err = s.routeToTask(ctx, "conv1", todo.ID, "接着把环比也算上")
-	if err != nil {
-		t.Fatalf("the message to a stopped task: %v", err)
-	}
-	if b := bodyOf(item); b.NewAgent == "" || b.NewAgent == "sec00001" || b.SessionID != b.NewAgent || b.MachineID != "box" ||
-		b.NewAgentMachine != b.MachineID {
-		t.Fatalf("the message that started a new Agent: %s", item.Body)
-	}
+			// Its agent stops (read-only, #4754): the owner's next message starts a new one, and the line names that one.
+			f.setSessions("box", proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "Desk",
+				Launcher: "work", LastText: "The sheet is at /code/desk/out.xlsx", Status: proto.StatusOffline, State: proto.StateOffline,
+				UpdatedAt: time.Now(), Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, ReadOnlyReason: "stopped"})
+			item, err = s.routeToTask(ctx, "conv1", todo.ID, "Then add the week-over-week totals")
+			if err != nil {
+				t.Fatalf("the message to a stopped task: %v", err)
+			}
+			if b := bodyOf(item); b.NewAgent == "" || b.NewAgent == "sec00001" || b.SessionID != b.NewAgent || b.MachineID != "box" ||
+				b.NewAgentMachine != b.MachineID {
+				t.Fatalf("the message that started a new Agent: %s", item.Body)
+			}
 
-	// The feed keeps what the route answered.
-	items, _, err := s.feed(ctx, "conv1", time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	named := 0
-	for _, it := range items {
-		if it.Kind != feedRouted {
-			continue
-		}
-		if b := bodyOf(it); b.From == "" && b.MachineID != "" && b.SessionID != "" {
-			named++
-		}
-	}
-	if named != 3 {
-		t.Fatalf("%d routed lines name their run, want 3: %s", named, feedKinds(s, "conv1"))
+			// The feed keeps what each line was written with: Persona's two name the agent they told as well.
+			items, _, err := s.feed(ctx, "conv1", time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mine, persona := 0, 0
+			for _, it := range items {
+				if it.Kind != feedRouted {
+					continue
+				}
+				b := bodyOf(it)
+				switch {
+				case b.MachineID == "" || b.SessionID == "":
+					t.Fatalf("a routed line names no run: %s", it.Body)
+				case b.From == routedFromAssistant:
+					if b.MachineID != "box" || b.SessionID != "sec00001" {
+						t.Fatalf("Persona's line: %s", it.Body)
+					}
+					persona++
+				default:
+					mine++
+				}
+			}
+			if mine != 3 || persona != 2 {
+				t.Fatalf("%d of the owner's lines and %d of Persona's, want 3 and 2: %s", mine, persona, feedKinds(s, "conv1"))
+			}
+		})
 	}
 }
