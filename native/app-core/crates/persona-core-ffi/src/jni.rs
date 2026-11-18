@@ -153,7 +153,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_dispatch(
         let Ok(action) = env.convert_byte_array(&action) else {
             return false;
         };
-        runtime.dispatch(&action)
+        // Move the Vec<u8> straight into the worker's channel; no second copy on the main thread.
+        runtime.dispatch_owned(action)
     }))
     .map_or(JNI_FALSE, boolean)
 }
@@ -219,7 +220,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectWireEnvelo
     .unwrap_or_default()
 }
 
-/// Projects the Agents list from a JSON input string. Pure function, no runtime handle needed.
+/// Projects the Agents list from a JSON input string. Debug/test only: no Release Android export.
+#[cfg(not(feature = "release-android"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
     mut env: JNIEnv<'a>,
@@ -230,6 +232,28 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
         let input: String = env.get_string(&input).ok()?.into();
         let input: persona_core_domain::sort::Input = serde_json::from_str(&input).ok()?;
         let projection = persona_core_domain::sort::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects a session_state or hub_state fixture through the same pure host adapter as ArkTS. Debug/test only: no
+/// Release Android export, production adapter or persisted client state.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectState<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::state::FixtureInput = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::state::project_fixture(&input).ok()?;
         let json = serde_json::to_string(&projection).ok()?;
         env.new_string(json).ok()
     }))
@@ -299,18 +323,18 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamRepa
     .unwrap_or_default()
 }
 
-/// Applies one question-answer operation from a JSON input string. Pure function, no runtime handle needed.
+/// Applies a caller-supplied drawn-info predicate to Apple's still-open picture fence. Pure function, no runtime.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>(
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectPlainOpenFence<'a>(
     mut env: JNIEnv<'a>,
     _class: JClass<'a>,
     input: JString<'a>,
 ) -> JString<'a> {
     catch_unwind(AssertUnwindSafe(|| {
         let input: String = env.get_string(&input).ok()?.into();
-        let input: persona_core_domain::answer::Input = serde_json::from_str(&input).ok()?;
-        let transition = persona_core_domain::answer::project(&input)?;
-        let json = serde_json::to_string(&transition).ok()?;
+        let input: persona_core_domain::stream_repair::PlainFenceInput = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_repair::plain_open_fence(&input);
+        let json = serde_json::to_string(&projection).ok()?;
         env.new_string(json).ok()
     }))
     .ok()
@@ -319,7 +343,29 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>
     .unwrap_or_default()
 }
 
-/// Formats a question option's display text and recommendation flag. Pure function, no runtime handle needed.
+/// Applies one question-answer operation from a JSON input string. Debug/test only: no Release Android export.
+/// The pure projection runs on a bounded Rust worker; the caller waits at most one second.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let json = crate::answer_shadow::call(crate::answer_shadow::Operation::Project, input)?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Formats a question option's display text and recommendation flag. Debug/test only: no Release Android export.
+/// The pure projection runs on the same bounded worker as question answers.
+#[cfg(not(feature = "release-android"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_displayAnswer<'a>(
     mut env: JNIEnv<'a>,
@@ -328,8 +374,7 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_displayAnswer<'a>
 ) -> JString<'a> {
     catch_unwind(AssertUnwindSafe(|| {
         let label: String = env.get_string(&input).ok()?.into();
-        let display = persona_core_domain::answer::display(&label);
-        let json = serde_json::to_string(&display).ok()?;
+        let json = crate::answer_shadow::call(crate::answer_shadow::Operation::Display, label)?;
         env.new_string(json).ok()
     }))
     .ok()

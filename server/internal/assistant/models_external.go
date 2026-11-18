@@ -57,28 +57,14 @@ func externalLauncherError(l proto.Launcher) error {
 	if !slices.Contains(e.Capabilities.Platforms, "posix") {
 		return i18n.Err("external-adapter.platform_unsupported")
 	}
-	if !slices.Contains(e.Capabilities.Runtimes, proto.AssistantRuntimeCLI) {
+	if !slices.Contains(e.Capabilities.Runtimes, "cli") {
 		return i18n.Err("external-adapter.runtime_unsupported")
 	}
 	return nil
 }
 
-func (s *Service) externalRuntime(ctx context.Context) error {
-	b, err := s.resolveModel(ctx, "assistant")
-	if err != nil {
-		return err
-	}
-	if b.Runtime != "" && b.Runtime != proto.AssistantRuntimeCLI {
-		return i18n.Err("external-adapter.runtime_unsupported")
-	}
-	return nil
-}
-
-func (s *Service) externalLauncherRefusal(ctx context.Context, l proto.Launcher) error {
-	if err := externalLauncherError(l); err != nil {
-		return err
-	}
-	return s.externalRuntime(ctx)
+func (s *Service) externalLauncherRefusal(_ context.Context, l proto.Launcher) error {
+	return externalLauncherError(l)
 }
 
 // externalTarget reads this computer's advertisement, without a global provider view or
@@ -202,11 +188,10 @@ func (s *Service) applyExternalScope(ctx context.Context, id string, params map[
 	if !persisted || kept != scope.pick {
 		return i18n.Err("external-adapter.scope_required")
 	}
-	if b.Runtime != "" && b.Runtime != proto.AssistantRuntimeCLI {
-		return i18n.Err("external-adapter.runtime_unsupported")
-	}
-	if runtime, _ := params["runtime"].(string); runtime != "" && runtime != proto.AssistantRuntimeCLI {
-		return i18n.Err("external-adapter.runtime_unsupported")
+	if raw, present := params["runtime"]; present {
+		if runtime, ok := raw.(string); !ok || runtime != "" && runtime != "cli" {
+			return i18n.Err("external-adapter.runtime_unsupported")
+		}
 	}
 	if _, guest := params["guest"]; guest {
 		return i18n.Err("external-adapter.scope_required")

@@ -18,10 +18,10 @@ import (
 )
 
 const externalTestNative = `#!/bin/sh
-printf '%s\n' "$*" >> "$SDK_FAKE_DIR/external-argv"
+printf '%s\n' "$*" >> "$CLI_FAKE_DIR/external-argv"
 echo '{"type":"system","subtype":"init","model":"example-model"}'
 while IFS= read -r line; do
-  printf '%s\n' "$line" >> "$SDK_FAKE_DIR/external-stdin"
+  printf '%s\n' "$line" >> "$CLI_FAKE_DIR/external-stdin"
   case "$line" in
     *'"type":"control_request"'*)
       id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
@@ -36,7 +36,7 @@ const externalTestAdapter = `#!/bin/sh
 operation=$1
 shift
 case "$operation" in
-  inventory) exec /bin/cat "$SDK_FAKE_DIR/external-inventory.json" ;;
+  inventory) exec /bin/cat "$CLI_FAKE_DIR/external-inventory.json" ;;
   exec)
     while [ "$#" -gt 0 ]; do
       case "$1" in
@@ -47,7 +47,7 @@ case "$operation" in
       esac
     done
     if [ -n "$output" ]; then
-      printf '%s\n' "$output" > "$SDK_FAKE_DIR/external-settings-path"
+      printf '%s\n' "$output" > "$CLI_FAKE_DIR/external-settings-path"
       printf '{"env":{"EXAMPLE_SECRET":"synthetic-value"}}\n' > "$output"
       chmod 600 "$output"
     fi
@@ -56,9 +56,9 @@ case "$operation" in
 esac
 `
 
-func externalAssistantFixture(t *testing.T, warm ...bool) (*sdkFixture, string, modelExecution, func(string)) {
+func externalAssistantFixture(t *testing.T, warm ...bool) (*cliFixture, string, modelExecution, func(string)) {
 	t.Helper()
-	f := sdkTest(t)
+	f := cliTest(t)
 	t.Setenv(agentSandboxEnv, "off")
 	managedFiles, managedDirs := claudeManagedSettings, claudeManagedSettingsDirs
 	claudeManagedSettings, claudeManagedSettingsDirs = nil, nil
@@ -196,7 +196,7 @@ func TestExternalAdapterResidentHandoverLoadsColdInventory(t *testing.T) {
 	if _, err := next.assistantSend(t.Context(), id, cwd, launcher, "after handover", nil, "default", "", execution); err != nil {
 		t.Fatal(err)
 	}
-	g := &sdkFixture{n: next, dir: f.dir}
+	g := &cliFixture{n: next, dir: f.dir}
 	g.idle(t, id)
 	if current := g.proc(id); current != p || current.cmd.Process.Pid != pid || current.model.External.Revision == binding.Revision {
 		t.Fatal("cold registry initialization restarted the resident conversation or changed its actual binding")
@@ -264,7 +264,7 @@ func TestExternalAdapterAssistantAdmission(t *testing.T) {
 		{"not_main", func(m *modelExecution) { m.IsMain = false }, "adapter_scope_required"},
 		{"wrong_session", func(m *modelExecution) { m.External.SessionID = newUUID() }, "adapter_scope_required"},
 		{"wrong_target", func(m *modelExecution) { m.External.TargetID = "another-target" }, "adapter_target_not_found"},
-		{"sdk", func(m *modelExecution) { m.Runtime = proto.AssistantRuntimeAgentSDK }, "adapter_runtime_unsupported"},
+		{"sdk", func(m *modelExecution) { m.Runtime = "agentsdk" }, "adapter_runtime_unsupported"},
 		{"unknown_runtime", func(m *modelExecution) { m.Runtime = "unknown-runtime" }, "adapter_runtime_unsupported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestExternalAdapterAssistantAdmission(t *testing.T) {
 func TestExternalAdapterRefusesCodingProbeAndSDKFallback(t *testing.T) {
 	f, launcher, execution, _ := externalAssistantFixture(t)
 	id := execution.External.SessionID
-	execution.Runtime = proto.AssistantRuntimeAgentSDK
+	execution.Runtime = "agentsdk"
 	_, err := f.n.spawnClaude(id, t.TempDir(), launcher, false, false, execution)
 	requireExternalCode(t, err, "adapter_runtime_unsupported")
 	if f.file("start.json") != "" || f.file("external-argv") != "" {
@@ -314,7 +314,7 @@ func TestExternalAdapterMainChatLifecycleAndRevision(t *testing.T) {
 	}
 	f.idle(t, id)
 	first := f.proc(id)
-	if first == nil || first.runtime != "" || first.cmd.Process == nil {
+	if first == nil || first.cmd.Process == nil {
 		t.Fatal("native CLI process was not registered")
 	}
 	pid := first.cmd.Process.Pid
@@ -343,7 +343,7 @@ func TestExternalAdapterMainChatLifecycleAndRevision(t *testing.T) {
 	if _, err := os.Stat(settingsPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("private settings survived process cleanup: %v", err)
 	}
-	sdkControlTranscript(t, f, id)
+	controlTranscript(t, f, id)
 	if _, err := f.n.assistantSend(context.Background(), id, cwd, launcher, "resume", nil, "default", "", execution); err != nil {
 		t.Fatal(err)
 	}
@@ -469,8 +469,8 @@ func TestExternalAdapterConfiguredProgram(t *testing.T) {
 func TestExternalAdapterStderrIsSanitized(t *testing.T) {
 	p := &assistantProc{id: "11111111-2222-4333-8444-555555555555", launcher: proto.ExternalLauncherName("example", "target"),
 		born: time.Now(), stderrDone: make(chan struct{})}
-	buf := &lockedBuf{}
-	f := sdkTest(t)
+	buf := &syncBuffer{}
+	f := cliTest(t)
 	f.n.logger.SetOutput(buf)
 	watchAssistantStderr(f.n.logger, p, io.NopCloser(strings.NewReader("error: synthetic-private-credential\nadapter_source_options_ignored\nadapter_revision_mismatch\n")))
 	if strings.Contains(buf.String(), "synthetic-private-credential") || strings.Contains(strings.Join(p.stderrTail, " "), "synthetic-private-credential") {

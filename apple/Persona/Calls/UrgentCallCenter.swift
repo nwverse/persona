@@ -1,7 +1,5 @@
 #if os(iOS)
-import AVFoundation
 import Foundation
-import LiveCommunicationKit
 import os
 import UIKit
 import UserNotifications
@@ -11,13 +9,17 @@ import UserNotifications
 /// notification beside it. On some iPhones sold in mainland China the call shows only as a banner or in the Dynamic
 /// Island; the notification stays after the call's banner goes, and tapping it answers. Answering opens the call page
 /// (`UrgentCallSession`); declining, a ring nobody answers in 45 seconds, and the call settled elsewhere end it, and
-/// the manager hears each.
+/// the manager hears each. The system's side is the app's one call manager's (`PersonaCalls`, #9290), shared with calls
+/// to Persona: this keeps what is the ring's (the push, the companion notification, the ring's 45 s, the reports).
 @MainActor @Observable final class UrgentCallCenter {
     static let shared = UrgentCallCenter()
     private static let log = Logger(subsystem: "persona", category: "urgent-call")
 
-    /// The call the page shows: answered, or opened from its notification.
-    private(set) var session: UrgentCallSession?
+    /// The call the page shows: answered, or opened from its notification (`UrgentCallPresenter`, which the cover reads).
+    private(set) var session: UrgentCallSession? {
+        get { UrgentCallPresenter.shared.session }
+        set { UrgentCallPresenter.shared.session = newValue }
+    }
 
     /// How long a ring lasts before it counts as missed (the manager rings once more after its retry wait).
     static let ringFor: Duration = .seconds(45)
@@ -33,18 +35,11 @@ import UserNotifications
     }
 
     @ObservationIgnored private var ringing: [UUID: Ringing] = [:]
-    /// LiveCommunicationKit's manager: made once, used only from the main actor (its async calls run on its own queue),
-    /// so it is held unchecked rather than sent between regions.
-    @ObservationIgnored nonisolated(unsafe) private let manager: ConversationManager
-    @ObservationIgnored private let delegate = Delegate()
 
-    private init() {
-        let config = ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil, maximumConversationGroups: 1,
-                                                       maximumConversationsPerConversationGroup: 1, includesConversationInRecents: false,
-                                                       supportsVideo: false, supportedHandleTypes: [.generic])
-        manager = ConversationManager(configuration: config)
-        manager.delegate = delegate
-    }
+    private init() {}
+
+    /// The session of the call the system knows as `uuid`.
+    func session(for uuid: UUID) -> UrgentCallSession? { ringing[uuid]?.session }
 
     // MARK: Ringing
 
@@ -64,24 +59,24 @@ import UserNotifications
         // read yet), the call and its notification say only that Persona is calling, not what about.
         let details = UserDefaults.standard.bool(forKey: LiveActivityController.detailsKey)
         let name = Self.callName(title: ring?.title, details: details)
-        let update = Conversation.Update(localMember: Handle(type: .generic, value: "owner"),
-                                         members: [Handle(type: .generic, value: ring?.id ?? uuid.uuidString, displayName: name)])
-        prepareAudio()
         if let ring {
             let session = UrgentCallSession(ring: ring) { [weak self] ended in self?.sessionEnded(ended) }
             ringing[uuid] = Ringing(ring: ring, session: session)
             Task { await session.prepare() }
         }
+        let calls = PersonaCalls.shared
         Task {
             do {
-                try await manager.reportNewIncomingConversation(uuid: uuid, update: update)
+                // Its audio category first, where nothing else set it (`PersonaCalls.ring`).
+                try await calls.ring(uuid, callID: ring?.id ?? "", name: name)
             } catch {
-                // Focus or Do Not Disturb can refuse the call: the companion notification is what the owner sees then.
+                // Focus or Do Not Disturb can refuse the call: the companion notification is what the owner sees then, and
+                // the call refuses nothing else until it is answered from there.
                 Self.log.notice("urgent call: the call was not shown: \(error.localizedDescription, privacy: .public)")
             }
             done()
             guard let ring else {
-                end(uuid, .failed)
+                calls.settle(uuid, .failed)
                 return
             }
             await companion(ring, missed: false, details: details)
@@ -90,13 +85,8 @@ import UserNotifications
         }
     }
 
-    /// The call session's category, set before the system activates the session for the call.
-    private func prepareAudio() {
-        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: PhoneVoiceAudio.sessionOptions)
-    }
-
-    /// The owner answered (on the call, or by tapping its notification while it rang).
-    fileprivate func answered(_ uuid: UUID) {
+    /// The owner answered (on the call, or by tapping its notification while it rang): `PersonaCalls` on Join.
+    func answered(_ uuid: UUID) {
         guard var r = ringing[uuid], !r.answered else { return }
         r.answered = true
         ringing[uuid] = r
@@ -105,8 +95,8 @@ import UserNotifications
         report(r.ring, .answered)
     }
 
-    /// The call ended on the phone: declined while it rang, or hung up after it was answered.
-    fileprivate func endedOnPhone(_ uuid: UUID) {
+    /// The call ended on the phone: declined while it rang, or hung up after it was answered (`PersonaCalls` on End).
+    func endedOnPhone(_ uuid: UUID) {
         guard let r = ringing.removeValue(forKey: uuid) else { return }
         removeCompanion(r.ring.id)
         if r.answered {
@@ -120,7 +110,7 @@ import UserNotifications
     /// (or pushes the matter).
     private func missed(_ uuid: UUID) {
         guard let r = ringing.removeValue(forKey: uuid) else { return }
-        end(uuid, .unanswered)
+        PersonaCalls.shared.settle(uuid, .unanswered)
         report(r.ring, .missed)
         let details = UserDefaults.standard.bool(forKey: LiveActivityController.detailsKey)
         Task { await companion(r.ring, missed: true, details: details) }
@@ -131,7 +121,7 @@ import UserNotifications
     func changed(id: String, state: String) {
         guard state != "ringing", let (uuid, r) = ringing.first(where: { $0.value.ring.id == id }), !r.answered else { return }
         ringing[uuid] = nil
-        end(uuid, state == "answered" ? .joinedElsewhere : state == "declined" ? .declinedElsewhere : .remoteEnded)
+        PersonaCalls.shared.settle(uuid, state == "answered" ? .answeredElsewhere : state == "declined" ? .declinedElsewhere : .remoteEnded)
         removeCompanion(id)
     }
 
@@ -139,15 +129,20 @@ import UserNotifications
     func opened(callID: String, group: String) {
         if let (uuid, r) = ringing.first(where: { $0.value.ring.id == callID }), !r.answered {
             Task {
-                do {
-                    try await manager.perform([JoinConversationAction(conversationUUID: uuid)])
-                } catch {
-                    answered(uuid) // no call to join (the system refused it): the page opens all the same
-                    audioActivated()
-                }
+                let calls = PersonaCalls.shared
+                if await calls.answer(uuid) { return }
+                // No call to join (the system refused it): the page opens and the call talks all the same, a call to
+                // Persona on hold meanwhile. One the system would not hold stays on, and the conversation opens instead.
+                if await calls.answeredHere(uuid) { return }
+                self.openConversation(callID, group: group)
             }
             return
         }
+        openConversation(callID, group: group)
+    }
+
+    /// The urgent call's conversation, its matter in writing.
+    private func openConversation(_ callID: String, group: String) {
         removeCompanion(callID)
         guard let api = AppModel.shared.api(group) else { return }
         Task {
@@ -159,28 +154,29 @@ import UserNotifications
 
     #if DEBUG
     /// `-showUrgentCallSample YES`: the call page for the mock hub's call `call_mock`, without ringing or audio.
-    func showSample() {
+    /// `held`: the system call behind it on hold after an interruption its audio did not come back from, so the page offers
+    /// Resume beside Mute and Speaker (`PersonaCalls.showUrgentSample`, a sample too: nothing reaches the system).
+    func showSample(held: Bool = false) {
         guard let group = AppModel.shared.hub?.group else { return }
         let ring = UrgentCallRing(id: "call_mock", title: "", manager: "", conversationID: "", attempt: 1, group: group)
         let s = UrgentCallSession(ring: ring) { [weak self] _ in self?.session = nil }
         session = s
+        if held {
+            let uuid = UUID()
+            ringing[uuid] = Ringing(ring: ring, session: s, answered: true)
+            PersonaCalls.shared.showUrgentSample(uuid, callID: ring.id)
+        }
         Task { await s.sample() }
     }
     #endif
 
-    // MARK: The call's audio
-
-    fileprivate func audioActivated() {
-        session?.start()
-    }
-
-    fileprivate func audioDeactivated() {}
+    // MARK: Ending
 
     /// The page's Hang Up: ends the call with the system, which ends the session.
     func hangUp() {
         guard let session else { return }
         if let (uuid, _) = ringing.first(where: { $0.value.session === session }) {
-            Task { try? await manager.perform([EndConversationAction(conversationUUID: uuid)]) }
+            PersonaCalls.shared.hangUp(uuid)
         } else {
             session.hangUp()
         }
@@ -189,14 +185,9 @@ import UserNotifications
     private func sessionEnded(_ ended: UrgentCallSession) {
         if let (uuid, _) = ringing.first(where: { $0.value.session === ended }) {
             ringing[uuid] = nil
-            end(uuid, .remoteEnded)
+            PersonaCalls.shared.urgentEnded(uuid)
         }
         if session === ended { session = nil }
-    }
-
-    private func end(_ uuid: UUID, _ reason: Conversation.EndedReason) {
-        guard let conversation = manager.conversations.first(where: { $0.uuid == uuid }) else { return }
-        manager.reportConversationEvent(.conversationEnded(.now, reason), for: conversation)
     }
 
     // MARK: Reports and the companion notification
@@ -240,41 +231,6 @@ import UserNotifications
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
     }
 
-    // MARK: LiveCommunicationKit
-
-    /// The conversation manager's delegate: LiveCommunicationKit calls it on its own queue, so each call hops to the
-    /// main actor.
-    private final class Delegate: ConversationManagerDelegate, @unchecked Sendable {
-        func conversationManager(_ manager: ConversationManager, conversationChanged conversation: Conversation) {}
-        func conversationManagerDidBegin(_ manager: ConversationManager) {}
-        func conversationManagerDidReset(_ manager: ConversationManager) {}
-
-        func conversationManager(_ manager: ConversationManager, perform action: ConversationAction) {
-            nonisolated(unsafe) let action = action
-            let uuid = action.conversationUUID
-            Task { @MainActor in
-                switch action {
-                case let join as JoinConversationAction:
-                    join.fulfill(dateConnected: .now)
-                    UrgentCallCenter.shared.answered(uuid)
-                case let end as EndConversationAction:
-                    end.fulfill(dateEnded: .now)
-                    UrgentCallCenter.shared.endedOnPhone(uuid)
-                default:
-                    action.fail()
-                }
-            }
-        }
-
-        func conversationManager(_ manager: ConversationManager, timedOutPerforming action: ConversationAction) {}
-
-        func conversationManager(_ manager: ConversationManager, didActivate audioSession: AVAudioSession) {
-            Task { @MainActor in UrgentCallCenter.shared.audioActivated() }
-        }
-
-        func conversationManager(_ manager: ConversationManager, didDeactivate audioSession: AVAudioSession) {
-            Task { @MainActor in UrgentCallCenter.shared.audioDeactivated() }
-        }
-    }
 }
+
 #endif

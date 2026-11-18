@@ -17,9 +17,10 @@ export type Route =
   | { name: "workspace-board" }
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
-  | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true }
+  // `at`: the message to land on (?at=<item id>, the hub's links to one message, docs/protocol/deep-links.md)
+  | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true; at?: string }
   // one herdr tab (a slot) of a workspace; `sid` picks its pane (lib/herdr-tree.ts resolveTab)
-  | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true }
+  | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true; at?: string }
   // `mid` / `manager`: the computer the conversation runs on and its manager when another than the default
   // (`?machine=…&manager=…`, lib/conversation-page.ts): with several assistants a reload, a new tab or a link finds it
   // where it runs, whichever assistant is current
@@ -52,6 +53,8 @@ export type Route =
   | { name: "agent-list" }
   // the agents archived from the Agents list (lib/agent-archives.ts), to find and restore
   | { name: "agent-archives" }
+  // the runs of one New agent start side by side (#8916, lib/compare-runs.ts)
+  | { name: "compare"; id: string }
   // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"), with the open to-do beside it
   | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
@@ -80,7 +83,11 @@ export function parse(path: string, search = ""): Route {
   // a malformed escape must still route: parse runs outside every error boundary
   const p = path.split("/").filter(Boolean).map(decodeURIComponentSafe);
   const view = parseView(search);
-  const detail = () => ({ ...(view && { view }), ...(new URLSearchParams(search).get("work") === "1" && { work: true as const }) });
+  const detail = () => {
+    const q = new URLSearchParams(search);
+    const at = q.get("at");
+    return { ...(view && { view }), ...(q.get("work") === "1" && { work: true as const }), ...(at && { at }) };
+  };
   if (p[0] === "s" && p[1] && p[2]) return { name: "session", mid: p[1], sid: p[2], ...detail() };
   if (p[0] === "t" && p[1] && p[2] && p[3]) return { name: "tab", mid: p[1], space: p[2], slot: p[3], sid: p[4] || undefined, ...detail() };
   if (!p.length) return { name: "persona" };
@@ -107,12 +114,14 @@ export function parse(path: string, search = ""): Route {
   }
   if (p[0] === "a") return { name: "agents", id: p[1] };
   if (p[0] === "agents") return p[1] === "archived" ? { name: "agent-archives" } : { name: "agent-list" };
+  if (p[0] === "compare" && p[1] && !p[2]) return { name: "compare", id: p[1] };
   if (p[0] === "settings") return { name: "settings" };
   if (p[0] === "subscriptions") return { name: "subscriptions" };
   // /plugin/<id>/<ui>: the same page under its name before #1845 (bookmarks)
   if ((p[0] === "extension" || p[0] === "plugin") && p[1] && p[2]) return { name: "extension", extension: p[1], ui: p[2] };
   if (p[0] === "todos") {
-    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    // the link's own query (#9930): reading the page's made routeAt() on a /todos?id= link open the to-do on screen
+    const q = new URLSearchParams(search);
     const r: Route = { name: "todos", id: p[1] || q.get("id") || undefined };
     if (q.get("view") === "calendar") {
       const mode = q.get("mode");
@@ -199,6 +208,8 @@ export function routePath(r: Route): string {
       return "/agents";
     case "agent-archives":
       return "/agents/archived";
+    case "compare":
+      return `/compare/${encodeURIComponent(r.id)}`;
     case "todos": {
       const q = new URLSearchParams();
       if (r.view === "calendar") {
@@ -221,8 +232,8 @@ export function routePath(r: Route): string {
   }
 }
 
-function detailQuery({ view, work }: { view?: SessionView; work?: true }): string {
-  const q = [view && `view=${view}`, work && "work=1"].filter(Boolean).join("&");
+function detailQuery({ view, work, at }: { view?: SessionView; work?: true; at?: string }): string {
+  const q = [view && `view=${view}`, work && "work=1", at && `at=${encodeURIComponent(at)}`].filter(Boolean).join("&");
   return q ? `?${q}` : "";
 }
 

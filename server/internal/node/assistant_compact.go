@@ -71,7 +71,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// A guest (a meeting's room too) starts as on any resume: spawnClaude reads its tools and kind from its record
 		// (no built-in tools, strict MCP config, project setting sources, its own settings and profile), and
 		// spawnAssistant refuses one whose launcher runs another agent by now.
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions}
+		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin}
 		resolved, current := n.assistantModel(ctx, id)
 		if proto.IsExternalLauncher(launcher) {
 			if resolved != launcher || current.External == nil {
@@ -81,6 +81,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 			execution.Model, execution.Effort = current.Model, current.Effort
 			execution.UseEffort, execution.Fingerprint = current.UseEffort, current.Fingerprint
 			execution.Runtime, execution.IsMain, execution.External = current.Runtime, current.IsMain, current.External
+			execution.MainCompactWindow = n.mainWindowOn(launcher, current.IsMain, current.MainCompactWindow)
 			if err := n.checkExternalAssistant(ctx, id, launcher, execution, false); err != nil {
 				return err
 			}

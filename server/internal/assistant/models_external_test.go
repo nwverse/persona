@@ -174,6 +174,9 @@ func TestExternalPickFailureKeepsSelectionAndNeverFallsBack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f, l := externalPickFixture(t)
 			pick := pickExternal(t, s, l, "vendor/model-one")
+			if !s.launcherModelSet(withLauncherPurpose(t.Context(), "assistant"), "server", l.Name)[pick.Model] {
+				t.Fatal("the model metadata cache was not primed")
+			}
 			changed := externalTestLauncher()
 			tc.change(&changed)
 			f.mu.Lock()
@@ -209,11 +212,10 @@ func TestExternalPickFailureKeepsSelectionAndNeverFallsBack(t *testing.T) {
 			requireExternalError(t, s.sendModel(t.Context(), "server", "main", map[string]any{}, i18n.En), "target_not_found")
 		}
 	})
-	t.Run("configured SDK refuses without changing pick", func(t *testing.T) {
+	t.Run("requested SDK refuses without changing pick", func(t *testing.T) {
 		s, _, l := externalPickFixture(t)
 		pick := pickExternal(t, s, l, "vendor/model-one")
-		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.gw", Runtime: proto.AssistantRuntimeAgentSDK})
-		requireExternalError(t, s.sendModel(t.Context(), "server", "main", map[string]any{}, i18n.En), "runtime_unsupported")
+		requireExternalError(t, s.sendModel(t.Context(), "server", "main", map[string]any{"runtime": "agentsdk"}, i18n.En), "runtime_unsupported")
 		if kept, _ := s.modelPickOf(t.Context(), "server", "main"); kept != pick {
 			t.Fatalf("runtime refusal changed the pick: %+v", kept)
 		}
@@ -365,9 +367,87 @@ func TestExternalPickDoesNotAcceptMessageOnlyModelChanges(t *testing.T) {
 		t.Fatalf("the real main session was not pinned: %v %v", params, err)
 	}
 	externalExecutionOf(t, params, l)
-	for _, extra := range []map[string]any{{"guest": map[string]any{}}, {"new_session_id": "forged"}, {"runtime": proto.AssistantRuntimeAgentSDK}, {"runtime": "future-runtime"}} {
+	for _, extra := range []map[string]any{{"guest": map[string]any{}}, {"new_session_id": "forged"}, {"runtime": "agentsdk"}, {"runtime": "future-runtime"}} {
 		if _, err := send(t, s, "main", extra); err == nil {
 			t.Fatalf("external execution accepted out-of-scope params: %v", extra)
+		}
+	}
+}
+
+func TestExternalRuntimeAdmissionKeepsTheRawRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runtime any
+		allowed bool
+	}{
+		{"CLI", "cli", true},
+		{"default", "", true},
+		{"SDK", "agentsdk", false},
+		{"unknown", "future-runtime", false},
+		{"padded CLI", " cli ", false},
+		{"null", nil, false},
+		{"number", 1, false},
+		{"boolean", true, false},
+		{"object", map[string]any{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, l := externalPickFixture(t)
+			pickExternal(t, s, l, "vendor/model-one")
+			for _, entry := range []string{"send params", "model boundary"} {
+				t.Run(entry, func(t *testing.T) {
+					params := map[string]any{"runtime": tc.runtime}
+					var err error
+					if entry == "send params" {
+						params, err = send(t, s, "main", params)
+					} else {
+						err = s.sendModel(t.Context(), "server", "main", params, i18n.En)
+					}
+					if (err == nil) != tc.allowed {
+						t.Fatalf("runtime %v: allowed=%v, params=%v, error=%v", tc.runtime, tc.allowed, params, err)
+					}
+					if err == nil {
+						externalExecutionOf(t, params, l)
+						if _, sent := params["runtime"]; sent {
+							t.Fatal("external runtime reached the node")
+						}
+					} else if params["external"] != nil {
+						t.Fatal("a refused runtime acquired an execution binding")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestExternalLegacyStoredRuntimeDoesNotChooseTheRuntime(t *testing.T) {
+	s, _, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-one")
+	putRawSetting(t, s, modelRecordKey("assistant"),
+		`{"revision":2,"binding":{"provider":"launcher.gw","runtime":"agentsdk"}}`)
+	params, err := send(t, s, "main", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalExecutionOf(t, params, l)
+	if _, sent := params["runtime"]; sent {
+		t.Fatal("a legacy stored runtime reached external execution")
+	}
+}
+
+func TestExternalRuntimeAdmissionLeavesOrdinaryRuntimeIgnored(t *testing.T) {
+	s, _, _ := externalPickFixture(t)
+	if err := s.guestSet(t.Context(), "server", "guest", []string{"sample.tool"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []string{"main", "side", "unknown", "guest"} {
+		for _, runtime := range []any{"agentsdk", "future-runtime", map[string]any{}} {
+			params, err := send(t, s, sid, map[string]any{"runtime": runtime})
+			if err != nil {
+				t.Fatalf("ordinary %s runtime %v: %v", sid, runtime, err)
+			}
+			if _, sent := params["runtime"]; sent || params["external"] != nil {
+				t.Fatalf("ordinary %s retained execution metadata: %v", sid, params)
+			}
 		}
 	}
 }

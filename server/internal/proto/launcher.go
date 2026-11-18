@@ -13,6 +13,9 @@ type Launcher struct {
 	// Source: "zshrc" (a function in the machine's ~/.zshrc), "path" (a wrapper script on its PATH, node/pathlaunchers.go), "persona" (managed in Settings › Models, the manager's assistant/models_launchers.go) "claude_desktop" (claude-desktop, a new session in Claude's desktop app, node/claudedesktop_new.go) or "codex_app" (codex-app, a new chat in the Codex App, node/codexapp_new.go). Empty
 	// from an older node: zshrc.
 	Source string `json:"source,omitempty"`
+	// RuntimeFallback is node-local discovery provenance: an ordinary CLI command yields to a connected runtime
+	// offering the same launcher. Explicit shell definitions never do. This flag is not part of the wire protocol.
+	RuntimeFallback bool `json:"-"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
 	// "Starting from the phone").
 	Agent string `json:"agent,omitempty"`
@@ -33,6 +36,12 @@ type Launcher struct {
 	Assistant bool `json:"assistant,omitempty"`
 	// External is a sanitized, machine-local adapter advertisement. It grants no execution authority.
 	External *ExternalLauncher `json:"external,omitempty"`
+	// AssistantFor: on an Assistant launcher, the Agent launcher of this computer it runs the assistant for, as the
+	// runtime declares it (the person who set it up says it is the same agent and account): integrations/grok's
+	// grok-chat for the Paseo provider grok, which only starts Agents. The main chat's picker points that one at it
+	// (docs/integrations/runtimes.md "Assistant"); nothing is ever run on one in place of the other. Older runtimes
+	// leave it out. A string, so Launcher stays comparable.
+	AssistantFor string `json:"assistant_for,omitempty"`
 	// AutoAccept: a runtime's launcher whose agents ask for approval unless a switch is on, which a start in
 	// bypassPermissions turns on (Paseo's Auto Accept: its ACP providers such as Grok, and OpenCode;
 	// docs/integrations/paseo.md). The Agents Persona itself starts on it run with the switch on, as Claude Code's run in
@@ -222,7 +231,8 @@ type ManagedLauncher struct {
 	// TimeoutMS: API_TIMEOUT_MS; 0 is 3000000 for a gateway (BaseURL set), Claude Code's own default otherwise.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// CompactWindow: CLAUDE_CODE_AUTO_COMPACT_WINDOW; 0 is the default model's context window (none when unknown).
-	// Assistant conversations, the main one included, follow it like agents do (#3066).
+	// Assistant conversations follow it like agents do (#3066); the main one is held to assistant.main_compact_window
+	// when that is smaller (#7314).
 	CompactWindow int `json:"compact_window,omitempty"`
 	// MaxContext: CLAUDE_CODE_MAX_CONTEXT_TOKENS; 0 is the default model's context window when it is over 200K.
 	MaxContext int `json:"max_context,omitempty"`
@@ -310,27 +320,6 @@ type ProviderModel struct {
 	// Price is the exact catalog entry's reference price. It is never inherited from an earlier generation.
 	Price *ModelPrice `json:"price,omitempty"`
 }
-
-// The assistant's runtimes for a Claude launcher (model_config.assistant's "runtime", the assistant.send / .start /
-// .warm params' "runtime"): the Claude Code CLI in stream-json mode (the default), or the Claude Agent SDK through the
-// node's Node bridge (integrations/agent-sdk, #2455), which falls back to the CLI where no Node 22+ is found.
-const (
-	AssistantRuntimeCLI      = "cli"
-	AssistantRuntimeAgentSDK = "agentsdk"
-)
-
-// Why an assistant conversation that asked for the Agent SDK runs on the CLI (Session.RuntimeFallback), as the node
-// writes it: in Chinese, the ones ending in a full-width colon followed by the cause, FallbackShellLauncher with the launcher's name.
-// The hub rewrites them in the app's language (hub/transcript_text.go runtimeFallbackText).
-const (
-	FallbackShellLauncher  = "启动器 %s 是这台电脑上的 shell 命令，Agent SDK 用不了它的设置"
-	FallbackReadBridge     = "读不到 Agent SDK 桥："
-	FallbackNoBridge       = "这个 personad 没有带 Agent SDK 桥"
-	FallbackWriteBridge    = "写不出 Agent SDK 桥："
-	FallbackNoBridgeScript = "Agent SDK 桥的包里没有 bridge.mjs"
-	FallbackNoNode         = "没有 Node.js 22 及以上："
-	FallbackNoClaude       = "找不到 claude："
-)
 
 // BearerAuth: the launcher's key goes as Authorization: Bearer (ANTHROPIC_AUTH_TOKEN) rather than x-api-key.
 func (l ManagedLauncher) BearerAuth() bool { return l.Auth == "bearer" }

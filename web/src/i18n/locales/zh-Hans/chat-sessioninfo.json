@@ -7,6 +7,7 @@
   "group_usage": "用量",
   "context": "上下文",
   "output": "输出",
+  "tokens": "{value} tokens",
   "turns": "轮数",
   "compaction": "压缩",
   "compactions_other": "{count} 次",

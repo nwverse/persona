@@ -300,9 +300,6 @@ func (s *Service) assistantProviders(ctx context.Context, machine string, picker
 		if l.Name == "" || slices.Contains(hidden, l.Name) && compat.Source(l.Source) != "persona" {
 			continue
 		}
-		if proto.IsExternalLauncher(l.Name) && s.externalRuntime(ctx) != nil {
-			continue
-		}
 		if s.modelLauncherCompatible(p, l, stored) {
 			allowed[l.Name] = true
 		}

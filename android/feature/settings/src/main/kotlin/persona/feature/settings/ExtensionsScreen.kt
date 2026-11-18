@@ -57,7 +57,8 @@ import persona.core.contracts.api.SUBSCRIPTIONS_UI
  * the hub's machine), its state, and the way to its page. Extensions are installed on the hub's machine only.
  */
 @Composable
-internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit, onExtension: (String, String?) -> Unit, onMarket: (() -> Unit)? = null) {
+internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit, onExtension: (String, String?) -> Unit, onMarket: (() -> Unit)? = null,
+    slots: LazyListScope.() -> Unit = {}) {
     if (extensions == null) {
         JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_ext_demo_none)) } }
         return
@@ -92,6 +93,8 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
                     selected = detail == ExtensionMarketRoute, onClick = onMarket)
             }
         }
+        // Cards and nav pages, above the installed list, as iOS Settings › Extensions (docs/extensions/extensions.md "UI slots").
+        slots()
         if (list == null && state.loading) item("loading") { JLoading() }
         if (list != null && list.isEmpty()) item("empty") {
             JEmptyState(stringResource(R.string.settings_ext_empty_title), stringResource(R.string.settings_ext_empty_text), icon = PhIcons.PuzzlePiece)
@@ -316,10 +319,18 @@ fun ExtensionPage(
         removing = false
         scope.launch {
             if (model.uninstall(keep, members = members)) {
-                feedback?.notice(ExtensionText.uninstalled(res, current.extension.name.ifBlank { current.extension.id }, members, model.removal))
-                onBack()
+                if (model.state.value.removalNotice == null) {
+                    feedback?.notice(ExtensionText.uninstalled(res, current.extension.name.ifBlank { current.extension.id }, members, model.removal))
+                    onBack()
+                }
             }
         }
+    }
+    state.removalNotice?.let { notice ->
+        ExtensionRemovalWarningsSheet(notice, onDone = {
+            model.dismissRemovalNotice()
+            onBack()
+        })
     }
     state.partial?.let { PackPartialDialog(it, detail?.extension?.name?.ifBlank { null } ?: extensionId, memberNames) { model.dismissPartial() } }
     // A new hub switches the pack's enabled members too: name them and change nothing until agreed (#1830).
@@ -337,8 +348,10 @@ fun ExtensionPage(
             destructive = true, confirm = stringResource(if (ask.keepData == null) R.string.settings_ext_dependents_off else R.string.settings_ext_dependents_remove) to {
                 scope.launch {
                     if (model.confirmCascade() && ask.keepData != null) {
-                        feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal))
-                        onBack()
+                        if (model.state.value.removalNotice == null) {
+                            feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal))
+                            onBack()
+                        }
                     }
                 }
             })

@@ -28,6 +28,7 @@ type fakeDesktopApp struct {
 	mu       sync.Mutex
 	seeds    []fakeSeed
 	links    []string
+	modes    map[string]string // the mode each session was imported in, read as the app reads it
 	inboxes  map[string]*fakeInbox
 	noImport bool
 }
@@ -40,7 +41,7 @@ func newFakeDesktopApp(t *testing.T, home string) *fakeDesktopApp {
 	if err := os.MkdirAll(filepath.Join(third, "claude-code-sessions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	a := &fakeDesktopApp{t: t, home: home, index: third, inboxes: map[string]*fakeInbox{}}
+	a := &fakeDesktopApp{t: t, home: home, index: third, inboxes: map[string]*fakeInbox{}, modes: map[string]string{}}
 	oldSeed, oldOpen := seedDesktopSession, openDesktopLink
 	seedDesktopSession = func(_ context.Context, claude, dir, id, title string) error {
 		a.mu.Lock()
@@ -59,6 +60,10 @@ func newFakeDesktopApp(t *testing.T, home string) *fakeDesktopApp {
 		switch {
 		case strings.HasPrefix(link, "claude://resume?session="):
 			id := strings.TrimPrefix(link, "claude://resume?session=")
+			mode := importedDesktopMode(t, findTranscript(t, home, id))
+			a.mu.Lock()
+			a.modes[id] = mode
+			a.mu.Unlock()
 			if !noImport {
 				writeDesktopEntry(t, a.index, id, id, false, nil, `,"cwd":"`+a.dirOf(id)+`"`)
 			}
@@ -88,6 +93,33 @@ func (a *fakeDesktopApp) dirOf(id string) string {
 		}
 	}
 	return ""
+}
+
+func (a *fakeDesktopApp) importedMode(id string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.modes[id]
+}
+
+// importedDesktopMode is the mode the app imports the transcript at path in: the permissionMode of its last user line
+// that names one ("" for none: the app's settings decide, and it lowers bypassPermissions to acceptEdits).
+func importedDesktopMode(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		var row struct {
+			Type           string `json:"type"`
+			PermissionMode string `json:"permissionMode"`
+		}
+		if json.Unmarshal([]byte(line), &row) == nil && row.Type == "user" && row.PermissionMode != "" {
+			mode = row.PermissionMode
+		}
+	}
+	return mode
 }
 
 func (a *fakeDesktopApp) seeded() []fakeSeed {
@@ -177,6 +209,22 @@ func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstMessageReceived := func() bool {
+		in := app.inbox(s.SessionID)
+		return in != nil && len(in.users()) == 1
+	}
+	// The inbox records the user before send finishes confirming delivery. Drain that send before fixture cleanup
+	// restores peerConfirmWait or closes its background-created inbox, even when an assertion below fails.
+	defer func() {
+		waitFor(t, "the first message in the session's inbox", firstMessageReceived)
+		waitFor(t, "the desktop session's first send to finish", func() bool {
+			unlock, ok := n.typing.tryLock(s.SessionID)
+			if ok {
+				unlock()
+			}
+			return ok
+		})
+	}()
 	if !validID(s.SessionID) || s.Cwd != dir || s.Title != "整理 本周的" || s.SourceKind != proto.SourceClaudeDesktop || s.Launcher != "" {
 		t.Fatalf("session: %+v", s)
 	}
@@ -187,10 +235,7 @@ func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 	if links := app.opened(); len(links) == 0 || links[0] != "claude://resume?session="+s.SessionID {
 		t.Fatalf("links: %v", links)
 	}
-	waitFor(t, "the first message in the session's inbox", func() bool {
-		in := app.inbox(s.SessionID)
-		return in != nil && len(in.users()) == 1
-	})
+	waitFor(t, "the first message in the session's inbox", firstMessageReceived)
 	users := app.inbox(s.SessionID).users()
 	if content, _ := users[0]["message"].(map[string]any)["content"].(string); !strings.Contains(content, "整理  本周的\n周报") {
 		t.Fatalf("first message: %v", users[0])
@@ -450,6 +495,71 @@ func TestTheDesktopSeedRunsALocalCommandOnly(t *testing.T) {
 	}
 	if err := seedDesktopSession(context.Background(), claude, dir, id, "x"); err == nil || !strings.Contains(err.Error(), "Not logged in") {
 		t.Fatalf("a failed run: %v", err)
+	}
+}
+
+// The app lowers bypassPermissions to acceptEdits for a session it imports and keeps auto (#9350), so a start with no
+// mode, or bypassPermissions, is imported in auto; default, acceptEdits and auto are imported as asked. The mode is on
+// the transcript before the app is asked to import it.
+func TestADesktopStartIsImportedInAutoMode(t *testing.T) {
+	n, home := testNode(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	app := newFakeDesktopApp(t, home)
+	fakeClaudeOnPath(t)
+	shellLaunchers(t)
+	dir := t.TempDir()
+	for _, c := range []struct{ asked, want string }{
+		{"", "auto"},
+		{"bypassPermissions", "auto"},
+		{"auto", "auto"},
+		{"acceptEdits", "acceptEdits"},
+		{"default", "default"},
+	} {
+		params := map[string]any{"cwd": dir, "launcher": "claude-desktop"}
+		if c.asked != "" {
+			params["permission_mode"] = c.asked
+		}
+		s, err := startDesktop(t, n, params)
+		if err != nil {
+			t.Fatalf("%q: %v", c.asked, err)
+		}
+		if got := app.importedMode(s.SessionID); got != c.want {
+			t.Errorf("asked %q: imported in %q, want %q", c.asked, got, c.want)
+		}
+	}
+}
+
+// stampDesktopMode puts the mode on the user lines that name none and keeps every other byte of the transcript.
+func TestStampDesktopModeKeepsTheRestOfTheTranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	before := `{"type":"custom-title","customTitle":"周报 <整理> & co"}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"<command-name>/rename</command-name>"}}` + "\n" +
+		`{"type":"user","permissionMode":"acceptEdits","message":{"role":"user","content":"kept"}}` + "\r\n" +
+		`not json` + "\n" +
+		`{"type":"system","content":"<local-command-stdout>x</local-command-stdout>"}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"last, no newline"}}`
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stampDesktopMode(path, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	want := strings.Replace(strings.Replace(before,
+		`{"type":"user","message":{"role":"user","content":"<command`, `{"permissionMode":"auto","type":"user","message":{"role":"user","content":"<command`, 1),
+		`{"type":"user","message":{"role":"user","content":"last`, `{"permissionMode":"auto","type":"user","message":{"role":"user","content":"last`, 1)
+	if string(b) != want {
+		t.Fatalf("stamped:\n%s\nwant:\n%s", b, want)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v", st.Mode().Perm())
+	}
+
+	if err := os.WriteFile(path, []byte(`{"type":"custom-title","customTitle":"x"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stampDesktopMode(path, "auto"); err == nil {
+		t.Fatal("a transcript with no user line was stamped")
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/tokenuse"
 )
 
 // Limits keep huge tool outputs and images from flooding the phone. Parsing keeps up to maxTextLen of any text, what
@@ -42,11 +43,11 @@ type entry struct {
 	} `json:"compactMetadata"`
 	Content json.RawMessage `json:"content"`
 	Message *struct {
-		Role    string          `json:"role"`
-		Model   string          `json:"model"`
-		ID      string          `json:"id"`
-		Content json.RawMessage `json:"content"`
-		Usage   *claudeUsage    `json:"usage"`
+		Role    string                `json:"role"`
+		Model   string                `json:"model"`
+		ID      string                `json:"id"`
+		Content json.RawMessage       `json:"content"`
+		Usage   *tokenuse.ClaudeUsage `json:"usage"`
 	} `json:"message"`
 	AITitle        string `json:"aiTitle"`
 	CustomTitle    string `json:"customTitle"`
@@ -137,6 +138,9 @@ type Meta struct {
 	// CodexSandbox: Codex rollouts' sandbox of the latest turn (read-only, workspace-write…); PermissionMode is its approval policy.
 	CodexSandbox  string
 	ContextTokens int // input + cache read + cache creation of the latest reply: what the model last saw
+	// ContextCompacted: a compaction came after the latest reply, so the context is not known (ContextTokens 0) until
+	// the next one; the size before it no longer stands (#9207).
+	ContextCompacted bool
 	// ContextWindow is the model's context window when the transcript says it (a Codex rollout's token_count carries
 	// model_context_window); 0 for Claude Code, whose transcripts do not (node/contextwindow.go knows by model id).
 	ContextWindow    int
@@ -148,8 +152,8 @@ type Meta struct {
 	lastOutputTokens int
 	// usage: the request whose usage the latest reply lines put on items (item_usage.go). codexTotal: a rollout's
 	// latest running total of tokens; codexUsage: what the turn under way used so far.
-	usage      RequestUsage
-	codexTotal int64
+	usage      tokenuse.Request
+	codexTotal tokenuse.CodexTotal
 	codexUsage proto.TokenUsage
 	sawUser    bool // a user line was read: a subagent's own work began (a fork's copied context comes before it)
 	// Queue holds input typed while Claude works and not yet taken (queue-operation lines:
@@ -403,6 +407,10 @@ var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-co
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
 
+// OmpStoppedNotice is what a stopped omp session (listed from omp's own session files, node/ompdisk.go) shows in
+// place of its conversation. The hub puts it into the reader's language (hub/transcript_text.go noticeText).
+const OmpStoppedNotice = "这个 omp 会话已停止。现在只能在电脑上接着它（omp --resume），这里还不能给它发消息。"
+
 // InterruptedNotice is the notice a turn stopped by the user becomes (Claude Code and Codex); APIErrorPrefix starts
 // the notice of a turn the model service failed. The channels read them as why a turn ended without words
 // (channel.Stopped).
@@ -538,12 +546,17 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	switch {
 	case e.Type == "system" && e.Subtype == "compact_boundary":
 		meta.Compactions++
+		if !e.IsSidechain {
+			// What the latest reply saw was compacted away, and the boundary's postTokens leaves out the system prompt
+			// and tools (the next reply sees about four times as much, #9207): unknown until that reply.
+			meta.ContextTokens, meta.ContextCompacted = 0, true
+		}
 	case e.Type == "assistant" && e.Message != nil && e.Message.Usage != nil && !e.IsSidechain:
 		u := e.Message.Usage
 		// A gateway's sum of a whole turn is not a context, nor the zeros it reports on the turn's other replies
 		// (usage.go): the last real one stands.
 		if tokens := int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens); tokens > 0 && PlausibleContext(tokens, 0) {
-			meta.ContextTokens = tokens
+			meta.ContextTokens, meta.ContextCompacted = tokens, false
 		}
 		meta.observeOutput(e.Message.ID, int(u.OutputTokens))
 	}

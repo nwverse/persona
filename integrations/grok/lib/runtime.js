@@ -15,6 +15,8 @@ const READ_TOOLS = new Set(['read_file', 'list_directory', 'search_files', 'grep
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch'])
 const MODES = new Set(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'])
 const validRaw = (raw) => /^[a-f0-9-]{36}$/i.test(raw)
+// Conversations started in a terminal are listed for this long after their last update, like the SDK's recent window.
+const TERMINAL_RECENT_MS = 7 * 24 * 60 * 60 * 1000
 
 // Match the node's assistant/health directories, including manager-scoped conversations.
 export function isConversationDir(cwd, home, env) {
@@ -25,6 +27,13 @@ export function createGrokRuntime(options = {}) {
   const home = options.home || homedir()
   const grokHome = options.grokHome || process.env.GROK_HOME || join(home, '.grok')
   const launcher = options.launcher || 'grok-chat'
+  // What the apps call it, and the Agent launcher (a Paseo provider running this Grok CLI and account) it runs the
+  // assistant for: only what the person setting it up declares, never guessed from names.
+  const displayName = typeof options.displayName === 'string' && options.displayName.trim() ? options.displayName.trim() : 'Grok'
+  const assistantFor = typeof options.assistantFor === 'string' ? options.assistantFor.trim() : ''
+  if (assistantFor && (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(assistantFor) || assistantFor === launcher)) throw new Error('Unsupported Grok assistant-for launcher')
+  const launcherEntry = (model, models) => ({ name: launcher, agent: 'grok', display_name: displayName, ...(assistantFor ? { assistant_for: assistantFor } : {}),
+    ...(model ? { model } : {}), ...(models ? { models } : {}) })
   const defaultModel = options.model || ''
   const defaultEffort = options.effort || ''
   const defaultMode = options.mode || 'default'
@@ -35,6 +44,7 @@ export function createGrokRuntime(options = {}) {
   let catalog = []
   let selectedModel = defaultModel
   let scanning
+  let rescanning
   const acp = options.acp || new GrokAcp({ bin: options.bin, args: options.args,
     env: { ...process.env, GROK_HOME: grokHome }, log, request: handleRequest })
   acp.request = handleRequest
@@ -48,7 +58,7 @@ export function createGrokRuntime(options = {}) {
   })
 
   const rt = createRuntime({ listSessions, items, cursor, item, image, start, send, interrupt, rename: renameSession, close, models, modes, check }, {
-    runtime: 'grok-chat', name: 'Grok', agent: 'grok', launcher, launcherModel: defaultModel,
+    runtime: 'grok-chat', name: 'Grok', agent: 'grok', launcher, launcherModel: defaultModel, launchers: [launcherEntry(defaultModel)],
     assistant: true, answerFirst: 'phone', modelSwitch: true, readonly: true,
     socketPath: options.socketPath, connect: options.connect, log, refreshMs: options.refreshMs || 10_000,
     pushDelayMs: options.pushDelayMs ?? 50, retryMs: options.retryMs,
@@ -72,16 +82,41 @@ export function createGrokRuntime(options = {}) {
   })
 
   function createState(raw, cwd, restored = false) {
-    const s = { ...blankItems(), raw, id: PREFIX + raw, cwd, assistant: true, title: 'Grok', mode: restored ? 'default' : defaultMode, modeKnown: !restored,
+      // A rediscovered conversation belongs to the assistant only in its directories (or by its metadata, readMetadata).
+    const s = { ...blankItems(), raw, id: PREFIX + raw, cwd, assistant: !restored || isConversationDir(cwd, home, options.env || process.env), title: 'Grok', mode: restored ? 'default' : defaultMode, modeKnown: !restored,
       model: '', effort: '', updated: new Date().toISOString(), history: `grok:${raw}`,
-      loaded: 0, running: false, tail: Promise.resolve(), queued: 0, epoch: 0, seen: new Set(), asks: new Set(), approved: new Set() }
+      restored, loaded: 0, running: false, tail: Promise.resolve(), queued: 0, epoch: 0, seen: new Set(), asks: new Set(), approved: new Set() }
     sessions.set(s.id, s)
+    rt.sessionsChanged()
     return s
   }
 
   function requireSession(id) {
     const s = sessions.get(id)
     if (!s) throw new RpcError('Grok conversation is unavailable', 'not_found')
+    return s
+  }
+
+  // Grok CLI records the conversations its running processes hold in active_sessions.json. One open in a terminal
+  // is shown read-only: a second writer through ACP would interleave with the terminal's own turns.
+  let terminalHeld = new Set()
+  async function readTerminalHeld() {
+    const held = new Set()
+    try {
+      const list = JSON.parse(await readFile(join(grokHome, 'active_sessions.json'), 'utf8'))
+      for (const entry of Array.isArray(list) ? list : []) {
+        if (!validRaw(entry?.session_id) || !Number.isInteger(entry.pid) || entry.pid <= 0 || entry.pid === acp.child?.pid) continue
+        try { process.kill(entry.pid, 0) } catch (error) { if (error.code !== 'EPERM') continue }
+        held.add(entry.session_id)
+      }
+    } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) log(`Grok active sessions read: ${error.code || error.name}`) }
+    terminalHeld = held
+  }
+  const inTerminal = (s) => terminalHeld.has(s.raw) && s.loaded !== acp.generation
+  async function requireWritable(id) {
+    await readTerminalHeld()
+    const s = requireSession(id)
+    if (inTerminal(s)) throw new RpcError('This Grok conversation is open in a terminal. Continue it there, or exit Grok in that terminal first.', 'terminal_open')
     return s
   }
 
@@ -94,7 +129,7 @@ export function createGrokRuntime(options = {}) {
       if (option.id === 'reasoning_effort') s.effort = option.currentValue
     }
     selectedModel ||= s.model
-    rt.launchersChanged([{ name: launcher, agent: 'grok', model: defaultModel || selectedModel, models: modelOptions(catalog, defaultModel || selectedModel) }])
+    rt.launchersChanged([launcherEntry(defaultModel || selectedModel, modelOptions(catalog, defaultModel || selectedModel))])
   }
 
   const sessionDir = (s) => s.file ? dirname(s.file) : join(grokHome, 'sessions', encodeURIComponent(s.cwd), s.raw)
@@ -140,22 +175,31 @@ export function createGrokRuntime(options = {}) {
   }
 
   async function scan() {
-    if (scanning) return scanning
+    // A caller arriving mid-scan waits for one more scan, which sees what changed after the running one began.
+    if (scanning) return (rescanning ||= scanning.then(() => { rescanning = null; return scan() }))
     scanning = (async () => {
-      let dirs
-      try { dirs = await readdir(join(grokHome, 'sessions'), { withFileTypes: true }) } catch (error) { if (error.code === 'ENOENT') return; throw error }
+      await readTerminalHeld()
+      let dirs = []
+      try { dirs = await readdir(join(grokHome, 'sessions'), { withFileTypes: true }) } catch (error) { if (error.code !== 'ENOENT') throw error }
       for (const dir of dirs) {
         if (!dir.isDirectory()) continue
         let cwd
         try { cwd = decodeURIComponent(dir.name) } catch { continue }
-        if (!isConversationDir(cwd, home, options.env || process.env) && ![...sessions.values()].some((s) => s.cwd === cwd)) continue
+        // Every working directory: the assistant's, and the ones where Grok was started in a terminal.
+        const conversations = isConversationDir(cwd, home, options.env || process.env)
         const base = join(grokHome, 'sessions', dir.name)
-        const entries = await readdir(base, { withFileTypes: true })
+        let entries
+        try { entries = await readdir(base, { withFileTypes: true }) } catch (error) { if (error.code === 'ENOENT') continue; throw error }
         for (const entry of entries) {
-          if (!entry.isDirectory() || !validRaw(entry.name)) continue
+          if (!entry.isDirectory() || !validRaw(entry.name) || probes.has(entry.name)) continue
           try {
             const summary = JSON.parse(await readFile(join(base, entry.name, 'summary.json'), 'utf8'))
             if (summary.info?.cwd !== cwd || summary.info?.id !== entry.name) continue
+            // Background CLI runs and child agents are not interactive terminal conversations.
+            if (!conversations && (summary.session_kind === 'headless' || summary.session_kind === 'subagent')) continue
+            // Older terminal conversations are left unread until they are updated again.
+            if (!conversations && !sessions.has(PREFIX + entry.name) && !terminalHeld.has(entry.name) &&
+              !(Date.now() - Date.parse(summary.updated_at) < TERMINAL_RECENT_MS)) continue
             const s = sessions.get(PREFIX + entry.name) || createState(entry.name, cwd, true)
             s.file = join(base, entry.name, 'updates.jsonl')
             if (!s.running) {
@@ -163,10 +207,24 @@ export function createGrokRuntime(options = {}) {
               s.model = summary.current_model_id || s.model
               s.effort = summary.reasoning_effort || s.effort
               s.updated = summary.updated_at || s.updated
-              await readTranscript(s)
+              // A terminal's turns reach a watching phone as the native transcript grows.
+              if (await readTranscript(s) && rt.watching(s.id)) rt.append(s.id, { items: s.items.map(placeholder), fromSeq: 0, toSeq: s.items.length, history: s.history })
               await readMetadata(s)
             }
           } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) log(`Grok transcript read: ${error.code || error.name}`) }
+        }
+      }
+      // Native cleanup can remove a whole cwd group between scans. Forget only rediscovered, unowned conversations;
+      // a new chat may not have flushed its summary yet, and the assistant keeps its own conversation lifecycle.
+      for (const [id, s] of sessions) {
+        if (!s.restored || s.assistant) continue
+        try { await stat(join(sessionDir(s), 'summary.json')) }
+        catch (error) {
+          if (error.code !== 'ENOENT') { log(`Grok summary stat: ${error.code || error.name}`); continue }
+          // Check after the filesystem await: a turn may have started or queued while the summary was checked.
+          if (s.running || s.queued || s.loading || terminalHeld.has(s.raw)) continue
+          sessions.delete(id)
+          rt.sessionsChanged()
         }
       }
     })().finally(() => { scanning = null })
@@ -178,18 +236,20 @@ export function createGrokRuntime(options = {}) {
     try {
       const info = await stat(file)
       const stamp = `${info.mtimeMs}:${info.size}`
-      if (stamp === s.stamp) return
+      if (stamp === s.stamp) return false
       const data = await readFile(file, 'utf8')
       const parsed = parseTranscript(data)
       // A newly-created chat can be listed before Grok flushes its first response.
-      if (!parsed.items.length && s.items.length) return
+      if (!parsed.items.length && s.items.length) return false
       const echoes = new Map()
       for (const i of s.items) if (i.client_msg_id) echoes.set(i.text, [...(echoes.get(i.text) || []), i.client_msg_id])
       for (const i of parsed.items) if (i.role === 'user' && i.kind === 'text' && echoes.get(i.text)?.length) i.client_msg_id = echoes.get(i.text).shift()
       Object.assign(s, parsed, { stamp, file, history: `grok:${s.raw}:${createHash('sha256').update(data).digest('hex').slice(0, 16)}` })
       if (s.failure && s.failureKey !== inputKey(s)) { s.failure = null; s.failureKey = null }
       if (s.failure) recordFailure(s)
+      return true
     } catch (error) { if (error.code !== 'ENOENT') throw error }
+    return false
   }
 
   function row(s) {
@@ -200,7 +260,8 @@ export function createGrokRuntime(options = {}) {
       efforts: modelOptions(catalog, s.model).find((m) => m.id === s.model)?.efforts }
   }
 
-  async function listSessions() { await scan(); return rt.recent([...sessions.values()].filter((s) => !s.closed).map(row), { pinned: (s) => s.status === 'working' }) }
+  // A conversation a terminal holds stays listed however long ago it was last updated.
+  async function listSessions() { await scan(); return rt.recent([...sessions.values()].filter((s) => !s.closed).map(row), { pinned: (r) => r.status === 'working' || terminalHeld.has(sessions.get(r.session_id)?.raw) }) }
   const placeholder = (i) => i.image ? { ...i, image: { mime: i.image.mime, data: '', lazy: true, size: Buffer.from(i.image.data, 'base64').length } } : i
   function push(s) { rt.append(s.id, { items: s.items.map(placeholder), fromSeq: 0, toSeq: s.items.length, history: s.history }); rt.sessionsChanged() }
   async function items(params) { await scan(); const s = requireSession(params.session_id); return page(s.items.map(placeholder), params, { history: s.history, toSeq: s.items.length }) }
@@ -303,7 +364,7 @@ export function createGrokRuntime(options = {}) {
   }
 
   async function send(params) {
-    const s = requireSession(params.session_id)
+    const s = await requireWritable(params.session_id)
     if (s.closed) throw new RpcError('Grok conversation is closed', 'closed')
     if (params.client_msg_id && s.seen.has(params.client_msg_id)) return { queued: s.running || s.queued > 0 }
     await loaded(s)
@@ -371,7 +432,7 @@ export function createGrokRuntime(options = {}) {
     const name = typeof title === 'string' ? title.trim() : ''
     if (!name) throw new RpcError('A conversation title is required', 'invalid_params')
     await scan()
-    const s = requireSession(session_id)
+    const s = await requireWritable(session_id)
     // The native operation persists a manual title, so refreshes and later turns keep the user's name.
     const result = await acp.call('_x.ai/session/rename', { sessionId: s.raw, title: name, cwd: s.cwd })
     if (result?.success !== true) throw new Error('Grok did not rename the conversation')
@@ -379,6 +440,7 @@ export function createGrokRuntime(options = {}) {
     rt.sessionsChanged()
   }
   async function close(params) {
+    await requireWritable(params.session_id)
     await interrupt(params)
     const s = requireSession(params.session_id)
     await acp.call('session/close', { sessionId: s.raw })
@@ -386,7 +448,7 @@ export function createGrokRuntime(options = {}) {
     s.loaded = 0
     rt.sessionsChanged()
   }
-  async function modes({ session_id, permission_mode, model, effort }) { const s = requireSession(session_id); await loaded(s); await apply(s, { mode: permission_mode, model, effort }); rt.sessionsChanged() }
+  async function modes({ session_id, permission_mode, model, effort }) { const s = await requireWritable(session_id); await loaded(s); await apply(s, { mode: permission_mode, model, effort }); rt.sessionsChanged() }
 
   async function ask(s, name, input, key) {
     const abort = new AbortController()

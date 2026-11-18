@@ -156,16 +156,13 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 // mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
-		base = ModelBinding{Provider: over.Provider, Runtime: base.Runtime, ConfigDir: base.ConfigDir}
+		base = ModelBinding{Provider: over.Provider, ConfigDir: base.ConfigDir}
 	}
 	if over.Model != "" {
 		base.Model = over.Model
 	}
 	if over.Effort != "" {
 		base.Effort = over.Effort
-	}
-	if over.Runtime != "" {
-		base.Runtime = over.Runtime
 	}
 	if over.ConfigDir != "" {
 		base.ConfigDir = over.ConfigDir
@@ -174,14 +171,10 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 }
 
 // effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
-// The In-meeting conversation takes no runtime from the main chat it follows: a room runs on Claude Code's CLI only.
 func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
 	b := mergeModel(base, over)
 	if p.ID == "inbox.triage" && b.Effort == "" {
 		b.Effort = "off"
-	}
-	if p.ID == purposeMeetingRoom {
-		b.Runtime = ""
 	}
 	return b
 }
@@ -284,6 +277,11 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 				}
 				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
 				providerModels = l.Models
+				model, err := resolveAPITierAlias(l, cmp.Or(b.Model, l.Model))
+				if err != nil {
+					return c, err
+				}
+				c.Model, b.Model = model, ""
 				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
 					return c, err

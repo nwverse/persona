@@ -186,13 +186,15 @@ class RealInboxRepository(
             }
         }
         scope.launch {
-            combine(sessions.sessions, interactions.pending) { agents, waiting ->
-                agents.map { AgentSession(it) } to waiting.map {
+            combine(sessions.sessions, interactions.pending, sessions.listStatus) { agents, waiting, status ->
+                Triple(agents.map { AgentSession(it) }, waiting.map {
                     InboxInteraction(it.id, it.machineId, it.sessionId, it.createdAt,
                         agents.firstOrNull { agent -> agent.key == it.sessionKey }?.displayTitle.orEmpty(), it.summary, it.headline.shown,
                         manager = it.manager)
-                }
-            }.collect { (agents, waiting) -> current.update { it.copy(sessions = agents, interactions = waiting) } }
+                }, status.loaded)
+            }.collect { (agents, waiting, targetsReady) ->
+                current.update { it.copy(sessions = agents, interactions = waiting, targetsReady = targetsReady) }
+            }
         }
         scope.launch {
             sessions.machines.collect { machines -> current.update { it.copy(machines = machines.associate { machine -> machine.id to machine.displayName }) } }

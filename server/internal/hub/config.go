@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/update"
 
 	"github.com/mdp/qrterminal/v3"
 
@@ -103,8 +104,9 @@ type NodePackagesConfig struct {
 // http://[user:pass@]host:port proxy for the update's checks and downloads only (internal/netproxy); "" the
 // environment's, as before.
 type UpdateConfig struct {
-	URL   string `json:"url,omitempty"`
-	Proxy string `json:"proxy,omitempty"`
+	URL         string                    `json:"url,omitempty"`
+	Proxy       string                    `json:"proxy,omitempty"`
+	Development *update.DevelopmentConfig `json:"development,omitempty"`
 }
 
 // TailcatConfig: DERPMapURL is a DERP map of your own relays (a derper) instead of Tailscale's public ones; the nodes
@@ -493,8 +495,8 @@ func (c *Config) requestPairCodeLang(ctx context.Context, l i18n.Lang) (*pairCod
 	return p.pairCode, nil
 }
 
-// requestPairCodeWith asks the running hub for a pairing code over loopback with the master token: body nil for an
-// app's, {"machine"} or {"add"} for a computer's.
+// requestPairCodeWith asks the running hub for a pairing code from loopback (managerconf.CLIHubURL, CLIDial) with the
+// master token: body nil for an app's, {"machine"} or {"add"} for a computer's.
 func (c *Config) requestPairCodeWith(ctx context.Context, reqBody map[string]any) (*pairCodeReply, error) {
 	return c.requestPairCodeWithLang(ctx, reqBody, i18n.Terminal())
 }
@@ -504,7 +506,7 @@ func (c *Config) requestPairCodeWithLang(ctx context.Context, reqBody map[string
 	if n, parseErr := strconv.Atoi(port); err != nil || parseErr != nil || n <= 0 || n > 65535 {
 		return nil, errors.New(i18n.T(l, "hub-cli.pair_listen_invalid"))
 	}
-	endpoint := "http://" + net.JoinHostPort("127.0.0.1", port) + "/api/v1/auth/pair-codes"
+	endpoint := managerconf.CLIHubURL(c.Listen) + "/api/v1/auth/pair-codes"
 	var body io.Reader
 	if reqBody != nil {
 		b, _ := json.Marshal(reqBody)
@@ -516,7 +518,7 @@ func (c *Config) requestPairCodeWithLang(ctx context.Context, reqBody map[string
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept-Language", string(l))
-	transport := &http.Transport{Proxy: nil}
+	transport := &http.Transport{Proxy: nil, DialContext: managerconf.CLIDial}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

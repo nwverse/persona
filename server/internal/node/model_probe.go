@@ -58,9 +58,11 @@ func (n *Node) launcherModelCheck(ctx context.Context, name, model string) (stri
 	if ok && time.Since(cached.at) < 10*time.Minute {
 		return cached.agent, cached.err
 	}
-	probe, err := n.launcherProbe(ctx, name, "--model", model)
+	probe, err := n.keptProbe(ctx, name, "--model", model) // kept and renewed with the message's other probes (#9097)
 	agent := probe.Agent
 	switch {
+	case ctx.Err() != nil && err == ctx.Err():
+		return "", err // the caller gave up; the probe goes on and is kept for the next one
 	case errors.Is(err, errProbeUnseen):
 		// What it forwards cannot be seen: start it as before the check, the model given as --model, rather than refuse
 		// every send and start through it (the assistant's own launcher: nothing could be sent at all).

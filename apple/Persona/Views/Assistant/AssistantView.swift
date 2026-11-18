@@ -38,12 +38,15 @@ struct AssistantView: View {
     @Environment(\.unifiedPath) private var hostPath
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
+    /// The inbox's accounts the split's destinations share, for the Inbox drawn as the root (#8359).
+    @Environment(\.shellInboxAccounts) private var inboxAccounts
     private var embedded: Bool { unified != nil && shell == nil && hostPath != nil }
     /// The Sidebar layout on a phone: the page under the drawer (`SplitDetail.drawer`).
     private var drawerPage: Bool { embedded && split?.drawer == true }
     /// The path this page's pages are pushed on: the page beside the sidebar's in the Sidebar layout, its own otherwise.
     private var navPath: Binding<NavigationPath> { hostPath ?? $path }
     #else
+    private var unified: UnifiedSidebar? { nil } // no Sidebar layout here (#9310)
     private var embedded: Bool { false }
     private var drawerPage: Bool { false }
     private var navPath: Binding<NavigationPath> { $path }
@@ -279,7 +282,7 @@ struct AssistantView: View {
                 // A phone's page at regular width too (iPhone Duo open, either layout; #3680, #3641): the iPhone's new
                 // conversation, with what needs the user over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, cleared: showsClearedMain, launcher: $starterLauncher, mode: $starterMode,
-                          effort: $starterEffort, openInbox: { navPath.wrappedValue.append($0) }, resend: resend, delete: deleteFailed) { text, images in
+                          effort: $starterEffort, openInbox: openFromOutside, resend: resend, delete: deleteFailed) { text, images in
                     Task { await start(text, images) }
                 }
                 .onAppear {
@@ -300,11 +303,51 @@ struct AssistantView: View {
 
     /// The root with its top bar, the lift layer and the pages it pushes: split from `stack` for Xcode 26.0 (#5333).
     private var dressedRoot: some View {
+        AnyView(rootPage)
+        .navigationDestination(isPresented: $showProfile) { AssistantProfileView() }
+        .navigationDestination(isPresented: $showKnowledge) { KnowledgeView() }
+        .navigationDestination(isPresented: $showRecordings) {
+            #if os(iOS) || os(visionOS)
+            RecordingsPage()
+            #else
+            KnowledgeView() // the Mac records nothing: its Knowledge lists the hub's recordings
+            #endif
+        }
+        .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
+        .navigationDestination(isPresented: $showTodos) { TodosView() }
+        .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
+        .navigationDestination(isPresented: $showHealth) {
+            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, mode: $starterMode, effort: $starterEffort) { text, images in
+                Task { await start(text, images, space: Session.healthSpace) }
+            }
+        }
+        .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
+        .modifier(ClassicDestinations(enabled: shell == nil && !padPlaces && !embedded))
+        #if os(iOS)
+        .modifier(SidebarRouteDestinations(enabled: embedded, page: sidebarPage))
+        #endif
+    }
+
+    /// The page at the stack's root: the conversation, or in the Sidebar layout the root its sidebar picked (#8359).
+    @ViewBuilder private var rootPage: some View {
+        #if os(iOS)
+        if embedded, let value = unified?.root.value {
+            sidebarRootPage(value)
+        } else {
+            conversationPage
+        }
+        #else
+        conversationPage
+        #endif
+    }
+
+    /// The conversation with its top bar and the lift layer.
+    private var conversationPage: some View {
         AnyView(root)
         // No system bar: the top bar floats over the conversation with a fog under it (it scrolls beneath).
         .toolbarVisibility(.hidden, for: .navigationBar)
         #if os(iOS) || os(visionOS)
-        .background { RootBarHidden(atRoot: atRoot) }
+        .background { RootBarHidden(atRoot: atRoot, roots: embedded ? unified : nil) }
         #endif
         .overlay(alignment: .top) {
             AssistantTopBar(key: pending == nil ? current : nil,
@@ -335,28 +378,6 @@ struct AssistantView: View {
         // The bar is the title bar's row, as the list beside it (#830); pushed pages keep their own.
         .ignoresSafeArea(.container, edges: .top)
         #endif
-        .navigationDestination(isPresented: $showProfile) { AssistantProfileView() }
-        .navigationDestination(isPresented: $showKnowledge) { KnowledgeView() }
-        .navigationDestination(isPresented: $showRecordings) {
-            #if os(iOS) || os(visionOS)
-            RecordingsPage()
-            #else
-            KnowledgeView() // the Mac records nothing: its Knowledge lists the hub's recordings
-            #endif
-        }
-        .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
-        .navigationDestination(isPresented: $showTodos) { TodosView() }
-        .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
-        .navigationDestination(isPresented: $showHealth) {
-            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, mode: $starterMode, effort: $starterEffort) { text, images in
-                Task { await start(text, images, space: Session.healthSpace) }
-            }
-        }
-        .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
-        .modifier(ClassicDestinations(enabled: shell == nil && !padPlaces && !embedded))
-        #if os(iOS)
-        .modifier(SidebarRouteDestinations(enabled: embedded, page: sidebarPage))
-        #endif
     }
 
     private var stack: some View {
@@ -380,6 +401,10 @@ struct AssistantView: View {
             .onChange(of: TasksStore.shared.fullAgent, initial: true) { _, key in
                 guard let key else { return }
                 TasksStore.shared.fullAgent = nil
+                #if os(iOS)
+                // The Sidebar layout: an Agent's chat is a root of the page, as its row opens it (#8359).
+                if embedded, let unified { unified.select(.page(AnyHashable(key)), path: navPath); return }
+                #endif
                 navPath.wrappedValue.append(key)
             }
             // On appear too (a cold launch onto Inbox asks before this page exists), but each request once: the root
@@ -394,11 +419,6 @@ struct AssistantView: View {
                 // Back out of a place by the user: it starts at its root next time.
                 if root { places.backedOut() }
             }
-            #if os(iOS)
-            // The Sidebar layout (#6332): an Agent's chat picked in the sidebar replaces the path without this page; no
-            // place is in front any more, so the next place's switch keeps nothing of it as the place's stack.
-            .onChange(of: unified?.shownPlace == nil) { _, none in if embedded, none { places.backedOut() } }
-            #endif
             // Opening a conversation from the profile (a run, a follow-up) shows it: back to the root. So does Ask Persona
             // from the knowledge base, even when its conversation is the one already open.
             // A start error belongs to the home page it failed on: another conversation (from any menu, the Mac's
@@ -413,10 +433,7 @@ struct AssistantView: View {
             .onChange(of: model.hub?.group) { old, new in
                 if old != new { model.forgetMainClear() }
                 // A pushed inbox and its items belong to the old hub. Initial pairing (nil → a group) and reconnects stay.
-                if AssistantCurrentNavigation.clearsPushedPages(oldHub: old, newHub: new) {
-                    places.forget()
-                    backToRoot()
-                }
+                if AssistantCurrentNavigation.clearsPushedPages(oldHub: old, newHub: new) { forgetPlaces() }
             }
             .onChange(of: model.assistantManagerID) {
                 starterLauncher = nil // a launcher of the assistant shown before
@@ -429,7 +446,7 @@ struct AssistantView: View {
             .onChange(of: model.assistantReveal) { leavePlace(); activeDrawer.close() }
             // Another assistant is current: a pushed page (the profile, scheduled tasks, memory…) read the one before and
             // would write to this one, so it closes.
-            .onChange(of: model.assistantSwitches) { places.forget(); backToRoot() }
+            .onChange(of: model.assistantSwitches) { forgetPlaces() }
             #if DEBUG
             // `-openAssistantPage profile|avatars|routines|runs|…` (with `-tab assistant`): the profile and its pages;
             // `-openAssistantSidebar YES` (or a fraction): the sidebar is out; `-showDrawerAutoDrag <rounds>`: scripted drags, measured
@@ -463,6 +480,7 @@ struct AssistantView: View {
                 default: break
                 }
                 // `-openShellPage inbox|machines|routines|knowledge|profile` (the new shell): that page pushed.
+                let atRoot = (navPath.wrappedValue.count, showRecordings)
                 switch UserDefaults.standard.string(forKey: "openShellPage") {
                 case "inbox": show(.inbox)
                 case "todos": show(.todos)
@@ -473,6 +491,16 @@ struct AssistantView: View {
                 case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
+                }
+                // A conversation picked after the push (a launch with `-openChatsFresh` reads it from the hub, late on a
+                // busy Mac) goes back to the root and takes Recordings with it: pushed again while that can happen. Only
+                // where the push shows in this stack's state (the sidebar layout picks a root instead).
+                if UserDefaults.standard.string(forKey: "openShellPage") == "recordings",
+                   (navPath.wrappedValue.count, showRecordings) != atRoot {
+                    for _ in 0..<10 {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        if (navPath.wrappedValue.count, showRecordings) == atRoot { show(.recordings) }
+                    }
                 }
             }
             .onAppear {
@@ -528,13 +556,17 @@ struct AssistantView: View {
     private func show(_ page: ShellPage?) {
         guard let page else { return }
         #if os(iOS)
-        // The Sidebar layout shades the place shown beside it, whoever asked for it (its row, a route, #6332).
-        if embedded { unified?.shownPlace = page.isSidebarPlace ? page : nil }
+        if embedded, let unified { return showRoot(page, in: unified) }
         #endif
         let kept = placesByValue ? places.enter(page, from: navPath.wrappedValue) : nil
         #if DEBUG
         ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut) path=\(navPath.wrappedValue.count) kept=\(kept?.count ?? 0)")
         #endif
+        // The Inbox at its root: chosen again while in front, its page stays up and is told (#9053). A kept path puts
+        // a new page beneath its item, which lands on that item's choice.
+        if page == .inbox {
+            if kept == nil { model.inboxEntries += 1 } else { InboxBarLanding.shared.broughtBack() }
+        }
         underDrawer {
             backToRoot()
             if let kept {
@@ -559,8 +591,101 @@ struct AssistantView: View {
         if let shell, shell.drawer.isOut { shell.drawer.close() }
     }
 
-    /// Leaves the place in front for the conversation, keeping its path (`ShellPlaces`).
+    /// An Inbox item opened from outside the Inbox (a Needs-you line over the composer): pushed over the Inbox, the list
+    /// landed on the item's choice, so closing the item shows the list where the item lives (#9053, docs/assistant/inbox.md
+    /// "Section bar"). What the Inbox kept open gives way to it. A page without places pushes the item alone, as before.
+    private func openFromOutside(_ item: InboxItem) {
+        guard placesByValue else { return navPath.wrappedValue.append(item) }
+        // the item in front before the list beneath first appears, whichever of the two appears first
+        InboxBarLanding.shared.appeared(item)
+        #if os(iOS)
+        if embedded, let unified {
+            traceRoot(.inbox, unified.select(.page(ShellRoute.inbox), path: navPath))
+            navPath.wrappedValue = NavigationPath([item])
+            return
+        }
+        #endif
+        _ = places.enter(.inbox, from: navPath.wrappedValue)
+        var path = NavigationPath()
+        path.append(ShellRoute.inbox)
+        path.append(item)
+        navPath.wrappedValue = path
+    }
+
+    #if os(iOS)
+    /// The Sidebar layout (#8359): each page the sidebar opens is a root of the page beside it, the conversation one of
+    /// them. Picking one replaces the root at once, the one left keeping what was opened on it; picking the one in front
+    /// goes back to it (`SidebarPageRoots`). The shaded row follows the root (`UnifiedSidebar.shownPlace`, `atRoot`).
+    private func showRoot(_ page: ShellPage, in unified: UnifiedSidebar) {
+        switch page {
+        case .newConversation:
+            traceRoot(page, unified.select(.conversation, path: navPath, contentChanged: true))
+            newConversation()
+        case .health:
+            traceRoot(page, nil)
+            enterHealth()
+        default:
+            let step = SidebarPageRoot.of(page).map { unified.select($0, path: navPath) }
+            if page == .inbox, let step { inboxPicked(step) }
+            traceRoot(page, step)
+        }
+    }
+
+    /// The Inbox picked in the Sidebar layout (#9053): picked again while it is the root, its page stays up and is told,
+    /// as every entry opens on Needs You; brought back with what it kept open, its new page lands on that item's choice.
+    private func inboxPicked(_ step: SidebarPageRoots.Step) {
+        switch step.move {
+        case .none, .popToRoot: model.inboxEntries += 1
+        case .switchRoot: if !step.path.isEmpty { InboxBarLanding.shared.broughtBack() }
+        case .drillDown: break
+        }
+    }
+
+    /// What a pick did to the page (`ShellTrace`, DEBUG): the move the UI tests read.
+    private func traceRoot(_ page: ShellPage, _ step: SidebarPageRoots.Step?) {
+        #if DEBUG
+        ShellTrace.shared.note("root \(page) move=\(step.map { "\($0.move)" } ?? "health") path=\(navPath.wrappedValue.count)")
+        #endif
+    }
+
+    /// A root of the Sidebar layout's page other than the conversation (#8359): a place, Health or Messages, or what the
+    /// Agents list opened. Drawn as the page that value is pushed as elsewhere, the first page whatever is pushed on it.
+    @ViewBuilder private func sidebarRootPage(_ value: AnyHashable) -> some View {
+        Group {
+            if let route = value.base as? ShellRoute {
+                if let inboxAccounts {
+                    ShellDestinations.place(route, path: navPath, accounts: inboxAccounts)
+                        .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
+                }
+            } else if let route = value.base as? SidebarRoute {
+                sidebarPage(route)
+            } else {
+                SidebarAgentsRootPage(value: value)
+            }
+        }
+        .id(value)
+        .sidebarRootPage(ownsBack: value.base is SessionKey)
+    }
+    #endif
+
+    /// Another assistant or hub: the pages pushed, and every place's or root's kept path, were the one before's.
+    private func forgetPlaces() {
+        places.forget()
+        #if os(iOS)
+        if embedded, let unified { unified.forget(path: navPath, keepingAsked: true) }
+        #endif
+        backToRoot()
+    }
+
+    /// Leaves the place in front for the conversation, keeping its path (`ShellPlaces`). The Sidebar layout: back at the
+    /// conversation root, another conversation's starting at its root (#8359).
     private func leavePlace() {
+        #if os(iOS)
+        if embedded, let unified {
+            unified.select(.conversation, path: navPath, contentChanged: unified.atRoot)
+            return
+        }
+        #endif
         places.leave(with: navPath.wrappedValue)
         underDrawer { backToRoot() }
     }
@@ -582,6 +707,9 @@ struct AssistantView: View {
         Task {
             switch await HealthModel.entry(deps: .live, live: model.healthConversations) {
             case .open(let key):
+                #if os(iOS)
+                if embedded, let unified { unified.select(.conversation, path: navPath, contentChanged: true) }
+                #endif
                 backToRoot()
                 model.openAssistantConversation(key)
             case .new:
@@ -594,6 +722,9 @@ struct AssistantView: View {
     /// A page over the conversation: by value on the Sidebar layout's one path (#6332), so what the sidebar opens next
     /// replaces it; by its flag otherwise, as before.
     private func present(_ route: SidebarRoute) {
+        #if os(iOS)
+        if embedded, let unified { unified.select(.page(AnyHashable(route)), path: navPath); return }
+        #endif
         if embedded { navPath.wrappedValue.append(route); return }
         switch route {
         case .health: showHealth = true
@@ -721,7 +852,8 @@ struct AssistantView: View {
             backToRoot()
             model.assistantCurrent = nil
         }
-        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
+        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count, op: op) }
+        let newChat = model.assistantNewChat
         do {
             // The first one becomes the main conversation; with the settings not read yet, whether there is one is unknown.
             let makesMain = space == nil && model.assistantConfig != nil && model.assistantMain == nil
@@ -741,31 +873,39 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            // The accepted conversation is visible before a follow-up configuration refresh.
             if makesMain { Task { await model.refreshAssistant() } }
-            Haptics.success()
-            model.began(s, text: text, images: images) // the message stays on screen until claude has written it
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: true,
+                                                  space: space, showsPage: model.showsPage(of: api))
+            if decision.haptic == .success { Haptics.success() }
+            if decision.began { model.began(s, text: text, images: images) } // keep it until claude has written it
             withAnimation(Theme.Motion.standard) {
                 // Another manager's page by now: the conversation is listed on its own page, not opened on this one.
-                if space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
-                pending = nil
-                failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                if decision.open { model.assistantCurrent = s.key }
+                if decision.clearPending { pending = nil }
+                if decision.failure == .clear {
+                    failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                }
             }
         } catch {
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
-            let here = space != nil || model.showsPage(of: api) // the card belongs to the page it failed on
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: false,
+                                                  space: space, showsPage: model.showsPage(of: api))
             withAnimation(Theme.Motion.standard) {
-                pending = nil
-                if here { model.readiness.failure = coded }
-                failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
-                                                     mayHaveStarted: FailedStart.mayHaveStarted(error),
-                                                     reason: coded == nil || !here ? error.shown : nil, at: .now,
-                                                     manager: space == nil ? api.shownManager : nil))
+                if decision.clearPending { pending = nil }
+                if decision.failure == .show { model.readiness.failure = coded }
+                if decision.failure == .show || decision.failure == .record {
+                    failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
+                                                         mayHaveStarted: FailedStart.mayHaveStarted(error),
+                                                         reason: coded == nil || decision.failure != .show ? error.shown : nil, at: .now,
+                                                         manager: space == nil ? api.shownManager : nil))
+                }
             }
-            if here, coded != nil { model.readinessChanged() }
-            Haptics.error()
+            if decision.failure == .show, coded != nil { model.readinessChanged() }
+            if decision.haptic == .error { Haptics.error() }
         }
     }
 }
@@ -775,6 +915,8 @@ struct PendingStart: Equatable {
     var imageCount: Int
     /// A start that failed (#1368): drawn as the chat's failed bubble, with Resend and Delete, and no typing line.
     var failed: FailedStart.Message? = nil
+    /// Which invocation owns the sending bubble; a late completion never clears a newer send's.
+    var op: UUID? = nil
 }
 
 /// The first message of a new conversation while it spins up, laid out as the chat will lay it out the moment it takes
@@ -961,6 +1103,10 @@ struct AssistantWelcome: View {
     /// The cards' rows at most (the shell: two, the page ends at their bottom, with no third row peeking out under the
     /// fade over Needs You, #5648); every suggestion when nil.
     var cardRows: Int? = nil
+    /// The token calendar's days (#9506) and its page.
+    @State private var usage = TokenUsageModel()
+    @State private var showUsage = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     /// A thing to ask: sent as `prompt`, or (`local`) opening help on this device; `needs`: the phone data it reads.
     struct Suggestion {
@@ -1027,6 +1173,14 @@ struct AssistantWelcome: View {
         .coordinateSpace(.named(WelcomeFold.space))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("assistant-welcome")
+        // Read when the page shows and when the app comes back to the front: no timer (the home stays still).
+        .tabActiveTask(id: sizeClass == .regular) {
+            await usage.loadDays(sizeClass == .regular ? TokenUsageModel.yearDays : TokenUsageModel.phoneDays)
+        }
+        .navigationDestination(isPresented: $showUsage) { TokenUsagePage() }
+        #if DEBUG
+        .onAppear { if UserDefaults.standard.bool(forKey: "openTokenUsage") { showUsage = true } } // screenshots
+        #endif
     }
 
     @ViewBuilder private var things: some View {
@@ -1093,17 +1247,10 @@ struct AssistantWelcome: View {
                  : String(localized: "Start a new side chat. I can see your computers, iPhone, email, Lark, and organized projects, and I can keep an eye on things and remind you when it's time."))
                 .font(Theme.Font.secondary).lineHeight(.secondary)
                 .foregroundStyle(.secondary)
-            // Wraps: in one HStack, a few more machines (or larger text) widened the whole page past the screen.
-            LarkFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(model.machines.filter { $0.online && model.assistantShows($0.manager) }) { m in
-                    Chip(text: m.name, symbol: m.symbol)
-                }
-                #if os(macOS)
-                // What this chip shows is this device's own link to the hub: on the Mac, this Mac.
-                Chip(text: ConnectorText.device, symbol: model.live.looksConnected ? Theme.Icon.laptop : Theme.Icon.laptopOffline)
-                #else
-                Chip(text: "iPhone", symbol: model.live.looksConnected ? Theme.Icon.phone : "iphone.slash")
-                #endif
+            // Tokens a day (#9506), where the computers' chips were: labels that did nothing (the connection is in the
+            // title). Only once the hub has history with usage in it: an older hub, or one with no computers, shows none.
+            if usage.hasUsage, let days = usage.days {
+                TokenCalendarCard(days: days) { showUsage = true }
             }
         }
     }
@@ -1437,7 +1584,9 @@ struct StarterComposer: View {
                 ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: starterModels.launchers, model: model),
-                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener, send: submit) {
+                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener,
+                                 dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                                 takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) }, send: submit) {
                     #if os(iOS)
                     // As a conversation's + (#3225): the iPhone's touch and hold, the iPad's tap with Photos and Files first.
                     if attachOpener == nil {
@@ -1626,6 +1775,8 @@ struct BeautifulStarterComposer: View {
                                return true
                            },
                            quotes: quotesBinding,
+                           dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                           takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) },
                            send: {
                                let typed = text
                                let t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1953,8 +2104,23 @@ struct StarterModesMenu: View {
 /// search still open (Knowledge), UIKit left the bar showing over the root, with the root's title and ~106 pt tall: the top
 /// bar was pushed down under it, and a tap where the switch belongs hit the empty bar (2026-11-01). SwiftUI still has
 /// the bar hidden, so it never hides it again.
+///
+/// Only while the conversation is the root (#8359): in the Sidebar layout another root (a place, an Agent's chat) takes
+/// its place in the same stack, and a hide still waiting from the conversation's last update hid that root's bar, its
+/// title and, on the open Duo upright, the button that brings the sidebar back.
 private struct RootBarHidden: UIViewRepresentable {
     var atRoot: Bool
+    /// The Sidebar layout's roots (#8596): a hide runs only while the conversation is still the root in front, read when
+    /// it runs. The view taken away (`dismantleUIView`) was not enough: SwiftUI kept it in the window a moment after
+    /// Recordings had replaced it, and a hide waiting 0.4 s hid Recordings' bar (the open Duo, one run in two).
+    var roots: UnifiedSidebar?
+
+    /// The conversation is still on screen: cleared when it is taken away (`dismantleUIView`).
+    final class Coordinator {
+        var live = true
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
@@ -1962,11 +2128,19 @@ private struct RootBarHidden: UIViewRepresentable {
         return v
     }
 
+    static func dismantleUIView(_ v: UIView, coordinator: Coordinator) {
+        coordinator.live = false
+    }
+
     func updateUIView(_ v: UIView, context: Context) {
         guard atRoot else { return }
+        let coordinator = context.coordinator
+        let roots = roots
         // Now, and once the pop and the search's own dismissal have finished.
         for delay in [0.0, 0.4, 0.9] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak v] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak v, weak roots] in
+                guard coordinator.live, v?.window != nil else { return }
+                if let roots, roots.root.value != nil { return } // another root is in front now
                 var r: UIResponder? = v
                 while let next = r?.next, !(next is UIViewController) { r = next }
                 guard let nav = (r?.next as? UIViewController)?.navigationController,

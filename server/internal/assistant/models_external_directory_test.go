@@ -79,7 +79,7 @@ func TestExternalUnavailableUsesExistingProjection(t *testing.T) {
 	}{
 		{"credentials missing", func(l *proto.Launcher) { l.External.CredentialState = "missing" }},
 		{"adapter unavailable", func(l *proto.Launcher) { l.External.UnavailableCode = "adapter_not_configured" }},
-		{"SDK only", func(l *proto.Launcher) { l.External.Capabilities.Runtimes = []string{proto.AssistantRuntimeAgentSDK} }},
+		{"SDK only", func(l *proto.Launcher) { l.External.Capabilities.Runtimes = []string{"agentsdk"} }},
 		{"not an assistant engine", func(l *proto.Launcher) { l.External.Engine = "another-engine" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

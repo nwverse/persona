@@ -251,7 +251,10 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
-	if p.PermissionMode == "" && p.GuestTools == nil {
+	if p.Origin == OriginInbox {
+		// The handling chat investigates and suggests; it never needs the assistant's bypass mode.
+		p.PermissionMode = proto.ModePlan
+	} else if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
 		if p.PermissionMode == "" {
 			p.PermissionMode = proto.ModeBypass
@@ -269,6 +272,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.Origin != "" {
+		params["origin"] = p.Origin // the node enforces the origin from the process's first tool call, before start answers
+	}
 	if p.Model != "" {
 		params["model"] = p.Model // picked with the first message, as with a message (sendModel): a typed id too
 	}
@@ -358,6 +364,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
+	if strings.TrimSpace(p.Text) == "" && len(p.Images) == 0 {
+		sess.Status, sess.State = proto.StatusIdle, proto.StateIdle
+	}
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
 }
@@ -399,8 +408,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 			guestID = newGuestSessionID()
 			p.NewSessionID = guestID
 		}
-		// The Agent SDK bridge discovers its tools before assistant.send returns. Register the guest's restriction
-		// first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
+		// The conversation's MCP server can discover its tools before assistant.send returns. Register the guest's
+		// restriction first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
 		if err := s.guestSet(ctx, machine, guestID, p.GuestTools); err != nil {
 			return proto.Session{}, err
 		}
@@ -432,7 +441,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
-		Origin: p.Origin, OriginRef: p.OriginRef})
+		Origin: p.Origin, OriginRef: p.OriginRef, NewSessionID: p.NewSessionID})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
@@ -1076,6 +1085,14 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
 		return nil, false, badRequest(i18n.Err("external-adapter.scope_required"), s.appLang(ctx, p.Lang))
 	}
+	// Keep the raw value until external admission checks it; ordinary conversations ignore it, even on an early return.
+	defer delete(params, "runtime")
+	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
+	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
+		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
+		// first resumed process is clamped to Plan and its Lark gate cannot fall back to an ordinary conversation.
+		params["origin"] = OriginInbox
+	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
@@ -1086,9 +1103,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 		return nil, false, err // an ended room: 409 meeting_ended (meeting_room.go)
 	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
-		// A guest conversation keeps what it started on: no launcher, model, runtime or mode picked for a message
-		// (the node refuses a change too, node/assistant_guest.go).
-		for _, k := range []string{"launcher", "model", "effort", "model_fingerprint", "runtime", "permission_mode"} {
+		// A guest conversation keeps what it started on: no launcher, model or mode picked for a message (the node
+		// refuses a change too, node/assistant_guest.go).
+		for _, k := range []string{"launcher", "model", "effort", "model_fingerprint", "permission_mode"} {
 			delete(params, k)
 		}
 		return params, own, nil
@@ -1143,6 +1160,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	delete(p, "external")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
@@ -1150,7 +1168,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid) ||
-		s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+		s.startedByTask(sid) || s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
 	// The owner-visible recovery rule (#7824) covers the main conversation and the leader/background supervisors, but
 	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
 	// ones so it can publish and persist the model-recovery marker only for them.
@@ -1231,14 +1249,20 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		}
 	}
 	pickedLauncher := l != ""
+	// The background supervisor runs under its own purpose (which follows Main chat until it is set apart), whoever
+	// writes to it: the hub's relays already do (backgroundModel), so a message typed to it must too.
+	purpose := "assistant"
+	if s.isBackground(ctx, sid) {
+		purpose = purposeSupervise
+	}
 	if pickedLauncher {
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
 		}
-	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
+	} else if err := s.applyModel(ctx, purpose, p); err != nil {
 		return err
 	}
-	_, err := s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
 	return err
 }
 
@@ -1259,6 +1283,14 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 		return err
 	}
 	return s.applyPick(ctx, p, pick)
+}
+
+// startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current
+// conversation (a task's "New chat next time", a deleted task): it follows the setting like the current one, which is
+// what the apps show for every conversation of that origin (#9248).
+func (s *Service) startedByTask(sid string) bool {
+	o, ok := s.conversationOrigins()
+	return ok && o[sid].origin == OriginTask
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

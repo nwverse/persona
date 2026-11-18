@@ -31,7 +31,7 @@ func externalMergeParams(launcher string, execution modelExecution, text string)
 	return params
 }
 
-func externalMergeModelReply(f *sdkFixture, launcher string, execution modelExecution) {
+func externalMergeModelReply(f *cliFixture, launcher string, execution modelExecution) {
 	params := externalMergeParams(launcher, execution, "")
 	delete(params, "text")
 	f.fh.mu.Lock()
@@ -39,18 +39,18 @@ func externalMergeModelReply(f *sdkFixture, launcher string, execution modelExec
 	f.fh.mu.Unlock()
 }
 
-func externalMergeRecordNative(t *testing.T, f *sdkFixture) {
+func externalMergeRecordNative(t *testing.T, f *cliFixture) {
 	t.Helper()
 	body := strings.Replace(externalTestNative, "#!/bin/sh\n", `#!/bin/sh
-printf '%s\n' "$CLAUDE_CONFIG_DIR" >> "$SDK_FAKE_DIR/external-profile"
-printf '%s\n' "$@" > "$SDK_FAKE_DIR/external-native-args"
+printf '%s\n' "$CLAUDE_CONFIG_DIR" >> "$CLI_FAKE_DIR/external-profile"
+printf '%s\n' "$@" > "$CLI_FAKE_DIR/external-native-args"
 `, 1)
 	if err := os.WriteFile(filepath.Join(f.dir, "example-native"), []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func externalMergeStart(t *testing.T, f *sdkFixture, launcher, cwd string, execution modelExecution) *assistantProc {
+func externalMergeStart(t *testing.T, f *cliFixture, launcher, cwd string, execution modelExecution) *assistantProc {
 	t.Helper()
 	params := externalMergeParams(launcher, execution, "first main-chat message")
 	delete(params, "session_id")
@@ -128,7 +128,7 @@ func TestExternalMergeRPCPreservesProfileBindingAndPolicy(t *testing.T) {
 	model := p.model
 	p.mu.Unlock()
 	if model.External == nil || *model.External != *execution.External || model.ConfigDir != profile ||
-		model.SupervisionInstructions != execution.SupervisionInstructions || !model.IsMain || p.runtime != "" {
+		model.SupervisionInstructions != execution.SupervisionInstructions || !model.IsMain {
 		t.Fatal("RPC dispatch lost explicit CLI execution metadata")
 	}
 	st, _ := f.n.state.get(id)
@@ -192,7 +192,7 @@ func TestExternalMergeRPCPreservesProfileBindingAndPolicy(t *testing.T) {
 
 func TestExternalMergeRPCRejectsUnsupportedRuntimeBeforeFallback(t *testing.T) {
 	for _, method := range []string{"assistant.send", "session.send"} {
-		for _, runtime := range []string{proto.AssistantRuntimeAgentSDK, "unknown-runtime"} {
+		for _, runtime := range []string{"agentsdk", "unknown-runtime"} {
 			t.Run(method+"/"+runtime, func(t *testing.T) {
 				f, launcher, execution, _ := externalAssistantFixture(t, false)
 				id := execution.External.SessionID
@@ -221,7 +221,7 @@ func TestExternalMergeCompactRefreshesTrustedBindingAndKeepsProfile(t *testing.T
 		{"forged_session", func(m *modelExecution) { m.External.SessionID = newUUID() }, "adapter_scope_required"},
 		{"wrong_scope", func(m *modelExecution) { m.External.Scope = "other-scope" }, "adapter_scope_required"},
 		{"wrong_target", func(m *modelExecution) { m.External.TargetID += "-other" }, "adapter_target_not_found"},
-		{"sdk", func(m *modelExecution) { m.Runtime = proto.AssistantRuntimeAgentSDK }, "adapter_runtime_unsupported"},
+		{"sdk", func(m *modelExecution) { m.Runtime = "agentsdk" }, "adapter_runtime_unsupported"},
 		{"unknown_runtime", func(m *modelExecution) { m.Runtime = "unknown-runtime" }, "adapter_runtime_unsupported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -229,8 +229,8 @@ func TestExternalMergeCompactRefreshesTrustedBindingAndKeepsProfile(t *testing.T
 			externalMergeRecordNative(t, f)
 			id, profile, cwd := execution.External.SessionID, t.TempDir(), t.TempDir()
 			f.n.state.put(id, sessionState{Launcher: launcher, Cwd: cwd, Model: "old-model", ModelFingerprint: "old-fingerprint",
-				Runtime: proto.AssistantRuntimeCLI, IsMain: true, ConfigDir: profile, SupervisionInstructions: "Previous policy."})
-			sdkControlTranscript(t, f, id)
+				IsMain: true, ConfigDir: profile, SupervisionInstructions: "Previous policy."})
+			controlTranscript(t, f, id)
 			execution.SupervisionInstructions, execution.SupervisionResolved = "Current manager-authorized policy.", true
 			params := externalMergeParams(launcher, execution, "")
 			test.edit(&execution)
@@ -249,7 +249,7 @@ func TestExternalMergeCompactRefreshesTrustedBindingAndKeepsProfile(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			sdkWait(t, "native compact input", func() bool { return strings.Contains(f.file("external-stdin"), "/compact") })
+			cliWait(t, "native compact input", func() bool { return strings.Contains(f.file("external-stdin"), "/compact") })
 			p := f.proc(id)
 			if p == nil {
 				t.Fatal("cold compaction did not start its native process")
@@ -316,7 +316,7 @@ func TestExternalMergePolicyChangeUsesCurrentRevision(t *testing.T) {
 			execution.SupervisionInstructions, execution.SupervisionResolved = "Original manager-authorized policy.", true
 			id, cwd := execution.External.SessionID, t.TempDir()
 			old := externalMergeStart(t, f, launcher, cwd, execution)
-			sdkControlTranscript(t, f, id)
+			controlTranscript(t, f, id)
 			binding := *execution.External
 			binding.Revision = "sha256:" + strings.Repeat("2", 64)
 			execution.External, execution.SupervisionInstructions = &binding, policy
@@ -335,6 +335,89 @@ func TestExternalMergePolicyChangeUsesCurrentRevision(t *testing.T) {
 			p.mu.Unlock()
 			if model.External == nil || *model.External != binding || model.SupervisionInstructions != policy || model.ConfigDir != execution.ConfigDir {
 				t.Fatal("the replacement process lost the current revision, resolved policy or saved profile")
+			}
+		})
+	}
+}
+
+func TestExternalMergePinComparesEveryEffectivePolicyField(t *testing.T) {
+	binding := proto.ExternalExecution{Scope: proto.ExternalMainChatScope, SessionID: "11111111-2222-4333-8444-555555555555", AdapterID: "example", TargetID: "example-target", Revision: "old-revision"}
+	launcher := proto.ExternalLauncherName(binding.AdapterID, binding.TargetID)
+	original := modelExecution{Model: "example-model", Fingerprint: "explicit-pick", IsMain: true, External: &binding, ConfigDir: "/example/profile", Origin: "human"}
+	p := &assistantProc{launcher: launcher, model: original, exited: make(chan struct{})}
+	for _, test := range []struct {
+		name string
+		edit func(*modelExecution)
+	}{
+		{"model", func(m *modelExecution) { m.Model = "other-model" }},
+		{"effort", func(m *modelExecution) { m.Effort = "high" }},
+		{"use_effort", func(m *modelExecution) { m.UseEffort = true }},
+		{"follows_setting", func(m *modelExecution) { m.FollowsSetting = true }},
+		{"compact_window", func(m *modelExecution) { m.MainCompactWindow = 400000 }},
+		{"role_policy", func(m *modelExecution) { m.SupervisionInstructions = "Changed policy." }},
+		{"fingerprint", func(m *modelExecution) { m.Fingerprint = "changed-pick" }},
+		{"profile", func(m *modelExecution) { m.ConfigDir = "/example/other-profile" }},
+		{"origin", func(m *modelExecution) { m.Origin = "task" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			next := original
+			current := binding
+			current.Revision = "current-revision"
+			next.External = &current
+			test.edit(&next)
+			if got := pinExternalExecution(p, launcher, next); got.External.Revision != current.Revision {
+				t.Fatal("an effective process-policy change retained the stale catalog revision")
+			}
+		})
+	}
+	next := original
+	current := binding
+	current.Revision = "current-revision"
+	next.External, next.Runtime, next.SupervisionResolved = &current, "cli", true
+	if got := pinExternalExecution(p, launcher, next); got.External.Revision != binding.Revision {
+		t.Fatal("non-policy request metadata prevented a retained process from pinning its actual revision")
+	}
+}
+
+func TestExternalMergeRequiredRestartUsesCurrentRevision(t *testing.T) {
+	for _, reason := range []string{"instructions", "permissions", "tools"} {
+		t.Run(reason, func(t *testing.T) {
+			f, launcher, execution, update := externalAssistantFixture(t)
+			execution.ConfigDir = t.TempDir()
+			id, cwd := execution.External.SessionID, t.TempDir()
+			old := externalMergeStart(t, f, launcher, cwd, execution)
+			controlTranscript(t, f, id)
+			binding := *execution.External
+			binding.Revision = "sha256:" + strings.Repeat("2", 64)
+			execution.External = &binding
+			update(binding.Revision)
+			f.n.external.launchers(t.Context(), true)
+			params := externalMergeParams(launcher, execution, "continue with current connection settings")
+			switch reason {
+			case "instructions":
+				if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("Use the updated conversation instructions.\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "permissions":
+				params["permission_mode"] = proto.ModeBypass
+			case "tools":
+				old.mu.Lock()
+				old.toolSet = "limited-tools"
+				old.mu.Unlock()
+			}
+			if _, err := nodeCall(t, f.n, "assistant.send", params); err != nil {
+				t.Fatalf("restart for %s retained a stale external revision: %v", reason, err)
+			}
+			f.idle(t, id)
+			p := f.proc(id)
+			if p == nil || p == old || p.cmd.Process.Pid == old.cmd.Process.Pid {
+				t.Fatalf("required %s restart retained the old process", reason)
+			}
+			p.mu.Lock()
+			actual := p.model
+			p.mu.Unlock()
+			if actual.External == nil || *actual.External != binding || actual.ConfigDir != execution.ConfigDir {
+				t.Fatal("new process lost the current binding or selected profile")
 			}
 		})
 	}
@@ -360,7 +443,7 @@ func TestExternalMergeCatalogRevisionKeepsActualProcess(t *testing.T) {
 	next := codexTestNode(t)
 	next.home, next.dir, next.bin, next.keeper = f.n.home, f.n.dir, f.n.bin, keeper
 	next.state.put(id, state)
-	g := &sdkFixture{n: next, fh: withFakeHub(t, next), dir: f.dir}
+	g := &cliFixture{n: next, fh: withFakeHub(t, next), dir: f.dir}
 	externalMergeModelReply(g, launcher, execution)
 	var err error
 	next.external, err = loadExternalAdapterRegistry()

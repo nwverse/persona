@@ -1,11 +1,23 @@
 # Lessons: testing and validation
 
+- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
+  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
+  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
+  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
+  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
+  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
+
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
   owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
   must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
   Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
   separately when evaluating the gain.
+
+- A fake peer recording a user line is not the send's completion (#9673). The desktop launcher's first message
+  continues in the background and still reads the shared confirmation timeout. After observing inbox receipt, wait
+  for that session's existing input lock before restoring the test's package globals; keep the drain on assertion
+  failure paths too. A fixed pause gives the race another schedule, not a happens-before relationship.
 
 - A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
   Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
@@ -61,12 +73,11 @@
   (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
   request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
   its reply and test a delayed initial snapshot. Streaming projection must pass the active turn and whether live text
-  is drawn, as the real page does. A pending wake joins the ordinary execution summary while the previous answer stays
-  in place; only when that turn's next words start streaming does the earlier narration fold into the inspectable work.
-  An idle or other-turn presentation still shows the last answer. Cover the ordered/no-tail shape, manual inspection,
+  is drawn, as the real page does. A wake opens an exchange of its own (#9140): the answer before it stays in place
+  while the woken work runs, streams and ends, and the woken work has its own summary.
+  An idle or other-turn presentation still shows the last answer. Cover the ordered shape, manual inspection,
   serialized reload and other turn IDs separately. When a merge retains the maintained renderer, reconcile tests
-  imported from a competing wake model instead of letting their old tail expectations reintroduce it, and do not treat
-  `hasPendingWake` as proof that new words are streaming (#3169).
+  imported from a competing wake model instead of letting their old expectations reintroduce it (#3169).
 
 - UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
   notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
@@ -252,6 +263,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Style-specific tests pass `-ui.style` themselves. It launches through `launchPersona()`, which only performs a clean Demo Mode start and never overrides navigation. `UITestStyleTests` scans source (`launch()` and `launchPersona()` both count as omissions).
 - On compact screens, SwiftUI can inherit `assistant-sidebar` onto the drawer footer buttons, replacing their individual identifiers in XCUITest even though they remain visible. Query the actual exported tree: the shared test helpers first try the individual identifier, then the drawer-container identifier plus the exact localized label. Do not weaken the visibility or tap assertions, or use an app-wide Settings label that can match a hidden page.
 - Drawer-close swipes start on the visible pushed-aside page, not a fixed screen fraction: conversation rows deliberately own left swipes for Archive, and sidebar sizing can move a row under that fraction. Intersect the close surface with the window before choosing the start point; its full frame can extend offscreen. Keep the real swipe and the closed-drawer assertion.
+- A shell place root's ☰ is not Back (#8221): a generic `back()` there opens the drawer, while Assistant remains the drawn strip page underneath. Do not use `assistantDrawn()` alone to decide the next action: with the drawer open, choose `sidebar-main` to return to the main conversation, or the requested place directly instead of opening the drawer again (#9603).
 - Runtime CLI `defaults --set` uses the registration domain, not persisted preferences. Upgrade tests must seed a disposable app's real preferences while its simulator is shut down, verify the baseline reads them, then install in place and inspect persistence after startup cleanup. Resolve the app container before shutdown; `simctl get_app_container` cannot look it up in the Shutdown state. CFPreferences writes asynchronously: terminating the app does not make an immediate disk read authoritative. Resolve its preferences path, shut down the owned simulator to let writes finish, then inspect that file; do not add synchronous writes to production startup just to satisfy the test.
 - Tests using `ShellFinger` must launch with `-probes YES`; its page/selection assertions deliberately require the real shell probe. Migrating a test from platform tabs requires adding that probe argument, not weakening the helper to infer state from controls that remain mounted offscreen. An empty Shell composer exposes dictation instead of Send until text is entered; check the initial dictation/interrupt control and still require an enabled Send after typing.
 - Model switching coverage must follow the chosen UI's actual transport: the Shell sends `/model <alias>` to the conversation, while platform mode chips can use the modes endpoint. Assert the destination and command receipt in the mock log rather than applying a retired control's disabled-state or endpoint assumptions to the default UI. UI-test runners can have a separate protected pasteboard; verify copy payloads by pasting back into the owning app, not by reading the runner's clipboard.
@@ -441,6 +453,14 @@ listed" did, and its title check (the row takes the old session's title, read of
 transcript was long enough to be listed (`longTurn`). Before asserting a row is absent, assert it is there in the same
 setup.
 
+## A simulator that ran against the mock hub uploads its recordings to the next hub it pairs with (2026-11-17, #9417)
+
+Recordings a UI test makes against the mock hub stay in the simulator's library, and the app syncs whatever the hub it
+is paired with doesn't have. Pairing the same simulator with a real hub afterwards (an end-to-end check) uploaded two
+test meetings there, which then sat in the owner's meeting list. Before pairing a simulator with a real hub, erase it,
+use another one, or move the earlier recordings out of the app's `Library/Application Support/Recordings/` while the
+app isn't running.
+
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
@@ -573,6 +593,8 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
   Detect real duplication via `client_msg_id` in mock `/mock/sent`: retries share an ID and both server/mock deduplicate it.
 - New test files require `xcodegen` first; otherwise `-only-testing:` selects nothing but xcodebuild still prints `** TEST SUCCEEDED **` (`Executed 0 tests`).
   Grep `Executed N tests` and require nonzero N (2026-11-01, first "passing" port-forwarding UI run executed none).
+- Pending-bubble UI tests need an idle session: since #6220, a message written while the Agent works is drawn in the queue strip
+  in sending, waiting and failed states; only an idle send stays a chat bubble (`PendingBubbleMenuTests`, `QueuePlacement`).
 - Mock resets between sorting cases also restore `updated_at` and `last_text`, or prior live pushes change later ordering.
   Capture original activity snapshots after all scenario fixtures are customized, preventing reset from overwriting intentional data. Read-and-return cases need fixtures with actual replies, not just list metadata with empty history.
 - **Build UI-test apps with simulator signing, without `CODE_SIGNING_ALLOWED=NO`** (2026-11-05, #1929). Unsigned executables lack `__TEXT,__entitlements`
@@ -637,6 +659,13 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
   screen, so `waitForExistence` on a row below the first screen never succeeds. `TodoPlanTests` waited for the NAS to-do, and a new section above
   it in the mock pushed it down: the test failed at its first check. Wait for the list's first row, then drag the list up slowly until the row is
   wholly inside the list's frame (`TodoPlanTests.scrollIntoView`), rather than counting on where the mock's rows land.
+- **What shows for a few seconds is gone by the next query** (2026-11-16, #9225). `waitForExistence` checks about once a second, so it takes
+  a second even when the element is already there, and each scroll and query adds more. `MeetingAttendanceUITests` waited for the answer, then
+  for its Speaking label, then read Stop Speaking with a bare `.exists`. The mock's 3-second answer kept that row up for 4.3 s, and the
+  read came 0.1 s after it went. The button looked missing while the screen recording showed it with the label the whole time. Make what
+  you check on last long (the mock's `speak_seconds`, restored in `addTeardownBlock`) and end it yourself (tap Stop Speaking).
+  To tell a race from a missing element, line up the result bundle's screen recording with its activity times.
+  The app's terminate and relaunch are good anchors.
 - Body-count tests (`RenderBudgetTests`) wait for the page to settle before measurement (2026-11-03, #475). Launch still loads/layouts history, and the first measured `rev` push
   gets blamed for those bubbles, looking like "unchanged-screen push redraws 6 bubbles"; order changes or a second measurement remove it. Now wait for unchanged counts for 1 second (`settled()`).
 

@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -166,11 +165,11 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
             components = markdownComponents(
                 orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                 table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
                     enabled = !LocalInPicture.current) },
                 codeFence = { model ->
@@ -456,6 +455,9 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 return
             }
             var open by remember(call.id) { mutableStateOf(false) }
+            // Tool details fade in place (ToolViews.swift:564, ChatPin.swift:707-726). TodoWrite does not: it is the plan bar.
+            val detailEdge = rememberOpenEdge(call.id)
+            val detailRevealing = detailEdge.revealing(open)
             val diff = remember(call.use.item) { toolDiff(call.use.item) }
             val todos = remember(call.use.item) { todoEntries(call.use.item) }
             val searchItem = LocalChatSearchItem.current
@@ -491,7 +493,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                         style = PersonaTheme.type.caption)
                 }
                 // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
-                if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
+                if (open) Column(Modifier.unfolding(detailRevealing).fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     // A tool that operates a Mac says its steps in words on Glass, its output and picture with them (iOS ComputerToolDetail).
                     val computer = PersonaTheme.style == AppStyle.Glass && persona.core.domain.ComputerSteps.isComputerTool(call.name)

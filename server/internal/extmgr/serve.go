@@ -141,6 +141,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/machines/{mid}/computer/{action}", withMachine(h.postComputerJob))
 	api.HandleFunc("GET /api/v1/machines/{mid}/computer/clipboard", withMachine(h.computerClipboard))
 	api.HandleFunc("POST /api/v1/machines/{mid}/computer/clipboard", withMachine(h.computerClipboard))
+	api.HandleFunc("POST /api/v1/machines/{mid}/computer/phone-screen", withMachine(h.computerPhoneScreen))
 	api.HandleFunc("GET /api/v1/machines/{mid}/computer/apps", withMachine(h.getComputerApps))
 	api.HandleFunc("DELETE /api/v1/machines/{mid}/computer/apps/{bundle}", withMachine(h.deleteComputerApp))
 	api.HandleFunc("DELETE /api/v1/machines/{mid}/computer/apps/revoke/{bundle}", withMachine(h.revokeComputerApp))
@@ -718,6 +719,23 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 // ConnectorTool says whether name is a registered connector's tool (not Cua's or ego's).
 func (h *Manager) ConnectorTool(name string) bool {
 	return h.connectors != nil && h.connectors.Offers(name)
+}
+
+// ToolAccess classifies every tool CallTool can dispatch, without running it. Connector reads are declared by the
+// connector; its Actions are writes. Subscription dry runs only read, while save/run can change or notify. Computer,
+// browser and iPhone control are actions for this policy even when an individual invocation only observes.
+func (h *Manager) ToolAccess(name string) (known, readOnly bool) {
+	if h.connectors != nil && h.connectors.Offers(name) {
+		return true, h.connectors.ReadOnly(name)
+	}
+	switch {
+	case isComputerTool(name), isBrowserTool(name), isIPhoneTool(name):
+		return true, false
+	case isSubscriptionTool(name):
+		return true, name == "subscription_list" || name == "subscription_get" ||
+			name == "subscription_sources" || name == "subscription_dry_run"
+	}
+	return false, false
 }
 
 // AssistantSummary is the text a gated command's card shows, as its extension names what the ids are; false: none.

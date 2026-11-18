@@ -18,6 +18,19 @@ import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.AssistantSnapshot
 import persona.core.designsystem.*
 
+/**
+ * Which sidebar row stays shaded for the page root beside the column (#9667).
+ * iOS `UnifiedSidebar.shownPlace` (UnifiedSidebar.swift:39–44); [None] has no place row.
+ */
+object AssistantSidebarShade {
+    const val Conversation = "conversation"
+    const val Inbox = "inbox"
+    const val Todos = "todos"
+    const val Knowledge = "knowledge"
+    const val Machines = "machines"
+    const val None = "none"
+}
+
 /** The real shared history remains available even while a secondary page hides the Assistant root. */
 @Composable
 fun AssistantSidebarContent(
@@ -45,6 +58,19 @@ fun AssistantSidebarContent(
     onOpenTodo: ((String) -> Unit)? = null,
     onOpenAgent: ((SessionKey) -> Unit)? = null,
     switcher: AssistantSwitcherSlot? = null,
+    /**
+     * A regular window (open foldable / tablet): Search opens over the whole window as the open iPhone Duo (#9171).
+     * Compact windows keep the drawer's inline search.
+     */
+    fullWindowSearch: Boolean = false,
+    /**
+     * Which place row stays shaded at regular width, including while drilled in
+     * (iOS `UnifiedSidebar.shownPlace`, UnifiedSidebar.swift:39–44).
+     * Null keeps the phone drawer's conversation shading.
+     */
+    shadedPlace: String? = null,
+    /** When the sidebar is a column beside the page, folds the column from its own header; null in a drawer or overlay. */
+    onFoldColumn: (() -> Unit)? = null,
 ) {
     val choice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val received = snapshot.takeIf { it.managerId == choice.shown }
@@ -58,6 +84,10 @@ fun AssistantSidebarContent(
     val archivedWords = stringResource(R.string.assistant_archived)
     val words = conversationWords()
     var query by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf("") }
+    var fullSearchOpen by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
+    LaunchedEffect(fullWindowSearch) {
+        if (fullWindowSearch) query = "" else fullSearchOpen = false
+    }
     var ended by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
@@ -88,21 +118,28 @@ fun AssistantSidebarContent(
             finally { leaderBusy = false }
         }
     }
-    val groups = remember(received, query, ended, archived, words, history.titles) {
-        conversationGroups(received.copy(conversations = history.titled(received.conversations.filter { it.key !in archived }.map {
+    val groups = remember(received, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
+        conversationGroups(received.copy(conversations = history.tagged(received.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
-        })), query, words)
+        })), query, words, activeTag = history.activeTag)
     }
     val searchOn = management != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
-    val knownChats = remember(received.conversations, ended, archived, history.titles, history.archived) {
-        val open = history.titled(received.conversations.filter { it.key !in archived }.map {
+    val openChats = remember(received.conversations, ended, archived, history.titles, history.tagEdits) {
+        history.tagged(received.conversations.filter { !it.archived && it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })
-        (open + history.shownArchived(openKeys(open))).distinctBy { it.sessionId }
     }
+    val knownChats = remember(received.conversations, ended, archived, history.titles, history.tagEdits, history.archived, history.restoring) {
+        val listed = received.conversations.filter { it.key !in archived }.map {
+            if (it.key in ended) it.copy(status = "offline", state = "offline") else it
+        }
+        history.tagged((listed + history.shownArchived(openKeys(openChats))).distinctBy { it.sessionId })
+    }
+    val tagChoices = remember(knownChats) { inUseConversationTags(knownChats) }
     val (foundChats, searchPartial) = rememberFoundChats(
         query, remember(groups) { (groups.directions + groups.others).distinctBy { it.sessionId } },
-        knownChats, searchOn, management, "${choice.hubId.orEmpty()}|${choice.shown}")
+        knownChats.withConversationTag(history.activeTag), searchOn, management, "${choice.hubId.orEmpty()}|${choice.shown}",
+        activeTag = history.activeTag)
     Column(Modifier.fillMaxHeight()) {
         failure?.let { JNotice(it, status = Status.NeedsYou) }
         Box(Modifier.weight(1f)) {
@@ -142,13 +179,41 @@ fun AssistantSidebarContent(
                     leaderConfirm = session
                 }) else null,
                 onRename = if (management != null && !demo) ({ session: Session -> history.renaming = session }) else null,
+                onEditTags = if (management != null && !demo) ({ session: Session -> history.editingTags = session }) else null,
                 onDiagnostics = { copy(conversationDiagnostics(it), resources.getString(R.string.assistant_diagnostics_copied)) },
                 archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
+                tagChoices = tagChoices, activeTag = history.activeTag, onTag = history::selectTag,
                 onTodos = onTodos, todoCount = todoCount, showTodos = showTodos,
                 settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
-                found = foundChats, searchPartial = searchPartial)
+                found = foundChats, searchPartial = searchPartial,
+                fullWindowSearch = fullWindowSearch,
+                onFullSearch = { if (fullWindowSearch) fullSearchOpen = true },
+                shadedPlace = shadedPlace,
+                onFoldColumn = onFoldColumn)
         }
+    }
+    if (fullSearchOpen && fullWindowSearch) {
+        val roster = persona.core.designsystem.LocalManagerRoster.current
+        val assistantName = roster.assistantDisplayName(choice.shown, persona.core.designsystem.LocalPersonaName.current)
+        AssistantFullSearch(
+            chats = openChats,
+            known = knownChats,
+            searchOn = searchOn,
+            management = management,
+            hubKey = "${choice.hubId.orEmpty()}|${choice.shown}",
+            words = words,
+            names = received.directionNames,
+            backgroundId = received.backgroundSupervisor,
+            activeTag = history.activeTag,
+            mainName = assistantName,
+            mainKey = received.mainSession,
+            onOpen = { key ->
+                fullSearchOpen = false
+                onOpen(key)
+            },
+            onDismiss = { fullSearchOpen = false },
+        )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
         notice = { feedback?.notice(it, persona.core.designsystem.FeedbackStyle.Success) }, failure = ::failed)

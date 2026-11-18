@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -216,6 +217,11 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
 		params := mcpToolsParams(req.Input, session, assistant, guest)
+		// A supervision round's process asks for its narrower set (assistant_round.go); a manager that does not know
+		// it gives the whole list.
+		if req.ToolSet != "" {
+			params["tool_set"] = req.ToolSet
+		}
 		if err := n.peer.Call(ctx, "mcp.tools", params, &res); err != nil {
 			resp = map[string]any{"tools": []proto.Tool{}, "error": err.Error()}
 		} else {
@@ -237,6 +243,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}
+		if origin := n.assistantOrigin(sid); origin != "" {
+			params["origin"] = origin
+		}
 		if req.WaitUpdates {
 			waitID, wait = n.beginMCPWait(c)
 			if wait != nil {
@@ -905,11 +914,13 @@ func toolSummary(name string, input json.RawMessage) string {
 	return name
 }
 
-// callerTools are the agents' own tools that act for the agent calling them (assistant/agent_control.go
-// agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
-// that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go), and a
-// task leader's task_plan and task_review (assistant/task_leader.go).
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"}
+// callerTools are the agents' own tools that act for the agent calling them: the manager's
+// (assistantwire.AgentToolNames: reporting to its supervisor; the decisions, thread, repositories and links of the
+// todo it works on), handing a subtask to another computer and reading it back (assistant/dispatch.go), and a task
+// leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
+// reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
+// only, and every agent's call of them reached the hub with no session).
+var callerTools = slices.Concat(assistantwire.AgentToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

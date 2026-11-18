@@ -46,19 +46,11 @@ func (n *Node) externalRuntime(id, launcher, requested string) string {
 	if proto.IsExternalLauncher(launcher) {
 		return requested // do not turn an unknown runtime into the CLI before checking it
 	}
-	return assistantRuntimeOf(requested)
+	return "" // ordinary conversations always follow the native CLI policy
 }
 
 func (n *Node) externalSessionRuntime(id, launcher, requested string, explicit bool) string {
-	if launcher == "" {
-		if st, ok := n.state.get(id); ok {
-			launcher = st.Launcher
-		}
-	}
-	if proto.IsExternalLauncher(launcher) && requested != "" {
-		return requested
-	}
-	return n.sessionRuntime(id, requested, explicit)
+	return n.externalRuntime(id, launcher, requested)
 }
 
 // checkExternalAssistant checks execution authority, not merely catalog visibility.
@@ -75,7 +67,7 @@ func (n *Node) checkExternalAssistant(ctx context.Context, id, launcher string, 
 		id == "" || binding.SessionID != id || n.guestOf(id) != nil || guestFrom(ctx) != nil {
 		return externalRefusal(ctx, "adapter_scope_required")
 	}
-	if execution.Runtime != "" && execution.Runtime != proto.AssistantRuntimeCLI {
+	if execution.Runtime != "" && execution.Runtime != "cli" {
 		return externalRefusal(ctx, "adapter_runtime_unsupported")
 	}
 	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" || runtime.GOOS == "js" {
@@ -136,11 +128,18 @@ func pinExternalExecution(p *assistantProc, launcher string, execution modelExec
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	old := p.model
-	if old.External == nil || old.Model != execution.Model || old.Effort != execution.Effort ||
-		old.SupervisionInstructions != execution.SupervisionInstructions ||
-		assistantRuntimeOf(old.Runtime) != assistantRuntimeOf(execution.Runtime) || old.Fingerprint != execution.Fingerprint ||
+	if old.External == nil || old.ConfigDir != execution.ConfigDir || old.Origin != execution.Origin ||
 		old.External.Scope != execution.External.Scope || old.External.SessionID != execution.External.SessionID ||
 		old.External.AdapterID != execution.External.AdapterID || old.External.TargetID != execution.External.TargetID {
+		return execution
+	}
+	// Compare every effective fingerprint field, including new manager policy fields. Only the directory revision may
+	// differ; per-request metadata and CLI's two accepted spellings are not a process policy change.
+	oldPolicy, nextPolicy := old, execution
+	oldPolicy.External, nextPolicy.External = nil, nil
+	oldRaw, _ := json.Marshal(oldPolicy)
+	nextRaw, _ := json.Marshal(nextPolicy)
+	if string(oldRaw) != string(nextRaw) {
 		return execution
 	}
 	binding := *old.External

@@ -57,6 +57,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
+-                    DELETE /api/v1/assistant/tasks/{id}/start-grant
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
 -                    DELETE /api/v1/channels/{id}/binding
@@ -195,6 +196,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/fleet
 -                    GET /api/v1/health
 -                    GET /api/v1/hub/update
+-                    GET /api/v1/hub/update/backups
 -                    GET /api/v1/hub/update/history
 -                    GET /api/v1/imessage
 -                    GET /api/v1/imessage/chats
@@ -286,6 +288,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/model-config/purposes/{id}
 -                    GET /api/v1/model-profiles
 -                    GET /api/v1/mutes
+-                    GET /api/v1/navigation
 -                    GET /api/v1/ops/{id}
 -                    GET /api/v1/personas
 -                    GET /api/v1/personas/{id}/{file...}
@@ -301,6 +304,7 @@ notify               GET /api/v1/push/stats/daily
 -                    GET /api/v1/recordings/{id}/live
 -                    GET /api/v1/recordings/{id}/photos
 -                    GET /api/v1/recordings/{id}/photos/{n}
+-                    GET /api/v1/remote-image
 agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
@@ -324,6 +328,8 @@ todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
 -                    GET /api/v1/usage
+-                    GET /api/v1/usage/days
+-                    GET /api/v1/usage/hours
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
 agents.read          GET /api/v1/workspace-board/activity
@@ -453,6 +459,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/extensions/{id}/-/upgrade
 -                    POST /api/v1/extensions/{id}/-/widget/{ui}
 -                    POST /api/v1/hub/update
+-                    POST /api/v1/hub/update/backups/{id}/apply
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
@@ -471,6 +478,7 @@ inbox.write          POST /api/v1/inbox/{id}/reply
 inbox.write          POST /api/v1/inbox/{id}/suggestion
 inbox.write          POST /api/v1/inbox/{id}/task-link/recheck
 agents.control       POST /api/v1/interactions/{id}/choose
+-                    POST /api/v1/interactions/{id}/clarify
 agents.control       POST /api/v1/interactions/{id}/reanswer
 agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/iphone/try
@@ -493,6 +501,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/cleanup
 -                    POST /api/v1/machines/{mid}/codex/{sid}/takeover
 -                    POST /api/v1/machines/{mid}/computer/clipboard
+-                    POST /api/v1/machines/{mid}/computer/phone-screen
 -                    POST /api/v1/machines/{mid}/computer/{action}
 -                    POST /api/v1/machines/{mid}/deploy
 -                    POST /api/v1/machines/{mid}/doctor/fix
@@ -550,6 +559,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/push/web/{device}/test
 -                    POST /api/v1/recordings/{id}/ask
 -                    POST /api/v1/recordings/{id}/followup
+-                    POST /api/v1/recordings/{id}/handoff
 -                    POST /api/v1/recordings/{id}/just-me
 -                    POST /api/v1/recordings/{id}/live
 -                    POST /api/v1/recordings/{id}/minutes
@@ -619,6 +629,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
 -                    PUT /api/v1/assistant/conversations/{id}/model
+-                    PUT /api/v1/assistant/conversations/{id}/tags
 -                    PUT /api/v1/assistant/directions/{id}/name
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/feishu/companions
@@ -674,6 +685,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/model-config/purposes/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
+-                    PUT /api/v1/navigation
 -                    PUT /api/v1/pins
 -                    PUT /api/v1/push/ln-mode
 -                    PUT /api/v1/push/web/{device}

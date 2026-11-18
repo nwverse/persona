@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,6 +66,12 @@ val LocalChromeInsets = compositionLocalOf { ChromeInsets() }
 
 /** The leading control of root pages (the hub avatar that opens settings), supplied by the shell. */
 val LocalRootLeading = compositionLocalOf<(@Composable () -> Unit)?> { null }
+
+/**
+ * True when this entry is a sidebar place shown as the page root at regular width.
+ * [LocalRootLeading] is also set by Settings, Engine and Pairing for other reasons, so it is not this test.
+ */
+val LocalIsSidebarRoot = compositionLocalOf { false }
 
 /** Back for a root page the shell shows as a page of its own (settings outside the board style). */
 val LocalRootBack = compositionLocalOf<(() -> Unit)?> { null }
@@ -136,6 +144,8 @@ private fun PageFrame(
     topScrollEdgeStyle: ScrollEdgeStyle,
     bottomScrollEdgeStyle: ScrollEdgeStyle,
     probePage: String? = null,
+    /** No reading inset: the content takes the pane's whole width ([JListPage]'s `fullWidth`). */
+    fullWidth: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -155,7 +165,7 @@ private fun PageFrame(
             // side is usable; an onSizeChanged correction would first draw a frame across the hinge.
             SubcomposeLayout(modifier.fillMaxSize().onConsumedWindowInsetsChanged { consumedInsets = it }) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
-                val inset = readingInset(constraints.maxWidth.toDp())
+                val inset = if (fullWidth) Tokens.Space.flush else readingInset(constraints.maxWidth.toDp())
                 val unconsumedNavigation = navigationInsets.exclude(consumedInsets)
                 val navigationBottom = unconsumedNavigation.getBottom(this)
                 val navigation = navigationBottom.toDp()
@@ -255,7 +265,7 @@ private fun PageFrame(
                 modifier.fillMaxSize().background(palette.background).onConsumedWindowInsetsChanged { consumedInsets = it },
             ) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
-                val inset = readingInset(constraints.maxWidth.toDp())
+                val inset = if (fullWidth) Tokens.Space.flush else readingInset(constraints.maxWidth.toDp())
                 val unconsumedNavigation = navigationInsets.exclude(consumedInsets)
                 val navigationBottom = unconsumedNavigation.getBottom(this)
                 val navigation = navigationBottom.toDp()
@@ -375,7 +385,9 @@ fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
                 }
             }
         }
-        Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+        CompositionLocalProvider(LocalSplitDetail provides null) {
+            Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+        }
     }
 }
 
@@ -421,10 +433,13 @@ fun JTopBar(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val compactHeight = 56.dp
+    val splitLeading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val leading: @Composable () -> Unit = {
-        when {
-            onBack != null -> JBackButton(onClick = onBack)
-            else -> LocalRootLeading.current?.invoke()
+        when (splitLeading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), splitLeading.onClick)
+            is DetailLeading.Back -> JBackButton(onClick = splitLeading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> LocalRootLeading.current?.invoke()
         }
     }
     val titleBlock: @Composable RowScope.() -> Unit = {
@@ -511,10 +526,17 @@ fun JListPage(
     /** False when the list should stop above the bottom inset instead of drawing a scroll edge over it. */
     scrollUnderBottom: Boolean = true,
     scrollEdgeStyle: ScrollEdgeStyle = ScrollEdgeStyle.Blurred,
+    /** The content takes the pane's whole width rather than [ReadingWidth]: a grid of cards (an extension's dashboard page). */
+    fullWidth: Boolean = false,
+    /** The list's scroll, so a tap spring can ignore a drag (`listTapScroll`). */
+    listScroll: NestedScrollConnection? = null,
     content: LazyListScope.() -> Unit,
 ) {
     val style = PersonaTheme.style
     val large = largeTitle && style != AppStyle.Board
+    // iOS keeps this title inline (InboxView.swift:152-153). Ending a selection inserts nothing and
+    // does not shift the list (the same withAnimation as the row close, :632). The large title just
+    // appears; rows spring only when the tap changed their order.
     val collapsed by remember(state, large) { derivedStateOf { !large || state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 120 } }
     val barSubtitle = if (style == AppStyle.Board) subtitle ?: summary else null
     AdaptiveListProbe(page = title, state = state)
@@ -526,17 +548,21 @@ fun JListPage(
         underBottom = { scrollUnderBottom && state.canScrollForward },
         topScrollEdgeStyle = scrollEdgeStyle,
         bottomScrollEdgeStyle = scrollEdgeStyle,
+        fullWidth = fullWidth,
     ) { padding ->
         val pad = pagePadding
         val bottom = padding.calculateBottomPadding()
         val viewport = if (scrollUnderBottom) Modifier.fillMaxSize() else Modifier.fillMaxSize().padding(bottom = bottom)
+        val scrolled = if (listScroll == null) viewport else viewport.nestedScroll(listScroll)
         val list: @Composable () -> Unit = {
             LazyColumn(
-                viewport, state,
+                scrolled, state,
                 contentPadding = PaddingValues(start = pad, end = pad, top = padding.calculateTopPadding() + 4.dp.dense,
                     bottom = if (scrollUnderBottom) bottom + Tokens.Space.section else Tokens.Space.section),
             ) {
-                if (large) item("page-title", contentType = "page-title") { PageTitle(title, subtitle, summary, greet, titleBusy, onTitleClick) }
+                if (large) item("page-title", contentType = "page-title") {
+                    PageTitle(title, subtitle, summary, greet, titleBusy, onTitleClick)
+                }
                 content()
             }
         }
@@ -557,11 +583,14 @@ fun JListPage(
 }
 
 @Composable
-private fun PageTitle(title: String, subtitle: String?, summary: String?, greet: Boolean, busy: Boolean, onClick: (() -> Unit)?) {
+private fun PageTitle(
+    title: String, subtitle: String?, summary: String?, greet: Boolean, busy: Boolean, onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val click = if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier
-    Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.s, bottom = Tokens.Space.m)) {
+    Column(modifier.fillMaxWidth().padding(top = Tokens.Space.s, bottom = Tokens.Space.m)) {
         when (PersonaTheme.style) {
             AppStyle.Brief -> if (summary != null) {
                 if (greet) Text(todayLabel(), style = type.caption, color = palette.ink3)

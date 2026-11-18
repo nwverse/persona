@@ -10,7 +10,7 @@ import { getAgentListFilters, setAgentListFilters, useAgentListFilters } from ".
 import { AGENT_SORT_KEY, AGENT_SORTS, agentSort, byUpdated, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, todoTreeByUpdate, type AgentSort } from "../lib/agent-sort";
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
-import { buildRepoMachineTree } from "../lib/agent-repos";
+import { buildRepoMachineTree, hasWorkspacePin } from "../lib/agent-repos";
 import { useWorkspaceCatalog } from "../lib/workspace-catalog";
 import { keyedRefs } from "../lib/keyed-refs";
 import { buildMachineTree } from "../lib/herdr-tree";
@@ -65,13 +65,14 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { normalizePath } from "../lib/files";
 import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgents, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval } from "../lib/runtime-list";
-import { SESSIONS_CATALOG_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
+import { SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
 import { type ListFilters } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
+import type { PageSection } from "../lib/sidebar-pages";
 import { WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { AssistantSwitcher } from "./AssistantSwitcher";
@@ -287,7 +288,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       .filter((c) => !c.archived).length,
     [assistant?.conversations, liveChats, manager],
   );
-  const { phase, online, total, main: mainConversation, pages, more } = useNavPages();
+  const { phase, online, total, main: mainConversation, sections, more } = useNavPages();
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
@@ -319,8 +320,6 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
-  // the pages fold under their own title (#2524); the drawer's grid of icons doesn't
-  const [pagesFolded, togglePages] = useFolded("pages", false, { all: false, holds: more.some((p) => p.k === activeKey) });
   const { nav, reg, hover, highlight } = useGlide(activeKey);
   useStickyTop(nav);
   const go = useGo(onNavigate);
@@ -362,13 +361,11 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
           <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
-        {narrow && <NavGrid pages={pages} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
-        {!narrow && (
-          <Section title={t("sidebar.pages")} folded={pagesFolded} onToggle={togglePages} right={pagesFolded ? <PagesTally pages={[...pages, ...more]} /> : undefined} first>
-            {pages.map((p) => <NavRow key={p.k} {...p} reg={reg} hover={hover} active={activeKey === p.k} go={go} />)}
-            {more.length > 0 && <MorePages more={more} reg={reg} hover={hover} activeKey={activeKey} go={go} />}
-          </Section>
-        )}
+        {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
+        {narrow && <NavGrid pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
+        {sections
+          .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
+          .map((g, i) => <PageGroup key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
 
         {chats && (
           <Section
@@ -494,6 +491,18 @@ export function AgentsList({ route, onNewAgent, workspaceActions }: { route: Rou
       </div>
       {adding.dialog}
     </div>
+  );
+}
+
+/** A group of the sidebar's pages (Pages, or a group #9071 brought: an extension's or the user's own), folding under
+ *  its own title (#2524), each fold kept apart; Pages ends with More. */
+function PageGroup({ group, more, first, reg, hover, activeKey, go }: { group: PageSection<NavPage>; more: NavPage[]; first: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
+  const [folded, toggle] = useFolded(group.id ? `pages:${group.id}` : "pages", false, { all: false, holds: more.some((p) => p.k === activeKey) });
+  return (
+    <Section title={group.title ?? t("sidebar.pages")} folded={folded} onToggle={toggle} right={folded ? <PagesTally pages={[...group.pages, ...more]} /> : undefined} first={first}>
+      {group.pages.map((p) => <NavRow key={p.k} {...p} reg={reg} hover={hover} active={activeKey === p.k} go={go} />)}
+      {more.length > 0 && <MorePages more={more} reg={reg} hover={hover} activeKey={activeKey} go={go} />}
+    </Section>
   );
 }
 
@@ -691,6 +700,7 @@ const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = 
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
+  const justFinished = useStore((s) => s.features.includes(SESSIONS_JUST_FINISHED_FEATURE));
   // a hub that folds side sessions (#7944) leaves them out of the list: nothing to nest under a parent
   const sideFold = useStore((s) => s.features.includes(SESSIONS_SIDE_FOLD_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
@@ -775,7 +785,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     <HerdrNotices />
     <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
-      catalog={catalog} placeOf={runtimePlace} failureText={agentsReadFailed}
+      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s, within) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
@@ -847,6 +857,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // drawn as it is, with no word about them
   const todosFailed = !chatList && todosUnread && grouping === "todo" && todosSupported !== false;
   const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : todosFailed ? "state" : grouping;
+  const catalog = useWorkspaceCatalog(shownGrouping === "repo");
   const availableGroupings = useGroupings();
   // "State first" / "Recently updated" (iOS AgentSort, G099): not under "By status", whose sections are the states already
   const [sortChoice, chooseSort] = useAgentSort();
@@ -872,7 +883,10 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     () => applyDimensionFilters(listed, dimFilters, evalCtx, facets),
     [listed, dimFilters, evalCtx, facets],
   );
-  const { live, recent: offline } = useMemo(() => splitAgentSessions(dimFiltered, machines), [dimFiltered, machines]);
+  // A host pin keeps its saved conversations in the repository tree, including ones older than Recent's 40 rows.
+  const { live, recent: offline } = useMemo(() => splitAgentSessions(dimFiltered, machines,
+    shownGrouping === "repo" && !chatList ? (s) => hasWorkspacePin(s, catalog.workspaces, catalog.manager) : undefined),
+  [dimFiltered, machines, shownGrouping, chatList, catalog]);
   const seeded = useRef(false);
   useEffect(() => {
     // a filter saved in this browser starts from what it matches once the list has loaded
@@ -925,7 +939,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return shareTree(lastTodoTree.current, byUpdate ? todoTreeByUpdate(built) : built);
   }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, byUpdate, keepEmptyGroups]);
   lastTodoTree.current = todoTree;
-  const catalog = useWorkspaceCatalog(shownGrouping === "repo");
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo") return [];
     const built = buildRepoMachineTree(unpinned, machines, { ...catalog, hiddenSources: botmuxHidden ? ["botmux"] : undefined, navigationSessions: [...shown, ...pinnedAgents.filter((p) => !shown.includes(p))], hideEmpty: filtered, compareSessions: byUpdate ? byUpdated : undefined });

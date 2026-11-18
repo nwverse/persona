@@ -2,6 +2,10 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+## Inline HTML is not one Markdown node (#9420)
+
+An inline script or style can have its tags in separate raw HTML nodes and its body in ordinary text, emphasis or code-span nodes. Track the hidden element across nodes when building searchable prose, but keep literal code examples and ordinary preview formatting. Render separate source fields independently so an unclosed tag in one cannot hide text from another; test the real search index, not only the text helper.
+
 ## Visible supervision replies do not exempt tool execution from folding (#2705)
 
 A promoted supervision round must expose its input and final reply, not pull visibility tools out of the work
@@ -17,13 +21,19 @@ The generic screenshot mock folds tool calls without production's `fold.supervis
 review hidden in such a fold falsely makes the entire synthetic round quiet. Emit the same retained evidence as
 production when testing this case; do not disable folding or force-open the UI to make the screenshot pass.
 
-## Wake continuations use the ordinary execution summary (#2796)
+## An exchange ends where its turn ends: a wake starts the next one (#9140; replaces #2796's rule)
 
-A wake before new assistant text must not cut the segment holding the previous answer: doing so shows the pre-wake
-narration again outside the folded summary. Keep the previous answer in place until new words arrive and put wake
-notices, new tools and narration in the same inspectable summary. Remove the separate wake-chip/drawer path rather
-than leaving it appended after the answer. Cover the interval between wake and new text in both the line model and
-the shared sync fixture, not only the final completed turn.
+The chat grouped everything between two of the user's messages into one exchange and showed its last words as the
+answer. A turn is not that: a background command's notification (`wake`) starts a turn with no message. With the
+woken work kept in the exchange before it, each woken turn's last words took the answer's place, so a complete
+answer to a newer question was folded into "work" as soon as an older background command reported back (four final
+texts between two messages, one shown). The wire already says where the turn ended (`Item.wake`: delivered while the
+agent was idle); every client now closes the exchange there and opens one for the woken work, which draws the notice
+where a message would be and has an ordinary summary of its own, never a wake chip or drawer.
+When grouping is ported or changed, check all of them together: the web's `buildBlocks`, iOS `ChatBlock.build`,
+Android `buildBlocks`, the Rust core's `turns::project`, the per-reply usage split (`chatUsage` on iOS and Android),
+and the two shared fixtures that pin it (`spec/fixtures/lines/wakes.json`, `spec/fixtures/sync/wake.json`). Cover the
+interval between the wake and its first step (the live work row must exist and keep its id) as well as the finished turn.
 
 
 Persona's `conversation_send` relay is model input with role `user`, not the user's own words. Its existing `from`
@@ -43,6 +53,7 @@ Use synthetic conversations for screenshots, not the user's real main conversati
 - Messages entered while Claude is working (from a computer or phone) are "absorbed mid-turn" and stored in the transcript as `attachment/queued_command` (commandMode=prompt,
   origin.kind=human), not as user messages. The parser must handle them separately, or they will not appear on the phone.
 - Newer Claude Code versions write narration between tool calls into nonempty `thinking` blocks, not `text`. The UI must not hide all thinking indiscriminately.
+  With `thinking.display = "updates"`, a progress-update block carries summary text rather than verbatim narration; `conversation_read` therefore labels it `(agent, progress summary)`. Content the user must read completely belongs in the final response, not only between tool calls.
   A live preview must also survive a cold load: `fold_work` hides those original blocks, so folds carry a bounded `latest_thinking` preview without changing their range or counts (#6319).
 - A new session (a headless assistant or a newly launched herdr Agent) has no transcript until claude writes its first line. The phone requests a backlog as soon as it subscribes to the hub. `session.items`
   must return an empty list rather than not found for these "starting" sessions (`startingSession`). Once watch sees the file appear, it must first replay the lines already written, or the chat page briefly flashes an error.
@@ -69,7 +80,7 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   (duplicates are dropped), the previous "! cmd" input, and Codex recording the same item twice. If a parser change introduces "cross-line state," the window's starting point must also be able to reconstruct it
   (`seeded` / `seeNotifications`), or windowed and full reads will disagree. `TestFixtureWindowedEqualsFull` and the corpus's `TestCorpusWindowed` catch this.
 - User images take two paths: ordinary messages contain user image blocks; messages sent while Claude is working are "absorbed mid-turn" as `attachment/queued_command`, with images in the prompt's block array
-  (before 2026-10-29, the parser took only text blocks, so bubbles showed no images). In App turns awakened by background tasks (`pickAnswerAcrossWakes`), keep the user's images together with their message in the original position, not in the work trace.
+  (before 2026-10-29, the parser took only text blocks, so bubbles showed no images). In App turns awakened by background tasks, keep the user's images together with their message in the original position, not in the work trace.
 - A long chat's slow first screen is not caused by the hub / node (cold read: 0.12 s), but by the page being too large: one long Codex session's last two turns contained 1412 entries and 1.08 MB, with just 6 reply entries; the rest were tools and thinking already collapsed in the UI.
 - Codex commentary is assistant text, not `Reasoning` (#5853). Keep an internal-only `Narration` marker so folding can handle completed narration without exposing a new wire kind or counting it as thinking. Only the latest page leaves the newest commentary visible until a final answer follows; a historical page may end before a final answer stored on the next page. Changing only the item kind let 110 commentary rows escape the fold and broke the long-session 40-item / 32 KB budget; cover real running pages, completed folds, expansion merging and golden output together.
 - The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
@@ -169,6 +180,10 @@ On one machine's real transcripts: 1 of 124 was in that state when scanned, and 
 - The leak also hid a gap: a long turn's prompt leaves the tail after 384 KB, and the turn only read as open because the first prompt's did. Removing a wrong source of a value means supplying the right one
   (the turn seen starting stays open until the tail ends it), and testing the case the wrong one happened to cover.
 - Check such a change against real transcripts, not only fixtures: compare the quick read with a read of the whole file, per field, and print ids and counts only.
+
+## A round resumed at the first turn is a branch, not a rewind (2026-11-14, #7315)
+
+The background supervisor's rounds each resume at the end of its first turn (`claude -p --resume <id> --resume-session-at <uuid>`), so every round's message is a user line under the same parent as the round before it, and that earlier one got a reply: exactly the shape `transcript/branch.go` reads as a rewind. Without an exception the reader hid every round but the last and moved `history`'s `.r<n>` at every wake, so every client dropped and refetched the conversation each time. The shape cannot tell the two apart; only the sender knows, so the manager marks the message (`<persona-supervision-round />` on its own line, `prompts.IsSuperviseRound`) and the tree never abandons a marked prompt's earlier siblings nor a marked prompt for a later sibling (`treeRec.round`, also in `share_projection.go`). A system line written beside the rounds at the anchor (a recap) does not hide them either. Attachment lines never take part in the rule, and an owner's message between rounds continues the latest round's branch: an ordinary chain (`branch_round_shapes_test.go` holds the attachment lines Claude Code 2.1.322 writes around each turn, and the first deploy's file of chained rounds followed by one from the first turn). Files without the marker read exactly as before, so `ChatCache` needed no bump. A real rewind of the owner's that sits beside a round now shows both branches: the price of not guessing. When a new way of starting a turn writes a sibling on purpose, decide in `branchTree.add` before it ships, and check `history` stays the same over a few such turns (`TestSuperviseRoundsStayVisible`).
 
 ## A subagent's report is a tool call now (2026-11-06, #5886)
 

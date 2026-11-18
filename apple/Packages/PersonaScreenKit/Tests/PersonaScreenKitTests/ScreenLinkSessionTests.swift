@@ -375,6 +375,7 @@ final class ScreenLinkSwitchTests: XCTestCase {
         func all() -> [ScreenLinkSession.Event] { lock.withLock { events } }
         func moves() -> [PathChange] { all().compactMap { if case let .moved(c) = $0 { c } else { nil } } }
         func reopens() -> Int { all().filter { if case .reopen = $0 { true } else { false } }.count }
+        func lost() -> Int { all().filter { if case .lost = $0 { true } else { false } }.count }
     }
 
     private func until(_ what: String, timeout: Double = 6, _ cond: () async -> Bool) async {
@@ -450,6 +451,47 @@ final class ScreenLinkSwitchTests: XCTestCase {
         await until("back on the relay", timeout: 5) { relay.used() }
         XCTAssertLessThan(Date().timeIntervalSince(at), 3.0, "the 1.5 s silence rule, plus a tick")
         await until("the move says lost") { events.moves().contains { $0.reason == .lost } }
+    }
+
+    /// #9218: a direct connection whose attach is never answered (here: added while its route is muted, so the node's
+    /// `attached` vanishes, as when a network drops packets for a moment) is lost within `attachWithin`, so the app dials
+    /// the route again. Before, it was never pinged and never lost, the route stayed counted as open, and after the
+    /// network came back the stream stayed on the hub's relay.
+    func testADirectConnectionWhoseAttachIsNeverAnsweredIsLost() async throws {
+        let shared = AutoNode.SharedReceive()
+        let (phoneR, nodeR) = PipeEnd.pair()
+        let relay = AutoNode(nodeR, delayMs: 30, shared: shared)
+        let s = ScreenLinkSession(rfbRelay: phoneR, first: ScreenLinkMessage.paths(ScreenLinkPaths(token: "tok")).framed())
+        let events = Collected(s)
+        let (phoneD, nodeD) = PipeEnd.pair()
+        let direct = AutoNode(nodeD, shared: shared)
+        await until("paths read") { events.all().contains { if case .paths = $0 { true } else { false } } }
+        await s.addDirect(phoneD, route: "lan:a", kind: .lan, via: .wifi)
+        await until("on the direct route") { direct.used() }
+        await s.muteDirect(kind: .lan, true)
+        await until("back on the relay", timeout: 5) { relay.used() }
+        await until("the route lost") { events.lost() == 1 }
+
+        // The app dials it again while it is still muted: the connection opens, its attach is never heard.
+        let (phoneD2, nodeD2) = PipeEnd.pair()
+        _ = AutoNode(nodeD2, shared: shared)
+        let added = Date()
+        await s.addDirect(phoneD2, route: "lan:a", kind: .lan, via: .wifi)
+        try await Task.sleep(nanoseconds: 500_000_000) // the node's `attached` came and vanished
+        await s.muteDirect(kind: .lan, false) // the network is back: only a new dial finds out
+        await until("the unanswered attach is lost, so the app dials again", timeout: 6) { events.lost() == 2 }
+        let took = Date().timeIntervalSince(added)
+        XCTAssertGreaterThanOrEqual(took, ScreenLinkSession.attachWithin - 0.3)
+        XCTAssertLessThan(took, ScreenLinkSession.attachWithin + 1.5, "attachWithin, plus a tick")
+
+        // The next dial attaches, and the route is measured again.
+        let (phoneD3, nodeD3) = PipeEnd.pair()
+        _ = AutoNode(nodeD3, shared: shared)
+        await s.addDirect(phoneD3, route: "lan:a", kind: .lan, via: .wifi)
+        await until("the route measured again", timeout: 5) {
+            events.all().contains { if case let .routes(r, _, _) = $0 { r["lan:a"] != nil } else { false } }
+        }
+        XCTAssertEqual(events.lost(), 2, "the attached one stays")
     }
 
     /// The relay drops while the direct route carries the session: the session goes on, and the app is asked to open

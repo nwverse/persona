@@ -95,6 +95,8 @@ object ChatWiringModule {
 internal suspend fun createChatWiring(
     data: ScopedHubData, repositories: ChatDataRepositories,
     connection: OkHttpHubConnection, group: persona.core.contracts.api.HubConnection, isCurrent: () -> Boolean,
+    /** The phone's own delete for Undo on a calendar quick result (iOS `CalendarTool.remove`); null: no Undo. */
+    quickResults: PhoneQuickResults? = null,
 ): ChatAppBindings {
     fun current() = isCurrent()
     val composer = data.messages.connectComposer { transport ->
@@ -120,7 +122,7 @@ internal suspend fun createChatWiring(
             connection.token, connection.http.client, isCurrent = { current() && connection.route.value == route }) } },
         usage = { persona.core.hub.HttpMachineManagement(connection).usageWindows() },
         tasks = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(connection), group, data.coroutineScope,
-            repositories.snapshots.todoCache()))
+            repositories.snapshots.todoCache(), quickResults = quickResults))
 }
 
 /** Resolve each operation against the current route and reject late replies from a previous route. */
@@ -155,6 +157,7 @@ private class RoutedAssistantManagement(
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)
     override suspend fun unarchiveConversation(session: SessionKey) = api().unarchiveConversation(session)
+    override suspend fun setConversationTags(session: SessionKey, tags: List<String>) = api().setConversationTags(session, tags)
     override suspend fun archivedConversations() = api().archivedConversations()
     override suspend fun searchChats(query: String, limit: Int) = api().searchChats(query, limit)
     override suspend fun renameConversation(session: SessionKey, title: String) = api().renameConversation(session, title)
@@ -174,7 +177,12 @@ private class RoutedAssistantManagement(
     override suspend fun memory() = api().memory()
     override suspend fun saveMemory(name: String, content: String) = api().saveMemory(name, content)
     override suspend fun deleteMemory(name: String) = api().deleteMemory(name)
+    override suspend fun places() = api().places()
+    override suspend fun savePlace(place: SavedPlace) = api().savePlace(place)
+    override suspend fun deletePlace(id: String) = api().deletePlace(id)
     override suspend fun skills() = api().skills()
     override suspend fun alwaysGrants(session: SessionKey) = api().alwaysGrants(session)
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = api().revokeAlwaysGrant(session, keyHash)
+    override suspend fun standingAuthorizations() = api().standingAuthorizations()
+    override suspend fun revokeStandingAuthorization(id: String) = api().revokeStandingAuthorization(id)
 }
