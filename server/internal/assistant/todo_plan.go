@@ -400,19 +400,42 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 		return
 	}
 	title, body := s.reminderText(ctx, todo, at, now)
+	larkTitle, larkBody := s.reminderLarkText(ctx, todo, at, now)
 	set := s.settings(ctx)
+	channelTitle, channelBody := s.reminderChannelText(ctx, todo, title, body)
 	// A reminder the owner set for themself: theirs to act on, so P0 even in the hub's low-distraction mode, keyed by
 	// to-do and due time (each due time rings once).
 	s.push(ctx, Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
-		SessionID: set.Main, Title: title, Body: body, Level: assistantwire.LevelP0,
+		SessionID: set.Main, Title: channelTitle, Body: channelBody, Level: assistantwire.LevelP0,
 		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
-	s.channelsPushed(set.MachineID, set.Main, title, body) // the Feishu bot and the channels with pushes on, as notify_user
+	// Only the Feishu copy gets the full notes, to-do deep link and reply context. Ordinary phone and other-channel
+	// copies keep their existing short text; a health task's content stays behind the generic notice on every copy.
+	go s.feishuTodoReminder(set.MachineID, set.Main, larkTitle, larkBody, todo)
+	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
+}
+
+// reminderChannelText applies the health space's outbound rule to phone and channel copies; ordinary text is unchanged.
+func (s *Service) reminderChannelText(ctx context.Context, t Todo, title, body string) (string, string) {
+	if s.todoInHealth(ctx, t) {
+		return healthNotice(s.lang(ctx))
+	}
+	return title, body
 }
 
 // reminderText is the push of t's reminder for at, pushed at now: its title, and its due date, the first line of its
 // notes and how late it is in the body.
 func (s *Service) reminderText(ctx context.Context, t Todo, at, now time.Time) (title, body string) {
+	return s.reminderTextWithNotes(ctx, t, at, now, clip(oneLine(t.Notes), 120), " · ")
+}
+
+// reminderLarkText keeps the notes exactly as saved, including line breaks. answerCards paginates them for Feishu;
+// the to-do link remains the way to read anything beyond the existing card budget.
+func (s *Service) reminderLarkText(ctx context.Context, t Todo, at, now time.Time) (title, body string) {
+	return s.reminderTextWithNotes(ctx, t, at, now, t.Notes, "\n\n")
+}
+
+func (s *Service) reminderTextWithNotes(ctx context.Context, t Todo, at, now time.Time, notes, sep string) (title, body string) {
 	l, loc := s.lang(ctx), s.location(ctx)
 	var parts []string
 	if due := t.dueText(loc); due != "" {
@@ -422,8 +445,8 @@ func (s *Service) reminderText(ctx context.Context, t Todo, at, now time.Time) (
 		}
 		parts = append(parts, i18n.T(l, key, i18n.Args{"when": due}))
 	}
-	if n := oneLine(t.Notes); n != "" {
-		parts = append(parts, clip(n, 120))
+	if strings.TrimSpace(notes) != "" {
+		parts = append(parts, notes)
 	}
 	if now.Sub(at) > remindLate {
 		parts = append(parts, i18n.T(l, "assistant-todos.remind_late", i18n.Args{"when": at.In(loc).Format("01-02 15:04")}))
@@ -431,5 +454,5 @@ func (s *Service) reminderText(ctx context.Context, t Todo, at, now time.Time) (
 	if len(parts) == 0 {
 		parts = append(parts, i18n.T(l, "assistant-todos.remind_body"))
 	}
-	return clip(t.Title, 120), strings.Join(parts, " · ")
+	return clip(t.Title, 120), strings.Join(parts, sep)
 }
