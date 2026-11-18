@@ -26131,6 +26131,7 @@ class H(BaseHTTPRequestHandler):
         if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if _web_push and _web_push.route(self, "GET", p): return
+        if _todo_view and _todo_view.route(self, "GET", p): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
         if net_control(p, q): return self.send_json({"ok": True, **NET})
@@ -26361,9 +26362,15 @@ class H(BaseHTTPRequestHandler):
             METRICS_ASKED = METRICS_ASKED or time.time()
             if MOCK_METRICS_FAIL == "1" or (MOCK_METRICS_FAIL == "after" and time.time() - METRICS_ASKED > 5):
                 return self.send_json({"error": "hub 暂时取不到监控数据"}, 503)
+            # With a roster, an overview is one manager's answer: no scope means the default, while the established
+            # header or query names another. A legacy hub keeps serving every computer, whatever the request names.
+            other = other_manager(self) if _stamps() else None
+            if other and other[1] is not None:
+                return self.send_json(*other[1])
+            owner = (other[0] if other else MANAGERS["default"]) if _stamps() else ""
             cards = []
             for m in MACHINES:
-                if kept(m["id"]):
+                if kept(m["id"]) and (not owner or machine_manager(m["id"]) == owner):
                     c = machine_metrics(m["id"], 3600, 60)
                     if (u := usage_card(m["id"])) is not None:
                         c["usage"] = u
@@ -27280,6 +27287,7 @@ class H(BaseHTTPRequestHandler):
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
         if _web_push and _web_push.route(self, self.command, p, self.last_body): return
+        if _todo_view and _todo_view.route(self, self.command, p): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -30086,13 +30094,21 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
+# MOCK_LIVE_STATUS=retry (#887): a generic first retry, detailed 429 attempts 4 and 5, ordinary work, then `live: null`
+# and idle. MOCK_LIVE_STATUS_TICK controls how long each state stays visible.
 # MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
 # tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
 # running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
 # start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
 LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
-LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady", "retry")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
+LIVE_STATUS_RETRY_STEPS = [
+    {"retry_error": "API Error", "retry_attempt": 1, "retry_max": 10},
+    {"retry_error": "429 Synthetic rate limit for retry capture", "retry_attempt": 4, "retry_max": 10},
+    {"retry_error": "429 Synthetic rate limit for retry capture", "retry_attempt": 5, "retry_max": 10},
+    {"verb": "Frosting", "elapsed_s": 8, "tokens_down": 1200},
+]
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
     {"verb": "Frosting", "elapsed_s": 2, "tokens_down": 400, "thinking": True},
@@ -30146,7 +30162,7 @@ def live_status_subscribe(send, mid, sid):
         since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
         s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_RETRY_STEPS if LIVE_STATUS_MODE == "retry" else LIVE_STATUS_STEPS
         for step in steps:
             time.sleep(tick)
             if steady:
@@ -30160,7 +30176,7 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady|retry  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。retry（#887）：先 generic API Error，再详细 429 attempt 4/5，随后恢复正常工作并推 null，给重试提示和清理截图。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
@@ -32255,6 +32271,13 @@ def mock_turn_usage(mode):
 
 if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
     mock_turn_usage(MOCK_TURN_USAGE)
+
+
+# MOCK_TODO_VIEW=1|old|late, MOCK_TODO_MANAGERS=2 (#10465, scripts/mock/todo_view_mock.py): the To-dos view, counts and
+# places from the design prototype's to-dos. Last, so it replaces the to-dos the other switches made and the features.
+import todo_view_mock  # noqa: E402
+MOCK_HELP.extend(todo_view_mock.HELP)
+_todo_view = todo_view_mock if todo_view_mock.install(globals()) else None
 
 
 if __name__ == "__main__":
