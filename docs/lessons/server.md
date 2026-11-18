@@ -1,5 +1,12 @@
 # Lessons: hub / node and networking
 
+## Contribution identity must match both preview and commit (#10272)
+
+UI routes and switches identify a contribution by extension plus local ID. A global UI-ID conflict check can therefore
+make an unrelated disabled built-in block installation. Check both registry preview and plan commit: fixing only
+preview leaves the install broken. Exercise real installs, batched plans, upgrades, rollback and reload, while keeping
+non-UI contribution conflicts and within-manifest duplicate checks intact.
+
 ## Empty assistant creation must not become a model turn
 
 Android allocates an assistant conversation before sending its queued message. The manager passed an empty prompt
