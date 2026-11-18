@@ -1141,6 +1141,31 @@ Confirm the connection on the pairing page, handle permissions and the checklist
 
 Wait until the page is ready before taking screenshots. For batch screenshots use `./scripts/app/android.sh shots`; debug direct-entry arguments are below. None connect to a production hub. For scrolling performance see "Interface style performance".
 
+## Process-start pairing restore
+
+`ConnectionRuntime.start()` schedules registry restoration and legacy migration on `Dispatchers.IO` instead of blocking the
+caller with `runBlocking`. It publishes the startup job before starting it; `settled()` joins that job and then takes the
+runtime gate, so callers resume only after the restored groups and selection are installed. `WiredPairingService.restore()`
+exposes that barrier through `PairingService`; implementations without asynchronous restoration return immediately.
+
+The main activity and share sheet keep their existing restore loading UI. Boot and notification receivers use `goAsync`
+(and join the resume job), workers and Glance suspend, and the foreground service promotes before making its deferred
+pairing decision. Notification and surface collectors also wait before reading `isPaired`: the initial `false` means
+restoration is pending, not that the user unpaired, so it must not stop services, clear a saved fleet, publish empty
+shortcuts or answer an action against an empty scope. `FleetFeed.settled()` additionally waits for the saved fleet
+snapshot, so a tile or widget cannot navigate or render from the empty pre-restore value. The tile immediately launches
+`TileRouteActivity` through `startActivityAndCollapse`; that foreground activity waits for the saved fleet and performs the
+final navigation after the tile service is destroyed, without relying on a background `Context.startActivity()`.
+
+`ConnectionRuntimeStartupTest`, `NotificationRuntimePairingRestoreTest`, `ReceiverPairingRestoreTest` and
+`ApproveFirstPairingRestoreTest` cover these barriers with deliberately delayed restoration.
+
+A restored `GroupRuntime` constructs its initial `HubNetwork` from `ConnectivityManager.activeNetwork` and its capabilities,
+including the Android 37 local-network permission state. Its constructor does not dial immediately: `activate()` first
+installs the group's data and reconciliation collectors, then starts the connection. The existing callback and
+`refreshNetwork()` path still handles later changes and local-address details, so the first route selection no longer waits
+for a callback or a second reconnect.
+
 ## Debug against release
 
 A debug package is for development: it is debuggable, so ART never compiles it ahead of time, and it skips R8. On the phone
