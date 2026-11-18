@@ -967,6 +967,7 @@ private struct AgentsList: View {
     /// Folded sections (spaces, machines, states), one id per line.
     @StoredValue("dev.folded") private var foldedList = ""
     @State private var quick: AgentFilter = .all
+    @State private var showHiddenDirectories = false
     @State private var paginationArmed = false
 
     private var selectedHub: String? {
@@ -976,6 +977,7 @@ private struct AgentsList: View {
 
     private var listQuery: SessionListQuery {
         var q = SessionListQuery(state: quick.state?.rawValue ?? "", text: query)
+        q.includeHidden = showHiddenDirectories
         if !machineFilter.isEmpty { q.machine = MachineRef(path: machineFilter).id }
         let links = model.links.filter { selectedHub == nil || $0.group == selectedHub }
         let pins = links.contains { !$0.pins.pins.sessions.isEmpty || !$0.pins.pins.spaces.isEmpty }
@@ -1243,7 +1245,9 @@ private struct AgentsList: View {
                                    foldAll: { setFolded(folding($0, true, in: folded)); expandedQuiet = [] },
                                    unfoldAll: { setFolded(Set(Self.foldedByDefault.union(Self.foldedByChoice).map { "!" + $0 })) },
                                    onMachines: { openFromList(MachineListRoute()) },
-                                   onTerminals: { openFromList(TerminalsRoute()) })
+                                   onTerminals: { openFromList(TerminalsRoute()) },
+                                   showingHidden: showHiddenDirectories,
+                                   toggleHidden: { showHiddenDirectories.toggle() })
         #if os(macOS)
         let _ = macRows.update(rowsInOrder(unpinned: unpinned, pinned: pinnedAgents, active: active, quiet: quiet, tree: tree, byHost: byHost))
         #endif
@@ -5690,7 +5694,7 @@ struct AgentsTopBar: View, Equatable {
 enum AgentsNeedsYou {
     static func cards(_ all: [Interaction], session: (SessionKey) -> Session?, machine: String = "", hub: String? = nil) -> [Interaction] {
         all.filter { ix in
-            session(ix.sessionKey)?.assistant != true && (machine.isEmpty || ix.machineRef.path == machine)
+            session(ix.sessionKey)?.assistant != true && session(ix.sessionKey)?.hiddenByDirectory != true && (machine.isEmpty || ix.machineRef.path == machine)
                 && (hub.map { HubFilter.matches($0, ix.group) } ?? true)
         }
     }

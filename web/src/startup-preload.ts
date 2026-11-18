@@ -408,7 +408,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // lazyOverlay started once something that opens it is on screen) and its assistant-readiness words left the first screen:
 // ja 482,722 B to 481,367 B, en 479,634 B to 478,331 B, zh-Hans 480,477 B to 479,146 B, measured in one environment
 // against main 51eb4b6a47. The budget stays.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// #8578: directory-hidden Agents leave the lists, counts and attention events (lib/sessions.ts directoryVisible,
+// lib/attention.ts) and the Agents page gets its Hidden sessions button. The inspection dialog loads on its first open
+// (views/HiddenAgentSessionsDialog.tsx, lazyDialog), taking 111 B back off the first screen; the remaining 128 B raise
+// the budget. The merged first screen measures ja 482,771 B, leaving 40 B of room, as main had.
+export const FIRST_SCREEN_BUDGET = 482_811;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
