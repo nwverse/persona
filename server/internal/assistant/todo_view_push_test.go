@@ -275,6 +275,14 @@ func TestTodoClassLeavesOutTheLine(t *testing.T) {
 			t.Errorf("%s: the row is filed alike", name)
 		}
 	}
+	// A run's ask whose card lands after it came to ask answers differently (its kind, its risk), with the same id.
+	asking := base
+	asking.Asks = []assistantwire.OwnerAsk{{ID: "run:server/s1@1", Kind: assistantwire.OwnerAskKindQuestion}}
+	carded := asking
+	carded.Asks = []assistantwire.OwnerAsk{{ID: "run:server/s1@1", Kind: assistantwire.OwnerAskKindTool, Interaction: "ix_1"}}
+	if todoClassOf(carded) == todoClassOf(asking) {
+		t.Error("a run's ask that got its card is filed alike")
+	}
 }
 
 // workingRun is a run on its way since began, its latest line activity.
