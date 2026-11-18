@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -128,6 +129,44 @@ func TestReadinessProbeOtherModelDoesNotClearModelRoute(t *testing.T) {
 	}
 }
 
+// The node shapes the check as the turn only for a Claude Code launcher it runs itself: a main chat on Codex, or on a
+// runtime's launcher (the runtime's own probe), always gets the plain check, and its pass of the turn's model clears
+// the turn's failure as it did before #10365, or "Try it" could never unblock that chat.
+func TestReadinessProbeUnshapedLauncherClearsModelRoute(t *testing.T) {
+	for _, l := range []proto.Launcher{
+		{Name: "codex", Agent: "codex"},
+		{Name: "rt", Source: "dsh", Agent: "claude", Assistant: true},
+	} {
+		t.Run(l.Name, func(t *testing.T) {
+			f, s, _ := readyMachine(t, proto.Session{SessionID: "m1", Assistant: true, Agent: l.Agent, Launcher: l.Name,
+				State: proto.StateIdle, LastText: routeText, UpdatedAt: time.Now().Add(-time.Minute)})
+			f.mu.Lock()
+			f.zshrc = map[string][]proto.Launcher{"server": {l}}
+			f.oldCheck = l.Assistant // the runtime's own probe runs it: never shaped as the turn
+			f.mu.Unlock()
+			setModel(t, s, "assistant", ModelBinding{Provider: launcherProvider(l.Name), Model: "model-a"})
+			if m := readinessStep(t, getReadiness(t, s, "", "en"), StepModel); m.Code != proto.TurnErrorModelRoute {
+				t.Fatalf("model step before the try: %+v", m)
+			}
+			r := getReadiness(t, s, "probe=1", "en")
+			if p := lastCheck(t, f); p["name"] != l.Name || p["model"] != "model-a" {
+				t.Fatalf("the check did not run the turn's model: %v", p)
+			}
+			if m := readinessStep(t, r, StepModel); r.Probe == nil || !r.Probe.OK || r.Probe.AssistantTurn || m.State != StepOK || r.Mode != ReadinessFull {
+				t.Fatalf("the pass of the turn's model left the chat blocked: %s %+v %+v", r.Mode, r.Probe, m)
+			}
+		})
+	}
+}
+
+// What a probe may take on the hub, which the clients wait past: web/src/lib/readiness.ts PROBE_HUB_MS and the probe's
+// line in docs/protocol/protocol.md ("Main chat readiness") say 202 s. A change here needs them changed too.
+func TestReadinessProbeBoundIsWhatClientsWait(t *testing.T) {
+	if got := readinessTargetWait + healthCheckTimeout + readinessWaitGet; got != 202*time.Second {
+		t.Fatalf("a probe takes up to %v on the hub: change PROBE_HUB_MS and the protocol doc to match", got)
+	}
+}
+
 // A pick the conversation's next message would be refused on is the probe's answer: nothing runs, nothing is kept and
 // the first message is not counted as answered.
 func TestReadinessProbePickRefusal(t *testing.T) {
@@ -144,5 +183,27 @@ func TestReadinessProbePickRefusal(t *testing.T) {
 	}
 	if rec := s.readinessRecordNow(context.Background()); rec.Probe != nil || rec.AnsweredAt != nil {
 		t.Fatalf("a refused turn was kept: %+v", rec)
+	}
+}
+
+// A kept pick on an external adapter's launcher runs through the adapter, which no launchers.check can try (the node
+// refuses every external name, adapter_probe_unsupported): "Try it" says so without asking, keeps nothing and counts
+// no first answer, rather than keeping a failure for a chat that works.
+func TestReadinessProbeExternalPickIsNotChecked(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pickExternal(t, s, l, "vendor/model-two")
+	f.mu.Lock()
+	f.checks = map[string]proto.LauncherCheck{"server/" + l.Name: {Agent: "claude", Error: "adapter_probe_unsupported"}} // the node's answer
+	f.mu.Unlock()
+	ctx := i18n.With(context.Background(), i18n.En)
+	res := s.readinessProbe(ctx, "server", s.settings(ctx))
+	if res == nil || res.OK || res.Error != i18n.T(i18n.En, "assistant-readiness.probe_external") {
+		t.Fatalf("probe: %+v", res)
+	}
+	if n := checkCount(f); n != 0 {
+		t.Fatalf("the adapter's launcher was checked: %v", f.checkParams)
+	}
+	if rec := s.readinessRecordNow(ctx); rec.Probe != nil || rec.AnsweredAt != nil {
+		t.Fatalf("an untried pick was kept: %+v", rec)
 	}
 }
