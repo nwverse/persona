@@ -85,6 +85,9 @@ func (m *Machine) startDeployOf(auto bool) error {
 	if auto && !m.d.config().AutoUpdateNodes {
 		return errAutoNodeUpdatesDisabled
 	}
+	if m.d.linkSwitchUnfinished(m.cfg.ID) { // the switch replaces the node's connection and may install its service
+		return errLinkSwitchDeploy
+	}
 	m.mu.Lock()
 	if m.deploying {
 		m.mu.Unlock()
@@ -380,6 +383,9 @@ func (m *Machine) updateOnConnect(ctx context.Context) {
 	online, deploying, info := m.online, m.deploying, m.info
 	m.mu.Unlock()
 	if m.cfg.Kind == "local" || m.d.hubVersion() == "" || !online || deploying {
+		return
+	}
+	if m.d.linkSwitchUnfinished(m.cfg.ID) { // nothing recorded: the next connection after the switch looks again
 		return
 	}
 	// The hub's build, or the release's its platform resolves to. Not known while the release site is away: nothing is
