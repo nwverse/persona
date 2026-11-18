@@ -66,8 +66,7 @@ class SshTunnel(
             localPort = port
             return port
         } catch (error: Throwable) {
-            if (port != 0) unlisten(session, port)
-            session.disconnect()
+            close()
             throw error
         }
     }
@@ -85,7 +84,17 @@ class SshTunnel(
 
     override fun close(): Unit = synchronized(this) {
         closed = true
-        session?.disconnect()
+        val current = session ?: return
+        // A failed start may already have bound the loopback forward before localPort was assigned. Disconnecting
+        // alone leaves that listener accepting health probes, which can reach the SSH server as another connection.
+        runCatching {
+            current.portForwardingL.forEach { forwarding ->
+                val port = forwarding.substringBefore(':').toIntOrNull()
+                if (port != null) runCatching { current.delPortForwardingL("127.0.0.1", port) }
+            }
+        }
+        localPort = 0
+        current.disconnect()
     }
 
     private suspend fun connect(): Pair<Session, SshHostKey> {
