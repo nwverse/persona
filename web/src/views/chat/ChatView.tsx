@@ -96,6 +96,7 @@ import { useTranscript } from "./useTranscript";
 import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
+import type { ChatRowWithModes, ModeChanges } from "./mode-changes";
 import { useFoldSearch } from "./useFoldSearch";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
@@ -1285,6 +1286,20 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }),
     [lines, dayTaken],
   );
+  // the permission mode changes the hub recorded (#10297), each among the rows at its time, read again when the mode or a
+  // waiting restart changes; their code and words load with an Agent's chat (mode-changes.ts). While older history is
+  // still to load (or sits in an earlier engine's stretch), a change from before the first loaded item waits for it.
+  const [modes, setModes] = useState<ModeChanges>();
+  useEffect(() => {
+    if (assistant) return;
+    const ctl = new AbortController();
+    void import("./mode-changes").then((kit) => kit.watchModeChanges(mid, sid, ctl.signal, kit, setModes), () => {});
+    return () => ctl.abort();
+  }, [mid, sid, assistant, session?.permission_mode, session?.bypass_pending]);
+  const chatRows: ChatRowWithModes[] = useMemo(
+    () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
+    [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],
+  );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
   const busySegment = useMemo(() => (lastLive ? lines.findLast((line) => line.kind === "segment")?.id : undefined), [lastLive, lines]);
@@ -2041,8 +2056,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                       />
                     ),
                   ])
-                : dayRows.flatMap((row) => row.kind === "day" ? (
+                : chatRows.flatMap((row) => row.kind === "day" ? (
                   <div key={row.id} data-day-divider={row.id}><DayLine date={row.date} /></div>
+                ) : row.kind === "mode" ? (
+                  modes && <modes.kit.ModeChangeDivider key={row.id} change={row.change} session={session} />
                 ) : [...failedBefore(row.line.id), open?.line === row.line.id ? (
                 <OpenRecapLine key={row.line.id} open={open} onClose={dismissRecap} />
               ) : row.line.id === bannerError?.id ? null : (

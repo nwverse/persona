@@ -1,0 +1,10 @@
+{
+  "changed_from": "{who} 把权限模式从 {from} 改成了 {to}",
+  "changed_to": "{who} 把权限模式改成了 {to}",
+  "restart_queued": "{who} 选了 {to}：这一轮结束后会重启会话切过去",
+  "restart_done": "已重启，切到了 {to}",
+  "restart_failed": "没能重启到 {to}",
+  "restart_dropped": "取消了重启到 {to}",
+  "by_hub": "hub",
+  "by_unknown": "某台设备"
+}

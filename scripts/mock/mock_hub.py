@@ -896,10 +896,29 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
 BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
 
 
+# The machine's record of permission mode changes (#10297, GET /api/v1/sessions/{mid}/{sid}/mode-changes): what /modes
+# picks and what became of a queued restart, oldest first. MOCK_MODE_CHANGES=1 starts the widget agent with three: a
+# phone's pick before its exchange, a computer's pick of Full access by a restart after it, and that restart called off.
+MODE_CHANGES = {}
+
+
+def note_mode_change(s, kind, to, **kw):
+    MODE_CHANGES.setdefault((s["machine_id"], s["session_id"]), []).append({"kind": kind, "to": to, "at": ago(minutes=0), **kw})
+
+
+if os.environ.get("MOCK_MODE_CHANGES") == "1":
+    MODE_CHANGES[("macbook", WIDGET)] = [
+        {"kind": "set", "from": "default", "to": "acceptEdits", "applied": "now", "actor_kind": "device", "device_name": "iPhone", "at": ago(minutes=20)},
+        {"kind": "set", "from": "acceptEdits", "to": "bypassPermissions", "applied": "restart", "actor_kind": "device", "device_name": "MacBook", "at": ago(minutes=1)},
+        {"kind": "restart_dropped", "to": "bypassPermissions", "reason": "another permission mode was picked", "at": ago(minutes=0)},
+    ]
+
+
 def bypass_restart(s, mode):
     """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
     if mode != "bypassPermissions":
-        if mode: s.pop("bypass_pending", None)
+        if mode and s.pop("bypass_pending", None):
+            note_mode_change(s, "restart_dropped", "bypassPermissions", reason="another permission mode was picked")
         return False
     if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
             or s.get("permission_mode") == "bypassPermissions":
@@ -913,6 +932,7 @@ def bypass_restart(s, mode):
             return
         s.pop("bypass_pending", None)
         s.update(permission_mode="bypassPermissions", bypass_available=True, updated_at=ago(minutes=0))
+        note_mode_change(s, "restart_done", "bypassPermissions")
         push_machine(s["machine_id"])
     threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()
     return True
@@ -27012,6 +27032,9 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and "/items/" in p and p.endswith("/full"):
             item = FULL.get(unquote(p.split("/")[7]))
             return self.send_json(item) if item else self.send_json({"error": "not found"}, 404)
+        if p.startswith("/api/v1/sessions/") and p.endswith("/mode-changes"):  # #10297
+            parts = p.split("/")
+            return self.send_json({"changes": MODE_CHANGES.get((parts[4], parts[5]), [])[-200:]})
         if p.startswith("/api/v1/sessions/") and p.endswith("/info"):  # the chat's "Developer info" card
             s = next((s for s in all_sessions() if s["session_id"] == p.split("/")[5]), {})
             codex = s.get("agent") == "codex"
@@ -28951,9 +28974,13 @@ class H(BaseHTTPRequestHandler):
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
                 if s["session_id"] == p.split("/")[5]:
                     applied = body
+                    before = s.get("permission_mode") or ""
                     if bypass_restart(s, body.get("permission_mode")):
                         applied = {k: v for k, v in body.items() if k != "permission_mode"}
                         push_machine(s["machine_id"])
+                    if body.get("permission_mode"):
+                        note_mode_change(s, "set", body["permission_mode"], **{"from": before, "applied": "now" if applied is body else "restart",
+                                                                              "actor_kind": "device", "device_name": "Phone"})
                     s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
                     MODES_LOG.append({"session_id": s["session_id"], **{k: v for k, v in body.items() if k in ("permission_mode", "effort", "model")}})
             return self.send_json({"ok": True})
