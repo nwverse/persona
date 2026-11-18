@@ -472,6 +472,75 @@ struct PendingBubble: View {
     }
 }
 
+/// One of your messages the assistant keeps after it could not go in (`Session.undelivered`, #10194): your bubble as a
+/// failed one looks (`PendingBubble`), with a line under it. Waiting: why, and that it goes by itself; its mark's menu
+/// offers Delete. Given up: why, with Retry and Delete. Shown on every device, from the chat's row.
+struct UndeliveredBubble: View {
+    var message: UndeliveredMessage
+    var retry: () -> Void
+    var discard: () -> Void
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
+
+    var body: some View {
+        let parsed = ContextRef.parse(message.text)
+        let shown = AttachedFile.parse(parsed.rest).rest
+        let reason = message.error ?? String(localized: "The assistant could not start")
+        VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+            let files = AttachedFile.parse(message.text).files
+            if !files.isEmpty { AttachedFileCards(files: files) }
+            HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                Spacer(minLength: 40)
+                Menu {
+                    if message.gaveUp {
+                        Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                    }
+                    Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
+                } label: {
+                    if message.gaveUp {
+                        ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                    } else {
+                        ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                            .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                            .contentShape(.rect)
+                    }
+                }
+                .accessibilityLabel(message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
+                // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
+                .accessibilityActions {
+                    if message.gaveUp { Button("Retry", action: retry) }
+                    Button("Delete", action: discard)
+                }
+                let split = MessageComments.inBubble(shown)
+                let fold = BubbleFoldKey(id: "undelivered-" + message.id)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
+                    .opacity(0.6)
+                    .messageLongPress(id: "undelivered-" + message.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                        UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                    }
+            }
+            Group {
+                if message.gaveUp {
+                    Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
+                } else {
+                    Text("Not delivered: \(reason). It will be sent automatically.").foregroundStyle(Theme.cautionText)
+                }
+            }
+            .font(Theme.Font.label)
+            .multilineTextAlignment(.trailing)
+            if let n = message.images, n > 0 {
+                Text("Pictures: \(n)").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        // Copy, and Delete, from the long-press bar as on a message only on this phone (#6427).
+        .messageActionBar(id: "undelivered-" + message.id, text: shown, isUser: true, date: message.at, pending: true,
+                          delete: MessageBarDelete(title: String(localized: "Delete"), run: discard))
+        .transition(.opacity)
+    }
+}
+
 /// Photos that came with one of your messages (from the transcript): square thumbnails on your side, tap to view.
 struct SentPhotos: View {
     @Environment(\.chatImages) private var chatImages

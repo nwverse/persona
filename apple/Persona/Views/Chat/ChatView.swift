@@ -2181,6 +2181,13 @@ struct ChatView: View {
     /// strip shows them).
     private var shownPending: [PendingMessage] { pendingPlacement.chat }
 
+    /// The row's kept messages (#10194) the transcript does not have yet (the row may lag behind the line).
+    private var keptUndelivered: [UndeliveredMessage] {
+        guard let list = session?.undelivered, !list.isEmpty else { return [] }
+        return UndeliveredMessage.shown(list, landed: store.items.compactMap(\.clientMsgID),
+                                        drawn: (store.pending + store.arriving).map(\.id.uuidString))
+    }
+
     /// What was sent from here and is not in the transcript yet, split between the chat and the queue strip (#1461).
     private var pendingPlacement: (strip: [PendingMessage], chat: [PendingMessage]) {
         QueuePlacement.split(store.arriving + store.pending, working: session?.status.isActive == true, queued: session?.queued ?? [],
@@ -3141,6 +3148,17 @@ struct ChatView: View {
                     .allowsHitTesting(!pick.on)
                     #endif
             }
+            // Your messages the assistant keeps after they could not go in, from the row: on every device (#10194).
+            ForEach(keptUndelivered.reversed()) { m in
+                UndeliveredBubble(message: m, retry: { Task { await model.retryUndelivered(key, m.id) } },
+                                  discard: { Task { await model.deleteUndelivered(key, m.id) } })
+                    .chatMark("chat.undelivered.\(m.state).\(m.id)")
+                    #if os(iOS)
+                    .allowsHitTesting(!pick.on) // not sent yet: never picked, and quiet while selecting
+                    #endif
+                    .flippedBack()
+                    .id("undelivered-" + m.id)
+            }
             // The first message of a conversation, not in the transcript yet: its day over it, as the new-conversation
             // page drew it (`FirstMessagePending`) and the transcript's lines will (#1911).
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
@@ -3258,7 +3276,7 @@ struct ChatView: View {
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
-        .scrollEdgeEffectHidden(true, for: .all)
+        .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
         .scrollPosition($position)
         // The part over the footer: what the page shows of the list, as the follow, the landings and the navigator take it.
         .onGeometryChange(for: CGRect.self, of: { g in
@@ -4081,7 +4099,7 @@ struct ChatView: View {
         let header = ChromeHeader(chrome: chrome, touched: { scratch.lastActivity = .now }) {
             VStack(spacing: 0) {
                 // One container for the row's glass (back, the terminal, ⋯): drawn together instead of as separate glasses.
-                GlassEffectContainer(spacing: 8) {
+                GlassGroup(spacing: 8) {
                     HStack(spacing: Theme.Space.s) {
                         headerBack
                         if pane == .chat, let expand = host?.expand { hostedExpandButton(expand) }
