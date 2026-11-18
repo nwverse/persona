@@ -994,9 +994,16 @@ version change while it is open never replaces them, and the newest store is
 read again when the dialog closes. Source options are disclosed per repository.
 No alias or base branch is required: an empty alias means no directory override
 and a missing ref means the remote default branch. This feature does no Git or
-remote issue lookup.
+remote issue lookup for GitHub and GitLab; a new link of a provider extension's
+repository is asked of that extension (`repo.link`) before the save, never while
+reading or opening a to-do.
 An issue/PR URL must belong to the saved provider, instance and target repository;
 links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+When a provider extension is switched off, not running or uninstalled, its rows
+and links still read and open from what was stored (`provider_state` `off` or
+`missing` on reads), saves keep the links already there without asking it, and
+only a new link for it fails with `task_repositories_provider_off` or
+`task_repositories_no_provider`.
 
 | Method | Route | Contract |
 | --- | --- | --- |
@@ -1016,7 +1023,8 @@ never masquerade as an empty set.
 `todo_repository_links_add` expose the same manager-owned store. `todo_get` includes
 its canonical associations. The additive tool accepts `{id, links: [{url, title}]}`
 with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
-total), infers repository groups offline and needs no preconfigured catalog.
+total), infers repository groups offline (an address on a host a provider
+extension claims is read by that extension) and needs no preconfigured catalog.
 Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
 characters are rejected. The tool schemas describe this byte limit explicitly;
 their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
@@ -1048,8 +1056,11 @@ Imports and interactive edits lock the same Todo and commit atomically; changes
 broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
 Metadata import errors are logged without blocking the legacy progress path; explicit
 tool and HTTP failures remain errors. Link-derived repositories absent from the
-catalog have `catalog_state: "unlisted"`; recording a URL performs no repository
-verification, remote lookup or catalog mutation.
+catalog have `catalog_state: "unlisted"`; recording a GitHub or GitLab URL performs
+no repository verification, remote lookup or catalog mutation. A provider extension's
+URL is read by that extension once, when it is new; reports skip it while the
+extension is unavailable, and the one-time import of older `pr_url` / `prs`
+references never asks an extension.
 
 Shared Go types and validators: `server/internal/assistant/repository/task.go`.
 Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
