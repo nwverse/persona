@@ -193,6 +193,27 @@ class UsageCalendarUiTest {
         rule.onNodeWithText("Output", substring = true).assertExists()
     }
 
+    @Test fun blankComputerIdsDoNotCollide() = computersWithIdsStayVisible("", "")
+
+    @Test fun duplicateComputerIdsDoNotCollide() = computersWithIdsStayVisible("office", "office")
+
+    private fun computersWithIdsStayVisible(vararg ids: String) {
+        val machines = ids.mapIndexed { index, id ->
+            UsageMachineShare(id = id, name = "Computer $index", input = index + 1L)
+        }
+        val failure = runCatching {
+            rule.setContent {
+                PersonaTheme(reduceMotion = true) {
+                    UsageCalendarPage(Hub(days, hours.copy(machines = machines)), onBack = {})
+                }
+            }
+            rule.waitForIdle()
+        }.exceptionOrNull()
+
+        assertTrue("duplicate or blank ids must not crash details: $failure", failure == null)
+        ids.indices.forEach { index -> rule.onNodeWithText("Computer $index").assertExists() }
+    }
+
     @Test fun disabledDayControlDoesNotOpenDetailsAndEnabledControlStillChangesDay() {
         var opened = 0
         rule.setContent { PersonaTheme(reduceMotion = true) { UsageCalendarCard(days, onOpen = { opened++ }) } }

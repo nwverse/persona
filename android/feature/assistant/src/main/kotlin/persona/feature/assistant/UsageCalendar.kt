@@ -336,7 +336,7 @@ internal fun UsageCalendarPage(api: UsageHistoryApi?, onBack: () -> Unit, listSt
                 item("hourly") { UsageHourlyGrid(hours) }
                 item("computers-title") { JSectionHeader(stringResource(R.string.assistant_usage_by_computer), Modifier.padding(top = Tokens.Space.m)) }
                 hours.machines.forEachIndexed { index, machine ->
-                    item("computer-${machine.id}") {
+                    item("computer-$index") {
                         JGroupItem(GroupPosition.of(index, hours.machines.size)) {
                             JRow(machine.name.ifBlank { stringResource(R.string.assistant_usage_unknown_machine) },
                                 value = compactTokens(machine.total, currentLocale))
