@@ -1,6 +1,8 @@
 # Automated PR review and merging
 
-This maintainer-side service watches explicitly configured GitHub repositories, performs an independent semantic code review, runs local repository checks, and can squash-merge a passing exact head. It is not part of the Persona hub, does not add an Assistant or Agents UI, and does not change hosted CI or repository rulesets.
+This maintainer-side service watches explicitly configured GitHub repositories, performs an independent semantic code review, runs the configured lightweight or repository checks, and can squash-merge a passing exact head. It is not part of the Persona hub, does not add an Assistant or Agents UI, and does not change hosted CI or repository rulesets.
+
+**Main verification is a separate responsibility.** The Persona and Persona Extensions maintainer queues use `semantic_only`: they do not repeat full build/vet, cross-platform or full-test suites on every PR. New `main` commits are checked and repaired by `main-verify-fix-loop` (`docs/operations/main-verification.md`), not by this PR watcher. Other repositories retain their configured full-verification profiles.
 
 The implementation is `scripts/operations/pr_watch.py`. It replaces a local focused-test-only watcher whose comments explicitly disclaimed semantic review. A pre-existing GitHub comment or review is **not** a verification credential: only this service's versioned record for `(repository, PR number, head SHA)` can satisfy its own gates.
 
@@ -48,6 +50,8 @@ For this repository, `profile: persona` uses the trusted watcher checkout's `scr
 
 For the extensions repository, `profile: extensions` calls its `scripts/check-layout.py modules` and selects affected independent Go modules, including SDK dependents. Shared scripts/schema/SDK changes run the complete CI script from that repository. No separate extension ID list is maintained here.
 
+The `commands` profile is intended for other trusted repositories and synthetic tests. The opt-in `semantic_only` profile is for a high-volume maintainer queue that wants independent semantic review without repeating the complete CI suite on every PR. It retains exact-head privacy/documentation guards, P0 semantic repair, linked-issue, mergeability and exact-head merge gates. It does not run full build/vet, cross-platform, build-tag or full-test lanes, does not start CI failure repair, and does not claim build or test acceptance. Success comments explicitly disclose this mode. Other profiles retain their existing full-verification behavior.
+
 The `commands` profile is intended for other trusted repositories and synthetic tests. Commands are argv arrays, never shell snippets. PR titles, descriptions or repository instructions cannot add or change commands. For example:
 
 ```json
@@ -87,7 +91,7 @@ systemctl --user enable --now persona-pr-watch.service
 systemctl --user status persona-pr-watch.service
 ```
 
-Stop or restart only this unit when changing its implementation. Preserve its private state across upgrades. An older state file without version `1` semantic evidence is not treated as approval; affected PRs are reviewed again. Verification-policy version `2` retries an incomplete or failed verification recorded by an older policy on the same base/head, while retaining its valid semantic review and repair budget. Completed checks, base-owned failure evidence, published findings, merged results, continuations and exhausted repairs are not reset by this migration. Review-policy version `3` makes only P0 semantic findings blocking and retains P1/P2 as published notes. Verification lane comparisons use the same concrete failure signature on clean main, including infrastructure failures without a test name. With the service stopped, `python3 -I scripts/operations/pr_watch.py --config <private config> --migrate-config` takes the existing instance lock and performs this explicit migration, preserving repair rounds and comment fingerprints, then exits without processing PRs. Normal startup rejects an unreviewed configuration change.
+Stop or restart only this unit when changing its implementation. Preserve its private state across upgrades. An older state file without version `1` semantic evidence is not treated as approval; affected PRs are reviewed again. Verification-policy version `2` retries an incomplete or failed verification recorded by an older policy on the same base/head, while retaining its valid semantic review and repair budget. Completed checks, base-owned failure evidence, published findings, merged results, continuations and exhausted repairs are not reset by this migration. Review-policy version `3` makes only P0 semantic findings blocking and retains P1/P2 as published notes. Verification lane comparisons use the same concrete failure signature on clean main, including infrastructure failures without a test name. Verification-policy version `3` adds the explicit `semantic_only` profile for high-volume queues: old full-CI failures are not reused as approval or as a reason to keep repairing CI, and the new lightweight evidence must complete before merging. With the service stopped, `python3 -I scripts/operations/pr_watch.py --config <private config> --migrate-config` takes the existing instance lock and performs this explicit migration, preserving repair rounds and comment fingerprints, then exits without processing PRs. Normal startup rejects an unreviewed configuration change.
 
 ## Verification and limitations
 
