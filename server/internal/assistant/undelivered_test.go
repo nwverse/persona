@@ -267,3 +267,26 @@ func TestConversationSendToOneThatCannotStartIsQueued(t *testing.T) {
 		t.Fatalf("not queued as one that could not go in (%q)", out)
 	}
 }
+
+// The kept messages reach the rows the hub hands the apps (decorateInventory), and leave them once none is left.
+func TestUndeliveredReachesTheRow(t *testing.T) {
+	ft := newFleetTest(t)
+	s := ft.s
+	setSettings(t, s, func(v *Settings) { v.MachineID = "mac" })
+	row := proto.Session{SessionID: "conv9", MachineID: "mac", Assistant: true, Cwd: "/home/me/.persona/assistant", Status: proto.StatusOffline}
+	ft.d.setSessions("mac", []proto.Session{row})
+	if _, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{MachineID: "mac", SessionID: "conv9",
+		Params: map[string]any{"text": "hello", "client_msg_id": "msg-9"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.fleetTakeSnapshot(s.snapshot(context.Background()))
+	rows := s.publishList("mac")
+	if len(rows) != 1 || rows[0].Undelivered == nil || len(*rows[0].Undelivered) != 1 || (*rows[0].Undelivered)[0].ID != "msg-9" {
+		t.Fatalf("rows %+v", rows)
+	}
+	s.undeliveredDrop("conv9", "msg-9")
+	s.fleetTakeSnapshot(s.snapshot(context.Background()))
+	if rows := s.publishList("mac"); len(rows) != 1 || rows[0].Undelivered != nil {
+		t.Fatalf("still on the row: %+v", rows)
+	}
+}
