@@ -596,6 +596,18 @@ func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bo
 // resolveApproved is resolve for an app's answer the hub relayed, with the device it vouched may approve a hand-off
 // card (nil: none). Only this way does a hand-off card take more than a no (secret_handoff.go).
 func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolution, approver *assistantwire.HandoffApprover) error {
+	s.fleet.mu.Lock()
+	prepared := s.fleet.interactions[id]
+	ownerSession := ""
+	if prepared != nil && prepared.prepared != nil && !r.Cancel {
+		ownerSession = prepared.ix.SessionID
+	}
+	s.fleet.mu.Unlock()
+	if ownerSession != "" {
+		// The web route resolves prepared cards directly instead of through Action;
+		// preserve the same owner-activity notification as every other answer path.
+		s.ownerHeard(ownerSession)
+	}
 	return s.resolveAnswer(ctx, id, r, true, nil, approver)
 }
 
@@ -1189,6 +1201,9 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 	s.fleet.mu.Unlock()
 	s.feishuDetach(ids)
 	for _, id := range ids {
+		if s.endPreparedByID(id, "cancelled", "The computer that owned this approval disconnected; nothing changed.") {
+			continue
+		}
 		s.finishInteraction(id)
 	}
 }
