@@ -4696,7 +4696,7 @@ The knowledge base belongs to a manager (the assistant). The hub forwards these 
 | --- | --- | --- |
 | GET | `/api/v1/kb/{kind}?tag=` | `{items,tags}`; can filter by tag |
 | GET | `/api/v1/kb/{kind}/{id}` | `{detail,agents?}`; for a project, can also return related online Agents |
-| PUT | `/api/v1/kb/{kind}/{id}` | body is a `kb.Update` (projects also take `unmerge: true`); can update name, tags, importance, summary and project properties; returns `{id}`; fields in [knowledge.md](../assistant/knowledge.md) |
+| PUT | `/api/v1/kb/{kind}/{id}` | body is a `kb.Update` (projects also take `unmerge: true`; removals take `lock_lists`, and `allow_people` / `allow_chats` / `allow_projects` lift a removed link, "Removed links" in [knowledge.md](../assistant/knowledge.md)); can update name, tags, importance, summary and project properties; returns `{id}`; fields in [knowledge.md](../assistant/knowledge.md) |
 | DELETE | `/api/v1/kb/projects/{id}` | Soft-deletes a project into the knowledge base's trash and unlinks it from its chats, people and items; returns the trash entry `{id, kind, slug, name, deleted_at, unlinked}`; `404` for unknown or merged projects, `403 kb_read_only` when read-only ([knowledge.md](../assistant/knowledge.md) "Deleting a project") |
 | GET | `/api/v1/kb-trash` | `{items}`: deleted projects' trash entries, newest first |
 | POST | `/api/v1/kb-trash/{id}/restore` | Restores a deleted project and its recorded links; returns the entry; `404` if there is no such entry, `409` if a project with its slug exists again, `403 kb_read_only` when read-only |

@@ -1504,6 +1504,13 @@ Clearing the main chat's context (**Clear context** in its ⋯ menu and `/clear`
 
 Deleting a Persona chat (#6172, web first) serves everyday people and reuses Menu, Dialog and Button without new tokens. **Delete…** appears in sidebar and History menus. The destructive one-object dialog has **Delete chat** and Cancel, with copy stating that Persona history is removed, task and Agent references and previously saved knowledge remain, and the computer transcript is retained. No physical-file checkbox is offered. It appears for ordinary and archived former main chats when the hub supports it. The main chat uses the existing Clear context action before its archived predecessor can be deleted. Cancel and repeat submission are disabled while the request is pending. Busy or waiting work is refused inline without removing the row; success removes it, while an already open reference shows **Conversation deleted** without a composer.
 
+Removing a link between two Knowledge entries (#10333, web `Relationships.tsx`; iPhone and iPad follow) is rung 2 with a
+narrow default: the dialog names both entries, says both are kept, and says only this link stays out while the rest keeps
+updating. The wider effect, stopping automatic changes to both whole lists, is a `Switch` in the dialog, off by default and
+fixed once the request is sent; turning it on spells out the two lists it protects. What was removed is listed under the
+related entries as **Removed by you**, each with **Allow again** (a secondary small `Button`), so the narrow default
+stays reversible without a toast. Allow again links nothing; it lets Persona decide again.
+
 A blocked terminal card on the web offers **Close Agent**, including when no choices can be parsed from the screen.
 Its footer reuses `Button`, explains that the pending confirmation is cancelled and the conversation kept, and
 requires **Close and archive** or **Cancel**. Close controls use the existing 44 px grid minimum and single-line labels.
