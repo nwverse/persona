@@ -679,7 +679,7 @@ struct CodeBreadcrumbView: View {
             line
             ScrollView(.horizontal) { line }
                 .scrollIndicators(.hidden)
-                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
                 .contentMargins(.vertical, Theme.Space.flush, for: .scrollContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -721,7 +721,7 @@ struct CodeTabsBar: View {
             row
             ScrollView(.horizontal) { row }
                 .scrollIndicators(.hidden)
-                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
                 .contentMargins(.vertical, Theme.Space.flush, for: .scrollContent)
                 .scrollClipDisabled()
         }
