@@ -148,9 +148,10 @@ export function providersPath(launcher?: string): string {
 /**
  * What a button does: a help topic to open in place (add_computer too: the page that owns `onHelp` opens the add flow
  * instead where the hub has it), or done here (a page opened, a check run). `launcher` is the step's, for "Change the key";
- * `onConfirm` opens the confirm screen of a computer waiting to be confirmed (without it: the machines page).
+ * `onConfirm` opens the confirm screen of a computer waiting to be confirmed (without it: the machines page);
+ * `onPickModel` opens the chat's own model panel for `pick_model`, false when it has none.
  */
-export function runAction(id: string, o: { launcher?: string; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void }): void {
+export function runAction(id: string, o: { launcher?: string; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void; onPickModel?: () => boolean }): void {
   switch (id) {
     case "add_computer":
     case "wake_computer":
@@ -165,6 +166,9 @@ export function runAction(id: string, o: { launcher?: string; onHelp: (topic: He
       return navigate(o.launcher ? providersPath(o.launcher) : "/settings?tab=models");
     case "main_chat_model": // the Main chat purpose of the model configuration: pick one of the machine's launchers
       return navigate("/settings?tab=models");
+    case "pick_model": // a model the chat can't run (turnErrorFix): another one in its own panel, never a new provider
+      if (!o.onPickModel?.()) navigate("/settings?tab=models");
+      return;
     case "test_assistant":
       void refreshReadiness({ probe: true });
       return;
@@ -212,15 +216,30 @@ export function passesBySelf(e: unknown): boolean {
 
 // ── turn errors (turn_error_code) ───────────────────────
 
-/** A turn that ended on a model error the user must fix: the card's title and its button (4.4 "Model error"). */
-export function turnErrorFix(code: string | undefined): { title: string; detail: string; action: string } | null {
+/** A turn error's card: its words and what "Fix it" does (runAction; `retry`: the card offers Retry instead). A Persona
+ *  chat adds its own model panel for `pick_model` and, while it keeps a pick, the way back to the default
+ *  (views/chat/ModelPill.tsx useAssistantTurnFix). */
+export interface TurnFix {
+  title: string;
+  detail: string;
+  action: string;
+  onPickModel?: () => boolean;
+  back?: { label: string; run: () => void };
+}
+
+/** A turn that ended on a model error the user must fix: the card's title and its button (4.4 "Model error"). A model
+ *  the chat can't run is fixed by picking another one for it (`pick_model`), not by adding a provider; a gateway that
+ *  refused on-demand tool loading needs only a retry, as Persona now sends every tool. */
+export function turnErrorFix(code: string | undefined): TurnFix | null {
   switch (code) {
     case "not_logged_in":
       return { title: t("lib-readiness.turn_not_logged_in"), detail: t("lib-readiness.turn_not_logged_in_detail"), action: "connect_model" };
     case "auth_failed":
       return { title: t("lib-readiness.turn_auth_failed"), detail: t("lib-readiness.turn_auth_failed_detail"), action: "edit_provider" };
     case "model_route":
-      return { title: t("lib-readiness.turn_model_route"), detail: t("lib-readiness.turn_model_route_detail"), action: "connect_model" };
+      return { title: t("lib-readiness.turn_model_route"), detail: t("lib-readiness.turn_model_route_detail"), action: "pick_model" };
+    case "tool_search_unsupported":
+      return { title: t("lib-readiness.turn_tool_search_unsupported"), detail: t("lib-readiness.turn_tool_search_unsupported_detail"), action: "retry" };
   }
   return null;
 }

@@ -715,3 +715,13 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## A check that passes must have sent what the chat sends (#10365)
+
+"Try it" ran `launchers.check` with the Main chat launcher's name alone: the launcher's default model, the login shell's
+profile, no tools, no tool search. The chat ran a picked or configured model in its own profile with Persona's tools,
+and failed with `model_route`; the check passed, its newer pass cleared the readiness card, and the next message failed
+again. Evidence about a model is about one request shape: resolve the probe's target with the send path's own code
+(`sendModel`, read-only), have the node build the check as the turn (`launchers.check` `assistant_turn`), and key the
+evidence and its reuse by machine, launcher and model, so a pass of something else, or of an older plain check, never
+outranks the real turn's failure (`TestReadinessProbeOtherModelDoesNotClearModelRoute`).

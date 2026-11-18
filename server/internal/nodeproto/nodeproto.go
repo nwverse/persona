@@ -140,6 +140,11 @@ const (
 	// groups, folders, rebuildable caches, tools) and the emptying of caches from its own catalog
 	// (docs/server/machines.md "Diagnosis and cleanup"). Without it the manager answers node_outdated.
 	MachineDiagnose = "machine_diagnose"
+	// LauncherCheckAssistantTurn: launchers.check takes assistant_turn (with conversation, config_dir, model and effort)
+	// and runs a Claude Code launcher's check as the assistant runs that conversation's turn: its profile, environment,
+	// Persona's MCP server and tool flags (docs/assistant/onboarding.md "Main-chat readiness"). Its answer says so
+	// (assistant_turn); an older node runs the plain check, which proves nothing about the main chat's own failure.
+	LauncherCheckAssistantTurn = "launcher_check_assistant_turn"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -169,7 +174,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal}
+var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, LauncherCheckAssistantTurn}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

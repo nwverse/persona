@@ -95,6 +95,9 @@ type LauncherCheck struct {
 	Answer string `json:"answer,omitempty"`
 	Millis int    `json:"millis"`
 	Error  string `json:"error,omitempty"`
+	// AssistantTurn: the check ran as the assistant runs a turn of conversation (launchers.check assistant_turn, a node
+	// with launcher_check_assistant_turn, Claude Code launchers only); absent, it was the plain check.
+	AssistantTurn bool `json:"assistant_turn,omitempty"`
 }
 
 // ClaudeAuthStatus is what a node's claude.auth_status found: `claude auth status --json` run as the launcher runs

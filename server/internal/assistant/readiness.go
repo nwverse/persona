@@ -134,7 +134,7 @@ type ReadinessSuggestion struct {
 type readinessRecord struct {
 	Dismissed   bool       `json:"dismissed"`
 	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
-	// Probe is the last probe's result, for the machine and launcher it ran with.
+	// Probe is the last probe's result, for the machine, launcher and model it ran with.
 	Probe *readinessProbe `json:"probe,omitempty"`
 	// Success is completed main-chat evidence, independent of the process remaining online.
 	Success *readinessSuccess `json:"success,omitempty"`
@@ -150,8 +150,13 @@ type readinessRecord struct {
 }
 
 type readinessProbe struct {
-	Machine  string              `json:"machine"`
-	Launcher string              `json:"launcher"`
+	Machine  string `json:"machine"`
+	Launcher string `json:"launcher"`
+	// Model and Effort are what the main conversation's next turn ran with ("" the launcher's default); Targeted says
+	// the probe checked that turn (readiness_probe_target.go), not the launcher's default of an older manager.
+	Model    string              `json:"model,omitempty"`
+	Effort   string              `json:"effort,omitempty"`
+	Targeted bool                `json:"targeted,omitempty"`
 	At       time.Time           `json:"at"`
 	Check    proto.LauncherCheck `json:"check"`
 }
@@ -357,7 +362,7 @@ func (s *Service) readiness(ctx context.Context, probe bool, wait time.Duration)
 	} else {
 		s.askAhead(d.ID, launcher)
 		if probe {
-			out.Probe = s.readinessProbe(ctx, d.ID, launcher)
+			out.Probe = s.readinessProbe(ctx, d.ID, v)
 		}
 		deadline := time.Now().Add(wait) // the node's two answers are waited for together, not one after the other
 		rec := s.readinessRecordNow(ctx)
@@ -501,8 +506,10 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 		fingerprint != "" && success.Fingerprint == fingerprint {
 		ev = append(ev, readinessEvidence{at: success.At, ok: true})
 	}
-	if p := rec.Probe; p != nil && p.Machine == d.ID && p.Launcher == launcher {
-		ev = append(ev, readinessEvidence{at: p.At, ok: p.Check.OK, text: p.Check.Error})
+	if p := rec.Probe; p != nil {
+		if e, ok := s.readinessProbeEvidence(ctx, *p, d.ID, launcher, binding, main, hasMain); ok {
+			ev = append(ev, e)
+		}
 	}
 	if hasMain && (main.Launcher == "" || main.Launcher == launcher) {
 		switch {
@@ -759,14 +766,19 @@ func readinessSuggestions(lang i18n.Lang, mode string) []ReadinessSuggestion {
 
 // ---- what it asks ----
 
-// readinessProbe runs the one-word check of launcher on machine (launchers.check, what "Test" runs), or answers
-// the last one's result when it ran this launcher there within readinessProbeReuse; one at a time.
-func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) *proto.LauncherCheck {
+// readinessProbe runs the one-word check of the main conversation's next turn on machine (launchers.check shaped as
+// that turn, readiness_probe_target.go), or answers the last one's result when it checked the same launcher and model
+// there within readinessProbeReuse; one at a time. A turn that would be refused is the answer, with nothing run.
+func (s *Service) readinessProbe(ctx context.Context, machine string, v Settings) *proto.LauncherCheck {
+	t, err := s.readinessProbeTarget(ctx, machine, v)
+	if err != nil {
+		return &proto.LauncherCheck{Error: i18n.Localize(err, s.requestCtxLang(ctx))} // the message's refusal: said, not kept
+	}
 	b := &s.ready
 	for {
 		b.mu.Lock()
 		s.readinessLoadLocked(ctx)
-		if p := b.rec.Probe; p != nil && p.Machine == machine && p.Launcher == launcher && time.Since(p.At) < readinessProbeReuse {
+		if p := b.rec.Probe; p != nil && p.checks(machine, t) && time.Since(p.At) < readinessProbeReuse {
 			c := p.Check
 			b.mu.Unlock()
 			return &c
@@ -796,7 +808,7 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 	cctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 	var res proto.LauncherCheck
-	if err := s.call(cctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": launcher, "purpose": "assistant"}, &res); err != nil {
+	if err := s.call(cctx, machine, assistantwire.DeviceLaunchersCheck, t.params(), &res); err != nil {
 		// Not the model's answer (the machine could not be asked): said, not kept.
 		return &proto.LauncherCheck{Error: i18n.Localize(err, s.requestCtxLang(ctx))}
 	}
@@ -806,7 +818,7 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 	defer wcancel()
 	if err := s.readinessUpdate(wctx, func(r *readinessRecord) {
 		now := time.Now().UTC()
-		r.Probe = &readinessProbe{Machine: machine, Launcher: launcher, At: now, Check: res}
+		r.Probe = &readinessProbe{Machine: machine, Launcher: t.launcher, Model: t.model, Effort: t.effort, Targeted: true, At: now, Check: res}
 		if res.OK && r.AnsweredAt == nil {
 			r.AnsweredAt = &now
 		}

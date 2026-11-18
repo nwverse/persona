@@ -19,5 +19,7 @@
   "turn_auth_failed": "Model not connected: the key is wrong",
   "turn_auth_failed_detail": "The key is wrong or has expired. Use one that works.",
   "turn_model_route": "Model not connected: this model isn't available",
-  "turn_model_route_detail": "The model name is wrong or the model isn't available now. Try another one."
+  "turn_model_route_detail": "The model name is wrong or the model isn't available now. Try another one.",
+  "turn_tool_search_unsupported": "Model not connected: this gateway can't load tools on demand",
+  "turn_tool_search_unsupported_detail": "Persona now sends every tool with each request. Retry."
 }
