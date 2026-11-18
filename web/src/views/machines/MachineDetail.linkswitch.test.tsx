@@ -71,7 +71,7 @@ describe("MachineDetail and a switch to Persona Link", () => {
     act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
     await flush();
     expect(host.querySelector("[data-offline-box]")).not.toBeNull();
-    expect(host.textContent).toContain("电脑要在线才能切换。");
+    expect(host.querySelector("[data-link-switch]")).toBeNull(); // the offline box says it; nothing of a switch too
   });
 
   it("shows nothing about switching for an older hub", async () => {

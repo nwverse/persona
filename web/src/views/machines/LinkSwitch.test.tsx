@@ -72,14 +72,17 @@ describe("LinkSwitch states", () => {
     ["pending", "请先确认这台电脑是你的。"],
     ["custom_node", "装在自定义位置"],
     ["hub_old", "hub 需要更新后才能切换电脑。"],
-    ["offline", "电脑要在线才能切换。"],
-    ["busy", "Persona 正在更新这台电脑"],
     ["something_new", "这台电脑暂时不能切换到 Persona Link。"],
   ])("says why it can't start (%s), with no button", async (reason, words) => {
     await render(view({ available: false, reason }));
     expect(text()).toContain(words);
     expect(text()).not.toContain(reason);
     expect(buttons(START)).toHaveLength(0);
+  });
+
+  it.each(["offline", "busy"])("says nothing of a switch while the computer is %s: the page says that already", async (reason) => {
+    await render(view({ available: false, reason }));
+    expect(host.innerHTML).toBe("");
   });
 
   it.each([

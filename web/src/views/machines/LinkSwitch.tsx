@@ -34,6 +34,8 @@ const WHY: Record<string, string> = {
   unknown: "machines-machinedetail.machine_switch_link_why_unknown",
 };
 const UNAVAILABLE = "machines-machinedetail.machine_switch_link_why_unavailable";
+// Passing reasons the page says in its own way already (offline, a node update running): nothing about a switch then.
+const PASSING = new Set(["offline", "busy"]);
 
 const STEP_LABEL: Record<(typeof LINK_SWITCH_STEPS)[number], string> = {
   checking: "machines-machinedetail.machine_switch_link_step_checking",
@@ -72,6 +74,7 @@ export function LinkSwitch({ machineId, name, state, post, refresh, user, classN
   const [asking, setAsking] = useState(false);
   if (!state) return null;
   const shown = shownLinkSwitch(state, attempt) ?? state;
+  if (!shown.available && !shown.phase && !attempt && PASSING.has(shown.reason ?? "")) return null;
   const notice = linkSwitchNotice(state, attempt);
   const starting = !!attempt?.starting;
   const running = linkSwitchRunning(shown);
