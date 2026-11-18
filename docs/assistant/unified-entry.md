@@ -588,7 +588,7 @@ record per piece of work, made when the work is handed out and never rewritten (
 
 | Field | From | Meaning |
 | --- | --- | --- |
-| `request` | the hub | The owner's message that led to the task, verbatim: `text` (cut at 2000 characters, then `truncated`), `at`, and where the whole of it is (`conversation`, `message_id`). Absent when the owner did not ask for it |
+| `request` | the hub | The owner's message that led to the task, verbatim: `text` (cut at 2000 characters, then `truncated`), `at`, and where the whole of it is (`conversation`, `message_id`); `via`: the conversations that relayed it, oldest first ("Across a relay" below). Absent when the owner did not ask for it |
 | `started_by`, `trigger`, `trigger_title`, `reason` | the hub, `reason` from the model | Who started it: `owner`, `assistant`, `leader`, `routine`, `hub`, or `unknown`; what the turn followed when it was not the owner (`supervision`, `followup`, `routine`, `conversation`, `notice`, `meeting`, `wake`); and why (`task_plan`'s `started_why`) |
 | `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
 | `done_when`, `expect_minutes`, `out_of_bounds` | the model | What done means, about how long it should take, what the Agent must not do |
@@ -601,6 +601,21 @@ not just ask: the work is recorded as started by the assistant (a leader convers
 `routine`) with what it followed, and no older message of the owner's is attributed to it. A conversation that cannot
 be read records `unknown`. The hub's own starts (an Agent that became a task, an inbox hand-off) record `hub`. The model
 never writes `request`: a `brief` in the tool call is dropped.
+
+**Across a relay.** When the main conversation hands the owner's request to a leader, the leader's latest message is
+the relay, so its brief would only say a conversation started it. `conversation_send` and `conversation_new` take an
+optional `quote`: `"latest"` or a message id (`server/internal/assistant/relay_quote.go`). The hub reads the sending
+conversation's last ten turns and accepts only a message the owner sent there from an app (it has a client message
+id), or a verified quote that conversation itself received, so a quote passes on through more than one conversation.
+Anything else refuses the send before the hop and rate limits count it. The hub keeps what it verified (setting
+`assistant.quotes`, by sender and message id, 14 days, at most 64) and the receiver gets the text verbatim in a
+`<persona-context kind="owner-request" message_id="…">` block right after the relay context
+(`prompts/assistant/relay.md`). When the receiver hands work out on that message, `request` is the kept quote,
+found by the sender (the item's `source`) and the id in that block; only a block directly after the canonical relay
+context counts (`prompts.ParseRelayQuoteID`), and its text is never read as the request. `started_by` stays
+`leader` / `assistant` with trigger `conversation`, and `request.via` lists who passed it on. A relayed quote is the
+owner's request, never their approval: a scope change that needs the owner's yes takes only a message they wrote in
+the conversation making the change. Hops and rate limits are as before.
 
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
 `expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
