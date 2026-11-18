@@ -376,6 +376,54 @@ Script steps:
 - **`--output` must be outside the collected trees** (the knowledge base, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`); `create` refuses it with a message, since the bundle and its staging directory would be copied into themselves. `~/.persona/backups/` is fine. On a case-insensitive file system (macOS) a differently-cased spelling of such a path is not recognised; spell the path as it is.
 - **If a restore cannot put the databases back** (for example the server goes away during the swap), what happens to the runtime files follows what restore could establish. If a database from the bundle may be live (it could not be moved back, or the checks that would show it was not installed failed), the files stay as restored, so they match it, and the error names every database that may be the bundle's, the previous databases that may still exist (`persona_previous_*`), any staged copy that may remain (`persona_staged_*`, not in use; when something outside the restore changed the databases, so that what a staged name holds cannot be confirmed, the error says so instead of calling it safe to drop: check it before dropping), the directory with the previous files and, for an external knowledge base, its previous copy. Otherwise the files are rolled back, and the error still names any previous database left parked and any staged copy that could not be dropped. The files can therefore stay as restored while both live databases are in fact the install's own only when every check that would tell failed; when one database was put back and the other could not be, the files stay as restored while one live database is the install's own. Running restore again converges, and nothing is lost either way.
 
+### Restore drill (`scripts/test/backup_restore_drill.py`, #10497)
+
+`backup verify` proves the bundle (checksums, schema and key identity, both dumps restoring into temporary databases).
+It restores no runtime and starts nothing, so it cannot show that the work in flight survives a restore. Starting the
+restored hub to look would change exactly that state: startup marks pending client operations unknown, expires stale
+interactions, drains the manager's outbox and starts connectors, extensions and nodes. The drill checks it offline instead.
+
+```sh
+cd server && CGO_ENABLED=0 go build -o /tmp/personad-drill ./cmd/personad && cd ..
+python3 scripts/test/backup_restore_drill.py --execute --binary /tmp/personad-drill [--docker "sudo -n docker"] [--report <new file>]
+```
+
+- **What it runs.** A disposable `postgres:18-alpine` container (`--image`, never pulled) on a Docker `--internal`
+  network with no published ports; databases created with the checkout's own migration files, applied as `db.Open`
+  applies them to a new database (each file in a transaction, recorded in `schema_migrations` with its part; a change
+  to that procedure in `server/internal/db/db.go` has to be mirrored in the drill's `migration_script`); a synthetic runtime (random `hub.json` token, both `secret.key` files, a `sealing_key` record, a small
+  knowledge base); and markers of each kind of work in flight: tasks and their Agent links, pending and resolved
+  interactions (approvals), the manager's outbox, and client operations in every state. The caller's static personad
+  then runs `backup create --writes-quiesced` and `verify` in a throwaway client container on the same network.
+- **The disaster and the restore.** The markers move on as a started hub and manager would move them (approvals resolved
+  and notified, the outbox drained and refilled, client operations settled and a new one made, tasks finished), the
+  runtime directory is deleted, and `backup restore --writes-quiesced` runs into an empty runtime directory under the
+  original database names (the changed databases are kept as `persona_previous_*`), followed by `verify` again.
+- **Read-only acceptance.** Every session has `default_transaction_read_only=on`. Schema and sealing-key identity match the
+  backup, the restored manager `secret.key` matches the `sealing_key` fingerprint, tasks and Agent links are as backed up,
+  pending approvals are still pending (no resolution, notification or authorization), the outbox has the same items in
+  `seq` order and its sequence was not advanced, client operations keep their states, order, timestamps and ids, the
+  knowledge base's digest matches, and the restored `hub.json` and `manager.json` name the restored databases. One
+  guarded write (resolving an approval) must fail with SQLSTATE 25006 and leave the row as restored, and no
+  `persona-hub` or `persona-manager` session may exist. The restored hub and manager are never started.
+- **The report** (stdout, and `--report`) has phase timings, the backup's `created_at`, each check's result, state counts,
+  `services_started: false` and the cleanup result: no row content, token, URL or key. Containers, the network and
+  the private temporary directory are removed on success, failure, timeout (`--timeout`, `--step-timeout`) and
+  SIGINT/SIGTERM; exit 0 only on `PASS`.
+- **Inputs it refuses.** Nothing runs without `--execute`. There is no flag for a hub URL, database URL, runtime
+  directory or existing bundle. A binary, `--work-dir`, `--report` or `TMPDIR` inside `~/.persona`, `PERSONA_HOME` or
+  any directory holding a `hub.json` or `secret.key` is refused, as is a dynamically linked binary (the Alpine client
+  image could not run it) or one built for another architecture than the Docker server's.
+- **Tests.** `scripts/test/test_backup_restore_drill.py` covers the arguments, the comparisons, redaction, and timeouts,
+  failures and interrupts against a fake docker. With `PERSONA_RESTORE_DRILL_BINARY` (and `PERSONA_RESTORE_DRILL_DOCKER`)
+  it also runs the real drill: a passing restore, `--checks verify-only` passing a restore whose approval was resolved
+  (what `backup verify` alone misses) while the full drill fails it, and each `--fault` failing with a clean teardown.
+  Hosted CI does not set them, so there the real drill is skipped, not verified.
+- **What it does not prove.** It is not a failover test. The shipped Docker Compose deployment, an independently hosted
+  manager, a restore onto another machine or another PostgreSQL cluster, real power loss, offsite copies, starting the
+  restored services and their first start's recovery are outside it. A later Settings page belongs under Settings →
+  Hub (Backup & Recovery), apart from the program backups of hub updates, not under Machines.
+
 ### Logs
 
 ```sh
