@@ -115,3 +115,66 @@ func TestRequest(t *testing.T) {
 		t.Fatalf("total %d: the four kinds, never the parts of them again", got)
 	}
 }
+
+// pi and omp: an assistant message's usage with its model; pi's usage entries and omp's model_usage with theirs; a
+// compaction's with the session's latest model (pi's model_change, omp's "provider/model"); reasoning is part of the
+// output, omp's orchestration tokens are added to their kinds; a failed request's zeros and other entries are none.
+func TestPiParser(t *testing.T) {
+	p := PiParser(Omp)
+	for i, c := range []struct {
+		line  string
+		ok    bool
+		model string
+		key   string
+		t     Tokens
+	}{
+		{`{"type":"session","version":3,"id":"s1","timestamp":"2026-11-17T08:00:00.000Z","cwd":"/w"}`, false, "", "", Tokens{}},
+		{`{"type":"message","id":"a1b2c3d4","parentId":null,"timestamp":"2026-11-17T08:00:01.000Z","message":{"role":"user","content":"the usage"}}`, false, "", "", Tokens{}},
+		{`{"type":"message","id":"e5f6a7b8","parentId":"a1b2c3d4","timestamp":"2026-11-17T08:00:02.000Z","message":{"role":"assistant","model":"model-a","provider":"p",` +
+			`"usage":{"input":3,"output":40,"cacheRead":500,"cacheWrite":60,"cacheWrite1h":60,"reasoning":10,"totalTokens":603}}}`,
+			true, "model-a", "pi:e5f6a7b8:2026-11-17T08:00:02.000Z", Tokens{Input: 3, Output: 40, CacheRead: 500, CacheWrite: 60, CacheWrite1h: 60, Reasoning: 10}},
+		{`{"type":"message","id":"c9d0e1f2","timestamp":"2026-11-17T08:00:03.000Z","message":{"role":"assistant","model":"model-a","stopReason":"error",` +
+			`"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0}}}`, false, "", "", Tokens{}},
+		{`{"type":"model_usage","id":"u1","timestamp":1763366404000,"purpose":"title","provider":"p","model":"model-s",` +
+			`"usage":{"input":7,"output":2,"cacheRead":0,"cacheWrite":0,"reasoningTokens":1,"orchestration":{"input":5,"output":1}}}`,
+			true, "model-s", "pi:u1:1763366404000", Tokens{Input: 12, Output: 3, Reasoning: 1}},
+		{`{"type":"model_change","id":"m1","timestamp":"2026-11-17T08:00:05.000Z","model":"p/model-b"}`, false, "", "", Tokens{}},
+		{`{"type":"compaction","id":"k1","timestamp":"2026-11-17T08:00:06.000Z","summary":"…","firstKeptEntryId":"a1b2c3d4","tokensBefore":9000,` +
+			`"usage":{"input":900,"output":80,"cacheRead":0,"cacheWrite":0}}`, true, "model-b", "pi:k1:2026-11-17T08:00:06.000Z", Tokens{Input: 900, Output: 80}},
+		{`{"type":"model_change","id":"m2","timestamp":"2026-11-17T08:00:07.000Z","provider":"p","modelId":"model-c"}`, false, "", "", Tokens{}},
+		{`{"type":"usage","id":"w1","timestamp":"2026-11-17T08:00:08.000Z","kind":"cache_warm","provider":"p","model":"model-c","usage":{"input":1,"output":1,"cacheRead":2000,"cacheWrite":0}}`,
+			true, "model-c", "pi:w1:2026-11-17T08:00:08.000Z", Tokens{Input: 1, Output: 1, CacheRead: 2000}},
+		{`{"type":"branch_summary","id":"b1","timestamp":"2026-11-17T08:00:09.000Z","fromId":"e5f6a7b8","summary":"…"}`, false, "", "", Tokens{}},
+	} {
+		r, ok := p.Line([]byte(c.line))
+		if ok != c.ok || ok && (r.Model != c.model || r.Key != c.key || r.Tokens != c.t || r.Agent != Omp || r.Time.IsZero()) {
+			t.Errorf("line %d: %v %+v, want %v %q %q %+v", i, ok, r, c.ok, c.model, c.key, c.t)
+		}
+	}
+}
+
+// opencode: a finished step's tokens with the reasoning in its output; an unfinished one, a compaction still running
+// and one without tokens count none.
+func TestOpencodeRow(t *testing.T) {
+	done := int64(1763366400500)
+	step := OpencodeRow{ID: "msg_1", Session: "ses_1", Type: "assistant", Created: 1763366400000, Completed: &done, Model: "model-a",
+		Input: 10, Output: 20, Reasoning: 5, CacheRead: 300, CacheWrite: 40}
+	r, ok := step.Record()
+	if !ok || r.Tokens != (Tokens{Input: 10, Output: 25, Reasoning: 5, CacheRead: 300, CacheWrite: 40}) || r.Key != "opencode:msg_1" ||
+		r.Session != "ses_1" || r.Agent != Opencode || r.Time.UnixMilli() != 1763366400000 {
+		t.Fatalf("step = %+v %v", r, ok)
+	}
+	for _, row := range []OpencodeRow{
+		{Type: "assistant", Input: 1},                     // under way
+		{Type: "compaction", Status: "running", Input: 1}, // under way
+		{Type: "assistant", Completed: &done},             // no tokens
+		{Type: "user", Completed: &done, Input: 1},        // not a request
+	} {
+		if _, ok := row.Record(); ok {
+			t.Errorf("%+v counted", row)
+		}
+	}
+	if _, ok := (OpencodeRow{Type: "compaction", Status: "failed", Output: 3}).Record(); !ok {
+		t.Error("a failed compaction's request is not counted")
+	}
+}

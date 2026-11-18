@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -157,6 +158,11 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
+	// BackgroundSupervisorKeepsContext: the background supervisor is one long conversation again from its next round,
+	// keeping each later round in context, as before #7315 (rounds already run from the first turn stay on their own
+	// branches). nil is off (the default): each round starts from its first turn with only that round's facts and tools
+	// (supervise_round.go).
+	BackgroundSupervisorKeepsContext *bool `json:"background_supervisor_keeps_context,omitempty"`
 	// BackgroundSupervisor is the background supervisor's conversation, on BackgroundSupervisorMachineID, started at
 	// BackgroundSupervisorAt: made on first use, "" until then. BackgroundSupervisorAnnounced: the main conversation
 	// was told once that it follows up its tasks. The assistant writes these itself; PUT /api/v1/assistant does not.
@@ -225,6 +231,9 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	}
 	if err := fn(&v); err != nil {
 		return Settings{}, err
+	}
+	if proto.IsExternalLauncher(v.Launcher) {
+		return Settings{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, settingsKey, v); err != nil {
@@ -704,6 +713,9 @@ func (s *Service) warm(launcher string) {
 		if h := s.loadHandoff(ctx); h.Pick != nil {
 			pick, picked = *h.Pick, true
 		}
+	}
+	if proto.IsExternalLauncher(launcher) || picked && proto.IsExternalLauncher(pick.Launcher) {
+		return // no real session exists for a prewarm's external scope
 	}
 	if launcher == "" && !picked {
 		launcher = s.launcherNow(ctx)
