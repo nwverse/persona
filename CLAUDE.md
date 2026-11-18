@@ -228,6 +228,8 @@ The full list is in `docs/lessons/`; read the file for the area you touch first.
   (`#available` covers only runtime). Build with 26.0 when you have it; otherwise note the Xcode you used and "26.0 not verified" in the
   PR. Raising the minimum is the user's decision (`docs/lessons/ios.md`, "Minimum compatible compiler").
 - The watch app targets watchOS 10 and compiles all of `Shared/`: only watchOS 10 APIs, with `#available` fallbacks (`Color.blended`, not `Color.mix`).
+- The iPhone and iPad app targets iOS 18.6 (#6730): an iOS 26 API gets `if #available(iOS 26.0, *)` with the older behavior, or a
+  `SystemCompat.swift` helper; toolbar items choose on the view, since `ToolbarContentBuilder` can't (`docs/lessons/ios.md`, "iOS 18.6 floor").
 - Someone else's redeploy can wipe the hub's memory at any time: flows that span requests must be self-contained or persisted.
 - The hub's port belongs to `personad.socket` (socket activation) and versions switch blue-green with `personad hub switch`. Before going
   back to a binary that doesn't understand `LISTEN_FDS`, run `PERSONA_HUB_SOCKET=0 scripts/deploy/hub-systemd.sh`; to stop the hub, stop the
