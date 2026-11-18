@@ -1274,6 +1274,8 @@ Claude Code has Allow All (`bypassPermissions`) in its Shift+Tab cycle only when
   report them (else its `sessions/<pid>.json`). Once that process has exited, or the session runs in another one (a
   resume at the computer or Persona's Resume), the pick is dropped: a later claude of the same conversation was never
   chosen for Full access and is never restarted into it. Where Persona cannot tell the process, the pick is refused.
+- **The record** (#10297): each pick and what became of its restart (done, failed, dropped and why) is kept by the
+  machine's manager (`docs/protocol/protocol.md` "Session mode changes").
 - **Where**: only a Claude Code Agent in a pane of a terminal host that can say what runs there and start an agent in it
   (herdr), on a launcher Persona can tell, in a folder it can tell. Runtimes, Antigravity, Codex and sessions outside
   Persona's terminals keep the refusal. The restart is kept in the node's memory (shared by a resident node's Nodes), so
