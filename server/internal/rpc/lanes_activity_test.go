@@ -393,3 +393,71 @@ func TestLanesActivityAnswersAroundADeadline(t *testing.T) {
 		}
 	})
 }
+
+// A callback in the read loop may wait for an answer of this side's to be written (AfterReply) while bulk has the
+// window full: interactive answers wait for no credit, which only that loop's reading would bring back.
+func TestLanesReadLoopWaitingForItsOwnAnswer(t *testing.T) {
+	link := netshape.Config{Rate: 1 << 20}
+	a, b := netshape.Pipe(link, link)
+	h, n := New("h", a), New("n", b)
+	h.EnableLanes(testControl, testBulk)
+	n.EnableLanes(testControl, testBulk)
+	h.TrackReplies = true
+	asked, waiting, written := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	h.OnRequest = func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "x.q" {
+			close(asked)
+			<-waiting // answered once the read loop waits for the answer
+			AfterReply(ctx, func() { close(written) })
+			return map[string]string{"answer": strings.Repeat("a", 40<<10)}, nil // several frames
+		}
+		return map[string]bool{"ok": true}, nil
+	}
+	h.OnEvent = func(event string, _ json.RawMessage) {
+		if event == "x.block" {
+			close(waiting)
+			select { // the read loop waits for its side's answer
+			case <-written:
+			case <-time.After(10 * time.Second):
+			}
+		}
+	}
+	n.OnRequest = func(context.Context, string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil }
+	go func() { _ = h.Serve(context.Background(), a) }()
+	go func() { _ = n.Serve(context.Background(), b) }()
+	defer func() { a.Close(); b.Close() }()
+	if err := h.UpgradeLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	for range 2 { // uploads that keep h's window full
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if h.Call(context.Background(), "file.chunk", map[string]string{"data": strings.Repeat("u", 64<<10)}, nil) != nil {
+					return
+				}
+			}
+		}()
+	}
+	eventually(t, func() bool { s := h.LaneStats(); return s.InFlight > 0 && s.Lanes[LaneBulk].SentFrames > 8 })
+	answered := make(chan error, 1)
+	go func() { answered <- n.Call(context.Background(), "x.q", map[string]any{}, nil) }()
+	<-asked // the request is read before the event that blocks the read loop
+	if err := n.Notify("x.block", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("the answer waited for credit the blocked read loop would bring (%s)", h.LaneStats())
+	}
+}

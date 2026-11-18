@@ -4,10 +4,10 @@ package rpc
 // from JSON lines to frames, each carrying a piece of one line on one of four lanes. The writer sends the lanes in
 // strict priority (control, interactive, events, bulk), short lines of a lane taking turns with its oldest long one, so
 // a pong or an answer to a tap waits at most for one frame already on its way, not for a 1 MiB file chunk ahead of it
-// on the one writer. Interactive and bulk frames also wait for credit (creditWindow): the other side acknowledges the
+// on the one writer. Requests and bulk lines also wait for credit (creditWindow): the other side acknowledges the
 // frames it has read, and only so many of their bytes may be sent and not yet acknowledged, so what sits in the
 // transport's own buffers (ssh, a relay, TCP) ahead of a pong stays bounded too, and a peer that stops reading holds
-// those writers back (creditLane says why events and control never wait).
+// those writers back (route says why events, answers and control never wait).
 //
 // The switch is negotiated on the connection itself, so old peers on either end, and every byte pipe in between,
 // see nothing new:
@@ -52,11 +52,23 @@ const (
 	laneCount
 )
 
-// creditLane: frames of lane wait for credit (creditWindow). Interactive and bulk lines are written by callers and
-// handlers, never by a read loop: a request from one would wait for its answer, which that loop alone reads, so it
-// never was. An event can be (a synchronous event handler that sends one), and waiting for credit there would wait for
-// an acknowledgement only that same loop can read; control is what credit itself travels on.
+// creditLane: frames of lane may wait for credit (creditWindow), so the reader acknowledges them; which lines do is
+// their route's.
 func creditLane(l Lane) bool { return l == LaneInteractive || l == LaneBulk }
+
+// route is where a line goes once the output is framed: its lane, and whether it waits for credit. Interactive
+// requests and bulk lines do. An event never does: a synchronous event handler can send one from the read loop, where
+// waiting for credit would wait for an acknowledgement only that loop reads (control is what credit travels on). Nor
+// does an interactive answer: a callback in the read loop may wait for one to be written (AfterReply), which would
+// wait for credit the same way, and on the one writer a pong waited behind a whole answer anyway. A read loop must not
+// wait for this side's requests or bulk lines to be written: a request from it would wait for an answer only it reads,
+// and a bulk line for credit.
+type route struct {
+	lane   Lane
+	credit bool
+}
+
+var controlRoute = route{lane: LaneControl}
 
 var laneNames = [laneCount]string{"control", "interactive", "events", "bulk"}
 
@@ -116,6 +128,17 @@ func (t laneTable) method(method string) Lane {
 	return LaneInteractive
 }
 
+// request is the route of a request for method; reply the route of its answer.
+func (t laneTable) request(method string) route {
+	l := t.method(method)
+	return route{lane: l, credit: l == LaneInteractive || l == LaneBulk}
+}
+
+func (t laneTable) reply(method string) route {
+	l := t.method(method)
+	return route{lane: l, credit: l == LaneBulk}
+}
+
 // event is the lane of an event.
 func (t laneTable) event(event string) Lane {
 	if l, ok := t[event]; ok {
@@ -125,6 +148,12 @@ func (t laneTable) event(event string) Lane {
 		return LaneControl
 	}
 	return LaneEvents
+}
+
+// eventRoute is the route of an event.
+func (t laneTable) eventRoute(event string) route {
+	l := t.event(event)
+	return route{lane: l, credit: l == LaneBulk}
 }
 
 // Frame sizes: a whole frame, header included, is at most frameMax.

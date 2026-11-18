@@ -68,7 +68,7 @@ func (p *Peer) UpgradeLanes(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := p.writeContextObserved(ctx, message{ID: id, Method: lanesMethod, Params: params}, LaneControl); err != nil {
+	if _, err := p.writeContextObserved(ctx, message{ID: id, Method: lanesMethod, Params: params}, controlRoute); err != nil {
 		p.mu.Lock()
 		if p.lanesCall == id {
 			p.lanesCall = ""
@@ -123,7 +123,7 @@ func (p *Peer) answerLanes(m message) {
 	}
 	p.mu.Unlock()
 	if !ok {
-		_ = p.write(message{ID: m.ID, Error: &Error{Message: "rpc: lanes refused", Code: CodeLanesRefused}}, LaneControl)
+		_ = p.write(message{ID: m.ID, Error: &Error{Message: "rpc: lanes refused", Code: CodeLanesRefused}}, controlRoute)
 		return
 	}
 	result, _ := marshal(lanesAnswer{Version: lanesVersion})
@@ -203,12 +203,12 @@ func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 // writeFramed queues line b on lane and waits until all of it is written. Until its first frame goes out it can be
 // withdrawn (NotSent); once begun, it is written to its end.
-func (p *Peer) writeFramed(ctx context.Context, lw *laneWriter, b []byte, lane Lane) (writeObservation, error) {
+func (p *Peer) writeFramed(ctx context.Context, lw *laneWriter, b []byte, r route) (writeObservation, error) {
 	var observation writeObservation
 	if err := ctx.Err(); err != nil {
 		return observation, NotSent(err)
 	}
-	l := &outLine{b: b, lane: lane, queued: time.Now(), done: make(chan error, 1)}
+	l := &outLine{b: b, lane: r.lane, credit: r.credit, queued: time.Now(), done: make(chan error, 1)}
 	delayed, err := lw.enqueue(l)
 	if err != nil {
 		return observation, NotSent(err)

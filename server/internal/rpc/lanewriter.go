@@ -53,6 +53,7 @@ type outLine struct {
 	b       []byte // the line (its newline dropped once it starts, after filter)
 	off     int    // written so far
 	lane    Lane
+	credit  bool // it waits for credit (route)
 	slot    uint16
 	started bool
 	queued  time.Time
@@ -224,8 +225,8 @@ func (lw *laneWriter) fillLocked(batch []byte, finished []*outLine, now time.Tim
 		batch = append(append(batch, h[:]...), l.b[l.off:l.off+n]...)
 		l.off += n
 		lw.totals[l.lane].frames++
-		if creditLane(l.lane) {
-			lw.win.wrote(lw.seq, n, now, n == lw.frameSize(l.lane))
+		if l.credit {
+			lw.win.wrote(lw.seq, n, now, n == lw.most(l))
 		}
 		if fin {
 			q := &lw.lanes[l.lane]
@@ -248,11 +249,11 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 		if len(q.lines) == 0 {
 			continue
 		}
-		most := lw.frameSize(lane)
-		long := q.long(most)
+		long := q.long(lw.most)
 		for k := 0; k < len(q.lines); k++ {
 			i := (q.next + k) % len(q.lines)
 			l := q.lines[i]
+			most := lw.most(l)
 			if l != long && l.left() > most {
 				continue // a long line behind the one going out
 			}
@@ -263,8 +264,8 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 			if !first && frameHeader+n > room {
 				return nil, 0, false
 			}
-			if creditLane(lane) && !lw.win.canSend(n) {
-				break // no credit: the lanes below that wait for it have none either
+			if l.credit && !lw.win.canSend(n) {
+				continue // no credit for it; a line of the lane that needs none may go
 			}
 			if !l.started {
 				// Filtered as it goes on the wire, as a line on the one writer was (the node hides values handed over
@@ -295,14 +296,14 @@ func (l *outLine) left() int {
 }
 
 // long is the lane's long line whose frames go now: the one in progress, else the oldest that needs more than one frame
-// of most bytes; nil when there is none.
-func (q *laneQueue) long(most int) *outLine {
+// (most); nil when there is none.
+func (q *laneQueue) long(most func(*outLine) int) *outLine {
 	var oldest *outLine
 	for _, l := range q.lines {
 		if l.started {
 			return l // a line started and not through is a long one: a short one starts and ends in one frame
 		}
-		if oldest == nil && l.left() > most {
+		if oldest == nil && l.left() > most(l) {
 			oldest = l
 		}
 	}
@@ -357,9 +358,9 @@ func sizeText(n int64) string {
 	return fmt.Sprintf("%dB", n)
 }
 
-// frameSize is the most a frame of lane carries now.
-func (lw *laneWriter) frameSize(lane Lane) int {
-	if creditLane(lane) {
+// most is the most a frame of l carries now: a quarter of the window when it waits for credit.
+func (lw *laneWriter) most(l *outLine) int {
+	if l.credit {
 		return lw.win.frameSize()
 	}
 	return framePayloadMax
@@ -373,9 +374,8 @@ func (lw *laneWriter) stats() LaneStats {
 	for i := range lw.lanes {
 		c := &s.Lanes[i]
 		c.SentFrames, c.MaxWait = lw.totals[i].frames, lw.totals[i].maxWait
-		most := lw.frameSize(Lane(i))
 		for _, l := range lw.lanes[i].lines {
-			left := len(l.b) - l.off
+			left, most := len(l.b)-l.off, lw.most(l)
 			c.QueuedBytes += int64(left)
 			c.QueuedFrames += max((left+most-1)/most, 1)
 			if !l.started {

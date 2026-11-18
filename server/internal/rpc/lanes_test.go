@@ -70,7 +70,7 @@ func heads(t *testing.T, b []byte) ([]frameHead, [][]byte) {
 
 func queue(t *testing.T, lw *laneWriter, lane Lane, line string) *outLine {
 	t.Helper()
-	l := &outLine{b: []byte(line + "\n"), lane: lane, queued: time.Now(), done: make(chan error, 1)}
+	l := &outLine{b: []byte(line + "\n"), lane: lane, credit: creditLane(lane), queued: time.Now(), done: make(chan error, 1)} // as a request's
 	if _, err := lw.enqueue(l); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func testCreditWindow(t *testing.T, lane Lane) {
 	defer close(closed)
 	lw := newLaneWriter(&sink, closed, func(error) {}, nil)
 	lw.start()
-	line := &outLine{b: bytes.Repeat([]byte("z"), 1<<20), lane: lane, queued: time.Now(), done: make(chan error, 1)}
+	line := &outLine{b: bytes.Repeat([]byte("z"), 1<<20), lane: lane, credit: true, queued: time.Now(), done: make(chan error, 1)}
 	if _, err := lw.enqueue(line); err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +572,10 @@ func TestLanesWriteErrorsAsLines(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
 	go func() { errc <- n.Notify("stream.data", map[string]int{}) }()
-	go func() { _, err := n.writeContextObserved(ctx, message{Event: "e2"}, LaneEvents); errc <- err }()
+	go func() {
+		_, err := n.writeContextObserved(ctx, message{Event: "e2"}, route{lane: LaneEvents})
+		errc <- err
+	}()
 	eventually(t, func() bool { // both queued behind the long line
 		lw.mu.Lock()
 		defer lw.mu.Unlock()

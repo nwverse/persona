@@ -1912,13 +1912,14 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   window bounds what is ahead of it in the pipe, and only a delay-based one fits both 30 KB/s (where 64 KiB in flight
   is two seconds of queue) and a fast link (where it starves a transfer). Frames shrink with the window: on a slow
   link the frame an interactive frame waits behind is a few KiB.
-- **Credit only where no read loop writes.** A write made from inside a read loop (a synchronous event handler) that
-  waits for credit waits for an acknowledgement only that read loop's reading could release: a deadlock lines cannot
-  have. Requests and answers never come from a read loop (a request there would already wait forever for its answer),
-  so interactive and bulk wait for credit; events do not. Credit for bulk alone was the first version: a review showed
-  a large `model.http` body then filled ssh's buffer ahead of the ping, which with lines would have waited unwritten
-  (not counted) and framed was written and missed. Large events still go to the transport at once; the middle of a
-  long line keeps excusing a late pong, as with lines.
+- **Credit only where no read loop writes or waits.** A write made from inside a read loop (a synchronous event
+  handler), or one such a handler waits for (an answer, through `AfterReply`), that waits for credit waits for an
+  acknowledgement only that read loop's reading could release: a deadlock lines cannot have. So requests and bulk
+  lines wait for credit; events and interactive answers do not. Credit for bulk alone was the first version: a review
+  showed a large `model.http` body then filled ssh's buffer ahead of the ping, which with lines would have waited
+  unwritten (not counted) and framed was written and missed; credit for every interactive line was the second, and a
+  read loop waiting for its own answer then hung (`TestLanesReadLoopWaitingForItsOwnAnswer`). Large answers and
+  events still go to the transport at once, as with lines; the middle of a long line keeps excusing a late pong.
 - **A delay-based window compares like with like.** Once short interactive frames fed it round trips, the link's base
   delay came from them, and a full frame's own 137 ms on the wire at 30 KB/s read as queueing: the window sat at its
   least and a 1 MiB transfer took 109 s instead of 47 s. Only frames cut to the frame size are samples now.

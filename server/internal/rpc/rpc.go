@@ -441,18 +441,18 @@ func (p *Peer) handle(ctx context.Context, m message) {
 			out.Result = b
 		}
 	}
-	lane := p.lanes.method(m.Method)
-	if err := p.write(out, lane); errors.Is(err, errFrameBudget) {
+	r := p.lanes.reply(m.Method)
+	if err := p.write(out, r); errors.Is(err, errFrameBudget) {
 		// The request must get an error, not a permanently unresolved promise.
 		// If even the error cannot fit, disconnect so all pending calls fail.
-		if err := p.write(message{ID: m.ID, Error: &Error{Message: errFrameBudget.Error()}}, lane); err != nil {
+		if err := p.write(message{ID: m.ID, Error: &Error{Message: errFrameBudget.Error()}}, r); err != nil {
 			p.Close(err)
 		}
 	}
 }
 
-func (p *Peer) write(m message, lane Lane) error {
-	return p.writeContext(context.Background(), m, lane)
+func (p *Peer) write(m message, r route) error {
+	return p.writeContext(context.Background(), m, r)
 }
 
 // encodeLine is marshal(m) and its newline, encoded into one buffer: the same bytes and errors without copying the
@@ -487,8 +487,8 @@ func plainEncoder(w io.Writer) *json.Encoder {
 	return enc
 }
 
-func (p *Peer) writeContext(ctx context.Context, m message, lane Lane) error {
-	_, err := p.writeContextObserved(ctx, m, lane)
+func (p *Peer) writeContext(ctx context.Context, m message, r route) error {
+	_, err := p.writeContextObserved(ctx, m, r)
 	return err
 }
 
@@ -498,9 +498,9 @@ type writeObservation struct {
 }
 
 // writeContextObserved also reports whether this message had to wait behind another writer before reaching the wire,
-// and how much of the caller's deadline remained when the write finished. lane is where it goes once the output is
-// framed (lanes.go).
-func (p *Peer) writeContextObserved(ctx context.Context, m message, lane Lane) (writeObservation, error) {
+// and how much of the caller's deadline remained when the write finished. r is where it goes once the output is framed
+// (lanes.go).
+func (p *Peer) writeContextObserved(ctx context.Context, m message, r route) (writeObservation, error) {
 	b, err := encodeLine(m)
 	if err != nil {
 		return writeObservation{}, err
@@ -509,7 +509,7 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message, lane Lane) (
 		return writeObservation{}, errFrameBudget
 	}
 	if lw := p.out.Load(); lw != nil {
-		return p.writeFramed(ctx, lw, b, lane)
+		return p.writeFramed(ctx, lw, b, r)
 	}
 	// Wait for the writer, but not past the caller or the connection: the write ahead may never finish. A write
 	// already under way cannot be interrupted. Try the immediate acquisition first so delayed means another write held
@@ -534,7 +534,7 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message, lane Lane) (
 	}
 	if lw := p.out.Load(); lw != nil { // framed while this line waited: it goes as frames
 		<-p.wsem
-		framedObservation, err := p.writeFramed(ctx, lw, b, lane)
+		framedObservation, err := p.writeFramed(ctx, lw, b, r)
 		framedObservation.delayed = framedObservation.delayed || observation.delayed
 		return framedObservation, err
 	}
@@ -617,7 +617,7 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 		}
 		req = message{ID: id, Method: method, Params: raw}
 	}
-	writeObservation, err := p.writeContextObserved(ctx, req, p.lanes.method(method))
+	writeObservation, err := p.writeContextObserved(ctx, req, p.lanes.request(method))
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil && errors.Is(err, cerr) {
 			return notWrittenError{err} // waited for the writer (a long write ahead) and gave up: never on the wire
@@ -630,7 +630,7 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 	case <-ctx.Done():
 		if p.Cancels[method] {
 			params, _ := json.Marshal(map[string]string{"id": id})
-			_ = p.write(message{Event: cancelEvent, Params: params}, LaneControl)
+			_ = p.write(message{Event: cancelEvent, Params: params}, controlRoute)
 		}
 		if writeObservation.delayed {
 			return writeDelayedError{err: ctx.Err(), remaining: writeObservation.remaining}
@@ -662,10 +662,10 @@ func (p *Peer) Notify(event string, params any) error {
 // NotifyContext bounds waiting for the writer. Once writing starts, the transport owner must close a stalled
 // connection to interrupt it; cancellation alone cannot stop an arbitrary io.Writer.
 func (p *Peer) NotifyContext(ctx context.Context, event string, params any) error {
-	lane := p.lanes.event(event)
+	r := p.lanes.eventRoute(event)
 	if raw, ok := params.(Marshaled); ok {
 		if line, ok := marshaledLine(event, raw); ok {
-			return p.writeContext(ctx, message{line: line}, lane)
+			return p.writeContext(ctx, message{line: line}, r)
 		}
 		params = json.RawMessage(raw)
 	}
@@ -673,13 +673,13 @@ func (p *Peer) NotifyContext(ctx context.Context, event string, params any) erro
 	// with the same errors, so the line is the same without encoding them twice (a computer's session list each time
 	// it changes). An empty one is what json.Marshal says it is (an error).
 	if raw, ok := params.(json.RawMessage); ok && len(raw) > 0 {
-		return p.writeContext(ctx, message{Event: event, Params: raw}, lane)
+		return p.writeContext(ctx, message{Event: event, Params: raw}, r)
 	}
 	raw, err := marshal(params)
 	if err != nil {
 		return err
 	}
-	return p.writeContext(ctx, message{Event: event, Params: raw}, lane)
+	return p.writeContext(ctx, message{Event: event, Params: raw}, r)
 }
 
 func (p *Peer) Close(err error) {
