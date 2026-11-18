@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -303,8 +302,8 @@ func TestToolSearchRefusalIsRetriedOnlyOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The turn error is published only once recovery has decided against another resend, so the count is final.
 		cliWait(t, "the turn error", func() bool { return f.turnOver(id) && f.session(t, id).TurnError != "" })
-		time.Sleep(300 * time.Millisecond) // a further resend would have started by now
 		if got := strings.Count(f.file("cli-argv"), "\n"); got != 2 {
 			t.Fatalf("%d starts, want the first and one restart", got)
 		}
