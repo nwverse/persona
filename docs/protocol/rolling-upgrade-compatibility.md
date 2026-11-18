@@ -159,6 +159,13 @@ does not take part:
 Nothing is stored: every new connection negotiates again, so a node or manager rolled back mid-session simply connects
 with lines next time.
 
+### Launcher default models (#4663)
+
+A launcher with no explicit model has an empty `model` on the wire; display text is never a model ID. Older nodes and
+shell helpers could send the Chinese placeholder `默认` instead. Every client treats that legacy value exactly like an
+empty model: the launcher's own default applies, its existing localized Default presentation is used, and no placeholder
+is sent as a model pick. Explicit model IDs are unchanged in both directions.
+
 ## 配置、目录、服务与升级渠道
 
 | 标识 | 旧名 | 新名 | 新实现读旧安装 | 与旧实现共存／回退 |

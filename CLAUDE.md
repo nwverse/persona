@@ -213,7 +213,7 @@ The full list is in `docs/lessons/`; read the file for the area you touch first.
   `simctl create/boot` or `-destination name=…`, and never reboot someone else's. A failure only on a slim simulator gets rerun on
   `--profile stock` first; a "no system prompt appeared" test proves something only on stock. UI tests launch with `app.launchPinned()` (`docs/operations/testing.md`).
 - A DEBUG launch argument's name must not equal any Swift identifier, or `release.sh`'s strings check blocks TestFlight: name switches
-  `open…` / `show…` and add them to the list in `scripts/release/release.sh`.
+  `open…` / `show…` and add each on its own line, in order, to `scripts/release/debug_switches.txt`.
 - Release builds need `SWIFT_REFLECTION_METADATA_LEVEL = all`, or every App Intents / Shortcuts parameter is empty and the app crashes;
   Debug and the simulator never show it (`docs/lessons/ios.md`).
 - A missing keychain group shared with extensions silently falls back on devices but works in the simulator: release ipas must pass

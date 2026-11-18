@@ -101,7 +101,7 @@ Removing `tags` from packages and indexes must wait longer, until the marketplac
 
 ## Extension points
 
-What an extension contributes where is written in the manifest's `contributes`: keys are extension points, values are lists of contributions, and each item has an `id` (globally unique within that extension point; a clash with another extension or with the hub itself means it can't be installed).
+What an extension contributes where is written in the manifest's `contributes`: keys are extension points, values are lists of contributions, and each item has an `id`. IDs must be unique within that extension point across installed extensions, except for `ui`: a UI ID belongs to its extension, so `volc/status` and `example/status` can coexist whether either extension is enabled or disabled. A duplicate UI ID inside one manifest is still refused. Other contribution points and the hub's reserved IDs keep their existing conflict checks, both in preview and when committing an install or upgrade.
 
 | Extension point | Namespace (method prefix) | Fields per item | Requirements | Wired to |
 | --- | --- | --- | --- | --- |
@@ -592,8 +592,10 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   `json_schema` with its one retry); the next one is tried when a candidate fails (`model_failed`, `model_refused`, `model_paused`), runs past `timeout_seconds` (which then bounds
   each candidate; the whole call stops at 600 seconds), answers with no text (`model_failed`, "the reply was empty") or still does not match `json_schema` (`invalid_output`).
   The extension only names models: each runs on a provider the user configured in Settings › Model providers that the hub calls directly (a direct API provider, or a Persona-managed
-  Messages launcher with an address and a key; not hidden) and that lists it (its default, tier, small, subagent or custom model, or its model list). The purpose's own provider is looked at first,
-  then direct API providers, then launchers, in their order. A model none offers is skipped as `model_unavailable` (data `{model}`) without a request.
+  Messages launcher with an address and a key; not hidden) that offers it (#10657): first the purpose's own provider when it lists the model (its default, tier, small, subagent or custom model,
+  or its model list) or the purpose is bound to that model there, then direct API providers, then launchers that list it, in their order; failing those, the purpose's own provider when it
+  declares no model list (it has not said what it serves, so its gateway is asked; one that does not serve the model fails like any candidate). Other providers without a list are never tried.
+  A model nothing offers is skipped as `model_unavailable` (data `{model}`) without a request.
   The result adds `candidate` (the entry of `models` that answered; `model` stays what the upstream says) and `attempts`, the candidates that failed before it (`{model, code, message, until?, seconds, usage}`);
   `usage` covers every attempt. A single candidate that fails answers with its own code and data, exactly as a call without candidates would, so an extension that sends one model per call and
   counts failures itself keeps its existing error handling. When two or more all fail the error is `model_candidates_failed`, its message naming each candidate and how it failed, its data `{attempts, usage}`.
@@ -1993,6 +1995,11 @@ The open-source repo ships no quota extension for any particular gateway.
 > that other thing uses the gateway's own admin key and is a very small built-in source in the hub (`usage.sources[]` in the manager's `manager.json`); for the trade-offs see `docs/server/usage-windows.md` ("Account-pool gateways").
 
 ## Declarative UI
+
+Each UI contribution is identified by its extension ID and its local UI ID together. The API already uses
+`/api/v1/extensions/{id}/-/ui/{ui}`, and discovery returns both `extension` and `id`. Page state, badges,
+contribution switches and `opens` references stay within that extension. Sharing a local ID with another
+extension needs no prefix, rename or migration; existing page links and saved switches keep their identities.
 
 Extensions **do not run code in the app**: they return a View (a few fixed kinds of items), which iOS, Mac, Android and web each draw with their own design system (correct in every interface style and in light and dark),
 and button actions go back to the extension. Views and components are defined in `schema/extension/view.schema.json` (the types on all four clients are generated from it, see [schema/extension/README.md](../../schema/extension/README.md));

@@ -59,7 +59,9 @@
 #                              directory as CI does (#3968). scripts/hooks/** also runs
 #                              scripts/test/test_privacy_check.py and test_check_deno_adapter_sh.py (they run the
 #                              hooks; the latter also for scripts/gen/deno_adapter.sh); scripts/privacy_check.py also
-#                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
+#                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check);
+#                              scripts/release/debug_switches.{txt,py} and release.sh also test_debug_switches.py,
+#                              test_release_debug_guard.py and scripts/test/test_apple_release_switch_names.py
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
 #                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
 #                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
@@ -815,6 +817,13 @@ else
       scripts/operations/pr_watch_merge.py|scripts/ci/changed_ratchets.py) script_test_add scripts/test/test_merge_pr_sh.py ;;
       scripts/ci/sleep_ratchet.py|scripts/ci/web_font_ratchet.py)
         script_test_add scripts/ci/test_changed_ratchets.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
+    esac
+    # The Release binary's DEBUG checks (#10616, #10654): a list that matches no script name, whose union merges can
+    # leave it out of order, the checker test_apple_release_switch_names.py imports, and release.sh, which runs it.
+    case "$f" in
+      scripts/release/debug_switches.txt|scripts/release/debug_switches.py|scripts/release/release.sh)
+        script_test_add scripts/release/test_debug_switches.py; script_test_add scripts/release/test_release_debug_guard.py
+        script_test_add scripts/test/test_apple_release_switch_names.py ;;
     esac
     case "$f" in deploy/docker/*|docs/operations/docker.md|Dockerfile) script_test_add scripts/test/test_docker_entrypoint.py ;; esac
     # test_wire_schema.py holds every sample the shared fixtures keep for a wire schema to that schema, at any depth.
