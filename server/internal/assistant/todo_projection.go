@@ -98,7 +98,7 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		CancelledAt: t.CancelledAt, CancelledReason: t.CancelledReason, Quiet: t.Quiet, PRURL: t.PRURL,
 		DueAt: t.DueAt, DueDate: t.DueDate, Priority: t.Priority, Project: t.Project, Kind: t.Kind, SeenAt: t.SeenAt,
 		PartOf: t.PartOf, Loc: loc}
-	// HOOK(#10226 restores): once Todo carries them, f.RestoredAt, f.SomedayUntil = t.RestoredAt, t.SomedayUntil
+	f.RestoredAt, f.SomedayUntil = t.RestoredAt, t.SomedayUntil // the owner's marks on the hub (todo_marks.go)
 	if t.Agents != nil {
 		f.Agents = make([]projection.Agent, len(t.Agents))
 	}

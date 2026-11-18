@@ -18,9 +18,9 @@ import (
 // The To-dos view's adapter (todo_projection.go, #10226): the facts it hands the projection are the list's row, so the
 // shared cases (which decode rows of GET /api/v1/todos) say what the manager answers.
 
-// projectionNotListedYet are the Facts fields GET /api/v1/todos does not carry yet: the restores PR (#10226) adds both
-// to Todo. Once it has, this test reports them: copy them in projectionFacts (its HOOK line) and drop them here.
-var projectionNotListedYet = map[string]bool{"RestoredAt": true, "SomedayUntil": true}
+// projectionNotListedYet are the Facts fields GET /api/v1/todos does not carry yet; a field the row starts carrying is
+// reported here, to be copied in projectionFacts and dropped from this set.
+var projectionNotListedYet = map[string]bool{}
 
 // Every field of a listed row, filled, reads the same through the adapter as through the row's JSON, and every JSON
 // field of projection.Facts is one the row writes: a field added to either side without the other fails here, field
@@ -47,7 +47,7 @@ func TestProjectionFactsMatchTheList(t *testing.T) {
 		listed := !dv.Field(i).IsZero()
 		switch {
 		case projectionNotListedYet[name] && listed:
-			t.Errorf("GET /api/v1/todos carries %s now: copy it in projectionFacts (its HOOK line) and drop it from "+
+			t.Errorf("GET /api/v1/todos carries %s now: copy it in projectionFacts and drop it from "+
 				"projectionNotListedYet", name)
 		case !projectionNotListedYet[name] && !listed:
 			t.Errorf("projection.Facts.%s (%q) is not a field of the listed row", name, strings.Split(tag, ",")[0])

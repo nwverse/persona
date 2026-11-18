@@ -6,5 +6,9 @@
   "checking": "Checking…",
   "delete": "Delete",
   "deleted": "Message deleted",
-  "undo": "Undo"
+  "undo": "Undo",
+  "undelivered_waiting": "Not delivered: {reason}. It will be sent automatically.",
+  "undelivered_failed": "Not delivered: {reason}",
+  "undelivered_images": "Pictures: {count}",
+  "undelivered_action_failed": "That did not work: {error}"
 }

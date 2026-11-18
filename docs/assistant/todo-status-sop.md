@@ -257,8 +257,11 @@ concern never shelves either: it waits for its report, however long.
 - Shelved to-dos are folded under **Shelved**, not counted as open, and not changed on the hub: nothing is deleted, closed
   or released. Any new activity (an agent working, a report, a review, an edit) takes it out again at once.
 - **Restore** on a shelved row counts as activity now: the to-do goes back to its section and shelves again only after
-  another 48 hours without a move. The restore is kept in this browser (`localStorage`, `persona.todos.restored`), not
-  on the hub; another browser or device still shows it shelved until it moves.
+  another 48 hours without a move. The restore is kept in this browser (`localStorage`, `persona.todos.restored`);
+  another browser or device still shows it shelved until it moves. The hub now stores restores too (`restored_at`,
+  `PUT /api/v1/todos/{id}/restored`, `docs/assistant/todos.md` "Restores and Someday"), but today's triage still uses
+  each device's own restore, and the hub's copy of the triage uses none, until the clients switch to the status the hub
+  works out (`view`, `docs/design/proposals/todos-redesign.md` section 6.1), from stage 2 of #10226.
 
 ## Related to-dos
 
@@ -373,7 +376,8 @@ redesign changes them:
 - **Can wait**: a decision marked for the briefing (`can_wait`) and a run that ended on a plain-text question
   (`awaits_reply`) are listed under Needs you's fold, not counted in its number.
 - **Inactive is a mark, not a section**: the to-do keeps its section (To do) with the time activity stopped. A restore
-  counts as activity once the list carries the hub's `restored_at`, instead of each device keeping its own.
+  counts as activity: the view reads the hub's `restored_at` ("Restores and Someday" in `docs/assistant/todos.md`),
+  not each device's own.
 
 No client reads `view` yet: no route sends it until the routes PR, and the clients switch to it in stage 2. Until then
 every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`), follows the rules
