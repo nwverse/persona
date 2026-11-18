@@ -75,7 +75,19 @@ An explicit `workspace` overrides inference. When a caller knows a particular ch
 For an explicit `new.branch`, admission first asks the node whether that branch already has a checkout in the same repository.
 It reuses that checkout only after a successful clean-tree check, complete live-Agent inventory, and the hub's unfinished-task
 ownership check. Dirty, occupied, changed or unverifiable checkouts are refused with their path and known owner; nothing is forced.
-Older nodes omit branch lookup and keep the existing creation/refusal behavior. An unnamed `new` still creates its task-specific branch.
+Older nodes omit branch lookup and keep the existing creation/refusal behavior.
+An unnamed `new` asks the same about its own `task/<todo id>` (#10365): a plan that continues a to-do, or reuses its ID, gets that
+branch and checkout path again, and the checkout an earlier failed start or Agent of the same to-do left is reused when the node
+finds it clean, idle and inside the checkouts folder (`in_checkouts`), saved as `reused`. A leftover it cannot take (dirty, in use,
+unverifiable, outside the checkouts folder, or a folder that is no checkout of the branch, `worktree_path_taken`) refuses the start
+with its path and the next step, workspace `{"existing": "<path>"}` to continue there or removing it; any other failure of the lookup
+falls back to creating the checkout as before, so a brand-new to-do is unchanged. Nothing is cleaned up automatically.
+Since the node names the directory an Agent starts in by a linked home's own spelling (`workspace.resolve` with `terminal`,
+#10365), while a claim or an Agent from before, or from an older node, has the resolved one (`home_real`), the hub compares
+task directories with the two spellings folded (`taskDirKey` in `server/internal/assistant/tasks_workspace.go`): a directory
+occupied under one spelling is occupied under the other. The leftover a refusal names for `{"existing": "<path>"}` gets portable
+git links before the refusal, and any linked worktree `workspace.resolve` hands to a terminal gets them too, so git works
+there in a terminal that sees only the home's spelling.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
 The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
 
@@ -1170,7 +1182,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | `task` | A task starts | To-do ID |
 | `answered` | A task interaction is handled | To-do ID; one-line summary (question, your answer), and full question / answer `items` per question |
 | `receipt` | Task finishes / fails to start / is interrupted by a model-service error (`interrupted`, #1516) | To-do ID; summary, changed-file count, tests, PR; interrupted receipts include original error `error` |
-| `start_remedy` | A supervised task's agent did not start and its tab is kept (#2570): each step the main conversation takes (`screen` read, `keys` typed, `retry`) and how it ended (`started`, `gave_up`) | To-do ID; `action`, `by` (`assistant`, `user`, `hub`), `attempt`, `keys` / `text` typed, `reason` in the user's language, `suggestion`. The tab's screen is never stored here. Clients that don't know the kind show nothing; the live task cards (#2365) list these steps in the card's history |
+| `start_remedy` | A supervised task's agent did not start and its tab is kept (#2570): each step the main conversation takes (`screen` read, `keys` typed, `retry`), the owner's answer to the tab's startup question from the app (`answer`, #10365; `answer_not_typed` when the question had left the tab before it came and nothing was typed) and how it ended (`started`, `gave_up`) | To-do ID; `action`, `by` (`assistant`, `user`, `hub`), `attempt`, `keys` / `text` typed, `reason` in the user's language, `suggestion`, `launcher_from` / `launcher_to` (a retry on another launcher of the same computer, #10365), `choice` (the id of the answer given, never what a prompt asked for, #10365). The tab's screen is never stored here. Clients that don't know the kind show nothing; the live task cards (#2365) list these steps in the card's history |
 | `routed` | You speak directly to a task, or Persona sends its agent work (`agent_send` with `task`, `agent_interrupt` with `then`, a rework) | To-do ID; original text; `interrupted` (agent_interrupt); `from: "assistant"` when Persona wrote it ("Messages to agents"); `relay: "answer"` when the hub worded an answer of yours for the Agent (a recommendation taken, an option chosen, a reply to a card; #3804), drawn like your own message. Migration 0441 marked older ones Persona wrote: an `interrupted` key, the rework prompt's opening line, or a `task` card of the same to-do at most 5 seconds before; the case it can't tell (agent_send with `task` to an agent already on that task, which writes no card) keeps the bubble |
 | `message` | AI twin drafts a reply to an Inbox message related to a task | Inbox item ID; task, source, chat, sender, original message, draft |
 | `today` | First opening of this chat that day (App calls `POST …/today`) | Date; tasks completed overnight, waiting tasks, open supervised tasks awaiting review (`pending_review`, excluded from waiting / working / done), working count, remaining Lark meetings today, chats mentioning me, other unread counts, unsuccessful items since yesterday at 18:00 (failed-start tasks, failed / skipped scheduled tasks, #4124) |
