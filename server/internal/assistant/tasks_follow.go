@@ -590,6 +590,10 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		// taken before the read). Moved, it is looked at again, the row and the transcript read together.
 		if now, ok := s.session(cctx, last.MachineID, last.SessionID); !ok || !sameTurnRow(now, last) {
 			s.releaseReceipt(ctx, t.ID, machine, sid, reserved)
+			if !ok && quiet == proto.TurnErrorNoOutput {
+				// A vanished recipient still owes its recorded source a failure notice.
+				s.taskInboxTurnEnded(cctx, t, last, items, true)
+			}
 			return settleLater
 		}
 		s.forgetStop(last.MachineID, last.SessionID, stop)
