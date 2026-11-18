@@ -125,6 +125,44 @@ func TestKBCountedModel(t *testing.T) {
 	}
 }
 
+// A call with no model set up for it is no model call and no failure: the lane says once that it has no model (not
+// "1 model call(s), 1 failed" every round), and once that a model answered again, when one did.
+func TestKBLaneNoModelLogsOnce(t *testing.T) {
+	unset := ai.New(ai.Config{}).JSONMax(context.Background(), "", "", 1, &struct{}{})
+	if !ai.IsNotConfigured(unset) {
+		t.Fatalf("not the not-configured error: %v", unset)
+	}
+	st := &kbLaneStats{}
+	_ = kbCounted(lanesModel{err: unset}).JSONMax(context.WithValue(context.Background(), kbLaneStatsKey{}, st), "", "", 1, nil)
+	if st.calls.Load() != 0 || st.failed.Load() != 0 {
+		t.Fatalf("calls %d, failed %d; want 0, 0", st.calls.Load(), st.failed.Load())
+	}
+
+	var lines []string
+	s := &Service{logf: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }}
+	err := unset
+	lane := &kbLane{name: "topics", run: func(ctx context.Context, _ *kb.Engine) {
+		_ = kbCounted(lanesModel{err: err}).JSONMax(ctx, "", "", 1, nil)
+	}}
+	for range 5 {
+		s.kbRunLane(context.Background(), nil, lane)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "kb: topics lane: no model is set up") {
+		t.Fatalf("with no model, 5 runs logged:\n%s", strings.Join(lines, "\n"))
+	}
+	lines, err = nil, nil
+	s.kbRunLane(context.Background(), nil, lane)
+	s.kbRunLane(context.Background(), nil, lane)
+	if len(lines) != 3 || !strings.Contains(lines[0], "kb: topics lane: a model answers again") || !strings.Contains(lines[1], "1 model call(s), 0 failed") {
+		t.Fatalf("with a model again, logged:\n%s", strings.Join(lines, "\n"))
+	}
+	lines, err = nil, unset
+	s.kbRunLane(context.Background(), nil, lane)
+	if len(lines) != 1 || !strings.Contains(lines[0], "no model is set up") {
+		t.Fatalf("the model gone again, logged:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
 // The index lane (the search index, kb/search_index.go) builds the index on its first run and then follows the
 // files at most every kbIndexEvery, since a run looks at every file and a live message kicks a round every few
 // seconds; text deleted on purpose does not wait, so the index never keeps it past the next round.

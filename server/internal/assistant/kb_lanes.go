@@ -41,6 +41,10 @@ type kbLane struct {
 
 	running bool // only the loop's goroutine reads and writes these two
 	due     bool
+
+	// unconfigured: the lane's last runs found no model set up for a call (the log has said so once); only the lane's
+	// own runs, one at a time, read and write it.
+	unconfigured bool
 }
 
 // kbLanes are the loop's lanes and where they say they ended.
@@ -219,19 +223,30 @@ func kbIndexCause(err error) string {
 }
 
 // kbRunLane runs one go of l with e, under kbRun, and logs what it did when it called the model or took longer than a
-// round: how long, how many calls, how many failed and how many were put off (a paused connection).
+// round: how long, how many calls, how many failed and how many were put off (a paused connection). A call with no
+// model set up for it is none of these: the lane says once that it has no model, and once that one answered again.
 func (s *Service) kbRunLane(ctx context.Context, e *kb.Engine, l *kbLane) {
 	st := &kbLaneStats{}
 	start := time.Now()
 	s.kbRun(ctx, func() { l.run(context.WithValue(ctx, kbLaneStatsKey{}, st), e) })
 	took := time.Since(start)
-	if calls := st.calls.Load(); calls > 0 || took >= kbPoll {
+	calls := st.calls.Load()
+	switch {
+	case st.unconfigured.Load() > 0 && !l.unconfigured:
+		l.unconfigured = true
+		s.logf("kb: %s lane: no model is set up for its work (Settings › Model configuration); not logged again until one answers", l.name)
+	case st.unconfigured.Load() == 0 && calls > 0 && l.unconfigured:
+		l.unconfigured = false
+		s.logf("kb: %s lane: a model answers again", l.name)
+	}
+	if calls > 0 || took >= kbPoll {
 		s.logf("kb: %s lane: %s, %d model call(s), %d failed, %d put off", l.name, took.Round(time.Second), calls, st.failed.Load(), st.putOff.Load())
 	}
 }
 
-// kbLaneStats counts a lane run's model calls (kbCountedModel, through the run's context).
-type kbLaneStats struct{ calls, failed, putOff atomic.Int32 }
+// kbLaneStats counts a lane run's model calls (kbCountedModel, through the run's context); unconfigured counts those
+// that had no model to go to.
+type kbLaneStats struct{ calls, failed, putOff, unconfigured atomic.Int32 }
 
 type kbLaneStatsKey struct{}
 
@@ -254,6 +269,8 @@ func (c kbCountedModel) JSONMax(ctx context.Context, system, user string, maxTok
 		case errors.Is(err, context.Canceled): // the run was stopped (shutdown): neither answered nor failed
 		case ai.IsPaused(err):
 			st.putOff.Add(1)
+		case ai.IsNotConfigured(err): // no model set up: no call was made
+			st.unconfigured.Add(1)
 		case err != nil:
 			st.calls.Add(1)
 			st.failed.Add(1)

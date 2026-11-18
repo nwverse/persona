@@ -516,7 +516,7 @@ func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) 
 				break
 			}
 			if err := e.Compress(ctx, c); err != nil {
-				if ai.IsPaused(err) { // the chats stay due: compressed once the connection is back
+				if ai.IsPaused(err) || ai.IsNotConfigured(err) { // the chats stay due: compressed once the connection or a model is back (the lane says it has none)
 					break
 				}
 				s.logf("kb: compress %s: %v", c.ID, err)
