@@ -11,37 +11,83 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Browser challenges are short-lived handshakes, like passwordLoginState. Durable
 // device credentials are issued only after approval and are stored in Postgres.
 type browserLoginFlow struct {
 	Source                                             string
+	Masked                                             string // the source as auth logs write it (maskedSource)
 	CreatedAt                                          time.Time
 	Issued                                             bool
 	Secret, Name, State, ApproverHash, Token, DeviceID string
+	Replaces, Replaced                                 string // this browser's previous web credential, as in POST /auth/tokens
 	Until                                              time.Time
 }
 type browserLoginState struct {
 	mu    sync.Mutex
 	flows map[string]*browserLoginFlow
+	// Its own limits (#10291): opening the sign-in page, refreshing its code or polling it never counts against
+	// password sign-in (passwordLimited), and a block here leaves password sign-in open.
+	starts, global, misses authLimiter
+}
+
+// Protocol values, not measured capacity: a person refreshes a code a few times a minute at most, and a browser
+// that polls its own code never misses.
+var (
+	browserStartLimits = SecurityConfig{AuthFailures: 20, AuthWindowSeconds: 60, AuthBlockSeconds: 60}  // starts per source
+	browserStartGlobal = SecurityConfig{AuthFailures: 200, AuthWindowSeconds: 60, AuthBlockSeconds: 60} // starts, all sources
+	browserPollMisses  = SecurityConfig{AuthFailures: 20, AuthWindowSeconds: 60, AuthBlockSeconds: 60}  // unknown id or wrong secret, per source
+)
+
+// browserLimited answers 429 for a source (or, for starts, everyone) over browser sign-in's own limits. A start is
+// counted here; a poll counts only when it misses (browserMissed).
+func (h *Hub) browserLimited(w http.ResponseWriter, r *http.Request, start bool) bool {
+	now, key, s := time.Now(), authSourceKey(r), &h.browserLogin
+	type check struct {
+		limiter *authLimiter
+		key     string
+		cfg     SecurityConfig
+	}
+	checks := []check{{&s.misses, key, browserPollMisses}}
+	if start {
+		checks = []check{{&s.starts, key, browserStartLimits}, {&s.global, "all", browserStartGlobal}}
+	}
+	for _, c := range checks {
+		if d := c.limiter.retry(c.key, now, c.cfg); d > 0 {
+			retryAfter(w, d)
+			writeErrCode(w, http.StatusTooManyRequests, "rate_limited", i18n.Err("hub-password_login.rate_limited"))
+			return true
+		}
+	}
+	if start {
+		s.starts.fail(key, now, browserStartLimits)
+		s.global.fail("all", now, browserStartGlobal)
+	}
+	return false
 }
 
 func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 	routes := http.NewServeMux()
 	routes.HandleFunc("POST /api/v1/auth/browser-login/start", func(w http.ResponseWriter, r *http.Request) {
-		if h.passwordLimited(w, r, true) {
+		if h.browserLimited(w, r, true) {
 			return
 		}
 		var in struct {
-			Name string `json:"name"`
+			Name     string `json:"name"`
+			Replaces string `json:"replaces,omitempty"`
 		}
 		if !passwordJSON(w, r, &in) {
 			return
 		}
-		in.Name = strings.TrimSpace(in.Name)
+		in.Name, in.Replaces = strings.TrimSpace(in.Name), strings.TrimSpace(in.Replaces)
 		if in.Name == "" || len([]rune(in.Name)) > 80 || strings.IndexFunc(in.Name, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
 			writeErr(w, 400, errors.New("invalid browser name"))
+			return
+		}
+		if len(in.Replaces) > 64 {
+			writeErr(w, 400, errors.New("invalid replaced credential"))
 			return
 		}
 		s := &h.browserLogin
@@ -60,7 +106,8 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 			s.flows = map[string]*browserLoginFlow{}
 		}
 		id, secret := randomToken(), randomToken()
-		f := &browserLoginFlow{Secret: hashToken(secret), Name: in.Name, Source: remoteIP(r).String(), CreatedAt: time.Now(), State: "pending", Until: time.Now().Add(passwordFlowLifetime)}
+		f := &browserLoginFlow{Secret: hashToken(secret), Name: in.Name, Source: remoteIP(r).String(), Masked: maskedSource(r), Replaces: in.Replaces,
+			CreatedAt: time.Now(), State: "pending", Until: time.Now().Add(passwordFlowLifetime)}
 		link := "persona://browser-login?" + url.Values{"hub": {h.hubID()}, "request": {id}}.Encode()
 		qr, err := newQRImage(link)
 		if err != nil {
@@ -71,6 +118,9 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 		writeJSON(w, map[string]any{"id": id, "secret": secret, "expires_at": f.Until, "qr": qr, "url": link})
 	})
 	routes.HandleFunc("POST /api/v1/auth/browser-login/poll", func(w http.ResponseWriter, r *http.Request) {
+		if h.browserLimited(w, r, false) {
+			return
+		}
 		var in struct {
 			ID     string `json:"id"`
 			Secret string `json:"secret"`
@@ -83,6 +133,7 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 		defer s.mu.Unlock()
 		f := s.flows[in.ID]
 		if f == nil || !time.Now().Before(f.Until) || subtle.ConstantTimeCompare([]byte(f.Secret), []byte(hashToken(in.Secret))) != 1 {
+			s.misses.fail(authSourceKey(r), time.Now(), browserPollMisses)
 			writeErr(w, 410, errors.New("sign-in expired"))
 			return
 		}
@@ -116,10 +167,26 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 				}
 			}
 			f.Issued = true
+			h.logf("device token %s for %q (web, full) by browser sign-in, approved by device %s %q", f.DeviceID, f.Name, approver.ID, approver.Name)
+			// Only a web credential, as in POST /auth/tokens: an id a browser kept cannot take a phone, a watch or a link off.
+			if old := f.Replaces; old != "" && old != f.DeviceID {
+				if ok, err := h.revokeWebToken(r.Context(), old); err != nil {
+					h.logf("device token %s: replacing %s: %v", f.DeviceID, old, err)
+				} else if ok {
+					f.Replaced = old
+					h.revoked(old)
+					h.sendRevocations(newlyReachable(nil, h.meshView()))
+					h.logf("device token %s replaces %s", f.DeviceID, old)
+				}
+			}
 			h.notifyPairing(f.Name, f.DeviceID)
 		}
 		// The same browser can retry a lost response without creating another device.
-		writeJSON(w, map[string]any{"state": "approved", "token": f.Token, "id": f.DeviceID})
+		resp := map[string]any{"state": "approved", "token": f.Token, "id": f.DeviceID}
+		if f.Replaced != "" {
+			resp["replaced"] = f.Replaced
+		}
+		writeJSON(w, resp)
 	})
 	approval := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		who := principalOf(r.Context())
@@ -157,6 +224,7 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 				f.State = "approved"
 				f.ApproverHash = hashToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 			}
+			h.logf("browser sign-in for %q (requested from %s) %s by device %s %q", f.Name, f.Masked, f.State, who.ID, who.Name)
 		} else if f.State == "pending" {
 			f.State = "scanned"
 		}
