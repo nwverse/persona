@@ -91,6 +91,9 @@ func TestPreparedSettingBusReturnsStructuredStaleAndConsumesHandle(t *testing.T)
 	if !ok || !repeated.Stale || repeated.Text != "" {
 		t.Fatalf("duplicate apply result = %#v, want stale with no execution", again)
 	}
+	if applies.Load() != 1 {
+		t.Fatalf("duplicate bus apply executed the setting again: apply count = %d, want one", applies.Load())
+	}
 }
 
 func TestPreparedSettingOneShotAdapterStillAppliesAndCleansUp(t *testing.T) {
