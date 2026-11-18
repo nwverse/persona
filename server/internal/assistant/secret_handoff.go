@@ -309,10 +309,11 @@ type humanSends struct {
 }
 
 type humanSend struct {
-	words string // the text sent, its words joined by single spaces, at most humanWordsMost bytes
-	at    time.Time
-	line  string // the transcript line it counted for (handoffLine), once one was read
-	void  bool   // sent again by someone else, or with other words: it counts for nothing
+	words      string // the text sent, its words joined by single spaces, at most humanWordsMost bytes
+	at         time.Time
+	line       string // the transcript line it counted for (handoffLine), once one was read
+	void       bool   // sent again by someone else, or with other words: it counts for nothing
+	replyAsked bool   // the manager already tried the follow-up (missing_reply.go)
 }
 
 // withoutContext is a vouched message's words, or its line's, compared without any context block: the ones the
@@ -459,26 +460,47 @@ func makeRoomLocked(ids map[string]humanSend, vouched bool) bool {
 // the transcript line it counts for: the first one it was read on (a picture of it, picture, is tied by the id alone,
 // on the same line).
 func (h *humanSends) has(session, id, text string, picture bool, line string) bool {
-	if session == "" || id == "" || line == "" {
+	if session == "" || id == "" || id == firstReplySendID {
 		return false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sent, ok := h.m[session][id]
-	if !ok || sent.void || time.Since(sent.at) > humanSendsKeep {
+	if !ok || !sent.matches(text, picture, line) {
 		return false
 	}
-	if !picture && !strings.Contains(humanWords(withoutContext(text), 1<<20), sent.words) {
-		return false
-	}
-	switch sent.line {
-	case "":
+	if sent.line == "" {
 		sent.line = line
 		h.m[session][id] = sent
-	case line:
-	default:
-		return false // the id on a second line: it counted for its first already
 	}
+	return true
+}
+
+func (sent humanSend) matches(text string, picture bool, line string) bool {
+	return line != "" && !sent.void && time.Since(sent.at) <= humanSendsKeep &&
+		(sent.line == "" || sent.line == line) &&
+		(picture || strings.Contains(humanWords(withoutContext(text), 1<<20), sent.words))
+}
+
+// claimReply checks the input and records the attempt together, independently of other chats.
+// The caller accepts an ID-less input only on the conversation's first transcript page.
+func (h *humanSends) claimReply(session string, owner proto.Item) bool {
+	id := owner.ClientMsgID
+	if id == firstReplySendID {
+		return false
+	}
+	if id == "" {
+		id = firstReplySendID
+	}
+	line := handoffLine(owner.ID)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sent, ok := h.m[session][id]
+	if !ok || sent.replyAsked || !sent.matches(owner.Text, false, line) {
+		return false
+	}
+	sent.line, sent.replyAsked = line, true
+	h.m[session][id] = sent
 	return true
 }
 

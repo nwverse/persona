@@ -1046,8 +1046,8 @@ Legacy App `routines` / `followups` APIs still read / write this table (`docs/pr
 
 ## Missing final replies (#10427)
 
-When a directly typed message in the main conversation completes with no written reply, Persona asks the Assistant
-once for a reply based on the results it already has. The chat shows the existing system line for the follow-up.
+When a user message in the main or an ordinary Assistant conversation completes with no written reply, Persona
+asks the Assistant once for a reply based on the results it already has. The chat shows a system line for the follow-up.
 If the follow-up still has no answer, or delivery fails, a saved chat notice tells the user to try sending the
 message again. This recovery is automatic.
 
@@ -1055,11 +1055,12 @@ The manager reads the settled transcript. A blank or tool-only ending counts as 
 that matches the existing channel list: `No response requested`, `no content`, `(no content)`, or `[no content]`,
 ignoring capitalization, whitespace around the reply, and trailing sentence punctuation. An ordinary answer,
 including a refusal with an explanation, stands on its own. A successfully displayed question or notification
-also counts as a user-visible outcome. Stops, existing model errors, queued work and background rounds keep their
-usual handling. The original transcript stays available.
+also counts as a user-visible outcome. Stops, existing model errors, queued work, and inputs from supervision,
+scheduled tasks or other conversations are excluded. The original transcript stays available.
 
-The owner input must be tied to a device's verified send. If that evidence is unavailable, for example across a
-manager restart before the first look, recovery may be skipped. An intentional request for silence or for exactly
+The input must be tied to a device's verified send or to the verified start and first transcript page of a new
+conversation. If that evidence is unavailable, for example across a manager restart before the first look,
+recovery may be skipped. An intentional request for silence or for exactly
 one of the listed strings can cause one extra model turn. Other vague or unhelpful replies are outside the check.
 The follow-up asks for text only and tells the model to avoid tools and repeated work. Normal tool permissions
 still apply. The send is tied to the original turn and the node checks that the conversation is still idle at

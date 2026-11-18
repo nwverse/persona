@@ -17,13 +17,16 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// recoverMissingReply looks at the latest settled exchange in the main chat. Session.LastText can
+// firstReplySendID is an internal ledger key. The first input can be vouched for by the
+// hub's start request even though the node intentionally assigns it no client message ID.
+const firstReplySendID = assistantwire.FirstMessageIDPrefix + "answer-again"
+
+// recoverMissingReply looks at the latest settled exchange in an Assistant chat. Session.LastText can
 // still hold an earlier answer when the current turn has only tools. Use the transcript and its
 // input provenance instead. Missing or ambiguous evidence costs us a recovery, never a replay.
 func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess proto.Session) {
-	cfg := s.settings(ctx)
 	sid := sess.SessionID
-	if sid == "" || sid != cfg.Main || machine != cfg.mainRouteMachine() ||
+	if sid == "" ||
 		(sess.Status != proto.StatusDone && sess.Status != proto.StatusIdle) ||
 		len(sess.Queued) > 0 || backgroundRunning(sess) || s.queuedFor(sid) > 0 {
 		return
@@ -32,7 +35,8 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 	defer cancel()
 
 	var page struct {
-		Items []proto.Item `json:"items"`
+		Items   []proto.Item `json:"items"`
+		HasMore *bool        `json:"has_more"`
 	}
 	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{
 		"session_id": sid, "turns": 1, "lazy_images": true,
@@ -40,10 +44,10 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 		return
 	}
 	owner, reply, retried, ok := missingReplyExchange(page.Items)
-	if !ok || !missingFinalReply(reply) {
+	if !ok || (owner.ClientMsgID == "" && (page.HasMore == nil || *page.HasMore)) || !missingFinalReply(reply) {
 		return
 	}
-	if !retried && (sess.TurnError != "" || !s.humanSent.has(sid, owner.ClientMsgID, owner.Text, false, handoffLine(owner.ID))) {
+	if !retried && sess.TurnError != "" {
 		return
 	}
 	if s.hasPending(ctx, machine, sid) {
@@ -55,11 +59,7 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 	if !retried {
 		// A second completion event can arrive before the follow-up reaches the transcript. The
 		// hub's send ledger also deduplicates this ID across delivery attempts and reconnects.
-		s.mainReplyMu.Lock()
-		alreadyTried := s.mainReplyID == id
-		s.mainReplyID = id
-		s.mainReplyMu.Unlock()
-		if alreadyTried {
+		if !s.humanSent.claimReply(sid, owner) {
 			return
 		}
 		params, err := s.sendParams(ctx, SendParams{MachineID: machine, SessionID: sid, Params: map[string]any{
@@ -97,8 +97,7 @@ func missingReplyExchange(items []proto.Item) (owner proto.Item, reply []proto.I
 		return owner, nil, false, false
 	}
 	owner = items[0]
-	if msg, user := extensionMessage(owner); !user || msg.Role != "user" || owner.ID == "" ||
-		owner.ClientMsgID == "" || owner.Queued || owner.Wake {
+	if msg, user := extensionMessage(owner); !user || msg.Role != "user" || owner.ID == "" || owner.Queued || owner.Wake {
 		return owner, nil, false, false
 	}
 	reply = items[1:]
@@ -111,7 +110,7 @@ func missingReplyExchange(items []proto.Item) (owner proto.Item, reply []proto.I
 		}
 		// Only the generated follow-up may be part of this exchange. An ordinary second input,
 		// even if queued in the same turn, makes its attribution ambiguous.
-		if retried || it.Queued || it.ClientMsgID != "" || it.From != "" {
+		if retried || it.Queued || it.ClientMsgID != "" || it.From != "" || prompts.ItemSource(it) != nil {
 			return owner, nil, false, false
 		}
 		if in := prompts.ParseInjected(it.Text); in == nil || in.State != "answer_again" {

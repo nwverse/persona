@@ -1421,8 +1421,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if err := json.Unmarshal(params, &guard); err != nil {
 				return nil, err
 			}
-			if p.SessionID == "" || !p.IsMain || p.NewSessionID != "" || guard.After == "" || guard.OnceID == "" || guard.ClientMsgID != "" {
-				return nil, errors.New("assistant.answer_again needs a guarded send to the main conversation")
+			if p.SessionID == "" || p.NewSessionID != "" || guard.After == "" || guard.OnceID == "" || guard.ClientMsgID != "" {
+				return nil, errors.New("assistant.answer_again needs a guarded send to an existing Assistant conversation")
 			}
 			sctx = context.WithValue(sctx, answerAgainAfterKey{}, guard.After)
 		}

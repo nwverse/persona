@@ -42,7 +42,7 @@ func TestAssistantAnswerAgainRequiresTheSameIdleTurn(t *testing.T) {
 	prompt := prompts.RenderAssistantAnswerAgain(prompts.AssistantAnswerAgain{Language: "English"})
 	send := func(after, onceID string) error {
 		raw, _ := json.Marshal(map[string]any{
-			"session_id": id, "text": prompt, "is_main": true, "answer_again_after": after, "once_id": onceID,
+			"session_id": id, "text": prompt, "is_main": false, "answer_again_after": after, "once_id": onceID,
 		})
 		_, err := n.handle(ctx, assistantwire.DeviceAssistantAnswerAgain, raw)
 		return err

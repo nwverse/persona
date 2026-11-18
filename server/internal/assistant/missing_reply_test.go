@@ -26,7 +26,7 @@ func TestMainMissingReplyAfterToolResult(t *testing.T) {
 		{name: "only tools"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f, items, sends := missingReplyFixture(t, nil)
+			s, f, items, sends := missingReplyFixture(t, "main-chat", nil)
 			if tc.hasText {
 				items = append(items, proto.Item{ID: "a4#0", Seq: 4, Role: "assistant", Kind: proto.KindText, Text: tc.final})
 			}
@@ -44,7 +44,7 @@ func TestMainMissingReplyAfterToolResult(t *testing.T) {
 				t.Fatalf("follow-up did not use a guarded, generic prompt: %+v", send)
 			}
 			golden(t, "main_answer_again.en", text)
-			assertMissingReplyNotices(t, s, 0)
+			assertMissingReplyNotices(t, s, "main-chat", 0)
 
 			items = append(items,
 				proto.Item{ID: "u5#0", Seq: 5, Role: "user", Kind: proto.KindText, Text: text},
@@ -60,7 +60,7 @@ func TestMainMissingReplyAfterToolResult(t *testing.T) {
 			if len(*sends) != 1 {
 				t.Fatalf("follow-up calls after a failed retry = %d, want one", len(*sends))
 			}
-			assertMissingReplyNotices(t, s, 1)
+			assertMissingReplyNotices(t, s, "main-chat", 1)
 		})
 	}
 }
@@ -111,13 +111,13 @@ func TestMainMissingReplyLeavesOtherOutcomesAlone(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f, items, sends := missingReplyFixture(t, nil)
+			s, f, items, sends := missingReplyFixture(t, "main-chat", nil)
 			f.setItems(tc.edit(items)...)
 			s.assistantTurnSettled(t.Context(), "server", "main-chat")
 			if len(*sends) != 0 {
 				t.Fatalf("unexpected follow-up: %+v", *sends)
 			}
-			assertMissingReplyNotices(t, s, 0)
+			assertMissingReplyNotices(t, s, "main-chat", 0)
 		})
 	}
 }
@@ -132,7 +132,7 @@ func TestMainMissingReplyFollowupSendFailure(t *testing.T) {
 		{"conversation moved on", &rpc.Error{Code: assistantwire.CodeAnswerAgainChanged}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f, items, sends := missingReplyFixture(t, tc.err)
+			s, f, items, sends := missingReplyFixture(t, "main-chat", tc.err)
 			f.setItems(items...)
 			for range 2 {
 				s.assistantTurnSettled(t.Context(), "server", "main-chat")
@@ -140,7 +140,99 @@ func TestMainMissingReplyFollowupSendFailure(t *testing.T) {
 			if len(*sends) != 1 {
 				t.Fatalf("follow-up calls = %d, want one", len(*sends))
 			}
-			assertMissingReplyNotices(t, s, tc.notices)
+			assertMissingReplyNotices(t, s, "main-chat", tc.notices)
+		})
+	}
+}
+
+func TestMissingReplyInOrdinaryConversation(t *testing.T) {
+	s, f, items, sends := missingReplyFixture(t, "side-chat", nil)
+	f.setSessions("server",
+		proto.Session{SessionID: "side-chat", Assistant: true, Agent: "claude", Status: proto.StatusDone},
+		proto.Session{SessionID: "main-chat", Assistant: true, Agent: "claude", Status: proto.StatusDone},
+	)
+	if _, err := s.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: "main-chat", Human: true,
+		Params: map[string]any{"client_msg_id": items[0].ClientMsgID, "text": items[0].Text}}); err != nil {
+		t.Fatal(err)
+	}
+	items = append(items, proto.Item{ID: "a4#0", Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "No response requested."})
+	f.setItems(items...)
+	for range 2 {
+		for _, sid := range []string{"side-chat", "main-chat"} {
+			s.assistantTurnSettled(t.Context(), "server", sid)
+		}
+	}
+	if len(*sends) != 2 {
+		t.Fatalf("follow-up calls = %d, want one per conversation", len(*sends))
+	}
+	side, main := (*sends)[0], (*sends)[1]
+	if side["session_id"] != "side-chat" || side["is_main"] != false || side["answer_again_after"] != "a4#0" ||
+		main["session_id"] != "main-chat" || side["client_msg_id"] == main["client_msg_id"] {
+		t.Fatalf("follow-ups did not keep their chat and turn routing: %v", *sends)
+	}
+	items = append(items, proto.Item{ID: "u5#0", Seq: 5, Role: "user", Kind: proto.KindText, Text: side["text"].(string)})
+	f.setItems(items...)
+	s.assistantTurnSettled(t.Context(), "server", "side-chat")
+	assertMissingReplyNotices(t, s, "side-chat", 1)
+	assertMissingReplyNotices(t, s, "main-chat", 0)
+	if len(*sends) != 2 {
+		t.Fatal("an unanswered follow-up started another recovery")
+	}
+}
+
+func TestMissingReplySkipsOrdinaryConversationBackground(t *testing.T) {
+	for _, kind := range []string{proto.SourceSupervision, proto.SourcePatrol, proto.SourceScheduledTask, proto.SourceConversation} {
+		t.Run(kind, func(t *testing.T) {
+			s, f, items, sends := missingReplyFixture(t, "side-chat", nil)
+			// Test both a page starting with a background prompt and one that retains
+			// the preceding app input. Neither may make the background work user-authored.
+			source := &proto.MessageSource{Kind: kind}
+			background := proto.Item{ID: "bg#0", Seq: 4, Role: "user", Kind: proto.KindText, Text: items[0].Text, Source: source}
+			backgroundOnly := items[0]
+			backgroundOnly.Source = source
+			f.setItems(backgroundOnly)
+			s.assistantTurnSettled(t.Context(), "server", "side-chat")
+			f.setItems(append(items, background)...)
+			s.assistantTurnSettled(t.Context(), "server", "side-chat")
+			if len(*sends) != 0 {
+				t.Fatalf("background work got %d follow-ups", len(*sends))
+			}
+			assertMissingReplyNotices(t, s, "side-chat", 0)
+		})
+	}
+}
+
+func TestMissingReplyOnFirstMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		human, older bool
+		want         int
+	}{
+		{name: "from app", human: true, want: 1},
+		{name: "unverified start"},
+		{name: "later native input", human: true, older: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, items, sends := missingReplyFixture(t, "side-chat", nil)
+			started, err := s.Start(t.Context(), StartParams{Human: tc.human, Text: items[0].Text, Untitled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			items[0].ClientMsgID = ""
+			started.Status = proto.StatusDone
+			f.setSessions("server", started)
+			f.answerNode(DeviceSessionItems, func(_ string, _ json.RawMessage) (any, error) {
+				return map[string]any{"items": items, "has_more": tc.older}, nil
+			})
+			for range 2 {
+				s.assistantTurnSettled(t.Context(), "server", started.SessionID)
+			}
+			if len(*sends) != tc.want {
+				t.Fatalf("follow-up calls = %d, want %d", len(*sends), tc.want)
+			}
+			if id, _ := f.sends[0]["client_msg_id"].(string); id != "" {
+				t.Fatalf("first input gained an app-visible ID: %q", id)
+			}
 		})
 	}
 }
@@ -158,18 +250,18 @@ func TestGoldenMainAnswerAgainLanguages(t *testing.T) {
 	}
 }
 
-func missingReplyFixture(t *testing.T, sendErr error) (*Service, *fakeHub, []proto.Item, *[]map[string]any) {
+func missingReplyFixture(t *testing.T, sid string, sendErr error) (*Service, *fakeHub, []proto.Item, *[]map[string]any) {
 	t.Helper()
 	f := newFakeHub().withMachine()
 	f.settings = &Settings{MachineID: "server", Main: "main-chat"}
 	f.hello.Locale = string(i18n.En)
 	s := withSettings(t, f, New(Options{Hub: f, Logf: testLogf(t)}))
 	f.setSessions("server", proto.Session{
-		MachineID: "server", SessionID: "main-chat", Assistant: true, Agent: "claude", Status: proto.StatusDone,
+		MachineID: "server", SessionID: sid, Assistant: true, Agent: "claude", Status: proto.StatusDone,
 	})
 	const request = "Summarize today's usage."
-	if _, err := s.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: "main-chat", Human: true,
-		Params: map[string]any{"session_id": "main-chat", "client_msg_id": "app-user-input", "text": request}}); err != nil {
+	if _, err := s.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: sid, Human: true,
+		Params: map[string]any{"session_id": sid, "client_msg_id": "app-user-input", "text": request}}); err != nil {
 		t.Fatal(err)
 	}
 	items := []proto.Item{
@@ -189,9 +281,9 @@ func missingReplyFixture(t *testing.T, sendErr error) (*Service, *fakeHub, []pro
 	return s, f, items, &sends
 }
 
-func assertMissingReplyNotices(t *testing.T, s *Service, want int) {
+func assertMissingReplyNotices(t *testing.T, s *Service, sid string, want int) {
 	t.Helper()
-	feed, err := s.feedItems(t.Context(), "main-chat", time.Time{})
+	feed, err := s.feedItems(t.Context(), sid, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
