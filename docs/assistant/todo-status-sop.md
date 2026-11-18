@@ -358,8 +358,8 @@ is not done yet.
 
 ## The hub's view (#10226)
 
-The manager now works out each to-do's `view` (not served yet; `schema/wire/todo-view.schema.json`: phase, section,
-reason, line 2, times, marks, asks, steps and rank) and the list's counts and places, by the redesign's decision table
+The manager works out each to-do's `view` (`schema/wire/todo-view.schema.json`: phase, section, reason, line 2,
+times, marks, asks, steps and rank) and the list's counts and places, by the redesign's decision table
 (`docs/design/proposals/todos-redesign.md` 6.3), in `server/internal/assistant/todo/projection`, fed by
 `server/internal/assistant/todo_projection.go`. The rules' source is the shared cases: `spec/fixtures/todo-view` and
 `spec/fixtures/todo-counts`, whose READMEs list every rule, field, line key (a stable key with string arguments, never
@@ -373,12 +373,23 @@ redesign changes them:
   long, accepted and deployed work included (this table's rules 6 and 7).
 - **Parked is Waiting**, on the hub too (this table's rule 5a, until now the web's alone) and above finished work; an
   open PR and a usage limit wait there with it.
+- **A run that waits on another Agent or an outside event it names is Waiting** (`someone_else`, line `run_waits`),
+  not Working (rule 4); background work and a `/loop`, which end by themselves, stay Working, and so does a moment's
+  model failure while the hub's "Continue" is on its way, which rule 2 reads as cut off.
 - **Can wait**: a decision marked for the briefing (`can_wait`) and a run that ended on a plain-text question
   (`awaits_reply`) are listed under Needs you's fold, not counted in its number.
 - **Inactive is a mark, not a section**: the to-do keeps its section (To do) with the time activity stopped. A restore
   counts as activity: the view reads the hub's `restored_at` ("Restores and Someday" in `docs/assistant/todos.md`),
   not each device's own.
 
-No client reads `view` yet: no route sends it until the routes PR, and the clients switch to it in stage 2. Until then
-every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`), follows the rules
-above.
+The list carries it: every row of `GET /api/v1/todos` has its `view` and the answer the list's `counts`, worked out
+once per read over the whole list (`server/internal/assistant/todo_view_routes.go`); `GET /api/v1/todos/{id}` answers
+one row the same way and `GET /api/v1/todos/places` the places (`docs/protocol/protocol.md`, the to-dos rows). Every
+time in a view is absolute, so the list's bytes, and its `ETag`, stay the same while neither the to-dos nor their runs
+change (a working run's latest line is in its row's view). Across managers the hub only adds the counts up and joins
+the places; it never works out a view. The hello features `todo_view` and `todo_places` say every manager serves them,
+and only while they are listed do the counts cover every manager.
+
+No client reads `view` yet: the clients switch to it in stage 2, falling back to the rules above for a row without
+one. Until then every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`),
+follows the rules above.

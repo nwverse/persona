@@ -99,7 +99,7 @@ import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
 import type { ChatRowWithModes, ModeChanges } from "./mode-changes";
 import { useFoldSearch } from "./useFoldSearch";
-import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
+import { DeleteSessionDialog, preloadSessionDialogs, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { permissionsCommand } from "../../lib/permissions-command";
 import { archiveCloseItems, closeItems } from "../AgentMenus";
@@ -1052,7 +1052,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       setSendFailure(null);
       noteWritten(id, p.at);
       setPending((ps) => [...ps.filter((x) => x.id !== id), p]);
-      follow(true); // your own message: to the end, whatever you were reading
+      // Quote replies keep an earlier reader's place; at the end, every own message still follows (#10346).
+      if (!out.quoteReply || atEnd.current) follow(true);
       const key = outboxKey(mid, sid);
       const launcher = assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined;
       const model = assistant ? pickedModel(conversationKey(mid, sid)) : undefined;
@@ -2526,6 +2527,10 @@ export const Header = memo(function Header({
   panel?: PanelChrome;
 }) {
   const menu = useMenu();
+  // the ⋯ menu's Rename…, Rename space… and Delete… open dialogs from a chunk of their own: on its way once it opens (#10382)
+  useEffect(() => {
+    if (menu.anchor) preloadSessionDialogs();
+  }, [menu.anchor]);
   const tabs = useMenu();
   const panel = usePanel();
   const mutes = useStore((s) => s.mutes);
