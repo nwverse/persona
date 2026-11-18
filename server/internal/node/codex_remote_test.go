@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -635,7 +636,7 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 	f, c := connectRemoteFixture(t, n, home, "one", remoteRaw)
 	n.logger = log.New(logs, "", 0)
 	c.mu.Lock()
-	c.readWait = 200 * time.Millisecond
+	c.readWait = time.Second
 	c.mu.Unlock()
 	const newSlow = "99999999-8888-7777-6666-555555555555"
 	fast := []string{remoteOther, "aaaaaaaa-0000-0000-0000-000000000001", "aaaaaaaa-0000-0000-0000-000000000002", "aaaaaaaa-0000-0000-0000-000000000003", "aaaaaaaa-0000-0000-0000-000000000004"}
@@ -667,6 +668,12 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 	if lines := strings.Count(logs.String(), "\n"); lines != 1 || !strings.Contains(logs.String(), "2 of 7 threads (2 timed out") {
 		t.Fatalf("log = %q, want one summary line", logs.String())
 	}
+	c.mu.Lock()
+	at := c.slow[remoteRaw].at
+	c.mu.Unlock()
+	if at.Sub(start) < time.Second {
+		t.Fatalf("backoff counted from %v after the refresh started, want from after the read timed out", at.Sub(start))
+	}
 
 	// The next refresh, before the backoff is over: the slow threads are not asked again, the others are.
 	if err := c.refresh(); err != nil {
@@ -686,5 +693,51 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 	}
 	if lines := strings.Count(logs.String(), "\n"); lines != 1 {
 		t.Fatalf("log = %q, want nothing new while the slow threads wait", logs.String())
+	}
+}
+
+// A refresh whose own time runs out stops asking: threads not read in time keep their last copy and are not backed off
+// as slow, while those whose own read timed out are.
+func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
+	n := remoteTestNode(t)
+	logs := &syncBuffer{}
+	f, c := connectRemoteFixture(t, n, t.TempDir(), "one", remoteRaw)
+	n.logger = log.New(logs, "", 0)
+	c.mu.Lock()
+	c.readWait, c.refreshWait = time.Second, 1600*time.Millisecond
+	c.mu.Unlock()
+	slow := []string{remoteRaw}
+	for i := range 9 {
+		slow = append(slow, fmt.Sprintf("bbbbbbbb-0000-0000-0000-%012d", i))
+	}
+	f.mu.Lock()
+	f.threads = slow
+	f.slowRead = map[string]bool{}
+	for _, raw := range slow {
+		f.slowRead[raw] = true
+	}
+	f.mu.Unlock()
+
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	_, kept := c.threads[remoteRaw]
+	backedOff := len(c.slow)
+	_, first := c.slow[remoteRaw]
+	c.mu.Unlock()
+	if !kept {
+		t.Fatal("a known thread was dropped")
+	}
+	if backedOff != codexReadWorkers || !first {
+		t.Fatalf("%d threads backed off (first %v), want the %d whose own read timed out", backedOff, first, codexReadWorkers)
+	}
+	for _, raw := range slow[2*codexReadWorkers:] {
+		if got := f.readCount(raw); got != 0 {
+			t.Fatalf("%s asked %d times after the refresh ran out of time", raw, got)
+		}
+	}
+	if !strings.Contains(logs.String(), "(4 timed out, 6 not read in time") {
+		t.Fatalf("log = %q", logs.String())
 	}
 }
