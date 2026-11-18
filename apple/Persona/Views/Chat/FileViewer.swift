@@ -2,6 +2,7 @@ import MarkdownUI
 import PDFKit
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 nonisolated struct FileContent: Decodable, Sendable {
     var path: String
@@ -174,17 +175,16 @@ struct FileViewer: View {
         NavigationStack {
             content
                 .navigationTitle(page?.file?.name ?? (ref.path as NSString).lastPathComponent)
-                .navigationSubtitle(model.machine(ref.machineRef)?.name ?? ref.machineID)
+                .navigationSubtitleWhenSupported(model.machine(ref.machineRef)?.name ?? ref.machineID)
                 .navigationBarTitleDisplayMode(.inline)
                 .pageToolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        if let back = history.last {
+                    // ‹ after following a file link, else the sheet's ✕ (#9653).
+                    if let back = history.last {
+                        ToolbarItem(placement: .topBarLeading) {
                             Button { history.removeLast(); ref = back } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
-                        } else {
-                            Button("Done [Extension System Presentation c0b3fb]") { dismiss() }
-                                .lineLimit(1)
-                                .accessibilityIdentifier("file-close")
                         }
+                    } else {
+                        SheetClose(id: "file-close") { dismiss() }
                     }
                     #if os(iOS)
                     if page?.kind != .directory {
@@ -507,6 +507,7 @@ struct FileViewer: View {
         case "xls", "xlsx", "numbers", "csv", "tsv": Theme.Icon.sheet
         case "ppt", "pptx": Theme.Icon.slides
         case "json", "yml", "yaml", "toml", "plist": "curlybraces"
+        case "zip", "gz", "tgz", "tar", "7z", "rar", "xz", "bz2": Theme.Icon.fileArchive
         case "": path.hasSuffix("/") ? Theme.Icon.folder : Theme.Icon.file
         default: Theme.Icon.code
         }

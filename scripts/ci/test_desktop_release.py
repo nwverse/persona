@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -29,8 +30,8 @@ class DesktopReleaseGateTests(unittest.TestCase):
     def test_no_secrets_skips_both_platforms_and_names_what_is_missing(self):
         values, summary = self.gate("v1.2.0")
         self.assertEqual(values, {"version": "1.2.0", "mac": "false", "win": "false"})
-        self.assertIn("macOS desktop packages skipped: repository secrets not configured: " + " ".join(MAC), summary)
-        self.assertIn("Windows desktop package skipped: repository secrets not configured: " + " ".join(WIN), summary)
+        self.assertIn("macOS desktop packages skipped: Environment secrets not configured: " + " ".join(MAC), summary)
+        self.assertIn("Windows desktop package skipped: Environment secrets not configured: " + " ".join(WIN), summary)
 
     def test_each_platform_needs_all_of_its_own_secrets(self):
         values, summary = self.gate("v1.2.0", MAC)
@@ -100,6 +101,9 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
     def test_the_administrator_gate_stays_in_front_of_every_desktop_job(self):
         self.assertEqual(self.jobs["desktop-gate"]["needs"], "authorize")
         self.assertEqual(self.jobs["desktop-gate"]["if"], "github.event_name == 'push' && github.ref_type == 'tag'")
+        # The gate reads only secret presence, but presence is environment-scoped too: without this binding the
+        # documented environment-only configuration would always skip both signed platforms.
+        self.assertEqual(self.jobs["desktop-gate"]["environment"], "persona-desktop-release")
         for name in ("desktop-mac", "desktop-win"):
             self.assertEqual(self.jobs[name]["needs"], ["authorize", "desktop-gate"])
             self.assertNotIn("permissions", self.jobs[name])
@@ -134,16 +138,18 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         for pattern in ("*.dmg", "*.zip", "*.exe", "*.blockmap", "*.yml"):
             self.assertIn(pattern, script)
 
-    def test_documented_secrets_are_the_ones_the_workflow_reads(self):
+    def test_documented_secrets_are_in_their_protected_environment(self):
         text = (ROOT / "docs/desktop/desktop.md").read_text()
-        release = (ROOT / ".github/workflows/release.yml").read_text()
+        environment = re.search(r"create the `([a-z0-9-]+)` GitHub Environment", text).group(1)
+        self.assertEqual(environment, "persona-desktop-release")
+        release = yaml.load((ROOT / ".github/workflows/release.yml").read_text(), Loader=yaml.BaseLoader)
         for name in sorted(set(MAC) | set(WIN)):
             self.assertIn(f"`{name}`", text)
-            self.assertIn(f"secrets.{name}", release)
-
-
-if __name__ == "__main__":
-    unittest.main()
+            self.assertIn(f"secrets.{name}", str(release))
+        for name, job in release["jobs"].items():
+            if any(f"secrets.{secret}" in str(job) for secret in set(MAC) | set(WIN)):
+                self.assertEqual(job.get("environment"), environment,
+                                 f"{name} must use the documented Environment")
 
     def test_desktop_ci_never_receives_signing_credentials(self):
         # Signing and notarization are release-only; a manually dispatched branch cannot sign arbitrary code.
@@ -151,3 +157,7 @@ if __name__ == "__main__":
         self.assertNotIn("inputs.signed", text)
         for name in sorted(set(MAC) | set(WIN)):
             self.assertNotIn(f"secrets.{name}", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

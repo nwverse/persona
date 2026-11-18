@@ -141,11 +141,14 @@ var catalogItemTypes = map[string]reflect.Type{
 	"secret_providers": reflect.TypeFor[SecretProviderItem](),
 	"voice":            reflect.TypeFor[VoiceItem](),
 	"transcription":    reflect.TypeFor[TranscriptionItem](),
+	"speech":           reflect.TypeFor[SpeechItem](),
 	"browser":          reflect.TypeFor[ComputerItem](),
 	"channel":          reflect.TypeFor[channel.Item](),
 	"shortcuts":        reflect.TypeFor[ShortcutItem](),
 	"computer":         reflect.TypeFor[ComputerItem](),
 	"iphone":           reflect.TypeFor[ComputerItem](),
+
+	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 }
 
 // Include the parsed projection as well as the signed entry fields: callers may

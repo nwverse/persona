@@ -1,10 +1,8 @@
 // Small pieces the inbox pages share: avatars (chat, mail, document, Moments) with their source mark, tags, counts,
 // the AI twin's draft card, a document row's status menu, and the few glyphs the shared icon set does not have.
 import { useState, type CSSProperties, type ReactNode } from "react";
-import {
-  agentDraft, docChangeKey, docChangeLine, isDone, isLark, itemKey, keptChanges, movingKey, setDocStatus, useDroppedChanges, useInbox, useUnsentReply, withToken,
-  type DocChange, type DocRow, type DocStatus, type InboxItem,
-} from "../../lib/inbox";
+import { agentDraft, docChangeKey, isDone, isLark, itemKey, keptChanges, movingKey, setDocStatus, useDroppedChanges, useInbox, useUnsentReply, withToken, type DocChange, type DocRow, type DocStatus, type InboxItem } from "../../lib/inbox";
+import { docChangeLine } from "../../lib/inbox-page";
 import { connectorBrand } from "../../lib/connectors";
 import { hubMediaURL } from "../../lib/lark-summary";
 import { useItemManager, useShownManager, withManager } from "../../lib/manager-choice";
@@ -211,9 +209,9 @@ export function DraftCard({ it, onEdit, onSend }: { it: InboxItem; onEdit: () =>
   const dropped = useDroppedChanges(key);
   // the four lines may cut it: "Show all" shows the rest in place, so it is read before "Send" (#4742)
   const [open, setOpen] = useState(false);
-  const { ref: textRef, cut: long } = useClamped<HTMLParagraphElement>(open);
+  const text = kept ?? draft ?? "";
+  const { ref: textRef, cut: long } = useClamped<HTMLParagraphElement>(open, "y", text);
   if (!draft) return null;
-  const text = kept ?? draft;
   const changes = keptChanges(it, dropped);
   // as sent: a failed send keeps the text trimmed, and the AI's own draft with a trailing newline is not an edit
   const edited = (kept !== undefined && kept.trim() !== draft.trim()) || dropped.length > 0;
@@ -298,6 +296,7 @@ export function StatusMenu({ it, row, status, showName }: { it: InboxItem; row: 
           anchor={menu.anchor}
           onClose={menu.close}
           header={status.name}
+          headerAsWritten
           width={180}
           items={status.options.map((o) => ({ key: o.name, label: o.name, checked: o.name === status.value, onSelect: () => void setDocStatus(it, row, status, o.name) }))}
         />

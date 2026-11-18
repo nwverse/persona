@@ -12,6 +12,9 @@ nonisolated struct RecordingActivityAttributes: ActivityAttributes {
             case paused
             /// Paused by a call or another app: resumes by itself, or when Persona is opened.
             case interrupted
+            /// Drawn only, never sent: a running recording whose activity went stale (`drawn(stale:)`). The app stopped
+            /// confirming it (`aliveAt`), so iOS ended the app with it (#9108: killed in the background for CPU).
+            case stopped
         }
 
         var phase: Phase
@@ -31,6 +34,10 @@ nonisolated struct RecordingActivityAttributes: ActivityAttributes {
         /// The meeting's current topic, as the room set it (#3862 phase 2, at most 60 characters): "Now: <topic>" under
         /// the name. nil without the live view, before the room names one, or while Persona doesn't attend.
         var topic: String? = nil
+        /// Where the current topic stands among the room's topics (#8731 V4): its place from 1 and how many there are
+        /// ("Topic 2 / 4: <topic>"). nil beside no `topic`, and in a state from before.
+        var topicNumber: Int? = nil
+        var topicCount: Int? = nil
         /// The latest line of the meeting's live log (phase 2, at most 120 characters): what was said while Persona
         /// attended, shown when no answer is new. nil without the live view.
         var line: String? = nil
@@ -42,8 +49,25 @@ nonisolated struct RecordingActivityAttributes: ActivityAttributes {
         /// hub's transcription fell back ("On iPhone: …" on the third line); nil otherwise, so a state from before reads
         /// as it was. Set only beside a `line`.
         var fellBack: Bool? = nil
+        /// While recording: the minute the app last confirmed it still records (Unix seconds). The activity goes stale a
+        /// little after it (`RecordingActivity.staleAfter`), so when iOS ends the app in the background (for CPU, #9108)
+        /// the island stops counting instead of showing a recording that no longer runs. nil while paused, and in a state
+        /// from before.
+        var aliveAt: Double? = nil
 
         var runningSinceDate: Date? { runningSince.map { Date(timeIntervalSince1970: $0) } }
+
+        /// What the widget draws: a recording whose activity went stale (`stale`, the system's `isStale`) as stopped,
+        /// its time standing where the app last confirmed it; anything else as it is. Pure, for the tests.
+        func drawn(stale: Bool) -> Self {
+            guard stale, phase == .recording else { return self }
+            var out = self
+            out.phase = .stopped
+            if let since = runningSince, let alive = aliveAt { out.elapsed = max(0, alive - since) }
+            out.runningSince = nil
+            out.talking = talking == nil ? nil : false
+            return out
+        }
     }
 
     /// The recording's id (`RecordingEntry.id`): what Stop and Bookmark act on.
@@ -59,5 +83,21 @@ nonisolated enum RecordingLink {
 
     static func matches(_ url: URL) -> Bool {
         HubNaming.accepts(scheme: url.scheme) && url.host() == "record"
+    }
+
+    /// A meeting's End on the Lock Screen and in the Dynamic Island (#8731 V4): persona://record?end=<recording id> opens
+    /// the meeting and asks "End the Meeting?", as its End in the app does. An ended meeting can't go on recording, so a
+    /// tap never ends it at once.
+    static func end(_ recordingID: String) -> URL {
+        var parts = URLComponents(url: page, resolvingAgainstBaseURL: false)!
+        parts.queryItems = [URLQueryItem(name: "end", value: recordingID)]
+        return parts.url!
+    }
+
+    /// The recording `end(_:)` names, lowercase; nil for any other link.
+    static func endID(_ url: URL) -> String? {
+        guard matches(url) else { return nil }
+        let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "end" }?.value
+        return value.flatMap { $0.isEmpty ? nil : $0.lowercased() }
     }
 }

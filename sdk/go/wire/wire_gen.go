@@ -264,33 +264,35 @@ type StoragePermission struct {
 // Contributes: contributions by extension point. A point this hub does not know installs with a warning, not taking
 // effect.
 type Contributes struct {
-	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
-	Voice           []NamedItem          `json:"voice,omitempty"`
-	Transcription   []NamedItem          `json:"transcription,omitempty"`
-	Computer        []NamedItem          `json:"computer,omitempty"`
-	Browser         []NamedItem          `json:"browser,omitempty"`
-	Iphone          []NamedItem          `json:"iphone,omitempty"`
-	Quota           []QuotaItem          `json:"quota,omitempty"`
-	Providers       []ProviderItem       `json:"providers,omitempty"`
-	API             []APIItem            `json:"api,omitempty"`
-	Assistant       []AssistantItem      `json:"assistant,omitempty"`
-	McpServers      []MCPServerItem      `json:"mcp_servers,omitempty"`
-	UI              []UIItem             `json:"ui,omitempty"`
-	AgentSources    []AgentSourceItem    `json:"agent_sources,omitempty"`
-	Channel         []ChannelItem        `json:"channel,omitempty"`
-	Events          []EventsItem         `json:"events,omitempty"`
-	Shortcuts       []ShortcutItem       `json:"shortcuts,omitempty"`
-	Skills          []SkillItem          `json:"skills,omitempty"`
-	Prompts         []PromptItem         `json:"prompts,omitempty"`
-	Themes          []ThemeItem          `json:"themes,omitempty"`
-	Looks           []LookItem           `json:"looks,omitempty"`
-	TriageTemplates []TriageTemplateItem `json:"triage_templates,omitempty"`
-	AgentFilters    []AgentFilterItem    `json:"agent_filters,omitempty"`
-	Tunnels         []TunnelItem         `json:"tunnels,omitempty"`
-	ErrorReports    []ErrorReportsItem   `json:"error_reports,omitempty"`
-	AuthRelay       []AuthRelayItem      `json:"auth_relay,omitempty"`
-	SecretProviders []SecretProviderItem `json:"secret_providers,omitempty"`
-	Messaging       []MessagingItem      `json:"messaging,omitempty"`
+	Connectors          []ConnectorItem          `json:"connectors,omitempty"`
+	Voice               []NamedItem              `json:"voice,omitempty"`
+	Transcription       []NamedItem              `json:"transcription,omitempty"`
+	Speech              []NamedItem              `json:"speech,omitempty"`
+	Computer            []NamedItem              `json:"computer,omitempty"`
+	Browser             []NamedItem              `json:"browser,omitempty"`
+	Iphone              []NamedItem              `json:"iphone,omitempty"`
+	Quota               []QuotaItem              `json:"quota,omitempty"`
+	Providers           []ProviderItem           `json:"providers,omitempty"`
+	API                 []APIItem                `json:"api,omitempty"`
+	Assistant           []AssistantItem          `json:"assistant,omitempty"`
+	McpServers          []MCPServerItem          `json:"mcp_servers,omitempty"`
+	UI                  []UIItem                 `json:"ui,omitempty"`
+	AgentSources        []AgentSourceItem        `json:"agent_sources,omitempty"`
+	Channel             []ChannelItem            `json:"channel,omitempty"`
+	Events              []EventsItem             `json:"events,omitempty"`
+	Shortcuts           []ShortcutItem           `json:"shortcuts,omitempty"`
+	Skills              []SkillItem              `json:"skills,omitempty"`
+	Prompts             []PromptItem             `json:"prompts,omitempty"`
+	Themes              []ThemeItem              `json:"themes,omitempty"`
+	Looks               []LookItem               `json:"looks,omitempty"`
+	TriageTemplates     []TriageTemplateItem     `json:"triage_templates,omitempty"`
+	AgentFilters        []AgentFilterItem        `json:"agent_filters,omitempty"`
+	Tunnels             []TunnelItem             `json:"tunnels,omitempty"`
+	ErrorReports        []ErrorReportsItem       `json:"error_reports,omitempty"`
+	AuthRelay           []AuthRelayItem          `json:"auth_relay,omitempty"`
+	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
+	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
+	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
 }
@@ -301,7 +303,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -333,7 +335,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -571,6 +573,39 @@ type SecretProviderItem struct {
 	Schemes []string `json:"schemes"`
 }
 
+// RepositoryProviderItem: A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's
+// repositories and links there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe;
+// repository.schema.json) and re-checks every answer. Needs the program to speak the protocol. A host another
+// installed extension claims, on or off, fails the install, and so does one host in two items.
+type RepositoryProviderItem struct {
+	ID string `json:"id"`
+	// What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no control
+	// characters.
+	Name string `json:"name"`
+	// The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+	// not an IP address, and not a host the built-in GitHub and GitLab read.
+	Hosts []string `json:"hosts"`
+	// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
+	// kinds stay issue and pull_request.
+	LinkKinds []RepositoryLinkLabel `json:"link_kinds,omitempty"`
+}
+
+// RepositoryLinkLabel: the word a repository provider shows for one kind of its links (MR for a pull_request).
+type RepositoryLinkLabel struct {
+	Kind string `json:"kind"`
+	// Not only spaces, no control characters.
+	Label string `json:"label"`
+}
+
+// RepositoryLinkKind: the kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+const (
+	RepositoryLinkKindIssue       = "issue"
+	RepositoryLinkKindPullRequest = "pull_request"
+)
+
+// RepositoryLinkKinds are the values of RepositoryLinkKind, in order.
+var RepositoryLinkKinds = []string{"issue", "pull_request"}
+
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
 // (error_reports.deliver): needs the program to speak the protocol, on_startup and permissions.error_reports.
 type ErrorReportsItem struct {
@@ -629,7 +664,7 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
-// NamedItem: A contribution with only an id and a name: voice, transcription, computer, browser.
+// NamedItem: A contribution with only an id and a name: voice, transcription, speech, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -718,6 +753,15 @@ type UIItem struct {
 	Families []string `json:"families,omitempty"`
 	// widget only: how often the widget is drawn again on its own (30 when not said).
 	RefreshMinutes int `json:"refresh_minutes,omitempty"`
+	// nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+	// l10n's groups.
+	Group *UIGroup `json:"group,omitempty"`
+}
+
+// UIGroup: A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+type UIGroup struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 type AgentSourceItem struct {
@@ -882,6 +926,26 @@ type AuthPrompt struct {
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
+// SettingsCheckParams: settings.check (manifest settings_check): the configuration and secrets as a change would
+// leave them, before the hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+type SettingsCheckParams struct {
+	// The whole configuration as it would be saved, the schema's defaults filled in.
+	Config  json.RawMessage   `json:"config"`
+	Secrets map[string]string `json:"secrets"`
+	// The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+	// permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+	// ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's ordinary
+	// proxy (an older hub sends none).
+	Proxy string `json:"proxy,omitempty"`
+}
+
+// SettingsCheckResult: settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every
+// secret out of it and cuts it to 300 characters).
+type SettingsCheckResult struct {
+	Ok    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
 // Values of HubRole.
 const (
 	HubRoleCenter = "center"
@@ -895,10 +959,11 @@ var HubRoles = []string{"center", "member"}
 const (
 	HubCapabilityInboxGroup      = "inbox_group"
 	HubCapabilityInboxGroupState = "inbox_group_state"
+	HubCapabilityToolImages      = "tool_images"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group", "inbox_group_state"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -1072,6 +1137,8 @@ type UIPlace struct {
 	Opens         string `json:"opens,omitempty"`
 	Badge         *Badge `json:"badge,omitempty"`
 	Connector     string `json:"connector,omitempty"`
+	// A nav_page's sidebar group, its title in the request's language (#9071).
+	Group *UIGroup `json:"group,omitempty"`
 }
 
 type UIPlaces struct {
@@ -1410,6 +1477,15 @@ const (
 // TextStyles are the values of TextStyle, in order.
 var TextStyles = []string{"body", "secondary", "caption", "code", "title", "headline"}
 
+// ProgressStyle: A progress drawing hint: bar (the default) or ring.
+const (
+	ProgressStyleBar  = "bar"
+	ProgressStyleRing = "ring"
+)
+
+// ProgressStyles are the values of ProgressStyle, in order.
+var ProgressStyles = []string{"bar", "ring"}
+
 // FieldKind: date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD,
 // time HH:MM (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen
 // values, multiline the text with \n.
@@ -1541,9 +1617,9 @@ const (
 var Platforms = []string{"ios", "mac", "android", "web"}
 
 // NavIcon: the fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the
-// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's).
-// Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old
-// name).
+// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8
+// a section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin
+// is its old name).
 const (
 	NavIconPlugin      = "plugin"
 	NavIconChart       = "chart"
@@ -1650,6 +1726,14 @@ type Section struct {
 	Items  []Component `json:"items"`
 	More   *More       `json:"more,omitempty"`
 	Pane   string      `json:"pane,omitempty"`
+	Span   string      `json:"span,omitempty"`
+	// Drawn before the title.
+	Icon      string       `json:"icon,omitempty"`
+	IconColor string       `json:"icon_color,omitempty"`
+	Link      *SectionLink `json:"link,omitempty"`
+	// How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+	// screen and when absent. Other components keep the whole width.
+	Columns int `json:"columns,omitempty"`
 }
 
 // Component: one component of a view, told apart by type. A type an app does not know is skipped and the rest drawn.
@@ -1912,18 +1996,35 @@ type Tile struct {
 	Control *RowControl `json:"control,omitempty"`
 	Actions []RowAction `json:"actions,omitempty"`
 	Action  *Action     `json:"action,omitempty"`
+	// Draws the tile as a ring (UI version 9): never with an image or a spark.
+	Gauge *Gauge `json:"gauge,omitempty"`
+}
+
+// Gauge: A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in
+// its centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+// app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+// color as the tile's.
+type Gauge struct {
+	// How full the ring is, 0 to 1.
+	Ratio *float64 `json:"ratio"`
+	// A short word under the value (USD, GB, h), as a control's unit.
+	Unit  string `json:"unit,omitempty"`
+	Color string `json:"color,omitempty"`
 }
 
 // Layout: stack: sections one under another. split: on a wide screen the side pane's sections in a column at the
 // start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that
-// opens as a sheet.
+// opens as a sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three
+// when there is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow
+// one a single column, as stack. An older app gets stack.
 const (
-	LayoutStack = "stack"
-	LayoutSplit = "split"
+	LayoutStack   = "stack"
+	LayoutSplit   = "split"
+	LayoutColumns = "columns"
 )
 
 // Layouts are the values of Layout, in order.
-var Layouts = []string{"stack", "split"}
+var Layouts = []string{"stack", "split", "columns"}
 
 // Pane: where a section of a split view goes.
 const (
@@ -1933,6 +2034,23 @@ const (
 
 // Panes are the values of Pane, in order.
 var Panes = []string{"main", "side"}
+
+// SectionSpan: how much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one
+// column. Other layouts ignore it.
+const (
+	SectionSpanFull = "full"
+)
+
+// SectionSpans are the values of SectionSpan, in order.
+var SectionSpans = []string{"full"}
+
+// SectionLink: A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls
+// ui.action with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as
+// the section's last row.
+type SectionLink struct {
+	Title  string `json:"title"`
+	Action Action `json:"action"`
+}
 
 // Values of FileStatus.
 const (
@@ -3348,6 +3466,10 @@ type ConnectorTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	// Words that run the tool in a shell instead (a gated command's); runtimes refuse them in an assistant conversation.
 	Shell []string `json:"shell,omitempty"`
+	// Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and loaded
+	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	DeferLoading bool `json:"defer_loading,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.
@@ -3365,11 +3487,27 @@ type ConnectorCallParams struct {
 // ConnectorCallResult: tools.call and actions.do.
 type ConnectorCallResult struct {
 	Text string `json:"text,omitempty"`
+	// tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+	// initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+	// 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+	// pixels; the hub leaves out any over a limit and says so after the text.
+	Images []ConnectorToolImage `json:"images,omitempty"`
 	// actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
 	// service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
 	// sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
 	// Leave it out when there is none.
 	MessageRef string `json:"message_ref,omitempty"`
+}
+
+// ConnectorToolImage: one picture of a tools.call answer (ConnectorCallResult.images).
+type ConnectorToolImage struct {
+	// image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes.
+	Mime string `json:"mime,omitempty"`
+	// The bytes, base64 (standard, with padding).
+	Data string `json:"data"`
+	// One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+	// post); the hub keeps the first 200 characters of its first line.
+	Caption string `json:"caption,omitempty"`
 }
 
 // ConnectorAction: A write as the card names it: visible says who will see it.
@@ -4463,8 +4601,13 @@ type KBEntry struct {
 	Updated   time.Time `json:"updated"`
 	// A project's short / long · status, a chat's dm / group…
 	Extra string `json:"extra,omitempty"`
-	// A chat's source (lark, mail, wechat, github…).
+	// A chat's source (lark, mail, wechat, github…); a document's, meeting's or event's connector (#8872).
 	Source string `json:"source,omitempty"`
+	// A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub.
+	RecordingKind string `json:"recording_kind,omitempty"`
+	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
+	// absent on other kinds, before a match and from an older hub.
+	MeetingID string `json:"meeting_id,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
@@ -4842,6 +4985,9 @@ type LeaderReportEvent struct {
 	Doing    string    `json:"doing,omitempty"`
 	NeedsYou string    `json:"needs_you,omitempty"`
 	Links    []string  `json:"links,omitempty"`
+	// set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+	// in the log and the briefing, alert nobody), P0 for a decision
+	Level string `json:"level,omitempty"`
 }
 
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;
@@ -4851,20 +4997,22 @@ type LeaderReportEvent struct {
 // status or a dropped connection); model_refused (the model declined to answer this input, a refusal or a content
 // filter: sending it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal);
 // timeout (past timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after
-// one more try; data ModelInvalidOutput).
+// one more try; data ModelInvalidOutput); model_candidates_failed (with two or more candidates, every one failed;
+// data ModelCandidatesFailed names how each did; a single candidate that fails answers with its own code and data).
 const (
-	ModelErrorCodeInvalidParams    = "invalid_params"
-	ModelErrorCodeAssistantOffline = "assistant_offline"
-	ModelErrorCodeModelUnavailable = "model_unavailable"
-	ModelErrorCodeModelPaused      = "model_paused"
-	ModelErrorCodeModelFailed      = "model_failed"
-	ModelErrorCodeModelRefused     = "model_refused"
-	ModelErrorCodeTimeout          = "timeout"
-	ModelErrorCodeInvalidOutput    = "invalid_output"
+	ModelErrorCodeInvalidParams         = "invalid_params"
+	ModelErrorCodeAssistantOffline      = "assistant_offline"
+	ModelErrorCodeModelUnavailable      = "model_unavailable"
+	ModelErrorCodeModelPaused           = "model_paused"
+	ModelErrorCodeModelFailed           = "model_failed"
+	ModelErrorCodeModelRefused          = "model_refused"
+	ModelErrorCodeTimeout               = "timeout"
+	ModelErrorCodeInvalidOutput         = "invalid_output"
+	ModelErrorCodeModelCandidatesFailed = "model_candidates_failed"
 )
 
 // ModelErrorCodes are the values of ModelErrorCode, in order.
-var ModelErrorCodes = []string{"invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output"}
+var ModelErrorCodes = []string{"invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output", "model_candidates_failed"}
 
 // ModelMessage: one turn of the conversation: the user's, or the model's earlier answer.
 type ModelMessage struct {
@@ -4897,6 +5045,17 @@ type ModelCompleteParams struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// What the call is for (daily, weekly…): it goes in the hub's log line with the usage.
 	Label string `json:"label,omitempty"`
+	// Candidate model ids, tried in order (#10398): one that fails (model_failed, model_refused, model_paused), runs
+	// past timeout_seconds, answers with no text (model_failed) or, with json_schema, still does not match it after its
+	// second try (invalid_output) hands over to the next. Each runs on a provider the user configured in Settings ›
+	// Model providers that offers it, the purpose's own provider first (a model none offers is model_unavailable with
+	// data {model}, nothing sent). One candidate that fails answers with its own error; when two or more all fail the
+	// error is model_candidates_failed. timeout_seconds bounds each candidate; the whole call stops at 600 seconds. The
+	// user can switch these lists off (the result then has no candidate) or replace them with a list of their own
+	// (candidate names the user's model) on the extension's purpose in Settings › Model configuration. Without models
+	// the call runs on the purpose's model, as it always did; a hub older than this field answers invalid_params
+	// (unknown field "models").
+	Models []string `json:"models,omitempty"`
 }
 
 // ModelUsage: what the call spent, every request of it together (a second try for json_schema included), as the
@@ -4917,8 +5076,37 @@ type ModelCompleteResult struct {
 	// The model that answered.
 	Model string `json:"model"`
 	// end_turn, or max_tokens when the answer was cut off.
-	StopReason string     `json:"stop_reason"`
-	Usage      ModelUsage `json:"usage"`
+	StopReason string `json:"stop_reason"`
+	// What the call spent; with models, every attempt's requests together.
+	Usage ModelUsage `json:"usage"`
+	// With models (or the user's own list): the candidate that answered.
+	Candidate string `json:"candidate,omitempty"`
+	// The candidates that failed before it, in order.
+	Attempts []ModelAttempt `json:"attempts,omitempty"`
+}
+
+// ModelAttempt: A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode; a reply
+// with no text is model_failed), what happened, how long it took and what it spent.
+type ModelAttempt struct {
+	Model   string `json:"model"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// model_paused: when its connection lets go, an RFC 3339 time.
+	Until   string     `json:"until,omitempty"`
+	Seconds float64    `json:"seconds"`
+	Usage   ModelUsage `json:"usage"`
+}
+
+// ModelNotOffered: the data of model_unavailable for a candidate no provider the user configured offers.
+type ModelNotOffered struct {
+	Model string `json:"model"`
+}
+
+// ModelCandidatesFailed: the data of model_candidates_failed: every candidate's failure in order, and what they spent
+// together.
+type ModelCandidatesFailed struct {
+	Attempts []ModelAttempt `json:"attempts"`
+	Usage    ModelUsage     `json:"usage"`
 }
 
 // ModelPause: the data of model_paused.
@@ -5719,6 +5907,172 @@ func (v UIPageSnapshot) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// TranscriptionErrorCode: error.code of the transcription calls besides permission_denied (data {scope:
+// "transcription"}): invalid_params (a field missing or wrong, audio that is not base64 PCM16 or over 256 KiB a call,
+// a job that is not this extension's or no longer runs); assistant_offline (the manager is away: try again);
+// transcription_unavailable (no transcription is chosen, ready or able to replay: the owner sets it up in Settings ›
+// Meetings); busy (this extension has a job running, or two extensions have); too_long (more than 15 minutes of
+// audio: the job is ended); timeout (the transcription stopped answering: the job is ended); transcription_failed
+// (the transcription failed the job; data {code}: its error code).
+const (
+	TranscriptionErrorCodeInvalidParams            = "invalid_params"
+	TranscriptionErrorCodeAssistantOffline         = "assistant_offline"
+	TranscriptionErrorCodeTranscriptionUnavailable = "transcription_unavailable"
+	TranscriptionErrorCodeBusy                     = "busy"
+	TranscriptionErrorCodeTooLong                  = "too_long"
+	TranscriptionErrorCodeTimeout                  = "timeout"
+	TranscriptionErrorCodeTranscriptionFailed      = "transcription_failed"
+)
+
+// TranscriptionErrorCodes are the values of TranscriptionErrorCode, in order.
+var TranscriptionErrorCodes = []string{"invalid_params", "assistant_offline", "transcription_unavailable", "busy", "too_long", "timeout", "transcription_failed"}
+
+// TranscriptionStartParams: transcription.start: a job for one piece of audio.
+type TranscriptionStartParams struct {
+	// A BCP 47 hint (zh-CN, en-US); the transcription still follows the speech. Empty: the transcription's own guess.
+	Language string `json:"language,omitempty"`
+	// A short name of what this is, for the manager's log (its first 40 characters); never what is said.
+	Label string `json:"label,omitempty"`
+}
+
+type TranscriptionStartResult struct {
+	// The job's id, for the calls after; it is this extension's only.
+	Job string `json:"job"`
+}
+
+// TranscriptionAudioParams: transcription.audio: the next piece of the audio, contiguous with the last: PCM16
+// little-endian, mono, 16 kHz, base64 (standard, with padding), at most 256 KiB of PCM (8 seconds) a call. The call
+// returns once the audio is with the transcription and no more than 60 seconds wait ahead of it, so sending as fast
+// as it returns paces the job.
+type TranscriptionAudioParams struct {
+	Job  string `json:"job"`
+	Data string `json:"data"`
+}
+
+// TranscriptionJobParams: transcription.finish (every piece is sent: wait for the text) and transcription.cancel
+// (drop the job and its text).
+type TranscriptionJobParams struct {
+	Job string `json:"job"`
+}
+
+// TranscriptionSegment: one sentence, from and to in seconds from the start of the audio.
+type TranscriptionSegment struct {
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+	Text string  `json:"text"`
+}
+
+// TranscriptionGap: A span the transcription did not trust any text for (its sessions did not agree: noise, music,
+// crosstalk): say so, never guess.
+type TranscriptionGap struct {
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+}
+
+type TranscriptionFinishResult struct {
+	Segments []TranscriptionSegment `json:"segments"`
+	Gaps     []TranscriptionGap     `json:"gaps,omitempty"`
+	// How much audio the job took.
+	Seconds float64 `json:"seconds"`
+}
+
+// RepoErrorCode: error.code a provider answers besides the base ErrorCode: not_found (no such repository or link, or
+// the account it uses cannot see it), not_signed_in (the user has to sign in to the source first), refused (the
+// source said no: say why in message), failed (anything else, say why in message). The manager shows the message on
+// one line, clipped.
+const (
+	RepoErrorCodeNotFound    = "not_found"
+	RepoErrorCodeNotSignedIn = "not_signed_in"
+	RepoErrorCodeRefused     = "refused"
+	RepoErrorCodeFailed      = "failed"
+)
+
+// RepoErrorCodes are the values of RepoErrorCode, in order.
+var RepoErrorCodes = []string{"not_found", "not_signed_in", "refused", "failed"}
+
+// RepoParseParams: repo.parse: what repository an address on one of the contribution's hosts names (a web address, an
+// https clone address, ssh://git@host/... or git@host:...). Answer only from the address when it can; the manager
+// asks repo.check before it saves one.
+type RepoParseParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The address as the user or an Agent wrote it (an Agent's may be any page on the contribution's hosts).
+	URL string `json:"url"`
+}
+
+// RepoParseResult: the repository the address names. instance_url is exactly https://<host> or https://<host>:<port>,
+// a lowercase host the contribution claims and nothing after it; the default port is left out
+// (https://code.acme.test, never https://code.acme.test:443, which is refused), path its plain segments without a
+// leading or trailing / (acme/tools), canonical_url exactly instance_url + "/" + path.
+type RepoParseResult struct {
+	InstanceURL  string `json:"instance_url"`
+	Path         string `json:"path"`
+	CanonicalURL string `json:"canonical_url"`
+	// How to clone it when that is not canonical_url: https or ssh on one of the contribution's hosts, no credentials,
+	// query or fragment.
+	CloneURL string `json:"clone_url,omitempty"`
+	// A name for people (Acme Tools): the catalog's default name for it.
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+// RepoCheckParams: repo.check: whether the repository exists and the account the program uses can see it, before the
+// manager saves it. Answered with Empty, or not_found / not_signed_in / refused / failed.
+type RepoCheckParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The repository's canonical_url as repo.parse answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoIdentity: A saved repository of the provider's, as repo.parse answered it.
+type RepoIdentity struct {
+	InstanceURL  string `json:"instance_url"`
+	Path         string `json:"path"`
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoLinkParams: repo.link: one of the repository's issues or pull requests for a to-do, named by an address (url)
+// or by kind and number. The manager asks only for a link it has not stored yet.
+type RepoLinkParams struct {
+	// The repository_providers item's id.
+	Contribution string       `json:"contribution"`
+	Repo         RepoIdentity `json:"repo"`
+	// The link's address as the user or an Agent wrote it; empty when kind and number name it. The hub only checks that
+	// the answer is under repo, so answer the link this address names, or an error when it names none.
+	URL string `json:"url,omitempty"`
+	// With number, when there is no url: the answer must be this kind.
+	Kind string `json:"kind,omitempty"`
+	// With kind: the answer must have this number.
+	Number string `json:"number,omitempty"`
+}
+
+// RepoLinkResult: the link: its kind and number, and its canonical address under the repository's canonical_url
+// (https, no credentials, query or fragment).
+type RepoLinkResult struct {
+	Kind         string `json:"kind"`
+	Number       string `json:"number"`
+	CanonicalURL string `json:"canonical_url"`
+	// Its title when the program knows it; kept on one line.
+	Title string `json:"title,omitempty"`
+}
+
+// RepoDescribeParams: repo.describe (optional): the title and state of a link the manager has stored, by its
+// canonical address.
+type RepoDescribeParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The link's canonical_url as repo.link answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoDescribeResult: what the link is called and where it stands.
+type RepoDescribeResult struct {
+	// Kept on one line.
+	Title string `json:"title"`
+	// Left out when the source has no such word for it.
+	State string `json:"state,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -6010,6 +6364,8 @@ var newDef = map[string]func() any{
 	"TriageTemplateItem":            func() any { return new(TriageTemplateItem) },
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
+	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
+	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
@@ -6023,6 +6379,7 @@ var newDef = map[string]func() any{
 	"AssistantItem":                 func() any { return new(AssistantItem) },
 	"MCPServerItem":                 func() any { return new(MCPServerItem) },
 	"UIItem":                        func() any { return new(UIItem) },
+	"UIGroup":                       func() any { return new(UIGroup) },
 	"AgentSourceItem":               func() any { return new(AgentSourceItem) },
 	"ChannelItem":                   func() any { return new(ChannelItem) },
 	"ChannelCapabilities":           func() any { return new(ChannelCapabilities) },
@@ -6035,6 +6392,8 @@ var newDef = map[string]func() any{
 	"AuthStepParams":                func() any { return new(AuthStepParams) },
 	"AuthField":                     func() any { return new(AuthField) },
 	"AuthPrompt":                    func() any { return new(AuthPrompt) },
+	"SettingsCheckParams":           func() any { return new(SettingsCheckParams) },
+	"SettingsCheckResult":           func() any { return new(SettingsCheckResult) },
 	"InitializeParams":              func() any { return new(InitializeParams) },
 	"ExportedContribution":          func() any { return new(ExportedContribution) },
 	"HubInfo":                       func() any { return new(HubInfo) },
@@ -6088,6 +6447,8 @@ var newDef = map[string]func() any{
 	"RowAction":                     func() any { return new(RowAction) },
 	"Spark":                         func() any { return new(Spark) },
 	"Tile":                          func() any { return new(Tile) },
+	"Gauge":                         func() any { return new(Gauge) },
+	"SectionLink":                   func() any { return new(SectionLink) },
 	"Tabs":                          func() any { return new(Tabs) },
 	"Tab":                           func() any { return new(Tab) },
 	"Fact":                          func() any { return new(Fact) },
@@ -6203,6 +6564,7 @@ var newDef = map[string]func() any{
 	"ConnectorTools":                func() any { return new(ConnectorTools) },
 	"ConnectorCallParams":           func() any { return new(ConnectorCallParams) },
 	"ConnectorCallResult":           func() any { return new(ConnectorCallResult) },
+	"ConnectorToolImage":            func() any { return new(ConnectorToolImage) },
 	"ConnectorAction":               func() any { return new(ConnectorAction) },
 	"ConnectorDescribeResult":       func() any { return new(ConnectorDescribeResult) },
 	"ConnectorDoParams":             func() any { return new(ConnectorDoParams) },
@@ -6345,6 +6707,9 @@ var newDef = map[string]func() any{
 	"ModelCompleteParams":           func() any { return new(ModelCompleteParams) },
 	"ModelUsage":                    func() any { return new(ModelUsage) },
 	"ModelCompleteResult":           func() any { return new(ModelCompleteResult) },
+	"ModelAttempt":                  func() any { return new(ModelAttempt) },
+	"ModelNotOffered":               func() any { return new(ModelNotOffered) },
+	"ModelCandidatesFailed":         func() any { return new(ModelCandidatesFailed) },
 	"ModelPause":                    func() any { return new(ModelPause) },
 	"ModelInvalidOutput":            func() any { return new(ModelInvalidOutput) },
 	"ModelRefusal":                  func() any { return new(ModelRefusal) },
@@ -6402,6 +6767,21 @@ var newDef = map[string]func() any{
 	"UIStreamFailure":               func() any { return new(UIStreamFailure) },
 	"UIStreamServerEnvelope":        func() any { return new(UIStreamServerEnvelope) },
 	"UIPageSnapshot":                func() any { return new(UIPageSnapshot) },
+	"TranscriptionStartParams":      func() any { return new(TranscriptionStartParams) },
+	"TranscriptionStartResult":      func() any { return new(TranscriptionStartResult) },
+	"TranscriptionAudioParams":      func() any { return new(TranscriptionAudioParams) },
+	"TranscriptionJobParams":        func() any { return new(TranscriptionJobParams) },
+	"TranscriptionSegment":          func() any { return new(TranscriptionSegment) },
+	"TranscriptionGap":              func() any { return new(TranscriptionGap) },
+	"TranscriptionFinishResult":     func() any { return new(TranscriptionFinishResult) },
+	"RepoParseParams":               func() any { return new(RepoParseParams) },
+	"RepoParseResult":               func() any { return new(RepoParseResult) },
+	"RepoCheckParams":               func() any { return new(RepoCheckParams) },
+	"RepoIdentity":                  func() any { return new(RepoIdentity) },
+	"RepoLinkParams":                func() any { return new(RepoLinkParams) },
+	"RepoLinkResult":                func() any { return new(RepoLinkResult) },
+	"RepoDescribeParams":            func() any { return new(RepoDescribeParams) },
+	"RepoDescribeResult":            func() any { return new(RepoDescribeResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -6497,4 +6877,12 @@ var Calls = map[string]Call{
 	"storage.blob.finish":            {Name: "storage.blob.finish", From: "program", Params: "StorageBlobMutateParams", Result: "StorageBlobFinishResult"},
 	"storage.blob.delete":            {Name: "storage.blob.delete", From: "program", Params: "StorageBlobMutateParams", Result: "StorageDeleteResult"},
 	"storage.blob.read":              {Name: "storage.blob.read", From: "program", Params: "StorageBlobReadParams", Result: "StorageBlobReadResult"},
+	"transcription.start":            {Name: "transcription.start", From: "program", Params: "TranscriptionStartParams", Result: "TranscriptionStartResult"},
+	"transcription.audio":            {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
+	"transcription.finish":           {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
+	"transcription.cancel":           {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
+	"repo.parse":                     {Name: "repo.parse", From: "hub", Params: "RepoParseParams", Result: "RepoParseResult"},
+	"repo.check":                     {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
+	"repo.link":                      {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
+	"repo.describe":                  {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
 }

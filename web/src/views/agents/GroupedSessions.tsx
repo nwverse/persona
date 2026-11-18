@@ -1,14 +1,17 @@
 // The paged list by group: one folding section for each computer, project, space or account (the sidebar's to-do and
 // state too, #6662), with how many sessions it holds and how many of them need the user on its heading. The first few
-// sections start open on their newest sessions (by to-do every to-do's, "Not on a to-do" folded);
+// sections start open on their newest sessions (by to-do every to-do's, "Not on a to-do" folded; by state Just finished
+// too, #9751);
 // a section reads its own sessions while it is open, a page at a time, and stops when it is folded, so the groups of a
 // long list cost nothing until someone looks into one.
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { shortPath } from "../../lib/format";
-import { filterQuery, PAGE_SIZE, SessionList, type ListFilters } from "../../lib/session-list";
-import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
+import { filterQuery, PAGE_SIZE, SessionList, type ListChangeHint, type ListFilters } from "../../lib/session-list";
 import { onHubEvent } from "../../lib/store";
+import { SectionList } from "../../lib/section-list";
+import { groupMachines, holdsPlace, JUST_FINISHED_KEY, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
+import { onShownHint } from "../../lib/shown-hints";
 import { useFolded } from "../../lib/use-folded";
 import { nestUnderParents } from "../../lib/side-sessions";
 import { Button } from "../../ui/atoms";
@@ -55,7 +58,7 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
   return (
     <div data-session-groups={dimension}>
       {shown.map((group, i) => (
-        <GroupSection key={group.key} group={group} first={i === 0} startsOpen={dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen} dimension={dimension} kind={kind} scope={scope} source={source}
+        <GroupSection key={group.key} group={group} first={i === 0} startsOpen={dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY)} dimension={dimension} kind={kind} scope={scope} source={source}
           renderRow={renderRow} name={groupName(group)} machineName={machineName} several={several} holds={Boolean(open && holdsPlace(group, dimension, open))} foldScope={foldScope} />
       ))}
       {groups.length > shown.length && (
@@ -96,7 +99,7 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
 function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName: (id: string) => string }) {
   if (!group.origin && !group.places.length) return null;
   return (
-    <ul aria-label={t("paged-agents.places")} className="flex flex-col gap-0.5 px-2 pb-1 text-xs text-ink-3">
+    <ul aria-label={t("agents-groupedsessions.places")} className="flex flex-col gap-0.5 px-2 pb-1 text-xs text-ink-3">
       {group.origin && (
         <li className="flex min-w-0 items-center gap-1.5">
           <Icon name="git" size={11} className="shrink-0" />
@@ -122,18 +125,33 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
   group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
 }) {
   const { path, identity, compare, removeIdentity, event, summary, roots, parentOf } = source;
-  // rows only: the section's numbers are the ones its heading already has
-  const list = useMemo(() => new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
-    [path, identity, compare, removeIdentity, summary, roots]);
+  // rows only: the section's numbers are the ones its heading already has. A runtime section passes over the hints that
+  // name none of its rows (#9176): with several open, each read for every agent's update anywhere.
+  const follows = event === "sessions_list";
+  const list = useMemo(() => new (follows ? SectionList : SessionList)<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
+    [path, identity, compare, removeIdentity, summary, roots, follows]);
   // the groups are built again with every read: the list follows what they select, not which object says it
   const selected = filterQuery({ ...scope, ...group.filters }, {});
   const filters = useMemo(() => ({ ...scope, ...group.filters }), [selected]); // eslint-disable-line react-hooks/exhaustive-deps
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   useEffect(() => {
     void list.setFilters(filters).catch(() => {});
-    const off = onHubEvent(event, () => list.invalidate());
-    return () => { off(); list.reset(); };
+    // the hub's message for the hint onShownHint acts on (registered first, so it is the one the hint is for); after a
+    // hidden stretch the last of several, which then does not chain from where the list stands, so the list reads
+    let hint: ListChangeHint | undefined;
+    const offHint = onHubEvent(event, (msg) => { hint = msg; });
+    const off = onShownHint(event, () => list.invalidate(hint));
+    return () => { offHint(); off(); list.reset(); };
   }, [list, filters, event]);
+  // What no hint names, a session joining the section, shows in its heading's numbers (the read that named the groups):
+  // when they change, the section reads. Before its first read is in, that read brings them.
+  const heading = `${group.count}/${group.needs}`;
+  const headingRead = useRef(heading);
+  useEffect(() => {
+    if (headingRead.current === heading) return;
+    headingRead.current = heading;
+    if (list.getSnapshot().loaded) list.invalidate();
+  }, [list, heading]);
   // the newest few first, so several open sections fit a screen; "Load more" shows what is read, then reads on
   const [limit, setLimit] = useState<number>(SESSION_LIST_METRICS.groupPreview);
   const shown = page.rows.length > limit ? page.rows.slice(0, limit) : page.rows;
@@ -148,9 +166,11 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
     {rows.map((row) => <div key={identity(row)} data-session-row="">
       {nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row, dimension, group)}</div> : renderRow(row, dimension, group)}
     </div>)}
-    {page.loading && !page.loaded && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
+    {page.loading && (!page.loaded || page.loadingMore) && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
     {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
-    {(page.rows.length > limit || page.hasMore) && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
+    {/* not hidden by a background refresh (only `loading`): on a busy fleet one is nearly always out, and the button
+        vanished under the pointer (#9215). A click during one queues its page. */}
+    {(page.rows.length > limit || page.hasMore) && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
   </>;
 }

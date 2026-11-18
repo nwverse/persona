@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor @Suite(.serialized) struct ExtensionPageStreamTests {
     final class Socket: LocalSocket {
@@ -67,7 +68,7 @@ import Testing
         #if os(macOS)
         #expect(ExtensionPageStream.uiVersion == 5)
         #else
-        #expect(ExtensionPageStream.uiVersion == 6)
+        #expect(ExtensionPageStream.uiVersion == 8)
         #endif
         #expect(socket.request?["context"]?["ui_version"] == .number("\(ExtensionPageStream.uiVersion)"))
         #expect(context.uiVersion == 3 && ExtensionUIContext.here().uiVersion == 3)

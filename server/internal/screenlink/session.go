@@ -3,6 +3,7 @@ package screenlink
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -34,6 +35,9 @@ type Limits struct {
 	AttachWait time.Duration
 	// Tick: how often the limits are checked.
 	Tick time.Duration
+	// FlowSilence: a UDP flow (#7873) the phone has sent nothing on this long is closed and its video goes on over
+	// the flow's TLS connection. 0: no such rule.
+	FlowSilence time.Duration
 }
 
 // DefaultLimits are the limits a node runs with.
@@ -45,6 +49,7 @@ var DefaultLimits = Limits{
 	VideoBacklog: 200 * time.Millisecond,
 	AttachWait:   3 * time.Second,
 	Tick:         250 * time.Millisecond,
+	FlowSilence:  5 * time.Second,
 }
 
 // maxVideoMessage is the video wire's own bound on one message (ScreenVideoWire.maxMessageBytes).
@@ -71,6 +76,7 @@ type Session struct {
 	logf   func(string, ...any)
 	now    func() time.Time
 	onEnd  func()
+	direct *Direct // the direct routes' listener, for UDP flows; nil: relays only
 
 	mu           sync.Mutex
 	cond         *sync.Cond
@@ -96,12 +102,21 @@ type channel struct {
 	eof       bool   // local ended: a close follows the last byte
 	sentClose bool
 	reset     bool // a reset at base goes out before more data
-	keyWait   bool // video: frames are dropped until a keyframe
-	active    *transport
-	home      *transport // the relay the hub opened for it
-	lostAt    time.Time  // since when no transport carries it; zero while one does
-	progress  time.Time  // when the phone last acknowledged something, or the channel last moved or started sending
-	finished  bool
+	resetOut  bool // a reset handed to the active writer is still waiting for the phone's confirmation
+	resetOff  uint64
+	jumpOff   uint64
+	jumpValid bool // a backlog drop made jumpOff; RFB never has one
+	// While jumpValid && !jumpConfirmed, only a phone-stated offset at or past jumpOff confirms the jump. A transport
+	// change then owes its reset again. jumpData says whether data at or past jumpOff was handed to a TCP or UDP writer;
+	// if so, the old reset may be behind the phone, so the next transport drops again instead of repeating it.
+	jumpConfirmed bool
+	jumpData      bool
+	keyWait       bool // video: frames are dropped until a keyframe
+	active        *transport
+	home          *transport // the relay the hub opened for it
+	lostAt        time.Time  // since when no transport carries it; zero while one does
+	progress      time.Time  // when the phone last acknowledged something, or the channel last moved or started sending
+	finished      bool
 
 	// Phone → node, written to local under umu in order; recv is the next offset expected (written under umu, read
 	// anywhere).
@@ -128,6 +143,16 @@ type transport struct {
 	ctl     [][]byte                      // control messages waiting to go out
 	acks    map[byte]uint64               // acknowledgements waiting to go out, the newest per channel
 	counter func() (retrans, sent uint32) // TCP counters for pongs; nil on a relay
+	tls     *tls.Conn                     // a direct route's connection: UDP flows take their keys from it
+
+	// A UDP flow (#7873): it carries the video channel only, and goes with parent, the direct route it was opened on.
+	flow       *udpFlow
+	parent     *transport
+	resend     []udpResend
+	sentAt     time.Time // when the flow last sent video (fresh or again)
+	probes     int       // tail probes since then
+	probeTimer *time.Timer
+	armedDue   time.Time // when probeTimer wakes the flow's sender
 }
 
 // Registry is the node's sessions by pair.
@@ -175,12 +200,14 @@ func (r *Registry) Open(pair string, rfb io.ReadWriteCloser) (*Session, io.ReadW
 	if old := r.Get(pair); old != nil {
 		old.End()
 	}
-	s := &Session{pair: pair, token: newToken(), limits: r.limits, logf: r.logf, now: time.Now,
+	r.mu.Lock()
+	direct := r.direct
+	r.mu.Unlock()
+	s := &Session{pair: pair, token: newToken(), limits: r.limits, logf: r.logf, now: time.Now, direct: direct,
 		chans: map[byte]*channel{}, ts: map[*transport]bool{}, done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	r.mu.Lock()
 	r.byPair[pair] = s
-	direct := r.direct
 	r.mu.Unlock()
 	s.onEnd = func() {
 		r.mu.Lock()
@@ -189,6 +216,7 @@ func (r *Registry) Open(pair string, rfb io.ReadWriteCloser) (*Session, io.ReadW
 		}
 		r.mu.Unlock()
 		if direct != nil {
+			direct.dropFlows(func(f *udpFlow) bool { return f.s == s })
 			direct.leave(s)
 		}
 	}
@@ -292,7 +320,7 @@ func (s *Session) setPaths(p Paths) {
 	t := s.chans[RFB].active
 	if t == nil || t.dead || t.pending {
 		for c := range s.ts {
-			if !c.dead && !c.pending {
+			if !c.dead && !c.pending && c.flow == nil {
 				t = c
 				break
 			}
@@ -311,7 +339,7 @@ func (s *Session) addDirect(conn net.Conn, r *reader, counter func() (uint32, ui
 	s.mu.Lock()
 	n := 0
 	for t := range s.ts {
-		if !t.relay && !t.dead {
+		if !t.relay && !t.dead && t.flow == nil {
 			n++
 		}
 	}
@@ -320,6 +348,7 @@ func (s *Session) addDirect(conn net.Conn, r *reader, counter func() (uint32, ui
 		return false
 	}
 	t := &transport{conn: conn, acks: map[byte]uint64{}, counter: counter}
+	t.tls, _ = conn.(*tls.Conn)
 	t.ctl = append(t.ctl, frame(TypeAttached))
 	s.ts[t] = true
 	s.cond.Broadcast()
@@ -527,25 +556,62 @@ func (s *Session) nextLocked(t *transport) []byte {
 		}
 		if ch.reset {
 			ch.reset = false
+			ch.resetOut, ch.resetOff = true, ch.base
+			if ch.sent == ch.base {
+				ch.progress = s.now() // an outstanding reset starts the stall clock just like the first byte
+			}
 			return frame(TypeReset, chanOffset(id, ch.base))
 		}
 		end := ch.base + uint64(len(ch.buf))
 		if ch.sent < end {
-			if ch.sent == ch.base {
+			if ch.sent == ch.base && !ch.resetOut {
 				ch.progress = s.now() // the first byte the phone hasn't acknowledged goes out: the stall clock starts
 			}
 			from := ch.sent - ch.base
 			to := min(from+dataChunk, uint64(len(ch.buf)))
-			out := frame(TypeData, chanOffset(id, ch.sent), ch.buf[from:to])
+			off := ch.sent
+			out := frame(TypeData, chanOffset(id, off), ch.buf[from:to])
 			ch.sent = ch.base + to
+			s.noteJumpDataLocked(ch, off)
 			return out
 		}
-		if ch.eof && !ch.sentClose {
+		if ch.eof && !ch.sentClose && (!ch.jumpValid || ch.jumpConfirmed) {
+			// The phone's reset handler does not re-check an earlier close, so close follows confirmation of a final jump.
 			ch.sentClose = true
 			return frame(TypeClose, chanOffset(id, end))
 		}
 	}
 	return nil
+}
+
+// confirmJumpLocked records the phone's own offset, never a successful write or an offset the node chose for a move.
+// A pending reset at the confirmed jump is no longer owed.
+func (s *Session) confirmJumpLocked(ch *channel, off uint64) {
+	if ch.resetOut && off >= ch.resetOff {
+		ch.resetOut = false
+	}
+	if ch.jumpValid && !ch.jumpConfirmed && off >= ch.jumpOff {
+		ch.jumpConfirmed = true
+		ch.reset = false
+		s.cond.Broadcast() // a final close may have been waiting for this confirmation
+	}
+}
+
+// noteJumpDataLocked records handing post-jump data to a writer, whether or not that writer later delivers it.
+func (s *Session) noteJumpDataLocked(ch *channel, off uint64) {
+	if ch.jumpValid && !ch.jumpConfirmed && off >= ch.jumpOff {
+		ch.jumpData = true
+	}
+}
+
+// phoneAckedLocked applies an acknowledgement and its confirmation of a jump. ackedLocked alone is also used with
+// the node's own base during automatic fallback, which confirms nothing.
+func (s *Session) phoneAckedLocked(ch *channel, off uint64) bool {
+	if !s.ackedLocked(ch, off) {
+		return false
+	}
+	s.confirmJumpLocked(ch, off)
+	return true
 }
 
 // ackedLocked drops what the phone has through off.
@@ -596,11 +662,33 @@ func (s *Session) moveLocked(ch *channel, t *transport, off uint64) bool {
 		return true // the same route: what it has in flight still arrives
 	}
 	ch.sent, ch.progress = ch.base, s.now()
-	if ch.video() && len(ch.buf) > 0 && s.ageLocked(ch) > s.limits.VideoBacklog {
+	ch.resetOut = false // the new route owes an unconfirmed reset itself; the old writer no longer holds one
+	// An old backlog drops first, as on main. Its end is a safe new jump in either unconfirmed case: the phone's reset
+	// only moves forward and clears a half message.
+	switch {
+	case ch.video() && len(ch.buf) > 0 && s.ageLocked(ch) > s.limits.VideoBacklog:
 		s.dropBacklogLocked(ch)
+	case ch.jumpValid && !ch.jumpConfirmed && ch.jumpData:
+		// The phone may have received data past the old jump, even in the middle of a message. A reset at the old
+		// offset is no longer safe: jump to the end of everything handed out and start at a new keyframe. Keep
+		// non-frame messages (format, encoding, …): a keyframe request does not make the helper repeat them.
+		s.dropFramesLocked(ch, "video moved with an unconfirmed reset")
+	case ch.jumpValid && !ch.jumpConfirmed:
+		// The backlog is young and no post-jump data was handed out, so the same reset remains safe.
+		ch.reset = true
 	}
 	s.cond.Broadcast()
 	return true
+}
+
+// movePhoneLocked is a move whose offset came from the phone (a TCP or UDP use). Automatic fallback calls moveLocked
+// directly with the node's base instead; that offset is not delivery evidence.
+func (s *Session) movePhoneLocked(ch *channel, t *transport, off uint64) bool {
+	if !s.ackedLocked(ch, off) {
+		return false
+	}
+	s.confirmJumpLocked(ch, off)
+	return s.moveLocked(ch, t, off)
 }
 
 // dropBacklogLocked drops the video channel's unacknowledged messages, tells the phone where the stream goes on, and
@@ -611,6 +699,9 @@ func (s *Session) dropBacklogLocked(ch *channel) {
 	ch.sent = ch.base
 	ch.buf, ch.marks = nil, nil
 	ch.reset, ch.keyWait = true, true
+	ch.resetOut = false  // this is a new jump; its reset has not been handed out yet
+	ch.sentClose = false // a new jump invalidates an earlier close, so sentClose implies no unconfirmed jump
+	ch.jumpOff, ch.jumpValid, ch.jumpConfirmed, ch.jumpData = ch.base, true, false, false
 	s.logf("screenlink: video moved with a %d-byte backlog: dropped for a keyframe", dropped)
 	go ch.upstream.inject(ch, keyframeRequest)
 }
@@ -654,7 +745,7 @@ func (s *Session) handle(t *transport, typ byte, body []byte) bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if ch := s.chans[id]; ch != nil && !ch.finished {
-			return s.ackedLocked(ch, off)
+			return s.phoneAckedLocked(ch, off)
 		}
 		return true
 	case TypePing:
@@ -682,7 +773,7 @@ func (s *Session) handle(t *transport, typ byte, body []byte) bool {
 			if ch == nil || ch.finished {
 				continue
 			}
-			if !s.moveLocked(ch, t, off) {
+			if !s.movePhoneLocked(ch, t, off) {
 				s.mu.Unlock()
 				return false
 			}
@@ -698,6 +789,9 @@ func (s *Session) handle(t *transport, typ byte, body []byte) bool {
 			return false
 		}
 		s.peerClose(id, off)
+		return true
+	case TypeUDPOpen:
+		s.udpOpen(t)
 		return true
 	}
 	return true // a type this node doesn't know: skipped, as on the video wire
@@ -810,6 +904,12 @@ func (s *Session) lose(t *transport) {
 	t.dead = true
 	delete(s.ts, t)
 	now := s.now()
+	var flows []*transport
+	for c := range s.ts {
+		if c.parent == t {
+			flows = append(flows, c) // a UDP flow goes with the route it was opened on
+		}
+	}
 	for _, ch := range s.chans {
 		if ch.home == t {
 			ch.home = nil
@@ -817,7 +917,9 @@ func (s *Session) lose(t *transport) {
 		if ch.active != t || ch.finished {
 			continue
 		}
-		if alt := s.fallbackLocked(ch); alt != nil {
+		if p := t.parent; p != nil && !p.dead && !p.pending {
+			s.moveLocked(ch, p, ch.base) // off a UDP flow: onto its own TLS route first
+		} else if alt := s.fallbackLocked(ch); alt != nil {
 			s.moveLocked(ch, alt, ch.base)
 		} else {
 			ch.active, ch.lostAt = nil, now
@@ -832,6 +934,12 @@ func (s *Session) lose(t *transport) {
 	if conn != nil {
 		_ = conn.Close()
 	}
+	for _, c := range flows {
+		s.lose(c)
+	}
+	if t.tls != nil && s.direct != nil {
+		s.direct.dropFlows(func(f *udpFlow) bool { return f.parent == t }) // flows the phone never proved an address for
+	}
 }
 
 func (s *Session) fallbackLocked(ch *channel) *transport {
@@ -839,7 +947,7 @@ func (s *Session) fallbackLocked(ch *channel) *transport {
 		return ch.home
 	}
 	for t := range s.ts {
-		if !t.dead && !t.pending {
+		if !t.dead && !t.pending && t.flow == nil { // a UDP flow carries video only, and only when the phone asks
 			return t
 		}
 	}
@@ -893,17 +1001,24 @@ func (s *Session) watch() {
 			if ch.active == nil && !ch.lostAt.IsZero() && now.Sub(ch.lostAt) >= s.limits.Grace {
 				expired = append(expired, ch)
 			}
-			// The phone has had bytes this long without acknowledging them: the route carrying them is stuck.
-			if ch.active != nil && ch.sent > ch.base && now.Sub(ch.progress) >= s.limits.StallAfter {
+			// Bytes or a reset handed to this route remain outstanding until the phone acknowledges them.
+			if ch.active != nil && (ch.sent > ch.base || ch.resetOut) && now.Sub(ch.progress) >= s.limits.StallAfter {
 				stuck = append(stuck, ch.active)
 			}
-			// The local end finished and the phone has everything: the channel is done.
+			// The local end finished and the phone has everything.
 			if ch.eof && ch.sentClose && len(ch.buf) == 0 {
 				expired = append(expired, ch)
 			}
 		}
 		if !s.noRelaySince.IsZero() && now.Sub(s.noRelaySince) >= s.limits.Grace {
 			end = true
+		}
+		if s.limits.FlowSilence > 0 {
+			for t := range s.ts {
+				if t.flow != nil && !t.dead && t.flow.heardSince() >= s.limits.FlowSilence {
+					stuck = append(stuck, t)
+				}
+			}
 		}
 		s.mu.Unlock()
 		for _, t := range stuck {

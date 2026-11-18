@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -49,6 +48,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.model.markdownAnimations
 import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
+import com.mikepenz.markdown.model.State as MarkdownResult
 import persona.core.contracts.Item
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatRepository
@@ -139,12 +139,15 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     val type = PersonaTheme.type
     val outer = LocalUriHandler.current
     val uriHandler = remember(outer, open) { if (open == null) outer else PathLinks.handler(outer, open) }
-    // Inline code a tap copies, in the body's color on its well; inside a path's link it stays the link's (#2984).
+    // Linked code opens its target; elsewhere a tap copies the code.
     val copy = rememberCopy()
-    val codeSpan = inlineCodeStyle(color)
+    val codeInk = if (color == palette.ink) palette.replyCodeInk else Color.Unspecified
     // …except in a message whose words "Select" has selected in place: a tap there is the selection's (#4210).
     val selecting = LocalSelectionAbove.current
-    val annotator = remember(codeSpan, copy, selecting) { copyingCode(codeSpan, if (selecting) null else { words: String -> copy(words, null) }) }
+    val root = (parsed as? MarkdownResult.Success)?.node
+    val annotator = remember(root, codeInk, copy, selecting) {
+        copyingCode(root, codeInk, if (selecting) null else { words: String -> copy(words, null) })
+    }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         if (parsed == null) ChatLinkText(text, Modifier.fillMaxWidth(), bodyStyle.copy(color = color))
         else Markdown(parsed!!, modifier = Modifier.fillMaxWidth(), imageTransformer = rememberMathImages(color, bodyStyle),
@@ -155,7 +158,7 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
             dimens = markdownDimens(blockQuoteThickness = Dp(0f)), // none (a hairline still draws a pixel)
             padding = markdownPadding(blockQuote = PaddingValues(start = Tokens.Space.m), blockQuoteBar = PaddingValues.Absolute()),
             colors = markdownColor(text = color, codeBackground = palette.sunken,
-                inlineCodeBackground = palette.sunken, dividerColor = palette.line,
+                inlineCodeBackground = palette.sunken.copy(alpha = 0f), dividerColor = palette.line,
                 tableBackground = palette.surface, darkTheme = palette.dark,
                 highlightText = palette.ink, highlightBackground = palette.marker),
             typography = markdownTypography(h1 = type.largeTitle, h2 = type.title, h3 = type.headline,
@@ -166,11 +169,13 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
             components = markdownComponents(
                 orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
+                table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
+                    enabled = !LocalInPicture.current) },
                 codeFence = { model ->
                     MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
                         // A card fence the hub's rules do not take as standalone (in a list or a quote): an example, drawn as
@@ -345,6 +350,9 @@ internal fun ChatLineContent(
                 // only the block goes; a reply that said nothing else is not drawn at all
                 if (!hideCloseout || !onlyCloseout(textUpdates[it.id]?.text ?: it.text, cut = it.fullSize != null)) {
                     MessageContent(it, false, textUpdates[it.id], boxed = true, hideCloseout = hideCloseout)
+                    val usage = LocalReplyUsage.current[it.id]
+                    // A reply still streaming has no total yet (the web hides the bar while the turn is live).
+                    if (usage != null && textUpdates[it.id]?.streaming != true) ReplyUsageFooter(it, usage)
                 }
             }
             "thinking" -> if (!style.hidesThoughts()) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
@@ -453,6 +461,9 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 return
             }
             var open by remember(call.id) { mutableStateOf(false) }
+            // Tool details fade in place (ToolViews.swift:564, ChatPin.swift:707-726). TodoWrite does not: it is the plan bar.
+            val detailEdge = rememberOpenEdge(call.id)
+            val detailRevealing = detailEdge.revealing(open)
             val diff = remember(call.use.item) { toolDiff(call.use.item) }
             val todos = remember(call.use.item) { todoEntries(call.use.item) }
             val searchItem = LocalChatSearchItem.current
@@ -488,7 +499,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                         style = PersonaTheme.type.caption)
                 }
                 // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
-                if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
+                if (open) Column(Modifier.unfolding(detailRevealing).fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     // A tool that operates a Mac says its steps in words on Glass, its output and picture with them (iOS ComputerToolDetail).
                     val computer = PersonaTheme.style == AppStyle.Glass && persona.core.domain.ComputerSteps.isComputerTool(call.name)

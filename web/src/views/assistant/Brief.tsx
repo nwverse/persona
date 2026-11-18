@@ -66,7 +66,7 @@ function WaitingRow({ row }: { row: BriefRow }) {
 }
 
 /** What the Accept button of a task says: it asked, the hub took it, or the round is already over. */
-type Accepting = "idle" | "busy" | "finishing" | "finished" | "accepted" | "handled";
+type Accepting = "idle" | "busy" | "finishing" | "finished" | "accepted" | "recorded" | "handled";
 
 /** What the button of a row to verify says: Accept a deployed task, Got it a conclusion, Take recommendation a decision. */
 function acceptLabel(row: BriefRow): { label: string; title: string } {
@@ -84,7 +84,7 @@ export function AcceptRow({ row, stacked = false, admission, onBusyChange, block
   // the primary button (and the settled word) on its own full-width line while the row is narrow
   const full = stacked ? "w-full" : "@max-md:w-full";
   const deciding = row.outcome === "decide";
-  const settled = state === "accepted" || state === "handled" || state === "finished";
+  const settled = state === "accepted" || state === "recorded" || state === "handled" || state === "finished";
   // A decision with nothing recommended can still be finished, but has nothing to take.
   const takes = !deciding || !!row.recommend;
   const accept = () => {
@@ -128,17 +128,19 @@ export function AcceptRow({ row, stacked = false, admission, onBusyChange, block
     <div className="@container" data-brief-row="accept">
     {/* Narrow (the tray, a phone's chat column; `stacked` always): the words take the whole width, the secondary buttons
         one row under them and the primary its own full-width line, so the words are never a four-letter column (#5569). */}
-    <div className={cx("flex items-center gap-3 py-1.5", stacked ? "flex-wrap gap-y-2" : "@max-md:flex-wrap @max-md:gap-y-2")}>
-      <div className={cx("min-w-0", stacked ? "w-full" : "flex-1 @max-md:w-full @max-md:flex-none")}>
-        {!hideTitle && <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>}
+    <div className={cx("flex items-center", stacked ? "flex-wrap gap-x-2 gap-y-3 py-0.5" : "gap-3 py-1.5 @max-md:flex-wrap @max-md:gap-y-2")}>
+      {/* stacked, top to bottom: the task, what is asked, what is recommended, how long it has waited; the buttons
+          follow after a larger gap, so the words and the actions read as two groups */}
+      <div className={cx("min-w-0", stacked ? "flex w-full flex-col gap-1.5" : "flex-1 @max-md:w-full @max-md:flex-none")}>
+        {!hideTitle && <div className={cx("font-medium [overflow-wrap:anywhere]", stacked ? "text-sm font-semibold" : "text-[13.5px]")}>{row.title}</div>}
         {row.verdict && (
-          <div className="text-[12.5px] [overflow-wrap:anywhere]" data-brief-verdict={row.outcome ?? "deployed"}>
+          <div className={cx("[overflow-wrap:anywhere]", stacked ? "text-sm leading-relaxed" : "text-[12.5px]")} data-brief-verdict={row.outcome ?? "deployed"}>
             {row.verdict}
           </div>
         )}
         {row.detail && <div className="text-label text-ink-2 [overflow-wrap:anywhere]">{row.detail}</div>}
-        {row.recommend && <div className="text-label text-ink-2 [overflow-wrap:anywhere]">{t("assistant-brief.recommend", { option: row.recommend })}</div>}
-        <div className="text-label text-ink-2">{meta(row)}</div>
+        {row.recommend && <div className="text-label text-ink-2 [overflow-wrap:anywhere]" data-brief-recommend>{t("assistant-brief.recommend", { option: row.recommend })}</div>}
+        <div className={cx("text-label", stacked ? "text-ink-3" : "text-ink-2")} data-brief-meta>{meta(row)}</div>
       </div>
       <Button title={t("assistant-brief.open_row", { title: row.title })} onClick={() => openTask(row.id)}>
         {t("assistant-brief.open")}
@@ -152,7 +154,7 @@ export function AcceptRow({ row, stacked = false, admission, onBusyChange, block
       {!settled && secondary}
       {settled ? (
         <span className={cx("shrink-0 text-[12.5px] text-ink-2", full)} data-brief-accepted={state}>
-          {t(state === "finished" ? "assistant-brief.finished" : state === "handled" ? "assistant-brief.handled" : deciding ? "assistant-brief.taken" : row.outcome ? "assistant-brief.noted" : "assistant-brief.accepted")}
+          {t(state === "finished" ? "assistant-brief.finished" : state === "handled" ? "assistant-brief.handled" : state === "recorded" ? "assistant-brief.recorded_not_delivered" : deciding ? "assistant-brief.taken" : row.outcome ? "assistant-brief.noted" : "assistant-brief.accepted")}
         </span>
       ) : takes ? (
         <Button tone="primary" className={full} busy={state === "busy"} disabled={blocked || !row.asked_at || state === "finishing"} title={button.title} onClick={accept}>

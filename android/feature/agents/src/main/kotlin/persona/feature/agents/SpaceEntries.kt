@@ -69,7 +69,8 @@ private fun SpaceDestination(route: SpaceRoute, navigator: Navigator, dependenci
         val model = viewModel(key = "space:${wiring.scope}:${operations?.operations?.scope.orEmpty()}") {
             AgentsViewModel(dependencies.sessions(), dependencies.interactions(), dependencies.connection(), dependencies.sender(),
                 dependencies.preferences(), operations, wiring.mainSender, scope, renamer, hubGroups = dependencies.groups(),
-                listContext = kotlinx.coroutines.Dispatchers.Default)
+                listContext = kotlinx.coroutines.Dispatchers.Default, listAdapter = dependencies.listAdapter(),
+                visibleChat = dependencies.visibleChat(), heldChat = dependencies.heldChat())
         }
         val creationService = LocalAgentCreationService.current
         val starPrompt = persona.core.designsystem.LocalStarPrompt.current
@@ -174,7 +175,8 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
     confirmRead?.let { rows -> MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) } }
     if (newAgent) {
         if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online,
-            onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) }) { newAgent = false }
+            onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) },
+            onOpenProvider = { navigator.navigate(persona.core.navigation.ModelProviderRoute(it)) }) { newAgent = false }
         else JDialog(onDismiss = { newAgent = false }, title = stringResource(R.string.agents_action_new_session),
             text = stringResource(R.string.agents_new_session_unavailable), confirm = stringResource(R.string.agents_close) to { newAgent = false }, dismiss = null)
     }

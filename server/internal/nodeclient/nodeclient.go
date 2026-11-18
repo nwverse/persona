@@ -50,7 +50,10 @@ var ErrNoNode = errors.New("no persona node")
 
 // Request is one line a client sends on the node socket; the node answers with one line.
 type Request struct {
-	Kind      string          `json:"kind"`
+	Kind string `json:"kind"`
+	// Locale is an optional display language for reports such as kind=preflight. Older nodes ignore it; absent keeps
+	// their legacy zh-Hans wording. Machine protocol fields never use it.
+	Locale    string          `json:"locale,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	Pane      string          `json:"pane,omitempty"`
 	Name      string          `json:"name,omitempty"`
@@ -60,6 +63,9 @@ type Request struct {
 	CodexThreadID string `json:"codex_thread_id,omitempty"`
 	Assistant     bool   `json:"assistant,omitempty"` // the caller is the assistant's MCP server
 	Guest         bool   `json:"guest,omitempty"`     // a guest conversation's MCP server (assistant_guest.go)
+	// ToolSet: mcp.tools of a process started with a narrower tool set (PERSONA_TOOL_SET: "supervise", a background
+	// supervisor's round, node/assistant_round.go); "" the whole list.
+	ToolSet string `json:"tool_set,omitempty"`
 	// WaitUpdates explicitly opts this MCP call into interim {"wait_kind":...} lines before its final response.
 	// Older clients omit it and keep the single-response protocol.
 	WaitUpdates bool `json:"wait_updates,omitempty"`

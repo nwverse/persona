@@ -39,6 +39,7 @@ import persona.core.contracts.draftPlaceholder
 import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
+import persona.core.contracts.api.PhoneQuickResults
 import persona.core.contracts.api.RequestManager
 import persona.core.contracts.api.hubCodedFailure
 import persona.core.contracts.api.TasksApi
@@ -97,7 +98,13 @@ class TasksStore(
     private val scope: CoroutineScope,
     private val cache: TodoCache? = null,
     private val clock: Clock = Clock.systemDefaultZone(),
+    /** The phone's own delete for Undo on a calendar quick result; null: the cards offer no Undo. */
+    private val quickResults: PhoneQuickResults? = null,
 ) : TodoDecisionsSource {
+    /** Created calendar event id → its Undo state, for as long as this store lives (iOS `TasksStore.undone`). */
+    private val _quickResultUndos = MutableStateFlow<Map<Long, QuickResultUndo>>(emptyMap())
+    val quickResultUndos: StateFlow<Map<Long, QuickResultUndo>> = _quickResultUndos.asStateFlow()
+    private val quickResultLock = Any()
     private val _todos = MutableStateFlow<List<Todo>>(emptyList())
     val todos: StateFlow<List<Todo>> = _todos.asStateFlow()
     /** The connected hub's declared capabilities; seen controls are absent without `todo_seen`. */
@@ -114,6 +121,42 @@ class TasksStore(
     private val agentLookup = TaskAgentLookup(api, scope)
     val agentSessions = agentLookup.sessions
     val agentLookupFailures = agentLookup.failures
+
+    /**
+     * Undo is offered for what this phone can take back: its own calendar events. A reminder is not one (Android has no
+     * reminders store, so `phone_reminders_create` runs on an iPhone), and neither is a card whose result named no event.
+     */
+    fun canUndoQuickResult(result: QuickResult): Boolean = quickResults != null && !result.reminder && result.itemId != null
+
+    fun quickResultUndo(result: QuickResult): QuickResultUndo =
+        result.itemId?.let { _quickResultUndos.value[it] } ?: QuickResultUndo.Added
+
+    /**
+     * Undo on a quick result (iOS `TasksStore.undo(_:)`): the event comes off the phone, with no second permission prompt
+     * because the user is undoing the assistant's own write. The card turns Undone as soon as the local delete returned;
+     * on failure it stays Added and this is false, so the chat can say so.
+     */
+    suspend fun undoQuickResult(result: QuickResult): Boolean {
+        if (!canUndoQuickResult(result)) return false
+        val id = result.itemId ?: return false
+        val remove = quickResults ?: return false
+        // One delete per card: a second tap while it runs, or after it, changes nothing.
+        synchronized(quickResultLock) {
+            if ((_quickResultUndos.value[id] ?: QuickResultUndo.Added) != QuickResultUndo.Added) return false
+            _quickResultUndos.update { it + (id to QuickResultUndo.Undoing) }
+        }
+        try {
+            remove.removeCalendarEvent(id)
+        } catch (cancelled: CancellationException) {
+            _quickResultUndos.update { it - id }
+            throw cancelled
+        } catch (_: Exception) {
+            _quickResultUndos.update { it - id }
+            return false
+        }
+        _quickResultUndos.update { it + (id to QuickResultUndo.Undone) }
+        return true
+    }
 
     /** Called by the visible conversation; exact lookups never change the Agents list window. */
     fun watchAgents(keys: Set<persona.core.contracts.SessionKey>) = agentLookup.watch(keys)
@@ -157,6 +200,16 @@ class TasksStore(
     val cards = AssistantViewStore()
     val cardActions = AssistantCardActions(api, cards, reload = { load(it, whole = true) })
 
+    private val _lnModeEnabled = MutableStateFlow(false)
+    val lnModeEnabled: StateFlow<Boolean> = _lnModeEnabled.asStateFlow()
+    private val _heldPushes = MutableStateFlow(HeldPushGroups())
+    val heldPushes: StateFlow<HeldPushGroups> = _heldPushes.asStateFlow()
+    private val _heldPushesLoading = MutableStateFlow(false)
+    val heldPushesLoading: StateFlow<Boolean> = _heldPushesLoading.asStateFlow()
+    private val _heldPushesFailed = MutableStateFlow(false)
+    val heldPushesFailed: StateFlow<Boolean> = _heldPushesFailed.asStateFlow()
+    private val heldPushesRevision = java.util.concurrent.atomic.AtomicLong(0L)
+
     init {
         if (cache != null) scope.launch(start = CoroutineStart.UNDISPATCHED) {
             val cached = try { cache.read() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
@@ -179,7 +232,52 @@ class TasksStore(
             }
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            connection.state.collect { if (it == ConnectionState.Online) { reloadTodos(); agentLookup.refresh(); loaded.value.forEach(::load) } }
+            connection.state.collect {
+                if (it == ConnectionState.Online) {
+                    reloadTodos()
+                    agentLookup.refresh()
+                    loaded.value.forEach(::load)
+                    refreshPushIntercepts()
+                } else {
+                    heldPushesRevision.incrementAndGet()
+                    _heldPushesLoading.value = false
+                }
+            }
+        }
+    }
+
+    /** Refresh only while the main Assistant page is visible or a hub reconnects; older responses cannot land late. */
+    fun refreshPushIntercepts() {
+        scope.launch {
+            val ticket = heldPushesRevision.incrementAndGet()
+            _heldPushesLoading.value = true
+            try {
+                val mode = api.lnMode()
+                if (ticket != heldPushesRevision.get()) return@launch
+                _lnModeEnabled.value = mode.enabled
+                if (!mode.enabled) {
+                    _heldPushes.value = HeldPushGroups()
+                    _heldPushesFailed.value = false
+                    return@launch
+                }
+                val response = api.pushIntercepts()
+                if (ticket != heldPushesRevision.get()) return@launch
+                val groups = heldPushGroups(response.intercepts, clock)
+                if (groups != _heldPushes.value) _heldPushes.value = groups
+                _heldPushesFailed.value = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (ticket != heldPushesRevision.get()) return@launch
+                _heldPushesFailed.value = true
+                val status = error::class.java.methods.firstOrNull { it.name == "getStatus" }?.invoke(error) as? Int
+                if (status == 404 || error.message?.contains("404") == true) {
+                    _lnModeEnabled.value = false
+                    _heldPushes.value = HeldPushGroups()
+                }
+            } finally {
+                if (ticket == heldPushesRevision.get()) _heldPushesLoading.value = false
+            }
         }
     }
 
@@ -202,7 +300,10 @@ class TasksStore(
                         }
                         finishedTasks.keys.retainAll(shown.map { it.id }.toSet())
                         answered = shown
-                        if (shown != _todos.value) _todos.value = shown
+                        // The list first, then the flag, in this block: a card must not see "the list is in" while it
+                        // still holds the previous one and call a just-dispatched task gone (#5110).
+                        _todos.value = shown
+                        todosReady.value = true
                     }
                     dropStaleRoutes()
                     remember()
@@ -212,7 +313,11 @@ class TasksStore(
                     val status = error::class.java.methods.firstOrNull { it.name == "getStatus" }?.invoke(error) as? Int
                     if (status == 404 || error.message?.contains("404") == true) {
                         _todosSupported.value = false
-                        synchronized(todosLock) { answered = emptyList(); _todos.value = emptyList() }
+                        synchronized(todosLock) {
+                            answered = emptyList()
+                            _todos.value = emptyList()
+                            todosReady.value = true
+                        }
                         remember()
                     }
                     // Failed reads retain the last confirmed binding; a reconnect or open retries the read.
@@ -337,6 +442,12 @@ class TasksStore(
         reloadTodos()
     }
 
+    /**
+     * A read of the to-dos has answered: until then a missing to-do is still on its way, not gone (#5110).
+     * A hub switch builds a new [TasksStore] (`AppServices`), so this starts false again with that hub.
+     */
+    val todosReady = MutableStateFlow(false)
+
     /** A read of the to-dos has answered: until then nothing tells whether the hub knows projects. */
     @Volatile private var todosLoaded = false
     /** The hub answered "Attach to to-do" with its router's 404: it has no such route (iOS TodosLogic.isLegacySpacesRoute). */
@@ -458,7 +569,7 @@ class TasksStore(
 
     /** What [conversation]'s dock shows after its tasks (iOS `DockAgent.shown`); see [dockAgents]. */
     fun agentsOf(conversation: String, sessions: List<Session>): List<Session> =
-        dockAgents(conversation, mainConversation.value, sessions, _todos.value)
+        dockAgents(conversation, mainConversation.value, sessions, _todos.value, "sessions_hierarchy" in features?.value.orEmpty())
 
     /**
      * The hub counts the day in the assistant's time zone, which need not be the phone's (#5194): the card is asked
@@ -719,7 +830,7 @@ class TasksStore(
     fun finishTaskNow(todo: Todo, onError: (Throwable) -> Unit, onChanged: () -> Unit) {
         val ask = todo.ask?.takeIf { it.outcome == "decide" } ?: return
         if (todo.isDone || todo.cancelledAt != null) return
-        finishDecision(todo.id, ask.askedAt, expectedAsk = ask, manager = null, onError = onError, onChanged = onChanged)
+        finishDecision(todo.id, ask.askedAt, expectedAsk = ask, manager = todo.manager, onError = onError, onChanged = onChanged)
     }
 
     /** Both direct-completion entries share the current-round fence and the confirmed local merge. */

@@ -4,9 +4,11 @@
 set -euo pipefail
 
 WORKSPACE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+CARGO_OUTPUT=${CARGO_TARGET_DIR:-$WORKSPACE/target}
 OUTPUT=${1:-"$WORKSPACE/build/android"}
 SYMBOLS=${2:-"$WORKSPACE/build/android-symbols"}
 REPORTS=${3:-"$WORKSPACE/build/android-reports"}
+CARGO_FEATURES=${PERSONA_ANDROID_CARGO_FEATURES:-}
 [[ $OUTPUT != "$SYMBOLS" && $OUTPUT != "$REPORTS" && $SYMBOLS != "$REPORTS" ]] || {
   printf 'Android core build: FAILED (jni, symbols and reports need distinct output roots)\n' >&2; exit 2;
 }
@@ -31,8 +33,14 @@ for target in aarch64-linux-android x86_64-linux-android; do
   rustup target list --installed --toolchain 1.98.0 | grep -Fx "$target" >/dev/null ||
     rustup target add --toolchain 1.98.0 "$target"
 done
-LLVM=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-[[ -d $LLVM ]] || { printf 'Android core build: FAILED (this script currently supports an x86_64 Linux NDK host)\n' >&2; exit 2; }
+HOST_OS=$(uname -s)
+case "$HOST_OS" in
+  Linux) NDK_HOST=linux-x86_64 ;;
+  Darwin) NDK_HOST=darwin-x86_64 ;;
+  *) printf 'Android core build: FAILED (unsupported NDK host OS %s)\n' "$HOST_OS" >&2; exit 2 ;;
+esac
+LLVM=$NDK/toolchains/llvm/prebuilt/$NDK_HOST
+[[ -d $LLVM ]] || { printf 'Android core build: FAILED (NDK %s lacks the %s host tools)\n' "$NDK_VERSION" "$NDK_HOST" >&2; exit 2; }
 READELF=$LLVM/bin/llvm-readelf
 STRIP=$LLVM/bin/llvm-strip
 [[ -x $READELF && -x $STRIP ]] || { printf 'Android core build: FAILED (NDK LLVM tools are missing)\n' >&2; exit 2; }
@@ -67,8 +75,8 @@ for pair in 'arm64-v8a:aarch64-linux-android' 'x86_64:x86_64-linux-android'; do
   abi=${pair%%:*}
   target=${pair#*:}
   printf 'Android core build: building %s (%s)\n' "$abi" "$target"
-  (cd "$WORKSPACE" && cargo +1.98.0 build --locked --release --target "$target" -p persona-core-ffi)
-  raw=$WORKSPACE/target/$target/release/libpersona_core.so
+  (cd "$WORKSPACE" && cargo +1.98.0 build --locked --release --target "$target" -p persona-core-ffi ${CARGO_FEATURES:+--features "$CARGO_FEATURES"})
+  raw=$CARGO_OUTPUT/$target/release/libpersona_core.so
   destination=$OUTPUT/$abi
   mkdir -p "$destination" "$SYMBOLS/$abi" "$REPORTS"
   cp "$raw" "$SYMBOLS/$abi/libpersona_core.so"

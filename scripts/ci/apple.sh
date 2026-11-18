@@ -66,6 +66,9 @@ PY
 }
 trap cleanup EXIT
 printf 'apple-ci: output %s; SwiftPM cache %s\n' "$OUTPUT" "$SPM"
+# No source imports CallKit and no build setting links it, before anything is built (#9290, docs/operations/release.md
+# "No CallKit"); the built apps' binaries are checked after each build below.
+ci_run 'No CallKit in Apple sources and build settings' 120 python3 "$CI_ROOT/scripts/test/test_apple_no_callkit.py"
 
 # XcodeGen writes tracked plists/entitlements, and the normal config helper writes
 # Config.xcconfig. Generate in a snapshot, not over a developer's private files.
@@ -107,10 +110,17 @@ result() {
 if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'PersonaCore strict-concurrency tests and C-binding fixture replay' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaCore" --scratch-path "$SPM/PersonaCore" -Xswiftc -warnings-as-errors
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
-  # The live screen's video codec and capture decisions (#3954), shared by Persona Link's helper and the iOS app.
+  # The live screen's video wire and capture decisions (#3954): PersonaScreenCore, all Persona Link's helper is built from
+  # (#7927), and PersonaScreenKit, the iOS app's side on top of it (route session, quality tiers).
+  ci_run 'PersonaScreenCore unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaScreenCore" --scratch-path "$SPM/PersonaScreenCore" -Xswiftc -warnings-as-errors
   ci_run 'PersonaScreenKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaScreenKit" --scratch-path "$SPM/PersonaScreenKit" -Xswiftc -warnings-as-errors
-  # The independent Link package contains only Persona Screen; PersonaScreenKit's tests cover its capture decisions.
-  # There is no menu-bar app or separate Link UI test target to build.
+  # The pixel scroll record (#7775), shared by Persona Input and the iOS app, and Persona Input itself, a package apart
+  # from Persona Screen's.
+  ci_run 'PersonaInputKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaInputKit" --scratch-path "$SPM/PersonaInputKit" -Xswiftc -warnings-as-errors
+  ci_run 'Persona Input build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink/Input" --scratch-path "$SPM/PersonaInput" -Xswiftc -warnings-as-errors
+  # The independent Link package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
+  # cover its capture decisions. There is no menu-bar app or separate Link UI test target to build.
+  ci_run 'Persona Screen build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaScreen" --product PersonaScreen -Xswiftc -warnings-as-errors
   # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
   # folder beside its build output: the snapshot above moves on every run, and a package whose folder moved is rebuilt
   # from scratch, swift-syntax included (seen with Xcode 27.2). Unchanged files keep their times (no -t), so an
@@ -147,6 +157,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # Every Mach-O in the device app (extensions, frameworks, the Watch app) and every architecture: none links CallKit,
+  # weakly or through a package (#9290). Device-only linker flags exist, so the simulator build cannot stand in for it.
+  ci_run 'No CallKit in the device build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
+    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
   # A phone's main thread has a 1 MB stack, the simulator's 8 MB: view functions with big fixed frames in this Debug
   # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
   ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
@@ -174,6 +188,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Build iOS offline unit tests' 1800 "${IOS_COMMON[@]}" \
     -destination 'generic/platform=iOS Simulator' ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES \
     "${IOS_UNIT_SELECTION[@]}" build-for-testing
+  ci_run 'No CallKit in the simulator build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
+    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"
 
   # Split the former 1000-second preparation budget into creation (100) and real
   # hosted readiness (900). A device state or running service is not a test gate.

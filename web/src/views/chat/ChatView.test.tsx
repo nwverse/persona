@@ -1,9 +1,10 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outgoing } from "./Composer";
 import type { MentionSource } from "./ComposerPanel";
 import type { Item, Session } from "../../lib/types";
 import { getFeedState, setRoute } from "../../lib/feed";
+import { loadPages } from "../../lib/lazy-page";
 import { outboxKey, type OutboxEntry } from "../../lib/outbox";
 import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
@@ -170,6 +171,19 @@ describe("ChatView composer task routing", () => {
     expect(await sender(false)({ text: "One more thing", images: [] })).toBe(true);
     expect(vi.mocked(toast).mock.calls.filter(([text]) => text === t("lib-outbox.waits_on_computer"))).toEqual(toasts ? [[t("lib-outbox.waits_on_computer"), "info"]] : []);
   });
+
+  // your own message to a Claude with Persona's plugin went through its inbox instead of as your input
+  it.each([
+    [{ delivered_as: "relayed", relay_reason: "busy" }, "lib-outbox.relayed_busy"],
+    [{ delivered_as: "relayed", relay_reason: "plugin_unavailable" }, "lib-outbox.relayed_plugin"],
+    [{ delivered_as: "user_input" }, undefined],
+    [{ delivered_as: "relayed", relay_reason: "no_plugin" }, undefined],
+  ])("says when the message may not count as your approval (%j)", async (reply, key) => {
+    fetcher.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true, ...reply }) });
+    expect(await sender(false)({ text: "Go ahead and merge", images: [] })).toBe(true);
+    const relayed = [t("lib-outbox.relayed_busy"), t("lib-outbox.relayed_plugin")];
+    expect(vi.mocked(toast).mock.calls.filter(([text]) => relayed.includes(String(text)))).toEqual(key ? [[t(key), "info"]] : []);
+  });
 });
 
 describe("ChatView message context availability", () => {
@@ -208,23 +222,28 @@ describe("the reply bar while a message is sent", () => {
 });
 
 describe("Agent context usage", () => {
-  it("leaves the header and appears in the row below the composer, at the right of the folder; no empty row when there is neither", () => {
+  it("leaves the header and appears in the row below the composer, at the right of the folder; no empty row when there is neither", async () => {
+    async function render() {
+      const stream = await renderToReadableStream(<ChatView mid="hub" sid="c1" />);
+      await stream.allReady;
+      return new Response(stream).text();
+    }
     const was = captured.session;
     try {
       captured.session = { ...was, agent: "claude", context_tokens: 78000, context_window: 200000 };
-      const html = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+      const html = (await render());
       const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
-      expect(header).not.toContain("61%");
+      expect(header).not.toContain("上下文 39%");
       expect(html).toContain('data-composer-usage');
-      expect(html).toContain('aria-valuenow="61"');
+      expect(html).toContain('aria-valuenow="39"');
       expect(html.indexOf('data-testid="composer"')).toBeLessThan(html.indexOf("data-composer-usage"));
-      expect(html.indexOf("data-composer-source")).toBeLessThan(html.indexOf('aria-valuenow="61"'));
+      expect(html.indexOf("data-composer-source")).toBeLessThan(html.indexOf('aria-valuenow="39"'));
       captured.session = { ...was, agent: "claude", context_tokens: undefined, context_window: undefined };
-      const unknown = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+      const unknown = (await render());
       expect(unknown).toContain("data-composer-source");
       expect(unknown).not.toContain("aria-valuenow");
       captured.session = { ...was, agent: "claude", cwd: "", context_tokens: undefined, context_window: undefined };
-      expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).not.toContain('data-composer-usage');
+      expect((await render())).not.toContain('data-composer-usage');
     } finally {
       captured.session = was;
     }
@@ -328,6 +347,37 @@ describe("ChatView opening line over an empty chat (#2450)", () => {
       expect(html).not.toContain(opening);
     } finally {
       captured.noDetails = "";
+    }
+  });
+});
+
+describe("closeout command evidence wiring", () => {
+  // the evidence row is a chunk of its own (CloseoutEvidence, #8118); a static render draws only a loaded one
+  beforeAll(() => loadPages(), 60_000);
+
+  it("uses only the closeout's own last exchange, never an earlier run", () => {
+    const was = captured.session;
+    captured.session = {
+      ...was, status: "done", state: "idle",
+      work: { phase: "done", closeout: { status: "done", verified: "`npm test`" } },
+    };
+    const call = (seq: number, id: string, command: string): Item[] => [
+      { id: `u${seq}#0`, seq, role: "assistant", kind: "tool_use", tool_use_id: id, tool_name: "Bash", tool_input: { command } },
+      { id: `r${seq}#0`, seq: seq + 1, role: "user", kind: "tool_result", tool_use_id: id, text: "ok", is_error: false, outcome: { status: "ok", exit_code: 0 } },
+    ];
+    captured.items = [
+      { id: "q1#0", seq: 1, role: "user", kind: "text", text: "First" },
+      ...call(2, "earlier", "npm test"),
+      { id: "q2#0", seq: 4, role: "user", kind: "text", text: "Second" },
+      ...call(5, "later", "npm run build"),
+      { id: "a7#0", seq: 7, role: "assistant", kind: "text", text: '<closeout status="done">\nverified: `npm test`\n</closeout>' },
+    ];
+    try {
+      expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).toContain('data-closeout-command-evidence="not_found"');
+      captured.items = captured.items.map((entry) => entry.tool_use_id === "later" && entry.kind === "tool_use" ? { ...entry, tool_input: { command: "npm test" } } : entry);
+      expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).toContain('data-closeout-command-evidence="exit"');
+    } finally {
+      captured.session = was;
     }
   });
 });

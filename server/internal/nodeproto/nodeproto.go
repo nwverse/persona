@@ -28,6 +28,10 @@ const MCPWait = "mcp_wait_v1"
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
 
+// ExternalLauncherInventory is optional source-scoped discovery from a trusted node-local adapter registration.
+// It is announced dynamically only while that registration is enabled, never as execution authority.
+const ExternalLauncherInventory = "external_launcher_inventory_v1"
+
 // Version is the node protocol this code speaks. Raise it only for a change an older peer cannot follow (a method
 // whose params or results changed meaning); additions go in as capabilities instead.
 //
@@ -52,8 +56,13 @@ const (
 	// AssistantConfigDir: assistant.send / assistant.warm / session.send honor an explicit
 	// config_dir and preserve the selected Claude profile when resuming a conversation.
 	AssistantConfigDir = "assistant_config_dir"
+	// AssistantSupervisionInstructions: per-conversation system policy, including explicit
+	// removal, is applied on startup/resume and isolated by the process fingerprint.
+	AssistantSupervisionInstructions = "assistant_supervision_instructions"
 	// SessionSkills: session.skills and validated explicit skill selections on ordinary session.send.
 	SessionSkills = "session_skills_v1"
+	// OwnerControls separates verified owner actions from legacy RPCs that can carry arbitrary params.
+	OwnerControls = "owner_controls_v1"
 	// AssistantServiceTier: assistant.send takes service_tier for a new Codex conversation and acknowledges it before
 	// the first turn. A node without it would start the conversation and silently drop an explicit, billable choice.
 	AssistantServiceTier = "assistant_service_tier"
@@ -71,6 +80,10 @@ const (
 	// Ultracode: session.start takes ultracode and session.ultracode switches it (docs/protocol/protocol.md "Claude Code
 	// ultracode"). A node without it would start a session and drop the field without a word.
 	Ultracode = "ultracode"
+	// StartGoal: session.start takes goal, a Claude Code /goal condition typed after the first message is in
+	// (docs/integrations/agent-goal.md "A goal set at the start"). A node without it would start the session and drop
+	// the goal without a word.
+	StartGoal = "start_goal"
 	// HealthSpaces: file.upload.begin (dest=health) and health.reports.list / health.reports.delete take health_dir,
 	// another manager's health space (health-<id>, docs/assistant/managers.md "Directories on a computer"). A node without it
 	// would use the built-in manager's.
@@ -123,6 +136,28 @@ const (
 	// (docs/operations/node-update.md "Usage"). sessions.list answers update_busy, that check, and the hub waits on it;
 	// for a node without it (or a list without the field) it waits on the old rule, every Agent idle.
 	NodeUpdateIdle = "node_update_idle"
+	// MachineDiagnose: machine.diagnose and machine.cleanup, a computer's bounded self-description (largest process
+	// groups, folders, rebuildable caches, tools) and the emptying of caches from its own catalog
+	// (docs/server/machines.md "Diagnosis and cleanup"). Without it the manager answers node_outdated.
+	MachineDiagnose = "machine_diagnose"
+	// StartContinue: start.continue, an answer to the startup question a start's new tab stopped on (shell_waiting),
+	// typed into the kept tab while the question is still there, and the start run again there under the same id
+	// (docs/protocol/protocol.md "Answering a start's question"). Without it the manager answers node_outdated.
+	StartContinue = "start_continue"
+	// LauncherCheckAssistantTurn: launchers.check takes assistant_turn (with conversation, config_dir, model and effort)
+	// and runs a Claude Code launcher's check as the assistant runs that conversation's turn: its profile, environment,
+	// Persona's MCP server and tool flags (docs/assistant/onboarding.md "Main-chat readiness"). Its answer says so
+	// (assistant_turn); an older node runs the plain check, which proves nothing about the main chat's own failure.
+	LauncherCheckAssistantTurn = "launcher_check_assistant_turn"
+	// StartAnswer: start.answer, the same answer typed into a failed start's kept tab by its pane, for a planned task
+	// the hub starts again in that tab itself (docs/protocol/protocol.md "Answering a start's question"). Without it
+	// the manager answers node_outdated.
+	StartAnswer = "start_answer"
+	// AssistantToolSearchFallback: an assistant turn a gateway refused for Claude Code's tool search is resent once with
+	// every tool loaded, and that launcher and model start so from then on (docs/integrations/claude-integration.md
+	// "Tool search behind a gateway"). Only then do the hub's words for tool_search_unsupported say Persona now sends
+	// every tool there; an older node keeps tool search on, and a retry meets the same refusal.
+	AssistantToolSearchFallback = "assistant_tool_search_fallback"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -146,11 +181,22 @@ const (
 	ProgramPersonaNode = "persona-node"
 )
 
+// RestartExitCode is how a resident node on Windows, which has no exec, asks its supervisor to start the installed
+// program again at once: it exits with this code after an update or a rollback put another file in place
+// (nodeupdate.Restart), and persona-link's scheduled-task supervisor restarts it without its usual delay.
+const RestartExitCode = 75
+
 // Announced is what a node built from this code announces.
-var Announced = []string{SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
+var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
 
 // CreationReceipt preserves opaque creation IDs on every ordinary new-start path.
 const CreationReceipt = "creation_receipt.v1"
+
+// These methods are emitted only by the devices manager after owner verification.
+const (
+	OwnerInterrupt  = "session.owner_interrupt"
+	OwnerCardAnswer = "codex.owner_answer"
+)

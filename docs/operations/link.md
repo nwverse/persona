@@ -15,7 +15,7 @@ the computer can connect to the hub or accept a connection from it. The recommen
 On a computer, Persona has an Electron desktop app and an independently installable Persona Link ([desktop.md](../desktop/desktop.md)).
 
 - **The desktop app** wraps the hub-hosted web UI and adds native notifications, presence and desktop integration. A computer you only chat from, or use another computer's Agents from, does not need a local node or Link.
-- **Persona Link** runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen helper. Its CLI/service works without the desktop app, including on Linux and headless computers.
+- **Persona Link** runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen and Persona Input helpers. Its CLI/service works without the desktop app, including on Linux and headless computers.
 - The local setup window offers fixed status/pairing/reconnect/node-service operations for a separately installed Link. It does not silently install a service. The Mac launchd agent and Windows scheduled task run independently of the desktop app. The former menu bar and Windows tray implementations are archived in [link-menu-tray.md](../archive/operations/link-menu-tray.md).
 
 A desktop need goes into the shared web UI first, and into Persona Link only when the browser cannot meet it (for example local node connectivity, pairing or a recording helper). The desktop app and Link are not a bundled installation.
@@ -63,7 +63,7 @@ curl -fsSL <site>/install.sh | sh -s -- --node --listen [:18663] [--addr <addres
   if a hub is already detected on the LAN (mDNS `_persona-hub._tcp`, `persona-link discover`), it first says "One hub is enough for the whole household; install the node service on this computer."
 - Without systemd, it still installs the binaries and prints alternative instructions (see "Linux (headless)").
 - On Mac, `--node` installs the connector and resident-node launchd agents and pairs; the Electron desktop is not required.
-- Publishing: `scripts/publish.sh` builds four extra `persona-link-<os>-<arch>.gz` and `persona-node-<os>-<arch>.gz` files alongside personad and adds them to the same `SHA256SUMS`.
+- Publishing: `scripts/release/publish.sh` builds four extra `persona-link-<os>-<arch>.gz` and `persona-node-<os>-<arch>.gz` files alongside personad and adds them to the same `SHA256SUMS`. Persona Link also has Windows amd64 and arm64 downloads named `persona-link-windows-<arch>.exe.gz`; `latest.json` indexes every connector under `links`.
 
 **Mac**: install the independent **Persona Link** helpers (`./scripts/app/mac-link.sh install`; a step-by-step guide is in [persona-link-install.md](persona-link-install.md)). The installer places persona-node in `Contents/Helpers/persona-node` and invokes
 `persona-link install --node-bin <bundled persona-node>`, which installs the connector LaunchAgent `com.persona.link` and the resident-node LaunchAgent `com.persona.node`.
@@ -71,9 +71,9 @@ The connector is copied to `~/.persona/bin/persona-link`, the fixed path the Ele
 The agent it writes has `ProcessType=Interactive` (the same as `node-launchd.sh`), so launchd doesn't throttle the node like a background job. Since an existing installation is left unchanged, one written before #5944 lacks it: `personad node doctor` reports it and `personad node doctor --fix` adds it (docs/server/server.md "Scheduling and privacy on the Mac").
 App updates don't replace the installed resident node. Nodes supporting the update protocol can be remotely updated by the hub over the existing connection, with backup, rollback and online confirmation; first-time local upgrades for old nodes, progress and installation boundaries are in [node-update.md](node-update.md) (#1158).
 
-**Windows** (Orca engine, [windows.md](windows.md) ("Install and start at logon")): `persona-link install --personad <personad.exe> [--pair '<link>']`, without admin privileges.
+**Windows** (Orca engine, [windows.md](windows.md) ("Install and start at logon")): download `persona-link-windows-amd64.exe.gz` or `persona-link-windows-arm64.exe.gz` from the GitHub release, verify and unpack it using the PowerShell commands there, then run `persona-link install [--personad <personad.exe>] [--pair '<link>']`, without admin privileges.
 Registers the current user's scheduled task **Persona Link**, starting at sign-in and checked every 5 minutes; it runs a windowless supervisor (`persona-link supervise`), which starts
-persona-link and the resident node and restarts them on exit. Both are in one task (no separate `node install`). The retired tray is not installed. There is no one-command installer script or installation package (#1179).
+persona-link and the resident node and restarts them on exit. Both are in one task (no separate `node install`). The retired tray is not installed. There is no one-command installer script or installation package; the release provides the connector executable.
 
 ### The device's program
 
@@ -95,6 +95,46 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 - Windows has no persona-node build yet: its node runs personad.
 
 **On the hub side**: active-mode computers are kind `link` in hub.json; passive-mode ones are kind `service` (the hub side implemented in #435; paste the link in admin **Computers › Add Computer › Hub connects**).
+
+## Claude Code plugin
+
+The Persona plugin for Claude Code (`integrations/claude-code-plugin`) lets the owner's own messages reach a Claude Code session Persona has no terminal for, such as a Code session in Claude's desktop app, the way typed input does. The resident node carries the plugin of its own build and keeps it installed; Persona Link shows it and switches it. Implementation: `server/internal/claudeplugin`, wired into the node in `server/internal/node/claudeplugin.go`.
+
+**Where it comes from.** The plugin's files are packed into personad and persona-node at build time (`go generate ./internal/runtimepkg`, which `scripts/deploy/deploy.sh`, `scripts/release/publish.sh`, the `Dockerfile` and `scripts/app/mac-link.sh` run; `runtimepkg.Assets`), so the installed plugin is always the node's own version. A node built without that step (a plain `go build`) reports `unavailable`. Updating the node, by Redeploy ([node-update.md](node-update.md)) or a new Link install, brings a new plugin, which the node puts in place at its next check.
+
+**How it is installed.** Only with Claude Code's own CLI, never by editing Claude Code's files, and every command names this plugin or its marketplace alone:
+
+```sh
+claude plugin marketplace add ~/.persona/claude-code-plugin      # the folder is the plugin's own marketplace, "persona"
+claude plugin install persona@persona --scope user                # an update: claude plugin update persona@persona --scope user
+```
+
+The node writes the plugin to `~/.persona/claude-code-plugin` (under `PERSONA_HOME` when that is set): a stable folder that Link and node updates keep. A plugin from a folder marketplace is read from that folder, so an update is new files there plus `claude plugin update`. The commands run with `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1`, in the data directory (never a project), and with `--json`; their results, not their wording, are read.
+
+**Which Claude Code.** The newest of the CLI the node finds (`PATH`, `~/.local/bin` and the other places it looks for `claude`) and the desktop app's own copy (`<app data>/Claude*/claude-code/<version>/…`). Without either, or without a config directory, nothing is installed: the state is `claude_missing`.
+
+**Which config directories.** The user's `~/.claude`, which the desktop app's Code sessions use whatever the environment says, and the directory the node's own `CLAUDE_CONFIG_DIR` names when that is another one outside the data directory. Commands for `~/.claude` run with `CLAUDE_CONFIG_DIR` unset, never set to `~/.claude` ([lessons/agents.md](../lessons/agents.md) "Claude Code plugins from a folder marketplace"). Persona's own profiles and the throwaway directories other claudes were seen with are left alone, and a directory that does not exist yet is never created.
+
+**When.** The resident node checks about 20 seconds after it starts, then every hour; a check that failed is tried again after 1, 5 and 15 minutes, then hourly. A check runs `claude --version` and `claude plugin list --json` for each directory (a few seconds) and installs or updates only when something differs. Checks never overlap: the node and the commands below take `~/.persona/claude-plugin.lock`.
+
+**Your choices win.**
+
+- The automatic install is on by default on macOS and Windows, where the desktop app runs, and off on Linux until `persona-link plugin on`. The choice is the computer's, kept in `~/.persona/claude-plugin.json` (`"auto": false` turns it off).
+- A plugin turned off in Claude Code (`claude plugin disable`, or **+ › Plugins** in the desktop app) stays off and is not updated; the state is `disabled`. Turned on again there, it is kept up to date again.
+- A plugin removed in Claude Code after the node installed it is not put back (`opted_out: uninstalled`). `persona-link plugin install`, `persona-link plugin on` or the desktop toggle undo either choice.
+
+**Running sessions.** Claude Code loads plugins when a session starts. After an install or update, new sessions (terminal and desktop app alike) have it, and sessions already open keep what they loaded until they restart or run `/reload-plugins`. Nothing is restarted for it; `changed: true` in the status says a check installed or updated it.
+
+| Command | What it does |
+| --- | --- |
+| `persona-link plugin status [--json]` | Checks now and says how it stands in each config directory |
+| `persona-link plugin install` | Installs or updates it now, turns it back on where it was turned off in Claude Code, forgets earlier opt-outs and turns the automatic install on |
+| `persona-link plugin uninstall` | Removes it and its marketplace from every config directory, deletes `~/.persona/claude-code-plugin` and turns the automatic install off |
+| `persona-link plugin on` / `off` | Turns only the automatic install on (and checks now) or off (what is installed stays, without updates) |
+
+`persona-link plugin` runs the resident node's program (`personad claude-plugin <op>` or `persona-node claude-plugin <op>`, which print the status as JSON) and needs a node on the computer; a node from before this says to update it. `persona-link status` shows the last check without running anything (`claude-plugin.status.json`). The Electron setup window's **Run Agents on this computer** section shows the state and a **Keep the Persona plugin for Claude Code installed** toggle, which calls `plugin install` / `plugin uninstall`; it receives the state words only, never paths. `persona-link uninstall --purge` removes the connector, not the node or its plugin: run `persona-link plugin uninstall` first to take the plugin out of Claude Code too.
+
+**Status to the hub.** `node.info` carries `claude_plugin` and the node sends a `claude.plugin` notification when it changes ([protocol.md](../protocol/protocol.md) "Node handshake"); the manager puts it on the machine as `claude_plugin` (`proto.ClaudePlugin`): `state` (`installed`, `outdated`, `disabled`, `not_installed`, `error`, `claude_missing`, `unavailable`), `auto`, `version`, `bundled`, `claude_version`, `config_dirs` (`path`, `state`, `version`, `opted_out`, `error`), `changed`, `error`, `checked_at`, `next_check`. The hub forwards it; no client shows it yet, and there is no per-machine switch in the apps.
 
 ## Responsibilities
 
@@ -584,6 +624,10 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 
 
 ## Status line
+
+The status line is a machine contract and is not translated. The same applies to `status --json`, `node status --json`, `ssh --test --json`, the saved `link.status.json`, passive HTTP `message` fields, and the pairing URL written by `pair --listen` on stdout. Candidate errors retain the full-width-semicolon delimiter (`；`) that current and older clients split. Human `status` and `install` output may translate a copy of a recognized saved error, but unknown hub, peer, OS and parser details pass through unchanged.
+
+Plain terminal output uses `i18n.Terminal()`: `PERSONA_LANG`, then `LC_ALL`, `LC_MESSAGES` and `LANG`, with English for C, POSIX, an unset locale or an unknown language. The `link-cli` catalogs ship `en`, `zh-Hans` and `ja`; Chinese terminal output retains its previous wording. Maintainer logs are English. An early `persona-link run` failure follows the terminal language when stderr is a terminal, but is English when a service redirects stderr into a log. One pre-existing exception to locale-independent JSON is `service.missing`: the unavailable-systemd reason was already locale-coupled and keeps that behavior for compatibility.
 
 ```json
 {"state":"connected","machine":"macbook","hub_name":"Home","mesh_hubs":1,"address":"https://192.0.2.10:18662","kind":"lan",

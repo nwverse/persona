@@ -615,9 +615,9 @@ export class ChatAttachments {
   }
 
   /** Prepare images and upload files for this exact target. Uploads are explicit and never auto-retried if uncertain. */
-  async prepareSend(text: string): Promise<PreparedAttachmentSend> {
+  async prepareSend(text: string, admit?: () => boolean): Promise<PreparedAttachmentSend> {
     const operation = this.capture();
-    if (!operation || this.busy) throw new Error('chat_attachment_target_unavailable');
+    if (!operation || this.busy || admit && !admit()) throw new Error('chat_attachment_target_unavailable');
     if (!operation.model.canSend()) throw new Error('chat_attachment_offline');
     const repository = operation.model.repo();
     this.busy = true;
@@ -625,6 +625,7 @@ export class ChatAttachments {
     const selected = this.attachments.map((item: ChatAttachment) => new AttachmentRevision(item.id, item.revision));
     try {
     const storage = await this.openStorage(operation.context);
+    const storageEpoch = storage.revision(this.key(operation.target));
     const latest = await this.changeDraft(operation.target, storage, (_draft: AttachmentDraft): void => {});
     if (!this.connected(operation, repository) || selected.length !== latest.attachments.length ||
       !selected.every((item: AttachmentRevision) => latest.attachments.some((saved: ChatAttachment) => saved.id === item.id && saved.revision === item.revision))) {
@@ -637,6 +638,7 @@ export class ChatAttachments {
     snapshot.attachments = captured.map((item: ChatAttachment) => new AttachmentRevision(item.id, item.revision));
       const uploaded: ChatAttachment[] = [];
       for (const item of captured) {
+        if (admit && !admit()) throw new Error('chat_attachment_target_unavailable');
         if (item.kind !== 'file') { uploaded.push(item); continue; }
         const current = this.attachments.find((candidate: ChatAttachment) => candidate.id === item.id && candidate.revision === item.revision);
         if (!current) throw new Error('chat_attachment_selection_changed');
@@ -646,37 +648,33 @@ export class ChatAttachments {
         if (!this.connected(operation, repository)) throw new Error('chat_attachment_offline');
         const bytes = this.readOwnedFile(current.localPath, MAX_FILE_BYTES);
         const uploading = this.copyAttachment(current); uploading.status = 'uploading';
-        await this.replaceItemAndSave(operation, uploading);
-        if (!this.connected(operation, repository)) {
-          if (this.current(operation)) await this.replaceItemAndSave(operation, current);
-          throw new Error('chat_attachment_offline');
-        }
         let receipt: Record<string, Object>;
         try {
+          await this.replaceItemAndSave(operation, uploading);
+          if (!this.connected(operation, repository)) throw new Error('chat_attachment_offline');
           const path = '/api/v1/machines/' + encodeURIComponent(operation.row.machine) + '/files?name=' +
             encodeURIComponent(current.name) + '&dest=' + (Wire.text(operation.row.data(), 'space') === 'health' ? 'health' : 'terminal');
-          receipt = await repository.upload(path, bytes, (): boolean => this.connected(operation, repository));
+          receipt = await repository.upload(path, bytes, (): boolean => (!admit || admit()) && this.connected(operation, repository));
         } catch (error) {
-          if (!this.current(operation)) throw new Error('scope_changed');
           const failed = this.copyAttachment(current);
           failed.status = this.uncertain(error) ? 'unknown' : 'failed';
-          await this.replaceItemAndSave(operation, failed);
+          await this.settleUpload(operation, repository, storage, storageEpoch, failed);
           if (failed.status === 'unknown') throw new Error('chat_attachment_upload_unknown');
           throw this.asError(error, 'chat_attachment_upload_failed');
         }
-        if (!this.connected(operation, repository)) throw new Error('scope_changed');
         const remotePath = Wire.text(receipt, 'path');
         const remoteName = Wire.text(receipt, 'name');
         if (!this.absoluteRemotePath(remotePath) || !remoteName) {
           const unknown = this.copyAttachment(current); unknown.status = 'unknown';
-          await this.replaceItemAndSave(operation, unknown);
+          await this.settleUpload(operation, repository, storage, storageEpoch, unknown);
           throw new Error('chat_attachment_upload_unknown');
         }
         const ready = this.copyAttachment(current); ready.status = 'ready'; ready.remotePath = remotePath; ready.remoteName = remoteName;
-        await this.replaceItemAndSave(operation, ready);
+        await this.settleUpload(operation, repository, storage, storageEpoch, ready);
         uploaded.push(ready);
       }
       if (!this.connected(operation, repository)) throw new Error('scope_changed');
+      if (admit && !admit()) throw new Error('chat_attachment_target_unavailable');
       const filePaths = uploaded.filter((item: ChatAttachment) => item.kind === 'file').map((item: ChatAttachment) => item.remotePath);
       const messageText = this.appendPaths(text, filePaths);
       const selectedImages = uploaded.filter((item: ChatAttachment) => item.kind === 'image');
@@ -1008,6 +1006,21 @@ export class ChatAttachments {
     });
     if (!this.current(operation)) throw new Error('scope_changed');
     this.attachments = saved.attachments;
+  }
+
+  /** Settle only the captured file revision, even after its view has detached. */
+  private async settleUpload(operation: AttachmentOperation, repository: HubRepository, storage: LocalStore,
+    epoch: number, replacement: ChatAttachment): Promise<void> {
+    const valid = (): boolean => {
+      if (!operation.model.owns(operation.generation, operation.scope) ||
+        operation.model.target(operation.row) !== operation.modelTarget || !storage.accepts(this.key(operation.target), epoch)) return false;
+      try { return operation.model.repo() === repository; } catch (_) { return false; }
+    };
+    await this.changeDraft(operation.target, storage, (draft: AttachmentDraft): void => {
+      if (!draft.attachments.some((item: ChatAttachment) => item.id === replacement.id && item.revision === replacement.revision))
+        throw new Error('chat_attachment_selection_changed');
+      draft.attachments = draft.attachments.map((item: ChatAttachment) => item.id === replacement.id && item.revision === replacement.revision ? replacement : item);
+    }, valid);
   }
 
   private async changeDraft(target: string, storage: LocalStore, change: (draft: AttachmentDraft) => void, admit: () => boolean = (): boolean => true): Promise<AttachmentDraft> {

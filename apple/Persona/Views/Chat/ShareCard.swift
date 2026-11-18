@@ -2,6 +2,7 @@ import MarkdownUI
 import PersonaKit
 import Photos
 import SwiftUI
+import PersonaWire
 
 /// A message to share as a picture (Share in the long-press bar).
 struct ShareMessage: Identifiable {
@@ -9,6 +10,8 @@ struct ShareMessage: Identifiable {
     var isUser: Bool
     var source: String
     var date: Date?
+    /// Who answers, as the chat names its agent (`Session.agentLabel`): its mark is the one that name has
+    /// (`AgentKind.brand(named:)`), else its first letter.
     var agent = "Claude"
     var id: String { text }
 }
@@ -75,8 +78,9 @@ struct MessageShareCard: View {
         .environment(AppModel.shared)
     }
 
-    /// Who wrote it: the user, or the agent's own mark (Claude's, OpenAI's for Codex). TRAEX has no public mark and
-    /// keeps a terminal on green.
+    /// Who wrote it: the user, or the agent's own mark (Claude's, OpenAI's for Codex, TRAE's), else the first letter of
+    /// its name on the same disc, as its row's mark draws it (`AgentKind`): a Paseo provider such as Grok is never drawn
+    /// as Claude (#8144). TRAEX has no public mark and keeps a terminal on green.
     @ViewBuilder private var avatar: some View {
         if message.isUser {
             ThemedIcon(Theme.Icon.user).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
@@ -85,10 +89,15 @@ struct MessageShareCard: View {
             ThemedIcon(Theme.Icon.terminalFilled).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .background(LinearGradient(colors: [Color(hex: 0x2FD38F), Color(hex: 0x12935E)], startPoint: .top, endPoint: .bottom), in: .circle)
-        } else {
-            Image(message.agent == "Codex" ? Theme.Brand.openAI : Theme.Brand.claude)
+        } else if let mark = AgentKind.brand(named: message.agent) {
+            Image(mark)
                 .resizable().scaledToFit().foregroundStyle(.primary)
                 .padding(7)
+                .frame(width: 32, height: 32)
+                .background(Color(.secondarySystemBackground), in: .circle)
+        } else {
+            Text(AgentKind(brand: nil, name: message.agent, surface: nil).letter)
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
                 .frame(width: 32, height: 32)
                 .background(Color(.secondarySystemBackground), in: .circle)
         }
@@ -145,6 +154,61 @@ extension MarkdownUI.Theme {
                 .markdownTableBackgroundStyle(.alternatingRows(Color.clear, Color.primary.opacity(0.03)))
                 .markdownMargin(top: 4, bottom: 12)
         }
+
+    /// Several messages exported as a picture (#9468, `ChatExportRenderer`): the card's theme, with ```math and
+    /// ```mermaid drawn from the pictures the export had drawn first (an offscreen picture never waits for them).
+    @MainActor static let export = MarkdownUI.Theme.card
+        .codeBlock { config in
+            if let kind = RenderedFence.kind(config.language) {
+                ExportRenderedFence(kind: kind, source: config.content)
+                    .markdownMargin(top: 4, bottom: 12)
+            } else if AssistantCardBlock.handles(config.language) {
+                ShareCardPartView(part: ShareCardParts.picture(language: config.language, config.content))
+                    .markdownMargin(top: 4, bottom: 12)
+            } else {
+                config.label
+                    .relativeLineSpacing(.em(0.2))
+                    .markdownTextStyle { FontFamilyVariant(.monospaced); FontSize(.em(0.8)) }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                    .markdownMargin(top: 4, bottom: 12)
+            }
+        }
+}
+
+/// A formula or a diagram in an exported picture (#9468): the picture `ChatExportRenderer` drew first, as large as it
+/// was drawn or the column, whichever is smaller; its source as code when it could not be drawn.
+struct ExportRenderedFence: View {
+    let kind: MarkdownRenderer.Kind
+    let source: String
+    @Environment(\.colorScheme) private var scheme
+
+    /// The picture's text size, the card theme's, which formulas are drawn at; diagrams a step smaller, as the chat's.
+    static let textPoints: CGFloat = 15
+    static func points(_ kind: MarkdownRenderer.Kind) -> CGFloat { kind == .mermaid ? 13 : textPoints }
+    /// Formulas are drawn black and tinted; diagrams in their own light or dark theme.
+    static func dark(_ kind: MarkdownRenderer.Kind, _ scheme: ColorScheme) -> Bool { kind == .mermaid && scheme == .dark }
+
+    var body: some View {
+        if let image = MarkdownRenderer.shared.cached(kind, source, dark: Self.dark(kind, scheme), points: Self.points(kind)) {
+            if kind == .mermaid {
+                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: image.size.width)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Image(uiImage: image).renderingMode(.template).resizable().scaledToFit().frame(maxWidth: image.size.width)
+                    .foregroundStyle(Color.primary)
+                    .frame(maxWidth: .infinity)
+            }
+        } else {
+            Text(verbatim: source)
+                .font(.system(size: 12, design: .monospaced))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+        }
+    }
 }
 
 /// One piece of the picture (`ShareCardParts`): words in the picture's Markdown theme, a card as the chat draws it, a
@@ -384,7 +448,7 @@ struct MessageShareSheet: View {
             return
         }
         do {
-            // `@Sendable`: Photos runs the block on its own queue, where main-actor code is a crash (BackgroundCallbackTests).
+            // `@Sendable`: Photos runs the block on its own queue, where main-actor code is a crash (test_apple_background_callbacks.py).
             try await PHPhotoLibrary.shared().performChanges { @Sendable in PHAssetChangeRequest.creationRequestForAsset(from: image) }
             Haptics.success()
             AppModel.shared.toast = Toast(String(localized: "Saved to Photos"), style: .success)

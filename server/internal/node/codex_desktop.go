@@ -143,13 +143,13 @@ func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text strin
 	if err != nil {
 		return refusal("bad_image", err.Error(), nil)
 	}
-	input := []map[string]any{}
-	if text != "" {
-		input = append(input, map[string]any{"type": "text", "text": text, "text_elements": []any{}})
-	}
-	for _, p := range paths {
-		input = append(input, map[string]any{"type": "localImage", "path": p})
-	}
+	// While the App runs a turn in the thread the message waits here and goes in once, as a turn of its own, when the
+	// turn ends (codex_desktop_queue.go): a start-turn into a running turn is steered into it and then run again.
+	return n.sendOrHoldCodexDesktop(ctx, src, codexDesktopMessage{text: text, paths: paths})
+}
+
+// startCodexDesktopTurn asks the window owning src's thread to run a turn with input, as the App's own composer does.
+func (n *Node) startCodexDesktopTurn(ctx context.Context, src codexSource, input []map[string]any) error {
 	ctx, cancel := context.WithTimeout(ctx, codexDesktopTimeout)
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
@@ -416,7 +416,12 @@ func (a *codexAppState) listed(thread string) bool {
 // placeCodexDesktop puts an App thread in its sidebar project — a subagent in its parent's (`group`) — and, for recent
 // ones, gives it its state. A subagent's finished turn is not something to read on its own: it is idle.
 func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string, subagent bool) {
-	app := loadCodexAppState(src.home)
+	n.placeCodexDesktopIn(s, src, group, subagent, nil)
+}
+
+// placeCodexDesktopIn is placeCodexDesktop with the App's state looked up once per home in a list pass (codexListPass).
+func (n *Node) placeCodexDesktopIn(s *proto.Session, src codexSource, group string, subagent bool, pass *codexListPass) {
+	app := pass.appState(src.home)
 	s.SpaceKind = "codex_app"
 	if pid, name := app.project(group, s.Cwd); pid != "" && name != "" && (app == nil || !app.projectless[group]) {
 		s.SpaceID, s.SpaceName = "codex-app:"+pid, name
@@ -444,7 +449,7 @@ func slotCodexDesktop(list []proto.Session) {
 		if s.SpaceKind != "codex_app" {
 			continue
 		}
-		s.SlotIndex = next[s.SpaceID]
+		s.SlotIndex = int32(next[s.SpaceID])
 		next[s.SpaceID]++
 	}
 }
@@ -560,6 +565,21 @@ func readCodexOrigin(path string) codexOrigin {
 		source = "" // an object: a subagent
 	}
 	o.exec = source == "exec" || m.Payload.Originator == "codex_exec" || strings.HasPrefix(m.Payload.Originator, "codex_sdk")
+	var spawned string
+	spawned, o.guardian, o.sub = codexSourceObject(m.Payload.Source)
+	o.parent = firstNonEmpty(m.Payload.Parent, spawned)
+	o.sub = o.sub || o.parent != "" || source == "subagent" || m.Payload.ThreadSource == "subagent"
+	if o.sub {
+		o.root = m.Payload.SessionID
+	}
+	codexOrigins.Store(path, o)
+	return o
+}
+
+// codexSourceObject reads a thread's source when it is an object, a subagent's ({"subagent": …}): the thread that
+// spawned it (thread_spawn's parent_thread_id), or an approval review ({"other": "guardian"}). A rollout's session_meta
+// and the App's database row hold the same object.
+func codexSourceObject(raw json.RawMessage) (parent string, guardian, sub bool) {
 	var spawn struct {
 		Subagent struct {
 			ThreadSpawn struct {
@@ -568,21 +588,23 @@ func readCodexOrigin(path string) codexOrigin {
 			Other string `json:"other"`
 		} `json:"subagent"`
 	}
-	if json.Unmarshal(m.Payload.Source, &spawn) == nil {
-		o.parent = spawn.Subagent.ThreadSpawn.Parent
-		o.guardian = spawn.Subagent.Other == "guardian"
+	if json.Unmarshal(raw, &spawn) == nil {
+		parent, guardian = spawn.Subagent.ThreadSpawn.Parent, spawn.Subagent.Other == "guardian"
 	}
-	o.parent = firstNonEmpty(m.Payload.Parent, o.parent)
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(m.Payload.Source, &fields) == nil {
-		_, o.sub = fields["subagent"]
+	if json.Unmarshal(raw, &fields) == nil {
+		_, sub = fields["subagent"]
 	}
-	o.sub = o.sub || o.parent != "" || source == "subagent" || m.Payload.ThreadSource == "subagent"
-	if o.sub {
-		o.root = m.Payload.SessionID
+	return parent, guardian, sub || parent != ""
+}
+
+// codexThreadOrigin is where src's thread came from: its rollout's first line, or, once the App moved the rollout into
+// its database and deleted it, the database row (codexAppThread.origin, #8191). Without either it says nothing.
+func codexThreadOrigin(src codexSource) codexOrigin {
+	if t, ok := codexAppThreadOf(src); ok {
+		return t.origin()
 	}
-	codexOrigins.Store(path, o)
-	return o
+	return readCodexOrigin(src.path)
 }
 
 // codexDesktopChat: a chat of the Codex App running on this machine (not a CLI thread, not a subagent of one).
@@ -593,12 +615,12 @@ func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
 	if !pass.desktopAvailable(src.home) {
 		return false
 	}
-	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go)
-		_, ok := codexAppThreadOf(src)
-		return ok
+	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go), not a subagent
+		t, ok := codexAppThreadOf(src)
+		return ok && !t.origin().sub
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
+	return o.desktop && o.parent == "" && (o.persona || pass.appState(src.home).listed(src.thread))
 }
 
 // loadedOwner is the App window that owns the thread, the App asked to open it when none does: it loads a thread it is

@@ -14,7 +14,7 @@ struct InboxActionBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let s = item.summary, !s.isEmpty {
+            if let s = item.lineSummary, !s.isEmpty {
                 (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                     .font(Theme.Font.secondary)
                     .lineLimit(3)
@@ -147,7 +147,7 @@ struct InboxDraftSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
                         Text("Send").lineLimit(1)
@@ -372,7 +372,9 @@ struct InboxHandOffSheet: View {
             }
             .sheet(item: $newAgent, onDismiss: finishNewAgent) { p in
                 NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: [p.card], forwardedIcon: Theme.Icon.inbox,
-                            nameHint: p.nameHint, onlyGroup: p.group) { s in
+                            nameHint: p.nameHint, onlyGroup: p.group, onFirstMessage: { s, message in
+                    handOff.newAgentFirstMessage(message, for: s.key)
+                }) { s in
                     startedAgent = (s.key, p)
                     newAgent = nil
                 }
@@ -397,7 +399,7 @@ struct InboxHandOffSheet: View {
             .navigationTitle("Hand to AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
                         if handOff.sending { ProgressView() } else { Text("Send").lineLimit(1) }

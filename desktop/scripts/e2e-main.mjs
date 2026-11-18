@@ -18,36 +18,98 @@ import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor, s
  * - `Notification.isSupported` and `powerMonitor.getSystemIdleTime` answer "supported" and "just used": a runner has
  *   no notification service and nobody at the keyboard. Lock and unlock are the power monitor's own events, emitted.
  * - `shell.openExternal` records the address instead of starting a browser.
+ * - `NotchIsland.prototype.setState` is only observed (it still runs, island.ts): the island draws only on a Mac, but
+ *   what it keeps, the rows of the web's last state, is checked across a hub change on every runner.
  */
 const output = process.env.PERSONA_DESKTOP_E2E ? resolve(process.env.PERSONA_DESKTOP_E2E) : "";
 const scenario = process.env.PERSONA_DESKTOP_E2E_SCENARIO ?? "";
 const hubURL = process.env.PERSONA_HUB_URL ?? "";
+const otherHubURL = process.env.PERSONA_DESKTOP_E2E_OTHER_HUB_URL ?? "";
 const mock = process.env.PERSONA_DESKTOP_E2E_MOCK ?? "";
+const otherMock = process.env.PERSONA_DESKTOP_E2E_OTHER_MOCK ?? "";
 const token = process.env.PERSONA_DESKTOP_E2E_TOKEN ?? ""; // a temporary pairing code, as `personad hub pair` makes
+const otherToken = process.env.PERSONA_DESKTOP_E2E_OTHER_TOKEN ?? "";
 let card; // a pending permission or question card of the synthetic hub, chosen by the caller
 try { card = JSON.parse(process.env.PERSONA_DESKTOP_E2E_CARD ?? "null"); } catch { card = undefined; }
+// The link that starts the app (#10282): macOS hands it over as open-url before any window exists (emitted below).
+const coldLink = scenario === "root" && card?.session_id
+  ? `persona://open/s/${encodeURIComponent(card.machine_id)}/${encodeURIComponent(card.session_id)}` : undefined;
 const local = value => /^http:\/\/127\.0\.0\.1:\d+\//.test(value);
-if (app.isPackaged || !output || !process.argv.includes("--desktop-e2e") || !["root", "subpath"].includes(scenario) || !local(hubURL) || !local(`${mock}/`) || !token) {
+const otherHub = otherHubURL ? new URL(otherHubURL) : undefined;
+const headless = process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+if (app.isPackaged || !output || !process.argv.includes("--desktop-e2e") || !["root", "subpath", "hub-change", "hub-prefix-parent"].includes(scenario) || !local(hubURL) || !local(`${mock}/`) || !token || ((scenario === "hub-change" || scenario === "hub-prefix-parent") && (!otherHub || !otherToken || !local(`${otherMock}/`)))) {
   console.error("desktop e2e: refused (development-only; needs --desktop-e2e, an output directory and a local synthetic hub)");
   process.exit(2);
 }
 
 const hub = new URL(hubURL);
-const prefix = hub.pathname.replace(/\/$/, ""); // "" at the root
+const prefix = hub.pathname.replace(/\/$/, ""); // "" at the root; unchanged for the whole scenario
 const DEVICE = "Persona desktop";
 const shown = []; // notifications that reached Notification.show()
 const closed = [];
 const external = []; // addresses handed to the system browser
+let island; // the shell's notch island (island.ts), seen with the web's first state
+/** The rows the island keeps: the web's last ones, none once their page is gone. */
+const islandRows = () => island?.state.rows.length ?? 0;
+/** What a Mac draws: the island's page from the shell's own scheme, as a packaged app must load it (its fuses keep
+ *  file:// out of the asar), with its stylesheet (the black pill) and its script (the leading count). */
+async function islandDrawn() {
+  const w = island?.window;
+  if (!w || w.isDestroyed()) throw new Error("no island window");
+  const url = w.webContents.getURL();
+  const seen = w.webContents.isLoading() ? { loading: true } : await w.webContents.executeJavaScript(
+    "({ pill: getComputedStyle(document.querySelector('#island')).backgroundColor, left: document.querySelector('#left').textContent })");
+  if (url !== "persona-island://app/island.html" || seen.pill !== "rgb(0, 0, 0)" || !/^\d+\+?$/.test(seen.left ?? "")) {
+    throw new Error(`the island's page at ${url} shows ${JSON.stringify(seen)}`);
+  }
+  return seen;
+}
 const notifyRequests = []; // what the renderer asked for over the production IPC
 const badges = []; // every count the renderer sent
+const localSettings = []; // the shell-owned options window, observed without exposing it to the hub page
+const presenceDiagnostics = [];
+const safeURL = value => {
+  try { const url = new URL(value); return `${url.origin}${url.pathname}`; } catch { return ""; }
+};
+const recordPresence = (kind, value) => presenceDiagnostics.push({ kind, at: Date.now(), ...value });
+app.on("browser-window-created", (_event, window) => {
+  recordPresence("window-created", { visible: window.isVisible(), focused: window.isFocused(), destroyed: window.isDestroyed() });
+  window.once("ready-to-show", () => recordPresence("ready-to-show", { visible: window.isVisible(), focused: window.isFocused(), destroyed: window.isDestroyed() }));
+  window.once("closed", () => recordPresence("window-closed", { destroyed: window.isDestroyed() }));
+  const record = url => {
+    if (url.endsWith("/setup.html") && !localSettings.includes(window)) {
+      localSettings.push(window);
+      // Chromium's headless platform gives new native windows a 1x1 off-screen frame. Exercise the same request the
+      // person made by making that test window visible; on native runners production show()/focus() already did this.
+      if (headless) {
+        window.setBounds({ x: 0, y: 0, width: 720, height: 640 });
+        window.show();
+      }
+    }
+    if (headless && !url.endsWith("/setup.html") && !url.startsWith("devtools:") && window.getBounds().width < 600) {
+      // A replacement hub window has the same headless sizing issue as the first one.
+      window.setBounds({ x: 0, y: 0, width: 1280, height: 840 });
+      window.show();
+      window.focus();
+    }
+  };
+  window.webContents.on("did-start-navigation", (_event, url) => record(url));
+  record(window.webContents.getURL());
+});
 Notification.isSupported = () => true;
 Notification.prototype.show = function show() { shown.push({ title: this.title, body: this.body, notification: this }); };
 Notification.prototype.close = function close() { closed.push(this.title); };
 powerMonitor.getSystemIdleTime = () => 0;
+const productionOn = ipcMain.on.bind(ipcMain);
+ipcMain.on = (channel, listener) => productionOn(channel, (event, ...args) => {
+  const result = listener(event, ...args);
+  if (channel === "desktop:presence" || channel === "desktop:notification-permission") recordPresence("ipc-result", { channel, reply: event.returnValue, supported: Notification.isSupported(), idle: powerMonitor.getSystemIdleTime(), destroyed: win.isDestroyed(), focused: win.isFocused(), visible: win.isVisible(), page: safeURL(event.senderFrame.url) });
+  return result;
+});
 shell.openExternal = async url => { external.push(String(url)); };
 // Linux is not a shipping platform, and GTK cannot build the tray's menu without a display server: on a headless
 // build machine the tray keeps its icon and click, and its menu is left out. macOS and Windows run it unchanged.
-if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) Tray.prototype.setContextMenu = () => {};
+if (headless) Tray.prototype.setContextMenu = () => {};
 
 const steps = [];
 const shots = [];
@@ -78,8 +140,8 @@ async function step(name, run) {
 }
 
 /** The synthetic hub's own control endpoints (/mock/…), which take no credential; this process never holds a device token. */
-async function hubGet(path) {
-  const response = await fetch(`${mock}${path}`, { signal: AbortSignal.timeout(5000) });
+async function hubGet(path, address = mock) {
+  const response = await fetch(`${address}${path}`, { signal: AbortSignal.timeout(5000) });
   if (!response.ok) throw new Error(`${path.split("?")[0]} answered ${response.status}`);
   return response.json();
 }
@@ -103,7 +165,8 @@ const path = () => page("location.pathname");
 /** The Needs-you count the web shows: the "(n)" its tab title starts with (lib/attention.ts tabTitle). */
 const webCount = () => page("Number(/^\\((\\d+)\\)/.exec(document.title)?.[1] ?? 0)");
 const lastBadge = () => badges[badges.length - 1];
-const desktops = () => hubGet("/mock/desktops");
+let activeMock = mock;
+const desktops = () => hubGet("/mock/desktops", activeMock);
 const signedIn = () => page("!!window.personaDesktop && !location.search.includes('token') && !document.querySelector('input[type=password]') && !!document.querySelector('nav a[href], aside a[href]')");
 
 async function signIn() {
@@ -183,6 +246,14 @@ async function chatAndAgents() {
 
 async function rootScenario() {
   await signIn();
+  await step("the persona:// link that started the app opens its page once the page listens", async () => {
+    // The signed-out page did not listen, so the route waited through sign-in for the app (page-routes.ts).
+    if (!coldLink) throw new Error("no cold-start link: the synthetic hub has no pending card");
+    await until("cold-start route", async () => (await path()).startsWith(`${prefix}/`) && (await path()).endsWith(`/${card.session_id}`));
+    const there = await path();
+    await go("/"); // the steps after this one start where sign-in leaves the page
+    return { path: there };
+  });
   await enableNotifications();
   await chatAndAgents();
   await step("Agent session with a waiting card", async () => {
@@ -197,8 +268,55 @@ async function rootScenario() {
   });
   await screen("Inbox", "/inbox", "document.querySelectorAll('main [data-inbox-list-scroll] [data-item]').length > 0", "06-inbox");
   await screen("To-dos", "/todos", "document.querySelectorAll('main [data-testid=\"todo-title\"]').length > 0 && !!document.querySelector('main [data-testid=\"todos-detail-column\"]')", "07-todos");
+  await step("signed-in desktop options keep the hub session and Link separate", async () => {
+    await go("/settings");
+    await until("desktop options entry", () => page("!!document.querySelector('[data-settings-group=\"desktop-options\"] button')"));
+    const before = localSettings.length;
+    const entry = "document.querySelector('[data-settings-group=\"desktop-options\"]')";
+    await page(`${entry}.scrollIntoView({block: 'center'}); true`);
+    await until("settings entry in the captured viewport", () => page(`(() => { const r = ${entry}.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()`));
+    await shot("08-settings-light");
+    nativeTheme.themeSource = "dark";
+    await page("[...document.querySelectorAll('button')].find(b => b.getAttribute('aria-pressed') !== null && b.textContent.trim() === 'Dark').click(); true");
+    await until("the app's Dark choice is selected", () => page("document.documentElement.classList.contains('dark') && [...document.querySelectorAll('button')].some(b => b.getAttribute('aria-pressed') === 'true' && b.textContent.trim() === 'Dark')"));
+    await shot("09-settings-dark");
+    nativeTheme.themeSource = "light";
+    await page("[...document.querySelectorAll('button')].find(b => b.getAttribute('aria-pressed') !== null && b.textContent.trim() === 'Light').click(); true");
+    await until("the app's Light choice is selected", () => page("!document.documentElement.classList.contains('dark') && [...document.querySelectorAll('button')].some(b => b.getAttribute('aria-pressed') === 'true' && b.textContent.trim() === 'Light')"));
+    await page("document.querySelector('[data-settings-group=\"desktop-options\"] button').click(); true");
+    const options = await until("local options window", () => localSettings[before]);
+    options.show();
+    await until("visible settled local options", async () => options.isVisible() && options.getBounds().width >= 600 && await options.webContents.executeJavaScript("document.fonts.status === 'loaded' && (document.querySelector('details').open = true)"));
+    await until("absent-Link explanation", () => options.webContents.executeJavaScript("document.querySelector('#link-state').textContent.includes('not installed') && !!document.querySelector('#link-install-guide') && !document.querySelector('#link-install-guide').hidden"));
+    const image = await options.webContents.capturePage();
+    if (image.getSize().width < 600 || image.getSize().height < 400) throw new Error(`local options capture ${JSON.stringify(image.getSize())}`);
+    await writeFile(join(output, "10-local-options.png"), image.toPNG());
+    const boundary = await options.webContents.executeJavaScript("({node: typeof require !== 'undefined', hub: !!window.personaDesktop, commands: Object.keys(window.desktopSetup).sort()})");
+    if (boundary.node || boundary.hub) throw new Error(`local window boundary ${JSON.stringify(boundary)}`);
+    options.close();
+    await until("hub window stays signed in", async () => !win.isDestroyed() && await signedIn() && (await path()) === `${prefix}/settings`);
+    const login = await page("window.personaDesktop.getLaunchAtLogin()");
+    if (typeof login.enabled !== "boolean") throw new Error(`the hub window lost its login-item IPC: ${JSON.stringify(login)}`);
+    const setLogin = await page(`window.personaDesktop.setLaunchAtLogin(${JSON.stringify(login.enabled)})`);
+    if (typeof setLogin.enabled !== "boolean") throw new Error(`the hub window lost its login-item setter: ${JSON.stringify(setLogin)}`);
+    return { localWindows: localSettings.length, boundary, hubPath: await path() };
+  });
+  await step("the notch island turns on and off and keeps the app in the Dock", async () => {
+    // Only a Mac draws it (#7669). Electron's default for a window over full-screen apps would make the whole app a
+    // background one, without its Dock icon and badge.
+    const mac = process.platform === "darwin";
+    const before = await page("window.personaDesktop.getIsland()");
+    if (before.supported !== mac || before.enabled) throw new Error(`the island before anyone turned it on: ${JSON.stringify(before)}`);
+    const on = await page("window.personaDesktop.setIslandEnabled(true)");
+    const dock = mac ? app.dock.isVisible() : undefined;
+    const off = await page("window.personaDesktop.setIslandEnabled(false)");
+    if (on.enabled !== mac || off.enabled) throw new Error(`the island answered ${JSON.stringify(on)}, then ${JSON.stringify(off)}`);
+    if (dock === false) throw new Error("turning the island on took the app out of the Dock");
+    return { on, off, ...(dock !== undefined ? { dock } : {}) };
+  });
 
   let target;
+
   await step("window closed to the tray", async () => {
     await go("/");
     await until("chat again", async () => (await path()) === `${prefix}/`);
@@ -209,7 +327,7 @@ async function rootScenario() {
   });
   await step("a new Needs-you item reaches the main process as a notification", async () => {
     const before = { badge: lastBadge(), notify: notifyRequests.length, shown: shown.length };
-    const bump = await hubGet("/mock/bump?what=screen");
+    const bump = await hubGet("/mock/bump?what=screen", activeMock);
     const route = `${prefix}/s/${bump.key}`;
     const request = await until("notification request", () => notifyRequests.slice(before.notify).find(n => n.route === route));
     if (!request.title || !request.tag.includes(bump.key)) throw new Error(`unexpected request ${JSON.stringify(request)}`);
@@ -230,6 +348,75 @@ async function rootScenario() {
     return { visible: win.isVisible(), path: await path() };
   });
   await lockWithdraws("unregister");
+}
+
+async function hubChangeScenario() {
+  await signIn();
+  await step("changing the hub replaces its window, session and IPC authorization together", async () => {
+    if (!otherHub || !otherToken) throw new Error("the second synthetic hub is missing");
+    // The island on (#7669), with the first hub's agents in it: none of them may stay once that hub's window is gone.
+    await page("window.personaDesktop.setIslandEnabled(true)");
+    const firstHubRows = await until("the first hub's agents in the island", islandRows);
+    const drawn = process.platform === "darwin" ? await until("the island's page drawing the first hub's agents", islandDrawn) : undefined;
+    await page("window.personaDesktop.setLaunchAtLogin(true)");
+    // Linux has no login-item service; the production getter truthfully reports false there. The round trip must
+    // work on the shipping platforms, while the hub-change assertion here is about IPC surviving, not a Linux autostart.
+    const replacedLogin = await page("window.personaDesktop.getLaunchAtLogin()");
+    if (typeof replacedLogin.enabled !== "boolean" || (process.platform !== "linux" && !replacedLogin.enabled)) throw new Error(`the login setting did not round-trip before the hub change: ${JSON.stringify(replacedLogin)}`);
+    await go("/settings");
+    await until("desktop options entry for hub change", () => page("!!document.querySelector('[data-settings-group=\"desktop-options\"] button')"));
+    await page("document.querySelector('[data-settings-group=\"desktop-options\"] button').click(); true");
+    const options = await until("local options for hub change", () => localSettings.at(-1));
+    await until("local hub form", async () => !options.isDestroyed() && options.webContents.executeJavaScript("document.querySelector('#hub').value.length > 0 && !!document.querySelector('#connect button')"));
+    const previousSession = win.webContents.session.storagePath;
+    const saved = options.webContents.executeJavaScript(`(() => { const form = document.querySelector('#connect'); document.querySelector('#hub').value = ${JSON.stringify(otherHub.href)}; form.requestSubmit(); return true; })()`);
+    if (!await saved) throw new Error("the local Continue form did not submit");
+    const replacement = await until("a new hub window", () => BrowserWindow.getAllWindows().find(candidate => candidate !== win && candidate !== options && !candidate.isDestroyed() && candidate.webContents.getURL().startsWith(otherHub.href)), 45_000);
+    if (!win.isDestroyed()) throw new Error("the old hub window is still alive after the hub changed");
+    win = replacement;
+    activeMock = otherMock;
+    const liveHubWindows = BrowserWindow.getAllWindows().filter(candidate => candidate !== options && !candidate.isDestroyed() && (candidate.webContents.getURL().startsWith(otherHub.href) || candidate === win));
+    if (liveHubWindows.length !== 1 || liveHubWindows[0] !== win) throw new Error(`hub replacement left ${liveHubWindows.length} eligible hub windows instead of one`);
+    const targetURL = win.webContents.getURL();
+    const targetSession = win.webContents.session.storagePath;
+    if (targetURL !== otherHub.href || targetSession === previousSession) throw new Error(`wrong replacement window or session: ${JSON.stringify({ targetURL, expected: otherHub.href, previousSession, targetSession })}`);
+    if (!win.webContents.getURL().startsWith(otherHub.href)) throw new Error("the replacement still shows the previous hub");
+    await until("second hub window is shown", () => !win.isDestroyed() && win.isVisible() && !win.webContents.isLoading());
+    await until("second hub sign-in page", () => page("!!document.querySelector('input[type=password]') || document.body.innerText.includes('Let this browser in from a device')"));
+    if (islandRows() !== 0) throw new Error(`the first hub's agents stayed in the island after the hub changed (${islandRows()} rows)`);
+    // The driver forces notification support and idle=0. A denial here is therefore an IPC authorization failure,
+    // not evidence that the native OS denied notification permission. Never substitute a visible/focused window for it.
+    const permission = await page("window.personaDesktop.notificationPermission()");
+    if (permission !== "granted") throw new Error(`the second hub's notification IPC was not authorized: ${JSON.stringify({permission})}`);
+    const loginItemState = await page("window.personaDesktop.getLaunchAtLogin().then(state => ({ok: true, state}), error => ({ok: false, error: String(error)}))");
+    if (!loginItemState.ok || typeof loginItemState.state?.enabled !== "boolean") throw new Error(`the second hub lost its public login-item IPC: ${JSON.stringify(loginItemState)}`);
+    const loginItemSet = await page(`window.personaDesktop.setLaunchAtLogin(${JSON.stringify(loginItemState.state.enabled)}).then(state => ({ok: true, state}), error => ({ok: false, error: String(error)}))`);
+    if (!loginItemSet.ok || typeof loginItemSet.state?.enabled !== "boolean") throw new Error(`the second hub lost its public login-item setter: ${JSON.stringify(loginItemSet)}`);
+    // A development Electron bundle may decline to persist a login item on macOS. The observable required here is
+    // the surviving authorized get/set IPC and its truthful readback, not an unproven operating-system autostart.
+    await until("second hub login item is still available", () => page(`window.personaDesktop.getLaunchAtLogin().then(state => typeof state.enabled === 'boolean')`));
+    await page("window.personaDesktop.setLaunchAtLogin(false)");
+    const presence = await page("window.personaDesktop.desktopPresence()");
+    const windowState = { visible: win.isVisible(), focused: win.isFocused(), enabled: win.isEnabled(), loading: win.webContents.isLoading(), url: safeURL(win.webContents.getURL()) };
+    if (!presence.active) throw new Error(`the second hub's presence was not authorized under forced support, zero idle and unlocked inputs: ${JSON.stringify({presence, permission, loginItemState, windowState})}`);
+    app.emit("second-instance", {}, [`persona://pair?url=${encodeURIComponent(otherHub.href)}&token=${encodeURIComponent(otherToken)}`]);
+    await until("second hub signed in", signedIn);
+    const secondHubRows = await until("the second hub's agents in the island", islandRows);
+    await page("window.personaDesktop.setIslandEnabled(false)");
+    if (!win.webContents.session.storagePath) throw new Error("the replacement window has no persisted origin-isolated session");
+    await go("/");
+    await until("second hub chat", () => page("!!document.querySelector('[data-testid=\"composer-send\"]')"));
+    await enableNotifications();
+    const original = await until("withdrawal at the first hub", async () => {
+      const state = await hubGet("/mock/desktops", mock);
+      return !state.registered.includes(DEVICE) && state;
+    });
+    const route = "/s/macbook/a1f3c2d4-0000-4000-8000-000000000002";
+    const accepted = await page(`window.personaDesktop.notify({title: 'Second hub notification', body: 'Bridge after the hub change', tag: 'second-hub-smoke', route: ${JSON.stringify(route)}})`);
+    if (!accepted) throw new Error("the replacement hub's production notify IPC was refused");
+    await until("second hub native notification", () => shown.find(n => n.title === "Second hub notification"));
+    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0, islandRows: { firstHub: firstHubRows, afterChange: 0, secondHub: secondHubRows }, ...(drawn ? { islandDrawn: drawn } : {}) };
+  });
 }
 
 async function subpathScenario() {
@@ -263,10 +450,8 @@ async function subpathScenario() {
   await lockWithdraws("close"); // a hub without desktop_unregister: only closing the socket withdraws (docs/desktop/desktop.md)
 }
 
-async function main() {
+async function main(created) {
   await mkdir(output, { recursive: true });
-  const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
-  await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
   win = await created;
   win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(String(event.message).slice(0, 300)); });
   await until("first load", () => !win.webContents.isLoading() && win.webContents.getURL().startsWith(hub.href), 45_000);
@@ -276,7 +461,8 @@ async function main() {
   // A headless Linux display gives every window 1x1; a real desktop keeps the size the shell restored.
   if (win.getBounds().width < 600) win.setBounds({ x: 0, y: 0, width: 1280, height: 840 });
   if (scenario === "root") await rootScenario();
-  else await subpathScenario();
+  else if (scenario === "subpath") await subpathScenario();
+  else await hubChangeScenario();
 }
 
 const consoleErrors = [];
@@ -286,13 +472,14 @@ async function finish(error) {
   if (finished) return;
   finished = true;
   clearTimeout(deadline);
-  const ok = !error && steps.length > 0 && steps.every(s => s.ok);
+  const ok = !error && steps.length > 0 && steps.every(s => s.ok) && consoleErrors.length === 0;
   const result = {
     ok, scenario, platform: process.platform, electron: process.versions.electron, hub: prefix ? `prefix ${prefix}` : "root",
     ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
     steps, screenshots: shots,
     boundary: { notifyRequests, shown: shown.map(n => ({ title: n.title, body: n.body })), closed: closed.length, badges, external },
     window: win && !win.isDestroyed() ? win.getBounds() : undefined,
+    presenceDiagnostics,
     consoleErrors: consoleErrors.slice(0, 20),
   };
   try {
@@ -303,7 +490,15 @@ async function finish(error) {
     }
     await writeFile(join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   } catch (writeError) { console.error(writeError); }
-  console.log(`desktop e2e ${scenario}: ${ok ? "PASS" : "FAIL"}${error ? ` (${result.error})` : ""}`);
+  console.log(`desktop e2e ${scenario}: ${ok ? "PASS" : "FAIL"}${error ? ` (${result.error})` : consoleErrors.length ? ` (renderer errors: ${consoleErrors.join(" | ")})` : ""}`);
   app.exit(ok ? 0 : 1);
 }
-main().then(() => finish(), error => finish(error));
+// The production entry loads before the app can become ready: it registers the island's scheme as it is evaluated, which
+// Electron takes only before ready. The same module instance main.js imports: the island it makes is the one seen here.
+const { NotchIsland } = await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "island.js")).href);
+const setIslandState = NotchIsland.prototype.setState;
+NotchIsland.prototype.setState = function setState(...args) { island = this; return setIslandState.apply(this, args); };
+const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
+await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
+if (coldLink) app.emit("open-url", { preventDefault() {} }, coldLink);
+main(created).then(() => finish(), error => finish(error));

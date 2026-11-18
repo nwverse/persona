@@ -81,6 +81,13 @@ type conversation struct {
 	started    bool // the app got its ready
 	outRate    int
 	reconnects int
+	// down is the last session the service said it cannot serve (error upstream_unavailable, its model's backend is
+	// down) with its words, clipped: it closes that session right after (docs/lessons/voice.md "Errors"), so the
+	// session's loss is the service's, not the network's.
+	down struct {
+		session int // sessionNo; 0 none
+		text    string
+	}
 	// toolless: its sessions declare no function tools, as its provider's service refused them (Provider.Tools unset,
 	// #1420). Set once, never cleared; read without mu (toolSet).
 	toolless atomic.Bool
@@ -151,6 +158,8 @@ type conversation struct {
 	modelAt time.Time
 	// talkIgnored: a talk frame came on a call that is not a meeting call, and was logged (meeting.go).
 	talkIgnored bool
+	// holdIgnored: a hold frame came on a call that takes none (protocol 1, a meeting call), and was logged (suspend.go).
+	holdIgnored bool
 }
 
 type outFrame struct {
@@ -471,7 +480,7 @@ func (c *conversation) shutdown() {
 	}
 	c.closed = true
 	up, w := c.up, c.w
-	lines := callLines{user: c.userSeq, model: c.asstSeq, pauses: c.sus.pauses, meeting: c.meeting.meetingLog()}
+	lines := callLines{user: c.userSeq, model: c.asstSeq, pauses: c.sus.pauses, holds: c.sus.holds, meeting: c.meeting.meetingLog()}
 	for id, t := range c.pending {
 		t.Stop()
 		delete(c.pending, id)

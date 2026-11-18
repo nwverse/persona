@@ -17,7 +17,7 @@ export class NavigationContext {
         const data = Wire.parse(param); result.page = Wire.text(data, 'page');
         const target = Wire.text(data, 'target'); if (target) { result.row = NavigationContext.rowFrom(target); result.scoped = !!result.row.id; }
       } else result.page = param;
-    } else if (['session', 'conversation', 'resource', 'tools', 'history', 'inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread', 'computer', 'extension'].includes(name)) {
+    } else if (['session', 'conversation', 'resource', 'tools', 'history', 'inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread', 'computer', 'extension', 'assistant'].includes(name)) {
       result.row = NavigationContext.rowFrom(param); result.scoped = !!result.row.id;
     }
     return result;

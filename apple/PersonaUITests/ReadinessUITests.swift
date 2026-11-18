@@ -318,6 +318,9 @@ final class ReadinessUITests: XCTestCase {
         if let expected = ProcessInfo.processInfo.environment["PERSONA_EXPECT_TITLE"] {
             let title = app.staticTexts[expected].firstMatch
             XCTAssertTrue(title.waitForExistence(timeout: 5), "the error must name its launcher:\n\(app.debugDescription)")
+            fix.tap()
+            let detail = app.descendants(matching: .any)["launcher.detail"].firstMatch
+            XCTAssertTrue(detail.waitForExistence(timeout: 10), "the repair must open the named launcher, not the wizard:\n\(app.debugDescription)")
         }
     }
 }

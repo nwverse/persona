@@ -1,5 +1,6 @@
 import MarkdownUI
 import SwiftUI
+import PersonaWire
 
 // The components of an extension's View (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
 
@@ -599,6 +600,8 @@ struct ExtensionActionButton<Content: View>: View {
     var model: any ExtensionViewControlling
     var values: [String: String] = [:]
     @Binding var link: LinkTarget?
+    /// Its accessibility identifier; nil: `plugin-ui-action-<action id>`.
+    var identifier: String? = nil
     @ViewBuilder var label: Content
     @State private var asking = false
 
@@ -611,7 +614,7 @@ struct ExtensionActionButton<Content: View>: View {
         // A Mac form draws a button in the accent whatever its role: red as on the phone (#1512).
         .tint(destructive ? Theme.danger : nil)
         .disabled(!model.isEnabled(action))
-        .accessibilityIdentifier("plugin-ui-action-\(action.id)")
+        .accessibilityIdentifier(identifier ?? "plugin-ui-action-\(action.id)")
         .confirmationDialog(action.confirm ?? "", isPresented: $asking, titleVisibility: .visible) {
             Button(role: destructive ? .destructive : nil) { run() } label: { Text(title.isEmpty ? String(localized: "OK [Interactive Assistant View Card fac2a6]") : title).lineLimit(1) }
                 .accessibilityIdentifier("plugin-ui-confirm")

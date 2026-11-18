@@ -49,6 +49,20 @@ type codexAppThread struct {
 
 func (t codexAppThread) updated() time.Time { return time.UnixMilli(t.UpdatedAtMs) }
 
+// origin is where the thread came from as its database row says, for a row whose rollout is gone (codexThreadOrigin):
+// its source is the rollout's session_meta source, a plain string ("vscode", "exec") or a subagent's object
+// (codexSourceObject), and every row read is the App's (readCodexAppThreads). It names no root and no start time.
+func (t codexAppThread) origin() codexOrigin {
+	o := codexOrigin{desktop: true}
+	source := strings.TrimSpace(t.Source)
+	if !strings.HasPrefix(source, "{") {
+		o.exec, o.sub = source == "exec", source == "subagent"
+		return o
+	}
+	o.parent, o.guardian, o.sub = codexSourceObject(json.RawMessage(source))
+	return o
+}
+
 type codexAppDB struct {
 	at    time.Time // when the database was last looked at
 	stamp string    // the database's files and the sidebar's ids when last read
@@ -60,9 +74,12 @@ var codexAppDBs = struct {
 	byHome map[string]*codexAppDB
 }{byHome: map[string]*codexAppDB{}}
 
+// codexAppDBGlob is what codexAppDBPath globs with (a test counts the globs).
+var codexAppDBGlob = filepath.Glob
+
 // codexAppDBPath is the newest state database in home (state_5.sqlite in 2026-11): its number goes up with its schema.
 func codexAppDBPath(home string) string {
-	paths, _ := filepath.Glob(filepath.Join(home, "state_*.sqlite"))
+	paths, _ := codexAppDBGlob(filepath.Join(home, "state_*.sqlite"))
 	best, bestN := "", -1
 	for _, p := range paths {
 		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "state_"), ".sqlite"))
@@ -222,7 +239,7 @@ func readCodexAppProjects(home string) map[string]codexAppProject {
 		Name string `json:"name"`
 		Root string `json:"root"`
 	}
-	if err := queryCodexAppDB(context.Background(), db,
+	if err := querySQLite(context.Background(), db,
 		`SELECT p.id AS id, p.name AS name, r.root AS root FROM projects p LEFT JOIN project_roots r ON r.project_id = p.id`, &rows); err != nil {
 		return nil
 	}
@@ -238,9 +255,10 @@ func readCodexAppProjects(home string) map[string]codexAppProject {
 	return out
 }
 
-// queryCodexAppDB runs q against the App's state database and decodes the json rows into into (read-only, as
-// readCodexThreads).
-func queryCodexAppDB(ctx context.Context, db, q string, into any) error {
+// querySQLite runs q against a SQLite database with the system sqlite3 and decodes the json rows into into
+// (read-only, as readCodexThreads; a WAL database nobody has open is read as it is on disk, codexDBTarget): the Codex
+// App's state database, opencode's (usage_opencode.go).
+func querySQLite(ctx context.Context, db, q string, into any) error {
 	sqlite, err := exec.LookPath("sqlite3")
 	if err != nil {
 		return err
@@ -279,6 +297,12 @@ func (n *Node) registerCodexAppThreads(home string, pass *codexListPass) {
 		if t.RolloutPath != "" {
 			if _, err := pass.stat(t.RolloutPath); err == nil {
 				path = t.RolloutPath
+				if !pathWithin(path, canonical) {
+					// The App names the rollout as it reached its home, which may be through a link (macOS's /var, a
+					// linked ~/.codex). The rollout scan registers the same file under the resolved home, so register
+					// it resolved too, or the two spellings of one file contend for the chat's path.
+					path = realPath(path)
+				}
 			}
 		}
 		n.registerCanonicalCodex(canonical, t.ID, path)

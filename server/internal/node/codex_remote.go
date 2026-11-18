@@ -396,7 +396,8 @@ func (c *codexRemote) refresh() error {
 			t.parent = "parent-managed"
 		}
 		if t.parent != "" && validID(t.parent) {
-			t.parent = c.n.registerCodex(c.spec.Home, t.parent, "")
+			// Keep the raw thread ID: decorateCodexSession maps ancestry to public IDs once.
+			c.n.registerCodex(c.spec.Home, t.parent, "")
 		}
 		if t.files == nil {
 			t.files = map[string][]string{}
@@ -717,6 +718,9 @@ func (n *Node) interruptCodex(ctx context.Context, id string) error {
 	}
 	if err != nil {
 		return refusal("codex_read_only", err.Error(), nil)
+	}
+	if t.turn == "" && t.parent == "" {
+		t.turn = c.activeTurn(ctx, t.id) // a turn already running when Persona joined (codex_daemon.go)
 	}
 	if t.turn == "" || t.parent != "" {
 		return refusal("codex_read_only", "没有可停止的已观察轮次", nil)

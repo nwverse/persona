@@ -17,7 +17,6 @@ type skillCatalogRequest struct {
 	SessionID string `json:"session_id"`
 	Cwd       string `json:"cwd"`
 	Launcher  string `json:"launcher"`
-	Runtime   string `json:"runtime"`
 	ConfigDir string `json:"config_dir"`
 	Scope     string `json:"-"` // additional node-derived ordinary session identity
 }
@@ -50,7 +49,7 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 	case "codex":
 		entries, out.Complete, err = n.codexSkillCatalog(ctx, in)
 	case "claude":
-		in.ConfigDir, err = n.assistantProfileSelection(ctx, in.SessionID, in.Launcher, in.Runtime, in.ConfigDir, in.SessionID != "")
+		in.ConfigDir, err = n.assistantProfileSelection(ctx, in.SessionID, in.Launcher, in.ConfigDir, in.SessionID != "")
 		if err != nil {
 			return out, err
 		}
@@ -78,7 +77,8 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 					return out, errors.New("cannot establish the launcher's skill settings")
 				}
 			}
-			entries, err = visibleClaudeSkills(entries, profile, in.Cwd, own)
+			// The user's skill switches a private profile carries (assistant_user_setup.go) come before the launcher's.
+			entries, err = visibleClaudeSkills(entries, profile, in.Cwd, map[string]any{"skillOverrides": n.userSkillsOff(profile, in.Cwd)}, own)
 		}
 	default:
 		err = errors.New("skill selection is unavailable for this runtime")
@@ -86,8 +86,10 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 	if err != nil {
 		return out, err
 	}
-	identity := []string{in.Owner, in.Machine, in.Cwd, in.Launcher, in.Runtime, in.ConfigDir,
-		n.executionFingerprint(in.Launcher, modelExecution{Runtime: in.Runtime})}
+	// The empty fifth word keeps a CLI conversation's scope, and so each skill's id, what an older node gave: a skill
+	// picked from its catalog still resolves here.
+	identity := []string{in.Owner, in.Machine, in.Cwd, in.Launcher, "", in.ConfigDir,
+		n.executionFingerprint(in.Launcher, modelExecution{})}
 	if in.Scope != "" {
 		identity = append(identity, in.Scope)
 	}
@@ -99,13 +101,7 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string, launcherSettings ...map[string]any) ([]assistantskills.Entry, error) {
 	// A bounded local adapter cannot establish the effective managed policy. Check presence only:
 	// never execute a policy helper or read a server-policy cache that may contain credentials.
-	policies := append([]string{filepath.Join(profile, "remote-settings.json"),
-		"/etc/claude-code/managed-settings.json", "/etc/claude-code/managed-settings.d"}, claudeManagedSettings...)
-	policies = append(policies, claudeManagedSettingsDirs...)
-	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
-		policies = append(policies, filepath.Join(programFiles, "ClaudeCode", "managed-settings.json"),
-			filepath.Join(programFiles, "ClaudeCode", "managed-settings.d"))
-	}
+	policies := claudePolicyPaths(profile)
 	for _, file := range policies {
 		if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
 			return nil, errors.New("skill catalog is unavailable while a managed policy may apply")
@@ -168,7 +164,7 @@ func (n *Node) selectedSkills(ctx context.Context, id, cwd, launcher, text strin
 	machine := n.machineID
 	n.mu.Unlock()
 	catalog, err := n.skillCatalog(ctx, skillCatalogRequest{Owner: owner, Machine: machine, SessionID: id, Cwd: cwd,
-		Launcher: launcher, Runtime: execution.Runtime, ConfigDir: execution.ConfigDir})
+		Launcher: launcher, ConfigDir: execution.ConfigDir})
 	if err != nil {
 		return nil, skillSelectionError(err)
 	}

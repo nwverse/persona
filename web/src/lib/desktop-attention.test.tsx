@@ -13,26 +13,30 @@ import type { Interaction } from "./types";
 const { sendMock, connectMock, disconnectMock } = vi.hoisted(() => ({ sendMock: vi.fn(), connectMock: vi.fn(), disconnectMock: vi.fn() }));
 let features: string[] = ["desktop_unregister"];
 let notifyOn = true;
+let socketOpen = true;
 vi.mock("./store", () => ({
   useStore: (select: (s: { loaded: boolean; interactions: Interaction[] }) => unknown) => select({ loaded: true, interactions: [] }),
   getState: () => ({ mutes: { spaces: [], sessions: [], allowed: [] }, interactions: [], features }),
   onHello: (fn: () => void) => { hello = fn; return () => { hello = undefined; }; },
-  send: sendMock, appSocketReady: () => true,
-  connect: connectMock, disconnect: disconnectMock,
+  send: sendMock, appSocketReady: () => socketOpen,
+  connect: () => { socketOpen = true; connectMock(); }, disconnect: () => { socketOpen = false; disconnectMock(); },
   hubHas: (list: string[], feature: string) => list.includes(feature),
   DESKTOP_UNREGISTER_FEATURE: "desktop_unregister",
+  onHubEvent: () => () => {}, setHelloExtras: () => {}, sayHello: () => {},
 }));
 vi.mock("./sessions", () => ({ useCounts: () => ({ badge: 0 }), useAgentSessions: () => [] }));
 vi.mock("./notify", async (original) => ({
   ...(await original<typeof import("./notify")>()),
   systemNotifyActive: () => notifyOn,
-  onSystemNotifyChange: (callback: () => void) => { changeNotifications = callback; return () => { changeNotifications = undefined; }; },
+  onSystemNotifyChange: (callback: () => void) => { notificationListeners.add(callback); return () => void notificationListeners.delete(callback); },
 }));
 
 let hello: (() => void) | undefined;
 let active: boolean | undefined;
 let changePresence: ((value: boolean) => void) | undefined;
-let changeNotifications: (() => void) | undefined;
+// every listener of the notification settings (the desktop lifecycle's, and what the page asks the hub for, #8145)
+const notificationListeners = new Set<() => void>();
+const changeNotifications = () => notificationListeners.forEach((l) => l());
 
 function desktopMock(overrides: Partial<DesktopBridge> = {}): DesktopBridge {
   return {
@@ -62,11 +66,12 @@ describe("desktop attention lifecycle", () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     features = ["desktop_unregister"];
     notifyOn = true;
+    socketOpen = true;
     active = true;
     vi.stubGlobal("window", Object.assign(window, { personaDesktop: desktopMock() }));
     hello = undefined;
     changePresence = undefined;
-    changeNotifications = undefined;
+    notificationListeners.clear();
     root = createRoot(document.createElement("div"));
   });
   afterEach(() => {
@@ -74,23 +79,26 @@ describe("desktop attention lifecycle", () => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
-  it("registers on authenticated hello, withdraws and restores on unlock, and follows notification settings", async () => {
+  it("registers on authenticated hello, withdraws and restores on unlock on the same socket, and follows notification settings", async () => {
     await act(async () => root.render(<Probe />));
     await act(async () => hello?.());
     expect(sendMock).toHaveBeenNthCalledWith(1, { type: "register_desktop", device_name: "Desktop" });
+    // the shell's 30 s repeat of an unchanged presence: the open socket stays and the hub is told nothing again
+    await act(async () => changePresence?.(true));
+    expect(sendMock).toHaveBeenCalledTimes(1);
     await act(async () => changePresence?.(false));
     expect(sendMock).toHaveBeenNthCalledWith(2, { type: "unregister_desktop" });
     await act(async () => changePresence?.(true));
-    expect(connectMock).toHaveBeenCalledOnce();
+    expect(connectMock).not.toHaveBeenCalled();
     expect(sendMock).toHaveBeenNthCalledWith(3, { type: "register_desktop", device_name: "Desktop" });
-    await act(async () => { notifyOn = false; changeNotifications?.(); });
+    await act(async () => { notifyOn = false; changeNotifications(); });
     expect(sendMock).toHaveBeenNthCalledWith(4, { type: "unregister_desktop" });
-    await act(async () => { notifyOn = true; changeNotifications?.(); });
+    await act(async () => { notifyOn = true; changeNotifications(); });
     expect(sendMock).toHaveBeenNthCalledWith(5, { type: "register_desktop", device_name: "Desktop" });
     await act(async () => root.unmount());
     expect(hello).toBeUndefined();
     expect(changePresence).toBeUndefined();
-    expect(changeNotifications).toBeUndefined();
+    expect(notificationListeners.size).toBe(0);
   });
   it("reconnects an old hub when notifications are restored and routes native clicks through the real listener", async () => {
     let click: ((route: string) => void) | undefined;
@@ -104,9 +112,9 @@ describe("desktop attention lifecycle", () => {
     }) }));
     await act(async () => root.render(<Probe />));
     await act(async () => hello?.());
-    await act(async () => { notifyOn = false; changeNotifications?.(); });
+    await act(async () => { notifyOn = false; changeNotifications(); });
     expect(disconnectMock).toHaveBeenCalledOnce();
-    await act(async () => { notifyOn = true; changeNotifications?.(); });
+    await act(async () => { notifyOn = true; changeNotifications(); });
     expect(connectMock).toHaveBeenCalledOnce();
     expect(sendMock).toHaveBeenLastCalledWith({ type: "register_desktop", device_name: "Desktop" });
     click?.("/persona/s/m/a?view=chat");

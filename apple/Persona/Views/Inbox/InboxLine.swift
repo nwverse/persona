@@ -170,10 +170,10 @@ struct InboxLineSection: View {
                 InboxLineOpen.agent(key, owner: tree?.item?.manager, model: model, push: pushChat)
             }) { r in
                 NavigationStack {
-                    TodoDetailView(todoID: r.id, openAgent: pushChat == nil ? nil : { key in
+                    TodoDetailView(todoID: r.id, onOpenAgent: pushChat == nil ? nil : { key in
                         pendingAgent = key
                         todo = nil
-                    }).macSheetDone { todo = nil }
+                    }).sheetDone { todo = nil }
                 }
                 #if os(macOS)
                 .macSheet()

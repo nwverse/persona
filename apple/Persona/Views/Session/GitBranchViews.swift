@@ -63,17 +63,14 @@ struct GitBranchesSheet: View {
             }
             .listStyle(.insetGrouped)
             .themedPage()
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: Text("Find or name a branch"))
+            .pageSearchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: String(localized: "Find or name a branch"))
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .navigationTitle(Text("Branches"))
-            .navigationSubtitle(status.branch ?? String(localized: "Detached HEAD"))
+            .navigationSubtitleWhenSupported(status.branch ?? String(localized: "Detached HEAD"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { dismiss() } label: { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) }
-                        .disabled(switching)
-                }
+                SheetClose(disabled: switching) { dismiss() }
             }
             .confirmationDialog(Text(asking.map { $0.create ? String(localized: "Create \($0.branch)?") : String(localized: "Switch to \($0.branch)?") } ?? ""),
                                 isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
@@ -221,13 +218,10 @@ struct GitStashesSheet: View {
             .themedPage()
             .refreshable { await refresh() }
             .navigationTitle(Text("Stashes"))
-            .navigationSubtitle(status.branch ?? String(localized: "Detached HEAD"))
+            .navigationSubtitleWhenSupported(status.branch ?? String(localized: "Detached HEAD"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { dismiss() } label: { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) }
-                        .disabled(stashing)
-                }
+                SheetClose(disabled: stashing) { dismiss() }
             }
             .confirmationDialog(Text("Drop This Stash?"), isPresented: Binding(get: { dropping != nil }, set: { if !$0 { dropping = nil } }),
                                 titleVisibility: .visible, presenting: dropping) { e in

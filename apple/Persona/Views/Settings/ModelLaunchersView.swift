@@ -521,6 +521,7 @@ struct ModelLauncherDetailView: View {
                 Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, Theme.Space.xl) }.listRowBackground(Color.clear)
             }
         }
+        .accessibilityIdentifier("launcher.detail")
         .detailTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
@@ -705,11 +706,11 @@ struct LauncherEditor: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: opened.map { $0 != fields } ?? false) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { usesPreset ? await savePreset() : await save() } }.lineLimit(1)
-                        .disabled(usesPreset ? !presets.canSave
-                                  : saving || name.isEmpty || baseURL.isEmpty || modelName.isEmpty || (isNew && apiKey.isEmpty)
-                                    || (scopeShown && scope.problem != nil))
+                SheetConfirm(id: "launcher-save",
+                             disabled: usesPreset ? !presets.canSave
+                                 : saving || name.isEmpty || baseURL.isEmpty || modelName.isEmpty || (isNew && apiKey.isEmpty)
+                                   || (scopeShown && scope.problem != nil)) {
+                    Task { usesPreset ? await savePreset() : await save() }
                 }
             }
             .task {

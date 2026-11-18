@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor
 struct AssistantViewModelTests {
@@ -192,7 +193,7 @@ struct AssistantViewModelTests {
     @Test func unsupportedGeneratedComponentsUseFallbackRatherThanBlankCards() {
         let future = #"{"fallback":"文字说明","sections":[{"items":[{"type":"hologram","title":"新组件"}]}]}"#
         #expect(AssistantRichMarkdown.decode(future) == nil)
-        // A card is drawn at `ExtensionUIContext.cardVersion` (6, #827): UI version 4's header is drawn, not left out.
+        // A card is drawn at `ExtensionUIContext.cardVersion` (8, #827, #9158): UI version 4's header is drawn, not left out.
         let header = #"{"fallback":"文字说明","sections":[{"items":[{"type":"header","title":"新组件"}]}]}"#
         #expect(AssistantRichMarkdown.decode(header) != nil)
         var card = view()

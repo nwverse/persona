@@ -6,10 +6,11 @@ import SwiftUI
 // current one checked, the default marked only when there are several installed assistants, one still installing with its
 // code's time left, and beside every other one than the current how much waits for the user there (`AssistantBadges`: its
 // agents waiting and its inbox's Needs You), then New Assistant and Manage Assistants… (Settings › Assistants). A
-// single-assistant roster therefore has one row without Default, followed by those two actions. The header's face carries
-// a mark while another assistant has something waiting. Picking one makes it the current assistant on this device
-// (`AppModel.selectAssistantManager`, kept for each hub across launches); picking one still installing shows how to
-// install it. Without a roster, or without an installed current assistant, the sidebar keeps the old Persona header.
+// single-assistant roster therefore has one row without Default, followed by those two actions. The built-in assistant
+// has no row while the hub marks it `hidden` (#9055). The header's face carries a mark while another assistant has
+// something waiting. Picking one makes it the current assistant on this device (`AppModel.selectAssistantManager`, kept
+// for each hub across launches); picking one still installing shows how to install it. Without a roster, or without an
+// installed current assistant, the sidebar keeps the old Persona header.
 
 /// What the switcher says and how it marks an assistant, kept apart from the views to test.
 enum AssistantSwitcherText {
@@ -19,9 +20,11 @@ enum AssistantSwitcherText {
         return ManagersText.status(m, now: now).text
     }
 
-    /// The rows in the list's order: the installed ones, the default first, then those still installing.
+    /// The rows in the list's order: the installed ones, the default first, then those still installing. One the hub
+    /// keeps out of the switcher (`HubManager.hidden`: the built-in assistant while the user hides it and it isn't used,
+    /// #9055) has no row; the rest of the app still counts it (`ManagerRoster.installed`, `isMulti`).
     static func rows(_ roster: ManagerRoster) -> [HubManager] {
-        roster.installed + roster.managers.filter { $0.installing != nil }
+        (roster.installed + roster.managers.filter { $0.installing != nil }).filter { !$0.hidden }
     }
 
     /// Which of an avatar's colors a manager gets, the same on every client: the default's is the assistant's own
@@ -138,6 +141,8 @@ struct AssistantSwitcherHeader: View {
     var compact = false
     var showsSwitchLabel = false
     var identityStyle: IdentityStyle = .sidebar
+    /// Between the face and the name (the Sidebar layout's head brings the name onto its rows' titles line, #4206).
+    var faceGap = Theme.Space.m
     /// Opens Settings on the page `AppModel.settingsPath` names.
     var openSettings: () -> Void
 
@@ -159,7 +164,7 @@ struct AssistantSwitcherHeader: View {
         let othersWaiting = model.othersWaiting
         let showsFace = !compact
         Button { listShown.toggle() } label: {
-            HStack(spacing: Theme.Space.m) {
+            HStack(spacing: faceGap) {
                 switch identityStyle {
                 case .sidebar:
                     if showsFace {

@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Drawing the code page's blocks (ExtensionCodePage.swift): one lazy stack, each block a row; the tabs over the page,
 // a single file's lines, the phone's directory pages.
@@ -125,6 +126,7 @@ struct CodeBlockStack: View {
                     }
                     if let more { ExtensionMoreRow(more: more, model: model, link: $link) }
                 }
+                .environment(\.extensionCardInset, CardStyle.padding)
                 .card()
                 if let footer, !footer.isEmpty {
                     Text(footer).font(Theme.Font.label).foregroundStyle(.secondary).padding(.horizontal, Theme.Space.xs)
@@ -677,7 +679,7 @@ struct CodeBreadcrumbView: View {
             line
             ScrollView(.horizontal) { line }
                 .scrollIndicators(.hidden)
-                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
                 .contentMargins(.vertical, Theme.Space.flush, for: .scrollContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -719,7 +721,7 @@ struct CodeTabsBar: View {
             row
             ScrollView(.horizontal) { row }
                 .scrollIndicators(.hidden)
-                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
                 .contentMargins(.vertical, Theme.Space.flush, for: .scrollContent)
                 .scrollClipDisabled()
         }

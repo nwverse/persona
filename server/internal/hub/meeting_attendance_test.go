@@ -215,6 +215,33 @@ func TestMeetingHighlightsFollowTheDefaultManager(t *testing.T) {
 	}
 }
 
+// meeting_notes is listed only beside meeting_live_view (and so meeting_conversation), while the default manager names
+// it too (#8851): a phone sends the notes role to no manager that would read it as off.
+func TestMeetingNotesFollowsTheDefaultManager(t *testing.T) {
+	h, srv, _ := newBusHub(t)
+	a := connectStateManager(t, h, srv, assistantwire.AssistantID)
+	hello := func(caps ...string) {
+		t.Helper()
+		if err := a.call(t, busHello, map[string]any{"id": a.id, "capabilities": append([]string{assistantwire.CapabilityConfigOwn}, caps...)}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := func() bool { return slices.Contains(h.features(), featureMeetingNotes) }
+	hello(assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingNotes)
+	if listed() {
+		t.Fatal("listed without meeting_live_view")
+	}
+	hello(assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingLiveView,
+		assistantwire.CapabilityMeetingNotes)
+	if !listed() || slices.Contains(h.features(), featureMeetingHighlights) {
+		t.Fatalf("features %v", h.features())
+	}
+	hello(assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingLiveView)
+	if listed() {
+		t.Fatalf("listed for a manager that does not name it: %v", h.features())
+	}
+}
+
 // meeting_echo is listed only beside meeting_attendance, while the default manager names it too (#5905).
 func TestMeetingEchoFollowsTheDefaultManager(t *testing.T) {
 	h, srv, _ := newBusHub(t)
@@ -244,13 +271,13 @@ func TestMeetingEchoFollowsTheDefaultManager(t *testing.T) {
 func TestMeetingFeaturesNotFromAReport(t *testing.T) {
 	h := newTestHub(t)
 	h.keepExtReport(assistantwire.AssistantID, &extwire.Report{Features: []string{featureMeetingAttendance, featureMeetingConversation,
-		featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, "fa"}})
+		featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, "fa"}})
 	features := h.features()
 	if !slices.Contains(features, "fa") {
 		t.Fatalf("the report's own feature is missing: %v", features)
 	}
 	for _, f := range []string{featureMeetingAttendance, featureMeetingConversation, featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights,
-		featureMeetingEcho, featureMeetingTranscription} {
+		featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription} {
 		if slices.Contains(features, f) {
 			t.Errorf("a report added %s", f)
 		}

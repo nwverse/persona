@@ -72,10 +72,8 @@ func (s *Service) inboxSuggestionRoutes() {
 			apierr.Write(w, http.StatusForbidden, err)
 		case errors.Is(err, errMailReplyTargetChanged):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(l, "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none"})
-		case replyInDoubt(err):
-			body := apierr.LocalizedBody(http.StatusBadGateway, assistantwire.CodeAssistantInDoubt, err, i18n.OfWriter(w))
-			body["delivered"], body["retryable"] = "unknown", false
-			apierr.WriteBody(w, http.StatusBadGateway, body)
+		case err != nil && s.writeInboxSendError(w, r, "suggestion", r.PathValue("id"), err):
+			// in doubt (delivered unknown), or why nothing was sent (#9125)
 		case err != nil:
 			apierr.Write(w, http.StatusBadGateway, err)
 		default:
@@ -142,15 +140,18 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	switch {
 	case in.Action == suggestReject:
 		b.chainAdd(it, rejectedEntry(l, g.Text, now))
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteRejected, Text: g.Text}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
 		b.chainAdd(it, instructedEntry(l, words, now))
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case !execute: // handback: the conversation does it
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteHandback, Text: text, Edited: edited}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case g.Kind == SuggestConclusion:

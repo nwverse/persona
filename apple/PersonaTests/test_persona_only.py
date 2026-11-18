@@ -179,9 +179,10 @@ class PersonaOnlyTests(unittest.TestCase):
             self.assertEqual(controls.count(f"Self.configuration(kind: LegacyNames.{stable})"), 1)
         for interim in ["persona.control.ask", "persona.control.agents"]:
             self.assertEqual(controls.count(f'configuration(kind: "{interim}")'), 1)
+        self.assertEqual(controls.count('Self.configuration(kind: "persona.control.dictate")'), 1)
         bundle = source("PersonaWidgets/PersonaWidgetsBundle.swift")
-        for widget in ["AskPersonaControl", "PersonaAgentsControl", "CompatibleAssistantControl", "CompatibleAgentsControl",
-                       "FleetLiveActivity", "CompatibleFleetLiveActivity"]:
+        for widget in ["AskPersonaControl", "PersonaAgentsControl", "DictatePersonaControl", "CompatibleAssistantControl",
+                       "CompatibleAgentsControl", "FleetLiveActivity", "CompatibleFleetLiveActivity"]:
             self.assertEqual(len(re.findall(rf"\b{widget}\(\)", bundle)), 1)
 
     def test_duplicate_key_guards_reject_silent_overwrites(self):
@@ -338,9 +339,9 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('static let persona = "sparkle"', icons)
         self.assertIn("symbol: Theme.Icon.avatar", source("Persona/Views/Settings/AppearanceSettingsView.swift"))
         launch = source("PersonaUITests/UITestStyle.swift")
-        self.assertEqual(len(re.findall(r"\bfunc launchPersona\(\)", launch)), 1)
-        self.assertNotRegex(launch, r"func launchPersona\(\)\s*\{\s*launchPersona\(\)")
-        wire = source("Shared/Generated/ExtensionWire.swift")
+        self.assertEqual(len(re.findall(r"\bfunc launchPersona\(", launch)), 1)
+        self.assertNotRegex(launch, r"func launchPersona\([^)]*\)\s*\{\s*launchPersona\(")
+        wire = source("Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift")
         look = re.search(r"enum ExtensionBuiltinLook\s*\{([^}]+)\}", wire).group(1)
         names = re.findall(r"static let (\w+)\s*=", look)
         self.assertEqual(len(names), len(set(names)))

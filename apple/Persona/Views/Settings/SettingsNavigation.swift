@@ -111,6 +111,8 @@ enum SettingsCatalog {
                   aliases: String(localized: "settings.search.knowledge")),
             .init(id: "meetings", title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, group: .assistant, page: .meetings,
                   aliases: String(localized: "settings.search.meetings")),
+            .init(id: "live-screen", title: String(localized: "Live Screen"), symbol: Theme.Icon.screen, group: .device, page: .liveScreen,
+                  aliases: String(localized: "settings.search.live_screen")),
             .init(id: "layout", title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, group: .device, page: .layout,
                   aliases: String(localized: "settings.search.layout")),
             .init(id: "health", title: String(localized: "Health"), symbol: Theme.Icon.health, group: .device, page: .health,
@@ -146,6 +148,7 @@ struct SettingsAboutPage: View {
     var body: some View {
         SettingsForm {
             Section { LabeledContent("Version", value: version) }
+            DevModeSection()
             Section {
                 DisclosureGroup("Diagnostics") {
                     LabeledContent("Build") { Text(commit).font(Theme.Font.code).textSelection(.enabled) }

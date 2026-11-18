@@ -59,6 +59,10 @@ type Pusher struct {
 	// fleet.clients, whether a phone would be pushed an MCP form). It may run under the Pusher's locks: it must not block.
 	devicesChanged func()
 
+	// sends counts the APNs and relay posts still on their way (sendBuiltWith, sendLiveActivity): each runs in its own
+	// goroutine and logs when it ends, so whoever closes what they post to (a test's fake APNs) waits for them first.
+	sends sync.WaitGroup
+
 	mu sync.Mutex
 	// sendMu lets maintenance skip an active transport instead of retiring a
 	// target whose acceptance is still in flight. Reads remain concurrent.
@@ -80,6 +84,29 @@ type Pusher struct {
 	// prefsEdit holds one change of a device's settings from its read to its write (editPrefs); taken before saveMu
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
+
+	// lnMu guards the low-distraction mode state (lnmode.go): the cached switch, the per-key push times for the
+	// 12-hour rule, the held-push list and the delivered-push counts.
+	lnMu         sync.Mutex
+	lnCached     *bool
+	lnCachedAt   time.Time
+	lnRefreshing bool
+	lnVersion    uint64 // bumped by setLnMode, so a refresh that read before it does not undo it
+	lnLastPush   map[string]time.Time
+	intercepts   []pushIntercept
+	sent         []pushSent
+	lnDirty      bool // the held-push list changed since the last save
+	// sentPending are the delivered pushes not yet appended to the store's record (pushSentStore); sentPrunedAt is
+	// when its last sweep ran.
+	sentPending  []pushSent
+	sentPrunedAt time.Time
+	// The hub.push_sent setting a build from before the table reads (mirrorSent): sentMirrorable once this hub read
+	// both at start, sentMirrorDue while it holds pushes the setting lacks, sentMirroredAt its last write.
+	sentMirrorable bool
+	sentMirrorDue  bool
+	sentMirroredAt time.Time
+	sentMirrorMu   sync.Mutex
+	lnWriting      bool // the one saver goroutine is running
 }
 
 // deviceStoreTimeout: how long a device row write may take before it gives up (the pool has no statement_timeout).
@@ -104,6 +131,7 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		}
 		cancel()
 	}
+	p.loadLnState() // the grading switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
 		logf("push: no %s, pushing through each phone's relay (docs/operations/push-relay.md)", filepath.Join(dir, "apns.json"))
@@ -156,6 +184,7 @@ func (p *Pusher) register(d Device) error {
 		d.RelayError = ""
 	}
 	d.RelayError = clipRelayError(d.RelayError)
+	cleanVoIP(&d)
 	d.Features = cleanFeatures(d.Features)
 	p.mu.Lock()
 	cur := p.devices[d.DeviceID]

@@ -32,7 +32,7 @@ enum AssistantScheduleText {
         return String(localized: "Every \(list)")
     }
 
-    /// The rule in words, as Reminders says it: "Every weekday 9:00 AM" / "Every Day 9:30 PM" / "Every Fri 5:00 PM" /
+    /// The rule in words: "Every weekday at 09:00" / "Every Day at 21:30" / "Every Fri at 17:00" /
     /// "Every 30 min" / "Once · Today 15:30" / "0 10 1 * * · At 10:00, on day 1 of the month".
     static func sentence(_ r: APIClient.ScheduledTask) -> String {
         switch r.repeats {
@@ -48,7 +48,7 @@ enum AssistantScheduleText {
         else if d == [6, 7] { days = String(localized: "Every weekend") }
         else { let list = dayList(d); days = String(localized: "Every \(list)") }
         let time = clock(r.time)
-        return String(localized: "\(days) \(time)", comment: "Repeat rule and time of day, e.g. Every weekday 9:00 AM")
+        return String(localized: "\(days) at \(time)", comment: "Repeat rule and 24-hour time of day, e.g. Every weekday at 09:00")
     }
 
     /// A cron task's rule: its expression, then the hub's words for it (first, so a one-line row always shows the
@@ -59,21 +59,13 @@ enum AssistantScheduleText {
         return String(localized: "\(cron) · \(text)")
     }
 
-    /// "09:00" → "9:00 AM", "21:30" → "9:30 PM", "00:15" → "12:15 AM".
+    /// A daily task's time the way `hm` writes a moment, 24-hour in every language: "09:00", "21:30", "00:15"
+    /// (#7499). The next and last runs on the same row come from `hm`, so a 12-hour rule beside them read one moment two
+    /// ways; the web says it the same way (`clockLabel`). Anything that is not a time of day stays as it came.
     static func clock(_ hhmm: String) -> String {
-        let parts = hhmm.split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2 else { return hhmm }
-        let (h, m) = (parts[0], parts[1])
-        let h12 = h % 12 == 0 ? 12 : h % 12
-        let time = String(format: "%d:%02d", h12, m)
-        return switch h {
-        case 0..<5: String(localized: "\(time) AM [Assistant Proactive Views 44e8c1]", comment: "12-hour time, 0:00–4:59")
-        case 5..<9: String(localized: "\(time) AM [Assistant Proactive Views 699a88]", comment: "12-hour time, 5:00–8:59")
-        case 9..<12: String(localized: "\(time) AM [Assistant Proactive Views 125b02]", comment: "12-hour time, 9:00–11:59")
-        case 12..<13: String(localized: "\(time) PM [Assistant Proactive Views 989511]", comment: "12-hour time, 12:00–12:59")
-        case 13..<18: String(localized: "\(time) PM [Assistant Proactive Views c3a451]", comment: "12-hour time, 13:00–17:59")
-        default: String(localized: "\(time) PM [Assistant Proactive Views af60c6]", comment: "12-hour time, 18:00–23:59")
-        }
+        let parts = hhmm.split(separator: ":", omittingEmptySubsequences: false).map { Int($0) }
+        guard parts.count == 2, let h = parts[0], let m = parts[1], (0..<24).contains(h), (0..<60).contains(m) else { return hhmm }
+        return String(format: "%02d:%02d", h, m)
     }
 
     /// The day part of a moment: "Today" / "Tomorrow" / "Yesterday" / "Wed" / "Nov 2".
@@ -516,6 +508,8 @@ struct AssistantTaskEditor: View {
     @State private var confirmBypass = false
     @State private var deleted = false
     @State private var runs: [APIClient.ScheduleRun] = []
+    /// The kind whose Remove under Starts Without Asking is on its way (#8045).
+    @State private var ungranting: String?
     /// Presented as the "new task" sheet: nothing is saved unless Add (or Run Now) is tapped.
     private let creating: Bool
     /// The task as the sheet opened: Cancel asks first once it differs (Mac).
@@ -548,6 +542,10 @@ struct AssistantTaskEditor: View {
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
 
     var body: some View {
+        ScrollViewReader { proxy in form(proxy) }
+    }
+
+    private func form(_ proxy: ScrollViewProxy) -> some View {
         Form {
             Section {
                 TextField(draft.repeats == .once ? String(localized: "Title (optional)") : String(localized: "Title, e.g. “Morning briefing”"), text: $draft.title)
@@ -570,6 +568,7 @@ struct AssistantTaskEditor: View {
                 Text("Write it as you would in a chat: what to look at and how to report. It can use schedule_followup to set up one-time follow-ups, like 10 minutes before a meeting.")
             }
             runsWithSection
+            if let grant = saved?.startGrant, !grant.kinds.isEmpty { startGrantSection(grant) }
             if showsPush { pushSection }
             if showsInbox { inboxSection }
             conversationSection
@@ -625,11 +624,8 @@ struct AssistantTaskEditor: View {
         .sheetCancel(unsaved: !Self.same(opened, draft), when: creating) { dismiss() }
         .toolbar {
             if creating {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add [Beautiful U I Bridge 7a8a11]") {
-                        Task { if await persist(leaving: false) != nil { dismiss() } }
-                    }
-                    .disabled(!isValid || running)
+                SheetConfirm(id: "schedule-add", disabled: !isValid || running) {
+                    Task { if await persist(leaving: false) != nil { dismiss() } }
                 }
             }
         }
@@ -655,8 +651,62 @@ struct AssistantTaskEditor: View {
             runs = (try? await api.scheduleRuns(ref: id)) ?? []
         }
         #if DEBUG
-        .onAppear { if UserDefaults.standard.string(forKey: "openAssistantPage") == "bypassTask" { confirmBypass = true } }
+        .onAppear {
+            if UserDefaults.standard.string(forKey: "openAssistantPage") == "bypassTask" { confirmBypass = true }
+            if StartGrantSample.on, saved != nil, saved?.startGrant == nil {
+                saved?.startGrant = APIClient.StartGrant(keys: StartGrantSample.kinds)
+                Task { try? await Task.sleep(for: .milliseconds(600)); proxy.scrollTo(Self.startGrantID, anchor: .center) }
+            }
+        }
         #endif
+    }
+
+    /// Starts without asking (#8045): the kinds of task this task's own runs start without the plan card, each with Remove.
+    /// Not drawn while there are none: only ticking it on one of its runs' cards adds one.
+    private static let startGrantID = "task.startGrant"
+
+    private func startGrantSection(_ grant: APIClient.StartGrant) -> some View {
+        Section {
+            ForEach(grant.kinds, id: \.key) { kind in
+                let place = [kind.machine.isEmpty ? nil : TaskPlace.machineName(kind.machine), kind.folder].compactMap { $0 }.joined(separator: " · ")
+                HStack(spacing: Theme.Space.m) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Text(place).font(Theme.Font.body).lineLimit(2).truncationMode(.middle)
+                        Text(kind.readonly ? String(localized: "Read-only [Start Grant]") : String(localized: "Can edit files"))
+                            .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: Theme.Space.s)
+                    if ungranting == kind.key {
+                        ProgressView()
+                    } else {
+                        Button(role: .destructive) { Task { await removeGrant(kind.key) } } label: {
+                            Text("Remove [Start Grant]").lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(ungranting != nil)
+                        .accessibilityLabel(String(localized: "Remove \(place)"))
+                    }
+                }
+            }
+        } header: {
+            Text("Starts without asking").id(Self.startGrantID)
+        } footer: {
+            Text("Tasks of these kinds that this scheduled task hands out start without your OK, unless that run read mail, Inbox or web pages. Changing its instructions or where it runs clears this list.")
+        }
+    }
+
+    private func removeGrant(_ kind: String) async {
+        guard let id = saved?.id, let api = model.api, ungranting == nil else { return }
+        ungranting = kind
+        defer { ungranting = nil }
+        do {
+            let t = try await api.revokeStartGrant(task: id, kind: kind)
+            // only the grant: what is being edited stays as it is
+            withAnimation(Theme.Motion.standard) { saved?.startGrant = t.startGrant }
+            Haptics.success()
+        } catch {
+            model.show(error)
+        }
     }
 
     /// Where runs go (docs/assistant/assistant.md「Scheduled tasks」): the conversation it came from (Continue in Original Chat), else the task's own
@@ -1325,10 +1375,7 @@ struct AssistantMemoryEditor: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .sheetCancel(unsaved: opened.map { $0 != text } ?? false) { dismiss() }
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button { Task { await save() } } label: { if saving { ProgressView() } else { Text("Save") } }
-                            .disabled(saving)
-                    }
+                    SheetConfirm(id: "memory-file-save", busy: saving) { Task { await save() } }
                 }
                 .onAppear { if opened == nil { opened = text } }
         }

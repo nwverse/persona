@@ -1,5 +1,6 @@
 import Observation
 import SwiftUI
+import PersonaWire
 
 // The inbox_item slot (docs/extensions/extensions.md「UI slots」, #1682): a plugin that contributes a UI with placement inbox_item for
 // one of its connectors draws the detail of that connector's inbox items. The app asks the hub which sources have one
@@ -160,6 +161,12 @@ import SwiftUI
         guard let target = InboxSourceLink.item(url) else { return false }
         if target == item { showsSource = true }
         return true
+    }
+
+    /// A reused detail must not carry the previous item's explicit source opening into another item's page.
+    func detailIdentityChanged(from oldKey: String, to newKey: String) {
+        guard oldKey != newKey else { return }
+        showsSource = false
     }
 
     /// The item changed (new messages, filed or moved back): its plugin draws it again.
