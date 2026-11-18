@@ -2112,9 +2112,8 @@ How a device adds a pending computer: see "Computer pairing codes" under "Tempor
 
 An optional policy of what a task Agent starts with beyond what its caller named, by the kind of work; with no policy,
 an expired one or no rule that fits, a task starts exactly as without the feature, apart from the Codex goal default
-below (rules and behaviour:
-`docs/assistant/assistant.md` "Start defaults"). It is one setting on the assistant (`start_defaults` in `GET`/`PUT
-/api/v1/assistant`, full credentials; empty rules clear it) and has its own route,
+below (rules and behaviour: `docs/assistant/assistant.md` "Start defaults"). It is one setting on the assistant
+(`start_defaults` in `GET`/`PUT /api/v1/assistant`, full credentials; empty rules clear it) and has its own route,
 `GET`/`PUT /api/v1/assistant/start-defaults`, open to full credentials and to an extension token granted
 `assistant.start_defaults` (an extension's policy must expire within one hour). Its shape:
 
@@ -2146,10 +2145,13 @@ below (rules and behaviour:
   `done_when` (a goal from the task's `done_when`) or `off` (no start goal, which turns off the Codex default below);
   `plan_first` a boolean. Effort and ultracode reach Claude Code starts only; a goal reaches new Claude Code and Codex
   starts of tasks with `done_when`.
-- With no rule naming `goal` for a task (no policy, none that fits, or one silent on `goal`), a new Codex start of a
-  task with `done_when` carries that goal by default; a Claude Code start carries none. `"goal":"off"` in a rule is how
-  the owner turns the Codex default off; any other value is 400.
-- Rules are tried in order and the first that fits wins. A caller's own effort, ultracode, tier, model or launcher is
+- With no fitting rule naming `goal` for a task (no policy, none that fits, or every fitting one silent on `goal`), a
+  new Codex start of a task with `done_when` carries that goal by default; a Claude Code start carries none.
+  `"goal":"off"` in a rule is how the owner turns the Codex default off; any other value is 400. The default is not
+  sent to a start in an engine runtime or through an app launcher, and a node's refusal of it is not put in the task's
+  `why`.
+- Rules are tried in order and the first that fits wins, except for `goal`: the first fitting rule that names `goal`
+  decides it, whichever rule supplies the rest. A caller's own effort, ultracode, tier, model or launcher is
   never replaced. A rule's values apply to one start try: the next try starts again from what the task named, and for
   whatever a rule filled in the task in `TaskPlan` keeps its own value, never the policy's (its `why` names a preset the
   policy picked).

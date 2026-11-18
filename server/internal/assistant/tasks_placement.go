@@ -277,8 +277,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
 		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
 	}
-	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource).
-	s.applyStartGoal(t, defaults, withDefaults, fit.agent, params)
+	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource); the default is not sent
+	// where the node is known to refuse it, and its refusal elsewhere is only logged (below).
+	defaultGoal := s.applyStartGoal(t, defaults, withDefaults, fit.agent, defaultGoalRefusedOn(m, params, fit), params)
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
 		// An explicit retry keeps that existing recovery path on the fixed target;
@@ -400,7 +401,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if reason, no := s.goalRefusal(err, params); no {
 			delete(params, "goal")
 			s.logf("task %s: start: %s; starting without a goal", t.TodoID, reason)
-			t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			if !defaultGoal { // a goal the owner never asked for is no news on the task's card
+				t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			}
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
 			}

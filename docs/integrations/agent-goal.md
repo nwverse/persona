@@ -102,9 +102,12 @@ The assistant attaches such a goal when the task's `done_when` gives it somethin
 (`prompts/assistant/task_goal.md`), and either a start-defaults rule asks for one (`goal: "done_when"`,
 [assistant.md](../assistant/assistant.md) "Start defaults") or the Agent is Codex and no rule decides the goal: a new
 Codex task Agent whose task has acceptance criteria gets them as its goal by default, since Codex has no Stop hook to
-keep it going. A rule with `goal: "off"` turns that default off for the tasks it matches. Claude Code gets a start goal
-only from a rule. Tasks without criteria start without one, and only brand-new Claude Code and Codex sessions take one. Its transcript lines, `goal_status` attachment, `Session.goal` and
-the goal bar are the ordinary goal's below; nothing else about goals changes.
+keep it going. The first fitting rule that names `goal` decides it, so a rule with `goal: "off"` turns that default off
+for the tasks it matches even after an earlier rule that is silent on the goal. The default is not sent to a start that
+cannot take it (an engine runtime, an app launcher), and a refused default is only logged. Claude Code gets a start
+goal only from a rule. Tasks without criteria start without one, and only brand-new Claude Code and Codex sessions
+take one. Its transcript lines, `goal_status` attachment, `Session.goal` and the goal bar are the ordinary goal's
+below; nothing else about goals changes.
 
 ### Codex
 

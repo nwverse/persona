@@ -66,5 +66,5 @@
   "start_link_lost": "和「{machine}」的连接断了，重连后也没看到任务起来：{reason}",
   "start_machine_busy": "「{machine}」一直连着，但在等待时间内没回应（电脑可能太忙）：{reason}",
   "start_link_down": "和「{machine}」的连接断了，等了一阵也没重连上：{reason}",
-  "start_goal_skipped": "没在第一条消息前设目标就启动了：{reason}"
+  "start_goal_skipped": "启动时没能设开始目标：{reason}"
 }
