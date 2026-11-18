@@ -31,7 +31,8 @@ import (
 // The ids these tests use (cleared first: the test database outlives a run).
 var switchTestIDs = []string{"lsw-box", "lsw-bare", "lsw-link", "lsw-far", "lsw-desk"}
 
-const switchOp = "ls_0123456789abcdef"
+// switchOp is this run's operation id (the audit, which says which switches began, outlives a run).
+var switchOp = newSwitchOp()
 
 // newSwitchOp is an operation id of the manager's form, new for each test (the audit outlives a run).
 func newSwitchOp() string { return "ls_" + randomHex(8) }
@@ -552,18 +553,104 @@ func TestLinkSwitchRollbackWithoutItsHash(t *testing.T) {
 // and a computer that is neither link nor ssh now.
 func TestLinkSwitchEndRefusals(t *testing.T) {
 	h, _, _ := switchHub(t)
+	op := newSwitchOp()
 	other := &busConn{ident: db.BusIdentity{ID: "m-0d0d0d"}}
-	refusedWith(t, "another manager's", busEnd(h, other, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Outcome: devicewire.LinkSwitchRolledBack}),
-		devicewire.LinkSwitchCodeNoMachine)
-	refusedWith(t, "an unknown outcome", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Outcome: "maybe"}), bus.CodeInvalidParams)
-	refusedWith(t, "a hash of nothing", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", PairHash: hashToken("jp_none"),
-		Outcome: devicewire.LinkSwitchRolledBack}), bus.CodeInvalidParams)
+	refusedWith(t, "another manager's", busEnd(h, other, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op,
+		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNoMachine)
+	refusedWith(t, "an unknown outcome", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op, Outcome: "maybe"}),
+		bus.CodeInvalidParams)
+	if _, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: op, SSHHost: "me@box.example"}); err != nil {
+		t.Fatal(err)
+	}
+	refusedWith(t, "a hash of nothing", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op,
+		PairHash: hashToken("jp_none"), Outcome: devicewire.LinkSwitchRolledBack}), bus.CodeInvalidParams)
+	if k := diskKind(t, h, "lsw-box"); k != "link" {
+		t.Fatalf("a refused end changed its kind: %v", k)
+	}
 	edited := strings.Replace(switchHubJSON, `"kind":"ssh"`, `"kind":"tailcat"`, 1)
 	if err := os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	refusedWith(t, "neither link nor ssh", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Outcome: devicewire.LinkSwitchRolledBack}),
-		devicewire.LinkSwitchCodeNotSSH)
+	refusedWith(t, "neither link nor ssh", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op,
+		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNotSSH)
+}
+
+// A rollback undoes only a switch whose begin took effect. One that begin refused (the computer had a Persona Link
+// already), one of another operation, or a manager's end on its own computer that never switched changes nothing:
+// the computer's own credential survives, its kind stays. A switch this hub no longer remembers (it restarted) is
+// still found by its audit row and undone.
+func TestLinkSwitchRollbackOnlyUndoesABegunSwitch(t *testing.T) {
+	h, _, _ := switchHub(t)
+	ctx := context.Background()
+	rollBack := func(mid, op, hash string) error {
+		return busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: mid, Operation: op, PairHash: hash, Outcome: devicewire.LinkSwitchRolledBack})
+	}
+
+	// Begin refused: the user's own credential for it.
+	refused := newSwitchOp()
+	userTok, _ := linkToken(t, h, "lsw-box")
+	_, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: refused, SSHHost: "me@box.example"})
+	refusedWith(t, "a credential already", err, devicewire.LinkSwitchCodeExistingLink)
+	if err := rollBack("lsw-box", refused, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.authenticate(ctx, userTok); !ok {
+		t.Fatal("a rollback of a refused begin revoked the computer's own credential")
+	}
+
+	// A link computer that never switched.
+	linkTok, _ := linkToken(t, h, "lsw-link")
+	if err := rollBack("lsw-link", newSwitchOp(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.authenticate(ctx, linkTok); !ok || diskKind(t, h, "lsw-link") != "link" {
+		t.Fatal("a rollback on a computer that never switched revoked its credential or changed its kind")
+	}
+
+	// Begun, then a rollback of another operation: nothing; of its own: undone.
+	op := newSwitchOp()
+	got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-bare", Operation: op, SSHHost: "bare.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := redeem(t, h, pairTokenOf(t, got.Link), `{}`)
+	if code != 200 {
+		t.Fatalf("redeem %d", code)
+	}
+	cred := out["token"].(string)
+	if err := rollBack("lsw-bare", newSwitchOp(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.authenticate(ctx, cred); !ok || diskKind(t, h, "lsw-bare") != "link" {
+		t.Fatal("a rollback of another operation undid this switch")
+	}
+	// This hub restarted: its memory of the switch is gone, the audit says it began.
+	h.linkSwitch.stop("lsw-bare")
+	if err := rollBack("lsw-bare", op, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.authenticate(ctx, cred); ok {
+		t.Fatal("the switch's credential still works")
+	}
+	if diskKind(t, h, "lsw-bare") != "ssh" || h.cfgEntry("lsw-bare").Kind != "ssh" {
+		t.Fatal("not back to ssh")
+	}
+	// Begun, but put back to ssh meanwhile and paired by its user: a rollback without the hash leaves that alone.
+	held := newSwitchOp()
+	if _, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-bare", Operation: held, SSHHost: "bare.example"}); err != nil {
+		t.Fatal(err)
+	}
+	h.kindLive("lsw-bare", "ssh")
+	if err := editHubJSON(h.cfg.dir, func(o *jsonObject) error { return setMachineField(o, "lsw-bare", "kind", "ssh") }); err != nil {
+		t.Fatal(err)
+	}
+	ownTok, _ := linkToken(t, h, "lsw-bare")
+	if err := rollBack("lsw-bare", held, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.authenticate(ctx, ownTok); !ok {
+		t.Fatal("a rollback without the hash revoked a credential of a computer no longer on Persona Link")
+	}
 }
 
 // A computer moved to another manager while it switched: end from the manager that began it is refused as not its
@@ -607,6 +694,106 @@ func TestLinkSwitchRollbackAfterTheComputerMoved(t *testing.T) {
 	}
 	if k := diskKind(t, h, "lsw-box"); k != "link" {
 		t.Fatalf("another manager's computer's kind was changed: %v", k)
+	}
+	if _, running := h.linkSwitch.get("lsw-box"); running {
+		t.Fatal("the switch is still under way")
+	}
+}
+
+// While a computer switches, it is neither moved to another manager nor removed: 409 link_switch_in_progress, in the
+// asker's language. Once the switch ended, both may go ahead.
+func TestLinkSwitchHoldsTheComputer(t *testing.T) {
+	h, _, _ := switchHub(t)
+	ctx := context.Background()
+	op := newSwitchOp()
+	if _, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: op, SSHHost: "me@box.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.moveMachine(ctx, "lsw-box", "m-0e0e0e"); !errors.Is(err, errLinkSwitchInProgress) {
+		t.Fatalf("moved while switching: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.adminMachineRoutes(mux)
+	w := langRecorder{httptest.NewRecorder(), i18n.Ja}
+	mux.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/v1/admin/machines/lsw-box", nil))
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusConflict || body["code"] != "link_switch_in_progress" || body["error"] != i18n.T(i18n.Ja, "hub-link_switch.in_progress") {
+		t.Fatalf("removed while switching: %d %v", w.Code, body)
+	}
+	if diskEntry(t, h, "lsw-box") == nil {
+		t.Fatal("gone")
+	}
+	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op, Outcome: devicewire.LinkSwitchRolledBack}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.moveMachine(ctx, "lsw-box", "m-0e0e0e"); errors.Is(err, errLinkSwitchInProgress) {
+		t.Fatal("still held after the switch ended")
+	}
+	if w := adminMachinesRequest(h, "DELETE", "/api/v1/admin/machines/lsw-box", ""); w.Code != http.StatusOK {
+		t.Fatalf("remove after the switch: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// langRecorder records an answer to a request in l (as the hub's request logger's writer carries it).
+type langRecorder struct {
+	*httptest.ResponseRecorder
+	l i18n.Lang
+}
+
+func (r langRecorder) Lang() i18n.Lang { return r.l }
+
+// An app's pairing code stands in for a full device until it is traded, but starts no switch; a signed-in full
+// device's request reaches the computer's manager (away here).
+func TestAPairingCodeStartsNoSwitch(t *testing.T) {
+	if !slices.Contains(devicewire.Routes, linkSwitchRoute) {
+		t.Fatalf("%q is not the manager's route", linkSwitchRoute)
+	}
+	h, _, _ := switchHub(t)
+	code, err := h.newPairCode(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, out := call(t, h.routes(), "POST", "/api/v1/machines/lsw-box/link-switch", code.Token, `{}`); status != http.StatusForbidden || out["code"] != "forbidden" {
+		t.Fatalf("an app's pairing code: %d %v", status, out)
+	}
+	if status, out := call(t, h.routes(), "POST", "/api/v1/machines/lsw-box/link-switch", h.cfg.Token, `{}`); status != http.StatusServiceUnavailable || out["code"] != "assistant_offline" {
+		t.Fatalf("a full device: %d %v", status, out)
+	}
+}
+
+// Right after a start the admin page's switch waits for the manager to report its machines, as the apps' routes wait
+// for it, before it says there is no such computer.
+func TestAdminLinkSwitchWaitsForTheManager(t *testing.T) {
+	h := newTestHub(t)
+	h.devices.mu.Lock()
+	h.devices.up, h.devices.warmUntil = make(chan struct{}), time.Now().Add(5*time.Second)
+	up := h.devices.up
+	h.devices.mu.Unlock()
+	mux := http.NewServeMux()
+	h.adminLinkSwitchRoutes(mux)
+	done := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/admin/machines/lsw-box/link-switch", strings.NewReader(`{}`)))
+		done <- w.Code
+	}()
+	time.Sleep(100 * time.Millisecond)
+	m := newMachine(h, MachineConfig{ID: "lsw-box", Kind: "ssh"})
+	h.fleet.mu.Lock()
+	h.machines, h.byID["lsw-box"] = append(h.machines, m), m
+	h.fleet.mu.Unlock()
+	h.devices.mu.Lock()
+	h.devices.upOpen = true
+	h.devices.mu.Unlock()
+	close(up)
+	select {
+	case status := <-done:
+		if status == http.StatusNotFound {
+			t.Fatal("answered no such computer before the manager reported")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no answer")
 	}
 }
 

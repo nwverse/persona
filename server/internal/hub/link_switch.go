@@ -121,18 +121,30 @@ func (h *Hub) beginLinkSwitch(ctx context.Context, c *busConn, p devicewire.Link
 		return nil, linkSwitchSwapErr(err)
 	}
 	h.linkSwitch.start(mid, run)
+	// Its begun row before its code: a rollback after this hub restarted (its memory of the switch gone) without the
+	// code's hash still finds that this begin took effect (endLinkSwitch).
+	if err := h.linkSwitchAuditNow(ctx, c, mid, run, "begun"); err != nil {
+		h.undoLinkSwitchBegin(ctx, mid, run)
+		return nil, fmt.Errorf("the switch's audit: %w", err)
+	}
 	code, err := h.newPairCode(ctx, mid)
 	if err != nil {
-		h.linkSwitch.stop(mid)
-		if back := h.swapMachineKind(context.WithoutCancel(ctx), mid, "ssh", linkSwitchBack); back != nil && !errors.Is(back, errSwapDone) {
-			h.logf("[%s] link switch %s: no pairing code, and its kind could not be put back to ssh: %v", mid, run.operation, back)
-		}
+		h.undoLinkSwitchBegin(ctx, mid, run)
 		h.linkSwitchAudit(ctx, c, mid, run, "begin_failed", nil)
 		return nil, fmt.Errorf("the computer's pairing code: %w", err)
 	}
-	h.linkSwitchAudit(ctx, c, mid, run, "begun", nil)
 	h.logf("[%s] link switch %s begun (asked by %s, through %s)", mid, run.operation, run.by, c.managerID())
 	return &devicewire.LinkSwitchBegun{Link: code.PairURL, PairHash: hashToken(code.Token)}, nil
+}
+
+// undoLinkSwitchBegin puts a begin that could not finish back to ssh. Its switch is kept when that failed too, so that
+// the manager's rollback (it was told begin failed) finds it and tries again. h.machineAdd is held.
+func (h *Hub) undoLinkSwitchBegin(ctx context.Context, mid string, run linkSwitchRun) {
+	if err := h.swapMachineKind(context.WithoutCancel(ctx), mid, "ssh", linkSwitchBack); err != nil && !errors.Is(err, errSwapDone) {
+		h.logf("[%s] link switch %s: its begin failed, and its kind could not be put back to ssh: %v", mid, run.operation, err)
+		return
+	}
+	h.linkSwitch.stop(mid)
 }
 
 // linkSwitchReady refuses a begin the hub cannot do now (devicewire's LinkSwitchCode*). h.machineAdd is held.
@@ -191,9 +203,14 @@ func linkSwitchSwapErr(err error) error {
 	return err
 }
 
-// endLinkSwitch is devices.link_switch.end from manager c.
+// endLinkSwitch is devices.link_switch.end from manager c. A rollback undoes only a switch whose begin took effect:
+// the one this hub has under way with that operation, or one whose begun row the audit has (this hub restarted
+// since), or the one whose code the hash names. Any other changes nothing: begin was refused, never reached this
+// hub, or this is not a switch at all (the computer's own Persona Link stays).
 func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchEnd) (any, error) {
-	mid := p.MachineID
+	mid, op := p.MachineID, clip(p.Operation, 64)
+	run, running := h.linkSwitch.get(mid)
+	running = running && op != "" && run.operation == op // this switch, as this hub saw it begin
 	if mid == "" || h.ownsMachine(c, mid) != nil {
 		// Not this manager's (any more: moved to another meanwhile). A rollback that names its code still revokes
 		// that code and what it became, which only the manager that began it can name; never all of a computer's.
@@ -206,13 +223,17 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 				h.revoked(id)
 			}
 		}
+		if running {
+			h.linkSwitch.stop(mid)
+		}
 		return nil, linkSwitchNoMachine()
 	}
-	run, _ := h.linkSwitch.get(mid) // who asked, when this hub saw it begin
-	run.operation = clip(p.Operation, 64)
+	run.operation = op
 	switch p.Outcome {
 	case devicewire.LinkSwitchSucceeded:
-		h.linkSwitch.stop(mid)
+		if running {
+			h.linkSwitch.stop(mid)
+		}
 		h.linkSwitchAudit(ctx, c, mid, run, "succeeded", nil)
 		return map[string]any{}, nil
 	case devicewire.LinkSwitchRolledBack:
@@ -221,55 +242,97 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	}
 	h.machineAdd.Lock()
 	defer h.machineAdd.Unlock()
-	revoked, err := h.revokeLinkSwitch(ctx, mid, p.PairHash)
+	begun, revoked, err := h.revokeLinkSwitch(ctx, mid, op, p.PairHash, running)
 	if err != nil {
 		return nil, err
+	}
+	if !begun {
+		h.logf("[%s] link switch %s rolled back before its begin took effect: nothing to undo", mid, op)
+		return map[string]any{}, nil
 	}
 	if err := h.swapMachineKind(ctx, mid, "ssh", linkSwitchBack); err != nil && !errors.Is(err, errSwapDone) {
 		return nil, linkSwitchSwapErr(err)
 	}
-	h.linkSwitch.stop(mid)
+	if running {
+		h.linkSwitch.stop(mid)
+	}
 	h.linkSwitchAudit(ctx, c, mid, run, "rolled_back", map[string]any{"credentials_revoked": revoked})
-	h.logf("[%s] link switch %s rolled back: %d credentials revoked, back to ssh", mid, run.operation, revoked)
+	h.logf("[%s] link switch %s rolled back: %d credentials revoked, back to ssh", mid, op, revoked)
 	return map[string]any{}, nil
 }
 
-// revokeLinkSwitch revokes what a switch of computer mid made: the pairing code whose hash is pairHash and the
-// credential it became, else (no hash) every Persona Link credential of the computer and its codes not used yet; and
-// closes what they have open (revoked). Its share records stay: the computer stays, on ssh. How many credentials.
-func (h *Hub) revokeLinkSwitch(ctx context.Context, mid, pairHash string) (int, error) {
+// revokeLinkSwitch revokes what switch op of computer mid made, once it shows that switch's begin took effect (begun
+// false: it did not, nothing done): the pairing code whose hash is pairHash and the credential it became; else (no
+// hash) every Persona Link credential of the computer and its codes not used yet, while its entry is kind link. It
+// closes what they have open (revoked); the computer's share records stay, as it does, on ssh. running: this hub has
+// the switch under way. How many credentials.
+func (h *Hub) revokeLinkSwitch(ctx context.Context, mid, op, pairHash string, running bool) (begun bool, n int, err error) {
 	if h.store == nil {
-		return 0, errors.New("no database")
+		return false, 0, errors.New("no database")
+	}
+	audited := func() (bool, error) {
+		if running {
+			return true, nil
+		}
+		if op == "" {
+			return false, nil
+		}
+		return h.store.LinkSwitchBegun(ctx, mid, op)
 	}
 	if pairHash != "" {
 		id, found, err := h.store.RevokeLinkPair(ctx, pairHash, mid)
-		switch {
-		case err != nil:
-			return 0, err
-		case !found:
-			return 0, &rpc.Error{Code: bus.CodeInvalidParams, Message: "pair_hash is no pairing code of this computer"}
-		case id == "":
-			return 0, nil
+		if err != nil {
+			return false, 0, err
 		}
-		h.revoked(id)
-		return 1, nil
+		if found {
+			if id == "" {
+				return true, 0, nil
+			}
+			h.revoked(id)
+			return true, 1, nil
+		}
+		// No code of this computer: one that begun says it made is not that one.
+		if begun, err := audited(); err != nil || !begun {
+			return false, 0, err
+		}
+		return false, 0, &rpc.Error{Code: bus.CodeInvalidParams, Message: "pair_hash is no pairing code of this computer"}
+	}
+	if begun, err = audited(); err != nil || !begun {
+		return false, 0, err
+	}
+	if mc := h.knownEntry(mid); mc == nil || mc.Kind != kindLink {
+		return true, 0, nil // not on Persona Link (any more): what it has of one is not this switch's
 	}
 	cr, _ := h.store.(credentialRevoker)
 	if cr == nil {
-		return 0, errors.New("this store cannot revoke a computer's credentials")
+		return false, 0, errors.New("this store cannot revoke a computer's credentials")
 	}
 	ids, err := cr.RevokeMachineCredentials(ctx, mid)
 	if err != nil {
-		return 0, err
+		return false, 0, err
 	}
 	for _, id := range ids {
 		h.revoked(id)
 	}
-	return len(ids), nil
+	return true, len(ids), nil
 }
 
 // linkSwitchAudit writes one row of the computer's audit: the switch, its step, and who asked; never its code.
 func (h *Hub) linkSwitchAudit(ctx context.Context, c *busConn, mid string, run linkSwitchRun, step string, more map[string]any) {
+	h.machineAudit(ctx, mid, "link_switch", "manager:"+c.managerID(), linkSwitchDetail(run, step, more))
+}
+
+// linkSwitchAuditNow is linkSwitchAudit for a row a later step goes by (begun): its failure is the caller's. A store
+// that keeps no audit keeps none.
+func (h *Hub) linkSwitchAuditNow(ctx context.Context, c *busConn, mid string, run linkSwitchRun, step string) error {
+	ts := h.trustStore()
+	if ts == nil {
+		return nil
+	}
+	return ts.AddMachineAudit(context.WithoutCancel(ctx), mid, "link_switch", "manager:"+c.managerID(), linkSwitchDetail(run, step, nil))
+}
+
+func linkSwitchDetail(run linkSwitchRun, step string, more map[string]any) json.RawMessage {
 	detail := map[string]any{"operation": run.operation, "step": step}
 	if run.by != "" {
 		detail["by"] = run.by
@@ -278,7 +341,22 @@ func (h *Hub) linkSwitchAudit(ctx context.Context, c *busConn, mid string, run l
 		detail[k] = v
 	}
 	b, _ := json.Marshal(detail)
-	h.machineAudit(ctx, mid, "link_switch", "manager:"+c.managerID(), b)
+	return b
+}
+
+// linkSwitchRoute is the apps' start of a switch (devicewire.Routes): a signed-in full device's only (deviceRoutesRelayed).
+const linkSwitchRoute = "POST /api/v1/machines/{mid}/link-switch"
+
+// errLinkSwitchInProgress: the computer is switching to Persona Link; it is neither moved to another manager nor
+// removed until the switch ends (its manager runs it, and undoes it when it fails).
+var errLinkSwitchInProgress = refuseAdd(http.StatusConflict, "link_switch_in_progress", i18n.Err("hub-link_switch.in_progress"))
+
+// linkSwitchBusy is errLinkSwitchInProgress while computer mid switches, else nil.
+func (h *Hub) linkSwitchBusy(mid string) error {
+	if _, ok := h.linkSwitch.get(mid); ok {
+		return errLinkSwitchInProgress
+	}
+	return nil
 }
 
 // swapMachineKind sets computer mid's entry kind to kind, every other key as it was, when check (given the entry as
@@ -336,11 +414,11 @@ func (h *Hub) kindLive(mid, kind string) {
 func (h *Hub) adminLinkSwitchRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/machines/{mid}/link-switch", func(w http.ResponseWriter, r *http.Request) {
 		mid := r.PathValue("mid")
+		_ = h.waitDevices(r.Context()) // the hub just started: the manager is on its way (bounded), and its machines
 		if h.localMachine(mid) == nil {
 			writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 			return
 		}
-		_ = h.waitDevices(r.Context()) // the hub just started: the manager is on its way (bounded); else 503 at once
 		r = r.Clone(r.Context())
 		r.URL.Path = "/api/v1/machines/" + mid + "/link-switch"
 		r.URL.RawPath = "/api/v1/machines/" + url.PathEscape(mid) + "/link-switch"

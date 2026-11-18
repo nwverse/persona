@@ -313,6 +313,8 @@ func (s *meshStore) MachineLinkInUse(_ context.Context, machine string) (bool, e
 	return false, nil
 }
 
+func (s *meshStore) LinkSwitchBegun(context.Context, string, string) (bool, error) { return false, nil }
+
 func (s *meshStore) RevokeLinkPair(context.Context, string, string) (string, bool, error) {
 	return "", false, nil
 }
