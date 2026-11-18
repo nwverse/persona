@@ -254,6 +254,12 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   an empty box without a transcript receipt is ambiguous,
   not permission to paste again. A later follow-up's timestamp can show it was queued after work began; do not
   attribute the original submission to that follow-up without a terminal-key receipt.
+- A prompt of pictures only has no words to compare (#10179, from the web): its box held `[Image #n]<attached_images>`
+  and the photo's `path:` line, `pendingPrompt` saw nothing of its own, no recovery Enter went in, the window ended and
+  the send answered 200, and the leftover refused every later send to the pane as a draft for 11 minutes. Its own
+  `path:` line names the upload the send just saved under a fresh random name, so it identifies the prompt
+  (`ownPictures`); a chip alone is still nothing to tell by. Claude Code before 2.1.316 drops the `path:` lines, so
+  such a box there is not recovered.
 - Never confirm a first image prompt from quick metadata alone (#4794): its head stops at 256 KB and tail at
   384 KB, so a multi-megabyte user row can be absent from both. A real disposable Agent's normal start recorded
   the same image prompt three times while confirmation believed it had been dropped. Capture a full incremental
