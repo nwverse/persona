@@ -845,6 +845,8 @@ export interface Interaction {
   tool_name?: string;
   questions?: Question[];
   plan?: string;
+  /** The permission mode a plan-mode session goes on in once this plan is approved (#3784). */
+  plan_then?: string;
   tool_input?: Record<string, unknown>;
   /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
   editable_text?: string;
