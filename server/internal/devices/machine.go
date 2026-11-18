@@ -85,9 +85,10 @@ type Machine struct {
 	peer *rpc.Peer
 	info proto.NodeInfo
 	// pingPeer is the connection measureNodes' last ping went on, pingMisses how many pings in a row it left
-	// unanswered there (paths_view.go).
+	// unanswered there, pingJudged when the last of them was counted (paths_view.go).
 	pingPeer   *rpc.Peer
 	pingMisses int
+	pingJudged time.Time
 	// online: shown online (its node answered on the current connection, or warm); connectedAt: when the node's
 	// current connection began.
 	online      bool
@@ -874,6 +875,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		} else {
 			devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_unavailable")
 		}
+		return // the manager's alone
+	case proto.EventModeRestart: // what became of a queued restart into a mode (mode_changes.go)
+		m.onModeRestart(params)
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
