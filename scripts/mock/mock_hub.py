@@ -896,10 +896,30 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
 BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
 
 
+# The machine's record of permission mode changes (#10297, GET /api/v1/sessions/{mid}/{sid}/mode-changes): what /modes
+# picks and what became of a queued restart, oldest first. MOCK_MODE_CHANGES=1 starts the widget agent with three: a
+# phone's pick before its exchange, a computer's pick of Full access by a restart after it, and that restart called off
+# (the session runs in another process now, #10296).
+MODE_CHANGES = {}
+
+
+def note_mode_change(s, kind, to, **kw):
+    MODE_CHANGES.setdefault((s["machine_id"], s["session_id"]), []).append({"kind": kind, "to": to, "at": ago(minutes=0), **kw})
+
+
+if os.environ.get("MOCK_MODE_CHANGES") == "1":
+    MODE_CHANGES[("macbook", WIDGET)] = [
+        {"kind": "set", "from": "default", "to": "acceptEdits", "applied": "now", "actor_kind": "device", "device_name": "iPhone", "at": ago(minutes=20)},
+        {"kind": "set", "from": "acceptEdits", "to": "bypassPermissions", "applied": "restart", "actor_kind": "device", "device_name": "MacBook", "at": ago(minutes=1)},
+        {"kind": "restart_dropped", "to": "bypassPermissions", "reason": "process_replaced", "at": ago(minutes=0)},
+    ]
+
+
 def bypass_restart(s, mode):
     """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
     if mode != "bypassPermissions":
-        if mode: s.pop("bypass_pending", None)
+        if mode and s.pop("bypass_pending", None):
+            note_mode_change(s, "restart_dropped", "bypassPermissions", reason="replaced")
         return False
     if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
             or s.get("permission_mode") == "bypassPermissions":
@@ -913,6 +933,7 @@ def bypass_restart(s, mode):
             return
         s.pop("bypass_pending", None)
         s.update(permission_mode="bypassPermissions", bypass_available=True, updated_at=ago(minutes=0))
+        note_mode_change(s, "restart_done", "bypassPermissions")
         push_machine(s["machine_id"])
     threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()
     return True
@@ -2106,6 +2127,17 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_UNDELIVERED=1 (#10194, docs/assistant/assistant.md "Messages that could not go in"): the first Persona chat could
+# not start, and its manager keeps two of the owner's messages: one it sends again by itself, one that gave up (Retry /
+# Delete).
+if os.environ.get("MOCK_UNDELIVERED") == "1":
+    ASSISTANT[0].update({"status": "offline", "state": "offline", "undelivered": [
+        {"id": "a0d1e2f3-0000-4000-8000-00000000f001", "text": "帮我看一下备份任务昨晚有没有跑完", "at": ago(minutes=50),
+         "state": "failed", "attempts": 40, "error": "助手没能启动"},
+        {"id": "a0d1e2f3-0000-4000-8000-00000000f002", "text": "顺便把结果发到今天的待办里", "at": ago(minutes=2),
+         "state": "waiting", "attempts": 2, "next_at": ago(minutes=-1), "error": "助手没能启动"},
+    ]})
+
 # MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
 # the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
 # the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
@@ -2164,6 +2196,9 @@ if os.environ.get("MOCK_RECENT") == "1":
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
 MOCK_DIRECTION_NAMES = {}
+# A direction's notes (#10086, assistant/direction_notes.go): the first leader has some, PUT …/directions/{id}/notes keeps them.
+MOCK_DIRECTION_NOTES = {}
+MOCK_DIRECTION_PROJECTS = {}
 if os.environ.get("MOCK_LEADERS") == "1":
     for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
         ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
@@ -2176,13 +2211,23 @@ if os.environ.get("MOCK_LEADERS") == "1":
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
+        if i == 0:
+            MOCK_DIRECTION_PROJECTS[c["session_id"]] = "persona-app"
+            MOCK_DIRECTION_NOTES[c["session_id"]] = ("Readings that count: the deployed build number and the test totals.\n"
+                                                     "- Every change goes issue → PR → local checks → merge.\n"
+                                                     "- Ask before touching the hub machine.")
 
 
 def mock_leaders_list():
     """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
     titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
-    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
-                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
+    out = []
+    for sid in MOCK_LEADERS:
+        row = {"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user", "at": "2026-11-10T08:00:00Z"}
+        if MOCK_DIRECTION_PROJECTS.get(sid): row["project"] = MOCK_DIRECTION_PROJECTS[sid]
+        if MOCK_DIRECTION_NOTES.get(sid): row["notes"], row["notes_at"] = MOCK_DIRECTION_NOTES[sid], "2026-11-17T03:00:00Z"
+        out.append(row)
+    return {"leaders": out}
 
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
@@ -2625,6 +2670,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # Close an Agent's terminal when its session ends (#10355), off by default.
+                    "close_ended_terminals": False,
                     # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
                     "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
@@ -2667,7 +2714,7 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
+        out.update(agent_tasks=cfg["agent_tasks"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
@@ -3308,6 +3355,14 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+# MOCK_TODO_ASK_LONG=1 (with MOCK_TODO_ASKS): the PR check's decision has a question and a recommendation of several lines, the
+# way a supervisor writes them, so the Needs you tray's decision card can be checked with long text, hours of waiting and its
+# buttons at the bottom of a short window.
+if os.environ.get("MOCK_TODO_ASK_LONG") == "1" and "todo_review" in TODO_ASKS:
+    TODO_ASKS["todo_review"].update(
+        verdict="🤔 要你拍板：PR #42 改的公开接口已经合进 2.0 版，但旧接口还有一半的客户端在用，2.0 放量之前它们的列表页会整个空掉。要不要先把旧接口加回来止损？",
+        recommend="先加回旧接口，通知客户端的负责人这个版本之后再删")
+    TODO_ASKED_AT = ago(hours=12, minutes=31)
 # MOCK_ASK_HELD=1 (#4930, #5803, docs/assistant/todos.md "Decisions that can wait"): with MOCK_TODO_ASKS, the PR
 # check's decision is held for the next briefing (`ask.for_briefing`), so the apps mark it.
 if os.environ.get("MOCK_ASK_HELD") == "1" and "todo_review" in TODO_ASKS:
@@ -3713,6 +3768,15 @@ KB = {
     "events": [],
 }
 KB_TAGS = {"projects": ["iOS", "前端", "个人"]}
+# A meeting both imported and recorded (#8872, docs/assistant/meeting-minutes.md): MOCK_IMPORTED_MEETING=1 lists a Lark
+# meeting named as the made-up weekly meeting (产品周会, -showMeetingSample) among the imported meetings, and a meeting
+# recording of that name names it as the hub's match does: meeting_id on its list item, imported_meeting and the link
+# resolved for it (its notes' URL, its connector) in its detail.
+IMPORTED_MEETING = os.environ.get("MOCK_IMPORTED_MEETING") == "1"
+IMPORTED_MEETING_ITEM = {"kind": "meetings", "id": "m_weekly", "name": "产品周会", "one_line": "定了 11 月 28 日发布，导出保留 4 MB 上限。",
+                         "importance": "P1", "relevance": 70, "updated": ago(days=2), "extra": "https://meetings.example.com/m_weekly",
+                         "source": "lark"}
+if IMPORTED_MEETING: KB["meetings"].append(IMPORTED_MEETING_ITEM)
 KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
 KB_TRASH = {}  # deleted projects by trash id (DELETE /api/v1/kb/projects/{id}, POST /api/v1/kb-trash/{id}/restore)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
@@ -5508,6 +5572,7 @@ def meeting_detail_meta(rid, meta):
     (absent when off or trimmed), never an attending_session."""
     m = MEETING_CONV.get(rid) if meeting_conversation_on() else None
     meta = transcription_fields(rid, dict(meta))
+    if MEETING_HANDOFFS.get(rid): meta["handoffs"] = list(MEETING_HANDOFFS[rid])
     if not m: return meta
     if m["private"] is not None: meta["private"] = m["private"]
     if (v := room_view(m)) is not None:
@@ -5687,6 +5752,78 @@ def meeting_receipt(h, kind, raw, run):
     return h.send_json(out, status) or True
 
 
+# Handing a meeting to an Agent after it (#8852, assistant/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
+# the meeting to an Agent listed here as the owner's own message, after its checks (503, 404 / 410, 400, 409
+# meeting_running, 409 no_material), and keeps each try in MEETING_HANDOFFS (oldest first, the last 20), shown as
+# detail.meta.handoffs. As attending's rules: a Persona conversation is not_agent; Allow All or a machine not listed
+# not_allowed; offline, interrupted, a subagent or a row not listed unavailable. MOCK_HANDOFF_FAIL=<problem>, or POST
+# /mock/meeting_handoff {"fail": "<problem>"} ("" for none), keeps every try that passes them as failed with that problem
+# (send_failed, unavailable…), for the page's failed row.
+MEETING_HANDOFFS = {}
+HANDOFF_FAIL = [os.environ.get("MOCK_HANDOFF_FAIL", "")]
+MEETING_HANDOFFS_KEPT = 20
+
+
+def handoff_problem(mid, sid):
+    """The problem a hand-off to (mid, sid) is kept with, "" when it goes (meeting_handoff.go handoffSend)."""
+    if not any(m["id"] == mid for m in MACHINES): return "not_allowed"
+    if not next((m for m in MACHINES if m["id"] == mid), {}).get("online"): return "unavailable"
+    row = next((x for x in SESSIONS + ASSISTANT if x["machine_id"] == mid and x["session_id"] == sid), None)
+    if row is None: return "unavailable"
+    if row.get("permission_mode") == "bypassPermissions": return "not_allowed"
+    if row.get("assistant"): return "not_agent"
+    if row.get("is_subagent") or row.get("status") in ("offline", "interrupted"): return "unavailable"
+    return HANDOFF_FAIL[0]
+
+
+def meeting_handoff_route(h, method, p):
+    """POST /api/v1/recordings/{id}/handoff (#8852), and /mock/meeting_handoff."""
+    if p == "/mock/meeting_handoff":
+        if method == "POST":
+            body = json.loads(getattr(h, "last_body", b"") or b"{}")
+            if isinstance(body.get("fail"), str): HANDOFF_FAIL[0] = body["fail"]
+        return h.send_json({"fail": HANDOFF_FAIL[0], "meetings": MEETING_HANDOFFS}) or True
+    hit = re.fullmatch(r"/api/v1/recordings/([^/]+)/handoff", p)
+    if not hit: return False
+    rid = hit.group(1).lower()
+    if method != "POST": return h.send_json({"error": "method"}, 405) or True
+    if is_read_only(h): return h.send_json({"error": "only devices with full credentials can do this", "code": "forbidden"}, 403) or True
+    raw = getattr(h, "last_body", b"") or b""
+    if os.environ.get("MOCK_RECORDINGS_DOWN") == "1": return h.send_json({"error": "知识库暂时不可用", "code": "kb_unavailable"}, 503) or True
+    if len(raw) > 64 << 10: return h.send_json({"error": "the body is over 64 KiB", "code": "too_large"}, 413) or True
+    if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
+    if rid not in RECORDINGS: return h.send_json({"error": "还没有上传这条录音", "code": "recording_not_found"}, 404) or True
+    try: body = json.loads(raw or b"{}")
+    except ValueError: body = None
+    if not isinstance(body, dict): return h.send_json({"error": "参数不对"}, 400) or True
+    mid, sid = str(body.get("machine_id") or "").strip(), str(body.get("session_id") or "").strip()
+    if not mid or not sid: return h.send_json({"error": "session is required"}, 400) or True
+    text = str(body.get("text") or "").strip()
+    rec = RECORDINGS[rid]
+    with_lines = any((x.get("text") or "").strip() for x in rec.get("segments") or [])
+    transcript = bool(body.get("transcript")) and with_lines and rid not in RECORDINGS_TRIMMED
+    minutes = bool((KB_DETAIL.get(("recordings", rid)) or {}).get("minutes"))
+    if meeting_running(rid): return h.send_json({"error": "The meeting is still running.", "code": "meeting_running"}, 409) or True
+    if not minutes and not transcript:
+        return h.send_json({"error": "This meeting has neither minutes nor a transcript.", "code": "no_material"}, 409) or True
+    title = re.sub(r"\s+", " ", str(body.get("title") or "")).strip()[:120]
+    out = {"id": uuid.uuid4().hex[:16], "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "machine_id": mid, "session_id": sid, "state": "sent"}
+    if title: out["title"] = title
+    if transcript: out["transcript"] = True
+    problem = handoff_problem(mid, sid)
+    if problem:
+        out.update(state="failed", problem=problem)
+    else:
+        name = rec.get("title") or "会议"
+        first = f"<persona-context>\n会议：{name}\n</persona-context>\n\n" + (text or "看看这场会里和你手上的事有关的部分。")  # i18n-ignore
+        conv_append(mid, sid, [conv_item("user", first)])
+    kept = MEETING_HANDOFFS.setdefault(rid, [])
+    kept.append(out)
+    del kept[:-MEETING_HANDOFFS_KEPT]
+    return h.send_json({"handoff": out}) or True
+
+
 def meeting_conversation_route(h, method, p):
     """PUT …/private, POST …/just-me, POST …/followup, messages into a room that ended, and /mock/meeting_conversation."""
     global MEETING_CONVERSATION
@@ -5759,7 +5896,7 @@ def meeting_conversation_reset():
             if c.get("session_id"):
                 ASSISTANT[:] = [x for x in ASSISTANT if x["session_id"] != c["session_id"]]
                 ITEMS.pop(c["session_id"], None)
-    MEETING_CONV.clear(); MEETING_RECEIPTS.clear()
+    MEETING_CONV.clear(); MEETING_RECEIPTS.clear(); MEETING_HANDOFFS.clear()
     with MEETING_EVENT_LOCK: MEETING_EVENTS.clear()
     JUST_ME_GENERATION[0] += 1  # a reply still on its timer is not written
     for main, before in JUST_ME_BEFORE.items():
@@ -7054,7 +7191,8 @@ def transcription_control(h, method):
                 sock["fail"](TRANSCRIPTION_MODE["fatal"])
     elif method != "GET": return h.send_json({"code": "method_not_allowed"}, 405) or True
     return h.send_json({"on": meeting_transcription_on(), **TRANSCRIPTION_MODE,
-                        "recordings": {rid: {"frames": t["frames"], "bytes": t["bytes"], "timeline": t["timeline"],
+                        # lines: the hub's final lines so far, what a test waits on before it looks for them (#10109)
+                        "recordings": {rid: {"frames": t["frames"], "bytes": t["bytes"], "lines": len(t["hub"]), "timeline": t["timeline"],
                                               "gaps": transcription_gaps(t), "held": t["held"], "socket": t.get("socket") is not None,
                                               "transcription": transcription_view(rid)}
                                        for rid, t in TRANSCRIPTIONS.items()}}) or True
@@ -7288,6 +7426,7 @@ def recordings_route_locked(h, method, p):
     if re.fullmatch(r"/api/v1/recordings/[^/]+/segments", p) and not RECORDING_DAY["on"]:
         return h.send_json({"error": "404 page not found"}, 404, add_error_code=False) or True
     if meeting_conversation_route(h, method, p): return True
+    if meeting_handoff_route(h, method, p): return True
     if live_view_route(h, method, p): return True
     if highlights_route(h, method, p): return True
     if photos_route(h, method, p): return True
@@ -7442,7 +7581,7 @@ def recordings_route_locked(h, method, p):
     if method == "DELETE":
         if (t := TRANSCRIPTIONS.pop(rid, None)) and t.get("socket"): t["socket"]["fail"]("recording_deleted")
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDING_RENAMED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDING_RENAMED.pop(rid, None); MEETING_HANDOFFS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -7488,13 +7627,17 @@ def recordings_route_locked(h, method, p):
     entry = {"kind": "recordings", "id": rid, "name": name or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
              "recording_kind": kind}  # #8870
-    kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                        "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo")),
                        **({"name": name, "name_source": name_source} if name else {}),
                        **({"ai_title": name, "ai_title_from": "summary" if body.get("complete") else "live"} if name_source == "model" else {})},
               "summary": text, "segments": body.get("segments", [])}
+    if IMPORTED_MEETING and kind == "meeting" and name == IMPORTED_MEETING_ITEM["name"]:
+        entry["meeting_id"] = IMPORTED_MEETING_ITEM["id"]
+        detail["meta"]["imported_meeting"] = {k: IMPORTED_MEETING_ITEM[k] for k in ("kind", "id", "name")}
+        detail["links"] = [dict(IMPORTED_MEETING_ITEM)]
+    kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
     if kind == "meeting" and not silent:
@@ -10483,6 +10626,7 @@ def mock_interactions():
 #   done        only finished-unseen agents
 #   one         exactly one working agent (a tap opens it)
 #   empty       nothing (the connection line)
+#   off         the default: GET serves an empty Fleet, with no fleet events
 # A working agent whose turn is over while its background work runs (MOCK_WORKFLOW=1, MOCK_WORKFLOW_CARDS=1) is a
 # background item, as the hub sends it (#3437): background, its workflow's line and bar, the workflow's start as since.
 MOCK_FLEET = os.environ.get("MOCK_FLEET", "")
@@ -10605,18 +10749,19 @@ def push_fleet():
         except Exception: pass
 
 
-FLEET_MODES = ("1", "all", "permission", "working", "done", "one", "empty")
+FLEET_MODES = ("1", "all", "permission", "working", "done", "one", "empty", "off")
 
 
 def set_fleet_mode(mode):
     """GET /mock/fleet?mode=…: switch MOCK_FLEET while running and push the new fleet. Restarting the mock instead
-    changes HUB_ID, and the app's pairing no longer matches (docs/lessons/android.md)."""
+    changes HUB_ID, and the app's pairing no longer matches (docs/lessons/android.md). `off` restores the default."""
     global MOCK_FLEET
     if mode not in FLEET_MODES:
         return {"error": "mode is one of " + ", ".join(FLEET_MODES)}, 400
-    MOCK_FLEET = mode
+    MOCK_FLEET = "" if mode == "off" else mode
     push_fleet()
-    return {"mode": MOCK_FLEET, "fleet": mock_fleet()}, 200
+    fleet = mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}
+    return {"mode": MOCK_FLEET, "fleet": fleet}, 200
 
 
 def mock_notify(interaction_id):
@@ -14559,6 +14704,16 @@ def listed_model_configuration(lang="zh-Hans"):
         own += [meeting_model_purpose(pid, lang, catalog)["purpose"] for pid in MEETING_PURPOSES]
     at = next((n for n, x in enumerate(catalog["purposes"]) if x["id"].startswith(("extension.", "plugin."))), len(catalog["purposes"]))
     catalog["purposes"][at:at] = own
+    # MOCK_MODEL_USAGE=1 (#10498, docs/assistant/model-config.md "Counting"): the last 7 days' calls of two purposes,
+    # Inbox screening's many small ones on a CLI and Information processing's few; the others had none.
+    if os.environ.get("MOCK_MODEL_USAGE") == "1":
+        usage = {"inbox.triage": dict(calls=1234, failures=12, input_tokens=61_700, output_tokens=148_080,
+                                      cache_read_input_tokens=24_680_000, cache_creation_input_tokens=5_430_000),
+                 "kb": dict(calls=1, failures=0, input_tokens=820, output_tokens=96,
+                            cache_read_input_tokens=0, cache_creation_input_tokens=0)}
+        for purpose in catalog["purposes"]:
+            if purpose["id"] in usage:
+                purpose["usage"] = usage[purpose["id"]]
     return catalog
 
 
@@ -25976,6 +26131,7 @@ class H(BaseHTTPRequestHandler):
         if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if _web_push and _web_push.route(self, "GET", p): return
+        if _todo_view and _todo_view.route(self, "GET", p): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
         if net_control(p, q): return self.send_json({"ok": True, **NET})
@@ -26206,9 +26362,15 @@ class H(BaseHTTPRequestHandler):
             METRICS_ASKED = METRICS_ASKED or time.time()
             if MOCK_METRICS_FAIL == "1" or (MOCK_METRICS_FAIL == "after" and time.time() - METRICS_ASKED > 5):
                 return self.send_json({"error": "hub 暂时取不到监控数据"}, 503)
+            # With a roster, an overview is one manager's answer: no scope means the default, while the established
+            # header or query names another. A legacy hub keeps serving every computer, whatever the request names.
+            other = other_manager(self) if _stamps() else None
+            if other and other[1] is not None:
+                return self.send_json(*other[1])
+            owner = (other[0] if other else MANAGERS["default"]) if _stamps() else ""
             cards = []
             for m in MACHINES:
-                if kept(m["id"]):
+                if kept(m["id"]) and (not owner or machine_manager(m["id"]) == owner):
                     c = machine_metrics(m["id"], 3600, 60)
                     if (u := usage_card(m["id"])) is not None:
                         c["usage"] = u
@@ -26916,6 +27078,9 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and "/items/" in p and p.endswith("/full"):
             item = FULL.get(unquote(p.split("/")[7]))
             return self.send_json(item) if item else self.send_json({"error": "not found"}, 404)
+        if p.startswith("/api/v1/sessions/") and p.endswith("/mode-changes"):  # #10297
+            parts = p.split("/")
+            return self.send_json({"changes": MODE_CHANGES.get((parts[4], parts[5]), [])[-200:]})
         if p.startswith("/api/v1/sessions/") and p.endswith("/info"):  # the chat's "Developer info" card
             s = next((s for s in all_sessions() if s["session_id"] == p.split("/")[5]), {})
             codex = s.get("agent") == "codex"
@@ -27122,6 +27287,7 @@ class H(BaseHTTPRequestHandler):
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
         if _web_push and _web_push.route(self, self.command, p, self.last_body): return
+        if _todo_view and _todo_view.route(self, self.command, p): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -28446,6 +28612,12 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and p.endswith("/seen"):
             mark_seen(p.split("/")[5])
             return self.send_json({"ok": True})
+        if p.startswith("/api/v1/assistant/directions/") and p.endswith("/notes") and self.command == "PUT":  # #10086
+            lead = p.split("/")[5]
+            if lead not in MOCK_LEADERS: return self.send_json({"error": "no such direction"}, 404)
+            notes = str(json.loads(self.last_body or b"{}").get("notes", "")).strip()[:4000]
+            MOCK_DIRECTION_NOTES[lead] = notes
+            return self.send_json({"notes": notes})
         # 设为常驻 / 取消常驻 (#4331, assistant/route.go makeDirection / endDirection): the leaders list changes
         if p.startswith("/api/v1/assistant/directions/") and p.split("/")[-1] in ("make", "end") and self.command == "POST":
             lead, op = p.split("/")[5], p.split("/")[6]
@@ -28512,6 +28684,8 @@ class H(BaseHTTPRequestHandler):
                     ASSISTANT_CONFIG[key] = body[key]
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("close_ended_terminals"), bool):
+                ASSISTANT_CONFIG["close_ended_terminals"] = body["close_ended_terminals"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
             if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
@@ -28855,9 +29029,13 @@ class H(BaseHTTPRequestHandler):
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
                 if s["session_id"] == p.split("/")[5]:
                     applied = body
+                    before = s.get("permission_mode") or ""
                     if bypass_restart(s, body.get("permission_mode")):
                         applied = {k: v for k, v in body.items() if k != "permission_mode"}
                         push_machine(s["machine_id"])
+                    if body.get("permission_mode"):
+                        note_mode_change(s, "set", body["permission_mode"], **{"from": before, "applied": "now" if applied is body else "restart",
+                                                                              "actor_kind": "device", "device_name": "Phone"})
                     s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
                     MODES_LOG.append({"session_id": s["session_id"], **{k: v for k, v in body.items() if k in ("permission_mode", "effort", "model")}})
             return self.send_json({"ok": True})
@@ -29916,13 +30094,21 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
+# MOCK_LIVE_STATUS=retry (#887): a generic first retry, detailed 429 attempts 4 and 5, ordinary work, then `live: null`
+# and idle. MOCK_LIVE_STATUS_TICK controls how long each state stays visible.
 # MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
 # tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
 # running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
 # start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
 LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
-LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady", "retry")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
+LIVE_STATUS_RETRY_STEPS = [
+    {"retry_error": "API Error", "retry_attempt": 1, "retry_max": 10},
+    {"retry_error": "429 Synthetic rate limit for retry capture", "retry_attempt": 4, "retry_max": 10},
+    {"retry_error": "429 Synthetic rate limit for retry capture", "retry_attempt": 5, "retry_max": 10},
+    {"verb": "Frosting", "elapsed_s": 8, "tokens_down": 1200},
+]
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
     {"verb": "Frosting", "elapsed_s": 2, "tokens_down": 400, "thinking": True},
@@ -29976,7 +30162,7 @@ def live_status_subscribe(send, mid, sid):
         since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
         s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_RETRY_STEPS if LIVE_STATUS_MODE == "retry" else LIVE_STATUS_STEPS
         for step in steps:
             time.sleep(tick)
             if steady:
@@ -29990,7 +30176,7 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady|retry  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。retry（#887）：先 generic API Error，再详细 429 attempt 4/5，随后恢复正常工作并推 null，给重试提示和清理截图。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
@@ -31340,6 +31526,33 @@ if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_FAMILIES") == "1":
     ]}
     LAUNCHER_MODELS["agy"] = {"agent": "agy", "models": [{"id": "默认", "name": "默认", "default": True}]}
 
+# MOCK_MODEL_GATEWAY=1 (with MOCK_MODEL_PICK=1, #10365, docs/assistant/model-config.md "One row per model"): the main chat
+# runs on gateway-api, a Persona-managed gateway provider whose Claude Code tiers all name one model, with the /model list
+# the hub serves for it: one Opus 5.5 row with the tier aliases folded into it, the gateway's other route of that model
+# told apart by its route, Default apart. =raw: the list as the hub served it before, each tier alias a row of its own,
+# every one of them and the route's row reading "Opus 5.5". For the web model panel's before / after screenshots.
+MODEL_GATEWAY_MODE = os.environ.get("MOCK_MODEL_GATEWAY", "")
+if MODEL_PICK_MODE and MODEL_GATEWAY_MODE:
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "gateway-api", "display_name": "Gateway API", "model": "claude-opus-5-5", "agent": "claude", "source": "persona"},
+        {"name": "claude", "model": "opus", "source": "builtin"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "gateway-api"
+    _gateway_default = {"id": "default", "name": "Default (recommended)", "description": "Use the default model (currently claude-opus-5-5)",
+                        "resolved": "claude-opus-5-5", "default": True, "efforts": _CLAUDE_EFFORTS}
+    _gateway_route = {"id": "kiro/claude-opus-5-5", "name": "Opus 5.5", "description": "From gateway"}
+    if MODEL_GATEWAY_MODE == "raw":
+        LAUNCHER_MODELS["gateway-api"] = {"agent": "claude", "models": [_gateway_default] + [
+            {"id": tier, "name": "Opus 5.5", "description": "Custom %s model (claude-opus-5-5)" % tier.title(), "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS}
+            for tier in ("opus", "fable", "sonnet", "haiku")] + [_gateway_route]}
+    else:
+        LAUNCHER_MODELS["gateway-api"] = {"agent": "claude", "models": [
+            _gateway_default,
+            {"id": "claude-opus-5-5", "name": "Opus 5.5", "description": "Custom Opus model (claude-opus-5-5)", "efforts": _CLAUDE_EFFORTS,
+             "aliases": ["opus", "fable", "sonnet", "haiku"]},
+            dict(_gateway_route, name="Opus 5.5 (kiro)"),
+        ]}
+
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
@@ -31430,6 +31643,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
+MOCK_HELP.append("MOCK_MODEL_GATEWAY=1|raw  With MOCK_MODEL_PICK: the main chat defaults to gateway-api, a gateway provider whose Claude Code tiers all name one model; 1: the list as the hub folds it (one Opus 5.5 row, the route's row says its route, #10365), raw: as it served it before (five Opus 5.5 rows)")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
@@ -32057,6 +32271,13 @@ def mock_turn_usage(mode):
 
 if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
     mock_turn_usage(MOCK_TURN_USAGE)
+
+
+# MOCK_TODO_VIEW=1|old|late, MOCK_TODO_MANAGERS=2 (#10465, scripts/mock/todo_view_mock.py): the To-dos view, counts and
+# places from the design prototype's to-dos. Last, so it replaces the to-dos the other switches made and the features.
+import todo_view_mock  # noqa: E402
+MOCK_HELP.extend(todo_view_mock.HELP)
+_todo_view = todo_view_mock if todo_view_mock.install(globals()) else None
 
 
 if __name__ == "__main__":

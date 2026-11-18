@@ -36,6 +36,15 @@ const (
 	inboxDirectChats      = 10
 	inboxDirectCandidates = 50
 	inboxDirectLookback   = 2 * time.Hour
+	// The context the models read (contextFor): the current batch and recent background. Keep the background from
+	// contextHistory before the first new message, at most contextEarlier messages, but always the last
+	// contextEarlierKeep however old (a short answer keeps its question). The chat's page of 40 brought weeks-old
+	// messages and cards of thousands of characters into every triage of a quiet chat.
+	contextHistory      = 24 * time.Hour
+	contextEarlier      = 10
+	contextEarlierKeep  = 3
+	contextEarlierRunes = 300
+	contextNewRunes     = 2000
 )
 
 // StateStore is the small part of the manager's Postgres-backed settings store
@@ -703,9 +712,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	}
 	contextMessages = visible
 	currentMessages := append([]adapter.Message(nil), group.messages...)
-	currentIDs := make(map[string]struct{}, len(currentMessages))
-	for _, message := range currentMessages {
-		currentIDs[message.MessageID] = struct{}{}
+	currentIDs := make(map[string]int, len(currentMessages))
+	for i, message := range currentMessages {
+		currentIDs[message.MessageID] = i
 	}
 	// History can already contain a follow-up which search has not indexed. Only
 	// unseen eligible activity in this chat/topic can supersede the search hit.
@@ -733,8 +742,8 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 			message.ChatPartner = latest.ChatPartner
 		}
 		latest = message
+		currentIDs[message.MessageID] = len(currentMessages)
 		currentMessages = append(currentMessages, message)
-		currentIDs[message.MessageID] = struct{}{}
 		group.replied = false
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}
@@ -779,21 +788,26 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	}
 	var history []adapter.Message
 	for _, message := range contextMessages {
-		if _, current := currentIDs[message.MessageID]; !current {
+		i, current := currentIDs[message.MessageID]
+		if !current {
 			history = append(history, message)
+		} else if currentMessages[i].MessagePosition == "" {
+			// Search may omit positions. Use the chat's position for display order
+			// without replacing the incoming message or its reply metadata.
+			currentMessages[i].MessagePosition = message.MessagePosition
 		}
 	}
+	sort.SliceStable(currentMessages, func(i, j int) bool {
+		return messageLess(currentMessages[i], currentMessages[j])
+	})
 	thing := connector.InboxThing{
-		Thread:  thread,
-		Kind:    kind,
-		Label:   label,
-		Title:   title,
-		Sender:  latest.Sender.Name,
-		Preview: firstLine(inboxMessageText(latest, lang)),
-		Context: prompts.RenderLarkCLIInboxContext(prompts.LarkCLIInboxContext{
-			Current: contextText(currentMessages, me),
-			History: contextText(history, me),
-		}),
+		Thread:   thread,
+		Kind:     kind,
+		Label:    label,
+		Title:    title,
+		Sender:   latest.Sender.Name,
+		Preview:  firstLine(inboxMessageText(latest, lang)),
+		Context:  contextFor(currentMessages, history, me),
 		At:       messageTime(latest),
 		Last:     latest.MessageID,
 		ReplyTo:  replyTo(lang, name, group.threadID != ""),
@@ -1215,14 +1229,34 @@ const (
 	markAll   = "（@所有人）" // i18n-ignore: the tier criteria's mark, read by the model
 )
 
-// contextText is the conversation as the models read it, a line a message: "<sender><marks>: <text>", the marks from
-// the message's structured mentions (both when it @'s the owner and everyone). me is the owner's id.
-func contextText(messages []adapter.Message, me string) string {
+// contextFor renders the incoming batch and bounded background, each in time order.
+func contextFor(current, history []adapter.Message, me string) string {
+	from := max(len(history)-contextEarlier, 0)
+	if first := messageTime(current[0]); !first.IsZero() {
+		for from < len(history)-contextEarlierKeep {
+			if at := messageTime(history[from]); !at.IsZero() && first.Sub(at) <= contextHistory {
+				break
+			}
+			from++
+		}
+	}
+	return prompts.RenderLarkCLIInboxContext(prompts.LarkCLIInboxContext{
+		Current: contextLines(current, me, contextNewRunes),
+		History: contextLines(history[from:], me, contextEarlierRunes),
+	})
+}
+
+// contextLines writes one line per message with its timestamp and structured mention marks.
+// The text is limited to runes (0: whole). me is the owner's id.
+func contextLines(messages []adapter.Message, me string, runes int) string {
 	var b strings.Builder
 	for _, message := range messages {
 		text := inboxMessageText(message, i18n.En)
 		if text == "" {
 			continue
+		}
+		if r := []rune(text); runes > 0 && len(r) > runes {
+			text = string(r[:runes]) + "…"
 		}
 		if b.Len() > 0 {
 			b.WriteString("\n")
