@@ -1,5 +1,13 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Project MCP enums only in agy's tool declarations (#9944)
+
+agy can turn a valid boolean enum such as `task_review`'s `evidence.ready: enum [true]` into an empty Gemini string
+enum and reject the whole request. In its proxy's matched `tools/list` responses, omit enum constraints that are not
+nonempty arrays of nonempty strings. Walk schema keywords, not arbitrary objects: a property named `enum` is still
+a property, and defaults, examples and constants are data. Keep call arguments and the server's schema and validation
+unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call` result containing `tools` is not a list.
+
 - Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
   (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
