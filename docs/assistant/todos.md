@@ -406,6 +406,34 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   **Use <launcher> instead** (when the hub suggests one and lists the feature), **Retry** and **Remove**; Retry no longer
   needs the to-do's `plan_id`. Apple and Android still offer Retry and Remove only.
 
+### Answering a failed start's question
+
+A planned task's start whose new tab's shell stopped on a startup question (`shell_waiting`: oh-my-zsh's update
+question where the tab's environment could not turn it off, compinit's insecure directories, a passphrase) fails with
+its tab kept by the computer for 10 minutes. Its plan task's `error_args` carry the question as the node listed it
+(`line`, `screen`, `pane`, `kept_until`, `kind`, `choices`, `line_mode`, `secret`, `default`; `docs/protocol/protocol.md`
+"Answering a start's question"). Since #10365 (`assistant/start_answer.go`) the owner answers it from the app instead
+of going to the computer:
+
+- **The route**: `POST /api/v1/todos/{id}/start/answer {"choice"}` (hello feature `todo_start_answer`), full devices
+  only (403 `read_only` for a read-only or answer-only device and an extension's token). Only a failed start (done with
+  `start_error`) whose last start stopped with `shell_waiting`, whose tab is still kept (`kept_until` ahead) and whose
+  question offered that choice is answered; otherwise 409 `start_not_waiting`, `start_tab_gone` or `choice_not_offered`,
+  nothing typed and nothing changed. A start the assistant is still remedying, or one starting again, has no question
+  to answer here.
+- **The node types it** (`start.answer {pane, line, choice}`, capability `start_answer`; an older node answers 409
+  `node_outdated`, worded "update Persona on <computer>"): with `start.continue`'s guards, only an answer the question
+  offers, only while that question is still the tab's last line (else `prompt_changed`), Ctrl-C alone into a password
+  prompt, never "yes" to an ssh host key, Enter after a key a line-reading question echoes.
+- **Then the task starts again in that tab**, as its Retry does there (`retryTaskWith` with `in_pane`): the same to-do
+  reopened, no new tab. The node marks the tab answered, so that start waits out the question's line, which stays the
+  last one written until the shell draws its prompt, instead of refusing at once as a plain Retry into a tab whose
+  question is still open does. A question after that one fails the start again with its own answers. The step is a
+  `start_remedy` feed item `{action: "answer", by: "user", choice}`: the answer's id, never what a prompt asked for.
+- **The web** shows the question card (`views/ShellQuestionCard.tsx`, loaded only for such a failure) on the failed
+  row, the task panel and the to-do page while the tab is kept and the hub lists the feature, beside Retry, which stays.
+  Apple and Android offer Retry only.
+
 ## To-do titles
 
 To-dos created by `task_plan` and `agent_start` (#2775), and by `agent_send` with `task` and `agent_supervise` (#3020), formerly used the prompt's first line as title, often starting with instructions to the Agent ("ultrathink ultracode 主人 11-05 19:47 的反馈，已授权直接开工：…", meaning feedback from the owner, authorized to start; "秘书派活（主人授权过…）", meaning assistant dispatch, owner already authorized), obscuring the task itself. Now two steps (`assistant/todo_titles.go`):

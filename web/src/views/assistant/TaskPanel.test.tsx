@@ -241,6 +241,30 @@ describe("task panel dispatch feedback (#7552)", () => {
     }
   });
 
+  it("answers the question its tab's shell stopped on beside Retry, where the hub takes it (#10365)", async () => {
+    const todo = emptyTask("failed-question", { start_error: "Synthetic shell question", done_at: at });
+    const plan = planFor(todo, "started", "Synthetic shell question");
+    plan.tasks[0] = { ...plan.tasks[0], error_code: "shell_waiting", error_args: { line: "Press Enter to continue", pane: "w1:p2", kind: "press_key",
+      choices: "enter", kept_until: new Date(Date.now() + 5 * 60_000).toISOString() } };
+    const features = getState().features;
+    getState().features = ["todo_start_answer"];
+    try {
+      await open({ kind: "task", todo: todo.id }, todo, [], { [plan.id]: plan });
+      const choice = () => host.querySelector<HTMLButtonElement>("[data-testid=shell-choice-enter]");
+      await vi.waitFor(async () => {
+        await settle();
+        expect(choice()).not.toBeNull();
+      }, { timeout: 5000, interval: 20 });
+      expect(panelText()).toContain(t("assistant-taskpanel.retry"));
+      await act(async () => choice()!.click());
+      await settle();
+      const post = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith("/todos/failed-question/start/answer") && init?.method === "POST");
+      expect(post?.[1]?.body).toBe(JSON.stringify({ choice: "enter" }));
+    } finally {
+      getState().features = features;
+    }
+  });
+
   it("does not describe released or completed work as a new Agent start", async () => {
     const released = emptyTask("released-task", { agents: [{ ...task().agents![0], released_at: at }] });
     await open({ kind: "task", todo: released.id }, released, []);

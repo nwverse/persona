@@ -1,16 +1,19 @@
 // The question a New Agent start's terminal tab stopped on, answered from here (#10365, lib/start-continue.ts): the
 // question as the computer shows it, one button per answer it offers, until when the tab waits, and its last lines
 // folded. An Agents-surface card in plain words, laid out as the design system's notice (ErrorNotice) with the
-// terminal's mark instead of the red one. ShellQuestionCard takes how to send an answer, so a task's failed start can
-// reuse it; SessionShellQuestion is it for a session's own start, with the refused messages sent again after; the
-// default export places it in the chat and on a New Agent launch's page, which load this file only for such a start.
+// terminal's mark instead of the red one. ShellQuestionCard takes how to send an answer; SessionShellQuestion is it
+// for a session's own start, with the refused messages sent again after, TaskShellQuestion for a planned task's failed
+// start (the hub starts the task again in that tab); the default export places them in the chat, on a New Agent
+// launch's page and on a task's failed row, panel and to-do page, which load this file only for such a start.
 import { useState } from "react";
 import { t } from "../i18n";
 import { errorText } from "../lib/api";
 import { clock } from "../lib/format";
-import { continueStart, openQuestion, resendRefused, shellQuestion, START_CONTINUE_FEATURE, type ShellQuestion } from "../lib/start-continue";
+import { answerTaskStart, continueStart, openQuestion, resendRefused, shellQuestion, SHELL_WAITING, START_CONTINUE_FEATURE, TODO_START_ANSWER_FEATURE, type ShellQuestion } from "../lib/start-continue";
 import { hubHas, useStore } from "../lib/store";
+import type { PlanTask } from "../lib/feed";
 import type { AgentLaunch } from "../lib/new-agent";
+import type { Todo } from "../lib/todos";
 import type { Session } from "../lib/types";
 import { Button, useNow } from "../ui/atoms";
 import { ErrorDetailsText, ErrorNotice } from "../ui/ErrorNotice";
@@ -138,10 +141,39 @@ export function SessionShellQuestion({ mid, sid, args, onAnswered, className }: 
   );
 }
 
-/** The card where a start stopped on its question (lazily loaded, the default export): a session's own (the chat's
- *  start error), or a New Agent launch's whose first message was refused with shell_waiting, the started session's row
- *  saying the question as it stands now (a renewed tab), the refusal's own body until it does. */
-export default function ShellQuestion({ session, launch }: { session?: Session; launch?: AgentLaunch }) {
+/** The card for planned task `todo`'s failed start (`task`, its plan task: error_code shell_waiting, the question in
+ *  error_args): an answer starts the task again in that tab, the to-do reopened. Nothing on a hub that cannot take it,
+ *  where the task's Retry stays its way on. */
+export function TaskShellQuestion({ todo, task, className }: { todo: Todo; task: PlanTask; className?: string }) {
+  const can = useStore((s) => hubHas(s.features, TODO_START_ANSWER_FEATURE));
+  const question = task.error_code === SHELL_WAITING ? shellQuestion(task.error_args) : undefined;
+  if (!can || !question) return null;
+  return (
+    <ShellQuestionCard
+      key={`${question.line}\n${question.keptUntil ?? ""}`}
+      question={question}
+      className={className}
+      answer={(choice) => answerTaskStart(todo, choice)}
+    />
+  );
+}
+
+/** The card where a start stopped on its question (lazily loaded, the default export): a planned task's (its failed
+ *  row, panel and page give `todo` and its plan task), a session's own (the chat's start error), or a New Agent
+ *  launch's whose first message was refused with shell_waiting. */
+export default function ShellQuestion({ session, launch, todo, task, className }: {
+  session?: Session;
+  launch?: AgentLaunch;
+  todo?: Todo;
+  task?: PlanTask;
+  className?: string;
+}) {
+  return todo && task ? <TaskShellQuestion todo={todo} task={task} className={className} /> : <StartShellQuestion session={session} launch={launch} />;
+}
+
+/** A session's own start or a New Agent launch's, the started session's row saying the question as it stands now (a
+ *  renewed tab), the refusal's own body until it does. */
+function StartShellQuestion({ session, launch }: { session?: Session; launch?: AgentLaunch }) {
   const mid = session?.machine_id ?? launch?.machineId ?? "";
   const sid = session?.session_id ?? launch?.session?.session_id ?? "";
   const row = useStore((s) => (launch ? s.sessions[mid]?.find((x) => x.session_id === sid) : undefined));

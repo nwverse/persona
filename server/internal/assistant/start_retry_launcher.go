@@ -23,8 +23,10 @@ import (
 
 // retryWith is another launcher (and its model) a retry starts a task's agent with; zero: the one its plan has. by: who
 // asked (user), for the start_remedy step that records the change; "" when the caller writes its own (task_retry).
+// answer: the owner's answer to the startup question the last start stopped on, typed into its kept tab first, where
+// the retry then starts (start_answer.go).
 type retryWith struct {
-	launcher, model, by string
+	launcher, model, by, answer string
 }
 
 // retryRefused: a retry on another launcher refused before anything changed (409, the words say why).

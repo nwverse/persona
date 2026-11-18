@@ -3,13 +3,19 @@
 // the question and its answers in start_error_args (or a refused message's 409 body); the owner picks one, the hub's
 // start.continue types it into that tab and the session starts again there, and the messages that start refused go
 // out again: they wait for the new start on the computer.
-import { api, sessionPath } from "./api";
+// A planned task whose Agent start stopped on such a question lists it in its plan task's error_args; the answer goes
+// to POST /api/v1/todos/{id}/start/answer, and the hub starts the task again in that tab (answerTaskStart).
+import { api, enc, sessionPath } from "./api";
 import { deliverLaunch } from "./new-agent";
 import { outboxKey, retryOutboxEntry } from "./outbox";
-import { getState, upsertSession } from "./store";
+import { getState, putTodo, refreshTodos, upsertSession } from "./store";
+import type { Todo } from "./todos";
 import type { Session } from "./types";
 
 export const START_CONTINUE_FEATURE = "start_continue";
+
+/** The hub answers a planned task's startup question and starts the task again in that tab (hello `features`). */
+export const TODO_START_ANSWER_FEATURE = "todo_start_answer";
 
 /** The refusal code of a start stopped on its shell's question. */
 export const SHELL_WAITING = "shell_waiting";
@@ -76,4 +82,13 @@ export function resendRefused(mid: string, sid: string) {
       void deliverLaunch(launch.id);
     }
   }
+}
+
+/** Sends the answer to the question task `todo`'s start stopped on: the hub types it into the kept tab and starts the
+ *  task again there, the to-do reopened (shown at once, as a Retry's is). */
+export async function answerTaskStart(todo: Pick<Todo, "id">, choice: string): Promise<Todo | undefined> {
+  const r = await api<{ todo?: Todo }>(`/todos/${enc(todo.id)}/start/answer`, { method: "POST", json: { choice } });
+  if (r.todo) putTodo(r.todo);
+  void refreshTodos();
+  return r.todo;
 }

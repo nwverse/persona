@@ -857,6 +857,7 @@ func (s *Service) taskRoutes() {
 			planErr(w, err)
 		}
 	})
+	s.handle("POST /api/v1/todos/{id}/start/answer", s.postTaskStartAnswer) // the startup question its start stopped on (start_answer.go)
 	s.handle("GET /api/v1/assistant/conversations/{id}/feed", func(w http.ResponseWriter, r *http.Request) {
 		var since time.Time
 		if s := r.URL.Query().Get("since"); s != "" {

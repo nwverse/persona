@@ -308,3 +308,97 @@ func TestKeptTabStartFailsFastOnAnOpenQuestion(t *testing.T) {
 		t.Error("the tab is not kept again")
 	}
 }
+
+// A planned task's start stopped on oh-my-zsh's question (#10365): its start was the hub's, so the answer goes by the
+// kept tab's pane (start.answer) and the hub starts the task again in that tab itself. Only the owner's "n" is
+// pressed; the start named to the tab (in_pane) then waits out the question's line, which stays the last one written
+// until the rest of ~/.zshrc draws the prompt, instead of failing at once as a plain Retry's does; the agent starts
+// there and no new tab opens.
+func TestStartAnswerAnswersAKeptTabByItsPane(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, 10*time.Second, 10*time.Second)
+	keptByAQuestion(t, n, f, home)
+	n.shellAsk = 10 * time.Second
+	f.after(func(c herdrCall) {
+		if isKeys("n")(c) { // oh-my-zsh read the key (no echo); the prompt comes after keptQuestionWait
+			time.AfterFunc(2*keptQuestionWait, func() { f.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" \n% ") })
+		}
+	})
+	claudeUpOnStart(t, f, "w1:p2")
+	f.reset()
+	if _, err := request(t, n, proto.MethodStartAnswer, map[string]any{"pane": "w1:p2", "line": omzQuestion, "choice": "n"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := keysInto(f, "w1:p2"); !slices.Equal(got, []string{"n"}) {
+		t.Errorf("keys pressed %v: one key, no Enter after a key read alone", got)
+	}
+	if got := sent(f, "w1:p2"); len(got) != 0 {
+		t.Errorf("typed %q with the answer", got)
+	}
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": home, "workspace_id": "w1", "launcher": "claude", "in_pane": "w1:p2"}); err != nil {
+		t.Fatalf("the start in the answered tab: %v", err)
+	}
+	if got := f.trace("tab.create", "workspace.create"); len(got) != 0 {
+		t.Errorf("opened a new tab: %v", got)
+	}
+	if got := sent(f, "w1:p2"); len(got) != 1 {
+		t.Errorf("typed %q into the kept tab", got)
+	}
+	if _, ok := n.keptStartTab("w1:p2"); ok {
+		t.Error("still kept once an agent runs there")
+	}
+}
+
+// start.answer types nothing for an answer the question was not offered, anything but Ctrl-C into a password prompt,
+// a question that is not the tab's last line any more (answered at the computer: prompt_changed), or a pane that is no
+// failed start's kept tab (any more).
+func TestStartAnswerRefusals(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, time.Minute, time.Minute)
+	keptByAQuestion(t, n, f, home)
+	f.reset()
+	const passphrase = "Enter passphrase for key '/home/me/.ssh/id_ed25519':"
+	answer := func(pane, line, choice string) error {
+		_, err := request(t, n, proto.MethodStartAnswer, map[string]any{"pane": pane, "line": line, "choice": choice})
+		return err
+	}
+	for _, tc := range []struct {
+		name, pane, line, choice, code string
+	}{
+		{"not offered", "w1:p2", omzQuestion, "x", "choice_not_offered"},
+		{"text", "w1:p2", omzQuestion, "yes", "choice_not_offered"},
+		{"no question", "w1:p2", "", "n", "start_not_waiting"},
+		{"another question", "w1:p2", "Continue? [y/N]", "y", "prompt_changed"},
+		{"not kept", "w1:p9", omzQuestion, "n", "start_tab_gone"},
+		{"a password", "w1:p2", passphrase, "enter", "choice_not_offered"},
+		{"a password's yes", "w1:p2", passphrase, "y", "choice_not_offered"},
+	} {
+		if err := answer(tc.pane, tc.line, tc.choice); rpcCode(err) != tc.code {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+	}
+	f.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" n\n% ") // answered on the computer
+	if err := answer("w1:p2", omzQuestion, "n"); rpcCode(err) != "prompt_changed" {
+		t.Errorf("a changed screen: %v", err)
+	}
+	f.setScreen("w1:p2", "Last login: today\n"+passphrase+" ")
+	if err := answer("w1:p2", passphrase, "cancel"); err != nil {
+		t.Fatalf("Ctrl-C to a password prompt: %v", err)
+	}
+	if got := keysInto(f, "w1:p2"); !slices.Equal(got, []string{"ctrl+c"}) {
+		t.Errorf("keys %v: only Ctrl-C", got)
+	}
+	if got := f.trace("pane.send_text", "pane.send_input"); len(got) != 0 {
+		t.Errorf("typed %v", got)
+	}
+	n.mu.Lock()
+	k := n.keptStarts["w1:p2"]
+	k.until = time.Now().Add(-time.Second)
+	n.keptStarts["w1:p2"] = k
+	n.mu.Unlock()
+	if err := answer("w1:p2", passphrase, "cancel"); rpcCode(err) != "start_tab_gone" {
+		t.Errorf("an expired tab: %v", err)
+	}
+}

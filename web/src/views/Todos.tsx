@@ -1923,6 +1923,8 @@ const TodoRequestGraph = lazy(() => import("./TodoRequestGraph"));
 const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
 const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
+// the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
+const ShellQuestion = lazy(() => import("./ShellQuestionCard"));
 
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
@@ -2098,11 +2100,13 @@ function TodoDetail({
   // A task whose agent never started, waiting on the owner (#3713, audit item 13): open, as its row reads, with why it
   // did not start; Retry for any a conversation handed out (POST …/retry: the hub finds the plan that binds it, one a
   // plan took over through todo_id has no plan id of its own, #8770, and says when there is none), and Hand to agent.
-  // Its launcher could not start there: "Use … instead" on the computer's other launcher comes first (#10365).
+  // Its launcher could not start there: "Use … instead" on the computer's other launcher comes first (#10365). Its
+  // tab's shell stopped on a question: the answers are offered here too, and the task then starts in that tab.
   const failedStart = open && Boolean(todo.start_error);
   const canRetry = failedStart && Boolean(todo.origin);
   const features = useStore((s) => s.features);
-  const instead = useFeed((s) => (canRetry ? retryLauncher(planTaskOf(todo, s.plans), features) : undefined));
+  const failedTask = useFeed((s) => (canRetry ? planTaskOf(todo, s.plans) : undefined));
+  const instead = retryLauncher(failedTask, features);
   // the main chat's task card's Retry (lib/feed retryTask): one on its way at a time from either, and the to-do the hub
   // reopens shows at once; its agent starts in the background and the list says how the start goes
   const retrying = useFeed((s) => Boolean(s.busy[retryKey(todo.id)]));
@@ -2189,6 +2193,7 @@ function TodoDetail({
           {t("todos.start_failed", { error: todo.start_error ?? "" })}
         </p>
       )}
+      {failedTask?.error_code === "shell_waiting" && <Suspense fallback={null}><ShellQuestion todo={todo} task={failedTask} className="mt-3" /></Suspense>}
       {isAutoDone(todo) && (
         <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-3">
           {todo.done_reason ? t("todos.auto_done_reason", { reason: todo.done_reason }) : t("todos.auto_done")}

@@ -189,6 +189,39 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
     }
   });
 
+  it("answers the question its tab's shell stopped on, where the hub takes it, keeping Retry (#10365)", async () => {
+    const { getFeedState } = await import("../lib/feed");
+    const line = "[oh-my-zsh] Would you like to update? [Y/n]";
+    const plan = { id: "p2", conversation: "conv", state: "started" as const, tasks: [{ title: "Renew the certificate", prompt: "", machine: "m1", cwd: "/w",
+      todo_id: "again", error: "stopped on a question", error_code: "shell_waiting", error_args: { line, pane: "w1:p2", kind: "update", choices: "y,n,enter",
+        default: "y", kept_until: new Date(Date.now() + 5 * 60_000).toISOString() } }] };
+    getFeedState().plans[plan.id] = plan;
+    const features = getState().features;
+    const choice = () => document.querySelector<HTMLButtonElement>("[data-testid=shell-choice-n]");
+    try {
+      // an older hub cannot take the answer: Retry as before, no card
+      seed({ features: ["todo_seen"] });
+      await show("again");
+      await flush();
+      expect(choice()).toBeNull();
+      expect(button(t("todos.retry"))).toBeTruthy();
+      seed({ features: ["todo_seen", "todo_start_answer"] });
+      await show("again");
+      await vi.waitFor(async () => {
+        await flush();
+        expect(choice()).not.toBeNull();
+      }, { timeout: 5000, interval: 20 });
+      expect(button(t("todos.retry"))).toBeTruthy();
+      await act(async () => choice()!.click());
+      await flush();
+      expect(calls("POST", "/todos/again/start/answer")).toEqual([{ choice: "n" }]);
+      expect(calls("POST", "/todos/again/retry")).toEqual([]);
+    } finally {
+      delete getFeedState().plans[plan.id];
+      seed({ features });
+    }
+  });
+
   it("reopens it when it is handed to an agent, not when the dialog only opens", async () => {
     await show("waits");
     await act(async () => button(t("todos.hand_over"))!.click());
