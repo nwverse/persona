@@ -15,6 +15,7 @@ import { launcherBlock } from "./launcher-health";
 import { validModelId } from "./model-id";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelProvider, type PanelState } from "./model-panel";
 import { canSwitchModel, isCurrentModel, modelBusy, sessionLauncher } from "./model-switch";
+import { launcherTitle } from "./provider-names";
 import { currentModelRow, engineSwitchable, modelLabel, pendingEngine, sessionEngine, sessionSwitches, type ModelList } from "./session-models";
 import type { Launcher, Session } from "./types";
 
@@ -36,6 +37,7 @@ function panelModel(m: AgentModel, engine: string, current: boolean, s: Session,
   const out: PanelModel = { id: m.id, name: modelName(m), efforts: rowEfforts(engine, m, listed, current, s) };
   if (m.description) out.description = m.description;
   if (m.resolved) out.resolved = m.resolved;
+  if (m.aliases?.length) out.aliases = m.aliases;
   if (m.default_effort && (!current || s.effort)) out.defaultEffort = m.default_effort;
   if (m.custom) out.custom = true;
   if (m.price) out.price = m.price;
@@ -103,7 +105,7 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     const launcher = all.find((l) => l.name === name);
     const defaultRow = currentModelRow(e.list?.models ?? [], launcher?.model) ?? defaultModel(e.list?.models ?? []);
     const defaultName = defaultRow ? (defaultRow.resolved ? modelLabel(defaultRow.resolved) : modelName(defaultRow)) : launcher?.model ? modelLabel(launcher.model) : undefined;
-    const p: PanelProvider = { id: name, name, engine: kind, models: null, defaultModel: defaultName, status: launcherBlock(launcher)?.reason };
+    const p: PanelProvider = { id: name, name: launcherTitle(name, all), engine: kind, models: null, defaultModel: defaultName, status: launcherBlock(launcher)?.reason };
     // the session's own provider is called what its row calls it (a Paseo provider's label, #8142)
     if (mine && s.agent_label) p.engineLabel = s.agent_label;
     if (e.list === undefined) {
