@@ -399,14 +399,19 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
 // so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
 // separate work.
+// #10226: Developing Persona's To-dos view shadow reads today's triage through App's module (App.tsx re-exports three of
+// lib/todo-triage.ts's functions; a direct import from the recorder's chunk split lib/todo-triage.ts into a chunk of its
+// own, about 700 B). 49 B in each language, measured in one environment against main d5050affc5 (ja 482,098 B to
+// 482,147 B; en 478,979 B to 479,028 B, zh-Hans 479,841 B to 479,890 B). The budget stays.
 // #10358: a conversation an extension opened is marked with that extension's own icon and, while the icon is drawn,
 // named after it. The icon and the installed extensions it is picked from are a lazy chunk (ui/OpenerTile.tsx,
 // lib/opener-icons.ts); the first screen keeps OriginMark's check for an opener, the lazy entry, the opener handed to
-// the first message's line and the name the mark tells its row and that line. 258 B in each language, measured in one
-// environment against main c53addf40 (ja 481,864 B to 482,122 B; en 478,739 B to 478,997 B, zh-Hans 479,568 B to
-// 479,826 B), much of it the lazy entry's preload list: its chunks' names in the App chunk's dependency table, which
-// renumbers the entries of every lazy import after it, so the count moves with main (before the names: 45 B against
-// 04cffd3d4, 198 B against c2fec3548, 155 B against bda346e8c). Main had 819 B of room; the budget stays.
+// the first message's line and the name the mark tells its row and that line. 117 B in each language, measured in one
+// environment against main affb08b4d (ja 482,147 B to 482,264 B; en 479,028 B to 479,145 B, zh-Hans 479,890 B to
+// 480,007 B), much of it the lazy entry's preload list: its chunks' names in the App chunk's dependency table, which
+// renumbers the entries of every lazy import after it, so the count moves with main (258 B against c53addf40; before
+// the names: 45 B against 04cffd3d4, 198 B against c2fec3548, 155 B against bda346e8c). Main had 536 B of room; the
+// budget stays.
 export const FIRST_SCREEN_BUDGET = 482_683;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
