@@ -492,6 +492,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   "Compacting context…", "Working…"); a Persona conversation says it in cindy's plain phases ("Thinking…", "Replying…",
   "Reading files…", "Updating files…", "Searching files…", "Searching the web…", "Reading web pages…", "Organizing the
   conversation…", "Working…") and never names a tool (super rules 0 and 4, section 5.6).
+- Model retry: while the screen reports one, the left leads with the existing classifier's plain reason and localized
+  `Retrying N/M`; the observed error is secondary detail beneath it. It is never retained from the last status: ordinary
+  work, `live: null` and turn end remove it before the usual linger/fade (#887).
 - Right, in `--ink-3`, tabular figures: the time in the work summary's format (`0s`, `1m 0s`, `1m 5s`, `1h 0m`; section 4.7),
   then in an Agent session either `· 42 tok/s` or `· ↓ 1.2k tok` (a 13 px arrow mark), never both, and no speed or tokens
   before there is a measurement (principle 5). The time and speed together are a 24 px round button with `hover:bg-hover`
@@ -847,8 +850,8 @@ Muted and Seen, and it keeps its space, repository and worktree out of the idle 
 a plain dot, its state word "Just finished" (the To-dos' section word, `StateName`), its second line the triage's
 "✓ conclusion". A muted one is plain Seen. Why not Unread: Unread stays what needs a look. Why not plain Seen: work
 that ended minutes ago sank under sessions seen days ago. Why after the work still going: as in the To-dos' order
-above, what still runs comes before what is done. The web has it first; Apple, Android and HarmonyOS follow in their
-own issues and show these rows as Seen until then.
+above, what still runs comes before what is done. The web and Android (#9786; there the dot is Unread's, as Awaiting
+reply's) have it; Apple and HarmonyOS follow in their own issues and show these rows as Seen until then.
 
 #### The work-item row
 
@@ -1147,6 +1150,12 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
+- Agent launcher label (#10248): when the session reports its launcher, the existing pill says **launcher · model**,
+  using the same launcher name as its model-panel row. Both the launcher and abbreviated model stay visible at phone
+  width, truncating within the existing capsule; the full names remain in its tooltip and spoken label. The existing
+  engine mark stays. A queued switch shows its target launcher with the clock, while the tooltip retains current and
+  next setups. An unknown launcher keeps the model-only label and compact fallback. This label correction applies to
+  Agents; Persona's pill keeps its existing presentation.
 - Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
   `--orange`, wrapping), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"
   for another launcher of the same engine, "Switching engines rebuilds context and may lose content" for the other engine
@@ -1260,7 +1269,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
-| Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry |
+| Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry. While a model request is still retrying, the web's run status bar and Apple's `SessionLiveRetryNote` instead show the plain classified reason, observed error as secondary detail and localized current/max attempt, cleared on recovery, turn end or unwatch (#887) |
 | Chat loading and waiting | iOS `ChatSkeleton` (five rounded bars of `Theme.Size.markS`, the first at the trailing edge, breathing between `Fill.well` and `Fill.chip`) while a chat's first page loads, its load error as a danger line at the chat's newest end, and `TypingIndicator` ("Claude is getting ready…", three pulsing dots) under your message until its turn's work line comes; Android `ChatSkeleton` and the error line on Glass, `TypingLine` in every style (#4339 C9) |
 | The day over a message | iOS `DayLine` (`Theme.Font.caption`, tertiary, centered): over the first line of each day in Persona's conversation, never in an Agent's chat, and over a first message the transcript does not have yet (the first-message page, a conversation with an empty transcript), so the day does not appear above it later (#1911); Android `DayLine`: the transcript's in every style, those pending ones on Glass (#4339 C18) |
 
