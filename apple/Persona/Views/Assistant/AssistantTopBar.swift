@@ -292,7 +292,7 @@ struct AssistantTopBar: View {
                 Color.clear.scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget).accessibilityHidden(true)
             }
             if sidebarButtonShown {
-                GlassEffectContainer {
+                GlassGroup {
                     Self.circle(sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, label: String(localized: "Chat History [Shell Components 60636b]"), id: "assistant-sidebar-button") {
                         Haptics.tap()
                         openSidebar()
@@ -308,7 +308,7 @@ struct AssistantTopBar: View {
                 // Its room kept, empty, so the face stays in the middle.
                 Color.clear.scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget).accessibilityHidden(true)
             } else {
-                GlassEffectContainer {
+                GlassGroup {
                     Self.circle(Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new") {
                         Haptics.tap()
                         newConversation()
