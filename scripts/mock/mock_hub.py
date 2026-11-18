@@ -9665,6 +9665,9 @@ INTERACTIONS = [
      "tool_name": "ExitPlanMode", "tool_use_id": "toolu_p1",
      "plan": "## 支持 HEIC\n\n1. 用 `sips` 把 HEIC 转成 JPEG，质量 90，保留 EXIF\n2. 转换放到导出前，原文件不动\n3. 已经转过的按内容哈希跳过\n4. 补测试：竖拍、实况照片、没有 EXIF 的图"},
 ]
+# MOCK_PLAN_THEN=<mode>: the photo Agent's ExitPlanMode card records the mode that follows approval (#3784).
+if os.environ.get("MOCK_PLAN_THEN"):
+    INTERACTIONS[1]["plan_then"] = os.environ["MOCK_PLAN_THEN"]
 # MOCK_EDITABLE=1: a Claude Code Lark approval whose outgoing text may be edited before Allow, plus a deny note.
 if os.environ.get("MOCK_EDITABLE") == "1":
     INTERACTIONS.append({
@@ -10546,6 +10549,8 @@ MOCK_INTERACTIONS = INTERACTIONS + [
      "tool_name": "Bash", "tool_use_id": "toolu_check",
      "tool_input": {"command": "python3 -m unittest discover", "description": "验证格式转换与元数据保留"}},
 ]
+if os.environ.get("MOCK_PLAN_THEN"):
+    MOCK_INTERACTIONS = [ix for ix in MOCK_INTERACTIONS if ix["id"] == "ix_photos"]
 if os.environ.get("MOCK_ASK_LONG") == "agent":  # only the two long cards on the tests session (see above)
     MOCK_INTERACTIONS = [x for x in MOCK_INTERACTIONS if x["session_id"] != TESTS or x["id"].startswith("ix_perm_long_agent")]
 # MOCK_SCRIPT_ASK=1: a card on no session (#4059), as `personad ask` run outside herdr sends it (session_id empty).
@@ -29726,6 +29731,7 @@ MOCK_HELP.append("MOCK_ASSISTANT_CARDS=run  主对话连着请求改六项设置
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and Persona's main ask_user card for MOCK_ASK_LONG=1|actions|swipe|review; /mock/reset restores both unanswered exactly once and clears their resolved and interaction history entries")
+MOCK_HELP.append("MOCK_PLAN_THEN=<mode>  Only the photo Agent's ExitPlanMode card, recording the mode that follows approval (#3784)")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
