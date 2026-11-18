@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // drainFleetBackground stops new background scheduling, then lets active calls finish before a test closes its store.
@@ -43,6 +44,12 @@ func drainFleetBackground(t *testing.T, s *Service, cancel context.CancelFunc) {
 			s.fleet.completionRuns.Done()
 		}
 		delete(s.fleet.completionTimers, timer)
+	}
+	for _, p := range s.fleet.interactions {
+		if p.orphaned != nil {
+			p.orphaned.Stop()
+			p.orphaned = nil // a queued callback checks this under fleet.mu before recording its outcome
+		}
 	}
 	s.fleet.mu.Unlock()
 	// workEvent and recordSendAsync use work.mu for the same runCtx + Add scheduling gate.
@@ -82,6 +89,57 @@ func waitFleetBackground(t *testing.T, name string, wg *sync.WaitGroup) {
 	case <-done:
 	case <-timer.C:
 		t.Fatalf("%s did not finish before the database fixture closed", name)
+	}
+}
+
+// orphanEndMem observes the real grace callback's outcome write without closing a database under a finished test.
+type orphanEndMem struct {
+	*fleetMem
+	ended chan string
+}
+
+func (m *orphanEndMem) FinishInteraction(ctx context.Context, id, status string, r *proto.Resolution) error {
+	m.ended <- id
+	return m.fleetMem.FinishInteraction(ctx, id, status, r)
+}
+
+func orphanTimerFixture(t *testing.T) (*Service, *orphanEndMem, context.CancelFunc) {
+	t.Helper()
+	st := &orphanEndMem{fleetMem: newFleetMem(), ended: make(chan string, 1)}
+	s := New(Options{Hub: newFakeHub(), Store: func() Store { return st }, Logf: testLogf(t), Devices: newFleetDevs()})
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.running.Store(&runCtx)
+	p := &pending{ix: resumable("ix_drain"), done: make(chan proto.Resolution)}
+	p.ix.ExpiresAt = time.Now().Add(30 * time.Millisecond)
+	s.fleet.mu.Lock()
+	s.fleet.interactions = map[string]*pending{p.ix.ID: p}
+	if !s.orphanLocked(p) {
+		t.Fatal("the short grace did not arm")
+	}
+	s.fleet.mu.Unlock()
+	return s, st, cancel
+}
+
+func TestOrphanTimerRecordsCancellationBeforeDrain(t *testing.T) {
+	s, st, cancel := orphanTimerFixture(t)
+	select {
+	case id := <-st.ended:
+		if id != "ix_drain" {
+			t.Fatalf("ended %q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the ordinary grace callback did not record its cancellation")
+	}
+	drainFleetBackground(t, s, cancel)
+}
+
+func TestDrainFleetBackgroundStopsOrphanedInteractions(t *testing.T) {
+	s, st, cancel := orphanTimerFixture(t)
+	drainFleetBackground(t, s, cancel)
+	select {
+	case id := <-st.ended:
+		t.Fatalf("orphan timer %q recorded an outcome after the service was drained", id)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

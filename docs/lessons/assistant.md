@@ -1,12 +1,5 @@
 # Lessons: assistant (headless Claude / Codex)
 
-- A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
-  states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
-  streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
-  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
-  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
-  duplicating that decision or mistaking an unrelated owner question for its own.
-
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
   `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
   an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.
@@ -727,3 +720,12 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## Scheduled runs need observable to-do progress (#9755)
+
+- A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
+  states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
+  streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
+  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
+  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
+  duplicating that decision or mistaking an unrelated owner question for its own.
