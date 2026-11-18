@@ -68,6 +68,9 @@ nonisolated enum ServerEvent: Sendable {
     /// Tasks from an assistant conversation (docs/assistant/unified-entry.md): the todos changed (pull them), a conversation's
     /// feed grew, a plan changed.
     case todos
+    /// The user's saved prompts changed (#7329, #9436): read `GET /api/v1/assistant/saved-prompts` again. `manager`: the
+    /// assistant whose list it is when not the default one; only the shown assistant's counts.
+    case savedPrompts(manager: String?)
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
     /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
@@ -288,6 +291,7 @@ nonisolated enum ServerEvent: Sendable {
         case "agents.prefs": return .agents(sessionIDs: ["agents.prefs"])
         case "inbox": return .inbox
         case "todos": return .todos
+        case "assistant_saved_prompts": return .savedPrompts(manager: e.manager?.string)
         case "personas": return .personas
         case "look":
             guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }

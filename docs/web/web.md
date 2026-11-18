@@ -1351,7 +1351,7 @@ or writes them: the main chat's fixed payload stays as it was.
 - **Save as Prompt…** on your own message's menu (right click, a long press, the ⋯ beside the bubble) where the chat
   can send: the editor over the page, filled with the message's words and a name from its first ones (lower case, joined
   by `-`, moved past a name taken). Not on replies, and not in a read-only chat.
-- iOS and Android follow in their own issues; until then they ignore `assistant_saved_prompts`.
+- iOS has them too (#9436, `docs/apple/ios.md` "Saved prompts (#9436)"); Android follows in its own issue and until then ignores `assistant_saved_prompts`.
 - Checks: `lib/saved-prompts.test.ts`, `views/settings/SavedPrompts.test.tsx`, `views/chat/Composer.saved-prompts.test.tsx`,
   `views/chat/MessageActions.save-prompt.test.tsx`; end to end against the mock hub (`MOCK_SAVED_PROMPTS=1`), wide and phone,
   light and dark: `node web/e2e/saved-prompts.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`.

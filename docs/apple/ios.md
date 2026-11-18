@@ -438,7 +438,7 @@ Chat page:
   - @: recently accessed tool files (12, `@relative/path`, understood by Claude Code and Codex), then recent 8 sessions, selected as
     `<persona-context>` before message, quote capsule above input. Only loaded-step files; folded work never expanded in long chats yields none.
   - /: `SlashCommand.all`, quick words /继续 (continue), /提交 (commit), /汇报 (report), fills request text for explicit Send (formerly menu sent immediately);
-    /compact and /context unchanged; /clear when supported, confirmation first.
+    /compact and /context unchanged; /clear when supported, confirmation first. The user's saved prompts follow the chat's own commands ("Saved prompts (#9436)").
   - /loop (#2601, web #1600): Claude Agents only, not Codex, internal Codex fork or assistant (`LoopCommand.offered`), in / and + Shortcuts;
     prefixes existing input with `/loop ` (existing text becomes task, cursor after command to enter interval), never sends directly (other + shortcuts still send on tap). A `/loop` draft shows shared `LoopDraftNote`
     explaining "Repeat every 10 minutes: Check CI" / "Repeat at Claude's chosen pace: …", gray usage when task absent;
@@ -2526,6 +2526,31 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Tests**: `InboxManagersTests`, `ManagerPushTests`, `ManagerGroupsTests.aComputerIsOfflineWithItsManager` and
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
+
+## Saved prompts (#9436)
+
+The user's own `/` prompts (web #7329, `docs/web/web.md` "Saved prompts (#7329)"): the instructions they send again and
+again, kept on the hub as the current assistant's settings, so the phone, the iPad and the web have one list. iOS uses the
+web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) and adds no hub change.
+
+- **One list** (`Persona/App/SavedPromptStore.swift`, types, API and rules in `Shared/SavedPrompts.swift`): read on hello,
+  on `assistant_saved_prompts` when it is the shown assistant's (no `manager`: the default one; `SavedPromptStore.concerns`),
+  and after the current assistant or hub changes, which first forgets the list before so another assistant's prompts are
+  never offered. Until a read answers the `/` lists have none; an assistant from before them (404) has none and its page
+  says so; a failed read keeps a list already read.
+- **The `/` lists**: the plain composer's (`SlashMenuRow.slashRows`, also in chats that have no commands of their own) and
+  BeautifulUI's prompt bar (`promptCommands`) list them after the chat's own commands and before extensions' quick
+  prompts, as `/name` with **Saved**; picking one types its text into the box and never sends it. A saved `/commit`
+  beside the chat's own is a row of its own (ids `saved:<id>`). Not in terminal chats.
+- **Assistant Profile › In Chats › Saved Prompts** (`Views/Settings/SavedPromptsView.swift`; both styles): each prompt's
+  `/name` and its text's first two lines, New Prompt, and per row (context menu, swipe, VoiceOver actions) Edit, Move Up /
+  Move Down (`PUT …/order`) and Delete, confirmed. Delete and a move show at once and come back with the reason when the
+  hub refuses; a list changed on another device meanwhile (409) is read again with a word.
+- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text. It says the hub's rules before asking it
+  (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
+  80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
+- Save as Prompt… on a message's menu, and Android, follow in their own issues.
+- DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt|deletePrompt`. Tests: `PersonaTests/SavedPromptsTests.swift`.
 
 ## The pages show the current assistant
 
