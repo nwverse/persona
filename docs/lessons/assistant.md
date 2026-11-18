@@ -724,6 +724,9 @@ work round even though the task was already open: otherwise its old Pass can ver
 the actual retirement passes as well as the card; a still-pending card alone never proves its task is open.
 The acceptance record and completion are separate durable writes: recover a saved owner Pass after a restart,
 including the verified stage if the todo was already closed.
+Recovery follows the current round's owner Pass, not only a `user_check` ledger: completion and the ledger's
+transition to `accepted` can each precede a crash before verification. Retry only unfinished steps, keep ledger
+write failures recoverable, and do not repeat completion or verification notifications on subsequent sweeps.
 Serialize the round change, not an ordinary message's Agent-start wait: a second message must still join the
 Agent already starting (`TestStoppedTaskSecondMessageGoesToTheStartingAgent`), rather than wait behind the
 first sender's action lock.

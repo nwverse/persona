@@ -86,12 +86,13 @@ func (s *Service) verifySupervisedAsks(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if t.Supervision != nil && t.Supervision.State == reviewUserCheck {
-			if a, ok := s.askCopy(id); ok && !a.AcceptedAt.IsZero() && !a.ByAssistant && !a.BySupervisor {
-				if _, err := s.acceptTry(ctx, id, ""); err != nil {
-					s.logf("task %s: recover owner Pass: %v", id, err)
-				}
+		if a, ok := s.askCopy(id); ok && ownerPassPending(&a, t) {
+			if _, err := s.acceptTry(ctx, id, ""); err != nil {
+				s.logf("task %s: recover owner Pass: %v", id, err)
 			}
+			continue
+		}
+		if t.Supervision != nil && t.Supervision.State == reviewUserCheck {
 			continue
 		}
 		if !supervisorVerified(t) {

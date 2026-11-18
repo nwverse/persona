@@ -197,6 +197,15 @@ func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bo
 	return s.acceptTryAsDismissalLocked(ctx, id, card, byDefault)
 }
 
+// ownerPassPending follows this round's durable owner Pass through completion, ledger and verification writes.
+func ownerPassPending(a *acceptAsk, t Todo) bool {
+	return a != nil && !a.AskedAt.IsZero() && !a.AcceptedAt.IsZero() &&
+		!decideAsk(a) && !a.Conclusion && !a.ByAssistant && !a.BySupervisor &&
+		userCheckAsked(t) && !acceptAskStale(a, t) &&
+		(t.Supervision.State == reviewUserCheck ||
+			t.Supervision.State == reviewAccepted && t.DoneAt != nil && !t.stageVerified)
+}
+
 // acceptTryAsDismissalLocked holds only this task's action lock across its send, not the book mutex.
 func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card string, byDefault bool) (acceptResult, error) {
 	t, todoOK := s.todoNow(id)
@@ -212,10 +221,8 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		return acceptResult{}, errAcceptStore
 	}
 	a, ok := b.asks[id]
-	// A durable owner Pass may precede completion if the process stops between the two writes.
-	ownerCheck := todoOK && t.Supervision != nil && t.Supervision.State == reviewUserCheck
-	resumeOwnerPass := ok && ownerCheck &&
-		!a.Conclusion && !a.ByAssistant && !a.BySupervisor && !a.AcceptedAt.IsZero()
+	resumeOwnerPass := ok && todoOK && ownerPassPending(a, t)
+	ownerCheck := todoOK && t.Supervision != nil && (t.Supervision.State == reviewUserCheck || resumeOwnerPass)
 	if !ok || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() && !resumeOwnerPass || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
 		decideAsk(a) && (a.Recommend == "" || todoOK && acceptAskEnded(a, t)) ||
 		byDefault && !(decideAsk(a) && a.Reversible && !a.Deadline.IsZero() && a.DueAt.IsZero() && !time.Now().Before(a.Deadline)) {
@@ -238,30 +245,36 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 	if byDefault {
 		a.ByDefault, a.DueAt = true, a.AcceptedAt
 	}
-	if err := s.saveAcceptErrLocked(ctx); err != nil {
-		// Kept only in memory, it would wait again after a restart: not accepted, and nothing that follows one runs.
-		a.AcceptedAt, a.ByDefault, a.DueAt = previousAcceptedAt, false, previousDueAt
-		b.mu.Unlock()
-		s.logf("task %s: acceptance: save: %v", id, err)
-		return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
+	if !resumeOwnerPass {
+		if err := s.saveAcceptErrLocked(ctx); err != nil {
+			// Kept only in memory, it would wait again after a restart: not accepted, and nothing that follows one runs.
+			a.AcceptedAt, a.ByDefault, a.DueAt = previousAcceptedAt, false, previousDueAt
+			b.mu.Unlock()
+			s.logf("task %s: acceptance: save: %v", id, err)
+			return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
+		}
 	}
 	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx) // it no longer waits
 	if !decideAsk(&cp) && !cp.Conclusion {
 		if ownerCheck {
-			closed, err := s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
-			if err != nil {
-				b.mu.Lock()
-				if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
-					a.AcceptedAt = previousAcceptedAt
-					s.saveAcceptLocked(ctx)
+			closed := false
+			if t.DoneAt == nil {
+				var err error
+				closed, err = s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
+				if err != nil {
+					b.mu.Lock()
+					if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+						a.AcceptedAt = previousAcceptedAt
+						s.saveAcceptLocked(ctx)
+					}
+					b.mu.Unlock()
+					s.askChanged(ctx)
+					return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 				}
-				b.mu.Unlock()
-				s.askChanged(ctx)
-				return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 			}
-			v, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+			v, changed, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 				if v.State != reviewUserCheck {
 					return false
 				}
@@ -270,12 +283,16 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			})
 			if err != nil {
 				s.logf("task %s: owner verification: %v", id, err)
-			} else if closed {
+				return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
+			}
+			if closed || changed {
 				s.taskReviewed(ctx, v.Supervisor, id, reviewAccepted, v)
 			}
 		}
 		completeDismissal()
-		s.taskVerified(ctx, id, cp)
+		if !ownerCheck || !t.stageVerified {
+			s.taskVerified(ctx, id, cp)
+		}
 		return acceptSucceeded(), nil
 	}
 	result := acceptSucceeded()
