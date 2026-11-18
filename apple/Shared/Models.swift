@@ -723,7 +723,7 @@ extension Launcher {
         let managed = source == "persona" || source == LegacyNames.product
         let machine = source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
         guard machine || managed, !(managed && agent == "codex") else { return false }
-        return agent == nil || agent == "" || agent == "claude" || agent == "codex" || agent == "agy"
+        return agent == nil || agent == "" || agent == "claude" || agent == "codex"
     }
 }
 
