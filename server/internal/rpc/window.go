@@ -52,20 +52,26 @@ func (w *creditWindow) frameSize() int {
 	return min(max(w.cwnd/4, bulkFrameMin), framePayloadMax)
 }
 
-// canSend: a bulk frame of n bytes may go out now. With nothing in flight one frame always may, whatever its size.
+// canSend: a frame of n bytes may go out now (room); one that may not notes that the window held it back.
 func (w *creditWindow) canSend(n int) bool {
-	if w.inFlight == 0 || w.inFlight+n <= w.cwnd {
+	if w.room(n) {
 		return true
 	}
 	w.limited = true
 	return false
 }
 
+// room: a frame of n bytes fits in the window now. With nothing in flight one frame always does, whatever its size.
+func (w *creditWindow) room(n int) bool { return w.inFlight == 0 || w.inFlight+n <= w.cwnd }
+
 // wrote records a frame of n bytes with credit, numbered seq, written from at; full: cut to the frame size.
 func (w *creditWindow) wrote(seq uint64, n int, at time.Time, full bool) {
 	w.inFlight += n
 	if k := len(w.sent); k >= maxSentEntries {
-		w.sent[k-1].seq, w.sent[k-1].bytes = seq, w.sent[k-1].bytes+n
+		// The newest entry takes this frame too, and its time: a round trip from the first frame it took would count
+		// the time the others took to be written as queueing.
+		e := &w.sent[k-1]
+		e.seq, e.bytes, e.at, e.full = seq, e.bytes+n, at, full
 		return
 	}
 	w.sent = append(w.sent, sentFrame{seq: seq, bytes: n, at: at, full: full})

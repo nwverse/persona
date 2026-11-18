@@ -313,11 +313,14 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		err = peer.Call(ictx, "node.info", map[string]any{}, &c.info)
 	}
 	if err == nil && nodeHas(c.info, nodeproto.NodeLanes) {
-		// Before anything else goes out, so nothing large is on its way while the two sides switch. A refusal, or no
-		// answer in time, leaves lines: the connection works as with an older node.
-		if lerr := peer.UpgradeLanes(ictx); lerr != nil && ictx.Err() == nil {
+		// Before anything else goes out, so nothing large is on its way while the two sides switch, and within a wait of
+		// its own: the handshake is done. A refusal leaves lines, the connection working as with an older node; an
+		// answer later than the wait still switches both sides when it comes ("connected" says which it is then).
+		lctx, lcancel := context.WithTimeout(ictx, lanesWait)
+		if lerr := peer.UpgradeLanes(lctx); lerr != nil {
 			m.d.logf("[%s] lanes over %s: %v (staying with lines)", m.cfg.ID, via, lerr)
 		}
+		lcancel()
 	}
 	icancel()
 	if err != nil {
@@ -600,6 +603,9 @@ func (m *Machine) watchPaths(ctx, runCtx context.Context, c *nodeConn) {
 		return
 	}
 }
+
+// lanesWait bounds the wait for the node's answer to rpc.lanes.
+const lanesWait = 10 * time.Second
 
 func onOff(on bool) string {
 	if on {

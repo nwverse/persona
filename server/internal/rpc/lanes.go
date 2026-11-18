@@ -57,8 +57,9 @@ const (
 func creditLane(l Lane) bool { return l == LaneInteractive || l == LaneBulk }
 
 // route is where a line goes once the output is framed: its lane, and whether it waits for credit. Interactive
-// requests and bulk lines do. An event never does: a synchronous event handler can send one from the read loop, where
-// waiting for credit would wait for an acknowledgement only that loop reads (control is what credit travels on). Nor
+// requests and bulk lines do (bulk events too: the port streams send them from their pumps). An event of the events
+// lane never does: a synchronous event handler can send one from the read loop, where waiting for credit would wait for
+// an acknowledgement only that loop reads (control is what credit travels on). Nor
 // does an interactive answer: a callback in the read loop may wait for one to be written (AfterReply), which would
 // wait for credit the same way, and on the one writer a pong waited behind a whole answer anyway. A read loop must not
 // wait for this side's requests or bulk lines to be written: a request from it would wait for an answer only it reads,

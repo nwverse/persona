@@ -146,3 +146,19 @@ func TestCreditWindowSamplesFullFramesOnly(t *testing.T) {
 		t.Fatalf("full frames: base %s, window %d", w.base.min(), w.cwnd)
 	}
 }
+
+// Past maxSentEntries the newest entry takes the next frames, and their time: its round trip is the newest frame's,
+// not the time since the first frame it took.
+func TestCreditWindowMergedEntryTakesTheNewestTime(t *testing.T) {
+	w := newCreditWindow()
+	start := time.Unix(1_000_000, 0)
+	for i := uint64(1); i <= maxSentEntries; i++ {
+		w.wrote(i, 10, start, true)
+	}
+	later := start.Add(10 * time.Second)
+	w.wrote(maxSentEntries+1, 10, later, true)
+	w.acked(maxSentEntries+1, later.Add(100*time.Millisecond))
+	if w.rtt != 100*time.Millisecond {
+		t.Fatalf("round trip %s, want the newest frame's 100ms", w.rtt)
+	}
+}

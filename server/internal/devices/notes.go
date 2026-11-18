@@ -3,14 +3,19 @@ package devices
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // The hub's one-way events for a node (devices.notify: terminal input, a forwarded port's bytes) come in on the bus's
 // read loop, which must not wait for any one computer: they are queued per machine and written by one writer each, in
 // the order they came, so a computer slow to take them holds up only its own. One whose write stalls noteStall, or
-// that lets maxNoteBytes pile up, is connected again (what ran on the connection ends, as with any dropped one).
+// that lets maxNoteBytes pile up, is connected again (what ran on the connection ends, as with any dropped one). A
+// forwarded port's bytes (nodeproto.BulkLane) queue apart from the rest: on a framed connection they wait for credit,
+// and terminal input behind them would wait with them.
 var (
 	noteStall    = 30 * time.Second
 	maxNoteBytes = 32 << 20
@@ -31,6 +36,9 @@ type nodeNote struct {
 // queueNote queues an event for the node.
 func (m *Machine) queueNote(event string, params json.RawMessage) {
 	n := &m.notes
+	if slices.Contains(nodeproto.BulkLane, event) {
+		n = &m.bulkNotes
+	}
 	n.mu.Lock()
 	if n.bytes+len(params) > maxNoteBytes {
 		dropped := len(n.q)
@@ -46,13 +54,12 @@ func (m *Machine) queueNote(event string, params json.RawMessage) {
 	n.writing = true
 	n.mu.Unlock()
 	if start {
-		go m.writeNotes()
+		go m.writeNotes(n)
 	}
 }
 
-// writeNotes writes the queued events to the node's connection of the moment until none is left.
-func (m *Machine) writeNotes() {
-	n := &m.notes
+// writeNotes writes the events queued on n to the node's connection of the moment until none is left.
+func (m *Machine) writeNotes(n *nodeNotes) {
 	for {
 		n.mu.Lock()
 		if len(n.q) == 0 {

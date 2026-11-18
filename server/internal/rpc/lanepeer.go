@@ -208,7 +208,13 @@ func (p *Peer) writeFramed(ctx context.Context, lw *laneWriter, b []byte, r rout
 	if err := ctx.Err(); err != nil {
 		return observation, NotSent(err)
 	}
-	l := &outLine{b: b, lane: r.lane, credit: r.credit, queued: time.Now(), done: make(chan error, 1)}
+	line := b
+	if lw.filter != nil {
+		// Here, not by the frame writer: a long line scanned under its lock would hold up every writer and the reader's
+		// acknowledgements.
+		line = lw.filter(b)
+	}
+	l := &outLine{b: bytes.TrimSuffix(line, newline), lane: r.lane, credit: r.credit, queued: time.Now(), done: make(chan error, 1)}
 	delayed, err := lw.enqueue(l)
 	if err != nil {
 		return observation, NotSent(err)

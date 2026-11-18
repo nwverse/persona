@@ -70,7 +70,7 @@ func heads(t *testing.T, b []byte) ([]frameHead, [][]byte) {
 
 func queue(t *testing.T, lw *laneWriter, lane Lane, line string) *outLine {
 	t.Helper()
-	l := &outLine{b: []byte(line + "\n"), lane: lane, credit: creditLane(lane), queued: time.Now(), done: make(chan error, 1)} // as a request's
+	l := &outLine{b: []byte(line), lane: lane, credit: creditLane(lane), queued: time.Now(), done: make(chan error, 1)} // as a request's
 	if _, err := lw.enqueue(l); err != nil {
 		t.Fatal(err)
 	}
@@ -648,4 +648,37 @@ func TestLanesPingActivityInTheMiddleOfALine(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool { return !p.PingActivity().IsZero() })
+}
+
+// A long request waiting for credit does not hold a long answer of its lane behind it: answers never wait on credit,
+// through another line neither.
+func TestLaneWriterAnswerPassesARequestWaitingForCredit(t *testing.T) {
+	var sink buffered // takes everything; nothing is ever acknowledged
+	closed := make(chan struct{})
+	defer close(closed)
+	lw := newLaneWriter(&sink, closed, func(error) {}, nil)
+	lw.start()
+	request := queue(t, lw, LaneInteractive, strings.Repeat("q", 4*framePayloadMax)) // credit, as a request's
+	eventually(t, func() bool {
+		lw.mu.Lock()
+		defer lw.mu.Unlock()
+		return request.started && !lw.busy && lw.win.inFlight > 0
+	})
+	answer := &outLine{b: []byte(strings.Repeat("a", 3*framePayloadMax)), lane: LaneInteractive, queued: time.Now(), done: make(chan error, 1)}
+	if _, err := lw.enqueue(answer); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-answer.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a long answer waited behind a request held back by the window")
+	}
+	select {
+	case <-request.done:
+		t.Fatal("the request went out without credit")
+	default:
+	}
 }
