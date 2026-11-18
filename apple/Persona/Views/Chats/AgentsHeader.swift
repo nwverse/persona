@@ -358,6 +358,16 @@ struct AgentsSearchField: UIViewRepresentable {
 
     static var prompt: String { AgentsSearchPrompt.text }
 
+    /// The text size the field's words stop growing at: the top bars' (`Theme.Shell.topBarLargestTypeSize`), whose row
+    /// it rises into. Its capsule and its band keep their height at every size, so the fold, the pull and the rise do
+    /// not change with the text (#10165).
+    static let largestTypeSize = UIContentSizeCategory(Theme.Shell.topBarLargestTypeSize)
+
+    /// The size the field's words are drawn at for its own text size.
+    static func textSize(for size: UIContentSizeCategory) -> UIContentSizeCategory {
+        size == .unspecified ? size : min(size, largestTypeSize)
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> Holder {
@@ -412,9 +422,28 @@ struct AgentsSearchField: UIViewRepresentable {
             super.init(frame: .zero)
             field.frame = bounds
             field.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            // `fitText` sizes the words; UIKit's own following would undo the cap.
+            field.adjustsFontForContentSizeCategory = false
             addSubview(field)
+            registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (holder: Holder, _: UITraitCollection) in
+                holder.fitText()
+            }
         }
         required init?(coder: NSCoder) { nil }
+
+        /// The field's words (what is typed and the placeholder) at its text size, no larger than `largestTypeSize`.
+        /// UIKit sizes them once, as the bar is made, and then follows only a change of the field's own size: the field
+        /// in the list's row is made at launch, before the window's cap is set, and kept the system's AX5 words (53 pt)
+        /// in its 44 pt capsule while everything around it was drawn at xxxLarge (#10165). Fitted again on entering a
+        /// window and on every change of the text size.
+        func fitText() {
+            let size = AgentsSearchField.textSize(for: traitCollection.preferredContentSizeCategory)
+            guard size != .unspecified, let font = field.font else { return }
+            let style = (font.fontDescriptor.object(forKey: .textStyle) as? String).map(UIFont.TextStyle.init) ?? .body
+            let points = UIFont.preferredFont(forTextStyle: style, compatibleWith: UITraitCollection(preferredContentSizeCategory: size)).pointSize
+            // The placeholder's words take the field's font with them.
+            if font.pointSize != points { field.font = font.withSize(points) }
+        }
 
         override func accessibilityActivate() -> Bool {
             guard let activateSearch else { return super.accessibilityActivate() }
@@ -442,6 +471,7 @@ struct AgentsSearchField: UIViewRepresentable {
                 cell = nil
             } else {
                 unclipCell()
+                fitText()
             }
         }
 
