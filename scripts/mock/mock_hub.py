@@ -11661,8 +11661,22 @@ def _codex_settings():  # Settings › Codex Settings: the node's whitelist (ser
     ]
 
 
+def _agy_settings():  # Settings › Antigravity Settings: the node's whitelist (server/internal/node/agyompconfig.go)
+    return [
+        {"key": "model", "title": "默认模型", "detail": "没有指定模型时使用 Antigravity 自己的默认模型", "type": "string", "default": "", "value": None},
+        {"key": "agentMode", "title": "执行模式", "detail": "改文件、跑命令时的默认模式；auto 自动放行安全操作，需要时仍会询问", "type": "enum",
+         "options": ["default", "accept-edits", "auto", "plan"], "default": "default", "value": "default"},
+        {"key": "toolPermission", "title": "工具权限", "detail": "调用工具或跑命令前要不要问你；选 always-proceed 会自动放行所有权限检查（全部放行）", "type": "enum",
+         "options": ["ask", "always-proceed"], "default": "ask", "value": None},
+        {"key": "modelProvider", "title": "模型接入方式", "detail": "oauth 走 Google / Antigravity 登录；填了 GOOGLE_GEMINI_BASE_URL + GEMINI_API_KEY 时选 gemini", "type": "enum",
+         "options": ["oauth", "gemini"], "default": "oauth", "value": None},
+        {"key": "showFeedbackSurvey", "title": "显示反馈问卷", "detail": "在终端里偶尔弹出反馈调查", "type": "bool", "default": True, "value": None},
+    ]
+
+
 CLAUDE_SETTINGS = {}  # machine id → its settings, made on first use
 CODEX_SETTINGS = {}
+AGY_SETTINGS = {}
 
 # Settings › Claude Code › Blocked configuration directories (server/internal/hub/claudedirs.go): machine id → blocked patterns; the directories
 # every machine has (home written as ~ here, expanded with the machine's home).
@@ -27037,6 +27051,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(_claude_dirs_state(p.split("/")[4]))
         if p.startswith("/api/v1/machines/") and p.endswith("/codex-settings"):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
+        if p.startswith("/api/v1/machines/") and p.endswith("/agy-settings"):
+            return self.send_json({"settings": AGY_SETTINGS.setdefault(p.split("/")[4], _agy_settings())})
         if p.startswith("/api/v1/sessions/") and p.endswith("/items"):
             sid = unquote(p.split("/")[5])  # a subagent's is "<session>@<agent>" (the web app sends %40)
             if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:  # MOCK_PASEO_NOT_LOADED: no watch has loaded it yet
@@ -28913,11 +28929,13 @@ class H(BaseHTTPRequestHandler):
                     pats.append(x)
             CLAUDE_DIRS_BLOCKED[mid] = pats
             return self.send_json(_claude_dirs_state(mid))
-        if p.startswith("/api/v1/machines/") and (p.endswith("/claude-settings") or p.endswith("/codex-settings")) and self.command == "PUT":
+        if p.startswith("/api/v1/machines/") and (p.endswith("/claude-settings") or p.endswith("/codex-settings") or p.endswith("/agy-settings")) and self.command == "PUT":
             body, mid = json.loads(self.last_body or b"{}"), p.split("/")[4]
             if not machine_online(mid):
                 return self.send_json({"error": "machine is offline"}, 503)
-            store, make = (CODEX_SETTINGS, _codex_settings) if p.endswith("/codex-settings") else (CLAUDE_SETTINGS, _claude_settings)
+            store, make = ((AGY_SETTINGS, _agy_settings) if p.endswith("/agy-settings")
+                           else (CODEX_SETTINGS, _codex_settings) if p.endswith("/codex-settings")
+                           else (CLAUDE_SETTINGS, _claude_settings))
             for st in store.setdefault(mid, make()):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
@@ -31443,6 +31461,8 @@ MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
 MODEL_PICK_HOME = "claude"  # the launcher-list default a reset restores
 MODEL_PICK_DEFAULT = MODEL_PICK_HOME
 MODEL_PICK_LOG = []
+MODEL_PICK_SHARED = os.environ.get("MOCK_ASSISTANT_LAUNCHER_FIXTURE") == "1"
+MODEL_PICK_SHARED_UNAVAILABLE = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
     {"name": "sonnetcc", "model": "sonnet", "source": "zshrc"},
@@ -31462,6 +31482,16 @@ MODEL_PICK_REASONS = {
 }
 if MODEL_PICK_MODE:
     LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+# MOCK_ASSISTANT_LAUNCHER_FIXTURE=1: replay the same Assistant candidates as the server, web, iOS and Android tests.
+if MODEL_PICK_MODE and MODEL_PICK_SHARED:
+    _shared_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                "spec", "fixtures", "assistant-launchers", "cases.json")
+    with open(_shared_path, encoding="utf-8") as _f:
+        _shared_case = json.load(_f)["cases"][0]
+    MODEL_PICK_LAUNCHERS[:] = [dict(l) for l in _shared_case["candidates"] if l["name"] in _shared_case["assistant"]]
+    MODEL_PICK_SHARED_UNAVAILABLE = [dict(l) for l in _shared_case["candidates"] if l["name"] not in _shared_case["assistant"]]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "runtime"
+    LAUNCHER_MODELS["runtime"] = {"agent": "claude", "models": []}
 # MOCK_MODEL_PICK_GROUPS=1: several Claude launchers whose names share their first word, as an owner with a few gateways
 # has them, for the model panel rail's captions ("claude-aster" reads "aster" beside "claude-max")
 if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
@@ -31605,8 +31635,11 @@ def model_pick_route(handler, p, body):
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
-            "default": {"provider": MODEL_PICK_DEFAULT, "model": "gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus", "effort": "high"},
+            "default": {"provider": MODEL_PICK_DEFAULT, "model": None if MODEL_PICK_SHARED else ("gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus"), "effort": "high"},
             "unavailable": [
+                dict(l, code="not_main_chat", reason=MODEL_PICK_REASONS["launcher_out_of_scope"][lang])
+                for l in MODEL_PICK_SHARED_UNAVAILABLE
+            ] if MODEL_PICK_SHARED else [
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
             ]}) or True
@@ -31659,6 +31692,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
+MOCK_HELP.append("MOCK_ASSISTANT_LAUNCHER_FIXTURE=1  配合 MOCK_MODEL_PICK：读取 spec/fixtures/assistant-launchers/cases.json，三端共用同一组启动器候选；默认 runtime、无显式模型，managed Codex 只在 unavailable")
 MOCK_HELP.append("MOCK_MODEL_GATEWAY=1|raw  With MOCK_MODEL_PICK: the main chat defaults to gateway-api, a gateway provider whose Claude Code tiers all name one model; 1: the list as the hub folds it (one Opus 5.5 row, the route's row says its route, #10365), raw: as it served it before (five Opus 5.5 rows)")
 
 
