@@ -2106,6 +2106,17 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_UNDELIVERED=1 (#10194, docs/assistant/assistant.md "Messages that could not go in"): the first Persona chat could
+# not start, and its manager keeps two of the owner's messages: one it sends again by itself, one that gave up (Retry /
+# Delete).
+if os.environ.get("MOCK_UNDELIVERED") == "1":
+    ASSISTANT[0].update({"status": "offline", "state": "offline", "undelivered": [
+        {"id": "a0d1e2f3-0000-4000-8000-00000000f001", "text": "帮我看一下备份任务昨晚有没有跑完", "at": ago(minutes=50),
+         "state": "failed", "attempts": 40, "error": "助手没能启动"},
+        {"id": "a0d1e2f3-0000-4000-8000-00000000f002", "text": "顺便把结果发到今天的待办里", "at": ago(minutes=2),
+         "state": "waiting", "attempts": 2, "next_at": ago(minutes=-1), "error": "助手没能启动"},
+    ]})
+
 # MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
 # the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
 # the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
