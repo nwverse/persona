@@ -497,9 +497,10 @@ cost is smaller than a broken image. When something has to be listed by hand in 
 - Hand-picked migration numbers were global across the hub and manager sets, even
   though their files live in separate directories: distinct filenames with the same
   prefix collided. New migrations are named by the UTC second they are written
-  (`docs/lessons/workflow.md`), so nobody picks a number, and a timestamp may be in
-  both sets since each records its own part; move only an unpublished migration to
-  another second, never an applied migration or the guard.
+  (`docs/lessons/workflow.md`), so nobody picks a number, and two files of one second
+  may be one in each set since each records its own part (one file in both sets is
+  still refused); move only an unpublished migration to another second, never an
+  applied migration or the guard.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen

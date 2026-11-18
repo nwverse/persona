@@ -22,8 +22,9 @@ ran on no database, and renaming it to a second of its own is the fix (the other
 a database may have recorded it before the second one merged).
 
 Duplicate versions across the two sets are not checked here. TestMigrationSets rejects a number
-both sets have, with the frozen bothSets and sharedNumbers exceptions kept in that test; a
-timestamp may be in both, since each set records its own part.
+both sets have, with the frozen bothSets and sharedNumbers exceptions kept in that test, and a
+timestamped file in both sets; two files of one second may be one in each set, since each set
+records its own part.
 """
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -87,8 +88,8 @@ NUMBERED = frozenset(_frozen("hub", (
     "0512_todo_inbox_item", "0513_assistant_search_plain", "0514_assistant_search_strong",
     "0516_todo_repositories", "0517_todo_repository_link_receipts", "0521_workspace_board_activity",
     "0523_todo_supervision_pending_since", "0531_urgent_calls", "0532_machine_usage_history",
-    "0533_usage_backfill", "0542_todo_request_pieces", "0551_usage_by_agent", "0552_todo_restored_someday",
-    "0556_session_mode_changes", "0561_model_usage"
+    "0533_usage_backfill", "0542_todo_request_pieces", "0543_machine_metrics_battery_temp", "0551_usage_by_agent",
+    "0552_todo_restored_someday", "0556_session_mode_changes", "0561_model_usage"
 )))
 
 

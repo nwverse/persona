@@ -63,7 +63,9 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   both merge. `TestMigrationSets` fails then, and a hub or manager whose build has both refuses to start, before it
   applies anything, until one is renamed. Keep the name of the one that merged first (a database may have recorded it)
   and give the other a second of its own: `migration_freeze.py` lets one of two files that share a version on the base
-  be renamed. One second in the hub set and the manager set is fine: each set records its own part.
+  be renamed. Two files of one second, one in the hub set and one in the manager set, are fine: each set records its
+  own part. One file in both sets is not, and `TestMigrationSets` refuses it: on a database both sides share it would
+  run once for each.
 - A migration that waits in a PR can merge after one written later. The runner applies whatever a database has not
   recorded, in name order, so on a database that already ran the later one the earlier second runs after it, while a
   new database runs them the other way round. Write a migration so that it doesn't depend on the order of ones written

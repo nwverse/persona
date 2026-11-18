@@ -35,7 +35,7 @@ var sharedNumbers = map[int64][2]string{421: {"0421_hub_settings.sql", "0421_mac
 // migrationVersion, #10618). scripts/ci/migration_freeze.py keeps the same numbered files by name.
 const lastNumbered = 561
 
-var numberedFiles = map[string]int{"hub": 35, "manager": 86}
+var numberedFiles = map[string]int{"hub": 35, "manager": 87}
 
 // firstStamp is when migrations began to be timestamped, and stampAhead how far after now a timestamp may be: one
 // further ahead (a typo in the year, a clock set wrong) would sort after every migration written until then, so new
@@ -88,8 +88,9 @@ func setTables(t *testing.T, part string) []string {
 }
 
 // Every migration is in exactly one set and has a version of its own there (docs/server/server.md "Migrations"); a
-// number is in both sets only for the frozen few in bothSets and sharedNumbers. The numbered ones are frozen, and the
-// rest timestamped, after them in name order as in version order.
+// number is in both sets only for the frozen few in bothSets and sharedNumbers, and a timestamped file never is (two
+// files of one second may be, one in each). The numbered ones are frozen, and the rest timestamped, after them in name
+// order as in version order.
 func TestMigrationSets(t *testing.T) {
 	root, err := fs.ReadDir(migrations, "migrations")
 	if err != nil {
@@ -129,13 +130,16 @@ func TestMigrationSets(t *testing.T) {
 // migrationNameProblems are what is wrong with the names of each part's migrations (sorted), now: a name that is not
 // numbered or timestamped, a number added after they were frozen, a timestamp before firstStamp or more than
 // stampAhead after now, a version two files of a part have, a number both parts have (but the frozen exceptions), a
-// name that sorts before an earlier version. A timestamp may be in both parts: each records its own, and no record
-// from before the split (which stands for both) has one.
+// timestamped file both parts have, a name that sorts before an earlier version. Two files of one second may be one in
+// each part: each records its own, and no record from before the split (which stands for both) has one. One file in
+// both is a migration in two sets, though: on a database both sides share it runs once for each, an UPDATE or an
+// INSERT twice.
 func migrationNameProblems(files map[string][]string, now time.Time) []string {
 	const rename = "a UTC second of its own: $(date -u +%Y%m%d%H%M%S)_<name>.sql"
 	var out []string
 	type file struct{ part, name string }
 	numbers := map[int64]file{}
+	stamped := map[string]string{} // timestamped name: the part that has it
 	for _, part := range []string{"hub", "manager"} {
 		seen := map[int64]string{}
 		numbered := 0
@@ -161,12 +165,18 @@ func migrationNameProblems(files map[string][]string, now time.Time) []string {
 					out = append(out, fmt.Sprintf("migration %d is in both sets (%s, %s): a new migration goes in exactly one", v, was.name, name))
 				}
 				numbers[v] = file{part, name}
-			} else if at, _ := time.Parse(stampLayout, name[:len(stampLayout)]); at.Before(firstStamp) {
-				out = append(out, fmt.Sprintf("migrations/%s/%s: a time before migrations were timestamped (%s); name it by %s",
-					part, name, firstStamp.Format(time.DateOnly), rename))
-			} else if at.After(now.Add(stampAhead)) {
-				out = append(out, fmt.Sprintf("migrations/%s/%s: a time more than %.0f hours after now (%s UTC); name it by %s",
-					part, name, stampAhead.Hours(), now.UTC().Format(stampLayout), rename))
+			} else {
+				if at, _ := time.Parse(stampLayout, name[:len(stampLayout)]); at.Before(firstStamp) {
+					out = append(out, fmt.Sprintf("migrations/%s/%s: a time before migrations were timestamped (%s); name it by %s",
+						part, name, firstStamp.Format(time.DateOnly), rename))
+				} else if at.After(now.Add(stampAhead)) {
+					out = append(out, fmt.Sprintf("migrations/%s/%s: a time more than %.0f hours after now (%s UTC); name it by %s",
+						part, name, stampAhead.Hours(), now.UTC().Format(stampLayout), rename))
+				}
+				if was, ok := stamped[name]; ok && was != part {
+					out = append(out, fmt.Sprintf("migration %s is in both sets: a new migration goes in exactly one (on a database both sides share it would run once for each)", name))
+				}
+				stamped[name] = part
 			}
 			if was, ok := seen[v]; ok {
 				out = append(out, fmt.Sprintf("migrations/%s: %s and %s have the same version %d: keep the name of the one that merged first and give the other %s",
@@ -186,10 +196,10 @@ func migrationNameProblems(files map[string][]string, now time.Time) []string {
 }
 
 // The guard on names: a numbered file added after the freeze (above the last number, or in a gap) fails, as do a
-// timestamp that is no time, one before the switch or more than a day ahead, a second taken twice in a set, and a
-// number in both sets; a timestamped file passes, in one set or in both. The made-up files are of seconds far after any
-// real one (now is put next to them), so the real timestamped files added later neither share their versions nor sort
-// after them.
+// timestamp that is no time, one before the switch or more than a day ahead, a second taken twice in a set, a number in
+// both sets and a timestamped file in both sets; a timestamped file passes in one set, and two files of one second pass
+// one in each set. The made-up files are of seconds far after any real one (now is put next to them), so the real
+// timestamped files added later neither share their versions nor sort after them.
 func TestMigrationNameProblems(t *testing.T) {
 	now := time.Date(2999, 12, 31, 12, 0, 0, 0, time.UTC)
 	with := func(add map[string][]string) map[string][]string {
@@ -210,9 +220,11 @@ func TestMigrationNameProblems(t *testing.T) {
 		{"timestamped", in("manager", "29991231235000_probe.sql", "29991231235001_probe_more.sql"), nil},
 		{"timestamped in each set", in("hub", "29991231235002_hub_probe.sql"), nil},
 		{"one second in both sets", with(map[string][]string{"hub": {"29991231235000_probe.sql"}, "manager": {"29991231235000_probe_too.sql"}}), nil},
+		{"one file in both sets", with(map[string][]string{"hub": {"29991231235000_backfill.sql"}, "manager": {"29991231235000_backfill.sql"}}),
+			[]string{"migration 29991231235000_backfill.sql is in both sets: a new migration goes in exactly one"}},
 		{"the first second", in("hub", "20261118000000_probe.sql"), nil},
 		{"a day ahead", in("hub", "30000101120000_probe.sql"), nil},
-		{"next number", in("manager", "0562_probe.sql"), []string{"numbers stopped at 0561", "87 numbered migrations, 86"}},
+		{"next number", in("manager", "0562_probe.sql"), []string{"numbers stopped at 0561", "88 numbered migrations, 87"}},
 		{"a gap", in("hub", "0559_probe.sql"), []string{"36 numbered migrations, 35"}},
 		{"a number in both sets", in("hub", "0561_probe.sql"), []string{"36 numbered migrations, 35", "561 is in both sets (0561_probe.sql, 0561_model_usage.sql)"}},
 		{"upper case", in("hub", "29991231235000_Probe.sql"), []string{"in lower case"}},
