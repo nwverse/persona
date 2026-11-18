@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
@@ -28,7 +29,8 @@ func (s *Service) modelUsageStore() modelUsageStore {
 }
 
 // countedClient is c's client, reporting each finished call of purpose on provider: a model_usage log line, and the
-// call added to the day's counts. A call that never ran (paused, nothing configured) is neither.
+// call added to the day's counts. A call that never ran (paused, nothing configured) or was stopped by its caller
+// (shutdown, an abandoned request; as kbCountedModel does) is neither.
 func (s *Service) countedClient(purpose, operation, provider string, c ai.Config) *ai.Client {
 	route := "api"
 	if c.RunLauncher != "" {
@@ -39,7 +41,7 @@ func (s *Service) countedClient(purpose, operation, provider string, c ai.Config
 	return s.aiClient(c).WithResult(func(reply ai.Reply, err error) {
 		u := reply.Usage
 		paused, _ := modelPaused(err)
-		if u == (ai.Usage{}) && (paused || ai.IsNotConfigured(err)) {
+		if u == (ai.Usage{}) && (paused || ai.IsNotConfigured(err) || errors.Is(err, context.Canceled)) {
 			return
 		}
 		result := "ok"

@@ -66,6 +66,12 @@ func TestModelUsageCountedAndListedByPurpose(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// a call its caller stopped is neither answered nor failed
+	stopped, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.purposeModel("inbox.judge").Complete(stopped, "", "x", 16); err == nil {
+		t.Fatal("a stopped call answered")
+	}
 	if len(st.calls) != 2 || st.calls[0] != (db.ModelCall{Purpose: "inbox.triage", Route: "api", Provider: "legacy.triage",
 		Model: "relay-model", InputTokens: 14, OutputTokens: 7, CacheReadInputTokens: 95, CacheCreationInputTokens: 83}) ||
 		st.calls[1].Purpose != "inbox.judge" {
