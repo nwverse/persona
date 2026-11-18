@@ -161,6 +161,7 @@ type Service struct {
 	origins    originBook           // origins.go
 	guests     guestBook            // guest.go
 	relays     relayBook            // conversations.go
+	quotes     quoteBook            // relay_quote.go: the owner's messages relays carried, verified
 	avail      availBook            // availability.go
 	quiet      quietBook            // quiet.go
 	supervise  superviseBook        // supervise_signals.go
