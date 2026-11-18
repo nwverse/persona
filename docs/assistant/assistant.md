@@ -1678,6 +1678,7 @@ User-visible differences:
 - Background completion doesn't wake chat; use `schedule_followup` to revisit.
 - Denial reasons appear as "(Not executed)…" messages (native Codex denial carries no text).
 - User `~/.codex/config.toml` MCP servers, `hooks.json`, `AGENTS.md` load too, like Claude user settings; other MCP calls need phone approval outside Allow Everything.
+- The ChatGPT apps of a ChatGPT sign-in (`codex_apps`, every connector of that account) do not: the assistant's Codex starts with `features.apps=false` (#10275). Code mode declares every tool in full in each request (in its `exec` tool's description, nothing loaded on demand); on one install the apps were 295 tools, ~140k tokens of a ~195k request, and the same request without them ~51k (captured from `codex exec --ephemeral` against a local mock, no model called). The assistant has Persona's own tools; the computer's own Codex keeps its apps.
 
 Measurement (2026-11-01, isolated hub: fake HOME, separate port / database, real Codex launcher and Lark gateway): new chat (snapshot, `agents_list` no approval), resume,
 ask_user answer, `ol GET /me` allowed, `ol POST …/messages` Lark card denied (model stopped without retry, no send),

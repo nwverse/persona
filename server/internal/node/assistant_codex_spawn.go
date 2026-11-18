@@ -50,6 +50,10 @@ func codexArgsForHome(bin, key, home string, legacyMCP bool, windows ...int) []s
 		// The assistant's memory is the one the app's "Memory" page shows, shared with Claude (codexMemoryPrompt); Codex's
 		// own (~/.codex/memories) is one store for every Codex on the machine, so it stays off here.
 		"-c", "features.memories=false",
+		// The ChatGPT apps of a ChatGPT sign-in (codex_apps: every connector of that account) are declared in full in
+		// every request, inside code mode's exec tool: measured at ~140k tokens of a ~195k request on one install, for
+		// tools the assistant never calls (it has Persona's own). Off here; the machine's own Codex keeps them (#10275).
+		"-c", "features.apps=false",
 	}
 	if len(windows) > 0 && windows[0] > 0 {
 		args = append(args, "-c", fmt.Sprintf("model_auto_compact_token_limit=%d", windows[0]))
