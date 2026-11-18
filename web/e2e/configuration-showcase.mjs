@@ -60,6 +60,17 @@ const open = async (page, scenario) => {
   await page.waitForTimeout(700);
   if (await page.locator("[data-showcase-invalid]").count()) fail(`${scenario ?? "default"}: the fixture self-check failed`);
 };
+const SAVE_TEXT = { en: { saved: "Saved", saving: "Saving", reset: "Reset" }, "zh-Hans": { saved: "已保存", saving: "正在保存", reset: "重置" } };
+/** A field row and its next row in document coordinates, so a scroll does not look like a layout change. */
+const boxOf = (page, form, id) => page.evaluate(([f, i]) => {
+  const element = document.querySelector(`[data-showcase-form="${f}"] [data-configuration-field="${i}"]`);
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  return { top: +(rect.top + window.scrollY).toFixed(2), height: +rect.height.toFixed(2) };
+}, [form, id]);
+const geometryOf = async (page, form, id, next) => ({ row: await boxOf(page, form, id), next: await boxOf(page, form, next) });
+const stable = (a, b) => !!a && !!b && Math.abs(a.row.top - b.row.top) <= 0.5 && Math.abs(a.row.height - b.row.height) <= 0.5 && Math.abs(a.next.top - b.next.top) <= 0.5;
+const showGeometry = (g) => `${g.row.top}/${g.row.height} → ${g.next.top}`;
 
 try {
   // The full showcase at every size and theme, plus the Simplified Chinese view.
@@ -89,6 +100,26 @@ try {
     }
     await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
     ok(`${tag}: ${modules.length} modules, ${fields} fields, ${layout.width}px wide, rows ${layout.line}/${layout.topic}px`);
+
+    // A conditional Reset / Cancel / Save must not move a row: the footer reserves the small-button height.
+    const words = SAVE_TEXT[language] ?? SAVE_TEXT.en;
+    const enabled = field(page, "showcase-digest", "enabled");
+    const start = await geometryOf(page, "showcase-digest", "enabled", "when");
+    await enabled.locator('[role="switch"]').click();
+    await page.waitForTimeout(700);
+    const off = await geometryOf(page, "showcase-digest", "enabled", "when");
+    if (width === 1280 && theme === "light" && language === "en") await enabled.screenshot({ path: join(shots, `${tag}-toggle-off.png`) });
+    await enabled.locator('[role="switch"]').click();
+    await page.waitForTimeout(700);
+    const on = await geometryOf(page, "showcase-digest", "enabled", "when");
+    if (width === 1280 && theme === "light" && language === "en") await enabled.screenshot({ path: join(shots, `${tag}-toggle-on.png`) });
+    await enabled.locator("button", { hasText: words.reset }).click();
+    await page.waitForTimeout(700);
+    const reset = await geometryOf(page, "showcase-digest", "enabled", "when");
+    for (const [name, state] of [["off", off], ["on", on], ["reset", reset]]) {
+      if (!stable(start, state)) fail(`${tag}: toggle ${name} moves the row ${showGeometry(start)} vs ${showGeometry(state)}`);
+    }
+    ok(`${tag}: toggle row stable ${showGeometry(start)} across off/on/reset`);
 
     if (theme === "light" && !size && language === "en") {
       // A maximum of one is a single choice: choosing Chinese replaces Auto at once, with no second check.
@@ -121,6 +152,7 @@ try {
 
   const scenarios = [
     ["slow", "light", 1280],
+    ["slow", "light", 390],
     ["load-fail", "light", 1280],
     ["reject", "light", 1280],
     ["conflict", "light", 1280],
@@ -145,11 +177,17 @@ try {
 
     if (scenario === "slow") {
       const enabled = field(page, "showcase-digest", "enabled");
+      await enabled.waitFor({ timeout: 8000 });
+      const start = await geometryOf(page, "showcase-digest", "enabled", "when");
       await enabled.locator('[role="switch"]').click();
-      await enabled.locator("text=Saving").waitFor({ timeout: 1200 }).catch(() => fail(`${tag}: Saving… never showed`));
+      await enabled.locator("text=Saving").waitFor({ timeout: 1500 }).catch(() => fail(`${tag}: Saving… never showed`));
+      const saving = await geometryOf(page, "showcase-digest", "enabled", "when");
+      if (!stable(start, saving)) fail(`${tag}: the pending state moves the row ${showGeometry(start)} vs ${showGeometry(saving)}`);
       await form(page, "showcase-digest").screenshot({ path: join(shots, `${tag}-saving.png`) });
       await enabled.locator("text=Saved").waitFor({ timeout: 6000 }).catch(() => fail(`${tag}: the slow save never finished`));
-      ok(`${tag}: a slow save shows Saving…, then Saved`);
+      const saved = await geometryOf(page, "showcase-digest", "enabled", "when");
+      if (!stable(start, saved)) fail(`${tag}: the saved state moves the row ${showGeometry(start)} vs ${showGeometry(saved)}`);
+      ok(`${tag}: a slow save shows Saving…, then Saved without moving the row (${showGeometry(start)})`);
     } else if (scenario === "load-fail") {
       const terminal = form(page, "showcase-terminal");
       if (await terminal.locator("[data-configuration-field]").count()) fail(`${tag}: the failed module already drew fields`);
