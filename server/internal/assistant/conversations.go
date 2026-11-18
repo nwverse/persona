@@ -257,8 +257,9 @@ type relayBook struct {
 	holds    map[string]*time.Timer // by conversation: drains its queue again when the hold for the owner ends
 	stuck    map[string]relayMsg    // by conversation: the message that could not go in at the last drain (pickLocked)
 	// failedAt: by conversation, when a delivery into it last failed because it did not take the message (it did not
-	// start, its computer was away): the next try waits relayRetryGap, so a conversation that cannot start is not
-	// cold-started again on every session list (#10194). In memory: a restart tries at once.
+	// start, its computer was away): that message, when nothing else may go, waits relayRetryGap for its next try, so a
+	// conversation that cannot start is not cold-started again on every session list (#10194). In memory: a restart
+	// tries at once.
 	failedAt map[string]time.Time
 	doubted  map[string]time.Time // by relayMsgID: when a try that ended in doubt began, its line not found then (relay_once.go)
 	// ownerTurns: the conversations whose round the owner is on, in memory only (#6394). While one is set, every
@@ -479,20 +480,29 @@ func (msg relayMsg) source() *proto.MessageSource {
 // notice (quiet.go) is its own text, and the work it starts is not a hop of any chain.
 func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg relayMsg) error {
 	text := relayDeliveryText(msg)
-	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
-	if msg.Tool == superviseTool {
-		// Register before dispatch: a fast MCP call can arrive before assistant.send returns.
-		s.holdPushes(ctx, to)
-	}
 	params := map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
 		"once_id": relayMsgID(to, msg)} // every try of it under one id: the node sends it once (relay_once.go)
 	if msg.Interject {
 		params["interject_background"] = true
 	}
-	if pick, ok := s.modelPickOf(ctx, machine, to); ok {
-		s.relayOnPick(ctx, machine, to, params, pick) // the conversation's own pick, as a message typed to it runs on (model_pick.go)
+	pick, kept, err := s.readModelPick(ctx, machine, to)
+	if err != nil {
+		return err // unknown is not permission to use a process that still has an older ordinary connection
+	}
+	if !kept && proto.IsExternalLauncher(pick.Launcher) {
+		return i18n.Err("external-adapter.scope_required") // a kept choice on another machine is not a fallback on this one
+	}
+	if kept {
+		if err := s.relayOnPick(ctx, machine, to, params, pick); err != nil {
+			return err
+		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+	}
+	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
+	if msg.Tool == superviseTool {
+		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
+		s.holdPushes(ctx, to)
 	}
 	// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
 	// and the switch now decide, also for one queued before a restart or a change of the switch, and whatever model runs it.
@@ -571,11 +581,14 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	now := time.Now()
 	for _, c := range list {
 		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
-			if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
-				held[c.SessionID] = gap // it failed to take the last one a moment ago
-				continue
-			}
 			i, wait := b.pickLocked(c.SessionID, now)
+			if last, stuck := b.stuck[c.SessionID]; stuck && i >= 0 && b.st.Queue[c.SessionID][i] == last {
+				// Only the message it failed to take is left to go: tried again after a gap, not on every list.
+				if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
+					held[c.SessionID] = gap
+					continue
+				}
+			}
 			if i < 0 {
 				held[c.SessionID] = wait
 				continue

@@ -30,7 +30,7 @@ export function UndeliveredBubble({ mid, sid, m }: { mid: string; sid: string; m
     <div data-undelivered={m.id} data-undelivered-state={m.state} className="flex flex-col gap-1.5">
       <UserBubble msg={{ id: `undelivered:${m.id}`, client_msg_id: m.id, ...words, images: [] }} mid={mid} sid={sid} sendState="failed"
         onDelete={() => void run(() => deleteUndelivered(mid, sid, m.id))} />
-      <div role={failed ? "alert" : "status"} className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 pl-[12%] text-[11.5px]">
+      <div role={failed ? "alert" : "status"} className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 pl-[12%] text-submeta">
         <span className={`min-w-0 ${failed ? "text-red" : "text-orange"}`}>
           {t(failed ? "chat-outboxbubbles.undelivered_failed" : "chat-outboxbubbles.undelivered_waiting", { reason })}
           {m.images ? ` · ${t("chat-outboxbubbles.undelivered_images", { count: m.images })}` : ""}
