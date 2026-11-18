@@ -31,7 +31,8 @@
 #   server/internal/db/migrations/**, scripts/ci/migration_freeze.py
 #                              python3 scripts/ci/migration_freeze.py (a migration already on the base must not be
 #                              edited, deleted or renamed; comment- and whitespace-only edits pass; a new file may be
-#                              added). A rename out of the directory counts too. --all runs it when the script is present.
+#                              added, named YYYYMMDDHHMMSS_<name>.sql by the UTC second it was written). A rename out of
+#                              the directory counts too. --all runs it when the script is present.
 #   server/**/*_test.go, sdk/go/**/*_test.go, scripts/ci/sleep_ratchet.py, scripts/ci/sleep_baseline.json
 #                              python3 scripts/ci/sleep_ratchet.py (each Go test file's time.Sleep count may stay or
 #                              fall, never rise; comments, strings and a // sleep-ok: reason line do not count; a new
