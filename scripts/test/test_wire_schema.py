@@ -95,12 +95,15 @@ def walk(doc, schema, value, at, reached):
 
 ANNOTATED = r"^[ \t]*(?:@\w+(?:\([^)\n]*\))?\s+)*"  # Swift, Kotlin and ArkTS attributes or annotations first
 TS_DECL = r"(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?"
+# A type alias, not an inline `type` specifier on its own line in a wrapped import or export (`  type TodoSummary,`).
+TS_ALIAS = r"type(?=\s+(?:NAMES)\s*[<=])"
 LANGUAGES = {  # language: (suffixes, a declaration of one of NAMES)
     "swift": ((".swift",), ANNOTATED + r"(?:(?:public|private|fileprivate|internal|package|open|final|nonisolated|"
                                        r"indirect)\s+)*(?:struct|class|enum|protocol|actor|typealias)\s+(NAMES)\b"),
     "ts": ((".ts", ".tsx", ".mts", ".cts"),
-           r"^[ \t]*" + TS_DECL + r"(?:class|interface|type|enum|const\s+enum)\s+(NAMES)\b"),
-    "arkts": ((".ets",), ANNOTATED + TS_DECL + r"(?:class|interface|type|enum|struct|const\s+enum)\s+(NAMES)\b"),
+           r"^[ \t]*" + TS_DECL + r"(?:class|interface|enum|const\s+enum|" + TS_ALIAS + r")\s+(NAMES)\b"),
+    "arkts": ((".ets",), ANNOTATED + TS_DECL + r"(?:class|interface|enum|struct|const\s+enum|" + TS_ALIAS +
+              r")\s+(NAMES)\b"),
     "kotlin": ((".kt", ".kts"), ANNOTATED + r"(?:(?:public|private|internal|protected|data|sealed|enum|value|inline|"
                                             r"annotation|open|abstract|inner|fun|companion|expect|actual)\s+)*"
                                             r"(?:class|interface|object|typealias)\s+(NAMES)\b"),
@@ -218,6 +221,9 @@ class WireSchema(unittest.TestCase):
             "apple/Thing.swift": "@MainActor private final class Thing {}\n",
             "apple/use.swift": "let thing: Thing = .init()\n",
             "web/thing.ts": "export type Thing = {\n",
+            "web/generic.ts": "type Thing<T> =\n  T[]\n",
+            "web/import.ts": "import {\n  type Thing,\n  other,\n} from \"./a\";\n",  # a wrapped import uses it
+            "harmony/export.ets": "export {\n  type Widget,\n} from \"./widget\";\n",
             "web/use.ts": "const x: Thing = y;\n",
             "web/a.ts": "export interface Thing {}\n",  # generated
             "web/notes.md": "struct Widget\n",
@@ -225,7 +231,7 @@ class WireSchema(unittest.TestCase):
         self.assertEqual(hand_copies(schemas, files.__getitem__, sorted(files)), [
             ("android/Widget.kt", "Widget"), ("apple/Thing.swift", "Thing"), ("core/src/widget.rs", "Widget"),
             ("harmony/Widget.ets", "Widget"), ("server/group.go", "Later"), ("server/local.go", "Widget"),
-            ("web/thing.ts", "Thing"),
+            ("web/generic.ts", "Thing"), ("web/thing.ts", "Thing"),
         ])
 
     def test_empty_strings_are_samples(self):

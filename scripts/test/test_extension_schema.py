@@ -31,8 +31,7 @@ def load_schemas():
     return files
 
 
-# A keyword neither validator knows is silently ignored (maxProperties and uniqueItems were, #4012): every keyword the
-# schemas use is one both validate, or an annotation (description, title, format, x-*).
+# The keywords both validators check, and the annotations they skip (test_schema_keywords_are_known; schema/wire too).
 VALIDATED = {"$ref", "oneOf", "allOf", "anyOf", "not", "type", "const", "enum", "minLength", "maxLength", "pattern",
              "minimum", "maximum", "items", "minItems", "maxItems", "uniqueItems", "properties", "required",
              "additionalProperties", "minProperties", "maxProperties", "propertyNames", "$defs"}
@@ -208,6 +207,8 @@ class ExtensionSchemaTests(unittest.TestCase):
                 self.assertNotEqual(self.v.validate(f.name.split(".")[0], json.loads(f.read_text(), parse_float=Decimal if f.name.startswith("UIStream") else float)), [])
 
     def test_schema_keywords_are_known(self):
+        # A keyword neither validator knows is silently ignored (maxProperties and uniqueItems were, #4012): every
+        # keyword the schemas use is one both validate, or an annotation (description, title, format, x-*).
         unknown = set()
         for name, doc in load_schemas().items():
             unknown |= unknown_keywords(doc, name)

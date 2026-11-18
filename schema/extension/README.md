@@ -267,7 +267,8 @@ The generator understands only what is below; anything else stops it with an err
     `additionalProperties: true` or a sub-schema also keeps extra keys (see "Custom contributions" below); one that
     says nothing or `false` is generated as before.
   - **A string enum**: `"type": "string"` + `enum`. The field stays a string in every language (an unknown value
-    still reads), with constants and a list besides.
+    still reads), with constants and a list besides. A value named like the list (`all`) is the constant `allValue`
+    in Swift and `ALL_VALUE` in Kotlin.
   - **A named scalar**: `"type": "string"` (or integer / number / boolean) without `enum`, such as `ID` or `Host`:
     where it is referenced it is that scalar; `pattern` and the like only validate.
   - **A union told apart by a field**: `oneOf` of `$ref`s only, with `"x-discriminator": "type"`; each variant is a
@@ -285,6 +286,8 @@ The generator understands only what is below; anything else stops it with an err
   (`"x-go-type": "int64"` is 64 bits: Go `int64`, Swift `Int64`, Kotlin `Long`; `Int` on the watch is 32 bits and
   cannot hold a build number), `number`, `boolean`, `array` + `items`, an `object` **without** `properties` +
   `additionalProperties` (a map whose values are `additionalProperties`), `$ref`, or nothing (free JSON).
+  On a map, `propertyNames` and `required` only validate: every language still generates a plain map, so the producer
+  writes each required key itself (and Go allocates the map, or writes `null`).
   A field that is an object with `properties` must be a definition of its own, referenced.
 - Optional fields are those not in `required`. Go adds `omitempty` (`omitzero` for a time) and makes an object a
   pointer; a scalar whose absence means something other than its zero value gets `"x-go-pointer": true` (a

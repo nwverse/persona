@@ -156,6 +156,8 @@ def load(schema_dir: Path | None = None, schema_files: list[str] | None = None) 
         if t == "object":
             if s.get("properties"):
                 raise SchemaError(f"{at}: an inline object with properties: make it a definition")
+            # A map: its propertyNames and required only validate (TodoCounts.sections names every section), so every
+            # language generates a plain map and the producer writes each required key itself.
             ap = s.get("additionalProperties", {})
             return TypeRef("map", of=typeof(ap if isinstance(ap, dict) else {}, at))
         raise SchemaError(f"{at}: type {t!r} is not in the subset")

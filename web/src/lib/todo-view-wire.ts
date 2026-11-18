@@ -19,9 +19,9 @@ export type TodoListSection = "needs_you" | "can_wait" | "working" | "waiting" |
 export const TODO_LIST_SECTIONS = ["needs_you", "can_wait", "working", "waiting", "todo", "just_finished", "someday", "done"] as const;
 
 /**
- * Why the row is where it is: the row of proposal 6.3 that placed it (spec/fixtures/todo-view/README.md says which
- * reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer hub may send
- * other values.
+ * Why the row is where it is: the row of proposal 6.3 that placed it (docs/design/proposals/todos-redesign.md 3.4 and
+ * 6.3 say which reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer
+ * hub may send other values.
  */
 export type TodoReason = "failed_start" | "agent_asks" | "interrupted" | "stopped_unfinished" | "owner_decides" | "verify" | "steps_proposed" | "signin" | "can_wait" | "awaits_reply" | "persona_working" | "agent_running" | "starting" | "queued" | "background" | "closed_unseen" | "completed" | "canceled" | "reported" | "superseded" | "parked" | "finished_unseen" | "finished_recent" | "pr_open" | "usage_limit" | "computer_offline" | "scheduled_report" | "someone_else" | "finished_seen" | "deferred" | "rest" | (string & {});
 export const TODO_REASONS = ["failed_start", "agent_asks", "interrupted", "stopped_unfinished", "owner_decides", "verify", "steps_proposed", "signin", "can_wait", "awaits_reply", "persona_working", "agent_running", "starting", "queued", "background", "closed_unseen", "completed", "canceled", "reported", "superseded", "parked", "finished_unseen", "finished_recent", "pr_open", "usage_limit", "computer_offline", "scheduled_report", "someone_else", "finished_seen", "deferred", "rest"] as const;
@@ -97,8 +97,10 @@ export interface OwnerAskOption {
  */
 export interface OwnerAsk {
   /**
-   * Unique within the row and the same while the ask is open; opaque to clients (spec/fixtures/todo-view/README.md
-   * says how the hub forms it).
+   * Unique within the row and never reused for a later ask, so what a client keeps by id (an answer, a Later) never
+   * lands on a new question. The same while the ask is open, though a hub restart may give an open run's ask a new
+   * one, which clients take as a new ask. Opaque to clients (spec/fixtures/todo-view/README.md says how the hub forms
+   * it).
    */
   id: string;
   kind: OwnerAskKind;
@@ -196,7 +198,8 @@ export interface TodoPlace {
  */
 export interface TodoCounts {
   /**
-   * Open to-dos except Someday: every to-do that is not closed (a start that failed counts), whatever its section.
+   * Open to-dos except Someday: every to-do that is not closed (a start that failed counts), in any section but
+   * Someday.
    */
   open: number;
   /**

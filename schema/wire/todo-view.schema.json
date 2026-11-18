@@ -23,7 +23,7 @@
       "enum": ["needs_you", "can_wait", "working", "waiting", "todo", "just_finished", "someday", "done"]
     },
     "TodoReason": {
-      "description": "Why the row is where it is: the row of proposal 6.3 that placed it (spec/fixtures/todo-view/README.md says which reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer hub may send other values.",
+      "description": "Why the row is where it is: the row of proposal 6.3 that placed it (docs/design/proposals/todos-redesign.md 3.4 and 6.3 say which reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer hub may send other values.",
       "type": "string",
       "enum": [
         "failed_start",
@@ -143,7 +143,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique within the row and the same while the ask is open; opaque to clients (spec/fixtures/todo-view/README.md says how the hub forms it)."
+          "description": "Unique within the row and never reused for a later ask, so what a client keeps by id (an answer, a Later) never lands on a new question. The same while the ask is open, though a hub restart may give an open run's ask a new one, which clients take as a new ask. Opaque to clients (spec/fixtures/todo-view/README.md says how the hub forms it)."
         },
         "kind": {"$ref": "#/$defs/OwnerAskKind"},
         "home": {"$ref": "#/$defs/OwnerAskHome"},
@@ -273,7 +273,7 @@
         "open": {
           "type": "integer",
           "minimum": 0,
-          "description": "Open to-dos except Someday: every to-do that is not closed (a start that failed counts), whatever its section."
+          "description": "Open to-dos except Someday: every to-do that is not closed (a start that failed counts), in any section but Someday."
         },
         "needs_you": {
           "type": "integer",

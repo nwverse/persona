@@ -41,9 +41,9 @@ const (
 // TodoListSections are the values of TodoListSection, in order.
 var TodoListSections = []string{"needs_you", "can_wait", "working", "waiting", "todo", "just_finished", "someday", "done"}
 
-// TodoReason: why the row is where it is: the row of proposal 6.3 that placed it (spec/fixtures/todo-view/README.md
-// says which reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer
-// hub may send other values.
+// TodoReason: why the row is where it is: the row of proposal 6.3 that placed it
+// (docs/design/proposals/todos-redesign.md 3.4 and 6.3 say which reasons each section holds). Inactivity is a mark
+// (TodoSummary.inactive), not a reason. Open: a newer hub may send other values.
 const (
 	TodoReasonFailedStart       = "failed_start"
 	TodoReasonAgentAsks         = "agent_asks"
@@ -151,8 +151,10 @@ type OwnerAskOption struct {
 // OwnerAsk: one ask that holds the to-do in Needs you or Can wait: the to-do's own (home todo) or one of its runs'
 // (home run). Its risk, lock-screen action and state come with answering in place, after stage 1.
 type OwnerAsk struct {
-	// Unique within the row and the same while the ask is open; opaque to clients (spec/fixtures/todo-view/README.md
-	// says how the hub forms it).
+	// Unique within the row and never reused for a later ask, so what a client keeps by id (an answer, a Later) never
+	// lands on a new question. The same while the ask is open, though a hub restart may give an open run's ask a new
+	// one, which clients take as a new ask. Opaque to clients (spec/fixtures/todo-view/README.md says how the hub forms
+	// it).
 	ID   string `json:"id"`
 	Kind string `json:"kind"`
 	Home string `json:"home"`
@@ -236,7 +238,8 @@ type TodoPlace struct {
 // TodoCounts: the numbers of the To-dos list (proposal 3.7), on GET /api/v1/todos and GET /api/v1/todos/places.
 // Across managers the hub adds them up field by field and key by key.
 type TodoCounts struct {
-	// Open to-dos except Someday: every to-do that is not closed (a start that failed counts), whatever its section.
+	// Open to-dos except Someday: every to-do that is not closed (a start that failed counts), in any section but
+	// Someday.
 	Open int `json:"open"`
 	// N: the to-dos in the Needs you section, each once however many of its runs ask; Can wait and quiet tasks are not
 	// counted. The To-dos row's badge, the bar's Needs you and the Needs you header show it.

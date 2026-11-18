@@ -3,7 +3,7 @@
   "cases": [
     {
       "name": "failed_start_recent",
-      "description": "A start that failed three hours ago is open and needs the owner: a retry ask on the to-do, the stored error on line 2, and 48 hours after the to-do's last activity it moves on.",
+      "description": "A start that failed three hours ago is open and needs the owner: a retry ask on the to-do, the stored error on line 2, and 48 hours after the failure it moves on.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 1",
         "#10226 (a failed start reads as open)"
@@ -42,7 +42,7 @@
           "rank": 0,
           "asks": [
             {
-              "id": "todo:retry",
+              "id": "todo:retry@2026-11-10T09:00:00Z",
               "kind": "retry",
               "home": "todo"
             }
@@ -52,7 +52,7 @@
     },
     {
       "name": "failed_start_after_two_days",
-      "description": "48 hours after a failed start's last activity it is a To do with the Inactive mark, never Done, though done_at is stored.",
+      "description": "48 hours after a start failed, with nothing done to the to-do since, it is a To do with the Inactive mark, never Done, though done_at is stored.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 rows 1, 13 and 14",
         "#10226 (a failed start reads as open)"
@@ -82,6 +82,75 @@
           "reason": "rest",
           "rank": 0,
           "inactive": "2026-11-07T10:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "failed_start_edited_since",
+      "description": "The owner edited a failed start's notes the day after it failed. Its 48 hours in Needs you run from the failure, so it is a To do now; the edit is activity, so the Inactive mark waits until 48 hours after it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 1, 13 and 14",
+        "#10226 (a failed start reads as open)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_a3",
+          "title": "Renew the rail pass",
+          "notes": "Ask about the discount for two",
+          "done_at": "2026-11-07T10:00:00Z",
+          "created_at": "2026-11-07T09:55:00Z",
+          "updated_at": "2026-11-09T15:00:00Z",
+          "origin": "conv_main",
+          "start_error": "Desk Mac is offline",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "project": "kyoto-trip"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "next_change_at": "2026-11-11T15:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "failed_start_due_ahead",
+      "description": "A failed start the owner started by hand (no conversation handed it out) and due in ten days. A task like that is never marked Inactive otherwise, but a failed start is: 48 hours after the failure it is a To do with the mark, since it waits for nothing.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 1, 13 and 14",
+        "#10226 (a failed start reads as open)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_a4",
+          "title": "Print the boarding passes",
+          "notes": "",
+          "done_at": "2026-11-08T08:00:00Z",
+          "created_at": "2026-11-08T07:55:00Z",
+          "updated_at": "2026-11-08T08:00:00Z",
+          "start_error": "Desk Mac is offline",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "due_date": "2026-11-20"
+        },
+        "sessions": []
+      },
+      "expected": {
+        "view": {
+          "phase": "todo",
+          "section": "todo",
+          "reason": "rest",
+          "rank": 0,
+          "inactive": "2026-11-08T08:00:00Z"
         }
       }
     },
@@ -147,7 +216,7 @@
           "rank": 0,
           "asks": [
             {
-              "id": "run:m1/s-ryokan",
+              "id": "run:m1/s-ryokan@2026-11-10T11:30:00Z",
               "kind": "question",
               "home": "run",
               "text": "Which ryokan should I book?",
@@ -334,7 +403,7 @@
           "rank": 0,
           "asks": [
             {
-              "id": "todo:decision:2026-11-10T09:00:00Z",
+              "id": "todo:decision@2026-11-10T09:00:00Z",
               "kind": "decision",
               "home": "todo",
               "round": "2026-11-10T09:00:00Z",
@@ -472,7 +541,7 @@
           "can_wait": true,
           "asks": [
             {
-              "id": "todo:decision:2026-11-10T10:00:00Z",
+              "id": "todo:decision@2026-11-10T10:00:00Z",
               "kind": "decision",
               "home": "todo",
               "round": "2026-11-10T10:00:00Z",

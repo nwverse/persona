@@ -41,9 +41,9 @@ object TodoListSection {
 }
 
 /**
- * Why the row is where it is: the row of proposal 6.3 that placed it (spec/fixtures/todo-view/README.md says which
- * reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer hub may send
- * other values.
+ * Why the row is where it is: the row of proposal 6.3 that placed it (docs/design/proposals/todos-redesign.md 3.4 and
+ * 6.3 say which reasons each section holds). Inactivity is a mark (TodoSummary.inactive), not a reason. Open: a newer
+ * hub may send other values.
  */
 object TodoReason {
     const val FAILED_START = "failed_start"
@@ -185,8 +185,10 @@ data class OwnerAskOption(
 @Serializable
 data class OwnerAsk(
     /**
-     * Unique within the row and the same while the ask is open; opaque to clients (spec/fixtures/todo-view/README.md
-     * says how the hub forms it).
+     * Unique within the row and never reused for a later ask, so what a client keeps by id (an answer, a Later) never
+     * lands on a new question. The same while the ask is open, though a hub restart may give an open run's ask a new
+     * one, which clients take as a new ask. Opaque to clients (spec/fixtures/todo-view/README.md says how the hub
+     * forms it).
      */
     val id: String = "",
     val kind: String = "",
@@ -322,7 +324,8 @@ data class TodoPlace(
 @Serializable
 data class TodoCounts(
     /**
-     * Open to-dos except Someday: every to-do that is not closed (a start that failed counts), whatever its section.
+     * Open to-dos except Someday: every to-do that is not closed (a start that failed counts), in any section but
+     * Someday.
      */
     val open: Int = 0,
     /**

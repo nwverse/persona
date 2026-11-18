@@ -23,9 +23,10 @@ Every sample a fixture holds for a definition must name exactly the schema's fie
 must be reached by some sample (`test_wire_schema.py`). The clients' tests write each sample back through the generated
 type and compare: Apple (`apple/PersonaTests/RecentSetupsTests.swift`, `apple/PersonaTests/TodoViewWireTests.swift`) the
 bytes, Go (`server/internal/assistantwire/todo_view_gen_test.go`) and Kotlin
-(`android/core/contracts/src/test/kotlin/persona/core/contracts/TodoViewWireTest.kt`) the JSON values. A sample writes an
-optional boolean only when it is true and leaves an empty list or map out, as Go's `omitempty` does, and a time as Go
-writes it.
+(`android/core/contracts/src/test/kotlin/persona/core/contracts/TodoViewWireTest.kt`) the JSON values; Go also holds
+what it writes to the schema with `server/internal/jsonsubset`, as the tests of the code that builds these values
+should, since a nil slice or map writes `null`. A sample writes an optional boolean only when it is true and leaves an
+empty list or map out, as Go's `omitempty` does, and a time as Go writes it.
 
 Hand-written copies of a generated type may not return: the test fails when a tracked file declares one of a schema's
 names outside its generated files, in every language its `x-out` names and in those its `x-guard` adds (`arkts`,

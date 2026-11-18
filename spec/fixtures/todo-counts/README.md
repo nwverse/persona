@@ -45,6 +45,11 @@ All data is made up.
 - Quiet tasks are left out of `needs_you` only, not of `sections` or `open`, which count the rows the list shows.
 - `today` and `upcoming` say 0 rather than a number nobody draws, so their bytes need no Today rule yet.
 - Projects are ordered by slug, which stays stable across languages and managers.
+- **A project whose open to-dos are all in Someday gets no place** (`reading` in `mixed_list`): places follow `open`,
+  which leaves Someday out, while proposal 3.3 says only "each knowledge-base project with open to-dos". Counting
+  Someday in would keep such a project in the sidebar; change `mixed_list` with this line.
+- **A project the knowledge base does not name still gets a place**, titled by its slug (`errands` in
+  `failed_start_counts_open`), so its to-dos stay reachable from the sidebar; 3.3 lists knowledge-base projects only.
 - Not pinned yet: a step counted under its parent once (proposal 3.4 "Steps roll up"), Today's and Upcoming's own
   rows, and what the hub does across several managers (its own test).
 

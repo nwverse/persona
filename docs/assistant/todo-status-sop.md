@@ -352,3 +352,11 @@ has no Status | Folder switch (it had no folder view), and the Mac shows a merge
 lead. The iOS list draws a row's "N related" inside the lead's row, under its words (Android's card already had it). iOS and
 Android filter and sort the list on the device (`docs/assistant/todos.md`, "List filter and sort"; the web follows). Moving the classification to the hub, so the clients only draw the section it sends, would remove the copies; it
 is not done yet.
+
+## The hub's view (in progress)
+
+#10226 moves this classification to the hub: each row of `GET /api/v1/todos` will carry a `view`
+(`schema/wire/todo-view.schema.json`) worked out by the redesign's decision table, pinned by `spec/fixtures/todo-view`
+and `spec/fixtures/todo-counts`. Its line 2 is a stable key with string arguments, never words; the keys and their
+arguments are listed in `spec/fixtures/todo-view/README.md` ("Line keys"). No route sends `view` yet, so every client
+still follows the rules above.
