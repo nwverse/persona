@@ -282,6 +282,7 @@ data class SessionCapabilities(
 @Serializable(with = WorkStateSerializer::class)
 data class WorkState(
     val phase: String = "",
+    @SerialName("just_finished") val justFinished: Boolean = false,
     val on: String? = null,
     val line: String? = null,
     val wait: String? = null,

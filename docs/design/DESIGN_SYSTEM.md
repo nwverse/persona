@@ -850,8 +850,8 @@ Muted and Seen, and it keeps its space, repository and worktree out of the idle 
 a plain dot, its state word "Just finished" (the To-dos' section word, `StateName`), its second line the triage's
 "✓ conclusion". A muted one is plain Seen. Why not Unread: Unread stays what needs a look. Why not plain Seen: work
 that ended minutes ago sank under sessions seen days ago. Why after the work still going: as in the To-dos' order
-above, what still runs comes before what is done. The web has it first; Apple, Android and HarmonyOS follow in their
-own issues and show these rows as Seen until then.
+above, what still runs comes before what is done. The web and Android (#9786; there the dot is Unread's, as Awaiting
+reply's) have it; Apple and HarmonyOS follow in their own issues and show these rows as Seen until then.
 
 #### The work-item row
 
@@ -1150,6 +1150,12 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
+- Agent launcher label (#10248): when the session reports its launcher, the existing pill says **launcher · model**,
+  using the same launcher name as its model-panel row. Both the launcher and abbreviated model stay visible at phone
+  width, truncating within the existing capsule; the full names remain in its tooltip and spoken label. The existing
+  engine mark stays. A queued switch shows its target launcher with the clock, while the tooltip retains current and
+  next setups. An unknown launcher keeps the model-only label and compact fallback. This label correction applies to
+  Agents; Persona's pill keeps its existing presentation.
 - Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
   `--orange`, wrapping), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"
   for another launcher of the same engine, "Switching engines rebuilds context and may lose content" for the other engine
