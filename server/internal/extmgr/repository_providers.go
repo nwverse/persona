@@ -168,8 +168,9 @@ func (h *Manager) RepositoryDescribe(ctx context.Context, provider, canonicalURL
 	return repository.CheckDescribeAnswer(res.Title, res.State), nil
 }
 
-// repositoryProvider is p as the assistant lists it, with its program when it is available: switched on (extension,
-// no problem, contribution) and with a program to call (one started by calls counts while idle).
+// repositoryProvider is p as the assistant lists it, and its program when it is switched on (extension, no problem,
+// contribution) and has one: a call goes to that program, which answers provider_off itself when it does not run
+// (host.ErrNotRunning). It is listed available only when its program takes a call now (programAnswers), off otherwise.
 func (ps *extensions) repositoryProvider(p extension.RepositoryProvider) (repository.ProviderInfo, *hubExtension) {
 	info := repository.ProviderInfo{ID: repository.ExtensionProvider(p.Extension, p.Contribution), Name: p.Name, Hosts: p.Hosts,
 		State: repository.ProviderOff}
@@ -183,13 +184,35 @@ func (ps *extensions) repositoryProvider(p extension.RepositoryProvider) (reposi
 	if hp == nil || hp.proc == nil {
 		return info, nil
 	}
-	info.State = repository.ProviderAvailable
+	if programAnswers(hp.proc) {
+		info.State = repository.ProviderAvailable
+	}
 	return info, hp
 }
 
+// programAnswers says whether proc takes a call now, as host.Proc.Call does: it is running, or starting (a call waits
+// for it), or started by calls (on_call) and idle or failed, since the next call starts it again. One stopped or
+// failed that a call does not start (it waits out a backoff before the host tries it again) and one without the
+// protocol answer no call. It reads the program's state only, never asks it anything.
+func programAnswers(proc *host.Proc) bool {
+	spec := proc.Spec()
+	if !spec.RPC {
+		return false
+	}
+	switch state, _ := proc.Status(); state {
+	case host.StateRunning, host.StateStarting:
+		return true
+	case host.StateStopped, host.StateError:
+		return spec.OnCall
+	}
+	return false
+}
+
 // repositoryTarget is provider's contribution and the program to ask: no_provider when it is not installed (info.ID
-// is then ""), provider_off when it is switched off or has no program. Without an installed provider the error names
-// none, so the caller names it by what it saved (the provider_name kept with the repository). It waits for startup as long as ctx lets it.
+// is then ""), provider_off when it is switched off or has no program (one that does not run answers provider_off
+// when called). Without an
+// installed provider the error names none, so the caller names it by what it saved (the provider_name kept with the
+// repository). It waits for startup as long as ctx lets it.
 func (h *Manager) repositoryTarget(ctx context.Context, provider string) (info repository.ProviderInfo, cid string, hp *hubExtension, err error) {
 	ext, cid, ok := repository.SplitExtensionProvider(provider)
 	if !ok {

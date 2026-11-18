@@ -21,12 +21,12 @@
       "type": "object",
       "properties": {
         "contribution": {"$ref": "manifest.schema.json#/$defs/ID", "description": "The repository_providers item's id."},
-        "url": {"type": "string", "minLength": 1, "maxLength": 2048, "description": "The address as the user wrote it."}
+        "url": {"type": "string", "minLength": 1, "maxLength": 2048, "description": "The address as the user or an Agent wrote it (an Agent's may be any page on the contribution's hosts)."}
       },
       "required": ["contribution", "url"]
     },
     "RepoParseResult": {
-      "description": "The repository the address names. instance_url is https://<host>[:port] on one of the contribution's hosts (nothing after the host), path its plain segments without a leading or trailing / (acme/tools), canonical_url exactly instance_url + \"/\" + path.",
+      "description": "The repository the address names. instance_url is exactly https://<host> or https://<host>:<port>, a lowercase host the contribution claims and nothing after it; the default port is left out (https://code.acme.test, never https://code.acme.test:443, which is refused), path its plain segments without a leading or trailing / (acme/tools), canonical_url exactly instance_url + \"/\" + path.",
       "type": "object",
       "properties": {
         "instance_url": {"type": "string", "minLength": 1, "maxLength": 2048},
@@ -62,7 +62,7 @@
       "properties": {
         "contribution": {"$ref": "manifest.schema.json#/$defs/ID", "description": "The repository_providers item's id."},
         "repo": {"$ref": "#/$defs/RepoIdentity"},
-        "url": {"type": "string", "maxLength": 2048, "description": "The link's address as the user wrote it; empty when kind and number name it."},
+        "url": {"type": "string", "maxLength": 2048, "description": "The link's address as the user or an Agent wrote it; empty when kind and number name it. The hub only checks that the answer is under repo, so answer the link this address names, or an error when it names none."},
         "kind": {"$ref": "manifest.schema.json#/$defs/RepositoryLinkKind", "description": "With number, when there is no url: the answer must be this kind."},
         "number": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$", "description": "With kind: the answer must have this number."}
       },

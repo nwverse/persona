@@ -20,5 +20,6 @@
   "provider_not_found": "{provider} 找不到这个仓库。请检查地址和访问权限，未保存任何内容。",
   "provider_not_signed_in": "{provider} 没有登录。请到「设置 › 扩展」检查它的设置，未保存任何内容。",
   "provider_refused": "{provider} 拒绝了：{why}",
-  "provider_failed": "{provider} 无法检查这个仓库：{why}"
+  "provider_failed": "{provider} 无法检查这个仓库：{why}",
+  "providers_starting": "扩展还在启动中。请稍后重试，未保存任何内容。"
 }

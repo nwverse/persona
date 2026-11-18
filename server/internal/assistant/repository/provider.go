@@ -72,8 +72,9 @@ type Description struct {
 }
 
 // ProviderError is why an extension provider did not answer. Code: no_provider (not installed), provider_off (installed
-// but switched off, failing or not running), not_found, not_signed_in, refused or failed. Provider is its name when
-// known, Why one line of the provider's words or the manager's reason.
+// but switched off, failing or not running), not_found, not_signed_in, refused or failed; the assistant adds
+// providers_starting (none listed yet, right after a restart). Provider is its name when known, Why one line of the
+// provider's words or the manager's reason.
 type ProviderError struct {
 	Code, Provider, Why string
 }

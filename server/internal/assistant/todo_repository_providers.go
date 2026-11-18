@@ -65,8 +65,12 @@ func (s *Service) awaitProviders(ctx context.Context) {
 	}
 }
 
-// providersStarting is the error for a link no one can place yet: the providers are not listed (right after a restart).
-var providersStarting = &repository.ProviderError{Code: "failed", Why: "extensions are still starting; try again in a moment"}
+// providersStartingCode is the code of providersStarting (repository_providers_starting, task_repositories_providers_starting).
+const providersStartingCode = "providers_starting"
+
+// providersStarting is the error for an address no one can place yet: the providers are not listed (right after a
+// restart). Its text is the asker's language's, saying to try again in a moment.
+var providersStarting = &repository.ProviderError{Code: providersStartingCode}
 
 // linkSources are what a to-do's link addresses are matched against, each read once when first needed: its saved
 // repositories and the saved catalog (none when they can't be read; the store's own transaction then answers).
@@ -358,13 +362,15 @@ func (s *Service) resolveLinkURL(ctx context.Context, src linkSources, in *repos
 		host, _ := repository.RemoteHost(in.URL)
 		return true, providerProblem(providersStarting, "", host)
 	case route == routeProvider:
-		return true, s.resolveProviderURL(ctx, info, src.rows(), in, only)
+		return true, s.resolveProviderURL(ctx, info, src, in, only)
 	}
 	return route == routeSaved, nil
 }
 
-// resolveProviderURL asks the provider claiming in.URL's host which repository and link it is.
-func (s *Service) resolveProviderURL(ctx context.Context, info repository.ProviderInfo, rows []repository.TaskRepository, in *repository.LinkInput, only string) error {
+// resolveProviderURL asks the provider claiming in.URL's host which repository and link it is. A repository the to-do
+// or the catalog saved under an earlier id of the provider's extension keeps the identity it was saved with, so the
+// store finds it (sameRepository).
+func (s *Service) resolveProviderURL(ctx context.Context, info repository.ProviderInfo, src linkSources, in *repository.LinkInput, only string) error {
 	if err := linkShape(*in); err != nil {
 		return err
 	}
@@ -381,13 +387,23 @@ func (s *Service) resolveProviderURL(ctx context.Context, info repository.Provid
 	if err != nil {
 		return providerProblem(err, info.ID, info.Name)
 	}
-	source := repository.SourceSnapshot{Identity: parsed.Identity, CloneURL: parsed.CloneURL, TransportOrigin: "canonical_default", ProviderName: parsed.ProviderName}
+	source := repository.SourceSnapshot{Identity: parsed.Identity, CloneURL: parsed.Identity.CanonicalURL, TransportOrigin: "canonical_default",
+		ProviderName: parsed.ProviderName}
+	if parsed.CloneURL != "" {
+		source.CloneURL, source.TransportOrigin = parsed.CloneURL, "provider"
+	}
 	var stored []repository.TaskLink
-	for _, row := range rows {
-		if s.sameRepository(row.SourceSnapshot.Identity, parsed.Identity) {
-			source, stored = row.SourceSnapshot, row.Links
-			break
+	if i := slices.IndexFunc(src.rows(), func(row repository.TaskRepository) bool {
+		return s.sameRepository(row.SourceSnapshot.Identity, parsed.Identity)
+	}); i >= 0 {
+		row := src.rows()[i]
+		source, stored = row.SourceSnapshot, row.Links
+	} else {
+		saved := make([]repository.Identity, 0, len(src.catalog()))
+		for _, entry := range src.catalog() {
+			saved = append(saved, entry.Identity)
 		}
+		source.Identity = s.storedIdentity(parsed.Identity, saved)
 	}
 	link, err := s.providerLink(ctx, source, stored, *in, only)
 	if err != nil {
@@ -402,13 +418,36 @@ func (s *Service) sameRepository(a, b repository.Identity) bool {
 	if a == b {
 		return true
 	}
-	if a.InstanceURL != b.InstanceURL || a.Path != b.Path || a.CanonicalURL != b.CanonicalURL ||
-		!repository.IsExtensionProvider(a.Provider) || !repository.IsExtensionProvider(b.Provider) {
+	return a.InstanceURL == b.InstanceURL && a.Path == b.Path && a.CanonicalURL == b.CanonicalURL && s.sameProvider(a.Provider, b.Provider)
+}
+
+// sameProvider: a and b are one provider, also when one is an earlier id of its extension (after a market rename both
+// resolve to its current id). A lookup, never a call.
+func (s *Service) sameProvider(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if !repository.IsExtensionProvider(a) || !repository.IsExtensionProvider(b) {
 		return false
 	}
-	pa, ok := s.repositoryProvider(a.Provider)
-	pb, ok2 := s.repositoryProvider(b.Provider)
+	pa, ok := s.repositoryProvider(a)
+	pb, ok2 := s.repositoryProvider(b)
 	return ok && ok2 && pa.ID == pb.ID
+}
+
+// storedIdentity is identity as it was saved: itself when saved has it, else the first of saved that is the same
+// repository under an earlier id of its extension. Stored identities are compared exactly (the store's transactions
+// call nothing), so a provider's answer under its extension's current id takes the stored one first.
+func (s *Service) storedIdentity(identity repository.Identity, saved []repository.Identity) repository.Identity {
+	if !repository.IsExtensionProvider(identity.Provider) || slices.Contains(saved, identity) {
+		return identity
+	}
+	for _, id := range saved {
+		if s.sameRepository(id, identity) {
+			return id
+		}
+	}
+	return identity
 }
 
 // identityHost is the lowercase host of a repository's instance.
@@ -486,24 +525,26 @@ func keptLink(in repository.LinkInput, only string) *repository.LinkInput {
 }
 
 // reportedLinkBook keeps the reported addresses a provider is asked about off the hub's event loops. An address of a
-// to-do is asked about once, and not again for reportedLinkRetry: by then it is saved, or the provider had no link of
-// the kind kept or failed, and only a reply that names it after that asks again.
+// to-do is asked about by one resolution at a time, and once its provider answered (it is saved, or the provider has
+// no link of the kind kept, needs a sign-in or refused), not again for reportedLinkRetry: only a reply that names it
+// after that asks again. A call that got no answer leaves it to the next reply that names it (providerAnswered).
 type reportedLinkBook struct {
-	mu    sync.Mutex
-	until map[string]time.Time // to-do id and address → when it may be asked about again
-	runs  sync.WaitGroup       // resolutions running (tests wait for them)
+	mu     sync.Mutex
+	until  map[string]time.Time // to-do id and address → when it may be asked about again
+	asking map[string]bool      // to-do id and address → a resolution is asking about it now
+	runs   sync.WaitGroup       // resolutions running (tests wait for them)
 }
 
-const (
-	// reportedLinkRetry is how long a reported address is not asked about again.
-	reportedLinkRetry = 5 * time.Minute
-	// reportedLinkStart is how long a resolution waits for the providers to be listed after a restart.
-	reportedLinkStart = time.Minute
-)
+// reportedLinkRetry is how long a reported address its provider answered is not asked about again.
+const reportedLinkRetry = 5 * time.Minute
+
+// reportedLinkStart is how long a resolution waits for the providers to be listed after a restart (tests shorten it).
+var reportedLinkStart = time.Minute
 
 // askReportedLater resolves reported addresses through their provider in the background, so the hub's events (and a
 // restart's replay of every task session's last reply) never wait on an extension, and one reply asks about an
-// address once, its PR included.
+// address once, its PR included. Each address has a provider budget of its own, so a slow answer about one never
+// leaves the next without time.
 func (s *Service) askReportedLater(ctx context.Context, id string, raws []string, only string) {
 	if len(raws) == 0 {
 		return
@@ -515,10 +556,13 @@ func (s *Service) askReportedLater(ctx context.Context, id string, raws []string
 	if b.until == nil {
 		b.until = map[string]time.Time{}
 	}
+	if b.asking == nil {
+		b.asking = map[string]bool{}
+	}
 	ask := []string{}
 	for _, raw := range raws {
-		if key := id + " " + raw; b.until[key].IsZero() {
-			b.until[key] = now.Add(reportedLinkRetry)
+		if key := id + " " + raw; b.until[key].IsZero() && !b.asking[key] {
+			b.asking[key] = true
 			ask = append(ask, raw)
 		}
 	}
@@ -533,11 +577,16 @@ func (s *Service) askReportedLater(ctx context.Context, id string, raws []string
 		wait, cancel := context.WithTimeout(ctx, reportedLinkStart)
 		s.awaitProviders(wait)
 		cancel()
-		src, budget := s.linkSources(ctx, id), context.WithValue(ctx, providerBudgetKey{}, time.Now().Add(repository.CheckTimeout))
+		src := s.linkSources(ctx, id)
 		var links []repository.LinkInput
+		answered := []string{}
 		for _, raw := range ask {
 			in := repository.LinkInput{URL: raw}
+			budget := context.WithValue(ctx, providerBudgetKey{}, time.Now().Add(providerBudget))
 			handled, err := s.resolveLinkURL(budget, src, &in, only)
+			if providerAnswered(err) {
+				answered = append(answered, raw)
+			}
 			switch {
 			case err != nil:
 				s.logf("task %s: repository link skipped: %v", id, err)
@@ -553,8 +602,28 @@ func (s *Service) askReportedLater(ctx context.Context, id string, raws []string
 		}
 		if err := s.importReported(ctx, id, links); err != nil {
 			s.logf("task %s: repository links not saved: %v", id, err)
+			answered = nil // not saved: the next reply that names them tries again
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		for _, raw := range ask {
+			delete(b.asking, id+" "+raw)
+		}
+		for _, raw := range answered {
+			b.until[id+" "+raw] = time.Now().Add(reportedLinkRetry)
 		}
 	}()
+}
+
+// providerAnswered: err (nil included) is an answer about a reported address: it was placed, or its provider said it
+// has no such link, needs a sign-in or refused. A call that got no answer (out of time, canceled, or failed, which is
+// also how a call that timed out reads), a provider that is off or missing, and the providers still starting are not.
+func providerAnswered(err error) bool {
+	var pe *repository.ProviderError
+	if !errors.As(err, &pe) {
+		return true
+	}
+	return pe.Code == "not_found" || pe.Code == "not_signed_in" || pe.Code == "refused"
 }
 
 // importReported records reported links: by address alone when no provider resolved any, as before.

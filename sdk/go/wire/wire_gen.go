@@ -5954,13 +5954,14 @@ var RepoErrorCodes = []string{"not_found", "not_signed_in", "refused", "failed"}
 type RepoParseParams struct {
 	// The repository_providers item's id.
 	Contribution string `json:"contribution"`
-	// The address as the user wrote it.
+	// The address as the user or an Agent wrote it (an Agent's may be any page on the contribution's hosts).
 	URL string `json:"url"`
 }
 
-// RepoParseResult: the repository the address names. instance_url is https://<host>[:port] on one of the
-// contribution's hosts (nothing after the host), path its plain segments without a leading or trailing /
-// (acme/tools), canonical_url exactly instance_url + "/" + path.
+// RepoParseResult: the repository the address names. instance_url is exactly https://<host> or https://<host>:<port>,
+// a lowercase host the contribution claims and nothing after it; the default port is left out
+// (https://code.acme.test, never https://code.acme.test:443, which is refused), path its plain segments without a
+// leading or trailing / (acme/tools), canonical_url exactly instance_url + "/" + path.
 type RepoParseResult struct {
 	InstanceURL  string `json:"instance_url"`
 	Path         string `json:"path"`
@@ -5994,7 +5995,8 @@ type RepoLinkParams struct {
 	// The repository_providers item's id.
 	Contribution string       `json:"contribution"`
 	Repo         RepoIdentity `json:"repo"`
-	// The link's address as the user wrote it; empty when kind and number name it.
+	// The link's address as the user or an Agent wrote it; empty when kind and number name it. The hub only checks that
+	// the answer is under repo, so answer the link this address names, or an error when it names none.
 	URL string `json:"url,omitempty"`
 	// With number, when there is no url: the answer must be this kind.
 	Kind string `json:"kind,omitempty"`

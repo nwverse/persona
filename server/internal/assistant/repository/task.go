@@ -564,12 +564,20 @@ func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog C
 			id := "linked_" + hex.EncodeToString(digest[:12])
 			source := SourceSnapshot{Identity: identity, CloneURL: identity.CanonicalURL, TransportOrigin: "canonical_default"}
 			if in.Resolved != nil {
+				// An extension provider's repository is cloned from where its provider said (repo.parse's clone_url).
 				source.ProviderName = in.Resolved.Source.ProviderName
+				if clone := in.Resolved.Source.CloneURL; clone != "" && clone != identity.CanonicalURL {
+					if _, err := CloneTransport(clone, identity); err == nil {
+						source.CloneURL, source.TransportOrigin = clone, "provider"
+					}
+				}
 			}
 			for _, entry := range catalog.Repositories {
 				if entry.Identity == identity && !slices.ContainsFunc(out, func(r TaskRepository) bool { return r.RepoID == entry.ID }) {
+					// The saved repository's own transport, as binding it would give (Bind).
 					id = entry.ID
 					source.CatalogRevision = catalog.Revision
+					source.CloneURL, source.TransportOrigin = identity.CanonicalURL, "canonical_default"
 					if entry.CloneURL != "" {
 						source.CloneURL = entry.CloneURL
 						source.TransportOrigin = "catalog"

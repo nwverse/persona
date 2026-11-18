@@ -6233,14 +6233,15 @@ export const REPO_ERROR_CODES = ["not_found", "not_signed_in", "refused", "faile
 export interface RepoParseParams {
   /** The repository_providers item's id. */
   contribution: string;
-  /** The address as the user wrote it. */
+  /** The address as the user or an Agent wrote it (an Agent's may be any page on the contribution's hosts). */
   url: string;
 }
 
 /**
- * The repository the address names. instance_url is https://<host>[:port] on one of the contribution's hosts (nothing
- * after the host), path its plain segments without a leading or trailing / (acme/tools), canonical_url exactly
- * instance_url + "/" + path.
+ * The repository the address names. instance_url is exactly https://<host> or https://<host>:<port>, a lowercase host
+ * the contribution claims and nothing after it; the default port is left out (https://code.acme.test, never
+ * https://code.acme.test:443, which is refused), path its plain segments without a leading or trailing /
+ * (acme/tools), canonical_url exactly instance_url + "/" + path.
  */
 export interface RepoParseResult {
   instance_url: string;
@@ -6283,7 +6284,10 @@ export interface RepoLinkParams {
   /** The repository_providers item's id. */
   contribution: string;
   repo: RepoIdentity;
-  /** The link's address as the user wrote it; empty when kind and number name it. */
+  /**
+   * The link's address as the user or an Agent wrote it; empty when kind and number name it. The hub only checks that
+   * the answer is under repo, so answer the link this address names, or an error when it names none.
+   */
   url?: string;
   /** With number, when there is no url: the answer must be this kind. */
   kind?: RepositoryLinkKind;

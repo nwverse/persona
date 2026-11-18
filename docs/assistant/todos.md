@@ -986,7 +986,11 @@ repositories as rows with their issues and pull requests as links, so the
 associations the agent maintains are visible without opening an editor. Each
 repository row carries its provider's own mark and its project address on one
 line; a link shows its retained full title as the hyperlink, falling back to the
-localized type and number when no title is known. The association store holds no
+localized type and number when no title is known. A provider extension's row
+(`docs/extensions/repository-providers.md`) shows a generic mark and the provider's
+name, and its links use the provider's own `link_kinds` words and `#number`; while
+the provider is unavailable the row is marked so, its links still open and adding
+one there is off. The association store holds no
 physical workspace path, so a row shows no filesystem path; directory aliases
 are not paths, and physical paths belong to the workspace preparation service.
 Opening the editor holds the draft and the revision it began from: a to-do
@@ -1003,7 +1007,10 @@ When a provider extension is switched off, not running or uninstalled, its rows
 and links still read and open from what was stored (`provider_state` `off` or
 `missing` on reads), saves keep the links already there without asking it, and
 only a new link for it fails with `task_repositories_provider_off` or
-`task_repositories_no_provider`.
+`task_repositories_no_provider`. Right after a restart, before the extensions
+have listed their providers, a new link on a host no built-in owns waits for
+them within the save's budget and, if they are still starting, fails with
+`task_repositories_providers_starting` (409), never `task_repositories_no_provider`.
 
 | Method | Route | Contract |
 | --- | --- | --- |
@@ -1057,10 +1064,15 @@ broadcast the existing `todos` event even when stage and legacy PR stay unchange
 Metadata import errors are logged without blocking the legacy progress path; explicit
 tool and HTTP failures remain errors. Link-derived repositories absent from the
 catalog have `catalog_state: "unlisted"`; recording a GitHub or GitLab URL performs
-no repository verification, remote lookup or catalog mutation. A provider extension's
-URL is read by that extension once, when it is new; reports skip it while the
-extension is unavailable, and the one-time import of older `pr_url` / `prs`
-references never asks an extension.
+no repository verification, remote lookup or catalog mutation. In a report, a
+provider extension's URL that is new is read by that extension in the background,
+and not again on that to-do for 5 minutes once it has answered (an attempt that
+failed or found it unavailable is tried on the next reply). That covers every address on its hosts in
+an Agent's reply, even one that is then not kept (a file page, an issue, another repository),
+so the extension learns the addresses you and your Agents mention in a to-do's work,
+as its install permission says. Reports skip such addresses while the extension is
+unavailable, and the one-time import of older `pr_url` / `prs` references never
+asks an extension.
 
 Shared Go types and validators: `server/internal/assistant/repository/task.go`.
 Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
@@ -1075,7 +1087,10 @@ names are independent. A removed or identity-changed catalog entry is reported
 without replacing the saved source. Catalog clients omitting `clone_url` preserve
 its previous value when identity is unchanged; a changed identity gets its own
 canonical fallback. Adopting a new source requires removing and reselecting the
-association in separate saves.
+association in separate saves. A repository row a new link adds clones from the
+catalog entry's `clone_url` when there is one (`transport_origin: "catalog"`),
+else from the clone address a provider extension answered for its repository
+(`"provider"`), else from its canonical URL (`"canonical_default"`).
 
 Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
 select repository IDs through `repository.Snapshot`, and persist that value with

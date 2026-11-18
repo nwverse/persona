@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,11 +32,14 @@ func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, r
 		return "", s.repositoryToolError(ctx, err)
 	}
 	for _, saved := range doc.Repositories {
-		if saved.Identity == binding.Identity {
+		if s.sameRepository(saved.Identity, binding.Identity) {
 			return "", s.repositoryToolError(ctx, repositoryProblem("duplicate"))
 		}
 	}
 	shown, _ := json.Marshal(in)
+	if repository.IsExtensionProvider(binding.Provider) {
+		shown = providerRepositoryCard(binding)
+	}
 	summary := i18n.T(s.lang(ctx), "assistant-repository_tools.add", i18n.Args{"url": binding.CanonicalURL})
 	now := time.Now().UTC()
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self,
@@ -52,7 +56,7 @@ func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, r
 				return "", s.repositoryToolError(ctx, err)
 			}
 			for _, saved := range doc.Repositories {
-				if saved.Identity == binding.Identity {
+				if s.sameRepository(saved.Identity, binding.Identity) {
 					return "", approvalops.ErrStale
 				}
 			}
@@ -65,6 +69,23 @@ func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, r
 		},
 	})
 	return outcome.Text, err
+}
+
+// providerRepositoryCard is the card's details for an extension provider's repository: what approving saves, its
+// provider, the name (the provider's own for it when the Agent gave none) and the address it is cloned from, which the
+// provider may have chosen.
+func providerRepositoryCard(binding RepositoryBinding) json.RawMessage {
+	shown, _ := json.Marshal(struct {
+		URL          string   `json:"url"`
+		Provider     string   `json:"provider"`
+		ProviderName string   `json:"provider_name"`
+		Name         string   `json:"name"`
+		Aliases      []string `json:"aliases"`
+		Purpose      string   `json:"purpose"`
+		CloneURL     string   `json:"clone_url"`
+	}{binding.CanonicalURL, binding.Provider, binding.ProviderName, binding.Name, binding.Aliases, binding.Purpose,
+		cmp.Or(binding.CloneURL, binding.CanonicalURL)})
+	return shown
 }
 
 func (s *Service) repositoryToolError(ctx context.Context, err error) error {

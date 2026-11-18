@@ -22,6 +22,9 @@ import (
 const repositoriesKey = "assistant.repositories"
 const repositoriesMax = 200
 
+// providersListWait is how long GET …/repositories/providers waits for the providers to be listed after a restart.
+var providersListWait = 2 * time.Second
+
 type RepositoryBinding struct {
 	repository.Identity
 	ID       string   `json:"id"`
@@ -180,6 +183,8 @@ func (s *Service) saveRepository(ctx context.Context, id string, binding Reposit
 		if id != "" && index < 0 {
 			return repositoryProblem("not_found")
 		}
+		// A repository saved before its extension was renamed is the same one under the provider's current id.
+		binding.Identity = s.savedIdentity(*doc, id, binding.Identity)
 		if slices.ContainsFunc(doc.Repositories, func(b RepositoryBinding) bool { return b.ID != id && b.Identity == binding.Identity }) {
 			return repositoryProblem("duplicate")
 		}
@@ -254,7 +259,9 @@ func (s *Service) restoreRepository(ctx context.Context, id, receipt string) (Re
 			return repositoryProblem("conflict")
 		}
 		binding = doc.Removed[index].Binding
-		if len(doc.Repositories) >= repositoriesMax || slices.ContainsFunc(doc.Repositories, func(b RepositoryBinding) bool { return b.ID == id || b.Identity == binding.Identity }) {
+		if len(doc.Repositories) >= repositoriesMax || slices.ContainsFunc(doc.Repositories, func(b RepositoryBinding) bool {
+			return b.ID == id || s.sameRepository(b.Identity, binding.Identity)
+		}) {
 			return repositoryProblem("conflict")
 		}
 		doc.Repositories = append(doc.Repositories, binding)
@@ -277,7 +284,7 @@ func repositoryError(w http.ResponseWriter, err error) {
 		code, status = check.Code, http.StatusUnprocessableEntity
 	case errors.As(err, &provider):
 		code, status = providerCode(provider), http.StatusUnprocessableEntity
-		if code == "no_provider" || code == "provider_off" {
+		if code == "no_provider" || code == "provider_off" || code == providersStartingCode {
 			status = http.StatusConflict
 		}
 		apierr.WriteCode(w, status, "repository_"+code, i18n.Err("assistant-repositories."+code, providerArgs(provider)))
@@ -327,8 +334,12 @@ func (s *Service) repositoryRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"manager": s.managerIdentity(), "repository": binding})
 	})
-	// The sources of repositories: GitHub, GitLab, then the extensions' providers, on or off.
+	// The sources of repositories: GitHub, GitLab, then the extensions' providers, on or off. Right after a restart it
+	// waits a moment for the extensions to start, then answers the providers listed by then.
 	s.handle("GET /api/v1/assistant/repositories/providers", func(w http.ResponseWriter, r *http.Request) {
+		wait, cancel := context.WithTimeout(r.Context(), providersListWait)
+		s.awaitProviders(wait)
+		cancel()
 		apierr.WriteJSON(w, map[string]any{"manager": s.managerIdentity(), "providers": s.repositoryProviders()})
 	})
 	s.handle("POST /api/v1/assistant/repositories/preview", func(w http.ResponseWriter, r *http.Request) {

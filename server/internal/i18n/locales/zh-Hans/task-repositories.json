@@ -15,5 +15,6 @@
   "provider_not_found": "{provider} 找不到这个 Issue 或 PR。请检查链接。",
   "provider_not_signed_in": "{provider} 没有登录。请到「设置 › 扩展」检查它的设置。",
   "provider_refused": "{provider} 拒绝了：{why}",
-  "provider_failed": "{provider} 无法查询这个链接：{why}"
+  "provider_failed": "{provider} 无法查询这个链接：{why}",
+  "providers_starting": "扩展还在启动中，暂时无法查询新链接。已保存的链接会保留，请稍后重试。"
 }

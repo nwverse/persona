@@ -93,6 +93,8 @@ func serveRepositoryProviderExtensionForTest() {
 					case "slow": // answers only when the hub gives up on the call (or the program stops)
 						<-ctx.Done()
 						return nil, ctx.Err()
+					case "crash": // the program falls over
+						os.Exit(3)
 					}
 					return nil, errors.New("the source fell over")
 				case "link":
@@ -135,22 +137,24 @@ func serveRepositoryProviderExtensionForTest() {
 			}}})
 }
 
-// repositoryProviderPackage is acme-code's package as id, started with the hub so that a stopped one stays stopped;
-// extra are more manifest fields.
+// repositoryProviderPackage is acme-code's package as id, started with the hub so that a stopped one stays stopped
+// (unless extra, more manifest fields, has its own activation_events).
 func repositoryProviderPackage(t *testing.T, id, out string, extra ...string) string {
 	dir := t.TempDir()
 	self, _ := os.Executable()
 	_ = os.MkdirAll(filepath.Join(dir, "bin"), 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "bin", "code"), []byte("#!/bin/sh\nPERSONA_TEST_PLUGIN=repos exec "+self+" \"$@\"\n"), 0o755)
-	fields := ""
+	activation, fields := `"activation_events": ["on_startup"], `, ""
 	for _, f := range extra {
+		if strings.HasPrefix(f, `"activation_events"`) {
+			activation = ""
+		}
 		fields += f + ", "
 	}
-	manifest := fmt.Sprintf(`{"manifest_version": 1, "id": %q, "name": "Acme Code", "version": "1.0.0", %s
+	manifest := fmt.Sprintf(`{"manifest_version": 1, "id": %q, "name": "Acme Code", "version": "1.0.0", %s%s
 		"engines": {"plugin_protocol": 1}, "runtime": {"command": {%q: "bin/code"}, "env": {"REPOS_OUT": %q}},
-		"activation_events": ["on_startup"],
 		"contributes": {"repository_providers": [{"id": "acme", "name": "Acme Code", "hosts": ["code.acme.test", "ssh.acme.test"],
-			"link_kinds": [{"kind": "pull_request", "label": "MR"}]}]}}`, id, fields, runtime.GOOS+"-"+runtime.GOARCH, out)
+			"link_kinds": [{"kind": "pull_request", "label": "MR"}]}]}}`, id, activation, fields, runtime.GOOS+"-"+runtime.GOARCH, out)
 	_ = os.WriteFile(filepath.Join(dir, extension.ManifestFile), []byte(manifest), 0o644)
 	return dir
 }
@@ -475,11 +479,19 @@ func TestRepositoryProviderStates(t *testing.T) {
 	}
 	waitRepositoryProviderUp(t, h)
 
-	// Its program stopped (started with the hub, so it stays stopped).
+	// Its program stopped (started with the hub, so it stays stopped and a call does not start it): listed off, as
+	// its calls answer.
 	h.extensions.get("acme-code").proc.Stop()
-	if pe := providerErr(t, h.RepositoryCheck(ctx, acmeRepository("ok"))); *pe != *off {
-		t.Fatalf("stopped: %+v", pe)
+	if got, ok := h.RepositoryProvider(acmeProvider); !ok || got.State != repository.ProviderOff {
+		t.Fatalf("stopped, by id: %+v %v", got, ok)
 	}
+	if got := h.RepositoryProviders(); len(got) != 1 || got[0].State != repository.ProviderOff {
+		t.Fatalf("stopped, listed: %+v", got)
+	}
+	if got, ok := h.RepositoryProviderForHost("code.acme.test"); !ok || got.State != repository.ProviderOff {
+		t.Fatalf("stopped, by host: %+v %v", got, ok)
+	}
+	offCalls("stopped", off)
 
 	// Uninstalled: no provider, named by its contribution.
 	if c, body := call(t, mux, "DELETE", "/api/v1/extensions/acme-code/-/", master, ""); c != 200 {
@@ -507,6 +519,59 @@ func TestRepositoryProviderStates(t *testing.T) {
 		t.Fatalf("its key: %d %v", c, body)
 	}
 	waitRepositoryProviderUp(t, h)
+}
+
+// A provider whose program calls start (on_call) is available while it is idle, and a call starts it; once its program
+// has failed it is off, as its calls answer, while it waits out its backoff.
+func TestRepositoryProviderLazyProgram(t *testing.T) {
+	saved := host.RestartFirst
+	host.RestartFirst = 50 * time.Millisecond // tried again soon after it falls over (restored after the hub stops)
+	t.Cleanup(func() { host.RestartFirst = saved })
+	h, _ := extensionTestHub(t)
+	mux := h.routes()
+	ctx := context.Background()
+	out := installRepositoryProviderPackage(t, h, mux, `"activation_events": ["on_call"]`)
+	state := func() string {
+		info, _ := h.RepositoryProvider(acmeProvider)
+		return info.State
+	}
+
+	// Idle: nothing has started its program yet, and it is available.
+	waitLong(t, "its program handle", func() bool {
+		hp := h.extensions.get("acme-code")
+		return hp != nil && hp.proc != nil
+	})
+	proc := h.extensions.get("acme-code").proc
+	if st, why := proc.Status(); st != host.StateStopped || !proc.Spec().OnCall || repoCalls(out) != 0 {
+		t.Fatalf("not idle: %s %q, %d calls", st, why, repoCalls(out))
+	}
+	if got := h.RepositoryProviders(); len(got) != 1 || got[0].State != repository.ProviderAvailable {
+		t.Fatalf("idle, listed: %+v", got)
+	}
+	if got := state(); got != repository.ProviderAvailable {
+		t.Fatalf("idle, by id: %s", got)
+	}
+
+	// A call starts it.
+	if err := h.RepositoryCheck(ctx, acmeRepository("ok")); err != nil {
+		t.Fatalf("a call to an idle provider: %v", err)
+	}
+	if st, _ := proc.Status(); st != host.StateRunning || state() != repository.ProviderAvailable {
+		t.Fatalf("started by the call: %s, %s", st, state())
+	}
+
+	// Its program falls over: still available, since calls start it again, and a later call reaches it.
+	if pe := providerErr(t, h.RepositoryCheck(ctx, acmeRepository("crash"))); pe.Code != "failed" {
+		t.Fatalf("the call it fell over in: %+v", pe)
+	}
+	if got, ok := h.RepositoryProviderForHost("ssh.acme.test"); !ok || got.State != repository.ProviderAvailable {
+		t.Fatalf("fell over, by host: %+v %v", got, ok)
+	}
+	sent := repoCalls(out)
+	waitLong(t, "a call answered again", func() bool { return h.RepositoryCheck(ctx, acmeRepository("ok")) == nil })
+	if repoCalls(out) == sent || state() != repository.ProviderAvailable {
+		t.Fatalf("after falling over: %d calls reached it, %s", repoCalls(out)-sent, state())
+	}
 }
 
 // Before the manager has started, lists are empty without waiting, and a call waits for startup as long as its

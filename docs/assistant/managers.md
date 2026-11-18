@@ -19,11 +19,14 @@ address on one of them with no provider chosen goes to it (`repo.parse`, then `r
 is `ext:<extension>/<contribution>`, and its name is kept as `provider_name`. An explicit `github` / `gitlab` still wins.
 While that extension is off or gone, its saved references still list, edit (name, aliases, purpose) and bind to
 to-dos; only adding one, changing its address or checking it fails (`repository_provider_off` /
-`repository_no_provider`).
+`repository_no_provider`). Right after a restart, a save that needs a provider waits for the extensions within its
+eight-second budget and, if they are still starting, answers `repository_providers_starting` (409), never
+`repository_no_provider`.
 
 The web form parses GitHub and GitLab addresses locally on every URL/provider change and immediately shows the
 provider, full repository path, canonical web root and an explicit not-yet-checked state; no remote request is needed
-for them. The server
+for them. An address on a provider extension's host, or with one picked, is read through `/preview` before Save is
+enabled; the page lists the sources only once such an extension or a saved row of one exists. The server
 reparses on preview and save; both parsers share `spec/fixtures/repository-remotes.json`. GitHub repository pages
 (such as `/pull/5581`) and GitLab's `/-/` project pages discard their page suffix, ordinary query and fragment.
 GitLab paths without `/-/` keep every namespace segment; ambiguous old page URLs are not guessed by taking two

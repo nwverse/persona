@@ -5258,3 +5258,9 @@ extension's (#10330), with its name kept beside the identity as `provider_name`;
 reads add `provider_state` and `link_kinds` to such rows only, and their stored
 links open unchanged when the extension is gone
 (`docs/extensions/repository-providers.md` "When the provider is gone").
+A `source_snapshot.transport_origin` may also be `provider`: a row a new link
+added clones from the address the provider answered. Right after a restart, a
+save that needs a provider answers 409 `task_repositories_providers_starting`
+(`repository_providers_starting` on the repository routes) when the extensions
+are still starting at the end of its budget; it never reports the provider as
+not installed.

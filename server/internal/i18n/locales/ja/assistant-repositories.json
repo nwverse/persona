@@ -20,5 +20,6 @@
   "provider_not_found": "{provider} でこのリポジトリが見つかりません。アドレスとアクセス権を確認してください。保存されていません。",
   "provider_not_signed_in": "{provider} にサインインしていません。「設定 › 拡張機能」で設定を確認してください。保存されていません。",
   "provider_refused": "{provider} が拒否しました：{why}",
-  "provider_failed": "{provider} でこのリポジトリを確認できませんでした：{why}"
+  "provider_failed": "{provider} でこのリポジトリを確認できませんでした：{why}",
+  "providers_starting": "拡張機能はまだ起動中です。少し待ってから再試行してください。保存されていません。"
 }

@@ -54,20 +54,24 @@ func (s *Service) repositoryProvider(id string) (repository.ProviderInfo, bool) 
 
 type providerBudgetKey struct{}
 
+// providerBudget is how long one request's provider calls may take together (repository.CheckTimeout; tests shorten it).
+var providerBudget = repository.CheckTimeout
+
 // withProviderBudget starts a request's provider budget: the provider calls made under ctx (parse, check, link,
-// describe) end together after repository.CheckTimeout. The store's own work is not bound by it.
+// describe), and a wait for the providers to be listed, end together after providerBudget. The store's own work is not
+// bound by it.
 func withProviderBudget(ctx context.Context) context.Context {
 	if _, ok := ctx.Value(providerBudgetKey{}).(time.Time); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, providerBudgetKey{}, time.Now().Add(repository.CheckTimeout))
+	return context.WithValue(ctx, providerBudgetKey{}, time.Now().Add(providerBudget))
 }
 
 // providerCall is ctx for one provider call, ending with its request's budget (a budget of its own when none started).
 func providerCall(ctx context.Context) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Value(providerBudgetKey{}).(time.Time)
 	if !ok {
-		deadline = time.Now().Add(repository.CheckTimeout)
+		deadline = time.Now().Add(providerBudget)
 	}
 	return context.WithDeadline(ctx, deadline)
 }
@@ -107,7 +111,7 @@ func noProvider(provider, saved string) *repository.ProviderError {
 // say it; an unknown one is provider_failed.
 func providerCode(pe *repository.ProviderError) string {
 	switch pe.Code {
-	case "no_provider", "provider_off":
+	case "no_provider", "provider_off", providersStartingCode:
 		return pe.Code
 	case "not_found", "not_signed_in", "refused":
 		return "provider_" + pe.Code
@@ -128,6 +132,9 @@ func (s *Service) repositoryBinding(ctx context.Context, in repositoryInput, id 
 		out := RepositoryBinding{Identity: saved.Identity, ProviderName: saved.ProviderName}
 		if in.CloneURL != nil {
 			if *in.CloneURL == "" || *in.CloneURL != saved.CloneURL {
+				if err := s.providersReady(ctx, saved.Provider, saved.ProviderName); err != nil {
+					return out, err
+				}
 				info, ok := s.repositoryProvider(saved.Provider)
 				if !ok {
 					return out, noProvider(saved.Provider, saved.ProviderName)
@@ -139,6 +146,12 @@ func (s *Service) repositoryBinding(ctx context.Context, in repositoryInput, id 
 			out.CloneURL = *in.CloneURL
 		}
 		return in.details(out)
+	}
+	if providerAddress(in) {
+		// Right after a restart the providers are not listed yet: wait for them rather than call one missing.
+		if err := s.providersReady(ctx, in.Provider, ""); err != nil {
+			return RepositoryBinding{}, err
+		}
 	}
 	registry := s.repositoryRegistry()
 	info, extension, err := registry.Provider(in.URL, in.Provider)
@@ -154,7 +167,9 @@ func (s *Service) repositoryBinding(ctx context.Context, in repositoryInput, id 
 	if err != nil {
 		return RepositoryBinding{}, catalogProviderError(err, info.ID, info.Name)
 	}
-	out := RepositoryBinding{Identity: parsed.Identity, ProviderName: cmp.Or(parsed.ProviderName, info.Name), CloneURL: parsed.CloneURL}
+	// A repository saved before its extension was renamed keeps the identity it was saved with.
+	out := RepositoryBinding{Identity: s.catalogIdentity(ctx, id, parsed.Identity), ProviderName: cmp.Or(parsed.ProviderName, info.Name),
+		CloneURL: parsed.CloneURL}
 	if in.CloneURL != nil {
 		if repository.CheckProviderClone(info, *in.CloneURL) != nil {
 			return out, repositoryProblem("remote")
@@ -167,6 +182,59 @@ func (s *Service) repositoryBinding(ctx context.Context, in repositoryInput, id 
 	return in.details(out)
 }
 
+// providerAddress: in names an extension provider, or an address on a host no built-in owns (one a provider may claim).
+func providerAddress(in repositoryInput) bool {
+	if in.Provider != "" {
+		return repository.IsExtensionProvider(in.Provider)
+	}
+	host, ok := repository.RemoteHost(in.URL)
+	return ok && !slices.Contains(repository.BuiltinHosts, host)
+}
+
+// providersReady waits, within ctx's provider budget, for the providers to be listed (right after a restart); still
+// not listed, the error is providers_starting, never a provider missing or an address no one takes.
+func (s *Service) providersReady(ctx context.Context, provider, saved string) error {
+	if s.providersListed() {
+		return nil
+	}
+	wait, cancel := providerCall(ctx)
+	s.awaitProviders(wait)
+	cancel()
+	if s.providersListed() {
+		return nil
+	}
+	return providerProblem(providersStarting, provider, saved)
+}
+
+// catalogIdentity is identity as the catalog saved it: a saved repository that is the same one under an earlier id of
+// its extension (sameRepository) keeps its own, id's first. No call.
+func (s *Service) catalogIdentity(ctx context.Context, id string, identity repository.Identity) repository.Identity {
+	if !repository.IsExtensionProvider(identity.Provider) {
+		return identity
+	}
+	doc, err := s.repositoryDocument(ctx)
+	if err != nil {
+		return identity
+	}
+	return s.savedIdentity(doc, id, identity)
+}
+
+// savedIdentity is catalogIdentity for doc.
+func (s *Service) savedIdentity(doc repositoryDocument, id string, identity repository.Identity) repository.Identity {
+	if !repository.IsExtensionProvider(identity.Provider) {
+		return identity
+	}
+	saved := make([]repository.Identity, 0, len(doc.Repositories))
+	for _, b := range doc.Repositories {
+		if b.ID == id {
+			saved = append([]repository.Identity{b.Identity}, saved...)
+		} else {
+			saved = append(saved, b.Identity)
+		}
+	}
+	return s.storedIdentity(identity, saved)
+}
+
 // catalogProviderError is a failed parse as the catalog says it: an address no provider takes is remote.
 func catalogProviderError(err error, provider, saved string) error {
 	if errors.Is(err, repository.ErrRemote) {
@@ -176,7 +244,8 @@ func catalogProviderError(err error, provider, saved string) error {
 }
 
 // savedProviderRepository is the saved extension repository a PUT of id sends back unchanged (its canonical address,
-// and its provider or none). Built-in addresses never match, so their path is the one it always was.
+// and its provider, under the id it was saved with or its extension's current one, or none). Built-in addresses never
+// match, so their path is the one it always was.
 func (s *Service) savedProviderRepository(ctx context.Context, in repositoryInput, id string) (RepositoryBinding, bool) {
 	if id == "" || in.Provider == repository.GitHub || in.Provider == repository.GitLab {
 		return RepositoryBinding{}, false
@@ -191,7 +260,7 @@ func (s *Service) savedProviderRepository(ctx context.Context, in repositoryInpu
 	for _, saved := range doc.Repositories {
 		if saved.ID == id {
 			return saved, repository.IsExtensionProvider(saved.Provider) && in.URL == saved.CanonicalURL &&
-				(in.Provider == "" || in.Provider == saved.Provider)
+				(in.Provider == "" || s.sameProvider(in.Provider, saved.Provider))
 		}
 	}
 	return RepositoryBinding{}, false

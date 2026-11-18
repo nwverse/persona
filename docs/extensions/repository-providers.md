@@ -31,8 +31,11 @@ GitHub and GitLab stay built in and work exactly as before (`server/internal/ass
 - The program must speak the protocol. The manager asks it only while it is enabled, without a problem, with the
   contribution switched on and its program running.
 - The install page says what it agrees to: Persona asks it to read addresses and check repositories and links on these
-  hosts, so it learns which repositories and links you add there. The hosts are part of the permission digest (empty for
-  every other extension, whose digests do not change), so an upgrade that adds a host is agreed to again.
+  hosts whenever you or your Agents add one or mention one in a to-do's work, so it learns those addresses, never those
+  on other hosts. That includes every address on these hosts in an Agent's reply in a to-do's session, even one that is
+  never saved (a file page, another repository): it is asked about to find out whether it is a link. The hosts are part
+  of the permission digest (empty for every other extension, whose digests do not change), so an upgrade that adds a
+  host is agreed to again.
 - A provider's hosts give it no network access: a sandboxed program still reaches only `permissions.network`, so declare
   the platform's API host there.
 
@@ -67,13 +70,16 @@ host).
 - **Bounds**: 5 seconds per call; one request's provider calls (a save's parse and check, a to-do save's new links)
   share an 8-second budget.
 - **Re-checks**: every answer is checked before it is used or stored, and refused (as a failure that says why) when
-  - `instance_url` is not `https://` and one of the declared hosts, with nothing after the host but an optional port;
+  - `instance_url` is not exactly `https://<host>` or `https://<host>:<port>`, with one of the declared hosts in lower
+    case and nothing after it; the port is 1 to 65535 without a leading zero, and the default one is left out
+    (`https://code.example.com`, never `https://code.example.com:443`);
   - `path` is not 1 to 20 plain segments (letters, digits, `-._~`) of at most 512 bytes, or `canonical_url` is not
     `instance_url/path`;
   - `clone_url` is not a credential-free `https://`, `ssh://git@` or `git@host:` address on a declared host;
-  - a link is not an `issue` or `pull_request` with a number of 1 to 20 digits (no leading zero), is not the link asked
-    about, or its `canonical_url` is not an `https://` address strictly under the repository's own with no query or
-    fragment.
+  - a link is not an `issue` or `pull_request` with a number of 1 to 20 digits (no leading zero), its `canonical_url` is
+    not an `https://` address strictly under the repository's own with no query or fragment, or, asked by `kind` and
+    `number`, it is not that kind and number. Asked with a pasted `url`, the hub cannot read the platform's layout, so
+    any issue or pull request under the repository passes.
   Names and titles are put on one line and cut (80 characters for `display_name`, 1024 bytes for a title). A refused
   answer is written to the extension's log with the reason.
 - **Errors** are `repository.ProviderError` with a code: `no_provider` (no installed extension claims it), `provider_off`
@@ -81,13 +87,20 @@ host).
   repository routes answer them as `repository_no_provider`, `repository_provider_off`, `repository_provider_not_found`,
   `repository_provider_not_signed_in`, `repository_provider_refused` and `repository_provider_failed`, and the to-do
   routes and tools as `task_repositories_…` with the same suffixes, in the asker's language and naming the provider.
+  Right after a restart there is one more, `repository_providers_starting` / `task_repositories_providers_starting`
+  (409, below).
 - **No transaction waits on an extension**: a to-do's new links are asked about first and carried into the save, which
   never calls a program. Links in Agents' reports that a provider must be asked about are resolved in the background,
-  so the hub's events never wait on an extension, and an address is asked about at most once every 5 minutes per
-  to-do (`server/internal/assistant/todo_repository_providers.go`).
-- **Right after a restart**, until the extensions are started and their providers listed, a link on a host no
-  built-in owns waits: an interactive save waits within its budget, a report waits in the background, and the import
-  of older links is put off to a later read, so nothing is taken for a GitHub repository by mistake.
+  so the hub's events never wait on an extension, each address with its own budget. Once the provider has answered
+  for an address, it is not asked about it again on that to-do for 5 minutes; one whose call failed, timed out or
+  found the provider off or still starting is asked again when a reply names it
+  (`server/internal/assistant/todo_repository_providers.go`).
+- **Right after a restart**, until the extensions are started and their providers listed, whatever may need a provider
+  (an address on a host no built-in owns, or an `ext:` provider named outright) waits: a save (a repository in the
+  catalog or a to-do's new links) waits within its budget and, if the providers are still not listed when it ends,
+  answers that they are still starting (`repository_providers_starting` / `task_repositories_providers_starting`, 409;
+  try again), never "not installed"; a report waits in the background; and the import of older links is put off to a
+  later read, so nothing is taken for a GitHub repository by mistake.
 
 `GET /api/v1/assistant/repositories/providers` lists the sources for the apps: `{manager, providers: [{id, name, builtin,
 hosts, state, link_kinds?}]}`, GitHub and GitLab first, then the installed providers, `state` `available` or `off`. An
@@ -101,6 +114,9 @@ uninstalled provider is not listed. An older manager answers 404 (its `/{id}` ro
   so their stored bytes and snapshot digests are unchanged.
 - Everything stays in the existing places: the `assistant.repositories` setting and `todo_repository_sets.repositories`.
   No table changes.
+- A repository a new link adds to a to-do (a `linked_` row) clones from the address the provider answered in
+  `clone_url` (`transport_origin` `provider`) when it gave one, instead of the canonical URL (`canonical_default`); a
+  catalog entry with its own clone address still wins (`catalog`).
 - A to-do read adds, for an extension's rows only, `provider_state` (`available`, `off` or `missing`) and `link_kinds`
   (the provider's labels), computed like `catalog_state` and never stored.
 - A manager from before #10330 does not know `ext:` providers: it refuses their addresses, and a link it is given by
@@ -148,9 +164,21 @@ fake provider.
 
 ## In the apps
 
-The web's **Settings › Repositories** and a to-do's repository editor show the sources and their states (the second
-step of #10330). iPhone and Android have no repository UI.
+The web shows sources only once a provider extension is installed or a saved repository uses one; with GitHub and
+GitLab alone every screen stays as it was.
 
-## What comes next (#10330)
+- **Settings › Repositories** lists the **Sources**: GitHub and GitLab as built in, then each provider by name with its
+  hosts, marked **Unavailable** while it is off. The provider menu offers each provider by name. An address on a
+  provider's host is read by that provider through the preview before it can be saved. A saved repository of a
+  provider that is off or gone still shows and opens, marked **Unavailable**, and its name, aliases and purpose can
+  still be edited.
+- A to-do's repositories show a provider's rows by its name (never the `ext:` id) with a generic mark, and their links
+  with the provider's own `link_kinds` words (`MR`) and `#number`, opening the stored address. A link pasted on such a
+  row is checked by the provider when the to-do is saved. While the provider is unavailable, the row is marked
+  **Unavailable** with a note that its links still open and a new one needs the provider, and adding a link there is
+  off.
 
-The web's source list, link labels and "provider unavailable" state follow in the second step of #10330.
+## Not done
+
+iPhone and Android have no repository UI: like GitHub's and GitLab's, a provider's repositories are shown and edited on
+the web only, though the Assistant and Agents can add them with their tools whichever device you talk from.

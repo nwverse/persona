@@ -20,5 +20,6 @@
   "provider_not_found": "{provider} can't find this repository. Check the address and your access; nothing was saved.",
   "provider_not_signed_in": "{provider} isn't signed in. Check its settings in Settings › Extensions; nothing was saved.",
   "provider_refused": "{provider} refused: {why}",
-  "provider_failed": "{provider} couldn't check this repository: {why}"
+  "provider_failed": "{provider} couldn't check this repository: {why}",
+  "providers_starting": "Extensions are still starting. Try again in a moment; nothing was saved."
 }
