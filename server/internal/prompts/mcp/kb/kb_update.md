@@ -15,7 +15,7 @@ Write to the knowledge base: create or change a project (name, project_kind shor
     },
     "merge_into": {
       "type": "string",
-      "description": "projects only: fold this project into that one (slug or name), the same work; nothing else changes in the same call"
+      "description": "projects only: fold this project into that one (slug or name); nothing else changes in the same call"
     },
     "unmerge": {
       "type": "boolean",
@@ -106,12 +106,6 @@ Write to the knowledge base: create or change a project (name, project_kind shor
       }
     },
     "projects": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "remove_projects": {
       "type": "array",
       "items": {
         "type": "string"
