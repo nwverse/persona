@@ -26,9 +26,16 @@ type todoProjection struct {
 // todoProjectionOf works out the view of every to-do of list at now. list holds the rows as GET /api/v1/todos lists
 // them (formatTodo, with ask, decision_review and orphaned). The sessions read are those of the active runs of the
 // to-dos the projection reads as open (a failed start included, whose runs still date its last activity), each
-// computer asked once (todoRunSessions), and with them the pending cards of those runs (pendingInteractions), which say
-// what a run that asks is asking.
+// computer asked once (todoRunSessions), and with them the pending cards of those runs (todoFactsOf).
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
+	facts := s.todoFactsOf(ctx, list)
+	return todoProjection{facts: facts, views: projection.Views(facts, now)}
+}
+
+// todoFactsOf are the rows of list as the projection reads them, with their active runs' sessions and those runs'
+// pending cards (pendingInteractions), which say what a run that asks is asking (todoProjectionOf; todo_view_push.go
+// works out the views of a part of the list from them).
+func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projection.Facts {
 	want := map[string]map[string]bool{} // by computer, the session ids of the open to-dos' active runs
 	for i := range list {
 		t := &list[i]
@@ -67,10 +74,10 @@ func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now t
 		}
 	}
 	loc := s.location(ctx)
-	p := todoProjection{facts: make([]projection.Facts, len(list))}
+	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
-		p.facts[i] = projectionFacts(*t, sessions, loc)
+		facts[i] = projectionFacts(*t, sessions, loc)
 		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}
@@ -80,12 +87,11 @@ func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now t
 			}
 			// A computer that did not answer lists nothing: its runs read as offline, and the to-do gets no Inactive
 			// mark.
-			p.facts[i].Unreached = p.facts[i].Unreached || failed[a.MachineID]
-			p.facts[i].Interactions = append(p.facts[i].Interactions, cards[[2]string{a.MachineID, a.SessionID}]...)
+			facts[i].Unreached = facts[i].Unreached || failed[a.MachineID]
+			facts[i].Interactions = append(facts[i].Interactions, cards[[2]string{a.MachineID, a.SessionID}]...)
 		}
 	}
-	p.views = projection.Views(p.facts, now)
-	return p
+	return facts
 }
 
 // todoRunSessions are those of machine's sessions whose id is in want, each as the apps get it: the node's rows read
