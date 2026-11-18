@@ -2,7 +2,7 @@
 
 「连接 hub」默认提供密码登录：输入 HTTPS 地址，在系统登录窗口输入管理员设置的连接密码，通过一次性授权码和 PKCE 返回 App。密码使用 OPAQUE 验证，原文不上传；设备凭据沿用现有独立撤销机制。扫码和手动 token 入口仍可切换使用。详见 [协议](../protocol/protocol.md#客户端密码登录)。
 
-XcodeGen source is `apple/project.yml`, generating `apple/Persona.xcodeproj` (generated files are not committed). iOS 26 / watchOS 10 (the watch App must install on older watches stuck on watchOS 10), Swift 6, default MainActor isolation. Depends on MarkdownUI.
+XcodeGen source is `apple/project.yml`, generating `apple/Persona.xcodeproj` (generated files are not committed). iOS 18.6 / watchOS 10 (iOS 26-only APIs fall back before iOS 26, #6730: `apple/Persona/DesignSystem/SystemCompat.swift`, `docs/lessons/ios.md` "iOS 18.6 floor"; the watch App must install on older watches stuck on watchOS 10), Swift 6, default MainActor isolation. Depends on MarkdownUI.
 Performance rules, budgets and how to measure: `docs/apple/performance.md` (read before changing `apple/` code).
 Bundle ID comes from configuration (`app.bundle_id`, watch `<id>.watchkitapp`, `docs/operations/config.md`). The UI supports English, Simplified Chinese and Japanese (`en` / `zh-Hans` / `ja`).
 
@@ -922,7 +922,12 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - The tab bar's chosen item is reached by a lens (`TabBarLens`): clear glass over the items in the glass styles
     (`lensSurface`), swelling and stretching along the bar as it glides with a bounce, fading as it lands; the chosen
     Assistant item shows the persona's face. With Reduce Motion the items cross-fade.
-  - Tests: `TabSwitchLayoutTests` (what fits, the column's room), `DuoSideColumnTests` (UI, each posture: no two buttons of
+  - The lens's glide runs on the frames it is drawn in, not on the wall clock (`TabBarGlide.frame(at:)`, #10270): the
+    chosen page is swapped in under the bar in the same frames (85–165 ms on the open Duo on its side in the simulator).
+    Before it sets off, the lens waits where it starts through such frames (`longestWait`); once moving, a held-up frame
+    moves it on by `longestStep` at most, so it never jumps. In the shell (the outer display) the moving rail stands in
+    until the glide ends (`ShellPager.standsIn`), so the pages' own rails come back once nothing moves, not in its fade.
+  - Tests: `TabSwitchLayoutTests` (what fits, the column's room, the glide's clock), `DuoSideColumnTests` (UI, each posture: no two buttons of
     the column over one another on an Agent's chat, Messages, a to-do and the main chat, also at the largest text size).
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
   Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the

@@ -40,7 +40,7 @@
   "mcp_tools.assistant#conversation_archive": 519,
   "mcp_tools.assistant#conversation_new": 775,
   "mcp_tools.assistant#conversation_read": 440,
-  "mcp_tools.assistant#conversation_rename": 893,
+  "mcp_tools.assistant#conversation_rename": 833,
   "mcp_tools.assistant#conversation_send": 813,
   "mcp_tools.assistant#conversation_tags_set": 613,
   "mcp_tools.assistant#conversation_unarchive": 312,
@@ -131,5 +131,5 @@
   "supervise.review_rework": 555,
   "supervise.rework": 396,
   "supervise.task_goal": 111,
-  "supervision_instructions": 15686
+  "supervision_instructions": 15684
 }
