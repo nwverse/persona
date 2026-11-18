@@ -68,6 +68,12 @@ func codexProjectRoot(cwd string, cache map[string]string) string {
 }
 
 func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy string, projects map[string]string) {
+	n.decorateCodexSessionIn(s, src, legacy, projects, nil)
+}
+
+// decorateCodexSessionIn is decorateCodexSession with the App's state looked up once per home in a list pass
+// (codexListPass).
+func (n *Node) decorateCodexSessionIn(s *proto.Session, src codexSource, legacy string, projects map[string]string, pass *codexListPass) {
 	origin := codexThreadOrigin(src) // a rollout's first line, else the App's database row (#8191)
 	s.ParentThreadID = firstNonEmpty(s.ParentThreadID, origin.parent)
 	s.IsSubagent = origin.sub || s.ParentThreadID != ""
@@ -91,7 +97,7 @@ func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy st
 		}
 	}
 	s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-	app := loadCodexAppState(src.home)
+	app := pass.appState(src.home)
 	s.SpaceKind = "codex_app"
 	cwd := s.Cwd
 	if pid, _ := app.project(src.thread, cwd); pid != "" {
