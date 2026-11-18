@@ -441,7 +441,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
-| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories` |
+| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories` |
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`; a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
