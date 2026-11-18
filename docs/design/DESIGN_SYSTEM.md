@@ -764,6 +764,8 @@ Reply targets show a friendly name and a source-backed preview when available;
 opaque routing IDs and read diagnostics stay in details. The layout changes no
 sending identity or confirmation behavior.
 
+The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
+
 ### 3.4 Lists and rows
 
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
