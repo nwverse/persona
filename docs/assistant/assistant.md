@@ -1602,12 +1602,22 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     of its own leaves the answer it owes free. So a main chat that hands work to others goes back and forth with each of them three times
     (main → worker at hop 1, its answer at 1, … the third request and its answer at 3); counting every message refused the worker's second answer
     (hop 4). Two chats that keep writing to each other still stop after 2 × 3 messages however slowly they write, which the rate limit alone would not do.
-    Per chat, at most 3 sends to the same target and 10 total within 10 minutes (memory only, reset on hub restart). User messages reset hops to 0.
+    Per chat, at most 20 sends to the same target and 30 total within 10 minutes, a cost cap only (memory only, reset on hub restart). User messages reset hops to 0.
   - **The main chat dispatches** (#10099, `relayAllowedOn`): the limits above guard against loops (per pair), spread (hops) and fan-out (per
     sender); none of them should leave the owner's dispatch center stuck. So a request from the main chat is never refused for its hop: past
     3 it goes at hop 3, where the receiver may answer it but sends nothing further. Requests *to* the main chat cost hops as before, so a
     leader can't keep the main chat going (leader ↔ main still stops after 2 × 3 messages). The main chat's sends to its leader chats count
-    per pair (3 per leader in 10 minutes) but not against its 10-per-sender cap, which stays for every other target.
+    per pair (20 per leader in 10 minutes) but not against its 30-per-sender cap, which stays for every other target.
+  - **Rates queue, loops are round trips, the owner's words are free** (#10400, `relayAdmit`). A fixed 3 per pair in 10 minutes refused
+    one-way traffic (the main chat forwarding the owner's requests one after another) while a slow ping-pong never tripped it. Now:
+    - Past the per-pair or per-sender cap a `conversation_send` is not refused: it gets the first time the window has room (`Due`),
+      waits in the receiver's relay queue held until then (`holdLocked`; after a restart `drainHeldRelays` finds it) and goes in once,
+      in order. The sender's result says it is queued and at about what time. At most 5 per pair wait this way (`relayQueueMax`);
+      past that the send is refused. `conversation_new` is not queued: a new chat starting minutes later is not what was asked.
+    - The loop guard counts turns: two chats whose messages change direction more than 2 × 6 times in an hour (6 round trips,
+      `relayRoundsMax`, `turnsLocked`) are cut, the main chat included, until the owner speaks in one of them.
+    - A send whose `quote` the hub verified (#3822), written in the last hour, is the owner's request: no rate, no round trip, hop 1.
+      Only the first send of a quoted message to a target is free (`quoted`); the same quote to the same chat again counts as usual.
   - **A scheduled run starts a new chain** (`scheduledWake`): a follow-up or routine that goes into an existing chat clears its hop, as a
     run in a fresh chat always did. At most once per chat per 10 minutes, so a chat cut off by the hops can't schedule itself a minute
     ahead over and over to keep a loop alive; the rates hold either way.
