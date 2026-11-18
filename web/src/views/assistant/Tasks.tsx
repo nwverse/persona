@@ -1199,27 +1199,30 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const counts: Record<AssistantTray, number> = { needs: ownAsks.length + badgeOf(entries.needsYou), running: badgeOf(entries.running), parked: badgeOf(entries.parked), review: badgeOf(entries.review) };
   // the card is in the chat already: close the tray onto it and bring it into view. A folded stack shows only its first
   // card, so use its existing expander before looking for another one (#10347).
-  const scrollOwn = (id: string) => {
+  const scrollOwn = (id: string, keepBar = false) => {
     const scope = bar.current?.closest("[data-chat-dock]") ?? document;
     const card = [...scope.querySelectorAll<HTMLElement>("[data-card]")].find((el) => el.dataset.card === id);
     if (!card) return false;
     card.firstElementChild?.scrollIntoView?.({ block: "nearest" });
+    // Revealing another card can scroll the capsule row out of the dock's own scroll box; keep Next clickable for the
+    // following card and the wrap to the first (#10347). A Needs you row keeps its existing landing.
+    if (keepBar) bar.current?.scrollIntoView?.({ block: "nearest" });
     return true;
   };
-  const openOwn = (id: string) => {
+  const openOwn = (id: string, keepBar = false) => {
     setTray(null);
     requestAnimationFrame(() => {
-      if (scrollOwn(id)) return;
+      if (scrollOwn(id, keepBar)) return;
       const dock = bar.current?.closest("[data-chat-dock]");
       // On a narrow screen a keyboard or short height first folds the whole stack to one row; that row is the first
       // expander, then the position chip opens the other cards. Desktop starts at the position-chip step.
       dock?.querySelector<HTMLButtonElement>("[data-chat-cards-position][aria-expanded='false'], [data-chat-cards-fold]")?.click();
       requestAnimationFrame(() => {
-        if (scrollOwn(id)) return;
+        if (scrollOwn(id, keepBar)) return;
         const queue = dock?.querySelector<HTMLButtonElement>("[data-chat-cards-position][aria-expanded='false']");
         if (!queue) return;
         queue.click();
-        requestAnimationFrame(() => scrollOwn(id));
+        requestAnimationFrame(() => scrollOwn(id, keepBar));
       });
     });
   };
@@ -1228,7 +1231,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     const previous = ownAsks.findIndex((ix) => ix.id === lastOwn.current);
     const next = ownAsks[(previous + 1) % ownAsks.length];
     lastOwn.current = next.id;
-    openOwn(next.id);
+    openOwn(next.id, true);
   };
   useEffect(() => {
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
@@ -1261,7 +1264,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div ref={bar} className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar onKeyDownCapture={onTrayKey}>
+    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", ownAsks.length > 0 && !tray ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header

@@ -214,6 +214,8 @@ describe("a Persona conversation's own approval card (#4883)", () => {
     await flush();
     expect(card(question.id)).not.toBeNull();
     expect(revealed).toEqual([bash.id, question.id]);
+    // The expanded cards must not shrink the closed action bar to zero and cover the next click (real-browser evidence).
+    expect(tray()?.classList.contains("shrink-0")).toBe(true);
 
     act(() => nextOwn()!.click());
     await flush();
