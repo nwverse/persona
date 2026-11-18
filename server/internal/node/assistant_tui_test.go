@@ -152,14 +152,10 @@ func TestInteractiveStartGoesThroughTheBridgeAndItsFallbackIsVisible(t *testing.
 	}
 	defer n.stopAssistant(id)
 	var spec tuiSpec
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	waitFor(t, "the bridge's spec", func() bool {
 		raw, _ := os.ReadFile(specFile)
-		if json.Unmarshal(bytes.TrimSpace(raw), &spec) == nil || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return json.Unmarshal(bytes.TrimSpace(raw), &spec) == nil
+	})
 	if spec.Session != id || len(spec.TUI) == 0 || len(spec.Print) == 0 {
 		t.Fatalf("spec %+v", spec)
 	}
@@ -171,11 +167,10 @@ func TestInteractiveStartGoesThroughTheBridgeAndItsFallbackIsVisible(t *testing.
 		t.Fatalf("commands: tui %q print %q", spec.TUI, spec.Print)
 	}
 	var exec proto.AssistantExecution
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if exec = n.assistantExecution(context.Background(), id); exec.Mode == executionModePrint {
-			break
-		}
-	}
+	waitFor(t, "the print-mode execution report", func() bool {
+		exec = n.assistantExecution(context.Background(), id)
+		return exec.Mode == executionModePrint
+	})
 	if exec.Mode != executionModePrint || !strings.Contains(exec.ModeNote, "tmux is not installed") {
 		t.Fatalf("the fallback is not in the execution report: %+v", exec)
 	}
@@ -219,13 +214,10 @@ func TestBridgeFallsBackToPrintModeVisibly(t *testing.T) {
 	t.Setenv("PATH", dir) // no tmux
 	spec, _ := json.Marshal(tuiSpec{Session: "s1", Cwd: dir, TUI: []string{"claude"}, Print: []string{printer}})
 	in := string(spec) + "\n" + `{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n"
-	var out, errb tuiTestOut
 	r, w := io.Pipe()
-	go func() {
-		_, _ = io.WriteString(w, in)
-		time.Sleep(time.Second) // stdin stays open while the start fails, as the node's does
-		_ = w.Close()
-	}()
+	out, errb := tuiTestOut{closeAt: "got ", closer: w}, tuiTestOut{} // stdin stays open while the start fails, as the node's does
+	defer time.AfterFunc(10*time.Second, func() { _ = w.Close() }).Stop()
+	go func() { _, _ = io.WriteString(w, in) }()
 	status := AssistantTUI(nil, r, &out, &errb)
 	if status != 7 {
 		t.Fatalf("status %d, stderr %s", status, errb.String())
@@ -317,20 +309,18 @@ func TestUndeliveredMessagesFailTheirTurn(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { b.submitLoop(ctx, inputs); close(done) }()
-	waitFor := func(what string) string {
+	await := func(what string) string {
 		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		var s string
+		waitFor(t, what, func() bool {
 			b.mu.Lock()
-			s := out.String()
-			b.mu.Unlock()
-			if strings.Contains(s, what) {
-				return s
-			}
-		}
-		t.Fatalf("no %q in:\n%s", what, out.String())
-		return ""
+			defer b.mu.Unlock()
+			s = out.String()
+			return strings.Contains(s, what)
+		})
+		return s
 	}
-	got := waitFor(`"type":"result"`)
+	got := await(`"type":"result"`)
 	lines := strings.Split(strings.TrimSpace(got), "\n")
 	if len(lines) != 2 || !strings.Contains(lines[0], `"subtype":"init"`) || !strings.Contains(lines[1], `"is_error":true`) ||
 		!strings.Contains(lines[1], "last 2 messages") || !strings.Contains(lines[1], "image") {
@@ -348,9 +338,11 @@ func TestUndeliveredMessagesFailTheirTurn(t *testing.T) {
 	}
 	b.mu.Unlock()
 	inputs <- []byte(`{"type":"user","message":{"content":"meanwhile"}}`)
-	for deadline := time.Now().Add(5 * time.Second); typedCount() == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-	}
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the running turn to hold the undelivered message", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.tr.undelivered != ""
+	})
 	b.mu.Lock()
 	if strings.Contains(out.String(), `"type":"result"`) {
 		b.mu.Unlock()
@@ -360,7 +352,7 @@ func TestUndeliveredMessagesFailTheirTurn(t *testing.T) {
 		b.out.emit(ev)
 	}
 	b.mu.Unlock()
-	got = waitFor(`"type":"result"`)
+	got = await(`"type":"result"`)
 	if !strings.Contains(got, `"is_error":true`) || !strings.Contains(got, "did not get your message (the input box did not take a message)") {
 		t.Fatalf("output:\n%s", got)
 	}
@@ -385,12 +377,9 @@ func TestFallbackForwardsOnlyMessages(t *testing.T) {
 	control := `{"type":"control_request","request_id":"r1","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}`
 	message := `{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}`
 	r, w := io.Pipe()
-	go func() {
-		_, _ = io.WriteString(w, string(spec)+"\n"+control+"\n"+message+"\n")
-		time.Sleep(4 * time.Second)
-		_ = w.Close()
-	}()
-	var out, errb tuiTestOut
+	out, errb := tuiTestOut{closeAt: "got ", closer: w}, tuiTestOut{}
+	defer time.AfterFunc(10*time.Second, func() { _ = w.Close() }).Stop()
+	go func() { _, _ = io.WriteString(w, string(spec)+"\n"+control+"\n"+message+"\n") }()
 	if status := AssistantTUI(nil, r, &out, &errb); status != 7 {
 		t.Fatalf("status %d, stderr %s", status, errb.String())
 	}
@@ -432,12 +421,10 @@ func TestCompactingAStoppedConversationKeepsInteractive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var spec tuiSpec
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	waitFor(t, "the bridge's spec", func() bool {
 		raw, _ := os.ReadFile(specFile)
-		if json.Unmarshal(bytes.TrimSpace(raw), &spec) == nil {
-			break
-		}
-	}
+		return json.Unmarshal(bytes.TrimSpace(raw), &spec) == nil
+	})
 	if spec.Session != id || !spec.Resume || len(spec.TUI) == 0 {
 		t.Fatalf("the compaction's start did not go through the bridge: %+v", spec)
 	}
@@ -473,11 +460,8 @@ func TestFallbackThatCannotRunSaysNothing(t *testing.T) {
 	t.Setenv("PATH", dir) // no tmux
 	spec, _ := json.Marshal(tuiSpec{Session: "s1", Cwd: dir, TUI: []string{"claude"}, Print: []string{filepath.Join(dir, "missing")}})
 	r, w := io.Pipe()
-	go func() {
-		_, _ = io.WriteString(w, string(spec)+"\n")
-		time.Sleep(time.Second) // stdin stays open while the start fails, as the node's does
-		_ = w.Close()
-	}()
+	defer w.Close() // stdin stays open while the start fails, as the node's does
+	go func() { _, _ = io.WriteString(w, string(spec)+"\n") }()
 	var out, errb tuiTestOut
 	if status := AssistantTUI(nil, r, &out, &errb); status != 1 || out.Len() != 0 {
 		t.Fatalf("status %d, output %q", status, out.String())
@@ -492,12 +476,21 @@ func TestFallbackThatCannotRunSaysNothing(t *testing.T) {
 type tuiTestOut struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+	// once the output holds closeAt, closer is closed: the bridge's stdin, so the print-mode stand-in ends once it
+	// answered, and not before (a bridge whose stdin ends before its start failed has nothing to hand over)
+	closeAt string
+	closer  io.Closer
 }
 
 func (o *tuiTestOut) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.buf.Write(p)
+	n, err := o.buf.Write(p)
+	if o.closer != nil && strings.Contains(o.buf.String(), o.closeAt) {
+		_ = o.closer.Close()
+		o.closer = nil
+	}
+	return n, err
 }
 
 func (o *tuiTestOut) String() string {
@@ -522,12 +515,15 @@ func TestALongInteractiveCommandStartsInTmux(t *testing.T) {
 	}
 	defer b.shutdown()
 	var plain string
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		if plain, _, _ = b.screens(context.Background()); strings.Contains(plain, "persona-long-ok 40000") {
-			return
+	defer func() {
+		if t.Failed() {
+			t.Logf("screen %q, tmux printed %q", plain, b.clientOut.lines(3))
 		}
-	}
-	t.Fatalf("the long command did not run in tmux; screen %q, tmux printed %q", plain, b.clientOut.lines(3))
+	}()
+	waitWithin(t, 10*time.Second, "the long command to run in tmux", func() bool {
+		plain, _, _ = b.screens(context.Background())
+		return strings.Contains(plain, "persona-long-ok 40000")
+	})
 }
 
 // A tmux that refuses to start says why only on its own terminal: that is the reason the start fails with, the one the
