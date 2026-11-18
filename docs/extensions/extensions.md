@@ -575,7 +575,7 @@ which follows "Knowledge base" (`kb`) until the user picks another connection or
 
 | Method | Parameters | Returns | Scope |
 | --- | --- | --- | --- |
-| `model.complete` | `{system?, messages: [{role: user\|assistant, content}], max_tokens?, json_schema?, timeout_seconds?, label?}` | `{text, json?, model, stop_reason, usage}` | `models` |
+| `model.complete` | `{system?, messages: [{role: user\|assistant, content}], max_tokens?, json_schema?, timeout_seconds?, label?, models?}` | `{text, json?, model, stop_reason, usage, candidate?, attempts?}` | `models` |
 
 The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.Hub.ModelComplete`.
 
@@ -585,11 +585,26 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   checks it against the schema and asks once more with what was wrong (`tools/json_schema_retry.md`). The result's `json` is the decoded value; a second miss is `invalid_output` with `{problem, text, usage}`.
   It works the same on every connection (no vendor structured-output feature is needed). Checked keywords: `type`, `enum`, `const`, `properties`, `required`, `additionalProperties`, `items`, `prefixItems`,
   `minItems`/`maxItems`, `minLength`/`maxLength`, `minimum`/`maximum` and the exclusive ones, `allOf`/`anyOf`/`oneOf` (taken as `anyOf`), local `$ref`; others (`format`, `pattern`…) are left to the extension. At most 64 KiB.
-- **No budget and no cap** (the user's decision): there is no daily limit and no fallback model. `usage` is what the call spent, every request of it together (`input_tokens`, `output_tokens`,
+- **No budget and no cap** (the user's decision): there is no daily limit. Without `models` there is no fallback model. `usage` is what the call spent, every request of it together (`input_tokens`, `output_tokens`,
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
+- **Candidate models** (#10398): `models` is an optional ordered list of 1 to 8 distinct model IDs. Each candidate is a whole call of its own (the same prompt, `max_tokens` and
+  `json_schema` with its one retry); the next one is tried when a candidate fails (`model_failed`, `model_refused`, `model_paused`), runs past `timeout_seconds` (which then bounds
+  each candidate; the whole call stops at 600 seconds), answers with no text (`model_failed`, "the reply was empty") or still does not match `json_schema` (`invalid_output`).
+  The extension only names models: each runs on a provider the user configured in Settings › Model providers that the hub calls directly (a direct API provider, or a Persona-managed
+  Messages launcher with an address and a key; not hidden) and that lists it (its default, tier, small, subagent or custom model, or its model list). The purpose's own provider is looked at first,
+  then direct API providers, then launchers, in their order. A model none offers is skipped as `model_unavailable` (data `{model}`) without a request.
+  The result adds `candidate` (the entry of `models` that answered; `model` stays what the upstream says) and `attempts`, the candidates that failed before it (`{model, code, message, until?, seconds, usage}`);
+  `usage` covers every attempt. A single candidate that fails answers with its own code and data, exactly as a call without candidates would, so an extension that sends one model per call and
+  counts failures itself keeps its existing error handling. When two or more all fail the error is `model_candidates_failed`, its message naming each candidate and how it failed, its data `{attempts, usage}`.
+  Pick the list per call, for example a short-text chain and a long-text chain chosen by the input's length.
+  The manager logs a line per attempt (`candidate i/n <model> via <provider>: <outcome>`) and one for the outcome (`answered by candidate <model> (<upstream model>) after <n> failed`, or `every candidate failed`).
+  The user keeps control on the extension's purpose in Settings › Model configuration (docs/assistant/model-config.md "Extensions' own purposes"): the lists the extension sent are shown there,
+  and the user can switch them off (every call runs on the purpose's model, and the result has no `candidate`) or replace them with a list of their own (`candidate` then names the user's model).
+  Without `models` (and without a list of the user's) the call is exactly as before. A hub older than this field answers `invalid_params` (`unknown field "models"`): send the call again without it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
 - **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
-  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, a selected model that is missing / unavailable to this key, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`.
+  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, a selected model that is missing / unavailable to this key, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`,
+  `model_candidates_failed` (with candidates, every one failed).
 - **A declined input**: when the model declines to answer (the Messages API's `stop_reason: "refusal"`, a Responses API refusal part, a Chat Completions refusal, or a response stopped by a `content_filter`)
   the answer is `model_refused` with `{stop_reason, usage}`; `usage` is what the declined call spent. Sending the same input again gets the same answer: split it into smaller pieces, drop
   a part or report which input was declined. Match the code, never the message, which is for people and may change. Hubs older than this code answer `model_failed`
@@ -599,6 +614,20 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 
 ```json
 {"permissions":{"hub":["kb.read","kb.write","models"]}}
+```
+
+A call with candidates and an answer from the second one:
+
+```json
+{"system": "...", "messages": [{"role": "user", "content": "..."}], "json_schema": {"type": "object"},
+ "timeout_seconds": 90, "label": "curate", "models": ["fast-model", "strong-model", "small-model"]}
+```
+
+```json
+{"text": "{...}", "json": {}, "model": "strong-model", "candidate": "strong-model",
+ "attempts": [{"model": "fast-model", "code": "timeout", "message": "model.complete: timed out", "seconds": 90,
+               "usage": {"input_tokens": 0, "output_tokens": 0, "requests": 0}}],
+ "stop_reason": "end_turn", "usage": {"input_tokens": 1200, "output_tokens": 300, "requests": 1}}
 ```
 
 ### Transcription for extensions (#8485)
