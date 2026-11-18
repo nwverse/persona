@@ -1959,6 +1959,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | POST | `/api/v1/assistant/route/agent` | The New agent sheet's **Under** field: `{"machine_id","cwd","prompt"}` → `{"supervisor","main"?,"title"?,"by"}`, the conversation a new agent goes under: the leader filed under the kb project that owns `cwd` (`by: "project"`), else the leader `assistant.route` matches the prompt to (`"model"`, 2 s), else the main conversation (`main: true`, `"default"`); read-only devices 403 (`docs/assistant/unified-entry.md` "New agent goes under a leader") |
 | POST | `/api/v1/assistant/agents/{mid}/{sid}/supervisor` | Puts an agent the owner started under a leader: `{"supervisor"?, "title"?}` (`""` the main conversation) → `{"todo","made"}`: an agent of no task becomes a supervised task of that conversation, its card in that conversation; one on a task moves to it with its card (its signals follow from the next one); no such machine or session 404; not a leader, an assistant conversation or the owner's own to-do 409; read-only devices 403 |
 | GET | `/api/v1/assistant/capabilities` | What the assistant supports, for extensions to ask before relying on it: `{"guest_conversations": true}` (404 on an older hub) |
+| GET | `/api/v1/assistant/repositories/providers` | The sources a repository can come from (#10330): `{"manager","providers":[{"id","name","builtin","hosts","state","link_kinds"?}]}`, GitHub and GitLab first, then the installed provider extensions (`id` `ext:<extension>/<contribution>`, `state` `available` or `off`, `link_kinds` their own labels for `issue` / `pull_request`). An older manager answers 404 (its `/{id}` route): only the built-ins. See `docs/extensions/repository-providers.md` ("The manager's side") |
 | GET | `/api/v1/assistant/urgent-call` | Full-access clients only: `{settings:{enabled, rules:[{id, text?, builtin?}], daily_cap, quiet:{start,end}|null, retry_minutes}, builtin:[ids], today, can_write}`, the urgent call settings (off by default; `docs/assistant/urgent-call.md` "Settings") and how many matters rang today |
 | PUT | `/api/v1/assistant/urgent-call` | The whole `settings` object → the same answer. `daily_cap` 1–10, `retry_minutes` 1–30, `quiet` `"HH:MM"` in the owner's time zone or null, at most 20 rules of at most 200 characters with unique ids (a built-in id without `text` uses its own wording); 400 `urgent_call_invalid` otherwise |
 | POST | `/api/v1/assistant/urgent-call/test` | Rings the owner's phones once with a test call (never retried, not counted) → `{call, devices, reason?}` |
@@ -5271,3 +5272,14 @@ existing Todo detail routes. `POST /api/v1/todos` accepts optional atomic
 `repository_bindings`; omitted fields preserve all legacy creation behavior.
 The full request, revision and source-snapshot contract is in
 `docs/assistant/todos.md` ("Repository associations").
+A repository's `provider` may be `ext:<extension>/<contribution>`, a provider
+extension's (#10330), with its name kept beside the identity as `provider_name`;
+reads add `provider_state` and `link_kinds` to such rows only, and their stored
+links open unchanged when the extension is gone
+(`docs/extensions/repository-providers.md` "When the provider is gone").
+A `source_snapshot.transport_origin` may also be `provider`: a row a new link
+added clones from the address the provider answered. Right after a restart, a
+save that needs a provider answers 409 `task_repositories_providers_starting`
+(`repository_providers_starting` on the repository routes) when the extensions
+are still starting at the end of its budget; it never reports the provider as
+not installed.
