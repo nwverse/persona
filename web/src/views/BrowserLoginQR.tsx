@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { deviceName } from "../lib/auth";
+import { deviceName, forgetUnrevoked, unrevokedTokenId } from "../lib/auth";
 import { errorText, setPairedToken } from "../lib/api";
 import { BASE } from "../lib/base";
+import { storedCredentials } from "../lib/compatibility";
 import { t } from "../i18n";
 import { Button, Spinner } from "../ui/atoms";
 
@@ -21,6 +22,9 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let done = false;
+    // The credential this browser had before, as pair() sends it: the hub revokes it once the new one is issued.
+    const replaces = storedCredentials().tokenId || unrevokedTokenId();
+    let replacing = false;
     async function request<T>(action: string, body: unknown): Promise<T> {
       const response = await fetch(`${BASE}/api/v1/auth/browser-login/${action}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -41,7 +45,9 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
           if (controller.signal.aborted) return;
           setState(result.state);
           if (result.state === "approved" && result.token && result.id) {
-            done = true; setPairedToken(result.token, result.id); onDone(); return;
+            done = true; setPairedToken(result.token, result.id);
+            if (replacing) forgetUnrevoked(); // the hub has had its one chance at it
+            onDone(); return;
           }
           if (result.state === "denied") { done = true; return; }
         } catch (err) {
@@ -56,7 +62,14 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
       timer = setTimeout(() => void poll(c), 1500);
     }
     setChallenge(undefined); setState("loading"); setError("");
-    request<Challenge>("start", { name: deviceName() }).then((c) => {
+    const name = deviceName();
+    (replaces
+      ? request<Challenge>("start", { name, replaces }).then((c) => { replacing = true; return c; }, (err) => {
+        // A hub from before #10291 refuses the unknown field: sign in without replacing, as before.
+        if (err instanceof BrowserLoginRequestError && err.status === 400) return request<Challenge>("start", { name });
+        throw err;
+      })
+      : request<Challenge>("start", { name })).then((c) => {
       if (controller.signal.aborted) return;
       setChallenge(c); setState("pending"); void poll(c);
     }).catch(failed);
