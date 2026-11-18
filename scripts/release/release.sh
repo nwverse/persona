@@ -62,12 +62,10 @@ python3 scripts/release/check_bundle_privacy.py "$APP"
 # Siri / Shortcuts only see the intents if their metadata was extracted at build time.
 [ -f "$APP/Metadata.appintents/extract.actionsdata" ] || { echo "missing AppIntents metadata in $APP"; exit 1; }
 # Release must not contain the DEBUG-only simulator switches (apple/Persona/App/PersonaApp.swift and the pages they open),
-# listed one per line in scripts/release/debug_switches.txt.
+# listed one per line in scripts/release/debug_switches.txt, nor the runtime CLI (apple/Persona/Debug/,
+# docs/operations/runtime-cli.md): its switches, its type, the accessibility hooks it turns on. One read of all of
+# `strings`: piped into `grep -q` under pipefail, an early match passed (#10616, #10654).
 python3 scripts/release/debug_switches.py check "$APP/Persona"
-# Nor the runtime CLI (apple/Persona/Debug/, docs/operations/runtime-cli.md): its switches, its type, the accessibility hook it turns on.
-if strings "$APP/Persona" | grep -qE 'runtimeCLI|RuntimeCLI|showActionTray|openNeedsRow|openPushIntercepts|_AXSSet(Automation|ReduceMotion)Enabled'; then
-  echo "DEBUG runtime or snapshot switches found in the Release binary" >&2; exit 1
-fi
 
 # Every bundle signed with its target's keychain groups (the app shares the Live Activity's persona with PersonaWidgets,
 # the push key with PersonaNotify): build 92 shipped without them (docs/operations/release.md "entitlements").

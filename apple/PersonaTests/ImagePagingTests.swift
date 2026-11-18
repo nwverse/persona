@@ -46,7 +46,7 @@ struct ImagePagingTests {
 
     @Test func debugLaunchFlagsFollowNamingAndReleaseChecks() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        // release.sh refuses a Release binary carrying any name listed in this file, one name per line.
+        // release.sh refuses a Release binary whose `strings` has a line equal to a name in this file (one per line).
         let switches = try String(contentsOf: root.appending(path: "scripts/release/debug_switches.txt"), encoding: .utf8)
         let listed = Set(switches.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) })
         let viewer = try String(contentsOf: root.appending(path: "apple/Persona/Views/Chat/ImageViewer.swift"), encoding: .utf8)

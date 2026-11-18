@@ -3,5 +3,6 @@ harmony/native/ssh/licenses/** -text -whitespace
 harmony/entry/src/main/resources/rawfile/native-ssh-licenses.html -text -whitespace
 native/app-core/licenses/** -text -whitespace
 
-# A pull request that adds a DEBUG switch adds one line; a union merge keeps both sides' lines (#10616).
+# A pull request that adds a DEBUG switch adds one line; a union merge keeps the lines both sides added, but can bring
+# back a name another branch removed, so check union merges that delete names (#10616).
 scripts/release/debug_switches.txt merge=union

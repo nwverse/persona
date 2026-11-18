@@ -1,7 +1,9 @@
 # DEBUG-only launch arguments (simulator switches) that must not be in a Release build of the iPhone app: release.sh
 # stops when a line of the binary's `strings` equals one of them (scripts/release/debug_switches.py).
-# One name per line, sorted, no duplicates, no comments below this header. Add a new switch on its own line in order;
-# `python3 scripts/release/debug_switches.py sort` puts the list back in order after a merge.
+# One name per line, sorted, no duplicates; no comments or blank lines below this header (the checker refuses them).
+# Add a new switch on its own line in order; `python3 scripts/release/debug_switches.py sort` puts the list back in
+# order after a merge. A union merge (.gitattributes) can bring back a name another branch removed, so check union
+# merges that delete names.
 addMail
 dropUsers
 fleetDetails

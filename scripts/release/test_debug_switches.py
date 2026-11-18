@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """debug_switches.txt stays a sorted list of unique switch names and keeps every name release.sh's regex had, and
-debug_switches.py finds a switch in `strings` output the way release.sh's `grep -qxE` did (#10616)."""
+debug_switches.py finds a switch where release.sh's `grep -qxE` matched, a whole line of `strings` output, anywhere in
+all of it (#10616). The runtime CLI rule it also runs is tested in test_release_debug_guard.py."""
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(ds.__file__).resolve()
 
 # Every name on release.sh's `grep -qxE '(…)'` line when the list moved to debug_switches.txt (#10616). A name leaves
-# the list only on purpose (a switch whose name now ships in Release code): take it out here in the same change.
+# the list only on purpose (a switch whose name now ships in Release code): take it out here in the same change. A
+# union merge can bring a removed name back, which this does not notice: check union merges that delete names.
 SNAPSHOT = """
 addMail dropUsers fleetDetails fleetIsland focusComposer focusTerminalInput holdChromeOpen inboxDrawer inboxJumpWait
 jumpEnd larkFocus larkMoments larkPicker larkProfile larkTop loadAll newAssistant openAbout openAgent openAgentsFresh
@@ -114,9 +116,42 @@ class DebugSwitchListTest(unittest.TestCase):
         self.assertEqual(ds.problems("openOKR\nopenOk\n"), [])
         self.assertEqual(ds.problems("openA\n<<<<<<< HEAD\n"), ["line 2: '<<<<<<< HEAD' is not a switch name "
                                                                 "(letters, digits and _)"])
+        self.assertEqual(ds.problems("openA\nshowB "), ["line 2: 'showB ' is not a switch name "
+                                                        "(letters, digits and _)"])
+        self.assertEqual(ds.problems("openA\nshowB"), ["the last line has no newline"])
+
+    def test_comments_and_blank_lines_belong_to_the_header(self):
+        # Above the first name they are the header, kept as they are; below it they are refused, since sort could
+        # not keep them next to the name they were about.
+        self.assertEqual(ds.split("# one\n\n# two\nopenA\n"), (["# one", "", "# two"], ["openA"]))
+        below = [("# h\nopenA\n# why showB stays\nshowB\n", 3, "a comment"),
+                 ("openA\n  # indented\nshowB\n", 2, "a comment"),
+                 ("# h\nopenA\n\nshowB\n", 3, "a blank line"),
+                 ("# h\nopenA\nshowB\n\n", 4, "a blank line")]
+        for text, line, what in below:
+            with self.subTest(text=text):
+                expected = (f"line {line}: {what} below the first name (comments go in the header; "
+                            "no blank lines between names)")
+                self.assertEqual(ds.problems(text), [expected])
+                with tempfile.TemporaryDirectory() as tmp:
+                    path, strings = Path(tmp, "list.txt"), Path(tmp, "strings.txt")
+                    path.write_text(text, encoding="utf-8")
+                    strings.write_text("harmlessName\n", encoding="utf-8")
+                    result = run("--list", str(path), "sort")
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn(expected, result.stderr)
+                    self.assertEqual(path.read_text(encoding="utf-8"), text, "sort must not drop the line")
+                    self.assertEqual(run("--list", str(path), "check", "--strings", str(strings)).returncode, 2)
+
+    def test_sort_leaves_a_list_with_no_problems_as_it_is(self):
+        samples = ("# one\n\n# two\nopenA\nopenOKR\nopenOk\nshowB\n", "openA\n", "# only a header\n",
+                   "# h\nshowB\nopenA\n", "openA\nopenA\n", "openA\nshowB", ds.LIST.read_text(encoding="utf-8"))
+        for text in samples:
+            with self.subTest(text=text[:40]):
+                self.assertEqual(ds.problems(text) == [], ds.sort_text(text) == text)
 
     def test_sort_keeps_the_header_and_drops_duplicates(self):
-        text = "# one\n# two\nshowB\nopenA\nshowB\n\nopenC\n"
+        text = "# one\n# two\nshowB\nopenA\nshowB\nopenC\n"
         self.assertEqual(ds.sort_text(text), "# one\n# two\nopenA\nopenC\nshowB\n")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "list.txt")
