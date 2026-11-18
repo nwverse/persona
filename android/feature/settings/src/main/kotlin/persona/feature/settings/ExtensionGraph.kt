@@ -1,9 +1,11 @@
 package persona.feature.settings
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -21,7 +23,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -56,7 +57,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -71,7 +75,6 @@ import persona.core.contracts.generated.ExtensionAction
 import persona.core.contracts.generated.ExtensionGraphComponent
 import persona.core.contracts.generated.ExtensionGraphDirection
 import persona.core.contracts.generated.ExtensionGraphNode
-import persona.core.designsystem.AppStyle
 import persona.core.designsystem.GraphIcons
 import persona.core.designsystem.GraphTokens
 import persona.core.designsystem.JCard
@@ -107,6 +110,7 @@ internal fun fitExtensionGraph(
     world: Size,
     padding: Float,
     opening: Boolean,
+    preview: Boolean = false,
     focus: Rect? = null,
     firstRoot: Rect? = null,
 ): ExtensionGraphTransform {
@@ -116,7 +120,9 @@ internal fun fitExtensionGraph(
     val availableWidth = (viewport.width - 2 * padding).coerceAtLeast(1f)
     val availableHeight = (viewport.height - 2 * padding).coerceAtLeast(1f)
     val minimum = if (opening) GraphOpeningMinZoom else GraphMinZoom
-    val scale = min(availableWidth / world.width, availableHeight / world.height).coerceIn(minimum, 1f)
+    val fitted = min(availableWidth / world.width, availableHeight / world.height)
+    // A still card always contains the whole graph, even a 300-node one; interactive canvases keep their zoom floors.
+    val scale = if (preview) fitted.coerceAtMost(1f) else fitted.coerceIn(minimum, 1f)
     val pan = when {
         opening && focus != null -> Offset(
             viewport.width / 2 - focus.center.x * scale,
@@ -219,9 +225,13 @@ private fun rememberGraphGeometry(layout: ExtensionGraphLayoutResult, direction:
             val nodeWidth = GraphTokens.nodeWidth.toPx() * fontScale
             val nodeHeight = GraphTokens.nodeHeight.toPx() * fontScale
             val pitchX = nodeWidth + GraphTokens.horizontalGap.toPx()
-            val pitchY = nodeHeight + GraphTokens.verticalGap.toPx()
             val framePadding = GraphTokens.framePadding.toPx()
             val titleHeight = GraphTokens.frameTitleHeight.toPx() * fontScale
+            val verticalGap = if (direction == ExtensionGraphDirection.DOWN && layout.frames.isNotEmpty()) {
+                // The unscaled fold chip must clear the group caption even at Fit's 25% floor and large text sizes.
+                GraphTokens.foldVisual.toPx() * fontScale.coerceAtLeast(1f) / GraphMinZoom + titleHeight + 2 * framePadding
+            } else GraphTokens.verticalGap.toPx()
+            val pitchY = nodeHeight + verticalGap
             val inset = framePadding + titleHeight
             val nodes = layout.at.mapValues { (_, point) ->
                 val left = inset + point.x.toFloat() * pitchX
@@ -283,8 +293,8 @@ internal fun ExtensionGraph(
     val ui = rememberSaveable(graph.key, saver = ExtensionGraphUiState.Saver) { ExtensionGraphUiState() }
     var fullScreen by rememberSaveable(graph.key) { mutableStateOf(false) }
     val open = {
-        // Keep exactly this position when the viewport changes into the dialog; compact re-fits when it comes back.
-        ui.touched = true
+        // Pages keep exactly this position; a still preview takes a legal interactive opening view in the dialog.
+        ui.touched = !compact
         fullScreen = true
     }
     val configuration = LocalConfiguration.current
@@ -295,6 +305,7 @@ internal fun ExtensionGraph(
         modifier.fillMaxWidth().height(if (compact) GraphTokens.compactHeight else pageHeight),
         compact = compact,
         fullScreen = false,
+        suspended = fullScreen,
         onFullScreen = open,
     )
     if (fullScreen) JFullScreen(onDismiss = {
@@ -311,6 +322,7 @@ internal fun ExtensionGraph(
                 Modifier.fillMaxWidth().weight(1f),
                 compact = false,
                 fullScreen = true,
+                suspended = false,
                 onFullScreen = {},
             )
         }
@@ -326,6 +338,7 @@ private fun ExtensionGraphCanvas(
     modifier: Modifier,
     compact: Boolean,
     fullScreen: Boolean,
+    suspended: Boolean,
     onFullScreen: () -> Unit,
 ) {
     val folded = remember(graph.folded, ui.foldOn, ui.foldOff) {
@@ -347,9 +360,12 @@ private fun ExtensionGraphCanvas(
     var viewport by remember { mutableStateOf(Size.Zero) }
     val selected = graph.selected?.let(geometry.nodes::get)
     val firstRoot = layout.order.firstOrNull { layout.depth[it] == 0 }?.let(geometry.nodes::get)
-    LaunchedEffect(viewport, geometry.world, selected, firstRoot, compact, fullScreen, ui, ui.touched) {
-        if (!ui.touched) ui.transform(
-            fitExtensionGraph(viewport, geometry.world, viewportPadding, opening = true, selected, firstRoot),
+    LaunchedEffect(viewport, geometry.world, selected, firstRoot, compact, fullScreen, suspended, ui, ui.touched) {
+        if (!suspended && !ui.touched) ui.transform(
+            fitExtensionGraph(
+                viewport, geometry.world, viewportPadding,
+                opening = !compact, preview = compact, focus = selected, firstRoot = firstRoot,
+            ),
             touched = false,
         )
     }
@@ -379,14 +395,15 @@ private fun ExtensionGraphCanvas(
             .clipToBounds()
             .background(PersonaTheme.palette.background)
             .then(if (interactive) Modifier.transformable(gestures) else Modifier)
+            .then(if (interactive) Modifier.semantics { isTraversalGroup = true } else Modifier)
             .then(if (compact) Modifier.clickable(role = Role.Button, onClick = onFullScreen)
                 .semantics(mergeDescendants = true) { contentDescription = openLabel } else Modifier)
             .testTag(if (compact) "graph-preview" else "graph-canvas"),
     ) {
         GraphLines(graph, layout, geometry, ui, Modifier.fillMaxSize())
         // Frame labels and nodes share the transform, but are composed in the shared reading order.
-        geometry.frames.forEach { frame ->
-            Box(Modifier.graphPlacement(frame.label, ui, density).zIndex(1f)) {
+        geometry.frames.forEachIndexed { index, frame ->
+            Box(Modifier.graphPlacement(frame.label, ui, density).zIndex(1f).testTag("graph-frame-label-$index")) {
                 Text(
                     frame.title,
                     Modifier.padding(start = GraphTokens.frameTitleInset).clearAndSetSemantics {},
@@ -398,13 +415,14 @@ private fun ExtensionGraphCanvas(
             }
         }
         val nodes = remember(graph.nodes) { graph.nodes.associateBy { it.id } }
-        layout.order.forEach { id ->
-            val node = nodes[id] ?: return@forEach
-            val rect = geometry.nodes[id] ?: return@forEach
+        layout.order.forEachIndexed { index, id ->
+            val node = nodes[id] ?: return@forEachIndexed
+            val rect = geometry.nodes[id] ?: return@forEachIndexed
             GraphNode(
                 graph, node, viewState, handle, ui,
                 interactive = interactive,
                 selected = graph.selected == id,
+                readingIndex = index * 2f,
                 modifier = Modifier.graphPlacement(rect, ui, density).zIndex(2f),
             )
             if (id in layout.folds && interactive) {
@@ -415,6 +433,7 @@ private fun ExtensionGraphCanvas(
                     folded = id in folded,
                     hidden = layout.folds.getValue(id),
                     state = ui,
+                    readingIndex = index * 2f + 1f,
                     onFold = {
                         if (id in folded) {
                             ui.foldOn = ui.foldOn - id
@@ -428,7 +447,7 @@ private fun ExtensionGraphCanvas(
                 )
             }
         }
-        if (interactive) GraphControls(ui, fullScreen, onFullScreen, ::fit, ::zoom)
+        if (interactive) GraphControls(ui, fullScreen, onFullScreen, layout.order.size * 2, ::fit, ::zoom)
     }
 }
 
@@ -437,6 +456,7 @@ private fun BoxScope.GraphControls(
     state: ExtensionGraphUiState,
     fullScreen: Boolean,
     onFullScreen: () -> Unit,
+    firstReadingIndex: Int,
     fit: () -> Unit,
     zoom: (Float) -> Unit,
 ) {
@@ -448,13 +468,15 @@ private fun BoxScope.GraphControls(
             .zIndex(4f),
     ) {
         JIconButton(GraphIcons.zoomOut, stringResource(R.string.settings_ext_graph_zoom_out), { zoom(1f / GraphZoomStep) },
-            Modifier.testTag("graph-zoom-out"), enabled = state.scale > GraphMinZoom, raised = false)
+            Modifier.testTag("graph-zoom-out").semantics { traversalIndex = firstReadingIndex.toFloat() },
+            enabled = state.scale > GraphMinZoom, raised = false)
         JIconButton(GraphIcons.zoomIn, stringResource(R.string.settings_ext_graph_zoom_in), { zoom(GraphZoomStep) },
-            Modifier.testTag("graph-zoom-in"), enabled = state.scale < GraphMaxZoom, raised = false)
+            Modifier.testTag("graph-zoom-in").semantics { traversalIndex = (firstReadingIndex + 1).toFloat() },
+            enabled = state.scale < GraphMaxZoom, raised = false)
         JIconButton(GraphIcons.fit, stringResource(R.string.settings_ext_graph_fit), fit,
-            Modifier.testTag("graph-fit"), raised = false)
+            Modifier.testTag("graph-fit").semantics { traversalIndex = (firstReadingIndex + 2).toFloat() }, raised = false)
         if (!fullScreen) JIconButton(GraphIcons.fullScreen, stringResource(R.string.settings_ext_graph_full_screen), onFullScreen,
-            Modifier.testTag("graph-open-full"), raised = false)
+            Modifier.testTag("graph-open-full").semantics { traversalIndex = (firstReadingIndex + 3).toFloat() }, raised = false)
     }
 }
 
@@ -504,6 +526,7 @@ private fun GraphLines(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GraphNode(
     graph: ExtensionGraphComponent,
@@ -513,6 +536,7 @@ private fun GraphNode(
     ui: ExtensionGraphUiState,
     interactive: Boolean,
     selected: Boolean,
+    readingIndex: Float,
     modifier: Modifier,
 ) {
     val palette = PersonaTheme.palette
@@ -534,17 +558,24 @@ private fun GraphNode(
     val longPress: (() -> Unit)? = if (interactive && action != null) showReadout else null
     val contentModifier = modifier
         .testTag("graph-node-${node.id}")
-        .semantics(mergeDescendants = true) { if (interactive) contentDescription = readout }
+        .then(if (interactive && action != null) Modifier.clip(PersonaTheme.shapes.cardShape).combinedClickable(
+            role = Role.Button, onClick = press ?: {}, onLongClick = longPress,
+        ) else Modifier)
         .then(if (interactive && action == null) Modifier.pointerInput(readout, feedback) {
             // An informational long press must not give an actionless node button semantics.
             detectTapGestures(onLongPress = { showReadout() })
         } else Modifier)
+        .semantics(mergeDescendants = true) {
+            if (interactive) {
+                contentDescription = readout
+                traversalIndex = readingIndex
+                this.selected = selected
+            }
+        }
         .stableAlpha(if (interactive && viewState.busy && action != null) 0.45f else 1f)
     Box(contentModifier) {
         JCard(
             Modifier.fillMaxSize(),
-            onClick = press,
-            onLongClick = longPress,
             padding = Tokens.Space.flush,
         ) {
             Box(Modifier.fillMaxSize().clearAndSetSemantics {}) {
@@ -606,31 +637,42 @@ private fun GraphFold(
     folded: Boolean,
     hidden: Int,
     state: ExtensionGraphUiState,
+    readingIndex: Float,
     onFold: () -> Unit,
     modifier: Modifier,
 ) {
     val label = if (folded) pluralStringResource(R.plurals.settings_ext_graph_show_hidden, hidden, hidden)
         else stringResource(R.string.settings_ext_graph_fold)
-    val target = Tokens.MinTouch.android
-    val half = with(LocalDensity.current) { (target / 2).toPx() }
+    val density = LocalDensity.current
+    val textScale = density.fontScale.coerceAtLeast(1f)
+    val target = Tokens.MinTouch.android * textScale
+    val visual = GraphTokens.foldVisual * textScale
+    val half = with(density) { (target / 2).toPx() }
+    val visualHalf = with(density) { (visual / 2).toPx() }
     val anchor = if (right) Offset(rect.right, rect.center.y) else Offset(rect.center.x, rect.bottom)
     Box(
         modifier.offset {
             val at = state.pan + anchor * state.scale
-            IntOffset((at.x - half).roundToInt(), (at.y - half).roundToInt())
+            // The visible chip lives in the pitch gap, never over the node's badge, subtitle or progress.
+            val centre = if (right) Offset(at.x + visualHalf, at.y) else Offset(at.x, at.y + visualHalf)
+            IntOffset((centre.x - half).roundToInt(), (centre.y - half).roundToInt())
         }.size(target).testTag("graph-fold-$id").clickable(role = Role.Button, onClick = onFold)
-            .semantics { contentDescription = label },
+            .semantics {
+                contentDescription = label
+                traversalIndex = readingIndex
+            },
         contentAlignment = Alignment.Center,
     ) {
-        val shape = if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(Tokens.Radius.badge) else CircleShape
         Box(
-            Modifier.size(GraphTokens.foldVisual).clip(shape).background(PersonaTheme.palette.surfaceOpaque)
-                .border(Tokens.Size.line, PersonaTheme.palette.line, shape).clearAndSetSemantics {},
+            Modifier.size(visual).clip(CircleShape)
+                .background(PersonaTheme.palette.surfaceOpaque)
+                .border(Tokens.Size.line, PersonaTheme.palette.line, CircleShape).clearAndSetSemantics {},
             contentAlignment = Alignment.Center,
         ) {
             if (folded) Text("+$hidden", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold),
                 color = PersonaTheme.palette.ink2, maxLines = 1)
-            else JIcon(GraphIcons.fold, null, size = GraphTokens.foldIcon, tint = PersonaTheme.palette.ink2, decorative = true)
+            else JIcon(if (right) GraphIcons.foldRight else GraphIcons.foldDown, null,
+                size = GraphTokens.foldIcon, tint = PersonaTheme.palette.ink2, decorative = true)
         }
     }
 }

@@ -2717,8 +2717,11 @@ tiles keep the grid's columns (`max_columns`, at least 150 px each), so a phone 
 the value and unit (or the percentage) in its centre, the same accessibility reading (the exact meter readout) and an eased ratio
 change which snaps with Reduce Motion. Android's `ExtensionGaugeRing` is shared by grid and carousel tiles at 96 dp on a page and
 80 dp in a compact card. `JTile` keeps the existing surface, badge, switch, action and extra-action menu, and adds meter semantics
-without removing the button behaviour of an actionable tile. Their native streams stay at their earlier versions, so the hub still
-gives a stream the downgraded tile.
+without removing the button behaviour of an actionable tile. iOS's native stream stays at its earlier version and receives
+the downgraded tile. Android's native stream sends 10; its `NativeTile` uses `JTile`, `ExtensionGaugeRing` and the same meter
+readout, retaining the active treatment, badge, switch and whole-tile switch action. `NativeExtensionProfile` accepts the
+gauge's named `color`, so supported native grid and carousel tiles keep the ring too (unsupported fields still use the legacy
+renderer rather than losing them).
 
 ## UI version 10 (#9727)
 

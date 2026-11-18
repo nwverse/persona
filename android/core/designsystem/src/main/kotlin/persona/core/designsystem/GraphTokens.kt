@@ -11,7 +11,7 @@ object GraphTokens {
     val nodeWidth = Tokens.Size.box280 - Tokens.Size.slimBar - Tokens.Space.Standard.block
     val nodeHeight = Tokens.Size.box64
     val horizontalGap = Tokens.MinTouch.android
-    val verticalGap = Tokens.Space.Standard.block
+    val verticalGap = Tokens.MinTouch.android
     val pageMinHeight = Tokens.Size.box280 + Tokens.Size.slimBar
     val pageMaxHeight = Tokens.Size.box300 * 3
     val compactHeight = Tokens.Size.box120 + Tokens.Size.box80
@@ -38,5 +38,6 @@ object GraphIcons {
     val zoomIn: PhIcon get() = PhIcons.Plus
     val fit: PhIcon get() = PhIcons.Scan
     val fullScreen: PhIcon get() = PhIcons.ArrowsOutSimple
-    val fold: PhIcon get() = PhIcons.CaretDown
+    val foldRight: PhIcon get() = PhIcons.CaretRight
+    val foldDown: PhIcon get() = PhIcons.CaretDown
 }

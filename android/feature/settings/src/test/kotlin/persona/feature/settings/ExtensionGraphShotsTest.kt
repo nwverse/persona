@@ -32,6 +32,7 @@ import persona.core.contracts.api.ExtensionTile
 import persona.core.contracts.api.ExtensionView
 import persona.core.contracts.api.ExtensionViewBadge
 import persona.core.contracts.api.ExtensionViewItem
+import persona.core.contracts.api.ExtensionViewSection
 import persona.core.contracts.generated.ExtensionAction
 import persona.core.contracts.generated.ExtensionBadge
 import persona.core.contracts.generated.ExtensionGauge
@@ -70,6 +71,9 @@ class ExtensionGraphShotsTest {
     private val graph = graphExample("View.v10-work-tree.json")
     private val layeredGraph = graphExample("View.v10-plan-layered.json")
     private val largeTree = workTree()
+    private val inPlaceState by lazy {
+        ExtensionViewState(view = ExtensionView(sections = listOf(ExtensionViewSection(items = listOf(graph)))))
+    }
 
     @Test fun gaugesGraphsAndTwoHundredNodeTreeInEveryStyleAndTheme() {
         assertEquals(200, largeTree.nodes?.size)
@@ -84,7 +88,7 @@ class ExtensionGraphShotsTest {
                         Scene.GaugeCompact -> gauges(compact = true)
                         Scene.GraphPage -> ExtensionGraph(graph, state, handle)
                         Scene.GraphLayered -> ExtensionGraph(layeredGraph, state, handle)
-                        Scene.GraphCompact -> ExtensionGraph(graph, state, handle, compact = true)
+                        Scene.GraphCompact -> ExtensionViewColumn(inPlaceState, handle)
                         Scene.LargeTree -> ExtensionGraph(largeTree, state, handle)
                     }
                 }

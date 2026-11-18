@@ -6,6 +6,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
@@ -24,6 +26,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -31,12 +34,16 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import persona.core.contracts.api.ExtensionView
 import persona.core.contracts.api.ExtensionViewItem
+import persona.core.contracts.api.ExtensionViewSection
 import persona.core.contracts.generated.ExtensionAction
 import persona.core.contracts.generated.ExtensionBadge
+import persona.core.contracts.generated.ExtensionGraphDirection
 import persona.core.contracts.generated.ExtensionGraphEdge
 import persona.core.contracts.generated.ExtensionGraphNode
 import persona.core.contracts.generated.ExtensionPush
+import persona.core.designsystem.GraphTokens
 import persona.core.designsystem.PersonaTheme
 import kotlin.math.abs
 
@@ -109,9 +116,15 @@ class ExtensionGraphTest {
         var pressed: Pair<ExtensionViewItem, persona.core.contracts.api.ExtensionViewAction>? = null
         mount(item) { view, action -> pressed = view to action }
         rule.onNodeWithContentDescription("Plan, Active, 3 steps, 25%").assertIsDisplayed()
+            .assertHasClickAction().performClick()
         rule.onNodeWithContentDescription("Design, Ready, under Plan").assertExists()
             .assertHasNoClickAction()
-        rule.onNodeWithTag("graph-node-root").performClick()
+        val nodeBounds = rule.onNodeWithTag("graph-node-root").fetchSemanticsNode().boundsInRoot
+        val foldTarget = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
+        val visualLeft = foldTarget.center.x - with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        assertTrue("fold visual stays outside the node: $nodeBounds / $foldTarget", visualLeft >= nodeBounds.right - 1f)
+        val selected = rule.onNodeWithTag("graph-node-design").fetchSemanticsNode().config[SemanticsProperties.Selected]
+        assertEquals(true, selected)
         val (view, action) = pressed!!
         assertEquals("row", view.type)
         assertEquals("delivery/root", view.key)
@@ -228,6 +241,146 @@ class ExtensionGraphTest {
         rule.onNodeWithTag("graph-fit").performClick()
         rule.onNodeWithTag("graph-zoom-in").assertIsEnabled()
         rule.onNodeWithTag("graph-zoom-out").assertIsEnabled()
+    }
+
+    @Test fun accessibilityUsesSharedReadingOrderInsteadOfDrawingOrder() {
+        val readingItem = item.copy(
+            nodes = listOf(
+                ExtensionGraphNode(id = "root", title = "Root"),
+                ExtensionGraphNode(id = "first", title = "First"),
+                ExtensionGraphNode(id = "second", title = "Second"),
+                ExtensionGraphNode(id = "grand", title = "Grandchild"),
+            ),
+            edges = listOf(
+                ExtensionGraphEdge("root", "first"),
+                ExtensionGraphEdge("root", "second"),
+                ExtensionGraphEdge("first", "grand"),
+            ),
+            selected = null,
+        )
+        mount(readingItem)
+        val rootNode = rule.onNodeWithTag("graph-node-root").fetchSemanticsNode()
+        val canvas = generateSequence(rootNode.parent) { it.parent }.firstOrNull {
+            it.config.getOrNull(SemanticsProperties.IsTraversalGroup) == true
+        }
+        assertTrue("the canvas is an accessibility traversal group", canvas != null)
+        val expected = mapOf("root" to 0f, "first" to 2f, "grand" to 4f, "second" to 6f)
+        expected.forEach { (id, index) ->
+            val actual = rule.onNodeWithTag("graph-node-$id").fetchSemanticsNode().config[SemanticsProperties.TraversalIndex]
+            assertEquals("shared reading order for $id", index, actual)
+        }
+        assertEquals(1f, rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().config[SemanticsProperties.TraversalIndex])
+        assertEquals(3f, rule.onNodeWithTag("graph-fold-first").fetchSemanticsNode().config[SemanticsProperties.TraversalIndex])
+        assertEquals(8f, rule.onNodeWithTag("graph-zoom-out").fetchSemanticsNode().config[SemanticsProperties.TraversalIndex])
+    }
+
+    @Test fun downwardFoldVisualStaysOutsideNodeAndProgress() {
+        mount(item.copy(direction = ExtensionGraphDirection.DOWN))
+        val node = rule.onNodeWithTag("graph-node-root").fetchSemanticsNode().boundsInRoot
+        val target = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
+        val visualTop = target.center.y - with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val visualBottom = target.center.y + with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val child = rule.onNodeWithTag("graph-node-design").fetchSemanticsNode().boundsInRoot
+        assertTrue("downward fold stays below the node: $node / $target", visualTop >= node.bottom - 1f)
+        assertTrue("downward fold stays above the next row: $child / $target", visualBottom <= child.top + 1f)
+    }
+
+    @Test fun compactPreviewFitsEvenAThirtyNodeChainWithoutAZoomFloor() {
+        val chain = (0 until 30).map { ExtensionGraphNode(id = "n$it", title = "Node $it") }
+        val graph = item.copy(
+            nodes = chain,
+            edges = (1 until chain.size).map { ExtensionGraphEdge("n${it - 1}", "n$it") },
+            selected = null,
+        )
+        mount(graph, compact = true)
+        val preview = rule.onNodeWithContentDescription("Open graph full screen").fetchSemanticsNode().boundsInRoot
+        chain.forEach { node ->
+            val bounds = rule.onNodeWithTag("graph-node-${node.id}").fetchSemanticsNode().boundsInRoot
+            assertTrue("${node.id} is clipped: $bounds not in $preview",
+                bounds.left >= preview.left - 1f && bounds.top >= preview.top - 1f &&
+                    bounds.right <= preview.right + 1f && bounds.bottom <= preview.bottom + 1f)
+        }
+    }
+
+    @Test fun inPlaceCardHostUsesTheStillPreviewPath() {
+        val view = ExtensionView(sections = listOf(ExtensionViewSection(items = listOf(item))))
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                ExtensionViewColumn(ExtensionViewState(view = view), ExtensionViewHandle(
+                    press = { _, _ -> }, edit = { _, _ -> }, choose = {}, open = {},
+                ))
+            }
+        }
+        rule.onNodeWithTag("graph-preview").assertIsDisplayed()
+        rule.onNodeWithTag("graph-node-root").assertHasNoClickAction()
+        rule.onAllNodesWithTag("graph-zoom-in").assertCountEquals(0)
+        rule.onAllNodesWithTag("graph-fold-root").assertCountEquals(0)
+        rule.onNodeWithContentDescription("Open graph full screen").assertHasClickAction()
+    }
+
+    @Test fun foldControlStaysAboveNeighbourAtMinimumZoom() {
+        mount(item)
+        repeat(10) { rule.onNodeWithTag("graph-zoom-out").performClick() }
+        rule.onNodeWithTag("graph-zoom-out").assertIsNotEnabled()
+        rule.onNodeWithTag("graph-fold-root").performClick()
+        rule.onNodeWithTag("graph-node-design").assertDoesNotExist()
+        rule.onNodeWithTag("graph-node-build").assertDoesNotExist()
+        rule.onNodeWithContentDescription("Show 2 hidden").assertExists()
+    }
+
+    @Test fun downwardFoldClearsGroupCaptionAtMinimumZoom() {
+        mount(item.copy(direction = ExtensionGraphDirection.DOWN))
+        repeat(10) { rule.onNodeWithTag("graph-zoom-out").performClick() }
+        val target = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
+        val visualBottom = target.center.y + with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val label = rule.onNodeWithTag("graph-frame-label-0", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("fold visual clears the group caption: $target / $label", visualBottom <= label.top + 1f)
+    }
+
+    @Config(qualifiers = "w400dp-h1000dp-mdpi", fontScale = 0.85f)
+    @Test fun downwardFoldClearsGroupCaptionWithSmallTextAtMinimumZoom() {
+        mount(item.copy(direction = ExtensionGraphDirection.DOWN))
+        repeat(10) { rule.onNodeWithTag("graph-zoom-out").performClick() }
+        val target = rule.onNodeWithTag("graph-fold-root").fetchSemanticsNode().boundsInRoot
+        val visualBottom = target.center.y + with(rule.density) { (GraphTokens.foldVisual / 2).toPx() }
+        val label = rule.onNodeWithTag("graph-frame-label-0", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("small-text fold visual clears the group caption: $target / $label", visualBottom <= label.top + 1f)
+    }
+
+    @Test fun compactFullScreenStartsWithInteractiveOpeningZoom() {
+        val chain = (0 until 30).map { ExtensionGraphNode(id = "n$it", title = "Node $it") }
+        val graph = item.copy(
+            nodes = chain,
+            edges = (1 until chain.size).map { ExtensionGraphEdge("n${it - 1}", "n$it") },
+            selected = "n15",
+        )
+        mount(graph, compact = true)
+        rule.onNodeWithContentDescription("Open graph full screen").performClick()
+        val inDialog = hasTestTag("graph-node-n15") and hasAnyAncestor(isDialog())
+        val zoomOut = hasTestTag("graph-zoom-out") and hasAnyAncestor(isDialog())
+        val zoomIn = hasTestTag("graph-zoom-in") and hasAnyAncestor(isDialog())
+        rule.onNode(zoomOut).assertIsEnabled()
+        val before = rule.onNode(inDialog).fetchSemanticsNode().boundsInRoot.width
+        rule.onNode(zoomIn).performClick()
+        val after = rule.onNode(inDialog).fetchSemanticsNode().boundsInRoot.width
+        assertEquals("one zoom step, not a jump from thumbnail scale", before * 1.25f, after, 1f)
+    }
+
+    @Test fun lazyCardHostUsesTheStillPreviewPath() {
+        val view = ExtensionView(sections = listOf(ExtensionViewSection(items = listOf(item))))
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                LazyColumn {
+                    extensionViewItems("machine", ExtensionViewState(view = view), ExtensionViewHandle(
+                        press = { _, _ -> }, edit = { _, _ -> }, choose = {}, open = {},
+                    ), compactGraph = true)
+                }
+            }
+        }
+        rule.onNodeWithTag("graph-preview").assertIsDisplayed()
+        rule.onNodeWithTag("graph-node-root").assertHasNoClickAction()
+        rule.onAllNodesWithTag("graph-zoom-in").assertCountEquals(0)
+        rule.onAllNodesWithTag("graph-fold-root").assertCountEquals(0)
     }
 
     private fun mount(
