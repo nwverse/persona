@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The decision table (docs/design/proposals/todos-redesign.md 6.3): the first row that holds places the to-do, except
@@ -744,8 +745,8 @@ func nextChange(f *Facts, now time.Time, v assistantwire.TodoSummary) time.Time 
 }
 
 // moments are the ends after now of every window the rules read for f and its steps: a failed start's 48 hours,
-// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, Someday's return, and the 48
-// hours to the Inactive mark or the end of a due day.
+// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, a scheduled retry's wake and
+// grace, Someday's return, and the 48 hours to the Inactive mark or the end of a due day.
 func moments(f *Facts, now time.Time) []time.Time {
 	var out []time.Time
 	add := func(t time.Time) {
@@ -772,6 +773,9 @@ func moments(f *Facts, now time.Time) []time.Time {
 	for _, s := range f.Sessions {
 		if reset := usageLimitReset(s); reset != nil {
 			add(reset.Add(usageLimitGrace))
+		}
+		if w := s.Work; w != nil && w.On == proto.WaitTransient && w.WakeAt != nil {
+			add(w.WakeAt.Add(retryGrace))
 		}
 	}
 	if u := f.SomedayUntil; u != nil {

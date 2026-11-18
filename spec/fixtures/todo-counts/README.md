@@ -70,8 +70,9 @@ All data is made up.
 - **A run that waits ranks by the hub's next wake of it** (`waiting_ranked_by_wake`): its `work.wake_at`, when the hub
   wakes it to check on an outside event or, for another Agent, looks again if that Agent's turn has not ended by then.
   It is the same kind of moment as a park's end, when the supervisor looks again, so the two rank together. A wait with
-  none (one the Agent ends by itself, or a wake so overdue that the hub dropped it) has no known wake and goes after
-  those with one. Such runs count in `in_progress` as the Waiting rows they are.
+  none (a named wait the hub schedules no wake for, its wake switch being off, or a wake so overdue that the hub
+  dropped it) has no known wake and goes after those with one. Such runs count in `in_progress` as the Waiting rows
+  they are. A wait the run ends by itself (background commands, a `/loop`) is Working, not Waiting.
 - Every to-do is ranked within its section, a step its parent carries too: clients sort the rows they draw by rank,
   and a gap left by a step they do not draw changes nothing.
 - Not pinned yet: Today's and Upcoming's own rows, and what the hub does across several managers (its own test).

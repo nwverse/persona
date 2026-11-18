@@ -2863,7 +2863,7 @@
     },
     {
       "name": "transient_retry_stays_background",
-      "description": "The model service failed for a moment and the hub sends \"Continue\" at 12:00:10 by itself. The session keeps its turn_error meanwhile, but the run is not cut off while the retry is on its way: Working, in the background, not Needs you and not Waiting.",
+      "description": "The model service failed for a moment and the hub sends \"Continue\" at 12:00:10 by itself. The session keeps its turn_error meanwhile, but the run is not cut off while the retry is on its way: Working, in the background, not Needs you and not Waiting. Should the retry not go out, the hub drops its wake from the list 5 minutes after it was due and the run reads as cut off, which next_change_at names.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 5",
         "docs/assistant/agent-work.md \"Transient errors: automatic continuation\"",
@@ -2933,6 +2933,7 @@
             }
           },
           "since": "2026-11-10T11:59:40Z",
+          "next_change_at": "2026-11-10T12:05:10Z",
           "rank": 0
         }
       }
@@ -3132,6 +3133,155 @@
           },
           "since": "2026-11-10T11:00:00Z",
           "next_change_at": "2026-11-10T14:10:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "loop_stays_background",
+      "description": "The run drives a /loop and its turn ended between two ticks. The hub writes that as a wait on an outside event with nothing named (no wait, no agent): one the run ends by itself, so the hub sends nothing. Working, in the background, not Waiting on an outside event.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 row 5",
+        "docs/assistant/agent-work.md \"Rules first, then the model\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wl1",
+          "title": "Watch the concert ticket release",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T08:00:00Z",
+          "updated_at": "2026-11-10T08:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-tickets",
+              "linked_at": "2026-11-10T08:01:00Z",
+              "title": "Concert tickets",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-tickets",
+            "title": "Concert tickets",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 0,
+            "last_text": "No tickets yet; I'll look again at 12:30",
+            "loop": {
+              "kind": "wakeup",
+              "prompt": "Check the ticket page",
+              "interval_seconds": 1800,
+              "next_at": "2026-11-10T12:30:00Z",
+              "ticks": 3
+            },
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Loop running on a timer, next at 12:30",
+              "turn_at": "2026-11-10T11:30:00Z",
+              "at": "2026-11-10T11:30:05Z",
+              "by": "rule"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "working",
+          "section": "working",
+          "reason": "background",
+          "line": {
+            "key": "background",
+            "args": {
+              "run": "Concert tickets"
+            }
+          },
+          "since": "2026-11-10T11:30:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "run_waits_unseen_without_wake",
+      "description": "The run's turn ended blocked on a named outside event, but the hub's wake switch is off, so it schedules no wake and leaves the turn unread (only a wait the hub or the run ends by itself makes a turn idle). Unread comes first: Just finished until the owner sees the run, then Waiting for someone else.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 6.3 rows 9 and 10",
+        "docs/assistant/agent-work.md \"Switches (requested 2026-11-05: all off by default)\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todo": {
+          "id": "todo_wu1",
+          "title": "Book the ferry to the islands",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-10T09:00:00Z",
+          "updated_at": "2026-11-10T09:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "m1",
+              "session_id": "s-ferry",
+              "linked_at": "2026-11-10T09:01:00Z",
+              "title": "Ferry booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-ferry",
+            "title": "Ferry booking",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:30:00Z",
+            "updated_at": "2026-11-10T11:30:00Z",
+            "pending_interactions": 0,
+            "last_text": "The summer timetable is not out yet; I'll book once it is",
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Waiting for the summer timetable to be published",
+              "wait": "The summer timetable is published",
+              "then": "Book the ferry",
+              "turn_at": "2026-11-10T11:30:00Z",
+              "at": "2026-11-10T11:30:15Z",
+              "by": "model"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "ready",
+          "section": "just_finished",
+          "reason": "finished_unseen",
+          "line": {
+            "key": "finished",
+            "args": {
+              "run": "Ferry booking"
+            }
+          },
+          "since": "2026-11-10T11:30:00Z",
           "rank": 0
         }
       }

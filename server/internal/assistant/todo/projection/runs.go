@@ -17,6 +17,7 @@ const (
 	justFinishedFor = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
 	inactiveAfter   = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
 	usageLimitGrace = 10 * time.Minute // a usage limit still holds this long past its reset
+	retryGrace      = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
 	prFreshFor      = 15 * time.Minute // PR facts count this long after they were checked
 )
 
@@ -31,8 +32,8 @@ const (
 	runInterrupted                // cut off by a model error that is not a usage limit
 	runAwaitsReply                // stopped on a plain-text question nobody answered
 	runUnread                     // finished a turn nobody has seen
-	runWaits                      // its turn ended blocked on another Agent or an outside event, which wakes it
-	runBackground                 // background work still runs, or the hub retries a moment's model failure
+	runWaits                      // its turn ended blocked on another Agent or a named outside event
+	runBackground                 // background work or a /loop brings it back, or the hub retries a model failure
 	runStarting                   // Persona is opening it
 	runRunning                    // an Agent works now
 	runPersona                    // one of Persona's own conversations works now
@@ -84,7 +85,7 @@ func activeRuns(f *Facts, now time.Time) []run {
 }
 
 // runReading is how run r stands: the first that holds of offline, asks, a usage limit, interrupted, awaits a reply,
-// unread, waits on another Agent or an outside event, background, starting, running.
+// unread, waits on another Agent or a named outside event, background, starting, running.
 func runReading(r run, now time.Time) runKind {
 	if !r.found {
 		return runOffline
@@ -104,7 +105,7 @@ func runReading(r run, now time.Time) runKind {
 		return runUnread
 	case waitsOn(s) != "":
 		return runWaits
-	case waitsByItself(s):
+	case waitsByItself(s, now):
 		return runBackground
 	case s.Starting:
 		return runStarting
@@ -165,7 +166,7 @@ func usageLimited(s proto.Session, now time.Time) bool {
 
 // interrupted: cut off by a model error that is not a usage limit, and that the hub does not retry by itself.
 func interrupted(s proto.Session, now time.Time) bool {
-	if s.TurnError == "" || usageLimited(s, now) || retrying(s) {
+	if s.TurnError == "" || usageLimited(s, now) || retrying(s, now) {
 		return false
 	}
 	st := stateOf(s)
@@ -182,29 +183,42 @@ func blockedOn(s proto.Session) string {
 	return s.Work.On
 }
 
-// waitsOn is what s waits on when its turn ended blocked on another Agent (agent) or an outside event (external):
-// the hub wakes it when that comes (docs/assistant/agent-work.md "Waiting: scheduled wakeups"); "" otherwise.
+// waitsOn is what s waits on when its turn ended blocked on another Agent (agent) or on an outside event it names
+// (external with a wait): the hub wakes it to check, when its wake switch is on (docs/assistant/agent-work.md
+// "Waiting: scheduled wakeups"); "" otherwise. A usage limit's wait is never one: the rows read the limit itself.
 func waitsOn(s proto.Session) string {
-	if on := blockedOn(s); on == proto.WaitAgent || on == proto.WaitExternal {
+	switch on := blockedOn(s); {
+	case on == proto.WaitAgent:
+		return on
+	case on == proto.WaitExternal && !wakesItself(s) && s.Work.ResetsAt == nil:
 		return on
 	}
 	return ""
 }
 
-// retrying: the hub's "Continue" after a moment's model failure is on its way (work blocked on transient with its
-// wake_at, docs/assistant/agent-work.md "Transient errors: automatic continuation"). The session keeps its turn_error
-// meanwhile, but the hub writes no Interrupted receipt until its retries run out, and neither does the view.
-func retrying(s proto.Session) bool {
-	return blockedOn(s) == proto.WaitTransient && s.Work.WakeAt != nil
+// wakesItself: its turn ended blocked on external with nothing named to wait for (no wait, no agent), which the hub
+// writes for background commands still running and for a /loop between its ticks: the run ends it by itself, so the
+// hub sends nothing (its managerWaits and actOn).
+func wakesItself(s proto.Session) bool {
+	return blockedOn(s) == proto.WaitExternal && s.Work.Wait == "" && s.Work.Agent == nil
 }
 
-// waitsByItself: something brings it back without the owner and with nothing to wait for: background work still
-// running after its turn ended, or the hub sending "Continue" after a moment's model failure (transient).
-func waitsByItself(s proto.Session) bool {
+// retrying: the hub's "Continue" after a moment's model failure is on its way (work blocked on transient with its
+// wake_at, docs/assistant/agent-work.md "Transient errors: automatic continuation"), and not so overdue that the hub
+// drops it from the list (retryGrace). The session keeps its turn_error meanwhile, but the hub writes no Interrupted
+// receipt until its retries run out, and neither does the view.
+func retrying(s proto.Session, now time.Time) bool {
+	return blockedOn(s) == proto.WaitTransient && s.Work.WakeAt != nil && now.Before(s.Work.WakeAt.Add(retryGrace))
+}
+
+// waitsByItself: something brings it back without the owner and with nothing named to wait for: background work
+// still running after its turn ended, a wait it ends by itself (background commands, a /loop), or the hub sending
+// "Continue" after a moment's model failure.
+func waitsByItself(s proto.Session, now time.Time) bool {
 	if stateOf(s) == proto.StateWorking {
 		return s.BackgroundWorking
 	}
-	return blockedOn(s) == proto.WaitTransient
+	return wakesItself(s) || retrying(s, now)
 }
 
 // firstRun is the first of runs (in the list's order) of kind k.

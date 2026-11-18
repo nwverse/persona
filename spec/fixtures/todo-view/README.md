@@ -12,7 +12,7 @@ unchanged (Go `server/internal/assistantwire/todo_view_gen_test.go`, Kotlin
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `todo_view.json` | One to-do and its runs' sessions → its view | 43: every phase and section at least once, every reason the hub produces |
+| `todo_view.json` | One to-do and its runs' sessions → its view | 45: every phase and section at least once, every reason the hub produces |
 
 ## Format
 
@@ -92,6 +92,8 @@ failed start reads as open although `done_at` is stored: `done` holds exactly wh
 | `transient_retry_stays_background` | working · working · `background` | rows 2, 5 | waiting · agent_asks |
 | `working_and_waiting_runs` | working · working · `agent_running` | rows 5, 10 | working · agent_running |
 | `usage_limit_before_run_waits` | waiting · waiting · `usage_limit` | rows 2, 10 | other · rest |
+| `loop_stays_background` | working · working · `background` | row 5 | working · agent_running |
+| `run_waits_unseen_without_wake` | ready · just_finished · `finished_unseen` | rows 9, 10 | just_done · finished_unseen |
 
 The last column is what `triageTodo` answers for the same input, for the web's shadow comparison; the view differs
 from it only where 6.3 changes a rule. It was computed with `triageTodo` as of commit `d477f040e2` (the last change to
@@ -112,9 +114,11 @@ no steps.
   rules read, of the to-do and of its open steps, at which the view reads differently. The windows: `done_at` + 48
   hours for a failed start (then To do); `done_at` + 24 hours for closed work (then Done); `seen_at` + 24 hours for
   finished work (then `finished_seen`); the reset + 10 minutes of any run's usage limit (then the run reads as cut off,
-  `interrupted`, in Needs you), whichever row holds the to-do now; each PR's `checked_at` + 15 minutes (then the facts
-  are stale); `someday_until` (then back in its place); the last activity + 48 hours, or the end of its due day in
-  `loc` (its `due_at`) when that is later, for a task that can still get the Inactive mark (any failed start can).
+  `interrupted`, in Needs you), whichever row holds the to-do now; the `wake_at` + 5 minutes of a retry the hub has
+  scheduled (then the hub drops the wake as long overdue and the run reads as cut off); each PR's `checked_at` + 15
+  minutes (then the facts are stale); `someday_until` (then back in its place); the last activity + 48 hours, or the
+  end of its due day in `loc` (its `due_at`) when that is later, for a task that can still get the Inactive mark (any
+  failed start can).
   Absent when none of them changes the view: a park's end, the hub's next wake of a run that waits, a decision's
   default and Someday with no date change nothing by themselves. Windows are half open: at `next_change_at` the new
   view holds.
@@ -177,7 +181,7 @@ strings, and a time is absolute RFC 3339. The keys are stable identifiers: never
 | `deployed` | `finished_unseen`, `finished_recent`, for deployed work | none |
 | `pr_open` | `pr_open` | none: a row never names a PR |
 | `usage_limit` | `usage_limit` | `run`; `resets_at`: when the limit resets, absent when not known |
-| `run_waits` | `someone_else`, for a run whose turn ended blocked on another Agent or an outside event | `run`: the waiting run's title; `on`: `agent` (another Agent) or `external` (an outside event) |
+| `run_waits` | `someone_else`, for a run whose turn ended blocked on another Agent or a named outside event | `run`: the waiting run's title; `on`: `agent` (another Agent) or `external` (an outside event) |
 | `finished_seen` | `finished_seen` | `at`: when it finished (its `since`) |
 | `completed` | `closed_unseen` or `completed`, a to-do closed any other way | `by`: its `done_by` (`auto`, `review` for an accepting review), absent when the owner closed it |
 | `canceled` | `closed_unseen` or `canceled`, a cancelled to-do: `done_by` `review` with the ledger's `state` `cancelled` (or a `cancelled_at`) | `reason`: the first line of the cancelling review's `note`, else its `cancelled_reason`; absent when neither |
@@ -201,8 +205,8 @@ Where the proposal and today's code leave a choice open, these cases make it; ch
   replies in the run's session.
 - **A park's end sets no `next_change_at`**: it passing changes nothing by itself (SOP rule 5a); the hub's wake at that
   time is a new fact, and so is a decision's default being taken at its deadline. The hub's next wake of a run that
-  waits (`work.wake_at`) sets none either: the run working again, or the hub dropping a wake long overdue from the
-  list, is a new fact.
+  waits (`work.wake_at`) sets none either: the run working again is a new fact, and the hub dropping a wake long
+  overdue changes only the rank. A retry's wake is the exception (see the retry below).
 - **A failed start's 48 hours run from the failure** (`done_at`), not from its last activity as today's hub counts
   them, so an edit or a restore after the failure neither keeps it in Needs you longer nor brings it back there. After
   them it is a To do, and the Inactive mark follows its last activity like any task's, so a later edit or restore holds
@@ -219,8 +223,8 @@ Where the proposal and today's code leave a choice open, these cases make it; ch
   own ids take over when the hub reads them, with answering in place.
 - **A line's run text** prefers the run's `activity` (what it does now) to its `last_text`.
 - **Several runs:** the first that holds of asks, a usage limit, cut off, awaiting a reply, unread, waiting on
-  another Agent or an outside event, background, starting and running decides each run's state. The rows pick a run
-  by its state, in the table's order (Working takes a run that works, else one that starts, else one in the
+  another Agent or a named outside event, background, starting and running decides each run's state. The rows pick a
+  run by its state, in the table's order (Working takes a run that works, else one that starts, else one in the
   background; Waiting takes a run on a usage limit, else one that waits on another Agent or an outside event), and
   among runs in the same state the first in the list's order (the newest link first), except that every asking run is
   an ask, the oldest first. So a run that works keeps its to-do in Working while another of its runs waits
@@ -231,19 +235,29 @@ Where the proposal and today's code leave a choice open, these cases make it; ch
 - **`persona_working` is one of Persona's own conversations** (a session with `assistant: true`) linked as the
   to-do's run and working; the line says it as Persona's, without the conversation's title.
 - **A run that waits on another Agent or an outside event is Waiting** (decided in #10226): its turn ended blocked
-  on another Agent (`work.on` `agent`) or on an outside event such as a deploy, CI or a time (`external`), and the
-  hub wakes it when that comes. 3.4 files "what wakes it" waits under Waiting, so the owner sees what the to-do waits
-  for instead of a spinner: reason `someone_else`, line `run_waits` (`run_waits_on_agent`, `run_waits_on_external`).
-  It is row 10's last reason, after an open PR and a usage limit (`usage_limit_before_run_waits`), as 6.3 lists them.
-  Today's hub files them as Working.
-- **`background` is work that brings the run back by itself with nothing to wait for**: background work still
-  running after its turn ended (`background_working`), or the hub sending "Continue" after a moment's model failure
-  (`work.on` `transient`). Both stay in Working under their own reason.
+  on another Agent (`work.on` `agent`) or on an outside event it names (`external` with a `work.wait`), such as a
+  deploy, CI or a time, and the hub wakes it to check, when its wake switch is on. 3.4 files "what wakes it" waits
+  under Waiting, so the owner sees what the to-do waits for instead of a spinner: reason `someone_else`, line
+  `run_waits` (`run_waits_on_agent`, `run_waits_on_external`). It is row 10's last reason, after an open PR and a
+  usage limit (`usage_limit_before_run_waits`), as 6.3 lists them. A usage limit's own wait (`external` with a
+  `resets_at`) is never one: the rows read the limit itself. Today's hub files them as Working.
+- **`background` is work that brings the run back by itself with nothing named to wait for**: background work still
+  running after its turn ended (`background_working`); a turn that ended blocked on `external` with no `work.wait` and
+  no `work.agent`, which the hub writes for background commands and for a `/loop` between its ticks, and which ends by
+  itself and is never woken (the hub's `managerWaits`; `loop_stays_background`); or the hub sending "Continue" after a
+  moment's model failure (`work.on` `transient`). All stay in Working under their own reason. Filing a `/loop` under
+  Waiting, with its next tick as the wake, would be a decision of its own, with an `on` of its own.
+- **A named wait nobody has seen reads as finished** (`run_waits_unseen_without_wake`): with the wake switch off (the
+  default) the hub schedules no wake for it and leaves its turn `unread`, and unread comes before a wait, as row 9
+  comes before row 10. The to-do is in Just finished, line `finished`, until the owner sees the run; then it is
+  Waiting.
 - **A moment's model failure the hub retries is not cut off** (`transient_retry_stays_background`): the session keeps
   its `turn_error`, but while the hub's "Continue" is on its way (`work.on` `transient` with a `wake_at`) the run reads
   as `background`, as the hub writes no Interrupted receipt until its retries run out
-  (`docs/assistant/agent-work.md` "Transient errors: automatic continuation"). With no `wake_at` (none scheduled, or
-  one so overdue that the hub drops it from the list) it reads as cut off. Today's hub reads it as cut off at once.
+  (`docs/assistant/agent-work.md` "Transient errors: automatic continuation"). The hub drops a wake 5 minutes after it
+  was due (`wakeGrace`), and so does the view, which names that moment as `next_change_at`: with no `wake_at` the run
+  reads as cut off while its `turn_error` stays, and with neither nothing brings it back, so it places nothing. Today's
+  hub reads it as cut off at once.
 - **"Cannot be done" is the owner's decision** (row 3): an ask on the to-do, kind `decision`, with nothing to choose
   from on the row.
 - **Finished work stays in Just finished while nobody has seen it**, however long: accepted (even when the hub reopened

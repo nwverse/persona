@@ -1839,7 +1839,7 @@
     },
     {
       "name": "waiting_ranked_by_wake",
-      "description": "Runs that wait on another Agent or an outside event are Waiting rows, counted In progress, and rank by the hub's next wake of them (work.wake_at) with the park and the usage limit: the soonest first, rows with no wake after them (a fallback check the hub dropped as long overdue, a wait the Agent ends by itself, an open PR), the longest waiting first. A moment's model failure the hub retries is Working.",
+      "description": "Runs that wait on another Agent or an outside event are Waiting rows, counted In progress, and rank by the hub's next wake of them (work.wake_at) with the park and the usage limit: the soonest first, rows with no wake after them (a fallback check the hub dropped as long overdue, a named wait the hub schedules no wake for, an open PR), the longest waiting first. A moment's model failure the hub retries is Working.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.4 \"Within a section\"",
         "docs/design/proposals/todos-redesign.md 3.7 \"Counts\"",
@@ -2172,10 +2172,12 @@
             "work": {
               "phase": "blocked",
               "on": "external",
-              "line": "Checks the timetable again by itself",
+              "line": "Waiting for the summer ferry timetable",
+              "wait": "The summer timetable is published",
+              "then": "Plan the island days",
               "turn_at": "2026-11-10T11:00:00Z",
               "at": "2026-11-10T11:00:10Z",
-              "by": "rule"
+              "by": "model"
             }
           },
           {
