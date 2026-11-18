@@ -741,9 +741,19 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	directions, ok := s.directionViews(ctx)
 	snap.Partial = snap.Partial || !ok
-	leadersAt := s.settings(ctx).MachineID // a leader conversation is on the assistant's machine
+	leadersAt := cfg.MachineID // a leader conversation is on the assistant's machine
 	for id, d := range directions {
 		view(id, leadersAt).Direction = d
+	}
+	if len(cfg.Leaders) > 0 {
+		// The same canonical name as the direction tree is the active conversation's
+		// identity on every client. Keep its stored ordinary title for when it ends.
+		names := s.directionSessionNames(ctx, cfg, titles)
+		for id, name := range names {
+			if name != "" {
+				view(id, leadersAt).Title = name
+			}
+		}
 	}
 	snap.Tasks = s.taskViews(ctx)
 	snap.Partial = snap.Partial || snap.Tasks == nil
