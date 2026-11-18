@@ -891,39 +891,18 @@ func (s *Service) todoRoutes() {
 	s.todoMarkRoutes()
 	s.todoRetitleRoute()
 	s.todoImportRoutes()
+	s.todoViewRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
-	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
+	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
+	// view, and the list its counts (todo_view_routes.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
-		if err := s.ensureTodosLoaded(r.Context()); err != nil {
+		list, err := s.listedTodos(r.Context(), true)
+		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		s.todos.mu.RLock()
-		list := make([]listedTodo, 0, len(s.todos.todos))
-		for _, t := range s.todos.todos {
-			list = append(list, listedTodo{Todo: formatTodo(copyTodoLocked(t))})
-		}
-		s.todos.mu.RUnlock()
-		if err := s.listDecisionReviews(r.Context(), list); err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
-			return
-		}
-		asks := s.todoAsks(r.Context()) // once the todos are let go: it reads them itself
-		links := s.briefLinksNow()      // every lineage below is read from these, not from all the links each time
-		for i := range list {
-			list[i].Todo = s.withBriefFrom(list[i].Todo, links) // what was asked and who carried it (task_brief.go)
-			if a, ok := asks[list[i].ID]; ok {
-				list[i].Ask = &a
-			}
-			if o, ok := s.orphanOf(list[i].ID); ok && list[i].DoneAt == nil {
-				list[i].Orphaned = &o
-			}
-		}
-
-		sort.Slice(list, func(i, j int) bool {
-			return list[i].CreatedAt.After(list[j].CreatedAt)
-		})
-		apierr.WriteJSON(w, map[string]any{"todos": list})
+		p := s.viewed(r.Context(), list, time.Now())
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
