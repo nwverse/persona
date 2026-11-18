@@ -43,13 +43,14 @@ import { openPanel } from "../../lib/panel";
 import { href, onLinkClick } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
 import { useFullAgentSessions } from "../../lib/sessions";
-import type { Launcher } from "../../lib/types";
+import type { Launcher, MachineLinkSwitch } from "../../lib/types";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../../ui/atoms";
 import { AgentRow } from "./AgentRow";
 import { Icon } from "../../ui/icons";
 import { ProviderName } from "../../ui/ProviderName";
 import { MetricChart, type ChartSeries } from "./MetricChart";
 import { MachineDeploy } from "./MachineDeploy";
+import { homeUser, LinkSwitch } from "./LinkSwitch";
 import { BrowserSection } from "./BrowserSection";
 import { ComputerSection } from "./ComputerSection";
 import { IPhoneSection } from "./IPhoneSection";
@@ -327,6 +328,17 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
           </div>
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
+        {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
+            runs, its disconnect is expected (machineDeployment) */}
+        <LinkSwitch
+          machineId={m.id}
+          name={m.name}
+          state={!m.hub_id || !selfHub || m.hub_id === selfHub ? m.link_switch : undefined}
+          post={() => api<{ link_switch?: MachineLinkSwitch }>(`/machines/${enc(m.id)}/link-switch`, { method: "POST" })}
+          refresh={refresh}
+          user={homeUser(m.home)}
+          className="mx-4 mb-3.5"
+        />
         <MachineDeploy machine={m} className="mb-3.5" />
       </section>
 
