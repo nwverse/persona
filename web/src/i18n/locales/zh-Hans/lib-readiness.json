@@ -19,5 +19,7 @@
   "turn_auth_failed": "模型没接好：Key 不对",
   "turn_auth_failed_detail": "Key 不对或过期了，换一个能用的。",
   "turn_model_route": "模型没接好：这个模型用不了",
-  "turn_model_route_detail": "模型名不对，或者这个模型现在用不了，换一个试试。"
+  "turn_model_route_detail": "模型名不对，或者这个模型现在用不了，换一个试试。",
+  "turn_tool_search_unsupported": "模型没接好：这个网关不支持按需加载工具",
+  "turn_tool_search_unsupported_detail": "Persona 现在每次都带上全部工具，重试即可。"
 }

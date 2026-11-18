@@ -399,7 +399,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
 // so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
 // separate work.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// #10365: a model error's card fixes a model the chat can't run in the chat (lib/readiness.ts pick_model, the pill's
+// opener and useAssistantTurnFix in views/chat/ModelPill.tsx, the card's way back to the default with
+// lib/assistant-pick.ts, which the lazy model panel used alone before) and says a gateway refused on-demand tools
+// (tool_search_unsupported, its words and lib/api-errors.ts reading it from the 400). 521 B in ja, measured in one
+// environment against main 80e59cccc6 (ja 482,519 B to 483,040 B; en 479,419 B to 479,938 B, zh-Hans 480,240 B to
+// 480,787 B); the pick's DELETE loaded on the tap instead measured 10 B more. Main had 164 B of room; the budget moves up
+// 357 B.
+export const FIRST_SCREEN_BUDGET = 483_040;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

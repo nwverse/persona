@@ -19,5 +19,7 @@
   "turn_auth_failed": "モデル未接続：キーが正しくありません",
   "turn_auth_failed_detail": "キーが正しくないか期限切れです。使えるキーに替えてください。",
   "turn_model_route": "モデル未接続：このモデルは使えません",
-  "turn_model_route_detail": "モデル名が違うか、今は使えません。別のモデルを試してください。"
+  "turn_model_route_detail": "モデル名が違うか、今は使えません。別のモデルを試してください。",
+  "turn_tool_search_unsupported": "モデル未接続：このゲートウェイはツールの必要時読み込みに対応していません",
+  "turn_tool_search_unsupported_detail": "Persona は毎回すべてのツールを送るようにしました。再試行してください。"
 }
