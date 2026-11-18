@@ -49363,6 +49363,28 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't hand to “%@”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't hand to “%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」に任せられませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能交给「%1$@」"
+          }
+        }
+      }
+    },
     "Couldn't import: %@" : {
       "localizations" : {
         "en" : {
@@ -73159,6 +73181,28 @@
       },
       "extractionState" : "manual"
     },
+    "Hand to Agent…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hand to Agent…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントに任せる…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交给 Agent…"
+          }
+        }
+      }
+    },
     "Hand to Persona" : {
       "localizations" : {
         "en" : {
@@ -78160,6 +78204,28 @@
         }
       }
     },
+    "Include the Transcript" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Include the Transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字起こしも付ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附上逐字稿"
+          }
+        }
+      }
+    },
     "Includes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -80447,6 +80513,28 @@
       },
       "extractionState" : "manual"
     },
+    "It gets this meeting's minutes: the summary, decisions, to-dos and open questions." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It gets this meeting's minutes: the summary, decisions, to-dos and open questions."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議の議事録（要約、決定事項、ToDo、未決事項）が届きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它会收到这场会的纪要：总结、结论、待办和没定的事。"
+          }
+        }
+      }
+    },
     "It goes to the computer’s Trash. You can undo right after, or put it back from the Trash there." : {
       "localizations" : {
         "en" : {
@@ -81445,6 +81533,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "它的助手「%@」离线，助手回来后这台电脑会恢复在线。"
+          }
+        }
+      }
+    },
+    "Its computer isn't reachable, or the chat is closed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its computer isn't reachable, or the chat is closed."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータに接続できないか、会話が閉じています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的电脑连不上，或者对话已关闭。"
           }
         }
       }
@@ -123026,6 +123136,28 @@
       },
       "extractionState" : "manual"
     },
+    "Pick an Agent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick an Agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントを選ぶ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选一个 Agent"
+          }
+        }
+      }
+    },
     "Pick an Item" : {
       "localizations" : {
         "en" : {
@@ -161617,6 +161749,28 @@
         }
       }
     },
+    "That's a Persona chat, not an Agent." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That's a Persona chat, not an Agent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これは Persona の会話で、エージェントではありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是 Persona 的对话，不是 Agent。"
+          }
+        }
+      }
+    },
     "That's too large to send. Try fewer or smaller photos." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -167022,6 +167176,28 @@
         }
       }
     },
+    "The meeting is still going. Hand it over once it ends." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The meeting is still going. Hand it over once it ends."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議はまだ続いています。終わってから任せてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会还在开，结束后再交。"
+          }
+        }
+      }
+    },
     "The meeting's material" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -167067,6 +167243,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The message didn't go through." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message didn't go through."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージを送れませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息没发出去。"
+          }
+        }
+      }
     },
     "The message source can't send encrypted messages right now" : {
       "localizations" : {
@@ -171239,6 +171437,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Agent can't take meetings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Agent can't take meetings."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このエージェントには会議を任せられません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Agent 不能接收会议内容。"
+          }
+        }
+      }
     },
     "This Agent has stopped. Its conversation and terminal stay; it doesn't take messages." : {
       "extractionState" : "manual",
@@ -176103,6 +176323,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "この会議にはまだ話題にできる文字起こしや議事録がありません。"
+          }
+        }
+      }
+    },
+    "This meeting has nothing to hand over yet: no minutes or transcript." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This meeting has nothing to hand over yet: no minutes or transcript."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会議にはまだ任せられる内容がありません（議事録も文字起こしもありません）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这场会还没有可交的内容：没有纪要，也没有逐字稿。"
           }
         }
       }
@@ -193081,6 +193323,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "要怎么改？"
+          }
+        }
+      }
+    },
+    "What should it do? (optional)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What should it do? (optional)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何をしてほしいか（任意）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要它做什么（可选）"
           }
         }
       }

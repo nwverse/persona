@@ -959,6 +959,16 @@ type Relay struct {
 	Tool              string // conversation_send | conversation_new
 	Hop, MaxHops      int
 	Text              string
+	// Quote: the owner's own message the sender carried, as the hub verified it (#3822); nil sends none.
+	Quote *RelayQuote
+}
+
+// RelayQuote is the owner's message a relay carries: its id, when and in which conversation they wrote it, the
+// conversations that passed it on after that one (oldest first), and the text verbatim. ParseRelayQuoteID reads the id back.
+type RelayQuote struct {
+	ID, At, Conversation string
+	Via                  []string
+	Text                 string
 }
 
 // RenderRelay is the message the other conversation gets (assistant/relay).
