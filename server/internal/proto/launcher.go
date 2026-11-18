@@ -34,6 +34,8 @@ type Launcher struct {
 	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// External is a sanitized, machine-local adapter advertisement. It grants no execution authority.
+	External *ExternalLauncher `json:"external,omitempty"`
 	// AssistantFor: on an Assistant launcher, the Agent launcher of this computer it runs the assistant for, as the
 	// runtime declares it (the person who set it up says it is the same agent and account): integrations/grok's
 	// grok-chat for the Paseo provider grok, which only starts Agents. The main chat's picker points that one at it
@@ -93,6 +95,9 @@ type LauncherCheck struct {
 	Answer string `json:"answer,omitempty"`
 	Millis int    `json:"millis"`
 	Error  string `json:"error,omitempty"`
+	// AssistantTurn: the check ran as the assistant runs a turn of conversation (launchers.check assistant_turn, a node
+	// with launcher_check_assistant_turn, Claude Code launchers only); absent, it was the plain check.
+	AssistantTurn bool `json:"assistant_turn,omitempty"`
 }
 
 // ClaudeAuthStatus is what a node's claude.auth_status found: `claude auth status --json` run as the launcher runs
@@ -171,6 +176,10 @@ type AgentModel struct {
 	Custom bool `json:"custom,omitempty"`
 	// Price is the built-in catalog's exact-entry reference price; nil when unknown or inherited from another model.
 	Price *ModelPrice `json:"price,omitempty"`
+	// Aliases: the other spellings the manager folded into this row because they run the same model with the same
+	// context window on this launcher (Claude Code's tier aliases on a gateway whose tiers name one model, #10365,
+	// assistant/models_launchers_fold.go). Each still picks this row: a saved pick of one keeps working.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 type LauncherEnv struct {
@@ -318,27 +327,6 @@ type ProviderModel struct {
 	// Price is the exact catalog entry's reference price. It is never inherited from an earlier generation.
 	Price *ModelPrice `json:"price,omitempty"`
 }
-
-// The assistant's runtimes for a Claude launcher (model_config.assistant's "runtime", the assistant.send / .start /
-// .warm params' "runtime"): the Claude Code CLI in stream-json mode (the default), or the Claude Agent SDK through the
-// node's Node bridge (integrations/agent-sdk, #2455), which falls back to the CLI where no Node 22+ is found.
-const (
-	AssistantRuntimeCLI      = "cli"
-	AssistantRuntimeAgentSDK = "agentsdk"
-)
-
-// Why an assistant conversation that asked for the Agent SDK runs on the CLI (Session.RuntimeFallback), as the node
-// writes it: in Chinese, the ones ending in a full-width colon followed by the cause, FallbackShellLauncher with the launcher's name.
-// The hub rewrites them in the app's language (hub/transcript_text.go runtimeFallbackText).
-const (
-	FallbackShellLauncher  = "启动器 %s 是这台电脑上的 shell 命令，Agent SDK 用不了它的设置"
-	FallbackReadBridge     = "读不到 Agent SDK 桥："
-	FallbackNoBridge       = "这个 personad 没有带 Agent SDK 桥"
-	FallbackWriteBridge    = "写不出 Agent SDK 桥："
-	FallbackNoBridgeScript = "Agent SDK 桥的包里没有 bridge.mjs"
-	FallbackNoNode         = "没有 Node.js 22 及以上："
-	FallbackNoClaude       = "找不到 claude："
-)
 
 // BearerAuth: the launcher's key goes as Authorization: Bearer (ANTHROPIC_AUTH_TOKEN) rather than x-api-key.
 func (l ManagedLauncher) BearerAuth() bool { return l.Auth == "bearer" }

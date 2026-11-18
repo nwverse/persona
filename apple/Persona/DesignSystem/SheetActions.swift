@@ -26,13 +26,22 @@ struct SheetClose: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            // The ink on the icon itself: a bar ignores a foreground style set on the button (docs/lessons/ios.md).
-            Button(role: .close, action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
+            closeButton
                 .tint(Color.primary)
                 .disabled(disabled)
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel(Text("Close"))
                 .accessibilityIdentifier(id)
+        }
+    }
+
+    @ViewBuilder private var closeButton: some View {
+        // The ink on the icon itself: a bar ignores a foreground style set on the button (docs/lessons/ios.md).
+        if #available(iOS 26.0, *) {
+            Button(role: .close, action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
+        } else {
+            // iOS 18 has no close role (#6730): the same ✕ on a plain button.
+            Button(action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
         }
     }
 }
@@ -62,15 +71,26 @@ struct SheetConfirm: ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
             if busy {
                 ProgressView().accessibilityIdentifier(id)
-            } else if let name {
-                Button(role: .confirm, action: action)
+            } else {
+                confirmButton
                     .disabled(disabled)
-                    .accessibilityLabel(Text(name))
                     .accessibilityIdentifier(id)
+            }
+        }
+    }
+
+    @ViewBuilder private var confirmButton: some View {
+        if #available(iOS 26.0, *) {
+            if let name {
+                Button(role: .confirm, action: action).accessibilityLabel(Text(name))
             } else {
                 Button(role: .confirm, action: action)
-                    .disabled(disabled)
-                    .accessibilityIdentifier(id)
+            }
+        } else {
+            // iOS 18 has no confirm role (#6730): the word, as iOS 18's own sheets say it. A ✓ there read like the
+            // selection ticks of the form under it.
+            Button(action: action) {
+                if let name { Text(name).lineLimit(1) } else { Text("Done").lineLimit(1) }
             }
         }
     }
@@ -93,6 +113,13 @@ extension View {
         foregroundStyle(Color.primary)
     }
 
+    /// The way out of a page that only shows things (#9653): `SheetClose`'s ✕ at the top leading corner on the iPhone
+    /// and iPad, Done in a Mac sheet's bottom row. Nothing when `detailPresentation` pushed the page into a column
+    /// (`detailPushed`): there its ‹ goes back.
+    func sheetDone(_ done: @escaping () -> Void) -> some View {
+        modifier(SheetDone(done: done))
+    }
+
     /// Done for a sheet that only shows things, in a Mac sheet's bottom row (Esc too). Nothing on iOS: there the page
     /// keeps its own Close or the swipe down.
     func macSheetDone(_ done: @escaping () -> Void) -> some View {
@@ -100,6 +127,19 @@ extension View {
         toolbar { ToolbarItem(placement: .cancellationAction) { Button(action: done) { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) } } }
         #else
         self
+        #endif
+    }
+}
+
+private struct SheetDone: ViewModifier {
+    var done: () -> Void
+    @Environment(\.detailPushed) private var pushed
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.macSheetDone(done)
+        #else
+        if pushed { content } else { content.pageToolbar { SheetClose(action: done) } }
         #endif
     }
 }

@@ -4,8 +4,8 @@ import UIKit
 #endif
 
 /// Settings › Appearance & Display › Persona Banner in Screenshots (#9508), on by default and this device's only: a
-/// screenshot of a chat shows the assistant's avatar and name with "(Persona)" (`PersonaBrandLockup`) where the top
-/// bar is, while the screen keeps the bar. Off, the bar is drawn as it always was, on screen and in screenshots alike.
+/// screenshot of a chat shows the assistant's avatar and name, and GitHub's mark with Persona's repository at the
+/// right (`PersonaBrandLockup`, #10172), where the top bar is, while the screen keeps the bar. Off, the bar is drawn as it always was, on screen and in screenshots alike.
 nonisolated enum ScreenshotBannerPrefs {
     static let enabledKey = "ui.screenshotBanner"
     static let enabledByDefault = true
@@ -35,25 +35,23 @@ extension View {
     }
 }
 
-/// The banner a chat's screenshot shows where its bar is: the brand lockup at the leading edge, centred in `row`
-/// (the bar's row of buttons) or in the whole height, `.slim` where the large one does not fit (a folded header).
+/// The banner a chat's screenshot shows where its bar is: the brand lockup across it between the page margins (the
+/// face and the name at the leading one, the repository at the trailing one), centred in `row` (the bar's row of
+/// buttons) or in the whole height; slim where the large one does not fit (a folded header, large text).
 struct ScreenshotBannerContent: View {
     /// The row the lockup stands in: from the top by `top`, `height` tall; nil centres it in the whole banner.
     var row: (top: CGFloat, height: CGFloat)?
 
     var body: some View {
-        ViewThatFits(in: .vertical) {
-            PersonaBrandLockup(size: .banner)
-            PersonaBrandLockup(size: .slim)
-        }
-        .padding(.horizontal, Theme.Space.l)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: row?.height)
-        .padding(.top, row?.top ?? 0)
-        .frame(maxHeight: .infinity, alignment: row == nil ? .center : .top)
-        .clipped()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        PersonaBrandLockup(size: .banner)
+            .padding(.horizontal, Theme.Space.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: row?.height)
+            .padding(.top, row?.top ?? 0)
+            .frame(maxHeight: .infinity, alignment: row == nil ? .center : .top)
+            .clipped()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -167,12 +165,12 @@ private struct CaptureSwapHost<Content: View, Backdrop: View, BannerBackdrop: Vi
 
     func makeUIViewController(context: Context) -> CaptureSwapController {
         let vc = CaptureSwapController()
-        vc.show(cover: cover(context, vc.geometry), banner: bannerRoot(context, vc.geometry))
+        vc.show(cover: cover(vc.geometry), banner: bannerRoot(vc.geometry), environment: context.environment)
         return vc
     }
 
     func updateUIViewController(_ vc: CaptureSwapController, context: Context) {
-        vc.show(cover: cover(context, vc.geometry), banner: bannerRoot(context, vc.geometry))
+        vc.show(cover: cover(vc.geometry), banner: bannerRoot(vc.geometry), environment: context.environment)
     }
 
     /// Before the content has reported its height (the first layout): ask the bar's hosting controller.
@@ -183,7 +181,7 @@ private struct CaptureSwapHost<Content: View, Backdrop: View, BannerBackdrop: Vi
         return CGSize(width: width, height: ceil(fit.height))
     }
 
-    private func cover(_ context: Context, _ geometry: CaptureSwapGeometry) -> AnyView {
+    private func cover(_ geometry: CaptureSwapGeometry) -> AnyView {
         let measured = measured
         return AnyView(
             content
@@ -191,16 +189,14 @@ private struct CaptureSwapHost<Content: View, Backdrop: View, BannerBackdrop: Vi
                 .onGeometryChange(for: CGFloat.self, of: { ceil($0.size.height) }) { measured($0) }
                 .background(alignment: .top) { CaptureBackdrop(fill: backdrop, solid: solid, fade: fade, geometry: geometry) }
                 .frame(maxHeight: .infinity, alignment: .top)
-                .modifier(CaptureEnvironment(context.environment))
         )
     }
 
-    private func bannerRoot(_ context: Context, _ geometry: CaptureSwapGeometry) -> AnyView {
+    private func bannerRoot(_ geometry: CaptureSwapGeometry) -> AnyView {
         AnyView(
             banner
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(alignment: .top) { CaptureBackdrop(fill: bannerBackdrop, solid: solid, fade: fade, geometry: geometry) }
-                .modifier(CaptureEnvironment(context.environment))
         )
     }
 }
@@ -257,10 +253,18 @@ private final class CaptureSwapController: UIViewController {
     let coverHost = UIHostingController(rootView: AnyView(EmptyView()))
     private let bannerHost = UIHostingController(rootView: AnyView(EmptyView()))
     private var field: UITextField?
+    /// The bar and the banner as the page last handed them in, and the page's environment for both.
+    private var cover = AnyView(EmptyView())
+    private var banner = AnyView(EmptyView())
+    private var environment = EnvironmentValues()
+    /// The window whose look the bar and the banner follow, and the registration for its changes.
+    private weak var watched: UIWindow?
+    private var watching: UITraitChangeRegistration?
 
     override func loadView() {
         let root = CaptureSwapView()
         root.geometry = geometry
+        root.movedToWindow = { [weak self] in self?.watchWindow() }
         root.clipsToBounds = false
         for host in [bannerHost, coverHost] {
             host.safeAreaRegions = []
@@ -295,14 +299,47 @@ private final class CaptureSwapController: UIViewController {
         view = root
     }
 
-    func show(cover: AnyView, banner: AnyView) {
-        coverHost.rootView = cover
-        bannerHost.rootView = banner
+    func show(cover: AnyView, banner: AnyView, environment: EnvironmentValues) {
+        self.cover = cover
+        self.banner = banner
+        self.environment = environment
+        render()
+    }
+
+    /// In a window, another one or none: follow its look.
+    private func watchWindow() {
+        let window = viewIfLoaded?.window
+        if window !== watched {
+            if let watching, let watched { watched.unregisterForTraitChanges(watching) }
+            watched = window
+            watching = window?.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak self] (_: UIWindow, _) in
+                self?.render()
+            }
+        }
+        render()
+    }
+
+    /// The page's environment with the window's look in it, and both hosting controllers' traits on that look, for what
+    /// UIKit and the glass draw (#9829). The copy of the page's environment is only as new as the last update SwiftUI
+    /// sent, and SwiftUI hands the same stale look to this controller's traits: an Agent chat opened for the first time
+    /// drew its header and banner light above the dark chat (the drawer's sidebar had the same, #4496). The bars are in
+    /// pages drawn in their window's look. Not in a window yet: the page's.
+    private func render() {
+        var look = environment
+        let style = viewIfLoaded?.window?.traitCollection.userInterfaceStyle ?? .unspecified
+        if style == .dark { look.colorScheme = .dark } else if style == .light { look.colorScheme = .light }
+        for host in [coverHost, bannerHost] where host.overrideUserInterfaceStyle != style {
+            host.overrideUserInterfaceStyle = style
+        }
+        coverHost.rootView = AnyView(cover.modifier(CaptureEnvironment(look)))
+        bannerHost.rootView = AnyView(banner.modifier(CaptureEnvironment(look)))
     }
 }
 
 private final class CaptureSwapView: UIView {
     weak var geometry: CaptureSwapGeometry?
+    /// It went into a window, or out of one.
+    var movedToWindow: () -> Void = {}
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -321,6 +358,7 @@ private final class CaptureSwapView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         setNeedsLayout()
+        movedToWindow()
     }
 }
 #endif

@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Empty assistant creation must not become a model turn
+
+Android allocates an assistant conversation before sending its queued message. The manager passed an empty prompt
+correctly, but the node appended its live snapshot and delivered a context-only turn. Check for text or images before
+requesting context or submitting model input, and keep the new conversation idle. Preserve deferred runtime instructions
+in the session record until the first successful delivery. A manager test with a fake node cannot catch this: exercise
+the real node against a recording CLI and runtime, including prewarmed sessions, whitespace, images and node restart.
+
 ## Journal recovery before changing live update files (#6921)
 
 A fence saying an update started cannot restore a Web directory renamed before `pending.json`
@@ -159,6 +167,30 @@ restarted, where the per-connection read had at least tried again. Keep only a f
 empty one after a backoff (five minutes), so a Mac where it always fails does not run it on every connection. Its
 output, like ioreg's, holds serial numbers: read only the one line. Tests fake both commands (`newModelLookup` takes
 the runner) and use `synctest`; a node-level test puts hanging fakes first on `PATH`.
+
+## A resolved path is not one every terminal has (2026-11-18, #10365)
+
+A computer whose home is a link (`/home/me -> /data/home/me`) ran its herdr terminals in a container that mounts the
+home at `/home/me` and has no `/data`. The node took its own program from `os.Executable()` plus `EvalSymlinks` (on
+Linux `/proc/self/exe` is already resolved, so dropping `EvalSymlinks` alone changes nothing) and typed that path into
+every managed launcher's start, hook, MCP config and codex-start line: the container answered `No such file or
+directory`, and Persona recorded the launcher as missing in the terminal. Git did the same to task checkouts: `git
+worktree add` writes both links between a worktree and its repository as resolved paths, so inside the container the
+checkout was "not a git repository" and the main checkout listed it as prunable (a `git worktree prune` there deletes
+its record). A path a process on this computer may open has to be the one that process can see, and a link is not
+always visible where the processes run: keep the resolved file for what needs the file itself (an update replaces it,
+macOS attributes Full Disk Access to it, comparisons use `realPath`), and hand out the home's own spelling of the same
+file (`os.SameFile`, `node/selfprogram.go`), in the generated files the doctor compares too, or the node and
+`personad node doctor` rewrite each other's files. Do not reach for git's relative worktree links: they set
+`extensions.relativeWorktrees` in the repository's shared config, and git before 2.48, libgit2 and go-git then refuse
+the whole repository; rewriting the absolute links to the home's spelling works for every git on both sides.
+
+A spelling handed out is not an identity. Once the node answered a task's directory by the home's spelling, the hub's
+check of which to-do writes there compared it as text with Agents recorded under the resolved spelling before the
+upgrade, and found nobody: a second to-do could be started in a directory the first still wrote in. Where the hub
+compares a node's paths, fold the home's two spellings (`home_real`) on both sides, as remembered task kinds do
+(`trustDir`) and task directories now do (`taskDirKey`). And repair git's links wherever a checkout's path is handed to a
+terminal, not only where the node reuses it: a refusal that names a leftover for `{existing}` leads there too.
 
 ## A node binary's name does not prove its platform (2026-11-14, #7206)
 
@@ -1955,6 +1987,9 @@ Error-valued message arguments and structured field errors also need the request
 
 - The session list asks `rolloutPath` once a second for every registered Codex thread; for a thread with no rollout (an app-server thread that never wrote one) that was a glob over every day directory of the whole history, each time. On a hub with 194 rollouts it was 61% of the node's CPU. Profile the live node before guessing: `perf record -p <pid>`, then map the addresses with an unstripped build of the same commit (`go tool addr2line`; the deployed binary is built with `-s -w`, but `.text` is laid out the same).
 - Caching a miss on directory mtimes needs care: a file created or moved into a directory changes its mtime, but the kernel stamps it with a coarse clock, so a second change within the same tick can leave it unchanged. Keep no miss whose directories changed in the last second (`TestRolloutPathMissRacy`).
+- A miss cache emptied on a timer pays the whole cost again each period (2026-11-18). The misses were cleared once a minute, so that a rollout put into an older day directory would still be found. Then Codex compressed most old rollouts to `.jsonl.zst`, which the `rollout-*.jsonl` globs never match: on one Mac, 528 listed threads had none, and each was globbed across 209 day directories once a minute (14 s of CPU in a row), and again whenever a new rollout changed today's directory. What the node already lists answers it: the minute listing of every day directory shows which ids appear in no file name, so only the misses whose id is in a name (and those nobody asked about for two minutes) are dropped, and a changed directory is listed once per list pass and checked by name (`TestRolloutPathMissesOutliveRelisting`). Finding a rollout still uses the per-id glob and the header check unchanged.
+- A per-row lookup that is cached can still pay for its cache check: `loadCodexAppState` globbed the Codex home for the state database before reading its cache, twice per App row per second (1,100 globs a second, about 16% of a core). Take such values once per list pass (`codexListPass.appState`, `TestCodexAppStateReadOncePerList`).
+- On macOS, `sample` cannot attribute a stripped Go binary's syscalls to Go callers (they go through libc on the system stack, and Go leaf functions keep no frame pointer); `go tool addr2line` still names the Go frames it does show. Calling the suspected functions from a throwaway test against the real Codex home, read-only, gave the per-call costs.
 
 ## Localized RPC summaries must not imply successful or absent delivery
 
@@ -2332,9 +2367,9 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 
 ## Embedded code: stored raw, copied per package, read whole on first use (2026-11-10, #3455)
 
-- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it the Agent SDK bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
+- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it one package's bundled bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
 - Keep generated archives byte-for-byte reproducible: no name or time in the gzip header, mode 0644, time 0 and no owner in tar entries, a fixed level, entries in path order (`TestGenerate` runs it twice and compares).
-- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held the 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
+- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held that 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
 - Compressed code is noise to a strings scan. `check_bundle_privacy.py --whole-short` inflates every gzip member it finds in a binary and scans that text as well; a test hides a private word in a member inside binary bytes, after another member and in a member cut short.
 
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)

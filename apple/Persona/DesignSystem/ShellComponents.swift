@@ -123,6 +123,12 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         .background(alignment: .leading) {
             // The tab bar marks its chosen item itself (`tabBarSegment`).
             if let shell, !tabBar { PagerPill(shell: shell, follows: follows) }
+            // Its lens glides to a newly chosen item (#9837): under the items where it does not bend them…
+            if tabBar, !StyleSpec.current.usesGlass { TabBarLens(index: ShellState.index(for: chosen), axis: axis) }
+        }
+        .overlay(alignment: .topLeading) {
+            // …and over them as glass, which does.
+            if tabBar, StyleSpec.current.usesGlass { TabBarLens(index: ShellState.index(for: chosen), axis: axis) }
         }
     }
 
@@ -176,12 +182,20 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// (`TabBarBadge`). Its name is what VoiceOver reads; a long press shows it large (`ButtonSegmentAccess`).
     private func tabBarSegment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
         VStack(spacing: Theme.Space.xxs) {
-            ThemedIcon(Self.symbol(value))
-                .font(Theme.Font.heading)
-                .foregroundStyle(selected ? Color.white : Color.primary)
-                .frame(width: Theme.Size.well, height: Theme.Size.well)
-                .background { if selected { Circle().fill(Theme.accent) } }
-                .overlay(alignment: .topTrailing) { TabBarBadge(tab: value) }
+            Group {
+                // The chosen Assistant shows the persona's own face (#9837), as the owner's reference shows its brand on
+                // its chosen home item.
+                if selected, value == .assistant {
+                    TabBarPersonaFace()
+                } else {
+                    ThemedIcon(Self.symbol(value))
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .frame(width: Theme.Size.well, height: Theme.Size.well)
+                        .background { if selected { Circle().fill(Theme.accent) } }
+                }
+            }
+            .overlay(alignment: .topTrailing) { TabBarBadge(tab: value) }
             Text(title)
                 .font(selected ? Theme.Font.labelStrong : Theme.Font.label)
                 .foregroundStyle(selected ? Theme.accent : Color.primary)
@@ -283,10 +297,181 @@ private struct WaitingBadge: View {
     }
 }
 
-/// A page's count on iPhone Duo's tab bar (#4231): white on red at its symbol's top trailing corner, hanging half off it,
-/// as the system's tab bar badges its items (the iPad's too). The tabs' numbers: what waits on the user among the Agents
-/// (`agentsWaiting`) and in Persona's own conversations (`TabBadges.assistant`); Messages has none, as its tab had none.
-/// Its own view, as `WaitingBadge`: only it is drawn again when the count changes. `shell-agents-count`,
+/// iPhone Duo's tab bar's lens (#9837, after the system's tab bar there, the owner's reference): when another item is
+/// chosen, a lens leaves the one that was, swelling and stretching along the bar, glides to the new one with a little
+/// bounce and fades as it lands, where that item's own chosen look already is. At rest there is none: the bar looks as it
+/// did. With Reduce Motion it never moves: the items only cross-fade (`SwitchMotion`). The glide is `TabBarGlide`'s, one
+/// for every bar on screen; this view draws it while it runs, its timeline paused otherwise. `index` is the chosen item's
+/// place on the bar (`ShellState.index`).
+private struct TabBarLens: View {
+    let index: Int
+    let axis: Axis
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let glide = TabBarGlide.shared
+        let running = glide.running && glide.to == index
+        Color.clear
+            .overlay(alignment: .topLeading) {
+                if running {
+                    TimelineView(.animation(paused: !running)) { context in
+                        lens(glide.frame(at: context.date))
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: index) { old, new in if !reduceMotion { glide.begin(from: old, to: new) } }
+    }
+
+    private func lens(_ f: TabBarGlide.Frame) -> some View {
+        let width = Theme.Shell.tabBarItemWidth, height = Theme.Shell.tabBarItemHeight
+        // Swollen, it is longer along the bar than across it, as a drop pulled along.
+        let pull = Theme.Motion.lensStretch * (f.swell - 1) / (Theme.Motion.lensSwellScale - 1)
+        let along = f.swell + pull, across = f.swell - pull / 2
+        return Color.clear
+            .lensSurface(in: .capsule)
+            .frame(width: width, height: height)
+            .scaleEffect(x: axis == .vertical ? across : along, y: axis == .vertical ? along : across)
+            .offset(x: axis == .horizontal ? f.at * width : 0, y: axis == .vertical ? f.at * height : 0)
+            .opacity(f.opacity)
+    }
+}
+
+/// The tab bar lens's glide (#9837), one for every iPhone Duo tab bar on screen: in the shell each page has its own bar
+/// and the moving bar stands in while the pages change, so a bar that comes in midway draws the glide where it is by
+/// then, on the same clock. Only `begin` starts it, once per choice.
+///
+/// Its clock runs on the frames the lens is drawn in, not on the wall's: the page the choice brings in is swapped in
+/// under the bar in the same frames (the open Duo's tab, its whole split; the shell's pages laid side by side), and a
+/// frame held up by that (85–165 ms on the open Duo on its side, 54–77 ms and then 25–45 ms on the outer display, on the
+/// simulator), and the slow frames after it, made a lens timed by the wall jump on by up to a third of its way at once
+/// (#10270). Each frame now moves it on by the time since the last one drawn, at most `longestStep`, and it sets off from
+/// where it starts only once the frames come on time (`longestWait`).
+@MainActor @Observable final class TabBarGlide {
+    static let shared = TabBarGlide()
+
+    /// Where the lens is, in items from the bar's first; how swollen; how opaque.
+    struct Frame: Equatable {
+        var at: CGFloat
+        var swell: CGFloat
+        var opacity: Double
+    }
+
+    private(set) var from: CGFloat = 0
+    private(set) var to = 0
+    private(set) var running = false
+    /// How far into the glide the lens has been drawn, when the last frame it was drawn in was, and how long it waited on
+    /// its first place (`frame(at:)`).
+    @ObservationIgnored private(set) var elapsed: TimeInterval = 0
+    @ObservationIgnored private var drawnAt: Date?
+    @ObservationIgnored private var waited: TimeInterval = 0
+    @ObservationIgnored private var serial = 0
+
+    /// How long a glide lasts, its fade included.
+    nonisolated static var length: TimeInterval { Theme.Motion.lensGlideTime + Theme.Motion.lensFadeTime }
+
+    /// The most of its way the glide goes on between two frames drawn: a frame and a half at 60 Hz (an iPhone draws an
+    /// app's own animations at 60 Hz), so a frame that is a little late still moves it on by all of its time, and one held
+    /// up for longer only by this.
+    nonisolated static let longestStep: TimeInterval = 0.025
+    /// Before it has set off, the lens waits where it starts through frames held up, this long at most: the first frames
+    /// after the page comes in are slow to draw (the open Duo's tab: two or three of 33–50 ms), and a lens setting off in
+    /// them went in fits and starts. It sets off on the first frame on time.
+    nonisolated static let longestWait: TimeInterval = 0.25
+    /// Frames drawn closer together than this are the same frame: every bar on screen draws the lens and reads the clock,
+    /// and the shell's bars read dates up to 7 ms apart in one frame. Half a 60 Hz frame.
+    nonisolated static let sameFrame: TimeInterval = 0.008
+
+    /// The lens in the frame drawn at `date`: the clock moves on by the time since the last frame drawn, at most
+    /// `longestStep`, or not at all while it waits to set off (`longestWait`); the bars that draw the same frame get the
+    /// same lens.
+    func frame(at date: Date) -> Frame {
+        if let drawnAt {
+            let step = date.timeIntervalSince(drawnAt)
+            if step > Self.sameFrame {
+                if elapsed == 0, step > Self.longestStep, waited < Self.longestWait {
+                    waited += step
+                } else {
+                    elapsed += min(step, Self.longestStep)
+                }
+                self.drawnAt = date
+            }
+        } else {
+            drawnAt = date
+        }
+        #if DEBUG
+        LensCadence.note(date, elapsed)
+        #endif
+        return Self.frame(from: from, to: to, at: elapsed)
+    }
+
+    /// The lens `t` seconds after leaving `from` for `to`: it swells as it goes, glides with a bounce, and once there it
+    /// shrinks back and fades.
+    nonisolated static func frame(from: CGFloat, to: Int, at t: TimeInterval) -> Frame {
+        let m = Theme.Motion.self
+        let along = m.lensGlide.value(target: 1.0, time: max(0, t))
+        let at = t >= length ? CGFloat(to) : from + (CGFloat(to) - from) * CGFloat(along)
+        let landed = max(0, t - m.lensGlideTime) / m.lensFadeTime
+        let rise = min(1, max(0, t) / m.lensSwellTime)
+        let swollen = min(rise * (2 - rise), 1 - min(1, landed)) // ease out up, then down as it fades
+        return Frame(at: at, swell: 1 + (m.lensSwellScale - 1) * CGFloat(swollen), opacity: max(0, 1 - landed))
+    }
+
+    /// A new choice: from where the lens is now (the item that was chosen, or partway on an earlier glide) to `to`. Every
+    /// bar that sees the choice asks; the first one starts it.
+    func begin(from old: Int, to new: Int) {
+        guard old != new, !(running && to == new) else { return }
+        from = running ? Self.frame(from: from, to: to, at: elapsed).at : CGFloat(old)
+        to = new
+        elapsed = 0
+        drawnAt = nil
+        waited = 0
+        running = true
+        serial += 1
+        let mine = serial
+        // It ends once drawn to its end, which held-up frames put off (a tab's first visit holds one up for 0.5 s or more);
+        // should no bar draw it, it still ends.
+        let deadline = Date.now + Self.length + Self.longestWait + 1
+        Task { @MainActor [weak self] in
+            var left = Self.length
+            while left > 0 {
+                try? await Task.sleep(for: .seconds(left))
+                guard let glide = self, glide.serial == mine else { return }
+                left = Date.now < deadline ? Self.length - glide.elapsed : 0
+            }
+            self?.running = false
+        }
+    }
+}
+
+/// The persona's face on the chosen Assistant item of iPhone Duo's tab bar (#9837): still, a `Size.well` circle.
+private struct TabBarPersonaFace: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let persona = model.persona
+        Group {
+            #if os(iOS) || os(visionOS)
+            if !persona.isBuiltin, let frames = model.personas.frames(persona, .idle) {
+                PersonaFramesView(frames: frames, animating: false, eligible: false)
+            } else {
+                AssistantAvatar(size: Theme.Size.well, design: persona.avatarDesign, still: true)
+            }
+            #else
+            AssistantAvatar(size: Theme.Size.well, design: persona.avatarDesign, still: true)
+            #endif
+        }
+        .frame(width: Theme.Size.well, height: Theme.Size.well)
+        .clipShape(.circle)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A page's count on iPhone Duo's tab bar (#4231): white on red on the rim of its symbol's well, at the top trailing
+/// corner, as the system's tab bar badges its items (the iPad's too). The tabs' numbers: what waits on the user among the
+/// Agents (`agentsWaiting`) and in Persona's own conversations (`TabBadges.assistant`); Messages has none, as its tab had
+/// none. Its own view, as `WaitingBadge`: only it is drawn again when the count changes. `shell-agents-count`,
 /// `shell-assistant-count` for the UI tests.
 private struct TabBarBadge: View {
     @Environment(AppModel.self) private var model
@@ -299,18 +484,54 @@ private struct TabBarBadge: View {
         default: 0
         }
         if waiting > 0 {
-            CountBadge(count: waiting, look: .solid(Theme.tabBarBadge), label: StateName.count(.needsYou, waiting))
-                .alignmentGuide(.top) { $0[VerticalAlignment.center] }
-                .alignmentGuide(.trailing) { $0[HorizontalAlignment.center] }
+            TabBarCount(count: waiting, label: StateName.count(.needsYou, waiting))
+                .tabBarBadgeSpot()
                 .allowsHitTesting(false)
                 .accessibilityIdentifier(tab == .assistant ? "shell-assistant-count" : "shell-agents-count")
         }
     }
 }
 
+/// The count iPhone Duo's tab bar draws (#4231), the system's tab bar badge: `Theme.Size.badge` (18 pt) tall, round for one
+/// digit and a capsule for more, its number `Theme.Font.labelHeavy` (12 pt) white on the system's red (`Theme.tabBarBadge`),
+/// ringed `Theme.Shell.tabBarBadgeRing` in the page's color so it stands apart from the chosen item's circle and the
+/// symbol under it. The same view on both displays (`DuoTabBarAlignmentTests`).
+struct TabBarCount: View {
+    let count: Int
+    /// What VoiceOver says for it ("3 need you"); by default the exact number.
+    var label: String? = nil
+
+    var body: some View {
+        if let text = CountBadge.text(count) {
+            Text(text)
+                .font(Theme.Font.labelHeavy.monospacedDigit())
+                .contentTransition(.numericText(value: Double(count)))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+                .padding(.horizontal, Theme.Space.xs)
+                .frame(minWidth: Theme.Size.badge, minHeight: Theme.Size.badge)
+                .background(Theme.tabBarBadge, in: .capsule)
+                .padding(Theme.Shell.tabBarBadgeRing)
+                .background(Theme.pageBackground, in: .capsule)
+                .fixedSize()
+                .accessibilityLabel(label ?? String(count))
+                .accessibilityShowsLargeContentViewer()
+        }
+    }
+}
+
+extension View {
+    /// A tab bar item's count, in an overlay at the top trailing corner of its symbol's well: centred
+    /// `Theme.Shell.tabBarBadgeInset` inside that corner, so it rests on the circle's rim and covers its edge only, not
+    /// the symbol, at any width (a zero-sized anchor at the corner, the count centred on it).
+    func tabBarBadgeSpot() -> some View {
+        frame(width: 0, height: 0).offset(x: -Theme.Shell.tabBarBadgeInset, y: Theme.Shell.tabBarBadgeInset)
+    }
+}
+
 /// The switch's motion, in the one step of its chain where the pill's glide always was (the switch across the top as it
 /// was, #6735's stack). As iPhone Duo's tab bar (`upright`, #4231) also: a bar of fixed items at the default text size
-/// (`Theme.Shell.switchTypeSize`), one container VoiceOver reads as a tab bar, the chosen item changing at once with
+/// (`Theme.Shell.switchTypeSize`), one container VoiceOver reads as a tab bar, the chosen item cross-fading with
 /// Reduce Motion on, and away while the keyboard is up, as the tab bar it stands for goes under the keyboard: faded and
 /// out of reach, never taken out of the tree (an item's menu may be open as the keyboard goes, docs/lessons/ios.md).
 private struct SwitchMotion: ViewModifier {
@@ -322,7 +543,8 @@ private struct SwitchMotion: ViewModifier {
         if upright {
             let up = KeyboardState.shared.isUp
             content
-                .animation(reduceMotion ? nil : Theme.Motion.state, value: chosen)
+                // With Reduce Motion the chosen item cross-fades and the lens stays still (`TabBarLens`, #9837).
+                .animation(reduceMotion ? Theme.Motion.tabFade : Theme.Motion.state, value: chosen)
                 .dynamicTypeSize(...Theme.Shell.switchTypeSize)
                 .accessibilityElement(children: .contain)
                 .accessibilityAddTraits(.isTabBar)

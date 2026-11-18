@@ -270,10 +270,10 @@ func (n *Node) placeIn(s *proto.Session, a host.Agent) {
 	n.mu.Unlock()
 	s.SpaceKind, s.SpaceID, s.SlotID = kind, a.WorkspaceID, a.TabID
 	if wok {
-		s.SpaceName, s.SpaceIndex, s.ParentSpaceID = w.Label, w.Number, w.ParentID
+		s.SpaceName, s.SpaceIndex, s.ParentSpaceID = w.Label, int32(w.Number), w.ParentID
 	}
 	if tok {
-		s.SlotName, s.SlotIndex = t.Label, t.Number
+		s.SlotName, s.SlotIndex = t.Label, int32(t.Number)
 	}
 	s.PaneIndex = nil
 	if piok {

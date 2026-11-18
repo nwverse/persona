@@ -242,6 +242,7 @@ func (s *Service) publishList(machine string) []proto.Session {
 	// told as null either way.
 	s.hub.Tell(assistantwire.EventFleetSessions, rpc.Marshaled(b))
 	s.liveChanged(false)
+	s.todoRunsChanged(machine) // a card, a seen turn: a to-do's view may file it elsewhere (todo_view_push.go)
 	return list
 }
 
@@ -381,6 +382,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		if list[i].Assistant {
 			list[i].Archived = shown[list[i].SessionID].Archived
+			list[i].Tags = rowTagsOf(shown[list[i].SessionID].Tags)
 			v := shown[list[i].SessionID]
 			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
 			list[i].ModelPick = v.ModelPick                                                         // what its next messages run on (model_pick.go)
@@ -390,6 +392,10 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			if q := shown[list[i].SessionID].Queued; len(q) > 0 {
 				list[i].Queued = append(slices.Clip(list[i].Queued), q...) // the node's slice is shared: never write into it
 				list[i].QueuedRelayed = uint16(min(len(q), math.MaxUint16))
+			}
+			if u := shown[list[i].SessionID].Undelivered; len(u) > 0 {
+				kept := slices.Clone(u) // the owner's messages that could not go in (undelivered.go, #10194)
+				list[i].Undelivered = &kept
 			}
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
@@ -461,6 +467,9 @@ func (s *Service) listedSession(machine, sid string) (proto.Session, bool) {
 	list, err := s.archivedListed(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false), mark)
 	if err != nil {
 		s.logf("load agent archives: %v", err)
+	}
+	if len(list) == 0 {
+		return proto.Session{}, false // an unreadable deletion ledger hides assistant rows rather than exposing them
 	}
 	return list[0], true
 }

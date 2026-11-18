@@ -36,6 +36,9 @@ func newUUID() string {
 // agentType is the agent the user picked for the launcher (claude, codex, traex, omp, pi, cursor, agy); empty: what
 // the launcher runs.
 func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
+	if proto.IsExternalLauncher(launcher) {
+		return nil, externalRefusal(ctx, "adapter_purpose_unsupported")
+	}
 	execution := executionOption(options)
 	// A start named to a failed start's kept tab holds it from here, sync and async alike: newTab uses it, else it is
 	// kept again when the start returns (startremedy.go).
@@ -88,6 +91,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		defer func() { // this start took the ticket: failed, nothing else may fetch its values (secretenv.go)
 			if startErr != nil {
 				n.handoffs().take(execution.SecretTicket, false)
+				startErr = withoutAnswers(startErr) // nor can an answer start it again with them (start.continue)
 			}
 		}()
 	}
@@ -223,17 +227,18 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	planThen := planThenOf(mode, execution.PlanThen)
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
-	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
+	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
+	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
 		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
-	shells := paneShells(ctx, created)
+	shells := n.startPaneShells(ctx, launch, created)
 	line := n.claudeCommandLine(spec, args+modeFlags(mode, effort)+planThenFlags(mode, planThen), shellQuote)
 	if execution.SecretTicket != "" { // through personad launch --ticket; the spec herdr resumes with keeps none (secretenv.go)
 		line = n.withSecretTicket(line, launcher, execution.SecretTicket, shellQuote)
 	}
 	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), line)
-	cmd = n.agentCommand(cmd, shellQuote, shells...)
+	cmd = n.agentStartCommand(cmd, shellQuote, shells...)
 	if cdFirst(ctx) { // a launcher switch in a shell that is not in the conversation's folder (launcher_switch.go)
 		cmd = cdThen(cwd, cmd, shells...)
 	}
@@ -373,6 +378,9 @@ func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created
 // checkStart validates a start's arguments and returns the directory (~ expanded, home when empty) and launcher.
 // agentType is the agent the start dispatches (start's kind: an explicit agent_type wins); empty: the launcher's own.
 func (n *Node) checkStart(cwd, launcher, resume, mode, effort, agentType string) (string, string, error) {
+	if proto.IsExternalLauncher(launcher) {
+		return "", "", externalRefusal(context.Background(), "adapter_purpose_unsupported")
+	}
 	if launcher == "" {
 		launcher = "claude"
 	}
@@ -496,17 +504,33 @@ func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
 // closes its tab, or in a split tab only its own pane, so the other panes survive; herdr-core ends its terminal.
 // Its user-action callers hold the recovery and typing locks, including retire's already-checked turn.
 func (n *Node) close(ctx context.Context, id string) error {
+	return n.closeWithCause(ctx, id, proto.StopUser)
+}
+
+// closeWithCause is close recording cause: the user's (saved and read back before anything is closed), or an
+// automatic one (idle, task_completed: #10355), which is recorded only once the close went through, as an automatic
+// stop's is (retire.go).
+func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCause) (err error) {
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
 	}
-	if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
-		return err
+	if cause == proto.StopUser {
+		if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
+			return err
+		}
+		defer n.state.stopped(id, proto.StopUser)
+	} else {
+		n.state.stopped(id, proto.StopUnknown) // an automatic close that fails grants no recovery
+		defer func() {
+			if err == nil {
+				n.state.stopped(id, cause)
+			}
+		}()
 	}
-	defer n.state.stopped(id, proto.StopUser)
 	a, ok := n.agent(id)
 	if !ok {
-		if _, mine := n.state.get(id); mine {
-			return nil // already gone
+		if st, mine := n.state.get(id); mine {
+			return n.closeAfterExit(ctx, id, st)
 		}
 		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")
 	}
@@ -534,10 +558,12 @@ func exitCommand(text string) bool {
 // the shell, retire.go), and one already stopped is left as it is rather than resumed in a new tab just to quit there.
 // It runs inside send's turn for the session, so it does not take the typing lock again as stop does.
 func (n *Node) exitAgent(ctx context.Context, id string) error {
-	if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
+	// Recorded as an exit, not the user's Stop: the session ended (the owner's close-on-end setting, #10355, closes
+	// its terminal; a Stop keeps it). Neither permits a supervisor resume.
+	if err := n.saveStopCause(ctx, id, proto.StopExit); err != nil {
 		return err
 	}
-	defer n.state.stopped(id, proto.StopUser)
+	defer n.state.stopped(id, proto.StopExit)
 	a, ok := n.agent(id)
 	if !ok {
 		return nil

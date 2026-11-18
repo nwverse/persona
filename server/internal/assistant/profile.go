@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -109,6 +110,10 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// CloseEndedTerminals: when an Agent's session ends (its task is done or cancelled, it quit by itself or was told
+	// to), its terminal tab is closed too, through the "Archive and close" path (#10355, agent_terminal_close.go).
+	// nil is off (the default): the terminal stays, as since #4754.
+	CloseEndedTerminals *bool `json:"close_ended_terminals,omitempty"`
 	// AgentAutoNaming corrects recognizable placeholder names; nil is on. Manual titles are protected.
 	AgentAutoNaming *bool `json:"agent_auto_naming,omitempty"`
 	// AgentAutoNamingMax counts successful automatic title changes per session; nil is one.
@@ -142,6 +147,9 @@ type Settings struct {
 	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
 	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
 	Leaders []string `json:"leaders,omitempty"`
+	// BriefingWaits tunes only the deterministic wait rows in morning/evening facts. Nil uses the supervision
+	// thresholds documented by briefingWaitsOf; changes go through persona_settings' ordinary owner approval.
+	BriefingWaits *BriefingWaits `json:"briefing_waits,omitempty"`
 	// InterjectBackground: a message the user sends while a Claude conversation is still answering moves what runs in
 	// the foreground (Bash commands, subagents) to the background, so the message is taken up at once instead of after
 	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default). A round the
@@ -157,6 +165,11 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
+	// BackgroundSupervisorKeepsContext: the background supervisor is one long conversation again from its next round,
+	// keeping each later round in context, as before #7315 (rounds already run from the first turn stay on their own
+	// branches). nil is off (the default): each round starts from its first turn with only that round's facts and tools
+	// (supervise_round.go).
+	BackgroundSupervisorKeepsContext *bool `json:"background_supervisor_keeps_context,omitempty"`
 	// BackgroundSupervisor is the background supervisor's conversation, on BackgroundSupervisorMachineID, started at
 	// BackgroundSupervisorAt: made on first use, "" until then. BackgroundSupervisorAnnounced: the main conversation
 	// was told once that it follows up its tasks. The assistant writes these itself; PUT /api/v1/assistant does not.
@@ -225,6 +238,9 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	}
 	if err := fn(&v); err != nil {
 		return Settings{}, err
+	}
+	if proto.IsExternalLauncher(v.Launcher) {
+		return Settings{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, settingsKey, v); err != nil {
@@ -534,7 +550,9 @@ type assistantView struct {
 	// InterjectBackground is in effect, like DoneNeedsDelivery.
 	InterjectBackground bool `json:"interject_background"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
-	AgentTasks                   bool `json:"agent_tasks"`
+	AgentTasks bool `json:"agent_tasks"`
+	// CloseEndedTerminals is in effect, like DoneNeedsDelivery.
+	CloseEndedTerminals          bool `json:"close_ended_terminals"`
 	AgentAutoNaming              bool `json:"agent_auto_naming"`
 	AgentAutoNamingMax           int  `json:"agent_auto_naming_max"`
 	AgentAutoNamingIntervalHours int  `json:"agent_auto_naming_interval_hours"`
@@ -575,6 +593,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
 		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,
 		AgentTasks:                   v.AgentTasks != nil && *v.AgentTasks,
+		CloseEndedTerminals:          v.CloseEndedTerminals != nil && *v.CloseEndedTerminals,
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
 		AgentAutoNamingMax:           agentNamingLimit(v),
 		AgentAutoNamingIntervalHours: agentNamingInterval(v),
@@ -619,6 +638,9 @@ func (s *Service) profileRoutes() {
 			return
 		}
 		out := s.view(r.Context(), archived == "1" || archived == "true", space)
+		if tag := strings.TrimSpace(r.URL.Query().Get("tag")); tag != "" {
+			out.Conversations = slices.DeleteFunc(out.Conversations, func(c proto.Session) bool { return !hasTag(c, tag) })
+		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
 		}
@@ -701,6 +723,9 @@ func (s *Service) warm(launcher string) {
 		if h := s.loadHandoff(ctx); h.Pick != nil {
 			pick, picked = *h.Pick, true
 		}
+	}
+	if proto.IsExternalLauncher(launcher) || picked && proto.IsExternalLauncher(pick.Launcher) {
+		return // no real session exists for a prewarm's external scope
 	}
 	if launcher == "" && !picked {
 		launcher = s.launcherNow(ctx)

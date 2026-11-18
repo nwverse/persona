@@ -259,6 +259,32 @@ class CheckFastScriptsTests(unittest.TestCase):
                 self.assertIn("FAIL     scripts/test/test_doc_wire.py", out)
                 self.assertNotIn("test_doc_paths.py", out)
 
+    def test_wire_schema_inputs_run_the_wire_sample_suite(self):
+        # test_wire_schema.py holds the samples the shared fixtures keep for each wire schema to it, runs the generator's
+        # --check and imports the extension test's validator.
+        self.break_suite("test_wire_schema.py")
+        self.commit_on_top("scripts/test/test_sdk_bundle.py", PASSING, "base")  # a schema/ change runs it too
+        self.commit_on_top("scripts/gen/extension_schema.py", "", "base")
+        for path in ("schema/wire/x.schema.json", "spec/fixtures/todo-view/x.json", "scripts/gen/extension_schema.py",
+                     "scripts/test/test_extension_schema.py"):
+            with self.subTest(path=path):
+                self.write(path, "# changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("checkout", "-q", "base", "--", "scripts")
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/test/test_wire_schema.py", out)
+
+    def test_other_schema_and_spec_files_do_not_run_the_wire_sample_suite(self):
+        self.break_suite("test_wire_schema.py")
+        self.commit_on_top("scripts/test/test_sdk_bundle.py", PASSING, "base")
+        for path in ("schema/extension/x.schema.json", "spec/tokens/x.json"):
+            with self.subTest(path=path):
+                self.write(path, "{}\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertNotIn("test_wire_schema.py", out)
+
     def test_a_change_where_the_section_check_reads_runs_it(self):
         # Most names test_doc_sections.py checks are in code comments, so a change under any of its SOURCE_DIRS runs it.
         self.break_suite("test_doc_sections.py")
@@ -274,12 +300,25 @@ class CheckFastScriptsTests(unittest.TestCase):
 
     def test_an_apple_change_runs_the_l10n_suite(self):
         self.break_suite("test_apple_l10n.py")
+        self.commit_on_top("scripts/test/test_apple_no_callkit.py", PASSING, "base")
         self.write("apple/Persona/Views/Settings/Options.swift", 'let s = "中文"\n')
         code, out = self.check_fast()
         self.assertEqual(1, code, out)
         self.assertIn("FAIL     scripts/test/test_apple_l10n.py", out)
+        self.assertIn("PASS     scripts/test/test_apple_no_callkit.py", out)
         self.assertIn("SKIP  apple/** builds and tests", out)  # the Mac-only checks are still reported
         self.assertNotIn("test_doc_paths.py", out)
+
+    def test_an_apple_or_xcconfig_change_runs_the_callkit_guard(self):
+        # It reads every Apple source and build file, and the xcconfig scripts/persona_config.py writes (#9290).
+        self.break_suite("test_apple_no_callkit.py")
+        for path in ("apple/Persona/Calls/Call.swift", "scripts/persona_config.py"):
+            with self.subTest(path=path):
+                self.write(path, "changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/test/test_apple_no_callkit.py", out)
 
     def test_token_inputs_run_the_token_suite(self):
         self.commit_on_top("scripts/assets/test_gen_tokens.py", FAILING, "base")
@@ -617,6 +656,16 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("schema/extension/examples/Manifest.x.json", '{"changed": true}\n')
         out, packages = self.check_fast()
         self.assertEqual(["./internal/ext/..."], packages, out)
+
+    def test_a_wire_schema_runs_its_readers(self):
+        self.write("server/internal/wirereader/wire_test.go",
+                   'package wirereader\n\nvar s = filepath.Join("..", "..", "..", "schema", "wire", "x.schema.json")\n')
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "reader")
+        self.git("tag", "-f", "base")
+        self.write("schema/wire/x.schema.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/wirereader/..."], packages, out)
 
     def test_the_server_test_launcher_runs_its_reader(self):
         self.write("scripts/test/server_test_env.py", "# changed\n")
