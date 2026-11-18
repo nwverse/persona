@@ -144,7 +144,11 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
         detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
         if argv[:2] == ["git", "fetch"] and "exhaustive rename detection was skipped" in detail:
             # This fallback supports only the exact single-refspec shape used
-            # by the watcher, never arbitrary options or multiple refspecs.
+            # by the watcher, never arbitrary options or multiple refspecs. An
+            # empty refmap (repair fetches, #10584) never updates a tracking
+            # ref, which the FETCH_HEAD recovery below already honors.
+            if argv[3:4] == ["--refmap="]:
+                argv = argv[:3] + argv[4:]
             if len(argv) != 5 or argv[3].startswith("-"):
                 raise WatchError("unsupported fetch recovery command shape")
             if argv[4].lstrip("+").startswith("-"):
