@@ -359,6 +359,13 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 - for a bare `codex` on non-Windows, the login shell defines no `codex` function. Native starts preserve that
   function (#4876), whose own profile or overrides may change the effort before Persona's arguments. A bounded
   shell-resolution check does not call the function; an error or timeout keeps the explicit effort flag.
+- the `codex` that runs is the Codex CLI itself: for a bare `codex`, the first one on the PATH of that same interactive
+  shell (codex-start's shell, with herdr's pane variables `HERDR_ENV=1`, `TERM_PROGRAM=herdr` and `HERDR_AGENT=codex`,
+  since an rc file may put another `codex` first only in engine panes); a launcher's path is checked as it is. After
+  symlinks it must be a native (Mach-O / ELF) program, npm's `@openai/codex/bin/codex.js`, or the `/bin/sh` shim a
+  desktop app bundles as `codex-cli/bin/codex`, which only execs `../CodexCLI.app/Contents/MacOS/codex` next to it.
+  Any other script may set its own `CODEX_HOME` or `--profile`, so the effort in `~/.codex/config.toml` would not apply
+  (#10432). On Windows this check is skipped.
 
   Otherwise the flag stays (`node/codex_start_effort.go`, #4860). The creation UI still offers no permission mode / thinking effort selector; effort can be changed in-chat after joining app-server (see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
 - **In the conversation's folder**: the file also names the directory (`dir`), and `codex-start` changes to it (and sets `PWD` to it when the shell had one) before it runs the words, for a resume too.
