@@ -143,6 +143,11 @@ node_ok() { [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null; }
 HAVE_GO=0; have go && HAVE_GO=1
 HAVE_PY=0; have python3 && HAVE_PY=1
 HAVE_BUN=0; have bun && HAVE_BUN=1
+# Go's build cache key holds each package's directory unless -trimpath is set: add it, so worktrees share compiled
+# packages (#10614). The helper keeps a user-set GOFLAGS; without the helper GOFLAGS stays as it was.
+if [ "$HAVE_GO" -eq 1 ] && GO_TRIMPATH_FLAGS=$(sh scripts/test/go_trimpath.sh 2>/dev/null); then
+  export GOFLAGS="$GO_TRIMPATH_FLAGS"
+fi
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/check-fast.XXXXXX")
 # Keep WORK after a failure or timeout (its logs are the trail to read); a clean run removes it on exit.

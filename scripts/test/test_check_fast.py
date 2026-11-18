@@ -762,6 +762,26 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual([], self.guard_calls(), out)
         self.assertNotIn("repo-wide guards", out)
 
+    def test_go_runs_with_trimpath_and_the_callers_flags(self):
+        # Worktrees share compiled packages only under -trimpath (#10614): check-fast adds it with
+        # scripts/test/go_trimpath.sh, which keeps a user-set GOFLAGS.
+        shutil.copy(ROOT / "scripts/test/go_trimpath.sh", self.repo / "scripts/test/go_trimpath.sh")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        self.git("tag", "-f", "base")
+        # This go answers go env GOFLAGS as the real one does and records the GOFLAGS of every other call.
+        (self.go_log.parent / "go").write_text(
+            '#!/bin/sh\n[ "$*" = "env GOFLAGS" ] && { printf "%s\\n" "$GOFLAGS"; exit 0; }\n'
+            'printf "%s|%s|%s\\n" "${PWD##*/}" "$GOFLAGS" "$*" >> "$FAKE_GO_LOG"\n')
+        self.env["GOFLAGS"] = "-mod=readonly"
+        self.write("server/internal/foo/x.go", "package foo\n")
+        self.check_fast()
+        calls = [line.split("|", 2) for line in self.go_log.read_text().splitlines()]
+        tests = [call for call in calls if call[0] == "server" and call[2].startswith("test ")]
+        self.assertEqual(3, len(tests), calls)  # the package and the two guard calls
+        for _, goflags, _ in tests:
+            self.assertEqual("-mod=readonly -trimpath", goflags)
+
 
 # A privacy-scan stub that never finishes on its own: it records its own pid, its parent's (the GNU timeout that runs
 # it) and a sleeping child's, then waits.
