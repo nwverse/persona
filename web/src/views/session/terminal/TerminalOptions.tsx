@@ -225,7 +225,7 @@ export function RendererRow({ v, onOpenLabs }: { v: Pick<FeedView, "renderer" | 
         type="button"
         aria-haspopup="dialog"
         onClick={onOpenLabs}
-        className="flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-control px-2 text-[12px] font-medium text-accent-ink hover:bg-hover"
+        className="flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-control px-2 text-label font-medium text-accent-ink hover:bg-hover"
       >
         {t("session-terminal-terminaloptions.renderer_open_labs")}
         <Icon name="chevronRight" size={11} stroke={2} />

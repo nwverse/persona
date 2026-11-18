@@ -68,8 +68,8 @@ function Form({ ctl }: { ctl: ConfigurationController }) {
   return (
     <section aria-label={doc.title} data-configuration={doc.id}>
       <div className="mb-1.5 px-1">
-        <h2 className="text-[12px] font-medium text-ink-3">{doc.title}</h2>
-        {doc.description && <p className="mt-0.5 text-[11.5px] leading-relaxed text-ink-3">{doc.description}</p>}
+        <h2 className="text-label font-medium text-ink-3">{doc.title}</h2>
+        {doc.description && <p className="mt-0.5 text-submeta leading-relaxed text-ink-3">{doc.description}</p>}
       </div>
       {!s.writable && <Banner tone="caution">{t("settings-configuration.unsupported_version")}</Banner>}
       {s.blocked && (
@@ -98,7 +98,7 @@ function Form({ ctl }: { ctl: ConfigurationController }) {
 function Banner({ tone, action, children }: { tone: "caution" | "alert"; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-card bg-surface px-4 py-2.5 shadow-card">
-      <p role={tone === "alert" ? "alert" : undefined} className={tone === "alert" ? "min-w-0 flex-1 text-[12.5px] leading-snug text-red" : "min-w-0 flex-1 text-[12.5px] leading-snug text-orange"}>{children}</p>
+      <p role={tone === "alert" ? "alert" : undefined} className={tone === "alert" ? "min-w-0 flex-1 text-meta leading-snug text-red" : "min-w-0 flex-1 text-meta leading-snug text-orange"}>{children}</p>
       {action}
     </div>
   );
@@ -153,8 +153,8 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
     <div data-settings-row={`configuration-${doc.id}-${field.id}`} data-configuration-field={field.id} data-kind={field.kind} className="px-4 py-2.5">
       <div className="flex flex-col gap-x-3 gap-y-1.5 sm:flex-row sm:items-start">
         <div className="min-w-0 flex-1">
-          <div id={titleId} className="text-[13px] text-ink">{field.title}</div>
-          {field.description && <p id={descId} className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{field.description}</p>}
+          <div id={titleId} className="text-meta text-ink">{field.title}</div>
+          {field.description && <p id={descId} className="mt-0.5 text-submeta leading-snug text-ink-3">{field.description}</p>}
         </div>
         {known && inline && <div className="shrink-0"><InlineControl ctl={ctl} field={known} shown={shown} can={can} titleId={titleId} descId={described} invalidValue={invalid} /></div>}
       </div>
@@ -163,18 +163,18 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
           <BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={described} dirty={typedDirty} />
         </div>
       )}
-      {fs.error && <p role="alert" className="mt-1.5 text-[11.5px] leading-snug text-red">{problemText(fs.error)}</p>}
+      {fs.error && <p role="alert" className="mt-1.5 text-submeta leading-snug text-red">{problemText(fs.error)}</p>}
       {notice && <Note tone={notice.kind === "warning" ? "caution" : undefined}>{notice.message}</Note>}
       {field.kind === "unsupported" && <Note tone="caution">{field.reason === "kind" ? t("settings-configuration.unsupported_kind") : t("settings-configuration.unsupported_definition")}</Note>}
       {invalid && <Note id={invalidId} tone="caution">{t("settings-configuration.invalid_value")}</Note>}
       {known?.disabled_reason ? <Note>{known.disabled_reason}</Note> : known?.read_only ? <Note>{t("settings-configuration.read_only")}</Note> : null}
       {known && known.details?.length ? (
-        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px] leading-snug">
+        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-submeta leading-snug">
           {known.details.map((d, i) => <Detail key={i} term={d.title}>{d.description}</Detail>)}
         </dl>
       ) : null}
       {!known && field.details?.length ? (
-        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px] leading-snug">
+        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-submeta leading-snug">
           {field.details.map((d, i) => <Detail key={i} term={d.title}>{d.description}</Detail>)}
         </dl>
       ) : null}
@@ -197,13 +197,13 @@ function FieldFooter({ ctl, field, can, resettable, dirty, count, countId, busy,
 }) {
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span className="min-w-0 text-[11.5px] leading-snug text-ink-3">
+      <span className="min-w-0 text-submeta leading-snug text-ink-3">
         {t("settings-configuration.default")} <span className="text-ink-2">{valueText(field, field.default)}</span>
       </span>
-      {count !== undefined && <span id={countId} className="text-[11px] text-ink-3 tabular-nums">{count}</span>}
+      {count !== undefined && <span id={countId} className="text-submeta text-ink-3 tabular-nums">{count}</span>}
       {/* Reserve the small buttons' height even when there is only text on this line. */}
       <span className="ml-auto flex min-h-7 shrink-0 items-center gap-1.5">
-        <span aria-live="polite" className={busy || saved ? "flex items-center gap-1.5 text-[11.5px] leading-snug" : "sr-only"}>
+        <span aria-live="polite" className={busy || saved ? "flex items-center gap-1.5 text-submeta leading-snug" : "sr-only"}>
           {busy && <><Spinner />{t("settings-configuration.saving")}</>}
           {saved && <span className="text-green">{t("settings-configuration.saved")}</span>}
         </span>
@@ -231,7 +231,7 @@ function Detail({ term, children }: { term: string; children: React.ReactNode })
 }
 
 function Note({ tone, id, children }: { tone?: "caution"; id?: string; children: React.ReactNode }) {
-  return <p id={id} className={tone ? "mt-1.5 text-[11.5px] leading-snug text-orange" : "mt-1.5 text-[11.5px] leading-snug text-ink-3"}>{children}</p>;
+  return <p id={id} className={tone ? "mt-1.5 text-submeta leading-snug text-orange" : "mt-1.5 text-submeta leading-snug text-ink-3"}>{children}</p>;
 }
 
 interface ControlProps {
@@ -325,8 +325,8 @@ function Checks({ ctl, field, chosen, editable, titleId, descId }: { ctl: Config
             className="touch-hit flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
             <CheckMark on={on} round={single} className="mt-0.5" />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12.5px] font-medium text-ink">{o.title}</span>
-              {o.description && <span className="block text-[11.5px] text-ink-3">{o.description}</span>}
+              <span className="block truncate text-meta font-medium text-ink">{o.title}</span>
+              {o.description && <span className="block text-submeta text-ink-3">{o.description}</span>}
             </span>
           </button>
         );
