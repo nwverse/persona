@@ -804,6 +804,65 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`), or says to open the Inbox in the App for Inbox follow-ups: never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 - The live snapshot puts the open-to-do total and `todo_list` entrance immediately after the time, before Agent details, so a hard cut still leaves a way to find the work. After the urgent Agent lists it carries an ID/title index of up to 100 open to-dos, regardless of origin or age (a question to-do is left to its own snapshot line only while that line shows it; once its ask record is pruned it is listed like any other); beyond that it keeps the total and points to `todo_list`. Under budget pressure titles and links are dropped from this index before the separate task-detail section is omitted. Full task details remain limited to 12, with open work ahead of recent closed conversation tasks. Showing a personal to-do does not enroll it for supervision or start an Agent.
 
+## Local request source diagnostics
+
+For people maintaining an Assistant installation, `scripts/diag/assistant_token_report.py --request-breakdown`
+adds a read-only, local source-size report to the existing token diagnostic (#10151). It is off by default: no hub
+setting, background capture, network request or runtime logging is added. Omit the flag to get the existing report.
+The primary Assistant screens and model behavior are unchanged.
+
+```sh
+python3 scripts/diag/assistant_token_report.py --request-breakdown --json scripts/diag/testdata/request_breakdown.jsonl
+python3 scripts/diag/assistant_token_report.py --request-breakdown --json /path/to/local/transcripts
+```
+
+The first command is a synthetic capture with fresh, follow-up, resume and compaction samples. The resume sample's
+1,300-byte tool result dominates; the follow-up includes observed cache reads. The fresh sample deliberately has
+unknown provider usage. These are reproducible fixtures, not measurements of a live installation.
+
+Two boundaries are reported separately:
+
+- `anthropic_request_content` / `responses_request_content`: a complete request object exported locally by the caller.
+  Each JSONL line has `type: "request"`, `runtime: "anthropic"` (Messages) or `"responses"` (OpenAI Responses), and
+  `request` containing the unmodified request object. Optional `usage` is the corresponding provider response's usage
+  object; `lifecycle` may be `fresh`, `followup`, `resume` or `compaction`; optional ISO `timestamp` supports `--since`.
+  This script does not intercept requests or configure a runtime to export them. Use a caller's existing local export
+  when available; some runtimes do not expose their assembled request. Captures contain private material and stay local;
+  only the aggregate report is suitable for sharing. No request ids, tool names, arguments, messages, attachment names
+  or URLs are emitted.
+- `claude_transcript_inventory` / `codex_transcript_inventory`: the content visible in a transcript, counted once per
+  observed block (Claude duplicate response blocks are deduplicated; Codex event mirrors are ignored). This is an
+  inventory across the selected file/time window, **not** a reconstruction of any request's retained context. A
+  compaction marker says `contains_compaction`; it does not prove which history survives. Runtime-owned instructions,
+  tool schemas, current request and retained history remain unknown (`null`, or `?` in text). Codex's recorded base
+  instructions and system/developer messages are exposed only as `observed_instruction_bytes`, a partial inventory.
+  Existing per-kind provider usage stays alongside the inventory in the token report, without inferred joins to requests.
+
+Byte definitions (separate from provider token counters):
+
+- Text is UTF-8 bytes; structured values use compact JSON with sorted keys, Unicode preserved, and no extra spaces.
+  The measurement is content size, not HTTP wire size or tokenizer output. Message role/id envelopes, transport
+  options and provider-owned additions are excluded; request wire bytes and provider context tokens remain unknown.
+- `instructions` measures exported system/developer instructions; `tool_schemas` measures the exported `tools` array.
+  Omitted fields in a complete request export count as zero; unavailable transcript fields count as unknown.
+- `snapshot_or_events` measures `<persona-context>…</persona-context>` blocks including their wrappers.
+  `current_message` is the last user message's remaining text; `history` is other message text. Both may contain
+  Persona event text outside those explicit blocks: no arbitrary content is guessed to be an event or instruction.
+- `tool_results` measures returned text/structured content, excluding separately counted attachments. The largest
+  result is reported only as the stable `tool_results` category and its byte size, never by tool name or call id.
+- `attachments` measures serialized image/file blocks (references, metadata or encoded data as recorded), not decoded
+  media size or image tokens. `other_content` covers remaining blocks, including tool calls and their arguments.
+  Source buckets are disjoint; `observed_content_bytes` is their observed sum (including separately reported observed
+  instructions for an incomplete transcript inventory). `items` counts measured text chunks/structured values, not
+  model calls (the tools array is one value). `dominant_sources` lists the largest observed buckets, ties included;
+  it may include partially observed instructions and does not rank unavailable runtime-owned content.
+- Provider usage counters are copied only when observed as nonnegative integers. Missing counters are unknown, not
+  zero. Anthropic input and cache counters keep their native definitions; Responses input includes cached tokens.
+  They are not derived from byte sizes or made comparable by assuming a bytes-per-token ratio.
+
+Compare runs with the same boundary and input scope. Changing one synthetic source changes only that source's size;
+`python3 scripts/diag/test_request_breakdown.py` checks this, known-size inputs, lifecycle samples, unknowns and privacy.
+
 ## Compaction
 
 Long assistant chats can grow to hundreds of thousands of tokens. After the prompt cache expires, restarting rewrites the whole context; compacting while the cache is warm keeps that restart affordable.
