@@ -487,7 +487,7 @@ nonisolated private enum AgentSortCoreInput {
         let forest = CodexTasks.build(AgentListProjection.preparedSessions(input),
                                       ownRows: input.settings.filter == .all ? [] : input.settings.kept, runs: runs)
         let visible = forest.roots
-        return visible.sorted { $0.key.path < $1.key.path }
+        return visible
     }
 
     static func encode(_ input: AgentListProjection.Input,
