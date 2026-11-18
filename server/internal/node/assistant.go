@@ -809,8 +809,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 
-	interject = interject && !fresh && p.interjects()
-	midTurn := !fresh && p.midTurn()
+	// A model recovery's resend continues the failed turn its busy flag holds: no message of the owner's, so no
+	// interjection (#10178).
+	interject = interject && recovery == nil && !fresh && p.interjects()
+	midTurn := recovery == nil && !fresh && p.midTurn()
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
