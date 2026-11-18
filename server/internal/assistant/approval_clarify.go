@@ -133,6 +133,32 @@ func (s *Service) expirePrepared(p *pending) {
 	s.endPreparedIf(p, "expired", "", func(a *preparedApproval) bool { return !a.paused })
 }
 
+// approvalNudgeDeadline returns the live effective deadline for a card the Lark
+// sweep is about to nudge. A question pauses that deadline; completed pauses move
+// it by their cumulative duration. Reading the prepared interaction here also
+// follows an implementation that extends its window without changing this sweep.
+func (s *Service) approvalNudgeDeadline(ix proto.Interaction) (time.Time, bool) {
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil {
+		// The hub lookup immediately before this check is authoritative for an
+		// ordinary interaction that has no process-local prepared approval.
+		return ix.ExpiresAt, true
+	}
+	if p.claimed || p.resolution != nil {
+		return time.Time{}, false
+	}
+	a := p.prepared
+	if a == nil {
+		return p.ix.ExpiresAt, true
+	}
+	if a.terminal || a.paused {
+		return time.Time{}, false
+	}
+	return p.ix.ExpiresAt.Add(a.pausedTotal), true
+}
+
 // pausePreparedLocked preserves the remaining decision time and starts the one
 // cumulative pause budget. Repeated questions while paused change neither.
 func (s *Service) pausePreparedLocked(p *pending) {
