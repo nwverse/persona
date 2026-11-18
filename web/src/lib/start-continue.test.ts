@@ -94,8 +94,8 @@ describe("answering it", () => {
   });
 
   it("refuses as the hub does: nothing changes locally", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => response({ error: "the question changed", code: "prompt_changed", delivered: "none" }, 409)));
-    await expect(continueStart("mac", SID, "n")).rejects.toMatchObject({ status: 409, code: "prompt_changed" });
+    vi.stubGlobal("fetch", vi.fn(async () => response({ error: "the tab is gone", code: "start_tab_gone", delivered: "none" }, 409)));
+    await expect(continueStart("mac", SID, "n")).rejects.toMatchObject({ status: 409, code: "start_tab_gone" });
     expect(upsertSession).not.toHaveBeenCalled();
   });
 
@@ -120,5 +120,45 @@ describe("answering it", () => {
     const states = Object.fromEntries((outbox()[`mac/${SID}`] ?? []).map((e) => [e.text, e.state]));
     expect(states).toMatchObject({ other: "failed", unsure: "failed" });
     expect(states.first).not.toBe("failed");
+  });
+
+  // The computer hands a conversation's messages to the agent in the order they arrive: the launch's first message
+  // was written before any the chat's start refused, so it goes first, and those once it went, one after another.
+  const refusedLaunch = (): AgentLaunch => ({ id: "local-1", machineId: "mac", cwd: "/w", launcher: "", text: "fix it", attachments: [],
+    phase: "failed", uploaded: {}, startOpId: "s1", startPromptOpId: "s2", messageId: "l1", session: { machine_id: "mac", session_id: SID } as Session,
+    outgoing: { text: "fix it", images: [] }, shellWaiting: { code: "shell_waiting", ...args } });
+  const refusedInChat = () => {
+    const refused = new ApiError(409, "stopped on a question", { code: "shell_waiting", delivered: "none", ...args });
+    keepFailed("mac", SID, { id: "m2", text: "second", images: [], at: 2 }, refused);
+    keepFailed("mac", SID, { id: "m3", text: "third", images: [], at: 3 }, refused);
+  };
+
+  it("sends the launch's first message before the chat's refused ones, and those in their order", async () => {
+    refusedInChat();
+    getState().launches = { "local-1": refusedLaunch() };
+    let release = () => {};
+    const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (JSON.parse(String(init?.body ?? "null"))?.client_msg_id === "l1") await new Promise<void>((done) => { release = done; });
+      return response({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const resent = resendRefused("mac", SID);
+    await vi.waitFor(() => expect(posts(fetcher)).toHaveLength(1));
+    expect(posts(fetcher)[0].body.text).toBe("fix it");
+    release();
+    await resent;
+    await vi.waitFor(() => expect(posts(fetcher)).toHaveLength(3));
+    expect(posts(fetcher).map((p) => p.body.text)).toEqual(["fix it", "second", "third"]);
+  });
+
+  it("keeps the chat's back when the launch's first message is refused again", async () => {
+    refusedInChat();
+    getState().launches = { "local-1": refusedLaunch() };
+    const fetcher = vi.fn(async () => response({ error: "stopped on a question", code: "shell_waiting", delivered: "none", ...args }, 409));
+    vi.stubGlobal("fetch", fetcher);
+    await resendRefused("mac", SID);
+    expect(posts(fetcher).map((p) => p.body.text)).toEqual(["fix it"]);
+    expect(getState().launches["local-1"].phase).toBe("failed");
+    expect((outbox()[`mac/${SID}`] ?? []).map((e) => e.state)).toEqual(["failed", "failed"]);
   });
 });

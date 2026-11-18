@@ -93,9 +93,9 @@ func TestSessionStartContinueRoute(t *testing.T) {
 	}
 	// What the node refuses goes back coded, nothing typed.
 	n.mu.Lock()
-	n.fail = &rpc.Error{Code: "prompt_changed", Message: "the question is gone", Data: json.RawMessage(`{"delivered":"none"}`)}
+	n.fail = &rpc.Error{Code: "start_tab_gone", Message: "the tab is gone", Data: json.RawMessage(`{"delivered":"none"}`)}
 	n.mu.Unlock()
-	if code, out := clipCall(t, mux, "POST", path, `{"choice":"n"}`, "full"); code != http.StatusConflict || out["code"] != "prompt_changed" || out["delivered"] != "none" {
+	if code, out := clipCall(t, mux, "POST", path, `{"choice":"n"}`, "full"); code != http.StatusConflict || out["code"] != "start_tab_gone" || out["delivered"] != "none" {
 		t.Errorf("a refusal: %d %v", code, out)
 	}
 }

@@ -134,7 +134,7 @@ export function SessionShellQuestion({ mid, sid, args, onAnswered, className }: 
       className={className}
       answer={(choice) => continueStart(mid, sid, choice)}
       onAnswered={() => {
-        resendRefused(mid, sid);
+        void resendRefused(mid, sid);
         onAnswered?.();
       }}
     />

@@ -255,6 +255,7 @@ var rpcFailureKeys = map[string]string{
 	"start_tab_gone":                     "rpc-errors.start_tab_gone", // the app's answer to its question (node/startcontinue.go, #10365)
 	"start_not_waiting":                  "rpc-errors.start_not_waiting",
 	"choice_not_offered":                 "rpc-errors.choice_not_offered",
+	proto.CodeSecretEnvGone:              "rpc-errors.secret_env_gone", // a hand-off's values went with the start that took them
 	"node_outdated":                      "rpc-errors.node_outdated",
 	"assistant_service_tier_start_only":  "rpc-errors.assistant_service_tier_start_only",
 	"assistant_service_tier_unsupported": "rpc-errors.assistant_service_tier_unsupported",

@@ -130,10 +130,9 @@ func TestStartContinueAnswersInTheKeptTab(t *testing.T) {
 	}
 }
 
-// Nothing is typed when the question is not the one listed any more (answered at the computer: an answer now could run
-// as a command at the prompt), for an answer the question was not offered, for a tab no longer kept, or for a session
-// whose start is not waiting.
-func TestStartContinueRefusesAChangedQuestion(t *testing.T) {
+// Nothing is typed for an answer the question was not offered, for a tab no longer kept, or for a session whose start
+// is not waiting; the start stays as it failed.
+func TestStartContinueRefusals(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
 	withStartWaits(n, time.Second, time.Second)
@@ -150,10 +149,6 @@ func TestStartContinueRefusesAChangedQuestion(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
-	f.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" n\n% ") // answered on the computer
-	if _, err := request(t, n, "start.continue", map[string]any{"session_id": startID, "choice": "n"}); rpcCode(err) != "prompt_changed" {
-		t.Errorf("a changed screen: %v", err)
-	}
 	n.mu.Lock()
 	k := n.keptStarts["w1:p2"]
 	k.until = time.Now().Add(-time.Second)
@@ -168,6 +163,126 @@ func TestStartContinueRefusesAChangedQuestion(t *testing.T) {
 	}
 	if _, s := n.starts.failed(startID); s.StartErrorCode != proto.CodeShellWaiting {
 		t.Errorf("a refused answer changed the start: %+v", s)
+	}
+}
+
+// The question answered at the computer (#10365): it is not the tab's last line any more, so the app's answer types
+// nothing (it could run as a command at the prompt), and the start runs again in that tab all the same and goes on
+// once the shell is at rest, rather than being refused with words that leave the card's buttons stuck. Another
+// question there since gets nothing typed either: that start ends at once with it and its answers.
+func TestStartContinueAfterAnAnswerAtTheComputer(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, 10*time.Second, 10*time.Second)
+	stuckAsyncStart(t, n, f, home, omzQuestion)
+	f.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" \n% ") // answered on the computer: the prompt is back
+	claudeUpOnStart(t, f, "w1:p2")
+	f.reset()
+	res, err := request(t, n, "start.continue", map[string]any{"session_id": startID, "choice": "y"})
+	if err != nil {
+		t.Fatalf("an answer after the computer's: %v", err)
+	}
+	if got := decodeSessions(t, []any{res["session"]})[0]; !got.Starting || got.StartErrorCode != "" {
+		t.Errorf("answered %+v", got)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- n.starts.wait(context.Background(), startID) }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("the start again: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the restarted start never ended")
+	}
+	if got := keysInto(f, "w1:p2"); len(got) != 0 {
+		t.Errorf("pressed %v over the computer's answer", got)
+	}
+	if got := sent(f, "w1:p2"); len(got) != 1 {
+		t.Errorf("typed %q into the kept tab", got)
+	}
+	if got := f.trace("tab.create", "workspace.create"); len(got) != 0 {
+		t.Errorf("opened a new tab: %v", got)
+	}
+
+	n2, f2, home2 := herdrNode(t)
+	withStartWaits(n2, 10*time.Second, 10*time.Second)
+	stuckAsyncStart(t, n2, f2, home2, omzQuestion)
+	const other = "Proceed with the upgrade? [y/N]:"
+	f2.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" \n"+other+" ")
+	f2.reset()
+	if _, err := request(t, n2, "start.continue", map[string]any{"session_id": startID, "choice": "y"}); err != nil {
+		t.Fatalf("an answer to a question gone: %v", err)
+	}
+	if err := n2.starts.wait(t.Context(), startID); rpcCode(err) != proto.CodeShellWaiting {
+		t.Fatalf("the start again: %v", err)
+	}
+	if _, s := n2.starts.failed(startID); s.StartErrorArgs["line"] != other || s.StartErrorArgs["choices"] != "y,n,enter" {
+		t.Errorf("listed %v", s.StartErrorArgs)
+	}
+	if got := f2.trace("pane.send_keys", "pane.send_text", "pane.send_input"); len(got) != 0 {
+		t.Errorf("typed %v", got)
+	}
+}
+
+// compinit's read -q echoes the key after its question, with no newline, and has read it (#10365): no Enter follows,
+// which would go to whatever reads next (a later question, which takes its default, or the prompt).
+func TestStartContinueSingleKeyGetsNoEnterAfterItsEcho(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, 10*time.Second, 10*time.Second)
+	const compinit = "Ignore insecure directories and continue [y] or abort compinit [n]?"
+	stuckAsyncStart(t, n, f, home, compinit)
+	f.after(func(c herdrCall) {
+		if isKeys("y")(c) {
+			f.setScreen("w1:p2", "Last login: today\n"+compinit+" y")
+		}
+	})
+	claudeUpOnStart(t, f, "w1:p2")
+	f.reset()
+	if _, err := request(t, n, "start.continue", map[string]any{"session_id": startID, "choice": "y"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.starts.wait(t.Context(), startID); err != nil {
+		t.Fatalf("the start again: %v", err)
+	}
+	if got := keysInto(f, "w1:p2"); !slices.Equal(got, []string{"y"}) {
+		t.Errorf("keys pressed %v: the key alone", got)
+	}
+}
+
+// A start that took a hand-off's values (secret_ticket) and stopped on a question cannot run again on an answer: they
+// went with it. Its question is listed without answers, so no app offers one it would refuse (secret_env_gone).
+func TestSecretStartListsNoAnswers(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, time.Second, time.Second)
+	n.secrets, n.keeper = newSecretStage(), newAssistantKeeper()
+	staged, err := stageForTest(t, n, envVar("GITHUB_TOKEN", handoffTestValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchShell(n)
+	n.shellAsk, n.shellQuiet = 300*time.Millisecond, 200*time.Millisecond
+	newShellTab(f, "zsh")
+	f.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" ")
+	if _, err := request(t, n, "session.start", map[string]any{"session_id": startID, "cwd": home, "workspace_id": "w1",
+		"launcher": "claude", "async": true, "secret_ticket": staged.Ticket}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.starts.wait(t.Context(), startID); rpcCode(err) != proto.CodeShellWaiting {
+		t.Fatalf("start: %v", err)
+	}
+	_, s := n.starts.failed(startID)
+	if args := s.StartErrorArgs; args["line"] != omzQuestion || args["pane"] != "w1:p2" || args["choices"] != "" {
+		t.Errorf("listed %v", args)
+	}
+	f.reset()
+	if _, err := request(t, n, "start.continue", map[string]any{"session_id": startID, "choice": "n"}); rpcCode(err) != proto.CodeSecretEnvGone {
+		t.Errorf("an answer: %v", err)
+	}
+	if got := f.trace("pane.send_keys", "pane.send_text", "pane.send_input"); len(got) != 0 {
+		t.Errorf("typed %v", got)
 	}
 }
 
@@ -349,9 +464,40 @@ func TestStartAnswerAnswersAKeptTabByItsPane(t *testing.T) {
 	}
 }
 
+// The assistant's remedy (#2570): start.keys answers the kept tab's question, then a Retry starts in that tab
+// (in_pane). The question stays the last line written until the rest of ~/.zshrc draws the prompt, so that start
+// waits it out as in a new tab instead of ending at once with shell_waiting, as a Retry with nothing typed does.
+func TestStartKeysThenRetryWaitsOutTheAnsweredQuestion(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, 10*time.Second, 10*time.Second)
+	keptByAQuestion(t, n, f, home)
+	n.shellAsk = 10 * time.Second
+	f.after(func(c herdrCall) {
+		if isKeys("n")(c) { // oh-my-zsh read the key (no echo); the prompt comes after keptQuestionWait
+			time.AfterFunc(2*keptQuestionWait, func() { f.setScreen("w1:p2", omzQuestion+" \n% ") })
+		}
+	})
+	claudeUpOnStart(t, f, "w1:p2")
+	f.reset()
+	if _, err := request(t, n, "start.keys", map[string]any{"pane": "w1:p2", "keys": []string{"n"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": home, "workspace_id": "w1", "launcher": "claude", "in_pane": "w1:p2"}); err != nil {
+		t.Fatalf("the Retry after the keys: %v", err)
+	}
+	if got := f.trace("tab.create", "workspace.create"); len(got) != 0 {
+		t.Errorf("opened a new tab: %v", got)
+	}
+	if got := sent(f, "w1:p2"); len(got) != 1 {
+		t.Errorf("typed %q into the kept tab", got)
+	}
+}
+
 // start.answer types nothing for an answer the question was not offered, anything but Ctrl-C into a password prompt,
-// a question that is not the tab's last line any more (answered at the computer: prompt_changed), or a pane that is no
-// failed start's kept tab (any more).
+// or a pane that is no failed start's kept tab (any more): refused. A question that is not the tab's last line any
+// more (another one there, or answered at the computer) gets nothing typed and the tab is not marked typed: the
+// hub's start there then goes on, or ends at once with the question the tab shows.
 func TestStartAnswerRefusals(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
@@ -369,7 +515,6 @@ func TestStartAnswerRefusals(t *testing.T) {
 		{"not offered", "w1:p2", omzQuestion, "x", "choice_not_offered"},
 		{"text", "w1:p2", omzQuestion, "yes", "choice_not_offered"},
 		{"no question", "w1:p2", "", "n", "start_not_waiting"},
-		{"another question", "w1:p2", "Continue? [y/N]", "y", "prompt_changed"},
 		{"not kept", "w1:p9", omzQuestion, "n", "start_tab_gone"},
 		{"a password", "w1:p2", passphrase, "enter", "choice_not_offered"},
 		{"a password's yes", "w1:p2", passphrase, "y", "choice_not_offered"},
@@ -378,9 +523,21 @@ func TestStartAnswerRefusals(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
+	if err := answer("w1:p2", "Continue? [y/N]", "y"); err != nil { // another question than the tab's
+		t.Errorf("another question: %v", err)
+	}
 	f.setScreen("w1:p2", "Last login: today\n"+omzQuestion+" n\n% ") // answered on the computer
-	if err := answer("w1:p2", omzQuestion, "n"); rpcCode(err) != "prompt_changed" {
+	if err := answer("w1:p2", omzQuestion, "n"); err != nil {
 		t.Errorf("a changed screen: %v", err)
+	}
+	if got := f.trace("pane.send_keys", "pane.send_text", "pane.send_input"); len(got) != 0 {
+		t.Errorf("typed %v into a question gone", got)
+	}
+	n.mu.Lock()
+	typed := n.keptStarts["w1:p2"].typed
+	n.mu.Unlock()
+	if typed {
+		t.Error("marked typed with nothing typed")
 	}
 	f.setScreen("w1:p2", "Last login: today\n"+passphrase+" ")
 	if err := answer("w1:p2", passphrase, "cancel"); err != nil {

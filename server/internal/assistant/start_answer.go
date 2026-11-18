@@ -61,8 +61,9 @@ func (s *Service) answerTaskStart(ctx context.Context, todoID, choice string) (j
 // answerKeptTab types choice, the owner's answer to the question task t's last start stopped on, into its kept tab on
 // pane (keptTabOf: "" when its computer no longer keeps it) on computer m, through the node's start.answer. Only a
 // shell_waiting refusal that listed the question and offered choice is answered; a node from before start.answer is
-// refused node_outdated before anything is asked. The node's own refusals (prompt_changed, start_tab_gone,
-// choice_not_offered) come back as it gave them.
+// refused node_outdated before anything is asked. The node's own refusals (start_tab_gone, choice_not_offered) come
+// back as it gave them; a question no longer on the tab's last line (answered at the computer) gets nothing typed,
+// and the task starts in the tab all the same.
 func (s *Service) answerKeptTab(ctx context.Context, m Device, t PlanTask, pane, choice string) error {
 	line := t.ErrorArgs["line"]
 	if t.ErrorCode != proto.CodeShellWaiting || line == "" {

@@ -71,16 +71,20 @@ export async function continueStart(mid: string, sid: string, choice: string): P
   return r.session;
 }
 
-/** After an answer: the messages this start refused go again (an outbox entry's Retry; a New Agent launch's first
- *  message), and wait on the computer for the agent to be up. Only refusals: they were never delivered. */
-export function resendRefused(mid: string, sid: string) {
-  for (const e of getState().outbox[outboxKey(mid, sid)] ?? []) {
-    if (e.state === "failed" && e.code === SHELL_WAITING && !e.inDoubt) retryOutboxEntry(mid, sid, e.id);
-  }
+/** After an answer: the messages this start refused go again (a New Agent launch's first message; an outbox entry's
+ *  Retry), and wait on the computer for the agent to be up. Only refusals: they were never delivered. In the order
+ *  they were written, which is the order the computer hands them to the agent in: the launch's first message first,
+ *  and the chat's only once it went (one refused again keeps them back, failed as they were); those one after
+ *  another (the outbox sends a conversation's messages in turn). */
+export async function resendRefused(mid: string, sid: string) {
   for (const launch of Object.values(getState().launches)) {
     if (launch.phase === "failed" && launch.machineId === mid && launch.session?.session_id === sid && launch.shellWaiting) {
-      void deliverLaunch(launch.id);
+      await deliverLaunch(launch.id);
+      if (getState().launches[launch.id]?.phase !== "ready") return;
     }
+  }
+  for (const e of getState().outbox[outboxKey(mid, sid)] ?? []) {
+    if (e.state === "failed" && e.code === SHELL_WAITING && !e.inDoubt) retryOutboxEntry(mid, sid, e.id);
   }
 }
 

@@ -672,7 +672,8 @@ type TaskNotice struct {
 	Earlier        []string // what else it went through since the last notice ("waiting on the user", "done"), oldest first
 	Ask            string   // needs: what it asks
 	Text           string   // what its agent said last, or why it did not start
-	// RetryWith: failed because of its launcher there, the launcher its card offers to start it with instead (#10365).
+	// RetryWith: failed because of its launcher there, the launcher the assistant may start it with instead when the
+	// user asks (task_retry's launcher; only the web's card has a button for it, #10365).
 	RetryWith string
 	// Reporting: the notice goes into the conversation that opened the task (one started with report_tasks, such as
 	// a Feishu /agent's, #3192), not the main conversation.

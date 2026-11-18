@@ -181,11 +181,11 @@ describe("a planned task's failed start", () => {
   });
 
   it("keeps the hub's refusal on the card", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "prompt_changed", error: "The terminal prompt has changed. Refresh before answering." }), { status: 409 })));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "start_tab_gone", error: "That terminal tab isn't waiting any more." }), { status: 409 })));
     act(() => root.render(<ShellQuestion todo={todo} task={task()} />));
     act(() => host.querySelector<HTMLButtonElement>("[data-testid=shell-choice-y]")!.click());
     await flush();
-    expect(host.querySelector("[role=alert]")!.textContent).toContain("The terminal prompt has changed.");
+    expect(host.querySelector("[role=alert]")!.textContent).toContain("That terminal tab isn't waiting any more.");
   });
 
   it("is absent on a hub that cannot take it, for another failure, and once the tab is no longer kept", () => {

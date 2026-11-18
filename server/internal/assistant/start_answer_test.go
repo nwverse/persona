@@ -193,11 +193,11 @@ func TestTaskStartAnswerRefusals(t *testing.T) {
 	}
 }
 
-// The node's own refusals come back as it gave them, nothing typed and nothing started: the question is not on the
-// tab's last line any more (answered at the computer), the tab went meanwhile, an answer it does not take for that
-// question (Ctrl-C alone into a password prompt).
+// The node's own refusals come back as it gave them, nothing typed and nothing started: the tab went meanwhile, an
+// answer it does not take for that question (Ctrl-C alone into a password prompt). (A question answered at the
+// computer is no refusal: the node types nothing and the task starts in the tab.)
 func TestTaskStartAnswerPassesTheNodesRefusalOn(t *testing.T) {
-	for _, code := range []string{"prompt_changed", "start_tab_gone", "choice_not_offered"} {
+	for _, code := range []string{"start_tab_gone", "choice_not_offered"} {
 		t.Run(code, func(t *testing.T) {
 			s, f := launcherRetryHub(t)
 			asked := answeredNode(f, func(proto.StartAnswerParams) error {
@@ -208,7 +208,7 @@ func TestTaskStartAnswerPassesTheNodesRefusalOn(t *testing.T) {
 			if status != http.StatusConflict || body["code"] != code {
 				t.Fatalf("%d %v", status, body)
 			}
-			if code == "prompt_changed" && (body["error"] != "The terminal prompt has changed. Refresh before answering." || body["delivered"] != "none") {
+			if code == "start_tab_gone" && body["error"] != "That terminal tab isn't waiting any more: it was closed after a few minutes, or an agent runs there now. Nothing was typed; start the agent again." {
 				t.Errorf("words %v", body)
 			}
 			if got := asked(); len(got) != 1 || startsSoFar(f) != 1 || onlyTodo(s).StartError == "" {

@@ -36,7 +36,8 @@ const (
 // keptQuestionWait is how long a question may stay on screen in a failed start's kept tab that a start runs in again
 // (session.start's in_pane: a Retry) before it ends with shell_waiting once more: that question was asked already, so
 // the start says so with it and its answers at once rather than wait shellQuestionWait for nobody, and no new tab
-// stops on it too. A start start.continue runs after typing an answer waits as in a new tab (answeredOf).
+// stops on it too. A start start.continue runs after typing an answer waits as in a new tab (answeredOf), and so does
+// one in a kept tab typed into since its question was kept (start.answer, start.keys: keptStart.typed).
 const keptQuestionWait = time.Second
 
 // keptStartWait is how long the tab of a start that ended waiting on its shell (shell_waiting) or on the agent's own
@@ -95,14 +96,17 @@ type shellChoice struct {
 }
 
 // shellAsk is how a startup question is answered from the app: its kind, the answers offered (only these are ever
-// typed), whether it reads a whole line (LineMode: an answer it echoes waits for Enter), whether it reads a secret
-// (Secret: nothing is typed into it but Ctrl-C), and the answer Enter alone gives ("" when it does not say).
+// typed), whether it reads a whole line (LineMode: an answer it echoes waits for Enter) or one key (SingleKey: one it
+// echoes has been read, and an Enter after it would go to whatever reads next), whether it reads a secret (Secret:
+// nothing is typed into it but Ctrl-C), and the answer Enter alone gives ("" when it does not say). Neither LineMode
+// nor SingleKey: the reader is not known (a bare [Y/n]), and the screen after the key tells (enterAfterEcho).
 type shellAsk struct {
-	Kind     string
-	Choices  []shellChoice
-	LineMode bool
-	Secret   bool
-	Default  string
+	Kind      string
+	Choices   []shellChoice
+	LineMode  bool
+	SingleKey bool
+	Secret    bool
+	Default   string
 }
 
 // The answers a startup question is offered.
@@ -127,12 +131,12 @@ func questionChoices(line string) shellAsk {
 		return shellAsk{Kind: "secret", Choices: []shellChoice{choiceCancel}, LineMode: true, Secret: true}
 	case askSSHHostKey.MatchString(line):
 		return shellAsk{Kind: "ssh_host_key", Choices: []shellChoice{choiceNoWord, choiceCancel}, LineMode: true}
-	case askCompinit.MatchString(line): // read -q: one key, y or n
-		return shellAsk{Kind: "compinit", Choices: []shellChoice{keyChoice("y", "y"), keyChoice("n", "n")}}
-	case askNewUser.MatchString(line): // q leaves it for next time, 0 writes a ~/.zshrc with only a comment
-		return shellAsk{Kind: "zsh_newuser", Choices: []shellChoice{keyChoice("q", "q"), keyChoice("0", "0")}}
-	case askP10k.MatchString(line): // its other answers are about how glyphs look: those are for the computer
-		return shellAsk{Kind: "p10k_wizard", Choices: []shellChoice{keyChoice("q", "q")}}
+	case askCompinit.MatchString(line): // read -q: one key, y or n, echoed after the question
+		return shellAsk{Kind: "compinit", Choices: []shellChoice{keyChoice("y", "y"), keyChoice("n", "n")}, SingleKey: true}
+	case askNewUser.MatchString(line): // read -k; q leaves it for next time, 0 writes a ~/.zshrc with only a comment
+		return shellAsk{Kind: "zsh_newuser", Choices: []shellChoice{keyChoice("q", "q"), keyChoice("0", "0")}, SingleKey: true}
+	case askP10k.MatchString(line): // read -k; its other answers are about how glyphs look: those are for the computer
+		return shellAsk{Kind: "p10k_wizard", Choices: []shellChoice{keyChoice("q", "q")}, SingleKey: true}
 	case askRVM.MatchString(line): // read: a line
 		return shellAsk{Kind: "rvm_trust", Choices: []shellChoice{keyChoice("n", "n"), keyChoice("c", "c")}, LineMode: true}
 	case askYesNoWords.MatchString(line):
@@ -144,7 +148,9 @@ func questionChoices(line string) shellAsk {
 		kind = "update"
 	}
 	if m := askYesNo.FindStringSubmatch(line); m != nil {
-		ask := shellAsk{Kind: kind, Choices: []shellChoice{keyChoice(m[1], m[1]), keyChoice(m[2], m[2]), choiceEnter}, LineMode: lineMode}
+		// oh-my-zsh's update question reads one key (read -k 1); oh-my-bash's ends in a colon and reads a line
+		ask := shellAsk{Kind: kind, Choices: []shellChoice{keyChoice(m[1], m[1]), keyChoice(m[2], m[2]), choiceEnter}, LineMode: lineMode,
+			SingleKey: kind == "update" && !lineMode}
 		switch {
 		case m[1] == "Y" && m[2] == "n":
 			ask.Default = "y"
@@ -222,7 +228,7 @@ func (n *Node) settleShell(ctx context.Context, pane string) error {
 		return nil
 	}
 	settle, quiet, ask := n.shellWaits()
-	if c := keptClaimOf(ctx); c != nil && c.pane == pane && !answeredOf(ctx) && !c.k.answered && ask > keptQuestionWait {
+	if c := keptClaimOf(ctx); c != nil && c.pane == pane && !answeredOf(ctx) && !c.k.typed && ask > keptQuestionWait {
 		ask = keptQuestionWait
 	}
 	began := time.Now()
@@ -283,9 +289,10 @@ type keptStart struct {
 	ws      string
 	until   time.Time
 	taken   bool // a start holds it (claimKeptTab): only that start settles or releases it
-	// answered: start.answer typed an answer to its question (startAnswer), so the start that claims it next waits
-	// out the question's line as in a new tab (answeredOf).
-	answered bool
+	// typed: something was typed into it since its start failed: an answer to its question (start.answer) or the
+	// assistant's keys (start.keys). Its question then stays the last line written until the shell prints more, so the
+	// start that claims it next waits that out as in a new tab (answeredOf) rather than end at once (keptQuestionWait).
+	typed bool
 }
 
 // keepStartTab keeps the tab of a start that failed waiting on its shell or on the agent's screen, created, open for
