@@ -143,6 +143,10 @@ type turnSignal struct {
 	Told    *time.Time `json:"told,omitempty"`
 }
 
+func (sig turnSignal) forTodo(todo string) superviseSignal {
+	return superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail}
+}
+
 // settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
 func (e taskTurn) settled() bool {
 	if e.State == turnDone && e.Judged == nil {
@@ -669,8 +673,8 @@ func (s *Service) taskJudging(todo string, n int) {
 // looked (once after a start of the manager); then one transcript read, at most turnRecoverMost going at a time. A
 // look that could not finish (the node did not answer, the judgment did not land) is tried again on the next tick and
 // then ever later while the row stays as it is (turnRetryIn). A usage limit that is waited out is not looked at until
-// the wait is over (its turn goes on then), nor an agent whose computer is not connected. What a manager before this
-// one left untold is told from the ledger alone.
+// the wait is over (its turn goes on then), nor an agent whose computer is not connected. An unchanged revision lets
+// the sweep replay a previous manager's untold signal from the ledger alone.
 func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session) {
 	agents = currentTaskAgents(agents, supersededAgents(t, agents))
 	probe := make([]proto.Session, len(agents))
@@ -721,7 +725,7 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 	}
 	b.mu.Unlock()
 	if tell != nil { // judged before a restart, never told: told now (a signal waiting or told already stays as it is)
-		s.signal(superviseSignal{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine, Detail: tell.Detail})
+		s.signal(tell.forTodo(t.ID))
 	}
 	if skip {
 		return
@@ -797,6 +801,11 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 		if e.settled() {
 			return true
 		}
+		// A bookkeeping entry can change the revision after the turn ends. Once its native end
+		// identifies the same turn, replay its outstanding signal even if the revision keeps moving.
+		if sig := e.Signal; e.Rev != last.Rev && sig != nil && sig.Told == nil {
+			s.signal(sig.forTodo(t.ID))
+		}
 		return s.resumeTurn(ctx, current, e)
 	}
 	if settling {
@@ -837,8 +846,9 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 }
 
 // resumeTurn finishes what a manager before this one, or a look that failed, left of task t's turn e: its judgment.
-// (Its untold signal is told by watchTurn.) When the last of turnJudgeTries judgments did not land either it is told
-// unjudged at once, so that the supervisor hears of the stop in any case. looked: nothing more to try now.
+// The sweep replays its untold signal after matching the revision or the native end. When the last of turnJudgeTries
+// judgments did not land either it is told unjudged at once, so that the supervisor hears of the stop in any case.
+// looked: nothing more to try now.
 func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bool) {
 	if e.State != turnDone || e.Judged != nil {
 		return true // judged: only the telling is left
