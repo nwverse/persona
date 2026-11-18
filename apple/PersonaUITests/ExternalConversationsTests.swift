@@ -17,10 +17,10 @@ final class ExternalConversationsTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(_ scheme: String, open session: String? = nil) {
+    @MainActor private func launch(_ scheme: String, open session: String? = nil, extra: [String] = []) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        var args = ["-pairURL", pair, "-tab", "assistant", "-ui.scheme", scheme, "-assistant.autoOpen", "YES"]
+        var args = ["-pairURL", pair, "-tab", "assistant", "-ui.scheme", scheme, "-assistant.autoOpen", "YES"] + extra
         // `-newAssistant` would start on a new conversation after `-openAssistant` picked this one.
         args += session.map { ["-openAssistant", "server/" + $0] } ?? ["-newAssistant", "YES", "-dev.openChat", ""]
         app.launchArguments = args
@@ -47,7 +47,8 @@ final class ExternalConversationsTests: XCTestCase {
         a.lifetime = .keepAlways
         add(a)
         if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
-            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/external-\(name).png"))
+            let suffix = ProcessInfo.processInfo.environment["PERSONA_SHOTS_SUFFIX"] ?? ""
+            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/external-\(name)\(suffix).png"))
         }
     }
 
@@ -85,6 +86,41 @@ final class ExternalConversationsTests: XCTestCase {
             sleep(1)
             shot("chat-extension-\(scheme)")
             app.terminate()
+        }
+    }
+
+    /// The extension that opened them (#10358): with MOCK_OPENER_ICONS=1 the mock installs the Lark /agent conversation's
+    /// opener as a made-up third-party extension with an icon (its name in PERSONA_OPENER_NAME, "Chat Bridge"), and the
+    /// rows and the first message draw it and name it 「来自 Chat Bridge」 once its icon is in. Without the flag nothing
+    /// is installed: Lark's mark and 「来自 飞书 /agent」, as before. Light and dark, at the default and the largest text
+    /// size; PERSONA_SHOTS keeps the screenshots, PERSONA_SHOTS_SUFFIX names the run.
+    @MainActor func testTheOpenersIconAndName() {
+        let name = ProcessInfo.processInfo.environment["PERSONA_OPENER_NAME"]
+        let words = name.map { "来自 \($0)" } ?? "来自 飞书 /agent"
+        let sizes: [(String, [String])] = [("default", []),
+                                           ("ax5", ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])]
+        for (size, extra) in sizes {
+            for scheme in ["light", "dark"] {
+                // All Chats filtered to Lark /agent: its one row, named by its opener once that one's icon is in.
+                launch(scheme, extra: extra)
+                openSidebar().tap()
+                let lark = app.buttons["auto-filter-lark_agent"].firstMatch
+                XCTAssertTrue(lark.waitForExistence(timeout: 5), "no 飞书 /agent filter:\n\(app.debugDescription)")
+                lark.tap()
+                let row = app.buttons.matching(NSPredicate(format: "identifier == 'auto-conversation' AND label CONTAINS %@", words)).firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 15), "no row saying \(words):\n\(app.debugDescription)")
+                sleep(1)
+                shot("opener-list-\(size)-\(scheme)")
+                app.terminate()
+
+                // Opened: the line under the message it was opened with.
+                launch(scheme, open: "b2e4d6f8-0000-4000-8000-000000000308", extra: extra)
+                let line = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'message-external-source' AND label CONTAINS %@", words)).firstMatch
+                XCTAssertTrue(line.waitForExistence(timeout: 20), "no 「\(words)」 under the first message:\n\(app.debugDescription)")
+                sleep(1)
+                shot("opener-chat-\(size)-\(scheme)")
+                app.terminate()
+            }
         }
     }
 
