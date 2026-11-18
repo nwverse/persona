@@ -1102,41 +1102,14 @@ nonisolated struct APIClient: Sendable {
     @discardableResult
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
               clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Bool {
-        try await sendReply(k, text: text, images: images, launcher: launcher, model: model, clientMsgID: clientMsgID,
-                            clearDraft: clearDraft, todoID: todoID, via: via, opID: opID).waitsOnComputer == true
-    }
-
-    /// The hub's answer to a message it took: whether it waits behind a question on the computer (#5890), or that it
-    /// did not go in and the assistant keeps it to send by itself (`delivered` "later", `undelivered`: #10194).
-    nonisolated struct SendReply: Decodable, Sendable {
-        var waitsOnComputer: Bool?
-        var delivered: String?
-        var undelivered: UndeliveredMessage?
-        var kept: Bool { delivered == "later" }
-        enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer", delivered, undelivered }
-    }
-
-    /// `send`, with the whole answer (`SendReply`).
-    func sendReply(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-                   clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> SendReply {
         let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
                                                                       model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
                                   timeout: 100, opID: opID)
-        return (try? JSON.decoder.decode(SendReply.self, from: data)) ?? SendReply()
-    }
-
-    /// Retry on a kept message that gave up (#10194): the assistant tries it again from now.
-    func retryUndelivered(conversation: String, id: String) async throws {
-        try await post("/api/v1/assistant/conversations/\(Self.pathPart(conversation))/undelivered/\(Self.pathPart(id))/retry", body: [String: String]())
-    }
-
-    /// Delete on a kept message (#10194): it is never sent.
-    func deleteUndelivered(conversation: String, id: String) async throws {
-        try await delete("/api/v1/assistant/conversations/\(Self.pathPart(conversation))/undelivered/\(Self.pathPart(id))")
-    }
-
-    private nonisolated static func pathPart(_ s: String) -> String {
-        s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? s
+        struct Answer: Decodable {
+            var waitsOnComputer: Bool?
+            enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.waitsOnComputer == true
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
     func attach(_ k: SessionKey) async throws { try await post(sp(k) + "/attach") }

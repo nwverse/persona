@@ -3690,9 +3690,6 @@ final class AppModel {
         sessionsByMachine[key.machineRef] = list
     }
 
-    /// `patchSession` for the send path's files (SendSafety.swift).
-    func patchListedSession(_ key: SessionKey, _ change: (inout Session) -> Void) { patchSession(key, change) }
-
     func keys(_ key: SessionKey, _ keys: [String], text: String = "") async {
         guard session(key)?.canTerminal == true else { return }
         do { try await api(key.group)?.keys(key, keys: keys, text: text) } catch { show(error) }
