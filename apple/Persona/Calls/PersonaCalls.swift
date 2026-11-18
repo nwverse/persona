@@ -868,8 +868,9 @@ extension PersonaCalls: CallSystemHandler {
         guard let call = call(id) else { return }
         if state == .left {
             dispatch(call, .systemEnded)
-        } else if !call.machine.known {
-            known(call, by: "conversationChanged, \(state)")
+        } else {
+            if !call.machine.known { known(call, by: "conversationChanged, \(state)") }
+            if state == .joined { dispatch(call, .conversationJoined) }
         }
     }
 

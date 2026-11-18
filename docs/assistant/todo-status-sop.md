@@ -391,6 +391,8 @@ the places; it never works out a view. The hello features `todo_view` and `todo_
 and only while they are listed do the counts cover every manager. The manager also pushes `{"type":"todos"}` when a
 run's change or time alone changes what a row is filed under (`docs/assistant/todos.md` "Live WebSocket pushes").
 
-No client reads `view` yet: the clients switch to it in stage 2, falling back to the rules above for a row without
-one. Until then every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`),
-follows the rules above.
+No client draws from `view` by default yet: the clients switch to it in stage 2, falling back to the rules above for a
+row without one. Until then every client, and the hub's own triage for the direction tree and leader reports
+(`todo_triage.go`), follows the rules above. The web's Developing Persona shadow compares the two on real data and
+records what the decided differences (the list above, Steps rolling up and Someday;
+`web/src/features/todos/model/view-legacy.ts` `BY_DESIGN`) do not explain (`docs/web/web.md` "Developing Persona").
