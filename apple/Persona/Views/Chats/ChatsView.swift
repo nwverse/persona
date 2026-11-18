@@ -2621,28 +2621,33 @@ private struct AgentsList: View {
 
     // MARK: Recently active
 
+    #if !os(iOS)
     private func workspaceAgentMenu(_ s: Session) -> AgentRowMenu {
-        #if os(iOS)
-        return AgentRowMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions)
-        #else
-        return AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
+        AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
                      live: s.state.isLive, terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose,
                      attachable: s.canAttach, deletable: s.canDelete,
                      paneActions: NodeMenu.offersPaneActions(s), actions: rowActions)
-        #endif
     }
+    #endif
 
 
     @ViewBuilder private func worktreeMenu(_ worktree: RepoTree.Worktree, agent: Session? = nil) -> some View {
         if let target = worktree.workspace {
             let direct = ordered(WorkspaceNavigation.directSessions(target, inventory: model.sessionsNow, catalog: workspaceCatalog.workspaces))
-            WorktreeSidebarMenu(workspace: target, parent: workspaceCatalog.workspaces.first { $0.key == target.parentKey },
-                                sessions: direct, agent: agent, menus: direct.map(workspaceAgentMenu),
-                                open: { target in
-                                    if target.key == worktree.workspace?.key { openWorktree(worktree) }
-                                    else { openWorktree(target) }
-                                }, newSession: { startingWorktree = $0 }, newChild: { creatingChild = $0 },
+            let parent = workspaceCatalog.workspaces.first { $0.key == target.parentKey }
+            let open: (HostWorkspace) -> Void = { target in
+                if target.key == worktree.workspace?.key { openWorktree(worktree) } else { openWorktree(target) }
+            }
+            #if os(iOS)
+            WorktreeSidebarMenu(workspace: target, parent: parent, sessions: direct, agent: agent, handlers: rowActions,
+                                open: open, newSession: { startingWorktree = $0 }, newChild: { creatingChild = $0 },
                                 rename: { renamingWorktree = $0 }).equatable()
+            #else
+            WorktreeSidebarMenu(workspace: target, parent: parent, sessions: direct, agent: agent,
+                                menus: direct.map(workspaceAgentMenu),
+                                open: open, newSession: { startingWorktree = $0 }, newChild: { creatingChild = $0 },
+                                rename: { renamingWorktree = $0 }).equatable()
+            #endif
         }
     }
 
@@ -3483,7 +3488,7 @@ private struct AgentsList: View {
             #endif
             .contextMenu { () -> AnyView in
                 #if os(iOS)
-                AnyView(AgentActionMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions).equatable())
+                AnyView(AgentActionMenuReader(session: s, handlers: rowActions)) // not the row's to observe (#10231)
                 #else
                 AnyView(AgentRowMenu(s, model: model, actions: rowActions).equatable())
                 #endif
@@ -3567,7 +3572,12 @@ private struct KeyedRow<Key: Equatable & Sendable, Content: View>: View, Equatab
     nonisolated let key: Key
     @ViewBuilder let content: () -> Content
 
-    var body: some View { content() }
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("KeyedRow") // an Agents row built again (`RenderBudgetTests`)
+        #endif
+        content()
+    }
 
     nonisolated static func == (a: Self, b: Self) -> Bool { a.key == b.key }
 }
@@ -3832,14 +3842,7 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
 
     /// The same machines as the list shows them: a machine's heartbeat (`lastSeen`, on every push of a busy hub) is
     /// shown only on the machines page, and drew the whole list again each time (#1495).
-    nonisolated static func sameListing(_ a: [Machine], _ b: [Machine]) -> Bool {
-        a.count == b.count && zip(a, b).allSatisfy { x, y in
-            guard x.lastSeen != y.lastSeen else { return x == y }
-            var y = y
-            y.lastSeen = x.lastSeen
-            return x == y
-        }
-    }
+    nonisolated static func sameListing(_ a: [Machine], _ b: [Machine]) -> Bool { AppModel.sameApartFromHeartbeat(a, b) }
 
     /// The rows that changed get their agent; the list gets the new list only if its structure changed.
     private func show(_ s: [Session]) {

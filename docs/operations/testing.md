@@ -961,7 +961,7 @@ Displayed state must match hub promptly (`docs/apple/ios-state.md` ("Truth and t
   Each has `at` (last change), compared to push time.
 - Mock:
   - `/mock/truth` current authoritative data;
-  - `/mock/bump?what=rev|last|needs|ask|resolve` changes one thing, pushes whole-machine sessions/question like hub.
+  - `/mock/bump?what=rev|last|needs|ask|resolve|heartbeat` changes one thing, pushes whole-machine sessions/question like hub (`heartbeat`: only the machines' `last_seen`, as a `machines` push).
 - Cases/limits:
   - Consistent at rest;
   - During touch, Needs you/questions visible ≤1 s;

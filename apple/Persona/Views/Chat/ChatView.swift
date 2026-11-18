@@ -3677,10 +3677,9 @@ struct ChatView: View {
         #if os(iOS)
         if style == .dev, let host { hostedMenuItems(host) }
         if style == .dev, let session {
-            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: pane,
-                                                            hosted: host != nil, showsSpace: openSpace != nil,
-                                                            sides: sides),
-                                    handlers: agentMenuHandlers)).stackSegment()
+            // Not the header's to observe: the facts read the machines, links and pins (#10231).
+            AnyView(AgentActionMenuReader(session: session, currentPane: pane, hosted: host != nil, showsSpace: openSpace != nil,
+                                          sides: sides, handlers: agentMenuHandlers)).stackSegment()
         } else if session?.canAttach == true {
             Button { Task { await model.attach(key) } } label: { Label("Attach Live", systemImage: Theme.Icon.link).lineLimit(1) }
         }
