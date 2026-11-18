@@ -25,6 +25,14 @@ import (
 // codexProfileKey matches a line that selects a Codex profile (`profile = "…"`, quoted or not), in any table.
 var codexProfileKey = lazyre.New(`(?m)^[ \t]*"?profile"?[ \t]*=`)
 
+// codexOwnEffort is e without an effort the Codex that argv starts in cwd already runs (codexEffortInherited).
+func (n *Node) codexOwnEffort(ctx context.Context, argv []string, cwd string, e modelExecution) modelExecution {
+	if e.Effort != "" && n.codexEffortInherited(ctx, argv, cwd, e.Effort) {
+		e.Effort = ""
+	}
+	return e
+}
+
 // codexEffortInherited: the Codex that argv starts in cwd already runs at effort without the flag. True only when sure:
 //   - argv runs codex itself (not a managed launcher), changes no home or shell lookup settings, and would join the shared
 //     app-server (no own-process flag, no --remote); a bare codex is not a shell function (#4876);
