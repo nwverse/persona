@@ -1664,9 +1664,11 @@ private fun ConversationRow(
     var menu by remember { mutableStateOf(false) }
     // What opened an automatic chat takes precedence; a user's own chat keeps its latest message's channel mark (#5196).
     val source = automaticConversationOrigin(origin)
+    // The extension that opened it, whose own icon its mark draws once it is there (#10358).
+    val opener = ConversationOpener.of(session, origin)
     val channels = LocalChannels.current
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
-    val sourceMark: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s) } }
+    val sourceMark: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s, opener) } }
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     val archivedLabel = if (session.archived) stringResource(R.string.assistant_archived) else null
     val accessory: (@Composable () -> Unit)? = if (sourceMark == null && archivedLabel == null) null else {
@@ -1730,11 +1732,18 @@ private fun ConversationRow(
     )
 }
 
-/** What opened an automatic chat: Lark's official brand for /agent, otherwise the source's icon (#5196). */
+/**
+ * What opened an automatic chat: Lark's official brand for /agent, otherwise the source's icon (#5196). A chat an
+ * extension opened ([opener]) draws that extension's own icon instead once it is there, named "From <its name>"
+ * (#10358, ConversationOpener.kt); until then, and for every fallback, the origin's mark and words stay.
+ */
 @Composable
-private fun ConversationOriginMark(source: AssistantConversationOrigin) {
-    val label = source.accessibilityLabel(androidx.compose.ui.platform.LocalResources.current)
-    if (source == AssistantConversationOrigin.LarkAgent) {
+private fun ConversationOriginMark(source: AssistantConversationOrigin, opener: ConversationOpener? = null) {
+    val drawn = rememberDrawnOpener(opener, source)
+    val label = originMarkLabel(source, drawn?.name, androidx.compose.ui.platform.LocalResources.current)
+    if (drawn != null) {
+        JSourceMark(label, size = MarkSize.Inline, picture = drawn.picture)
+    } else if (source == AssistantConversationOrigin.LarkAgent) {
         JSourceMark(label, brand = Brand.Lark, size = MarkSize.Inline)
     } else {
         val icon = when (source) {
