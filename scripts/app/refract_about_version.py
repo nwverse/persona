@@ -11,10 +11,11 @@ Usage:
     python3 scripts/app/refract_about_version.py check --download
     python3 scripts/app/refract_about_version.py generate --download
 
-`--download` explicitly opts into fetching the exact public source archive from toolchain.json into an isolated
-temporary source/toolchain directory. Its full commit, archive checksum, extracted source-tree digest and archived
-SwiftSyntax lock are verified before `swift build`; no moving branch or unverified archive is accepted.
+`--download` explicitly opts into fetching the exact public Git commit from toolchain.json into an isolated
+source/toolchain directory. Its full commit, complete Git tree, deterministic source-archive checksum and archived
+SwiftSyntax lock are verified before `swift build`; no moving branch, dirty checkout or unverified archive is accepted.
 An ordinary Android build never invokes this script, downloads a generator or selects the experimental component.
+With `--download`, the CLI's build parallelism is two jobs by default (`PERSONA_REFRACT_BUILD_JOBS` can lower it).
 Android CI explicitly opts into the same pinned public source build with --download; no other Gradle or CI path
 downloads a generator implicitly. Without --download, no network request is made: use --cli, PERSONA_REFRACT_CLI,
 or a local `.toolchain/refract` built from that exact source (this untracked path is optional and never committed).
@@ -22,8 +23,9 @@ or a local `.toolchain/refract` built from that exact source (this untracked pat
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
-import http.client
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -33,9 +35,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
+sys.dont_write_bytecode = True
 import urllib.error
-import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 PILOT = ROOT / "android/refract/about"
@@ -46,8 +47,9 @@ SCHEMA_ONLY_HARMONY = PILOT / "harmony-resource-validation-only"
 EXPECTED = {
     "source": "https://github.com/nwverse/refract",
     "commit": "e32413fba1f13ff0652dedea5f96fc49ec4a8c96",
-    "archiveSha256": "a28ae4ff35f85988057cd846fc2bf1844ae88525319eee84f13ac6b9ce8d6a83",
-    "sourceTreeSha256": "cfaeafa9cee642c7f8e8832440977ec099851f834ffa31e87de281d5334a43be",
+    "archiveSha256": "522ec930a5b5de652acc090f1734e7d3440b18ad404a437927f713b2c3ad23fa",
+    "sourceTreeSha256": "bb1e9d8fbe772541bd619a825cdb673c10d09542395aace51b1fbcfe280b5c30",
+    "archiveTreeSha256": "cfaeafa9cee642c7f8e8832440977ec099851f834ffa31e87de281d5334a43be",
     "mappingSchemaVersion": 1,
     "swiftSyntaxVersion": "600.0.1",
     "swiftSyntaxRevision": "0687f71944021d616d34d922343dcef086855920",
@@ -63,8 +65,8 @@ def validate_lock() -> dict:
     for key, expected in EXPECTED.items():
         if lock.get(key) != expected:
             fail(f"toolchain.json: {key} does not match the reviewed source lock")
-    if lock.get("archiveUrl") != f"https://api.github.com/repos/nwverse/refract/tarball/{EXPECTED['commit']}":
-        fail("toolchain.json: archive URL is not the reviewed commit's public source archive")
+    if lock.get("archiveUrl") != "deterministic git source archive built by scripts/package_cli.py at the pinned commit":
+        fail("toolchain.json: archive source is not the reviewed deterministic packaging command")
     if json.loads(MAPPING.read_text(encoding="utf-8")).get("schemaVersion") != EXPECTED["mappingSchemaVersion"]:
         fail("refract.json: unsupported mapping schema")
     return lock
@@ -79,7 +81,7 @@ def source_tree_digest(source: Path) -> str:
 
 def validate_archived_lock(source: Path, lock: dict) -> None:
     actual_tree = source_tree_digest(source)
-    if actual_tree != lock["sourceTreeSha256"]:
+    if actual_tree != lock["archiveTreeSha256"]:
         fail(f"Source-tree SHA-256 mismatch: got {actual_tree}")
     resolved = json.loads((source / "Package.resolved").read_text(encoding="utf-8"))
     pins = [pin for pin in resolved.get("pins", []) if pin.get("identity") == "swift-syntax"]
@@ -110,25 +112,82 @@ def safe_extract(archive: Path, destination: Path) -> None:
     shutil.move(str(extracted[0]), str(destination / "source"))
 
 
+def validate_git_tree(checkout: Path, lock: dict) -> None:
+    # Read the selected commit's regular blobs, never incidental files produced by a build or Python import.
+    listing = subprocess.run(["git", "ls-tree", "-r", "-z", lock["commit"]], check=True, cwd=checkout,
+                             capture_output=True, timeout=30).stdout
+    entries = []
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        metadata, encoded_name = record.split(b"\t", 1)
+        mode, kind, _ = metadata.split()
+        if kind != b"blob" or mode not in (b"100644", b"100755"):
+            fail("Pinned source contains a non-regular Git entry")
+        name = encoded_name.decode("utf-8")
+        data = subprocess.run(["git", "show", f"{lock['commit']}:{name}"], check=True, cwd=checkout,
+                              capture_output=True, timeout=30).stdout
+        if name == "Sources/RefractCLI/Version.swift":
+            data, count = re.subn(rb'(?m)^(\s*static let sourceRevision = )"[^"]*"$',
+                                  rb'\g<1>"$Format:%H$"', data)
+            if count != 1:
+                fail("The pinned CLI source identity placeholder is missing")
+        entries.append((name, hashlib.sha256(data).hexdigest()))
+    actual_tree = hashlib.sha256(json.dumps(sorted(entries), separators=(",", ":")).encode()).hexdigest()
+    if actual_tree != lock["sourceTreeSha256"]:
+        fail(f"Source-tree SHA-256 mismatch: got {actual_tree}")
+
+
+def canonical_source_archive(checkout: Path, lock: dict, archive: Path) -> None:
+    # Use the pinned packager's canonical metadata and source selection, but read Git blobs rather than requiring
+    # a Git LFS smudge filter in a clean CI checkout. Version identity is stamped by the same upstream function.
+    source = checkout
+    spec = importlib.util.spec_from_file_location("persona_refract_source_package", source / "scripts/package_cli.py")
+    if spec is None or spec.loader is None:
+        fail("Pinned source packaging module cannot be loaded")
+    packaging = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(packaging)
+    entries = []
+    for name in packaging.source_files(lock["commit"]):
+        metadata, object_name = packaging.run(["git", "ls-tree", "-z", lock["commit"], "--", name]).split("\0")[0].split("\t", 1)
+        mode, kind, _ = metadata.split()
+        if kind != "blob" or mode not in ("100644", "100755"):
+            fail(f"Pinned source contains a non-regular entry: {object_name}")
+        data = packaging.run_bytes(["git", "show", f"{lock['commit']}:{name}"])
+        if name == "Sources/RefractCLI/Version.swift":
+            data = packaging.version_source(data, lock["commit"])
+        entries.append((name, 0o755 if mode == "100755" else 0o644, data))
+    archive.write_bytes(gzip.compress(packaging.deterministic_tar("refract-source-0.1.0", entries),
+                                    compresslevel=9, mtime=packaging.ARCHIVE_EPOCH))
+
+
 def build_cli(work: Path, lock: dict) -> Path:
+    checkout = work / "checkout"
+    archive = work / "source.tar.gz"
+    subprocess.run(["git", "clone", "--quiet", "--no-checkout", "--filter=blob:none", lock["source"], str(checkout)],
+                   check=True, cwd=work, timeout=300)
+    subprocess.run(["git", "checkout", "--quiet", "--detach", lock["commit"]], check=True, cwd=checkout, timeout=300)
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], check=True, cwd=checkout, capture_output=True, text=True,
+                              timeout=30).stdout.strip()
+    if revision != lock["commit"]:
+        fail(f"Git source revision mismatch: {revision}")
+    # Match only regular files from the selected commit, not an arbitrary checkout or untracked file.
+    status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], check=True, cwd=checkout,
+                            capture_output=True, text=True, timeout=30).stdout
+    if status:
+        fail("Pinned source checkout is not clean")
+    validate_git_tree(checkout, lock)
+    # The fixed source's own reviewed packager supplies canonical tar metadata. Do not accept a download cache's
+    # changing gzip bytes as a stable archive. A second independently generated archive must be identical.
+    for candidate in (archive, work / "source-second.tar.gz"):
+        canonical_source_archive(checkout, lock, candidate)
+        digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if digest != lock["archiveSha256"]:
+            fail(f"Deterministic source archive SHA-256 mismatch: got {digest}")
+    if archive.read_bytes() != (work / "source-second.tar.gz").read_bytes():
+        fail("Two pinned source archives are not byte-identical")
     source = work / "source"
     source.mkdir()
-    archive = work / "source.tar.gz"
-    # The public archive is small but its connection can drop a chunk. Retry only the download, with a fixed
-    # deadline; the exact archive checksum below remains the trust boundary and is never retried away.
-    for attempt in range(3):
-        try:
-            request = urllib.request.Request(lock["archiveUrl"], headers={"Accept": "application/vnd.github+json"})
-            with urllib.request.urlopen(request, timeout=90) as response, archive.open("wb") as output:
-                shutil.copyfileobj(response, output)
-            break
-        except (OSError, urllib.error.URLError, http.client.IncompleteRead):
-            if attempt == 2:
-                raise
-            time.sleep(1)
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if digest != lock["archiveSha256"]:
-        fail(f"Source archive SHA-256 mismatch: got {digest}")
     safe_extract(archive, source)
     validate_archived_lock(source / "source", lock)
     subprocess.run(
@@ -225,7 +284,7 @@ def main() -> int:
                 print(f"Generated {GENERATED.relative_to(ROOT)} with pinned source {lock['commit']}")
             print(f"Refract About Version {args.mode}: PASSED ({lock['commit']}); Android-only, no runtime")
     except (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError, tarfile.TarError,
-            urllib.error.URLError, http.client.HTTPException) as error:
+            urllib.error.URLError) as error:
         print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
         return 1
     return 0

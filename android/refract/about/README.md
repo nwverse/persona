@@ -26,8 +26,9 @@ or target registration for this pilot.
 
 ## Reproducible source and generation
 
-`toolchain.json` pins public Refract source commit `e32413fba1f13ff0652dedea5f96fc49ec4a8c96`, its source-archive
-SHA-256, a digest of every extracted source file, mapping schema 1, and SwiftSyntax 600.0.1 at revision `0687f71944021d616d34d922343dcef086855920`.
+`toolchain.json` pins public Refract source commit `e32413fba1f13ff0652dedea5f96fc49ec4a8c96`, the raw Git-tree
+and extracted-archive-tree SHA-256 values (the archive honors `Fixtures/** -text`, preserving fixture CRLF), its
+source-archive SHA-256, mapping schema 1, and SwiftSyntax 600.0.1 at revision `0687f71944021d616d34d922343dcef086855920`.
 This is an experimental source snapshot, **not a supported release** and not production-readiness acceptance. The
 upstream scalar-model fix it contains was separately reviewed and merged through Refract's exact-head workflow.
 
@@ -47,9 +48,13 @@ supply that already-built CLI; otherwise the command fails with a clear prerequi
 verification. Its `refract --version` must report the pinned complete source commit. Swift is needed only for an
 explicit download/build, not for ordinary Gradle builds or the offline check.
 
-The command validates the lock, source identity and archived SwiftSyntax revision. The GitHub API source archive's
-SHA-256 and the digest of every extracted source file are both checked; no archive is accepted on its URL alone.
-It never downloads or commits an opaque binary, accepts arbitrary generated target text, or patches Kotlin afterward. The same invocation
+The command validates the lock, exact Git commit, complete source tree and archived SwiftSyntax revision. It uses
+the pinned packager's canonical metadata and Git-blob source selection to build a deterministic source archive twice;
+both archives must match SHA-256 `522ec930a5b5de652acc090f1734e7d3440b18ad404a437927f713b2c3ad23fa` and each
+other before extraction. The upstream packaging implementation is in the locked source repository's packaging script.
+This avoids treating a download cache's changing gzip container as stable source. No dirty checkout or unverified
+archive is accepted. It never downloads or commits an opaque binary, accepts arbitrary generated target text, or
+patches Kotlin afterward. The same invocation
 is repeated for byte-identical output. `scripts/ci/android.sh` explicitly selects `--download` for this read-only
 check in its lint/build lane; a missing Swift toolchain, download failure or source mismatch fails the check rather
 than silently skipping it. An ordinary Gradle build does not fetch or run the generator.

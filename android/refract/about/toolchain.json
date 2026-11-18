@@ -1,9 +1,10 @@
 {
   "source": "https://github.com/nwverse/refract",
   "commit": "e32413fba1f13ff0652dedea5f96fc49ec4a8c96",
-  "archiveUrl": "https://api.github.com/repos/nwverse/refract/tarball/e32413fba1f13ff0652dedea5f96fc49ec4a8c96",
-  "archiveSha256": "a28ae4ff35f85988057cd846fc2bf1844ae88525319eee84f13ac6b9ce8d6a83",
-  "sourceTreeSha256": "cfaeafa9cee642c7f8e8832440977ec099851f834ffa31e87de281d5334a43be",
+  "archiveUrl": "deterministic git source archive built by scripts/package_cli.py at the pinned commit",
+  "archiveSha256": "522ec930a5b5de652acc090f1734e7d3440b18ad404a437927f713b2c3ad23fa",
+  "sourceTreeSha256": "bb1e9d8fbe772541bd619a825cdb673c10d09542395aace51b1fbcfe280b5c30",
+  "archiveTreeSha256": "cfaeafa9cee642c7f8e8832440977ec099851f834ffa31e87de281d5334a43be",
   "mappingSchemaVersion": 1,
   "swiftSyntaxVersion": "600.0.1",
   "swiftSyntaxRevision": "0687f71944021d616d34d922343dcef086855920",

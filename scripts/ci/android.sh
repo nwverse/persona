@@ -10,7 +10,7 @@ usage() {
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
     'Swift builds the source-pinned Refract CLI for the explicit About Version regeneration check in lane 0.' \
-    'The check downloads that exact public source archive, verifies its checksum and never skips on failure.' \
+    'The check fetches that exact public commit, verifies its deterministic source archive and never skips.' \
     'Also requires rustup and NDK 29.0.14206865: core:rustcore tests build the host JNI library;' \
     'core:rustcore-android packages arm64-v8a and x86_64 for the debug APK.' \
     'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865"' \
