@@ -78,6 +78,24 @@ the hub keeps the arrangement and that a second browser draws the same groups; `
 the browser and the setting says so. Light and dark screenshots of the sidebar (the phone's drawer open) and of the editor
 at 1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory; a 300-second watchdog ends the run.
 
+## Sidebar heading spacing (#10637)
+
+```sh
+MOCK_SESSIONS_LIST=1 MOCK_MANAGERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-heading-spacing.mjs <loopback-web-origin> [--shots <artifact-directory>] [--chromium <executable>]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese, light and dark. It measures the sidebar's
+top-level headings (Pages, Persona chats, Personal Agents when listed, Agents) with both Agents lists: the complete one
+(the mock's pinned space keeps the sidebar on it) and the paged one (the run clears the pins and puts them back; the
+paged list needs one assistant, hence `MOCK_MANAGERS=1`). At 1440 × 1000, 390 × 844 with a mouse and 390 × 844 on a
+touch screen (the drawer, where Pages is a grid), folded and then unfolded, it checks that every heading's row is as
+tall and its title centred as far down it, that folded the title-to-title gaps are equal, and that unfolded each title
+stands as far below the group before it, all within 0.5 px (iOS: `SidebarHeadingGapsUITests`, #10561). Only the
+mock's own requests leave the browser. Screenshots and `results.json` go to the artifact directory; a four-minute
+watchdog ends the run, and the last line is the verdict.
+
 ## Start page (#9071)
 
 ```sh

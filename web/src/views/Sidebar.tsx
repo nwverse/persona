@@ -369,6 +369,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
         {chats && (
           <Section
+            top
             title={t("sidebar.persona_chats")}
             folded={personaFolded}
             onToggle={togglePersona}
@@ -457,7 +458,7 @@ function PendingAgents({ route, reg, hover, go, onNewAgent, onNavigate }: {
   const rows = useMemo(() => sidebarPending(sessions, interactions, answered), [sessions, interactions, answered]);
   const [folded, toggle] = useFolded("work-pending", false, { all: false });
   return (
-    <Section title={t("work-entry.pending")} folded={folded} onToggle={toggle} right={<SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}>
+    <Section top title={t("work-entry.pending")} folded={folded} onToggle={toggle} right={<SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}>
       {loaded && !rows.length && <p className="px-2 py-1.5 text-[12px] text-ink-3">{t("work-entry.pending_empty")}</p>}
       {rows.map((row) => {
         const card = row.cards[0];
@@ -499,7 +500,7 @@ export function AgentsList({ route, onNewAgent, workspaceActions }: { route: Rou
 function PageGroup({ group, more, first, reg, hover, activeKey, go }: { group: PageSection<NavPage>; more: NavPage[]; first: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
   const [folded, toggle] = useFolded(group.id ? `pages:${group.id}` : "pages", false, { all: false, holds: more.some((p) => p.k === activeKey) });
   return (
-    <Section title={group.title ?? t("sidebar.pages")} folded={folded} onToggle={toggle} right={folded ? <PagesTally pages={[...group.pages, ...more]} /> : undefined} first={first}>
+    <Section top title={group.title ?? t("sidebar.pages")} folded={folded} onToggle={toggle} right={folded ? <PagesTally pages={[...group.pages, ...more]} /> : undefined} first={first}>
       {group.pages.map((p) => <NavRow key={p.k} {...p} reg={reg} hover={hover} active={activeKey === p.k} go={go} />)}
       {more.length > 0 && <MorePages more={more} reg={reg} hover={hover} activeKey={activeKey} go={go} />}
     </Section>
@@ -1034,7 +1035,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     <div data-sidebar-agents ref={groupsRef}>
     <SidebarGroup className="mt-3" heading={
       <div data-sidebar-agents-controls className="pb-1">
-      <div className="group/sec relative flex items-center gap-1 px-2">
+      {/* the sidebar's top-level heading box (#10637): its controls never make it taller than Pages' or Persona chats' */}
+      <div className="group/sec relative flex sidebar-heading items-center gap-1 px-2">
         {foldable ? (
           <button type="button" aria-expanded={!folded} onClick={toggleBlock} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
             <span className="min-w-0 truncate">Agents</span>
