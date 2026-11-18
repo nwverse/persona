@@ -63,9 +63,13 @@ func codexArgsForHome(bin, key, home string, legacyMCP bool, windows ...int) []s
 // codexShell runs the launcher with `codex` turned into `codex <its flags> app-server <ours>`: the launcher's
 // function sets what it sets (env, -c model_provider, -m …) exactly as when it starts the TUI.
 // Use alias-safe definitions and calls: zsh expands aliases while parsing the script.
-func codexShell(launcher string) string {
+func codexShell(launcher string) string { return codexShellWith(launcher, "app-server") }
+
+// codexShellWith is codexShell for another subcommand of the launcher's codex (`debug models`,
+// assistant_fallback_window.go).
+func codexShellWith(launcher, sub string) string {
 	return `__persona_args=("$@")
-function __persona_codex { builtin command codex "$@" app-server "${__persona_args[@]}"; }
+function __persona_codex { builtin command codex "$@" ` + sub + ` "${__persona_args[@]}"; }
 if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
   # Keep a user-defined codex() launcher intact while routing its final command through the app-server wrapper.
   # Copy it through the functions table: functions -c needs zsh 5.8, and a subscript never expands aliases.
