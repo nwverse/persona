@@ -2664,3 +2664,15 @@ nothing ran the old build after the new one.
 - Lesson: a 409 the client swallows hides a broken ownership model until something else (here a cleanup) depends on
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
+
+## A restore check must not start what it checks (2026-11-18, #10497)
+
+- Starting a restored hub or manager to see whether the restore worked changes the state under test: startup marks
+  pending client operations unknown, expires stale interactions, drains the manager's outbox and starts connectors,
+  extensions and nodes. Read the restored databases with `default_transaction_read_only=on` instead, and prove the
+  setting holds with one guarded write that must fail with SQLSTATE 25006 (psql prints the SQLSTATE only with
+  `VERBOSITY=verbose`; matching the message text would also accept unrelated failures).
+- Killing a `docker run` client on a timeout leaves its container running. Name every container, and remove it by name
+  (`docker rm --force`) after the client exits or is killed; then check with `docker container inspect` that it is gone.
+- `backup verify` passing says nothing about tasks, approvals or outboxes: the drill's `--checks verify-only` passes a
+  restore whose approval was resolved afterwards, which the read-only acceptance fails.
