@@ -12,7 +12,7 @@ import (
 // Stopping the agents of finished tasks (docs/assistant/todos.md "Stop Agents of completed tasks"). Once a task opened from an
 // assistant conversation is done — by the user or by the assistant's judge (done.go) — its agents that have stayed
 // still for a while are stopped: the node quits the agent process and keeps its terminal, the shell it ran in (node
-// retire.go, session.stop; #4754: Persona never closes an agent's terminal on its own). The todo keeps the agents
+// retire.go, session.stop; #4754; the node closes that terminal itself only after its grace period, #10111). The todo keeps the agents
 // (machine, session id, directory) and the node keeps how each was started (launcher, model, modes), so reading one
 // goes on from its transcript and its terminal stays open on its computer.
 //
@@ -65,6 +65,7 @@ func (s *Service) taskCloseLoop(ctx context.Context) {
 	refused := taskCloseRefused{}
 	doneSeen := doneSeen{}
 	idleSeen := idleSeen{}
+	endedSeen := endedSeen{}
 	var archived time.Time
 	for {
 		select {
@@ -74,7 +75,8 @@ func (s *Service) taskCloseLoop(ctx context.Context) {
 		}
 		s.closeDoneTaskAgents(ctx, refused, doneSeen)
 		s.closeIdleAgents(ctx, refused, idleSeen)
-		s.orphanWatch(ctx, time.Now()) // open to-dos whose agents are all gone (tasks_orphan.go)
+		s.closeEndedAgentTerminals(ctx, endedSeen) // Agents that quit, with close_ended_terminals on (agent_terminal_close.go)
+		s.orphanWatch(ctx, time.Now())             // open to-dos whose agents are all gone (tasks_orphan.go)
 		if now := time.Now(); now.Sub(archived) >= autoArchiveEvery {
 			archived = now
 			s.archiveClosedSessions(ctx, now) // closed sessions idle for days (agent_archive_auto.go)
@@ -264,13 +266,24 @@ func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who
 	if who == "idle" {
 		cause = proto.StopIdle
 	}
-	err := s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": c.SessionID, "retire": true, "stop_cause": cause}, &res)
+	// A done task ends its Agent's session: with the owner's close-on-end setting its terminal goes too (#10355,
+	// agent_terminal_close.go). An idle stop is no end: that Agent keeps its terminal either way.
+	closeIt := cause == proto.StopTaskCompleted && !agentCloseBusy(c) && s.closeEndedTerminals(ctx)
+	var err error
+	if closeIt {
+		res.Stopped, err = s.closeEndedTerminal(cctx, machine, c.SessionID, cause)
+	} else {
+		err = s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": c.SessionID, "retire": true, "stop_cause": cause}, &res)
+	}
 	cancel()
 	var re *rpc.Error
 	switch {
 	case err == nil:
 		delete(refused, key)
-		if res.Stopped {
+		switch {
+		case res.Stopped && closeIt:
+			s.logf("%s: closed agent %s/%s and its terminal (close_ended_terminals)", who, machine, c.SessionID)
+		case res.Stopped:
 			s.logf("%s: stopped agent %s/%s (its terminal stays)", who, machine, c.SessionID)
 		}
 		return true

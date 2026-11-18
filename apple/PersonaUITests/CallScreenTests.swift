@@ -633,10 +633,10 @@ final class CallScreenTests: XCTestCase {
 
     /// The avatar's states for VoiceOver (#9887 review): the avatar stays decorative (no element unless it is Interrupt
     /// Voice), and the call's line, which shows the running time, says what the avatar shows as its value: 「在听」 while
-    /// nobody speaks, 「正在思考」, 「正在工作」, 「等你拿主意」 while a card waits, 「正在说」 while it speaks. The urgent call's header says the
+    /// nobody speaks, 「正在思考」, 「工作中」 (the state's own name, #10502), 「等你拿主意」 while a card waits, 「正在说」 while it speaks. The urgent call's header says the
     /// call's name, the main conversation's top bar's (the mock's 「助手」), beside its face.
     @MainActor func testTheAvatarsStatesForVoiceOver() throws {
-        let rows = [("connected", "在听"), ("thinking", "正在思考"), ("working", "正在工作"), ("asking", "等你拿主意"),
+        let rows = [("connected", "在听"), ("thinking", "正在思考"), ("working", "工作中"), ("asking", "等你拿主意"),
                     ("speaking", "正在说")] // i18n-ignore: the catalog's words, as VoiceOver reads them
         for (state, words) in rows {
             try XCTContext.runActivity(named: state) { _ in
