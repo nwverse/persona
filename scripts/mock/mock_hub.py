@@ -14704,6 +14704,16 @@ def listed_model_configuration(lang="zh-Hans"):
         own += [meeting_model_purpose(pid, lang, catalog)["purpose"] for pid in MEETING_PURPOSES]
     at = next((n for n, x in enumerate(catalog["purposes"]) if x["id"].startswith(("extension.", "plugin."))), len(catalog["purposes"]))
     catalog["purposes"][at:at] = own
+    # MOCK_MODEL_USAGE=1 (#10498, docs/assistant/model-config.md "Counting"): the last 7 days' calls of two purposes,
+    # Inbox screening's many small ones on a CLI and Information processing's few; the others had none.
+    if os.environ.get("MOCK_MODEL_USAGE") == "1":
+        usage = {"inbox.triage": dict(calls=1234, failures=12, input_tokens=61_700, output_tokens=148_080,
+                                      cache_read_input_tokens=24_680_000, cache_creation_input_tokens=5_430_000),
+                 "kb": dict(calls=1, failures=0, input_tokens=820, output_tokens=96,
+                            cache_read_input_tokens=0, cache_creation_input_tokens=0)}
+        for purpose in catalog["purposes"]:
+            if purpose["id"] in usage:
+                purpose["usage"] = usage[purpose["id"]]
     return catalog
 
 

@@ -164,7 +164,14 @@ final text. Nothing reads, copies or re-serves the login (#4220 is a different t
 - **Counting**: these runs leave no transcript on the computer, so the manager logs one `model_usage` line per
   completed purpose call on any route (`api`, `api_via_node`, `cli`): purpose, operation (Inbox event grouping is
   `inbox_group`), provider, model, result and input / output / cache read / cache write tokens (#10492). A call that
-  never ran (paused, nothing configured) is not logged.
+  never ran (paused, nothing configured) is not logged. Extensions' `model.complete` calls are logged the same way, one
+  line per request to the model. Each logged call is also added to the manager's `model_usage` table, one row per UTC
+  day, purpose, route, provider and model (calls, failures, the four token sums); a write drops the days older than 60.
+  `GET /api/v1/model-config` gives each listed purpose its last 7 UTC days as `usage` (its own calls and those of the
+  unlisted uses under it: Information processing's titles, translation and the rest), and the web's Settings › Models
+  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498). Its tokens are input + output + cache
+  writes; cache reads are left out of that number, since they cost a fraction and would swamp it, and the line's
+  tooltip lists all four. The Apple and Android apps do not show it yet.
 - **How it runs**: the node runs the launcher as a start does (`personad launch` for a managed one, the login shell's
   function or alias otherwise, with its environment, settings and default model), in a fresh temporary directory that
   is removed afterwards. Claude Code runs as `-p --output-format json --max-turns 1 --no-session-persistence` with
