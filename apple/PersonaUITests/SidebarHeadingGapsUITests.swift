@@ -97,7 +97,8 @@ final class SidebarHeadingGapsUITests: XCTestCase {
 
     @MainActor private func elements() -> (XCUIElement, XCUIElement, XCUIElement) {
         let places = element("sidebar-fold-places"), chats = element("sidebar-fold-chats")
-        XCTAssertTrue(places.waitForExistence(timeout: 10) && chats.exists, "no Pages or Persona Chats heading:\n\(app.debugDescription)")
+        // Persona Chats may still be below the screen (unfolded, at a large text size): `reach` brings it.
+        XCTAssertTrue(places.waitForExistence(timeout: 10), "no Pages heading:\n\(app.debugDescription)")
         // Before #10551 the Agents heading's words were its only element: measured too, so the test reports the old gaps.
         let named = element("sidebar-agents-heading")
         let agents = named.waitForExistence(timeout: 3) ? named : app.staticTexts["Agents"].firstMatch
@@ -168,16 +169,18 @@ final class SidebarHeadingGapsUITests: XCTestCase {
             XCTAssertEqual(x.middle!, y.middle!, accuracy: tolerance,
                            "\(x.name)'s words are centred \(x.middle!) pt below its row's top, \(y.name)'s \(y.middle!) pt")
         }
-        // Where only one can be placed (unfolded, the Persona headings come as whole rows): its words in the middle of a
-        // sidebar row's height at the row's foot, where the heading box puts every heading's (`Theme.Sidebar.row`).
+        // Where only one can be placed (unfolded, the Persona headings come as whole rows): its words in the middle of
+        // the heading box, which fills the row under the room above it (`SidebarHeadingBox`; the box grows with the
+        // text size, the room above does not).
         if placed.count == 1, let one = placed.first {
-            XCTAssertEqual(one.middle!, one.row.height - Self.sidebarRow / 2, accuracy: tolerance,
-                           "\(one.name)'s words are centred \(one.middle!) pt below its row's top, not in its heading box")
+            let box = (one.row.height + Self.headingAbove) / 2
+            XCTAssertEqual(one.middle!, box, accuracy: tolerance,
+                           "\(one.name)'s words are centred \(one.middle!) pt below its row's top, its heading box's middle is \(box) pt")
         }
     }
 
-    /// `Theme.Sidebar.row` on iOS: the heading box's height.
-    private static let sidebarRow: CGFloat = 44
+    /// `SidebarHeadingBox.above` (`Theme.Space.s`): the room over each heading, inside its row.
+    private static let headingAbove: CGFloat = 8
 
     /// From the bottom of the row before `row` to its top.
     @MainActor private func above(_ row: CGRect) -> CGFloat {
