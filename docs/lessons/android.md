@@ -1,10 +1,25 @@
 # Lessons: Android
 
+## A false pairing snapshot can mean restoration is still pending (#4055)
+
+Removing a main-thread restore changes more than the first suspend call. A `StateFlow<Boolean>` whose initial value is
+`false` does not distinguish an empty startup snapshot from a real unpair. Gate both one-shot decisions and collectors on
+the appropriate readiness barrier: pairing restoration and, for a persisted fleet, its snapshot becoming visible. A
+collector started early can stop a service or erase a saved snapshot before the pairing arrives. An available initial
+network must not dial before the group's data and reconciliation collectors exist. Keep broadcast `goAsync` results pending
+until the barrier and the original action complete, and preserve the foreground service's promote-before-stop ordering. A
+deferred tile click launches a foreground routing activity through `startActivityAndCollapse` while the tile service is
+alive; that activity waits for restoration and performs the final route. A raw `Context.startActivity()` after the tile
+service is destroyed can be blocked by background-activity-start restrictions. An undispatched coroutine start keeps
+demo/test implementations with a no-op restore synchronous while allowing the real restore to suspend.
+
 ## A cancelled SSH start must still report a rejected host key (#10101)
 
 Cancelling the coroutine waiting for JSch does not prove that its queued dial never ran or that the SSH thread has finished. Register a new session and check `closed` in one lock with `close()`; check the explicit late flag before starting queued blocking work, and pass a failure which arrives after cancellation to the tunnel's configuration-scoped block. Otherwise the next retry dials a host key which already failed the pin check. Keep the original no-redial connection assertion, test late success separately from late failure, and run the whole `core:hub` suite: this ordering may not reproduce in an isolated class. Do not replace the cancelled attempt's host-key error with a generic stopped state.
 
 A failed SSH start can leave a live local forwarding listener even after the session disconnects. A later OkHttp health probe then reaches the SSH server and looks like a second dial despite no new `HubWays.open()`. Close every listener in `Session.portForwardingL`, not only the port already assigned to `localPort`; the listener may exist before `start()` returns. Assert both the original no-redial test and that closing before port publication refuses a new probe.
+
+A refused-key failure can become visible while its `HubWays` start is still unwinding. `unblock` must invalidate that pending attempt and fence late callbacks from older epochs; otherwise the old `NotAuthorized` is written back after the user acts, and every reconnect refuses to dial. Do not replace this with an ordinary epoch check for every late failure: `close(forget = false)` also bumps the epoch, and #10101 requires a late changed-host-key failure after that close to keep blocking redial. The explicit-unblock fence is separate, and a failure from the new post-unblock epoch must still publish normally. Verify with the complete connection-class loop: a stale-block timeout shows `Down(NotAuthorized)`, no second SSH handshake and no login, while an isolated pass proves nothing (#10140).
 
 ## Device drag evidence needs a live touch sequence and a real test count
 
@@ -41,6 +56,8 @@ these races: use real JNI with independently controlled worker completion, frame
 ## Verify intermittent test failures with the whole module
 
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
+
+Buffered hand-off evidence is acknowledged before its recording runs, leaving the journal delivered but unrecorded until that request completes. Coalesce the buffered operation IDs with the same recovery pass's journal scan, not with a permanent attempted tombstone: a later reconnect or process owner must still retry. If a disconnect during startup IO starts another recovery generation, watch hub state from transport acquisition rather than subscribing after the blocking write. Hold the journal mutex to force a failed buffered record before the scan, and use the following reply-recovery lookup as the completion barrier (#9868).
 
 ## A Robolectric FileProvider keeps the cache directory of the test that first used it (#9365)
 

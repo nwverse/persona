@@ -232,6 +232,10 @@ struct ChatView: View {
     /// The right-edge navigator while a finger is on it (new conversation layout, `ChatEdgeScrub`).
     @State private var scrub = EdgeScrubState()
     @State private var userInputIndex: (key: SessionKey, index: ChatUserInputIndex)?
+    /// The permission mode changes the hub recorded for an Agent's chat (#10297, `loadModeChanges`), by session, and
+    /// the chat and mode they were last read for.
+    @State private var modeChanges: (key: SessionKey, changes: [APIClient.ModeChange])?
+    @State private var modeChangesRead: String?
     @State private var navigationJump: EdgeMark?
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
@@ -390,7 +394,7 @@ struct ChatView: View {
         // chat (AssistantTopBar, drawn by AssistantView over this page and the new-conversation page). Where the system
         // puts bars down the side (iPhone Duo), an Agents chat hands its actions to it instead: they go in that column.
         .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(sideBars)
+        .navigationBarBackButtonHidden(sideBars && !systemBack)
         .pageToolbar { if sideBars { sideBarItems } }
         // The system draws that bar's title over the content, not in the column: a second title right above the
         // header's own. Removed while the header shows its title; while typing the header is only fog, and the
@@ -418,10 +422,6 @@ struct ChatView: View {
         } message: { c in
             Text(modeConfirmMessage(c))
         }
-        #if DEBUG
-        // `-sideBars YES`: lay the chat out as under iPhone Duo's side bars on any simulator (screenshots, tests).
-        .onAppear { if UserDefaults.standard.bool(forKey: "sideBars") { barsVertical = true } }
-        #endif
         #if os(macOS)
         .macChatDrop(key) // files dropped anywhere on the page go to the composer (#2113)
         #endif
@@ -1066,6 +1066,7 @@ struct ChatView: View {
         let feed = style == .assistant ? ChatLines.drawnFeed(TasksStore.shared.feed(shownKey.sessionID)) : []
         let kids = model.childRows(shownKey)
         scratch.childRows = kids
+        let modes = shownModes(until: frozen == nil ? nil : items[..<cut].last(where: { $0.ts != nil })?.ts ?? .distantPast)
         let childStamp = kids.map { "\($0.sessionID):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0)" }.joined(separator: "|")
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
@@ -1074,7 +1075,7 @@ struct ChatView: View {
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
-                                       closeout: shownCloseout != nil, children: childStamp)
+                                       closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" })
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -1094,6 +1095,11 @@ struct ChatView: View {
         // screen (#4970). Persona's own conversation keeps its boxed answers whole.
         if style == .dev { lines = ChatLines.splitAnswers(lines) }
         #endif
+        // The permission mode changes the hub recorded (#10297), each at the end of the exchange it happened in; while
+        // older history is still to load, one from before the first loaded item waits for it.
+        if !key.modes.isEmpty {
+            lines = ChatLines.mergeModeChanges(lines, modes, earliest: store.hasMore ? items.lazy.compactMap(\.ts).first ?? .distantFuture : nil)
+        }
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
             // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
             // of hiding them as though a full task card still rendered them (#3711).
@@ -1107,6 +1113,14 @@ struct ChatView: View {
         ChatTrace.shared.note(shownKey, ChatTrace.screen(lines, live: store.liveText.count, streaming: key.streaming, running: key.live != nil,
                                                          frozen: frozen != nil, withheld: items.count - cut))
         return lines
+    }
+
+    /// This chat's mode changes (`loadModeChanges`); frozen (the user reading back), only those up to `until`, the time
+    /// of the last item shown: what came after waits with the rest.
+    private func shownModes(until: Date?) -> [APIClient.ModeChange] {
+        guard style == .dev, let m = modeChanges, m.key == shownKey else { return [] }
+        guard let until else { return m.changes }
+        return m.changes.filter { $0.at <= until }
     }
 
     /// The main conversation and the leader conversations fold their background rounds while the hub's switch is on
@@ -1524,7 +1538,7 @@ struct ChatView: View {
 
     /// The Model Not Connected card for the line, when it is the turn's error: the last line, an answer or an API error.
     private func turnErrorCard(_ line: ChatLine, raw: String?) -> ReadinessCard? {
-        guard let fix = turnFix, currentLines().last?.id == line.id else { return nil }
+        guard let fix = turnFix, ChatLines.lastOfChat(currentLines())?.id == line.id else { return nil }
         return ReadinessCard(title: fix.title, detail: fix.detail, tone: .danger,
                              actionTitle: String(localized: "Fix it"),
                              action: { readinessRoute = fix.action == "edit_provider" ? .provider(session?.launcher) : .providerWizard },
@@ -1555,6 +1569,7 @@ struct ChatView: View {
         case .quick(let result): QuickResultCard(result: result)
         case .placeMap(let result): PlaceMapCard(result: result)
         case .day(let date): DayLine(date: date)
+        case .modeChange(_, let change): ModeChangeLine(change: change, session: session)
         case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
             turnErrorCard(line, raw: info.raw)
         case .apiError(let item, let info, let count):
@@ -1565,9 +1580,9 @@ struct ChatView: View {
             // Not when the fallback model is missing (#4489): Continue would go to the same model.
             // The exhausted chain's words go on the last error only; an earlier error in the chat is not what they explain.
             APIErrorCard(info: info, count: count, at: item.ts,
-                         recovery: ModelFallbackText.exhaustedRecovery(session).flatMap { r in currentLines().last?.id == line.id ? r : nil },
+                         recovery: ModelFallbackText.exhaustedRecovery(session).flatMap { r in ChatLines.lastOfChat(currentLines())?.id == line.id ? r : nil },
                          retry: ModelFallbackText.offersRetry(transient: info.transient, session: session)
-                             && !status.isActive && currentLines().last?.id == line.id
+                             && !status.isActive && ChatLines.lastOfChat(currentLines())?.id == line.id
                              && model.session(key)?.turnErrorCode != ModelFallbackText.unavailableCode
                              ? { model.sendNow(key, text: "继续") } : nil) // i18n-ignore
         case .userImages(_, let items):
@@ -2197,14 +2212,15 @@ struct ChatView: View {
     private var lastPromptID: String? { store.items.last { $0.role == "user" && $0.kind == .text }?.id }
 
     /// A swipe to the right goes from files or Git back to the chat. To the left there is none: on the chat a drag to
-    /// the left quotes a message (#1058); files are behind the header's folder button.
+    /// the left quotes a message (#1058); files are behind the header's folder button. On the chat it is off: there it
+    /// would do nothing, and the system's swipe back from anywhere on a pushed page is the page's (#9971).
     private var swipeablePanes: some View {
         #if os(visionOS)
         // A pinch-and-drag scrolls on visionOS; a sideways drag here would take it. The panes switch with their buttons.
         paneContent
         #else
         paneContent
-            .gesture(SwipeTo(direction: .right) { swipePane(forward: false) })
+            .gesture(SwipeTo(direction: .right, enabled: style == .dev && pane != .chat) { swipePane(forward: false) })
         #endif
     }
 
@@ -2317,6 +2333,10 @@ struct ChatView: View {
                     .modifier(EdgeScrubbing(on: layout.on, band: scrubBand, changed: scrubbed))
                     .tabActiveTask(id: "\(shownKey)|\(store.resets)|\(lastPromptID ?? "")") {
                         await loadUserInputIndex()
+                    }
+                    // not `tabActiveTask`: the app coming back to the front asks nothing (#10297)
+                    .task(id: "\(shownKey)|\(session?.permissionMode ?? "")") {
+                        await loadModeChanges()
                     }
                     .tabActiveTask(id: navigationJump) {
                         guard let mark = navigationJump else { return }
@@ -2469,6 +2489,27 @@ struct ChatView: View {
                 guard !Task.isCancelled, shownKey == key, attempt < 3 else { return }
                 try? await Task.sleep(for: .seconds(3))
             }
+        }
+    }
+
+    /// An Agent's chat reads its permission mode changes when it opens and when its mode changes, nothing else: not on a
+    /// timer, a refresh, the page shown again or the app back in front (one request; the energy lane counts them). After a
+    /// change of mode it looks once more 2 s later: the manager records the change as the node answers, which can be a
+    /// moment after the row says the new mode. Off the main actor; a failure (an older hub, offline) keeps what there was
+    /// and asks again next time. Persona's own conversations have none.
+    private func loadModeChanges() async {
+        guard style == .dev, let api = model.api(shownKey.group) else { return }
+        let key = shownKey, read = "\(key)|\(session?.permissionMode ?? "")"
+        guard modeChangesRead != read else { return }
+        let modeChanged = modeChangesRead?.hasPrefix("\(key)|") == true
+        for wait in modeChanged ? [0, 2] : [0] {
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard !Task.isCancelled, let changes = try? await api.modeChanges(key), !Task.isCancelled, shownKey == key else { continue }
+            modeChangesRead = read
+            // none (most chats), or the same again: nothing to draw again
+            if changes.isEmpty && modeChanges?.key != key { continue }
+            if modeChanges?.key == key && modeChanges?.changes == changes { continue }
+            modeChanges = (key, changes)
         }
     }
 
@@ -4202,11 +4243,21 @@ struct ChatView: View {
     /// column has no second one.
     private var systemShowsList: Bool { backShowsList && split?.sideBars == true }
 
+    /// Under side bars, a page pushed onto another, on its chat: Back is the system's own (#9971). It does what ours does
+    /// there (one page back), the system puts it at the top of the side column, and only with it does iOS's swipe back
+    /// from anywhere on the page work: UIKit gives that swipe no touch on a page that hides the system's Back. Ours stays
+    /// where it does something else: files / Git back to the chat, a sheet's ✕.
+    private var systemBack: Bool {
+        guard sideBars, pane == .chat, !hidesBack, !backShowsList else { return false }
+        if let host { return !host.closes }
+        return split?.isFirstPage != true
+    }
+
     /// The header's actions as system toolbar items, for the side column: back on top (a custom one, so it leaves files /
     /// Git for the chat first), then the panes, the terminal and ⋯. Each has a title as well as a symbol: the column
     /// shows the symbol, the overflow menu both.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
-        if !hidesBack && !systemShowsList {
+        if !hidesBack && !systemShowsList && !systemBack {
             ToolbarItem(placement: .topBarLeading) {
                 // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
@@ -5325,6 +5376,33 @@ struct ChatSkeleton: View {
     }
 }
 
+/// The model request Claude is retrying now, above the composer. Its plain reason leads; the observed error stays as
+/// secondary detail. Ordinary work, a null live event, turn end and subscription cleanup leave no note behind.
+struct SessionLiveRetryNote: View {
+    let key: SessionKey
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let retry = model.liveRetry(key) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                ThemedIcon(Theme.Icon.retry).font(Theme.Font.labelStrong).foregroundStyle(Theme.cautionText)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    Text(retry.attemptText).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.cautionText)
+                    Text(retry.error.reason).font(Theme.Font.secondary)
+                    Text(retry.error.raw).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("chat.model-retry")
+        }
+    }
+}
+
 /// Claude's suggested next message over the composer: a tap puts it in the box to edit, Send Now (long press) sends it.
 /// A session Persona is still starting (node/starting.go): what is sent now waits and goes in once it is ready. Or why
 /// it did not start.
@@ -5965,6 +6043,7 @@ struct Composer: View, Equatable {
         let call = voiceCall
         let inCall = call.map { !$0.isOver } ?? false
         return VStack(spacing: Theme.Space.s) {
+            SessionLiveRetryNote(key: key)
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -7551,6 +7630,9 @@ struct ChatLine: Identifiable {
         case viewed(id: String, images: [ViewedImage])
         /// A part of a long finished answer, a row of its own (#4970, `AnswerParts`): the first has the answer's id.
         case answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int)
+        /// A permission mode change the hub recorded, at the end of the exchange it happened in (#10297,
+        /// `ChatLines.mergeModeChanges`); `id` from its time and kind.
+        case modeChange(id: String, change: APIClient.ModeChange)
 
         var id: String {
             switch self {
@@ -7572,6 +7654,7 @@ struct ChatLine: Identifiable {
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
+            case .modeChange(let id, _): id
             }
         }
     }
@@ -7614,6 +7697,7 @@ struct ChatLine: Identifiable {
     static func quick(_ result: QuickResult) -> Self { Self(.quick(result)) }
     static func placeMap(_ result: PlaceMapResult) -> Self { Self(.placeMap(result)) }
     static func day(_ date: Date) -> Self { Self(.day(date)) }
+    static func modeChange(id: String, _ change: APIClient.ModeChange) -> Self { Self(.modeChange(id: id, change: change)) }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))
@@ -8457,6 +8541,8 @@ final class ChatScratch {
         var closeout = false
         /// Folded children placed in this chat. A change of row rebuilds the lines.
         var children = ""
+        /// The permission mode changes merged in (#10297): one more is a new line.
+        var modes: [String] = []
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []
@@ -8561,8 +8647,10 @@ private extension View {
     }
 }
 
-private extension View {
+extension View {
     /// Whether the system presents this page's bars down the side of the screen (iPhone Duo); always false before iOS 27.1.
+    /// The Agents chat and the pages that host it before it is there (a task's page, a side session's) read the same, so
+    /// their Back is in the same place (#9971). DEBUG `-sideBars YES` says yes on any simulator (screenshots, tests).
     func readsVerticalBars(_ vertical: Binding<Bool>) -> some View { modifier(VerticalBarsReader(vertical: vertical)) }
 }
 
@@ -8570,19 +8658,69 @@ private struct VerticalBarsReader: ViewModifier {
     @Binding var vertical: Bool
 
     func body(content: Content) -> some View {
-        #if compiler(>=6.4) && os(iOS) // `toolbarVerticalEdge` is in the iOS 27.1 SDK; Xcode 26 (Swift ≤ 6.3) has no such key path
-        if #available(iOS 27.1, *) {
-            content.modifier(VerticalBarsEdgeReader(vertical: $vertical))
-        } else {
+        Group {
+            #if compiler(>=6.4) && os(iOS) // `toolbarVerticalEdge` is in the iOS 27.1 SDK; Xcode 26 (Swift ≤ 6.3) has no such key path
+            if #available(iOS 27.1, *) {
+                content.modifier(VerticalBarsEdgeReader(vertical: $vertical))
+            } else {
+                content
+            }
+            #else
             content
+            #endif
         }
-        #else
-        content
+        #if DEBUG
+        .onAppear { if UserDefaults.standard.bool(forKey: "sideBars") { vertical = true } }
         #endif
     }
 }
 
+/// Whether bars are down the side, known on the page's first drawing (`readsVerticalBars` learns it a moment later): a
+/// page whose system Back depends on it has that Back from the start, which iOS's swipe back from anywhere needs (#9971).
+struct WithVerticalBars<Content: View>: View {
+    @ViewBuilder var content: (Bool) -> Content
+
+    #if DEBUG
+    /// `-sideBars YES` (screenshots, tests), read once.
+    static var forced: Bool { VerticalBarsForced.value }
+    #else
+    static var forced: Bool { false }
+    #endif
+
+    var body: some View {
+        #if compiler(>=6.4) && os(iOS) // `toolbarVerticalEdge` is in the iOS 27.1 SDK
+        if #available(iOS 27.1, *) {
+            VerticalBarsEnvironment(content: content)
+        } else {
+            content(Self.forced)
+        }
+        #else
+        content(Self.forced)
+        #endif
+    }
+}
+
+#if DEBUG
+private enum VerticalBarsForced {
+    static let value = UserDefaults.standard.bool(forKey: "sideBars")
+}
+#endif
+
 #if compiler(>=6.4) && os(iOS)
+@available(iOS 27.1, *)
+private struct VerticalBarsEnvironment<Content: View>: View {
+    @Environment(\.toolbarVerticalEdge) private var edge
+    var content: (Bool) -> Content
+
+    var body: some View {
+        #if DEBUG
+        content(edge != nil || VerticalBarsForced.value)
+        #else
+        content(edge != nil)
+        #endif
+    }
+}
+
 @available(iOS 27.1, *)
 private struct VerticalBarsEdgeReader: ViewModifier {
     @Environment(\.toolbarVerticalEdge) private var edge
