@@ -145,6 +145,13 @@ func (s *inboxEscalationStore) Setting(ctx context.Context, key string, value an
 	return s.Store.Setting(ctx, key, value)
 }
 
+func (s *inboxEscalationStore) PutSetting(ctx context.Context, key string, value any) error {
+	if key == relayKey && s.queueDown.Load() {
+		return errors.New("synthetic queue admission failure")
+	}
+	return s.Store.PutSetting(ctx, key, value)
+}
+
 func TestInboxNoOutputEscalationFailedDispatchDoesNotConsumeNotice(t *testing.T) {
 	st := &inboxEscalationStore{Store: todoTestDB(t)}
 	s, f, todo := inboxRetryService(t, st)
@@ -155,9 +162,6 @@ func TestInboxNoOutputEscalationFailedDispatchDoesNotConsumeNotice(t *testing.T)
 	inboxRetryTurn(s, f, "empty-1", prompt, "", 10)
 	inboxRetryTurn(s, f, "empty-2", prompt, "", 20)
 	failure := unhandledInboxSignals(s)[0]
-	s.relays.mu.Lock()
-	s.relays.loaded = false
-	s.relays.mu.Unlock()
 	st.queueDown.Store(true)
 	f.mu.Lock()
 	f.failAssistant = errors.New("synthetic supervisor dispatch failure")
@@ -181,6 +185,45 @@ func TestInboxNoOutputEscalationFailedDispatchDoesNotConsumeNotice(t *testing.T)
 	out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{failure}, now.Add(2*time.Hour))
 	if err != nil || len(out) != 0 {
 		t.Fatalf("accepted retry of the supervisor notice was not durable: %d, %v", len(out), err)
+	}
+}
+
+func TestInboxNoOutputEscalationRechecksSourceInsteadOfQueuingStaleNotice(t *testing.T) {
+	ctx := context.Background()
+	st := todoTestDB(t)
+	s, f, todo := inboxRetryService(t, st)
+	s.inboxToAgent(ctx, inboxRetryEvent(todo.ID, "review-1"))
+	sent := sentToAgent(f)
+	prompt := sent[len(sent)-1]
+	inboxRetryTurn(s, f, "empty-1", prompt, "", 10)
+	inboxRetryTurn(s, f, "empty-2", prompt, "", 20)
+	failure := unhandledInboxSignals(s)[0]
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server",
+		Assistant: true, Status: proto.StatusWorking})
+	ordinary := inboxRetryEvent(todo.ID, "ordinary-message")
+	if !s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{ordinary}, "", time.Now(), time.Time{}) ||
+		s.queuedFor("conv1") != 1 {
+		t.Fatal("ordinary Inbox notice did not queue behind the supervisor's turn")
+	}
+	if s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{failure}, "", time.Now(), time.Time{}) ||
+		s.queuedFor("conv1") != 1 {
+		t.Fatal("an unhandled source was consumed by a rendered queue instead of awaiting revalidation")
+	}
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	f.setSessions("server", idle)
+	s.drainRelays("server", []proto.Session{idle})
+	waitFor(t, "the ordinary notice to drain", func() bool { return s.queuedFor("conv1") == 0 })
+	restarted, again := newQuietServiceOn(t, st)
+	turnInboxSignalsOn(t, restarted)
+	restarted.superviseTimes.gather = time.Hour
+	if err := restarted.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restarted.recoverTaskInboxEvents(ctx)
+	recovered := unhandledInboxSignals(restarted)
+	if len(recovered) != 1 || !restarted.deliverDigest(ctx, restarted.settings(ctx), "conv1",
+		recovered, "", time.Now(), time.Time{}) || len(again.notices()) != 1 {
+		t.Fatal("a supervisor becoming available after restart lost its source-bearing notice")
 	}
 }
 
