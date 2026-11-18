@@ -459,3 +459,53 @@ func TestRolloutPathNamesListedDuringAChangeAreNotKept(t *testing.T) {
 		t.Fatal("names listed while a directory changed were kept")
 	}
 }
+
+// A list pass keeps the misses it finds after a listing of every directory overtook its look (a long pass, the first
+// after the node starts).
+func TestRolloutPathPassOvertakenByTheListing(t *testing.T) {
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	now := time.Now()
+	writeRollout(t, home, "11111111-1111-1111-1111-111111111111", "/w", now, now)
+	ageDirs(t, codex)
+	perID, _ := countRolloutGlobs(t, codex)
+	pass := newCodexListPass()
+	rolloutPathIn(codex, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", pass) // the pass takes its look
+	expireRollouts(codex, true)                                        // a minute on: the next lookup lists every directory
+	const id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	rolloutPathIn(codex, id, pass)
+	perID.Store(0)
+	rolloutPathIn(codex, id, pass) // the list's second ask for the same thread, in the same pass
+	if got := perID.Load(); got != 0 {
+		t.Fatalf("globbed again in the same pass: %d", got)
+	}
+}
+
+// A miss asked about again is kept by the next listing, however long ago it was recorded.
+func TestRolloutPathMissAskedAgainIsKept(t *testing.T) {
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	now := time.Now()
+	writeRollout(t, home, "11111111-1111-1111-1111-111111111111", "/w", now, now)
+	ageDirs(t, codex)
+	const id = "23232323-2323-2323-2323-232323232323"
+	if p := rolloutPath(codex, id); p != "" {
+		t.Fatalf("no rollout: %q", p)
+	}
+	rolloutCaches.Lock()
+	m := cacheFor(codex).misses[id]
+	m.asked = m.asked.Add(-missKeptFor - time.Minute)
+	cacheFor(codex).misses[id] = m
+	rolloutCaches.Unlock()
+	if p := rolloutPath(codex, id); p != "" { // asked about again
+		t.Fatalf("no rollout: %q", p)
+	}
+	expireRollouts(codex, true)
+	rollouts(codex)
+	rolloutCaches.Lock()
+	_, kept := cacheFor(codex).misses[id]
+	rolloutCaches.Unlock()
+	if !kept {
+		t.Fatal("a miss asked about again was let go")
+	}
+}

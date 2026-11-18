@@ -437,6 +437,13 @@ func newMissLook(home string) *missLook {
 // mtime's granularity (a coarse clock tick) without its mtime moving, so nothing seen then is kept for later looks.
 func (l *missLook) settled() bool { return slices.Max(l.stamp) < l.at.Add(-time.Second).UnixNano() }
 
+// relistedSince: a listing of every directory of home (relistMisses) began after at.
+func relistedSince(home string, at time.Time) bool {
+	rolloutCaches.Lock()
+	defer rolloutCaches.Unlock()
+	return cacheFor(home).relistedAt.After(at)
+}
+
 // keepMiss records that id has no rollout as of the look, unless it is not settled, or a listing of every directory
 // began after it: that listing knows more, and may just have let this miss go for a rollout written meanwhile into an
 // older day. The next look decides then.

@@ -526,13 +526,15 @@ func (p *codexListPass) appState(home string) *codexAppState {
 	return app
 }
 
-// missLook is newMissLook with each home's look taken once per pass.
+// missLook is newMissLook with each home's look taken once per pass, and again once it is a second old or a listing of
+// every directory began after it (keepMiss keeps nothing for such a look): a long pass, the first after the node
+// starts, still keeps the misses it finds.
 func (p *codexListPass) missLook(home string) *missLook {
 	if p == nil {
 		return newMissLook(home)
 	}
 	look := p.looks[home]
-	if look == nil {
+	if look == nil || time.Since(look.at) > time.Second || relistedSince(home, look.at) {
 		look = newMissLook(home)
 		p.looks[home] = look
 	}
