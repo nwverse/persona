@@ -221,6 +221,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
 	"POST /api/v1/assistant/rule-suggestions/{id}/not-now",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
+	"POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry",
+	"DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
@@ -240,6 +242,7 @@ var Routes = []string{
 	"POST /api/v1/assistant/route/agent",
 	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
 	"PUT /api/v1/assistant/directions/{id}/name",
+	"PUT /api/v1/assistant/directions/{id}/notes",
 	"GET /api/v1/assistant/conversations/{id}/feed",
 	"POST /api/v1/assistant/feed/{id}/dismiss",
 	"POST /api/v1/assistant/feed/{id}/undo-dismiss",
@@ -307,6 +310,9 @@ var Routes = []string{
 	"DELETE /api/v1/todos/{id}/thread",
 	"PUT /api/v1/todos/{id}/seen", // Got it on a Just finished to-do, and its Undo (todo_seen.go, #5707)
 	"DELETE /api/v1/todos/{id}/seen",
+	"PUT /api/v1/todos/{id}/restored", // Restore on an inactive to-do, and Someday and back (todo_marks.go, #10226)
+	"PUT /api/v1/todos/{id}/someday",
+	"DELETE /api/v1/todos/{id}/someday",
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",

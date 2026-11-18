@@ -474,7 +474,7 @@ struct InboxPage: View {
             if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
-        .listRowInsets(.vertical, Theme.Space.flush) // its buttons are the room above and below (#6576)
+        .listRowVerticalInsets(Theme.Space.flush) // its buttons are the room above and below (#6576)
         .id(Self.groupID(section, g.key))
     }
 
@@ -1084,7 +1084,7 @@ struct InboxPage: View {
             }
         }
         .textCase(nil)
-        .listRowInsets(.vertical, Theme.Space.flush)
+        .listRowVerticalInsets(Theme.Space.flush)
         .id("|done")
     }
 
@@ -1166,7 +1166,7 @@ struct InboxPage: View {
             }
         }
         .textCase(nil)
-        .listRowInsets(.vertical, Theme.Space.flush)
+        .listRowVerticalInsets(Theme.Space.flush)
     }
 
     private func agentRow(_ ix: Interaction) -> some View {

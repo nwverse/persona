@@ -28,6 +28,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import { TaskTrust } from "./TaskTrust";
+import { DirectionNotes, directionNotesDeps } from "./DirectionNotes";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
@@ -106,6 +107,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 function AssistantSettingsForManager({ manager, owner, bare }: { manager: string; owner: string; bare?: boolean }) {
   const [notesSaves] = useState(() => aboutMeSaves(manager, owner));
   const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
+  const [directionNotes] = useState(() => directionNotesDeps(scopedApi));
   const persona = usePersona();
   const machines = useStore((s) => s.machines);
   const [info, setInfo] = useState<AssistantState | null>(null);
@@ -518,6 +520,8 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </button>
         )}
       </Group>
+
+      <DirectionNotes deps={directionNotes} />
 
       <PageBoundary page="repositories">
         <Suspense fallback={<Group title={t("settings-repositories.title")}><Loading /></Group>}>
