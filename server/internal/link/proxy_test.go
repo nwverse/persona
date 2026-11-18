@@ -481,6 +481,10 @@ func TestDialActiveTriesTheProxyAfterDirect(t *testing.T) {
 	if l, err := try(cfg, ""); err != nil || l.ep != ep || proxy.connects.Load() != 0 {
 		t.Fatalf("direct first: %+v %v (CONNECTs %d)", l, err, proxy.connects.Load())
 	}
+	// After a direct link, last is its address kind: direct candidates still go first.
+	if l, err := try(cfg, ep.Kind); err != nil || l.ep != ep || proxy.connects.Load() != 0 {
+		t.Fatalf("direct first after a direct link: %+v %v (CONNECTs %d)", l, err, proxy.connects.Load())
+	}
 	// The route that worked last goes first: through the proxy, direct candidates untried.
 	before := direct.attempts.Load()
 	if l, err := try(cfg, KindProxy); err != nil || l.ep.Kind != KindProxy || direct.attempts.Load() != before || proxy.connects.Load() != 1 {
