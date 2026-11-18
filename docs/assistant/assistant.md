@@ -530,6 +530,9 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
   user's language on what it is doing and how long it will take or what it waits for, then to answer the message; the sentence about
   work moved to the background is there only when it was. Without it an owner's "what happened?" got six minutes of tool calls and no
   word. Tests: `TestAssistantInterjectOffOrOldClaude`, `TestInterjectNote` (`node/assistant_interject_test.go`).
+- **A model recovery's resend is no interjection** (#10178): the bounded recovery's resend (`prompts/assistant/model_retry`) finds the
+  chat busy because the recovery holds the failed turn, but nobody sent it mid-turn: it carries neither the note nor the
+  `background_tasks` request. Test: `TestAssistantRecoveryResendIsNoInterjection` (`node/assistant_recovery_test.go`).
 
 ## Next-message suggestions (#4644)
 
