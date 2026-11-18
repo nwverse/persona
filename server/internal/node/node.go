@@ -185,6 +185,7 @@ type Node struct {
 	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
+	oldMisses map[string]oldCodexMiss // negative opaque-id lookups, bounded by directory stamps and a one-minute TTL
 	takeovers codexTakeovers
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID string
