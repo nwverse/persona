@@ -92,6 +92,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/todos/{id}
 todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
 -                    DELETE /api/v1/todos/{id}/seen
+-                    DELETE /api/v1/todos/{id}/someday
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
@@ -703,7 +704,9 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          PUT /api/v1/todos/{id}/repositories
 todos.write          PUT /api/v1/todos/{id}/repositories/{repo_id}/links
+-                    PUT /api/v1/todos/{id}/restored
 -                    PUT /api/v1/todos/{id}/seen
+-                    PUT /api/v1/todos/{id}/someday
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
 -                    PUT /api/v1/workspace-board/settings
