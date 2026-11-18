@@ -56,10 +56,10 @@ function ScheduledTaskMessage({ msg, mid, sid }: SourceProps) {
         <Icon name="clock" size={13} className="shrink-0" />
         {sourceLabel(msg.source!)}
       </span>
-      <div className="min-w-0 rounded-card bg-neutral-bubble px-4 py-2.5 text-ink">
+      <div className="min-w-0 rounded-card bg-neutral-bubble px-4 py-2.5 text-ink" data-disclosure-anchor>
         <div ref={preview} className="chat-scheduled-body" data-collapsed={!open || undefined} data-source-folded={!open && long || undefined}>{text}</div>
         {open && full.more}
-        {long && <button type="button" className="chat-source-toggle mt-1.5 inline-flex items-center gap-1" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        {long && <button type="button" className="chat-source-toggle touch-hit mt-1.5 inline-flex items-center gap-1" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
           {t(open ? "chat-segmentview.collapse" : "chat-messages.show_more")}
           <Icon name="chevron" size={13} className={open ? "rotate-180" : undefined} />
         </button>}

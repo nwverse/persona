@@ -857,7 +857,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       const was = atEnd.current;
       atEnd.current = false;
       moved = false;
-      anchor.current = { el, edge: "top", at: el.getBoundingClientRect().top, follow: false, quiet: window.setTimeout(drop, 1000) };
+      // A disclosure below its contents anchors the card, not the button that moves down when it opens.
+      const row = el.closest("[data-disclosure-anchor]") ?? el;
+      anchor.current = { el: row, edge: "top", at: row.getBoundingClientRect().top, follow: false, quiet: window.setTimeout(drop, 1000) };
       resume = window.setTimeout(() => {
         if (!was) return;
         if (!followsAfterUnfold({ wasAtEnd: was, readerMoved: moved, gap: sc.scrollHeight - sc.scrollTop - sc.clientHeight })) return follow(false);

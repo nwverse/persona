@@ -41,6 +41,7 @@ describe("source messages in the actual transcript renderer", () => {
     expect(preview?.hasAttribute("data-source-folded")).toBe(true);
     const toggle = card.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     expect(toggle.textContent).toBe("显示更多");
+    expect(toggle.closest("[data-disclosure-anchor]")?.contains(preview!)).toBe(true);
     act(() => toggle.click());
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(preview?.hasAttribute("data-collapsed")).toBe(false);
