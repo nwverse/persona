@@ -79,9 +79,10 @@ func TestFailedStartWithoutAMainConversationGoesToTheDispatchingConversation(t *
 	b := &s.supervise
 	b.mu.Lock()
 	pending := len(b.pending)
+	told := b.sent[superviseSignal{Todo: todo.ID, Kind: sigFailed}.id()] != ""
 	b.mu.Unlock()
-	if pending != 0 {
-		t.Fatalf("%d signal(s) still pending after the message", pending)
+	if pending != 0 || !told {
+		t.Fatalf("after the message: %d signal(s) still pending, failed start marked told %v", pending, told)
 	}
 	if n := logged("no main conversation"); n != 0 {
 		t.Fatalf("logged %d line(s) that signals wait for a main conversation, though the message went out", n)
@@ -91,7 +92,6 @@ func TestFailedStartWithoutAMainConversationGoesToTheDispatchingConversation(t *
 	for range 5 {
 		s.sendDigest(ctx)
 	}
-	time.Sleep(5 * shortSuperviseTimings.gather)
 	if n := supervisionTo(f, "side1", sigFailed); len(n) != 1 {
 		t.Fatalf("%d supervision messages about the failed start, want 1", len(n))
 	}
