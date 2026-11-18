@@ -795,6 +795,7 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 	ctx = context.WithoutCancel(ctx)
 	cctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
+	observed, _ := s.launcherHealth(ctx, machine, launcher) // the health record the check's result may update
 	var res proto.LauncherCheck
 	if err := s.call(cctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": launcher, "purpose": "assistant"}, &res); err != nil {
 		// Not the model's answer (the machine could not be asked): said, not kept.
@@ -813,7 +814,24 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 	}); err != nil {
 		s.logf("assistant: readiness: %v", err)
 	}
+	s.readinessProbeHealth(ctx, machine, launcher, res, observed)
 	return &res
+}
+
+// readinessProbeHealth: the main chat's check is the one a launcher health check runs, so a record of its launcher
+// failing on machine takes its result (#10369). A pass clears it, as Settings › Test's does (recordTestPassed), so the
+// setup card and the start detours it drives go at once; a failure of a record still in force says the launcher still
+// fails now, not when it was first seen; one timeout says nothing yet (probeLauncherWithRetry). Without a failing
+// record nothing is kept, and a failure never starts one (Test's rule: the checks and the starts judge failures).
+func (s *Service) readinessProbeHealth(ctx context.Context, machine, launcher string, res proto.LauncherCheck, observed LauncherHealth) {
+	switch {
+	case observed.State == "" || observed.State == healthOK:
+	case res.OK:
+		s.recordTestPassed(ctx, machine, launcher, res, observed)
+	case observed.unusable() && classifyLauncherError(res.Error) != errKindTimeout:
+		s.recordHealth(ctx, machine, launcher, healthResult{agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error,
+			source: healthSourceCheck, observed: &observed})
+	}
 }
 
 // What the machine's launcher list says of a launcher.
