@@ -12,7 +12,13 @@ func TestUnrecoverableTurnErrorCode(t *testing.T) {
 			t.Errorf("%q: code = %q", text, code)
 		}
 	}
-	for _, text := range []string{"", "API Error: 503 encrypted connection failed", "compaction failed", "compacted natively but not sealed"} {
+	for _, text := range []string{
+		"",
+		"API Error: 503 encrypted connection failed",
+		"compaction failed",
+		"compacted natively but not sealed",
+		"API Error: 400 ToolSearch is not supported on this endpoint; resend with all tools loaded",
+	} {
 		if code := UnrecoverableTurnErrorCode(text); code != "" {
 			t.Errorf("recoverable error %q classified as %q", text, code)
 		}
