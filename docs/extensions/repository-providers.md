@@ -148,9 +148,33 @@ fake provider.
 
 ## In the apps
 
-The web's **Settings › Repositories** and a to-do's repository editor show the sources and their states (the second
-step of #10330). iPhone and Android have no repository UI.
+The web shows a provider extension's sources and repositories only once there is one: with GitHub and GitLab alone,
+every screen is what it was before #10330, and the to-do requests are unchanged. Settings › Repositories sends one more
+request, the providers read beside the list.
+
+- **Settings › Repositories** (`web/src/views/settings/Repositories.tsx`) reads `GET …/repositories/providers` beside
+  the list (a 404 or a failure means the built-ins only, never an error). With an extension's source installed or a
+  saved repository from one, a **Sources** part lists GitHub and GitLab as built in and each extension by its name and
+  hosts, with an **Unavailable** pill when it is off. The provider menu keeps its three options and adds each extension
+  by name (an off one disabled, except for the repository that already uses it). An address on a host an extension
+  claims, or with its source picked, is read by `POST …/repositories/preview` after a short pause, one read at a time,
+  with "Reading the address with Acme Code…" until it answers; Save waits for that answer, and the source's refusal is
+  shown in the hub's words with **Try again**. A saved repository's row names its source; when that source is off or
+  uninstalled, the row adds an **Unavailable** pill and a line saying the repository stays saved, its details can be
+  edited, and checking it or changing its address needs the source. Editing its name, aliases or purpose with the
+  address unchanged asks nothing, so it works meanwhile. A repository saved before its extension was renamed keeps
+  the old id, which the list does not have: the page takes it to be the listed source with the same contribution that
+  claims its host, and sends the saved id, which the hub follows. Until the providers are read (or when they can't be),
+  the page claims nothing about a saved repository's source and lets the hub answer a new address for it.
+- **A to-do's Repositories and work** (`web/src/ui/TaskRepositoryBindingsEditor.tsx`) draws an extension's repository
+  with the extension mark and, after its address, its source's name as saved with it (`provider_name`, else "Another
+  source"; never the `ext:` id; the to-do page reads no providers list, so a source renamed since shows its saved
+  name), its links at their stored addresses, as `#N`, in the source's own `link_kinds` words.
+  A pasted address strictly under the repository's is kept as pending ("Checked when you save") and sent as `{url}`,
+  for the hub to ask the extension. With `provider_state` `off` or `missing` the row carries an **Unavailable** pill
+  and a note, its links still open, and adding a new one is turned off.
 
 ## What comes next (#10330)
 
-The web's source list, link labels and "provider unavailable" state follow in the second step of #10330.
+The iPhone and Android apps have no repository screens yet; when they get them, they read the same providers route and
+fields (`provider_name`, `provider_state`, `link_kinds`) and follow the web's rules above.

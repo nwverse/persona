@@ -3167,6 +3167,23 @@ keeps the draft on failure, and a browser timeout asks the user to refresh becau
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
 
+A provider extension's source (#10330, `docs/extensions/repository-providers.md`) changes nothing on screen while
+none is installed and no saved repository uses one: the list and the menu's three options stay as they were. The only
+difference then is one more read, the sources beside the list (a 404 or a failure means the built-ins only).
+Once there is one, the expanded area adds a **Sources** part, plain rows of each source's mark, name and either
+"Built in" or its hosts in small mono text, with a neutral `Pill` **Unavailable** for one that is off. The provider
+menu adds extensions by name after the built-ins, an off one disabled unless the edited repository uses it. The
+preview of an extension's address waits for the source: the shared `Loading` line names it ("Reading the address
+with Acme Code…"), then the inset preview names the source rather than its id; a host the source does not claim, an
+unavailable source or its refusal (the hub's words) is one status line, and Save stays off until an identity
+arrives. A refusal or failure is never final: a quiet **Try again** under it reads the address again, as does
+editing the address. Until the sources are read (or when they can't be), the page claims no source is unavailable:
+the repository being edited asks its own source through the hub, whose answer is shown. A saved repository of an
+extension names its source under the address and, when that source is off or gone, adds the neutral **Unavailable**
+pill and one `data-repository-note` line on what still works on this page (it stays saved and its details can be
+edited). A source whose extension was renamed is still the saved repository's: the hub keeps the id it was saved
+with, so the page matches it to the listed source with the same contribution that claims its host.
+
 ## Optional repository associations
 
 Coding-work metadata belongs in the Web to-do detail's **Repositories and
@@ -3182,7 +3199,19 @@ presented as filesystem paths. A link carries its complete source title as one
 hyperlink, wrapping at narrow widths, followed by its number and an external
 mark. An unknown title falls back to the localized kind and number. GitHub PRs
 use the pull-request mark, GitLab MRs the merge mark and issues the existing
-issue mark. The associations an agent keeps show without an editor. Editing is
+issue mark. A provider extension's repository uses the extension mark
+(`Icon` `extension` in the secondary ink, `data-repository-mark="extension"`,
+hidden from assistive technology; `git` would read as the branch mark of
+**Source options** beside it). Its source's name, never the `ext:` id, follows
+the address, so a narrow line cuts the name before the repository's path. Its
+links open at their stored addresses, are numbered `#N` and take
+the source's own `link_kinds` word for an untitled link. A pasted address of such
+a repository is a pending link row ("Checked when you save") until the hub
+reads it on save. When its source is off or uninstalled, the repository row adds
+the neutral `Pill` **Unavailable** before its count and a `data-repository-note`
+line beneath it; links keep opening and only adding one is turned off. The
+picker shows the same mark and the source's name after the host. The
+associations an agent keeps show without an editor. Editing is
 the existing `Dialog` with a compact text button (**Manage links**), never an
 always-open form. `TaskRepositoryBindingsEditor` is the controlled editor;
 `TodoRepositoryBindings` owns existing-todo reads and writes and
