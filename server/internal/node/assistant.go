@@ -534,9 +534,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	selectedLauncher, selectedExecution := launcher, execution
 	// The live snapshot the message starts with, asked for while the process starts (assistant_context.go). A new
 	// Codex conversation has no id yet: it can't be the main one.
+	hasInput := strings.TrimSpace(text) != "" || len(images) > 0
 	snapc := make(chan contextAnswer, 1)
-	if guest != nil {
-		snapc <- contextAnswer{} // the user's state is not a guest's (the hub gives it none either)
+	if guest != nil || !hasInput {
+		snapc <- contextAnswer{} // guests get no owner state; empty starts leave it for the first real message
 	} else {
 		go func(id string) { snapc <- n.assistantContext(id) }(id)
 	}
@@ -669,7 +670,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		n.noteModes(id, mode, effort)
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || !resume && !hasInput {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -681,11 +682,24 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.SupervisionInstructions = execution.SupervisionInstructions
 		st.FollowsSetting = execution.FollowsSetting
 		st.ConfigDir = execution.ConfigDir
+		if !resume && !hasInput {
+			st.AwaitingFirstMessage = true
+		}
 		n.state.put(id, st)
 	}
 
 	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
 	n.noteAssistantRecoveryProcess(ctx, p)
+	if !hasInput {
+		// Android creates the session before sending its outbox. Keep the process and
+		// settings, but do not turn its context into a message or acknowledge it as read.
+		err := n.syncAssistantModes(ctx, p)
+		awaitList(n.notifySessionsSoon())
+		if err != nil {
+			return "", err
+		}
+		return id, nil
+	}
 	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
 		// An active process may retain its old environment while a switch waits. Never send selections to that
 		// different environment simply because the display names match. Claude startup can also
@@ -1267,6 +1281,11 @@ func (n *Node) assistantSessions() []proto.Session {
 			queued = queuedTexts(p.queuedLocked()) // typed while it works and not taken yet (assistant_queue.go)
 		}
 		p.mu.Unlock()
+		if !busy {
+			if st, ok := n.state.get(p.id); ok && st.AwaitingFirstMessage {
+				status = proto.StatusIdle
+			}
+		}
 		s := proto.Session{SessionID: p.id, Cwd: p.cwd, Status: status, Launcher: p.launcher, UpdatedAt: updated.UTC(),
 			Queued: queued}
 		if p.agent == "codex" {
