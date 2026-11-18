@@ -76,7 +76,7 @@ func TestModesAnswerSaysHowAPickTookEffect(t *testing.T) {
 	if err != nil || res["applied"] != "now" {
 		t.Fatalf("auto answered %v, %v", res, err)
 	}
-	if e := outcome(t, events, proto.ModeRestartDropped); e.Mode != proto.ModeBypass || !strings.Contains(e.Reason, "another permission mode") {
+	if e := outcome(t, events, proto.ModeRestartDropped); e.Mode != proto.ModeBypass || e.Reason != proto.ModeRestartReasonReplaced {
 		t.Errorf("drop reported as %+v", e)
 	}
 	res, err = request(t, n, "session.modes", map[string]any{"session_id": sidA, "effort": "high"})
@@ -110,7 +110,7 @@ func TestModeRestartOutcomesAreReported(t *testing.T) {
 		}
 		run(4101, false)
 		listSessions(t, n)
-		if e := outcome(t, events, proto.ModeRestartDropped); !strings.Contains(e.Reason, "has exited") {
+		if e := outcome(t, events, proto.ModeRestartDropped); e.Reason != proto.ModeRestartReasonProcessExited {
 			t.Errorf("drop reported as %+v", e)
 		}
 	})
@@ -132,11 +132,29 @@ func TestModeRestartOutcomesAreReported(t *testing.T) {
 		sh.restarts[sidA].at = time.Now().Add(-modeRestartMaxAge - time.Minute)
 		sh.mu.Unlock()
 		n.tryModeRestart(sidA)
-		if e := outcome(t, events, proto.ModeRestartDropped); !strings.Contains(e.Reason, "picked over") {
+		if e := outcome(t, events, proto.ModeRestartDropped); e.Reason != proto.ModeRestartReasonExpired {
 			t.Errorf("drop reported as %+v", e)
 		}
 		if n.switches().restartMode(sidA) != "" {
 			t.Error("a pick older than the limit still waits")
 		}
 	})
+}
+
+// A restart that did not work says how, in a code the apps put in words; one the node cannot name says nothing.
+func TestRestartFailureReasons(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{refusal(proto.CodeSwitchNotStopped, "the agent did not quit", nil), proto.ModeRestartReasonNotStopped},
+		{refusal(proto.CodeSwitchFailed, "did not come up", nil), proto.ModeRestartReasonStartFailed},
+		{refusal(proto.CodeSwitchFailedStopped, "it has stopped", nil), proto.ModeRestartReasonStopped},
+		{refusal(proto.CodeSwitchUnsupported, "no", nil), ""},
+		{io.ErrUnexpectedEOF, ""},
+	} {
+		if got := restartFailure(c.err); got != c.want {
+			t.Errorf("%v: %q, want %q", c.err, got, c.want)
+		}
+	}
 }

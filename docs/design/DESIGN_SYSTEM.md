@@ -195,7 +195,7 @@ Dynamic Type behavior:
 - The user's Small, Standard or Large setting shifts the system size by -1, 0 or +1 (`apple/Persona/DesignSystem/TextSize.swift:6-36`). Web maps the same ratios (12/13, 1, 14/13) through a build-time rewrite. Android has no in-app setting.
 - Shapes scale with `scaledFrame`, capped at 1.6x (`apple/Persona/DesignSystem/TextSize.swift:98-108`). `tapTargetFrame` and `tapTargetHeight` never go below 44 pt.
 - The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
-- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes.
+- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes, and the browser sign-in number (`Theme.Font.signInNumber`, 64 pt rounded bold with fixed-width digits, `apple/Shared/Design/BrowserLoginTokens.swift`, #10293): two digits read off the iPhone to be typed in a browser, already far above the interface's cap at every size.
 
 ### 2.3 Spacing
 
@@ -349,6 +349,15 @@ drawn in gray at the end of the call's row: the call did not run, so it is not a
 | `beautiful` | glass | glass | neutral | line glyphs |
 
 Source: `apple/Shared/Design/Theme.swift:11-39`, `apple/Shared/Design/StyleSpec.swift`. Style and theme color are independent axes; `StyleSpecTests` checks every pair. New code never switches on `AppStyle`. It reads the composed spec. Web has one look (the Beautiful style). Android has Glass, Brief and Board, so only Glass is common to both platforms.
+
+**Before iOS 26** (the iPhone and iPad app runs from iOS 18.6, #6730) there is no Liquid Glass. The `glass` surface draws
+visionOS's material instead (`.regularMaterial`, the tint washed over it), `glass` buttons draw the `bordered` style's,
+and `GlassGroup` stands in for `GlassEffectContainer`. Other iOS 26-only modifiers go through
+`apple/Persona/DesignSystem/SystemCompat.swift` (`navigationSubtitleWhenSupported`, `listRowVerticalInsets`,
+`scrollEdgeEffectHiddenWhenSupported`, `safeAreaBarWhenSupported`, …): on iOS 26 each is the system modifier, so every
+screen there is unchanged; before it, the nearest older behavior or nothing. Toolbar items that need iOS 26
+(`ToolbarSpacer`, `sharedBackgroundVisibility`) are chosen on the view: `ToolbarContentBuilder` cannot take
+`if #available` (`docs/lessons/ios.md`, "iOS 18.6 floor").
 
 On the retired native Mac, a style could also bring the window's chrome (`StyleSpec.MacChrome`), read through the former Mac-only tokens and `Theme.monogram(_:)`: the sections column, the side column beside a list, how the
 shell's lists showed the selected row and the row under the pointer, and the discs of names without a picture. Every style
@@ -640,6 +649,17 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+  (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
+  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
+  restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
+  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
+  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
+  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
+  or the app back in front.
 
 ### 3.3 Cards and surfaces
 
@@ -754,6 +774,8 @@ and a bottom collapse action that restores focus to the expansion control.
 Reply targets show a friendly name and a source-backed preview when available;
 opaque routing IDs and read diagnostics stay in details. The layout changes no
 sending identity or confirmation behavior.
+
+The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
 ### 3.4 Lists and rows
 
@@ -911,7 +933,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - The composer's + panel on the iPhone (`AttachSheet`) is a system sheet with detents medium and large and the drag indicator, like the system's photo picker; its bar sits in `safeAreaInset(edge: .bottom)` so the keyboard pushes it up (#4312).
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).
-- **Bar buttons of a presented page** (`apple/Persona/DesignSystem/SheetActions.swift`, #9653): `SheetClose` is the ✕ at `.cancellationAction`: a close-role button with the style's ✕ (`ThemedIcon(Theme.Icon.close)`) in the primary ink, named Close for VoiceOver, closed by Esc from a keyboard, identifier `sheet-close` unless the page gives its own. The system's own ✕ (`Button(role: .close)` without a label) takes the app's tint, which read 2–3:1 on the bar's glass in dark. `SheetConfirm` is an edit sheet's ✓, the system's confirm button (`Button(role: .confirm)`, a white tick on the accent, at least 3.5:1 by `PersonaPalette`) at `.confirmationAction`; a verb that says more stays the page's own item there. Edit sheets reach `SheetClose` through `sheetCancel(unsaved:)`, which asks to discard on Mac only; on iOS it leaves at once. A page that only shows things and is also pushed elsewhere takes `sheetDone`: the ✕ as a sheet, nothing when `detailPresentation` pushed it into a column (a to-do's details). A self-drawn header (the link card, a hosted chat, the terminal's grab bar, the image viewer) puts its ✕ first, before its title. Pages never write their own close or put one at the trailing edge; `SheetCloseTests` counts both.
+- **Bar buttons of a presented page** (`apple/Persona/DesignSystem/SheetActions.swift`, #9653): `SheetClose` is the ✕ at `.cancellationAction`: a close-role button with the style's ✕ (`ThemedIcon(Theme.Icon.close)`) in the primary ink, named Close for VoiceOver, closed by Esc from a keyboard, identifier `sheet-close` unless the page gives its own. The system's own ✕ (`Button(role: .close)` without a label) takes the app's tint, which read 2–3:1 on the bar's glass in dark. `SheetConfirm` is an edit sheet's ✓, the system's confirm button (`Button(role: .confirm)`, a white tick on the accent, at least 3.5:1 by `PersonaPalette`) at `.confirmationAction`; a verb that says more stays the page's own item there. Edit sheets reach `SheetClose` through `sheetCancel(unsaved:)`, which asks to discard on Mac only; on iOS it leaves at once. A page that only shows things and is also pushed elsewhere takes `sheetDone`: the ✕ as a sheet, nothing when `detailPresentation` pushed it into a column (a to-do's details). A self-drawn header (the link card, a hosted chat, the terminal's grab bar, the image viewer) puts its ✕ first, before its title. Pages never write their own close or put one at the trailing edge; `SheetCloseTests` counts both. Before iOS 26 (no close or confirm roles) the ✕ is a plain button with the same icon, and the ✓ is the word it stands for (its name, or Done), as iOS 18's own sheets have it: a ✓ there read like the selection ticks of the form under it.
 - A word on a sheet's bar that only closes draws in the primary ink, `sheetBarLabel()` (`apple/Persona/DesignSystem/SheetActions.swift`, #9460): on the bar's glass, which turns lighter in a dark sheet over a light page, the accent read 2.1:1 (Send To) and 3.1:1 (Forward To), and 2–3:1 across the app's 54 bar Cancels (#9634). `SheetClose`'s ✕ replaced those words; a confirming button keeps the accent.
 - Busy sheets disable interactive dismissal. Detents and drag indicators are inconsistent (DS-22).
 - Confirmation sheets for Close and Delete agent exist because a system dialog was too wordy (`apple/Persona/DesignSystem/Components.swift:444`).
