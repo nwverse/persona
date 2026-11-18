@@ -35,6 +35,9 @@ import (
 //     All and is never restarted into it by an old pick. Where Persona cannot tell the process, the pick is refused.
 //   - It lives in the node's memory, shared by a resident node's Nodes (switch_share.go): a node restart forgets it, and
 //     nothing restarts the agent behind the user's back after that.
+//   - What became of it (done, failed, dropped and why) goes to the manager as a session.mode_restart event, kept
+//     with the session's mode changes (#10297, devices/mode_changes.go); session.modes answers applied "restart"
+//     when a pick waits for one, "now" when it took effect at once.
 
 const (
 	modeRestartRetry    = 3 * time.Second
@@ -88,6 +91,19 @@ func (s *switchShare) restartProcess(id string) (pid int, start string) {
 		return r.pid, r.start
 	}
 	return 0, ""
+}
+
+// expireRestart drops session id's restart when it was picked over modeRestartMaxAge ago and is not being carried
+// out, and returns its mode ("" when nothing went).
+func (s *switchShare) expireRestart(id string, now time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.restarts[id]
+	if r == nil || r.applying || now.Sub(r.at) <= modeRestartMaxAge {
+		return ""
+	}
+	delete(s.restarts, id)
+	return r.mode
 }
 
 // restartApplying: session id's restart is being carried out now (taken by takeRestart, not settled yet).
@@ -181,13 +197,29 @@ func (n *Node) queueModeRestart(id, mode string) error {
 
 // dropModeRestart drops a restart session id waits for (another mode was picked).
 func (n *Node) dropModeRestart(id string) {
-	if n.switches().restartMode(id) == "" {
+	mode := n.switches().restartMode(id)
+	if mode == "" {
 		return
 	}
 	n.switches().setRestart(id, "", time.Time{}, 0, "")
 	n.logf("session %s: waiting restart in another permission mode dropped", id)
+	n.reportModeRestart(id, mode, proto.ModeRestartDropped, "another permission mode was picked")
 	n.notifySessions()
 }
+
+// reportModeRestart tells the manager what became of session id's restart in mode (#10297): kept with the session's
+// mode changes.
+func (n *Node) reportModeRestart(id, mode, outcome, reason string) {
+	if n.peer == nil {
+		return
+	}
+	_ = n.peer.Notify(proto.EventModeRestart, proto.ModeRestartEvent{SessionID: id, Mode: mode, Outcome: outcome, Reason: reason})
+}
+
+// restartGoneError: the claude a restart was picked for is gone (restartGone), so it is dropped, not failed.
+type restartGoneError string
+
+func (e restartGoneError) Error() string { return string(e) }
 
 // agentProcess is the claude process session id runs in: as its hooks last reported it, else as the sessions/<pid>.json
 // of a running claude with that session open says; 0 when neither can tell.
@@ -230,7 +262,9 @@ func (n *Node) dropGoneRestart(id string) bool {
 	if why == "" {
 		return false
 	}
+	mode := n.switches().restartMode(id)
 	n.switches().setRestart(id, "", time.Time{}, 0, "")
+	n.reportModeRestart(id, mode, proto.ModeRestartDropped, why)
 	n.logf("session %s: waiting restart in another permission mode dropped: %s", id, why)
 	return true
 }
@@ -243,6 +277,7 @@ func (n *Node) modeRestartRow(s *proto.Session) {
 	}
 	if s.PermissionMode == mode && s.BypassAvailable {
 		n.switches().setRestart(s.SessionID, "", time.Time{}, 0, "") // in it already (set at the computer)
+		n.reportModeRestart(s.SessionID, mode, proto.ModeRestartDone, "the agent runs in it already")
 		return
 	}
 	if n.dropGoneRestart(s.SessionID) { // the claude it was picked for is gone (#10296)
@@ -257,6 +292,13 @@ func (n *Node) modeRestartRow(s *proto.Session) {
 
 // tryModeRestart tries session id's queued restart, when one is due (takeRestart), and settles it.
 func (n *Node) tryModeRestart(id string) {
+	if mode := n.switches().expireRestart(id, time.Now()); mode != "" {
+		why := fmt.Sprintf("picked over %v ago", modeRestartMaxAge)
+		n.logf("session %s: restart in permission mode %s dropped: %s", id, mode, why)
+		n.reportModeRestart(id, mode, proto.ModeRestartDropped, why)
+		n.notifySessions()
+		return
+	}
 	mode := n.switches().takeRestart(id, time.Now())
 	if mode == "" {
 		return
@@ -265,12 +307,18 @@ func (n *Node) tryModeRestart(id string) {
 	defer cancel()
 	err := n.runModeRestart(ctx, id, mode)
 	n.switches().settleRestart(id, mode, err, time.Now())
+	var gone restartGoneError
 	switch {
 	case err == nil:
 		n.logf("session %s: restarted in permission mode %s", id, mode)
+		n.reportModeRestart(id, mode, proto.ModeRestartDone, "")
 	case errors.Is(err, errRestartLater):
+	case errors.As(err, &gone):
+		n.logf("session %s: restart in permission mode %s dropped: %v", id, mode, err)
+		n.reportModeRestart(id, mode, proto.ModeRestartDropped, err.Error())
 	default:
 		n.logf("session %s: restart in permission mode %s dropped: %v", id, mode, err)
+		n.reportModeRestart(id, mode, proto.ModeRestartFailed, err.Error())
 	}
 	n.notifySessions()
 }
@@ -286,7 +334,7 @@ func (n *Node) runModeRestart(ctx context.Context, id, mode string) error {
 		return nil // dropped while it waited for the input
 	}
 	if why := n.restartGone(id); why != "" {
-		return errors.New(why) // the claude it was picked for is gone: a later one is never restarted by it (#10296)
+		return restartGoneError(why) // the claude it was picked for is gone: a later one is never restarted by it (#10296)
 	}
 	if why := n.switchBusy(ctx, id); why != "" {
 		return errRestartLater
@@ -364,4 +412,18 @@ func (n *Node) restartInMode(ctx context.Context, id, mode string) error {
 		return refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent did not come up in %s (%v), nor again as before (%v); it has stopped", mode, startErr, err), nil)
 	}
 	return refusal(proto.CodeSwitchFailed, fmt.Sprintf("the agent did not come up in %s (%v); it runs as before", mode, startErr), nil)
+}
+
+// modesAnswer is session.modes' answer once it took a pick of mode (#10297): applied "restart" when a restart into it
+// waits for the turn to end, "now" otherwise (shift+tab, or an assistant conversation's next message).
+func (n *Node) modesAnswer(id, mode string) map[string]any {
+	out := map[string]any{"ok": true}
+	if mode == "" {
+		return out
+	}
+	out["applied"] = "now"
+	if n.switches().restartMode(id) == mode {
+		out["applied"] = "restart"
+	}
+	return out
 }
