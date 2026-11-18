@@ -756,7 +756,7 @@ func TestNudgeDeadlineZeroDisablesAll(t *testing.T) {
 }
 
 func TestNudgeDeadlineSkipsEndedCards(t *testing.T) {
-	for _, status := range []string{"answered", "dismissed", "replaced", "expired"} {
+	for _, status := range []string{"answered", "dismissed", "replaced", "expired", "withdrawn"} {
 		t.Run(status, func(t *testing.T) {
 			r := newNudgeRig(t)
 			ix := r.askExpiring(r.s, "ix_ended", 15*time.Minute)
