@@ -180,11 +180,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
-		if execution.Effort != "" && n.codexEffortInherited(ctx, argv, cwd, execution.Effort) {
-			// An inherited effort needs no override, which would leave the shared app-server.
-			execution.Effort = ""
-		}
-		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, execution), prompt, ws, tabName, mode)
+		// An inherited effort needs no override, which would leave the shared app-server; the record keeps it all the same.
+		runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
+		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, runs), execution, prompt, ws, tabName, mode)
 	}
 	if work := workAgentKind(launcher, kind); work != "" { // workagent.go
 		if resume != "" {
