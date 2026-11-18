@@ -1236,3 +1236,16 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - A lazy settings subtree needs its own `PageBoundary` inside the surrounding settings page. Reproduce a chunk failure by blocking the browser's actual module request, then verify that sibling settings remain editable and their drafts can still save. Restore the resource and use the existing Reload action to verify recovery of the module and persisted rules; a mocked component or a JSX-shape assertion cannot establish that behavior.
 
 - An export-only change in a deferred editor need not reduce the first screen. Measure it, revert an ineffective trial, and inspect the shared code that startup actually ships. Remove duplicated work there while retaining validation and request-lifetime guards; keep the original budget and verify the normal app/public build.
+
+## Raw TCP test listeners get the port probe too (2026-11-19, #10659)
+
+`TestProxyRouteCarriesTheLinkAndItsStreams` saw one more "direct attempt" than the link made. The extra connection was the
+local node's port probe (`GET /`, `User-Agent: persona-ports`), which finds any new listener, plain TCP included, not only
+HTTP fakes. A raw listener that counts connections (`gatedDirectListener`, `link/ssh_test.go`) now counts only those
+that open with a TLS record (first byte `0x16`) and replays that byte before forwarding. Two traps on the way:
+
+- The first guess, a Happy Eyeballs second dial for a name with both address families, was wrong. Read the stray
+  connection's first bytes before explaining it.
+- Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
+  promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
+  and every forwarded TLS handshake fails.
