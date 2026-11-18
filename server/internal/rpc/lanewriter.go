@@ -148,6 +148,12 @@ func (lw *laneWriter) run() {
 	buf := make([]byte, 0, frameMax)
 	var finished []*outLine
 	for {
+		select {
+		case <-lw.closed: // nothing more goes out on a closed peer, however much is queued
+			lw.stop(ErrClosed)
+			return
+		default:
+		}
 		lw.mu.Lock()
 		if lw.err != nil {
 			lw.mu.Unlock()

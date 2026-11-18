@@ -1921,8 +1921,9 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   observer were `io.Writer`s around the connection; with frames they would have scrubbed across frame headers (a value
   split between two frames never found, a length changed under its header) and parsed frames as JSON. They are line
   hooks on the peer now (`LineFilter` when a line's first frame is cut, `LineWritten` when its last is written).
-- **Not removed here:** the relaxed ping rules. Lanes take the large blocks out of a pong's way on the node connection;
-  whether the late-pong allowances can go needs evidence from framed connections first (follow-up issue). On Persona
+- **Not removed here:** the relaxed ping rules. Lanes take the large blocks out of a pong's way on the node connection,
+  but nodes and managers without lanes still need every allowance, and on a framed connection large answers and events
+  still fill the transport ahead of a pong: narrowing them needs evidence from framed connections first. On Persona
   Link, frames also mean no WebSocket message over 32 KiB on the node stream, which takes away the 5 s `writeControl`
   wait and `spliceWS`'s one-minute write cap described in "Heartbeat timeouts on slow links" for that stream.
 
