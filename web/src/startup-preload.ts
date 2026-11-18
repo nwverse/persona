@@ -399,17 +399,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
 // so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
 // separate work.
-// #9727: UI version 10's graph adds 1,020 B in every language, measured in one environment against main e6a2faac1 (ja
-// 482,752 B to 483,772 B; en 479,646 B to 480,666 B, zh-Hans 480,469 B to 481,489 B): the reading of a view's graph
+// #9727: UI version 10's graph adds 837 B in every language, measured in one environment against main 04cffd3d4 (ja
+// 482,609 B to 483,446 B; en 479,521 B to 480,358 B, zh-Hans 480,348 B to 481,185 B): the reading of a view's graph
 // (lib/extension-ui.ts readGraph and the UIGraph fields), its one-line lazy entry and Suspense case in
 // views/extensions/ViewBody.tsx with the fallback that keeps a card's height while the canvas's chunk loads, and the
 // graph's owner as a React context (lib/extension-owner.tsx) with its provider at every surface that draws an
 // extension's view (ExtensionSlots, the assistant's cards, an inbox item's body, the subscription pages, the launcher
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
-// The same environment measures main e4ea9d95f at #9847's ja 482,643 B and main e6a2faac1 at ja 482,752 B, 69 B over
-// main's own budget before this change. The budget is main's, plus that 69 B so the build passes (taking them back off
-// the first screen is main's separate work), plus this change's 1,020 B: 0 B of room.
-export const FIRST_SCREEN_BUDGET = 482_683 + 69 + 1_020;
+// The budget is main's plus this change's 837 B, keeping main's 74 B of room.
+export const FIRST_SCREEN_BUDGET = 482_683 + 837;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -634,12 +632,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // environment. The idle renderer (ViewBody6.tsx's TileView) gains a gauge tile's label and meter role, the ring's
 // space while it loads and the lazy registration of ViewBody9.tsx; the ring itself (about 1 KB) loads on intent with
 // the first tile that has a gauge. Main's 60 B of room is kept on top.
-// And 189 B for UI version 10 (#9727): main e6a2faac1 sends 45,998 B at idle, the same tree with #9727 46,187 B, in one
+// And 182 B for UI version 10 (#9727): main 04cffd3d4 sends 45,996 B at idle, the same tree with #9727 46,178 B, in one
 // environment. The idle renderer (ViewBody.tsx) gains the graph's case with its Suspense fallback of the kept height and
 // the lazy registration of ViewBody10.tsx (whose chunk name it embeds), and the launcher sections (ExtensionView.tsx's
 // chunk) gain the owner's context provider; the canvas itself (about 8 KB) loads on intent with the first view that has
-// a graph. Main's 65 B of room is kept on top.
-export const IDLE_TIER_BUDGET = 46_063 + 189;
+// a graph. Main's 67 B of room is kept on top.
+export const IDLE_TIER_BUDGET = 46_063 + 182;
 
 const gzip = promisify(gzipCompress);
 
