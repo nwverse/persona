@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"strings"
 	"testing"
 	"time"
@@ -45,12 +46,13 @@ func resultOf(t *testing.T, done chan string, wait time.Duration) string {
 	}
 }
 
-// The card a leader conversation raised goes through the manager's queue like any card and expires there unanswered:
-// the tool says nobody answered, not that the user declined, and the setting stays as it was.
+// The card a leader conversation raised goes through the manager's queue like any card. Unanswered in its decision
+// window it is no decline: the tool says the card is still waiting for the owner (it stays on the apps), and once the
+// waiting window ends too it expires without changing the setting.
 func TestSettingCardExpiringUnansweredIsNoDecline(t *testing.T) {
-	old := settingCardWait
-	settingCardWait = 300 * time.Millisecond
-	t.Cleanup(func() { settingCardWait = old })
+	old, oldWaiting := settingCardWait, approvalWaitingWindow
+	settingCardWait, approvalWaitingWindow = 300*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { settingCardWait, approvalWaitingWindow = old, oldWaiting })
 	a := newAskRig(t)
 	setSettings(t, a.s, func(v *Settings) { v.Main, v.Leaders = "main-1", []string{"s1"} })
 
@@ -66,26 +68,13 @@ func TestSettingCardExpiringUnansweredIsNoDecline(t *testing.T) {
 		return up && !p.Delegating // the user's from the start: not held by a supervisor
 	})
 	out := resultOf(t, done, 5*time.Second)
-	for _, want := range []string{ix.ID, "expired", "nothing was executed"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("an expired card result %q does not contain %q", out, want)
-		}
+	if out != approvalops.WaitingText || strings.Contains(out, "declined") {
+		t.Fatalf("a card unanswered in its window: %q", out)
 	}
-	if strings.Contains(out, "declined") {
-		t.Fatalf("an expired card was reported as a user refusal: %q", out)
-	}
-	if status, _, _ := a.mem.InteractionOutcome(context.Background(), ix.ID); status != "expired" {
-		t.Errorf("history: %q, want expired", status)
-	}
-	a.s.approvals.mu.Lock()
-	var journaled bool
-	for _, entry := range a.s.approvals.list {
-		journaled = journaled || entry.ID == ix.ID
-	}
-	a.s.approvals.mu.Unlock()
-	if journaled {
-		t.Error("an unclarified expiry started a second delivery instead of using only the original tool result")
-	}
+	waitFor(t, "the waiting card to expire", func() bool {
+		status, _, _ := a.mem.InteractionOutcome(context.Background(), ix.ID)
+		return status == "expired"
+	})
 	if interjectOn(t, a.s) {
 		t.Error("the setting changed without the user's approval")
 	}
