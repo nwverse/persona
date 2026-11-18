@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 var (
@@ -72,7 +73,7 @@ func (p *assistantProc) controlAnswer(ctx context.Context, request map[string]an
 	timedOut := func() error {
 		if ready != nil {
 			p.mu.Lock()
-			shellReady := !p.shellReadyAt.IsZero()
+			shellReady := !p.shellReadyAt.IsZero() || proto.IsExternalLauncher(p.launcher)
 			p.mu.Unlock()
 			stage = "shell_start_timeout"
 			if shellReady {

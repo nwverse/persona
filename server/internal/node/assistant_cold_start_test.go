@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -300,4 +301,16 @@ esac
 	if st.AppMode != "acceptEdits" || st.AppEffort != "high" {
 		t.Fatalf("fallback saved settings: %q %q", st.AppMode, st.AppEffort)
 	}
+}
+
+// External adapters invoke their CLI directly, without interactive-shell init.
+func TestAssistantColdStartDirectAdapterReportsAssistantStage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := &assistantProc{stdin: discardControlWriter{}, exited: make(chan struct{}), ready: make(chan struct{}), born: time.Now(), launcher: proto.ExternalLauncherName("adapter", "target")}
+		err := p.control(context.Background(), map[string]any{"subtype": "set_permission_mode"})
+		var timeout *assistantControlTimeoutError
+		if !errors.As(err, &timeout) || timeout.stage != "assistant_ready_timeout" {
+			t.Fatalf("direct adapter timeout = %v", err)
+		}
+	})
 }
