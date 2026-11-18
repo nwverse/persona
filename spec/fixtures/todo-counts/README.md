@@ -10,7 +10,7 @@ values to the schema and the generated types read them back unchanged (the tests
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `todo_counts.json` | A list → its counts, places and order | 7: an empty list, one to-do in each section, a failed start counted open, a superseded failed start, a step counted once, rows ranked in every section, rows ranked by what their steps carry |
+| `todo_counts.json` | A list → its counts, places and order | 8: an empty list, one to-do in each section, a failed start counted open, a superseded failed start, a step counted once, rows ranked in every section, rows ranked by what their steps carry, runs that wait counted In progress and ranked by their wake |
 
 ## Format
 
@@ -61,14 +61,22 @@ All data is made up.
 - **The order within a section** (`rank`, proposal 3.4 "Within a section"; `ranked_list`, `ranked_steps`): Needs you
   and Can wait by the soonest deadline (the earliest of the deadlines of the decisions on the row, a step's included,
   and the to-do's own due), then the oldest ask (`since`); Working by the latest activity, its steps' included;
-  Waiting by the soonest wake (a park's end, a usage limit's reset plus its grace, the leading step's when a step
-  leads the row), rows with none (an open PR) last, then the longest waiting; To do by due (overdue, today, later), then
+  Waiting by the soonest wake (a park's end, a usage limit's reset plus its grace, the hub's next wake of a run that
+  waits on another Agent or an outside event, the leading step's when a step leads the row), rows with none (an open
+  PR, a run's wait with no `wake_at`) last, then the longest waiting; To do by due (overdue, today, later), then
   priority (high, normal, low), then the newest; Just finished and Done newest first (`since`); Someday by the soonest
   return, no date last, then the newest. Ties go by id, so the order never depends on the list's. The proposal's "the
   owner's order" for To do has no input yet: priority and age stand in.
+- **A run that waits ranks by the hub's next wake of it** (`waiting_ranked_by_wake`): its `work.wake_at`, when the hub
+  wakes it to check on an outside event or, for another Agent, looks again if that Agent's turn has not ended by then.
+  It is the same kind of moment as a park's end, when the supervisor looks again, so the two rank together. A wait with
+  none (a named wait the hub schedules no wake for, its wake switch being off, or a wake so overdue that the hub
+  dropped it) has no known wake and goes after those with one. Such runs count in `in_progress` as the Waiting rows
+  they are. A wait the run ends by itself (background commands, a `/loop`) is Working, not Waiting.
 - Every to-do is ranked within its section, a step its parent carries too: clients sort the rows they draw by rank,
   and a gap left by a step they do not draw changes nothing.
-- Not pinned yet: Today's and Upcoming's own rows, and what the hub does across several managers (its own test).
+- Not pinned yet: Today's and Upcoming's own rows. What the hub does across several managers has its own test
+  (`server/internal/hub/todo_view_test.go`): it adds the counts up and joins the places, ranking nothing again.
   `rank` is worked out per manager's list, and the hub only joins the lists, so a merged section can hold equal ranks:
   clients order by `rank`, then the manager, then the id.
 

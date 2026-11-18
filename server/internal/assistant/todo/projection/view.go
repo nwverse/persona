@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The decision table (docs/design/proposals/todos-redesign.md 6.3): the first row that holds places the to-do, except
@@ -35,6 +36,7 @@ const (
 	lineDeployed        = "deployed"
 	linePROpen          = "pr_open"
 	lineUsageLimit      = "usage_limit"
+	lineRunWaits        = "run_waits"
 	lineFinishedSeen    = "finished_seen"
 	lineCompleted       = "completed"
 	lineCanceled        = "canceled"
@@ -45,7 +47,8 @@ const (
 
 // placement is a view and what ranks it within its section, worked out from the facts together with the view (the
 // ranking never reads them back off it): the soonest deadline of the decisions on the row, when it wakes (a park's
-// end, a usage limit's reset and its grace) and when it comes back from Someday; a zero time is none.
+// end, a usage limit's reset and its grace, the hub's next wake of a run that waits) and when it comes back from
+// Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
 	deadline, wake, back time.Time
@@ -218,8 +221,10 @@ func cancelNote(f *Facts) string {
 
 // ---- row 1: a failed start ----
 
-// failedStart: a run failed to start; it stays open and needs the owner for 48 hours after the failure (its retry is
-// the ask), then rows 12 to 14 place it as nothing works on it, with the Inactive mark whatever its due date or origin.
+// failedStart: a run failed to start; it stays open and needs the owner for 48 hours after the failure, then rows 12
+// to 14 place it as nothing works on it, with the Inactive mark whatever its due date or origin. Its retry is the ask,
+// safe to answer anywhere, on a to-do a conversation opened: the hub starts no other again, so one with no origin only
+// says why it did not start.
 func (r *reading) failedStart() placement {
 	f := r.f
 	// The failure is done_at, which FailTodo stores (a start that fails on a closed to-do keeps the close). updated_at
@@ -236,8 +241,10 @@ func (r *reading) failedStart() placement {
 	}
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonFailedStart)
 	p.Line, p.Since = line(lineFailedStart, "error", f.StartError), utc(failed)
-	p.Asks = []assistantwire.OwnerAsk{{ID: "todo:retry@" + listed(failed), Kind: assistantwire.OwnerAskKindRetry,
-		Home: assistantwire.OwnerAskHomeTodo}}
+	if f.Origin != "" {
+		p.Asks = []assistantwire.OwnerAsk{withRisk(assistantwire.OwnerAsk{ID: "todo:retry@" + listed(failed),
+			Kind: assistantwire.OwnerAskKindRetry, Home: assistantwire.OwnerAskHomeTodo}, assistantwire.OwnerAskRiskSafe)}
+	}
 	return p
 }
 
@@ -272,18 +279,62 @@ func (r *reading) runAsks() (placement, bool) {
 	return placement{}, false
 }
 
-// runAsk is run rn's ask: a question at home in its session (the session list says that it waits, not which card it
-// shows), its id following the moment the session came to wait.
+// runAsk is run rn's ask, at home in its session, its id following the moment the session came to wait: what its
+// pending card asks (cardKind), with the card's id to answer it by, safe to answer in place only when a notification
+// may answer it too (proto.Interaction.OneTapQuestion: one question with options, no fields, not a Just me turn's or a
+// health conversation's) and its asker did not say going ahead cannot be undone; a question, open, while the hub holds
+// no card for it (the session list says that it waits, not on what).
 func runAsk(rn run) assistantwire.OwnerAsk {
 	text := rn.s.Asks
 	if text == "" {
 		text = rn.s.AttentionReason
 	}
-	return assistantwire.OwnerAsk{
+	a := assistantwire.OwnerAsk{
 		ID:   "run:" + rn.link.MachineID + "/" + rn.link.SessionID + "@" + listed(rn.since()),
 		Kind: assistantwire.OwnerAskKindQuestion, Home: assistantwire.OwnerAskHomeRun, Text: text,
 		Run: &assistantwire.TodoRunRef{MachineID: rn.link.MachineID, SessionID: rn.link.SessionID, Title: rn.title()},
 	}
+	risk := assistantwire.OwnerAskRiskOpen
+	if c := rn.card; c != nil {
+		a.Kind, a.Interaction = cardKind(c), c.ID
+		if _, ok := c.OneTapQuestion(); ok && !cardCannotUndo(c) {
+			risk = assistantwire.OwnerAskRiskSafe
+		}
+	}
+	return withRisk(a, risk)
+}
+
+// cardKind is the kind of ask a run's pending card is: secret when it asks for a password (on the screen, or among
+// the fields to fill in), form for other fields to fill in or an MCP server's form, tool for an approval, plan for a
+// plan, else question (a question card, or a dialog on the screen).
+func cardKind(c *proto.Interaction) string {
+	switch {
+	case c.Secret || slices.ContainsFunc(c.Fields, func(f proto.Field) bool { return f.Secret }):
+		return assistantwire.OwnerAskKindSecret
+	case len(c.Fields) > 0 || c.Kind == proto.IxElicitation:
+		return assistantwire.OwnerAskKindForm
+	case c.Kind == proto.IxPermission:
+		return assistantwire.OwnerAskKindTool
+	case c.Kind == proto.IxPlan:
+		return assistantwire.OwnerAskKindPlan
+	}
+	return assistantwire.OwnerAskKindQuestion
+}
+
+// cardCannotUndo: card c's asker said going ahead cannot be undone (an ask_user's reversible false), the card's twin
+// of the manager's rule for a decision (askRisk), which makes such a decision open.
+func cardCannotUndo(c *proto.Interaction) bool {
+	return c.Reversible != nil && !*c.Reversible
+}
+
+// withRisk is ask a with its risk and the lock-screen action that follows from it, open_only exactly when open; a risk
+// that is neither safe nor open (none said) is open.
+func withRisk(a assistantwire.OwnerAsk, risk string) assistantwire.OwnerAsk {
+	a.Risk, a.Lockscreen = assistantwire.OwnerAskRiskOpen, assistantwire.OwnerAskLockscreenOpenOnly
+	if risk == assistantwire.OwnerAskRiskSafe {
+		a.Risk, a.Lockscreen = assistantwire.OwnerAskRiskSafe, assistantwire.OwnerAskLockscreenAnswer
+	}
+	return a
 }
 
 // withOwnAsk adds the to-do's own decision to p's asks when one also waits on the owner.
@@ -316,8 +367,8 @@ func (r *reading) dismissed() bool {
 	return r.f.DecisionReview != nil && r.f.DecisionReview.DismissalID != ""
 }
 
-// ownAsk is the to-do's own decision as an ask at home on the to-do, its id and round the moment it was asked, and the
-// ask it was read from (nil when no decision waits).
+// ownAsk is the to-do's own decision as an ask at home on the to-do, its id and round the moment it was asked, its
+// risk as listed, and the ask it was read from (nil when no decision waits).
 func (r *reading) ownAsk() (assistantwire.OwnerAsk, *Ask) {
 	a := r.decisionAsk()
 	if a == nil {
@@ -330,7 +381,7 @@ func (r *reading) ownAsk() (assistantwire.OwnerAsk, *Ask) {
 	if a.Default == defaultTaken && a.Deadline != nil {
 		out.DefaultAt = utc(*a.Deadline)
 	}
-	return out, a
+	return withRisk(out, a.Risk), a
 }
 
 // canWaitDecision: a decision that can wait for the briefing.
@@ -395,9 +446,9 @@ func (r *reading) canWait() (placement, bool) {
 
 // ---- row 5: someone works on it ----
 
-// working: Persona or an Agent works on it now, else a run starts, else one works in the background; within each
-// kind the first such run in the list's order (the newest link first) decides. queued needs the start's admission
-// queue, which the plan keeps and the list does not carry yet.
+// working: Persona or an Agent works on it now, else a run starts, else one works in the background or the hub
+// retries its moment's model failure; within each kind the first such run in the list's order (the newest link first)
+// decides. queued needs the start's admission queue, which the plan keeps and the list does not carry yet.
 func (r *reading) working() (placement, bool) {
 	for _, rn := range r.runs {
 		if rn.kind != runRunning && rn.kind != runPersona {
@@ -526,9 +577,10 @@ func (r *reading) finishedSeen() (placement, bool) {
 
 // ---- row 10: waiting on something named ----
 
-// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), or a run
-// stopped on a usage limit until it resets. computer_offline needs Start When It's Back, scheduled_report a report's
-// schedule: neither is kept yet; someone_else comes with a park (row 8).
+// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), else a run
+// stopped on a usage limit until it resets, else a run's turn ended blocked on another Agent or an outside event
+// (someone_else; it also comes with a park, row 8), in the order 6.3 lists them. computer_offline needs Start When
+// It's Back, scheduled_report a report's schedule: neither is kept yet.
 func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
@@ -538,9 +590,18 @@ func (r *reading) waiting() (placement, bool) {
 	if rn, ok := firstRun(r.runs, runLimited); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonUsageLimit)
 		p.Line, p.Since = line(lineUsageLimit, "run", rn.title()), utc(rn.since())
-		if reset := usageLimitReset(rn.s); reset != nil {
+		if reset := usageLimitReset(*rn.s); reset != nil {
 			p.Line = line(lineUsageLimit, "run", rn.title(), "resets_at", stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
+		}
+		return p, true
+	}
+	if rn, ok := firstRun(r.runs, runWaits); ok {
+		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonSomeoneElse)
+		p.Line, p.Since = line(lineRunWaits, "run", rn.title(), "on", waitsOn(*rn.s)), utc(rn.since())
+		// When the hub looks next ranks it; that moment passing changes nothing by itself, as a park's end does not.
+		if w := rn.s.Work.WakeAt; w != nil {
+			p.wake = *w
 		}
 		return p, true
 	}
@@ -732,8 +793,8 @@ func nextChange(f *Facts, now time.Time, v assistantwire.TodoSummary) time.Time 
 }
 
 // moments are the ends after now of every window the rules read for f and its steps: a failed start's 48 hours,
-// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, Someday's return, and the 48
-// hours to the Inactive mark or the end of a due day.
+// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, a scheduled retry's wake and
+// grace, Someday's return, and the 48 hours to the Inactive mark or the end of a due day.
 func moments(f *Facts, now time.Time) []time.Time {
 	var out []time.Time
 	add := func(t time.Time) {
@@ -760,6 +821,9 @@ func moments(f *Facts, now time.Time) []time.Time {
 	for _, s := range f.Sessions {
 		if reset := usageLimitReset(s); reset != nil {
 			add(reset.Add(usageLimitGrace))
+		}
+		if w := s.Work; w != nil && w.On == proto.WaitTransient && w.WakeAt != nil {
+			add(w.WakeAt.Add(retryGrace))
 		}
 	}
 	if u := f.SomedayUntil; u != nil {
