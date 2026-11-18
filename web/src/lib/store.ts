@@ -35,7 +35,7 @@ import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { unreachable } from "./shell";
 import { setOfflineProbe } from "./feedback";
 import { readDirectionTree } from "./direction-names";
-import { unnamedTaskConversations } from "./background-supervisor";
+import { unlistedConversations } from "./conversation-origins";
 import { directionTreeAwaitsHello } from "./direction-tree";
 import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
@@ -252,13 +252,15 @@ function listedOver(row: Session, listed: Session): Session {
  *  hints, never `sessions` / `sessions_delta`, so nothing else moves them: the Persona sidebar and All chats kept the
  *  state of the last /assistant read, and a conversation read mid-turn kept spinning after its turn had ended until a
  *  reload, a send or opening it. Its row in the conversations and the detail kept of it (which those lists lay over
- *  them) both take the change; no other row is made or kept. */
+ *  them) both take the change; no other row is made or kept from them. A conversation the held answer does not list
+ *  (one another client made) has the answer read again instead (askAboutUnlisted, #10190). */
 function followConversations(upsert: Session[]) {
   const a = state.assistant;
   if (!a || !upsert.length) return;
   const changed = new Map<string, Session>();
   for (const row of upsert) if (row.machine_id === a.machine_id) changed.set(row.session_id, row);
   if (!changed.size) return;
+  askAboutUnlisted([...changed.values()]);
   const ids = new Set(a.conversations.map((c) => c.session_id));
   let moved = false;
   const conversations = a.conversations.map((c) => {
@@ -1161,20 +1163,27 @@ export function upsertSession(s: Session) {
   set({ sessions: { ...state.sessions, [s.machine_id]: next }, ...syncAssistant(s.machine_id, [s]) });
 }
 
-/** The conversations the assistant was read again for (unnamedTaskConversations): once each, whatever it answered. */
-const askedForUnnamed = new Set<string>();
+/** The conversations the assistant was read again for (unlistedConversations): once each, whatever it answered. */
+const askedForUnlisted = new Set<string>();
+
+/** `rows` (of the assistant's machine) bring conversations the held answer does not list (#10190): one another client
+ *  made, or a background supervisor the hub made since (#5082). The answer is read again, once for each, so the
+ *  conversation comes in with everything it gives one (its manager noted for its requests, its title, its details), not
+ *  as a list row laid in by this page. */
+function askAboutUnlisted(rows: readonly Session[]) {
+  const a = state.assistant;
+  const ids = a ? unlistedConversations(a, rows).filter((id) => !askedForUnlisted.has(id)) : [];
+  if (!ids.length) return;
+  ids.forEach((id) => askedForUnlisted.add(id));
+  void refreshAssistant().catch(() => {});
+}
 
 // The assistant's conversations are sessions on its machine too: the change that keeps the copy in `assistant`
 // current, to go with the sessions' own (one update, not two).
 function syncAssistant(mid: string, list: Session[]): Partial<State> {
   const a = state.assistant;
   if (!a || a.machine_id !== mid) return {};
-  // a background supervisor the hub made since the assistant was read (#5082): read again, so it is the built-in one
-  const unnamed = unnamedTaskConversations(a, list).filter((id) => !askedForUnnamed.has(id));
-  if (unnamed.length) {
-    unnamed.forEach((id) => askedForUnnamed.add(id));
-    void refreshAssistant().catch(() => {});
-  }
+  askAboutUnlisted(list);
   let changed = false;
   const convs = a.conversations.map((c) => {
     const s = list.find((x) => x.session_id === c.session_id);
@@ -1676,6 +1685,7 @@ export function reset() {
   // a refresh() still on its way belongs to the old login too
   refreshes.applied = ++refreshes.asked;
   sessionsPushed.clear();
+  askedForUnlisted.clear(); // the conversations asked about were the old login's
   resetAgents();
   rowHints.clear();
   taskRowsAsked.clear();
