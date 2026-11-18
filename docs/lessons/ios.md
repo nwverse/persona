@@ -2938,6 +2938,19 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
 
+## A Mac framework can lack an iPhone symbol dyld needs (#9948)
+
+- An iPhone app on an Apple silicon Mac loads the Mac's frameworks. If a symbol the app imports strongly is exported by
+  the iPhone SDK but not the Mac's framework, dyld ends the launch before app code runs; an `@available` check cannot
+  help. LiveCommunicationKit's Mac framework lacked two `ConversationManagerDelegate` audio-callback descriptors.
+- Link such a framework with `weak: true` in `apple/project.yml` and put an `isiOSAppOnMac` cut before every path that
+  could construct or touch its types. Weak binding alone is not a feature fallback: urgent calls also omit their
+  Settings entry and VoIP registration on a Mac, while iPhone and iPad keep the same factory and registration.
+- `scripts/release/check_mac_imports.py <path to Persona.app>/Persona` compares the executable's strong imports with
+  MacOSX.sdk TBD exports, preferring `System/iOSSupport`. `release.sh` runs it before export and upload. Inspect the
+  Mach-O (`xcrun dyld_info -imports`, `otool -l`) after linking: source inspection proves neither weak imports nor the
+  `LC_LOAD_WEAK_DYLIB` load command.
+
 ## One `import CallKit` gets the build rejected for China (2026-11-16, #9290)
 
 - App Review rejects a build offered in China when any binary in it links `CallKit.framework`. That includes a weak
@@ -3043,3 +3056,9 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
 - A mutating method on an observed struct property tells every reader even when it changes nothing (the Observation macro only
   skips an equal value on a plain assignment): `UnifiedSidebar.forget` reset roots that were already at the conversation on every
   choice of the Agents tab and redrew everything reading them, in the frame the switch is drawn in. Check first.
+
+## Machines metrics need a manager scope as well as a hub scope (2026-11-18, #4031)
+
+- `GET /api/v1/metrics` answers for the default manager unless the request names one by the established header or query. Fan out once per installed, online manager, keep the default's request bare, and merge machine IDs in roster order. A failed manager keeps its last-good snapshot; only a success, including an empty one, replaces it. A routed `no_manager` 404 is not evidence that monitoring is unsupported.
+- Keep the request's hub and manager scopes distinct: a settings page keeps its one captured manager rather than widening to the whole roster, and a roster restored from a snapshot cannot name managers until this launch confirms it. Fence late answers by both pairing and read generation.
+- The mock must enforce the same manager scoping or the UI fixture hides the bug. Each assistant's Machines page lists only its own computers, so a UI regression selects the non-default assistant before requiring that computer's numbers. `MachineMetricsLoadingTests`, `MachineMetricsStoreTests` and `MachinesPageTests/testNonDefaultManagerMetricsInLightAndDark` cover the request, cache, cancellation and visible-sample contracts.

@@ -117,7 +117,7 @@ extension View {
     func runFonts() -> some View { modifier(RunFonts()) }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 /// Inline code's ink (#9477): `Theme.Reply.codeInk`, a step quieter than the words, where they are in the body's own
 /// ink. Words drawn in an ink of their own (a quote, a quieter heading, an agent's quiet words between its steps) keep it
 /// for their code too, and so does a written link: code in it is the link's. A copy link (`CodeCopyMarkdown`, what
@@ -238,9 +238,11 @@ struct UserBubble: View, Equatable {
     /// The extension that opened the conversation with this message (#3758): 「来自 飞书 /agent」 under it. Set by the chat
     /// page on the conversation's first message only.
     var external: AutoConversationSource? = nil
+    /// Which extension that was, whose own icon that line draws when it can (#10358).
+    var opener: ConversationOpener? = nil
     /// Only the message itself: the chat page re-evaluates its body on every hub push, and without this every row on
     /// screen (and in the lazy list's buffer) ran its body again too (about 45 a push on a long Persona conversation).
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external && a.opener == b.opener }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
     @Environment(\.chatPin) private var pin
@@ -277,7 +279,7 @@ struct UserBubble: View, Equatable {
             if ChannelSource.possible(item.clientMsgID) {
                 ChannelSourceLine(clientMsgID: item.clientMsgID)
             } else if let external {
-                ExternalSourceLine(source: external)
+                ExternalSourceLine(source: external, opener: opener)
             }
             if d.cardSource != nil {
                 Text("From a card").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
