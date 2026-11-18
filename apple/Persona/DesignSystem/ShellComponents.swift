@@ -344,9 +344,9 @@ private struct TabBarLens: View {
 ///
 /// Its clock runs on the frames the lens is drawn in, not on the wall's: the page the choice brings in is swapped in
 /// under the bar in the same frames (the open Duo's tab, its whole split; the shell's pages laid side by side), and a
-/// frame held up by that (95–150 ms on the open Duo on its side, 50–70 ms and then 30–45 ms on the outer display, on the
+/// frame held up by that (85–165 ms on the open Duo on its side, 54–77 ms and then 25–45 ms on the outer display, on the
 /// simulator), and the slow frames after it, made a lens timed by the wall jump on by up to a third of its way at once
-/// (#ISSUE). Each frame now moves it on by the time since the last one drawn, at most `longestStep`, and it sets off from
+/// (#10270). Each frame now moves it on by the time since the last one drawn, at most `longestStep`, and it sets off from
 /// where it starts only once the frames come on time (`longestWait`).
 @MainActor @Observable final class TabBarGlide {
     static let shared = TabBarGlide()

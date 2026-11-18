@@ -129,7 +129,7 @@ struct TabSwitchLayoutTests {
         #expect(back.at == 0 && back.opacity == 0)
     }
 
-    /// The lens never jumps (#ISSUE): the page a choice brings in is swapped in under the bar in the same frames. Frames
+    /// The lens never jumps (#10270): the page a choice brings in is swapped in under the bar in the same frames. Frames
     /// held up by that before it sets off keep it where it starts, and it sets off on the first frame on time; one held up
     /// once it moves moves it on by `longestStep` only, not by the time it took. Every bar drawing the same frame gets the
     /// same lens, and a choice made midway starts from where the lens was drawn.

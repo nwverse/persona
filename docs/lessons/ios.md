@@ -2966,13 +2966,13 @@ The screenshot banner hides the chats' bars from captures with a secure text fie
 - A view in a second hosting controller inside it takes every touch in its frame: overriding `hitTest` to pass the hosting view's own hits through also dropped the bar's SwiftUI buttons (they hit-test as the hosting view). `accessibilityHidden` on the banner's SwiftUI view left its text in the tree; `accessibilityElementsHidden` on its hosting view removes it.
 - The bar's and the banner's hosting controllers are the same trap as the drawer's sidebar (#4496, above): a copied `colorScheme` is only as new as SwiftUI's last update, and SwiftUI puts the same stale look into the controller's traits. On a phone, the first Agent chat opened drew its header and banner light above the dark chat (2026-11-17, #9829). In a system screenshot that shows as a white banner, and the status bar's text turns dark over it although the app is dark: forcing both hosts light in the simulator gave the same picture. No simulator flow reproduced the stale update (pushes from the list, links, `-showLookBlink`, Home and back, light or dark against the system), so `ScreenshotBannerTests.theBarAndTheBannerFollowTheirWindow` holds a stale page look against the window's. Any view hosted on its own takes its look from its window.
 
-## An animation timed by the wall clock jumps over the frame its own tap held up (2026-11-18, #ISSUE)
+## An animation timed by the wall clock jumps over the frame its own tap held up (2026-11-18, #10270)
 
 iPhone Duo's tab bar lens (#9837) stuttered on a real Duo. It was a `TimelineView(.animation)` drawn at `date - start`, its start
-stamped in the update that also swapped in the chosen page, and that update held the next frame up: 95–150 ms on the open Duo on
-its side (the system `TabView` swapping in the other tab's whole split), 50–70 ms and then 30–45 ms on the outer display (the
-shell's moving rail, then the pager's spring a run loop later), 450–700 ms on a tab's first visit (simulator, optimized build).
-The lens was drawn once where it starts and then a third of its way on in the next frame.
+stamped in the update that also swapped in the chosen page, and that update held the next frame up: 85–165 ms on the open Duo on
+its side (the system `TabView` swapping in the other tab's whole split), 54–77 ms and then 25–45 ms on the outer display (the
+shell's moving rail, then the pager's spring a run loop later), 460–620 ms on a tab's first visit (simulator, optimized build).
+The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to a third of it on a first visit.
 
 - A SwiftUI animation is worked out on the main thread, frame by frame: nothing keeps it moving through a frame the main thread
   held up, and one timed by the wall clock makes up for it at once. An animation that starts with a page change is timed by the
@@ -2982,6 +2982,11 @@ The lens was drawn once where it starts and then a third of its way on in the ne
 - No UI test is needed to switch tabs under `FrameStats`: `FrameProbe` takes `com.persona.perf.tab.<assistant|chats|feishu>`
   as the tab bar's tap (`selectHomeTab`); post it with `xcrun simctl spawn <udid> notifyutil -p <name>` between `frames.start`
   and `frames.stop`, and read `Documents/frames-probe.json` from the app's data container.
+- Put the other work an animation's tap starts where nothing moves. The shell's strip comes to rest about 0.55 s into the
+  lens's 0.65 s, and putting the pages' own rails back then (glass and menus) held up a frame of the lens's fade by 33–42 ms;
+  under the Duo's side bars the moving rail now stands in until the lens is gone (`ShellPager.standsIn`).
+- A first drawing is slow too: on the open Duo, after the swap frame the main thread was idle (1 ms a frame) while the lens's
+  first two or three frames still came 25–50 ms apart. The lens waits where it starts through them (`longestWait`).
 - A mutating method on an observed struct property tells every reader even when it changes nothing (the Observation macro only
   skips an equal value on a plain assignment): `UnifiedSidebar.forget` reset roots that were already at the conversation on every
   choice of the Agents tab and redrew everything reading them, in the frame the switch is drawn in. Check first.

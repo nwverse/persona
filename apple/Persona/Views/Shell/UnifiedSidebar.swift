@@ -62,7 +62,7 @@ import PersonaWire
         if keepingAsked, let asked = askedFromOutside, roots.current == asked { return }
         askedFromOutside = nil
         // Nothing to forget: written again all the same, the roots drew everything that reads them again, on every
-        // choice of the Agents tab, in the frame the tab bar's lens starts in (#ISSUE).
+        // choice of the Agents tab, in the frame the tab bar's lens starts in (#10270).
         if roots.forgotten, path.wrappedValue.isEmpty { return }
         apply(path: path) { roots.forget() }
     }
