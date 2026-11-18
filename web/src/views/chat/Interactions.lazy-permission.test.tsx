@@ -11,6 +11,7 @@ const reported = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/error-reports", () => ({ reportBoundary: reported }));
 import { PermissionCardFrame } from "./Interactions";
 import { lazyPage, type LazyPageComponent } from "../../lib/lazy-page";
+import { cardToolName } from "../../lib/turns";
 import { t } from "../../i18n";
 import type { Interaction } from "../../lib/types";
 
@@ -21,10 +22,10 @@ type CardComponent = ComponentType<{ ix: Interaction }>;
 let host: HTMLDivElement;
 let root: Root;
 
-async function render(Lazy: LazyPageComponent<{ ix: Interaction }>) {
+async function render(Lazy: LazyPageComponent<{ ix: Interaction }>, interaction = ix) {
   await act(async () => {
     root.render(
-      <PermissionCardFrame ix={ix}><Lazy ix={ix} /></PermissionCardFrame>,
+      <PermissionCardFrame ix={interaction}><Lazy ix={interaction} /></PermissionCardFrame>,
     );
     await Promise.resolve();
   });
@@ -43,7 +44,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const titleCases = [
+  { ...ix, id: "p_settings", tool_name: "persona_settings", tool_title: "Persona settings" },
+  { ...ix, id: "p_mail", tool_name: "mcp__persona__mail_send", tool_title: undefined },
+] as Interaction[];
+
 describe("a lazy permission card", () => {
+  it.each(titleCases)("uses the display name while loading: $tool_name", async (toolIx) => {
+    const Lazy = lazyPage(() => new Promise<CardComponent>(() => {}));
+    await render(Lazy, toolIx);
+    await vi.waitFor(() => expect(host.querySelector('[role="status"]')).not.toBeNull());
+    expect(host.querySelector("[data-pending-card]")?.getAttribute("aria-label"))
+      .toBe(t("chat-interactions.permission_title", { tool: cardToolName(toolIx) }));
+  });
+
+  it.each(titleCases)("uses the display name after a load failure: $tool_name", async (toolIx) => {
+    const failure = new TypeError("Failed to fetch dynamically imported module");
+    const Lazy = lazyPage(() => Promise.reject(failure));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render(Lazy, toolIx);
+      await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
+      expect(host.querySelector("[data-pending-card]")?.getAttribute("aria-label"))
+        .toBe(t("chat-interactions.permission_title", { tool: cardToolName(toolIx) }));
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
   it("keeps an identifiable loading slot until its controls arrive", async () => {
     let arrive!: (card: CardComponent) => void;
     const Lazy = lazyPage(() => new Promise<CardComponent>((resolve) => { arrive = resolve; }));
@@ -92,6 +119,42 @@ describe("a lazy permission card", () => {
       act(() => retry.click());
       await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
       expect(load).toHaveBeenCalledTimes(2);
+      expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("does not loop full reloads when the same card keeps failing", async () => {
+    const loopIx = { ...ix, id: "p_reload_loop" } as Interaction;
+    const failure = new TypeError("Failed to fetch dynamically imported module");
+    const load = vi.fn<() => Promise<CardComponent>>().mockRejectedValue(failure);
+    const reload = vi.fn();
+    vi.stubGlobal("location", { reload });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let attempt = 0;
+    const showFailure = async () => {
+      const Lazy = lazyPage(load);
+      attempt += 1;
+      await act(async () => {
+        root.render(<PermissionCardFrame key={attempt} ix={loopIx}><Lazy ix={loopIx} /></PermissionCardFrame>);
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
+    };
+    try {
+      await showFailure();
+      const firstRetry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("app.retry"))!;
+      act(() => firstRetry.click());
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+      // A real reload creates a fresh boundary but preserves sessionStorage.
+      await showFailure();
+      const secondRetry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("app.retry"))!;
+      act(() => secondRetry.click());
+      await vi.waitFor(() => expect(reported).toHaveBeenCalledTimes(4));
+      expect(load).toHaveBeenCalledTimes(4);
+      expect(reload).toHaveBeenCalledTimes(1);
       expect(host.querySelector('[role="alert"]')).not.toBeNull();
     } finally {
       consoleError.mockRestore();

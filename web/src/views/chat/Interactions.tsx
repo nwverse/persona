@@ -15,7 +15,7 @@ import { answerLines } from "../../lib/answered";
 import { answerBlock, interactionCanAnswer, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
-import { mcpServerLabel } from "../../lib/turns";
+import { cardToolName, mcpServerLabel } from "../../lib/turns";
 import { isSecretHandoff, isSecretRun, optionDisplay, secretHandoffInput, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
@@ -546,14 +546,27 @@ const PermissionCard = lazyPage(() => import("./PermissionCard").then((m) => m.P
 
 export function PermissionCardLoading({ ix }: { ix: Interaction }) {
   return (
-    <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })} footer={null}>
+    <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })} footer={null}>
       <Loading />
     </Card>
   );
 }
 
+/** A repeated cached import failure gets one full reload per card and tab session. The marker survives that reload;
+ *  if the chunk is still unavailable, the card keeps its local Retry instead of entering a reload loop. */
+function reloadPermissionChunk(id: string) {
+  const key = `permission-chunk-reload:${id}`;
+  try {
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, "1");
+  } catch {
+    return;
+  }
+  location.reload();
+}
+
 /** One failed permission chunk must not blank its card or take down the chat. Retry first remounts lazyPage; browsers
- *  that cached the failed native import reload on its repeated failure. Another card starts without this failure. */
+ *  that cached the failed native import reload once on its repeated failure. Another card starts without this failure. */
 export class PermissionCardFrame extends Component<{ ix: Interaction; children?: ReactNode }, { error: unknown }> {
   state = { error: null as unknown };
   failures = 0;
@@ -565,14 +578,14 @@ export class PermissionCardFrame extends Component<{ ix: Interaction; children?:
   componentDidCatch(error: unknown, info: ErrorInfo) {
     const chunk = isChunkError(error);
     reportBoundary(error, "permission_card", chunk, info.componentStack);
-    if (chunk && this.failures++) location.reload();
+    if (chunk && this.failures++) reloadPermissionChunk(this.props.ix.id);
   }
 
   render() {
     const { ix, children } = this.props;
     if (this.state.error) {
       return (
-        <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })}
+        <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })}
           footer={<Button size="sm" onClick={() => this.setState({ error: null })}>{t("app.retry")}</Button>}>
           <ErrorNotice role="alert" className="border-0 bg-transparent p-0" message={t("chat-interactions.permission_load_failed")}
             description={t("chat-interactions.permission_load_hint")} />
