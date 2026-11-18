@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Detect missing final replies on the settled exchange (#10427). A session preview can carry the previous answer
+  through a tool-only turn. Check the current transcript and verified input provenance, then test that a follow-up
+  cannot pass the send guard after newer input or an explicit stop. Keep its attempt identity and visible failure
+  notice tied to the original input.
+
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
   `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
   an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.

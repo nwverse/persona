@@ -203,7 +203,7 @@ and knowledge base (moved from hub 2026-11-04: engine, loops, files in the data 
 
 **Computers belong to the assistant** (2026-11-04, [machines.md](../server/machines.md) ("Who connects to computers")): the assistant process also manages all computers, with `internal/devices` connecting each (hub no longer does).
 Messages with hub live in `server/internal/devicewire`, over the same bus (`docs/protocol/protocol.md` ("Computers (devices.*)")); `assistant/devices.go` hands hub `devices.*` calls and events to it. `BusHub` has only a few calls:
-node-owned methods in the table's `device.call` go directly in-process to that computer's node, without hub (errors remain `apierr.ErrOffline`, `rpc.ErrClosed`, node `rpc.Error`); hub-owned methods (`assistantwire.HubDeviceMethods`: `devices.list`, `interactions.list`, `sessions.list`, `session.get`, and channel `session.follow` / `session.unfollow` / `session.send_once`) still ask hub.
+node-owned methods in the table's `device.call` go directly in-process to that computer's node, without hub (errors remain `apierr.ErrOffline`, `rpc.ErrClosed`, node `rpc.Error`); hub-owned methods (`assistantwire.HubDeviceMethods`: `devices.list`, `interactions.list`, `sessions.list`, `session.get`, channel `session.follow` / `session.unfollow` / `session.send_once`, and guarded `assistant.answer_again`) still ask hub.
 node requests `assistant.model` and `assistant.context` are also answered directly in-process (`Service.NodeAnswer`), not forwarded by hub; the manager tells nodes the snapshot's `profile.keep` (above).
 
 **hub accesses the assistant only through** `assistant.Handler` (`assistant/handler.go`; hub's `assistantRemote`, same messages), one message per method: App requests (assistant `assistantwire.Routes`, bus `http.request`, forwarded unchanged; caller role in `X-Persona-Role`, overriding any client-supplied value),
@@ -1043,6 +1043,27 @@ restart, a deletion is taken as the user's.
 Migration: first startup without `assistant.tasks` moves `assistant.routines` / `assistant.followups` (ids, times, prior statuses unchanged),
 then clears old follow-ups so an older hub can't rerun them; thereafter reads only the new table. Failed Postgres reads save nothing (formerly defaults overwrote).
 Legacy App `routines` / `followups` APIs still read / write this table (`docs/protocol/protocol.md`).
+
+## Missing final replies (#10427)
+
+When a directly typed message in the main conversation completes with no written reply, Persona asks the Assistant
+once for a reply based on the results it already has. The chat shows the existing system line for the follow-up.
+If the follow-up still has no answer, or delivery fails, a saved chat notice tells the user to try sending the
+message again. This recovery is automatic.
+
+The manager reads the settled transcript. A blank or tool-only ending counts as missing, as does a whole reply
+that matches the existing channel list: `No response requested`, `no content`, `(no content)`, or `[no content]`,
+ignoring capitalization, whitespace around the reply, and trailing sentence punctuation. An ordinary answer,
+including a refusal with an explanation, stands on its own. A successfully displayed question or notification
+also counts as a user-visible outcome. Stops, existing model errors, queued work and background rounds keep their
+usual handling. The original transcript stays available.
+
+The owner input must be tied to a device's verified send. If that evidence is unavailable, for example across a
+manager restart before the first look, recovery may be skipped. An intentional request for silence or for exactly
+one of the listed strings can cause one extra model turn. Other vague or unhelpful replies are outside the check.
+The follow-up asks for text only and tells the model to avoid tools and repeated work. Normal tool permissions
+still apply. The send is tied to the original turn and the node checks that the conversation is still idle at
+the same transcript tail before delivering it.
 
 ## Background rounds
 

@@ -96,6 +96,9 @@ type Service struct {
 	heard ownerHeard
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent humanSends
+	// Last main-chat recovery requested, including while its send is in flight.
+	mainReplyMu sync.Mutex
+	mainReplyID string
 
 	hub   Hub
 	store func() Store

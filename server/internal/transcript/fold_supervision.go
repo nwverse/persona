@@ -9,6 +9,18 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// HasUserVisibleAction reports a successful Persona tool action that already answered
+// or reached the owner directly, as it would be recognized in a folded work row.
+func HasUserVisibleAction(items []proto.Item) bool {
+	uses := make(map[string]proto.Item)
+	for _, it := range items {
+		if it.Kind == proto.KindToolUse {
+			uses[it.ToolUseID] = it
+		}
+	}
+	return supervisionUserAction(items, uses)
+}
+
 // supervisionUserAction keeps successful explicit user actions visible even when
 // their tool calls and results are replaced by a server-side work fold.
 func supervisionUserAction(run []proto.Item, uses map[string]proto.Item) bool {
