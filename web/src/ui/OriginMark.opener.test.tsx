@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/api";
 import type { AutoOrigin } from "../lib/conversation-origins";
 import { resetManagerChoice } from "../lib/manager-choice";
@@ -31,6 +31,8 @@ const urls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
 /** The extension's own icon in a mark (Lark's tile is a picture too). */
 const logo = (el: Element) => el.querySelector<HTMLImageElement>("[data-opener] [data-extension-logo] > img");
 
+// the lazy chunk's module, loaded once up front: a busy run's first import must not outlast the flushes below
+beforeAll(async () => { await import("./OpenerTile"); });
 beforeEach(() => {
   resetManagerChoice();
   forgetOpenerIcons();
