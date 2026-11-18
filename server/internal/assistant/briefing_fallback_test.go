@@ -282,8 +282,8 @@ func TestBriefReportFactsAreFallbackOnly(t *testing.T) {
 	if run == nil || !run.fallbackOnly || run.facts == nil {
 		t.Fatalf("Report has no retained fallback facts: %+v", run)
 	}
-	if got := s.briefClaim("s-report", "⏰ Evening report", false); got != nil {
-		t.Fatalf("a successful Report grew a Facts card: %+v", got)
+	if got, claimed := s.briefClaim("s-report", "⏰ Evening report", "report-turn", false); got != nil || claimed {
+		t.Fatalf("a successful Report grew a Facts card: %+v (claimed %v)", got, claimed)
 	}
 	if got := s.briefPush("s-report", i18n.ZhHans, true); got != "" {
 		t.Fatalf("a successful Report grew a Facts push: %q", got)

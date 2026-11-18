@@ -144,7 +144,11 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 		if s.briefFailure(session, asked, cut) {
 			return // watchScheduledRun sends the persisted one-per-occurrence facts fallback instead
 		}
-		if run := s.briefClaim(session, asked, cut); run != nil { // a routine with facts: fixed cards Persona lays out
+		run, claimed := s.briefClaim(session, asked, turn, cut)
+		if claimed {
+			return // the same retained turn already owns a briefing card, including its pending retries
+		}
+		if run != nil { // a routine with facts: fixed cards Persona lays out (briefing.go)
 			s.briefMirror(ctx, machine, session, label, run, answer, turn)
 			return
 		}
@@ -182,16 +186,21 @@ type mirrorSend struct {
 
 // mirrorStillDue: a retry of m may go now: the switch its conversation needs is on, its notify_user did not go to Feishu
 // meanwhile, and its turn is still the conversation's last (an old morning brief must not land under a newer answer).
-func (s *Service) mirrorStillDue(ctx context.Context, m *mirrorSend) bool {
-	f, ready := s.feishuFeatures(ctx)
+func (s *Service) mirrorStillDue(ctx context.Context, m *mirrorSend) (bool, error) {
+	st, err := s.feishuStatus(ctx)
+	ready, f := err == nil && st.Ready, st.Features
+	s.workbenchOn(f, ready)
+	if err != nil && !answered(err) {
+		return false, err // unknown readiness is temporary, not evidence that the owner switched the channel off
+	}
 	switch {
 	case !ready, m.main && !f.Sync, !m.main && !f.Pushes:
-		return false
+		return false, nil
 	case f.Pushes && s.pushedLately(channel.Feishu, m.target.MachineID, m.target.SessionID):
-		return false
+		return false, nil
 	}
 	_, answer, turn, ok := s.channelLastTurnOf(ctx, m.target.MachineID, m.target.SessionID)
-	return ok && answer == m.answer && turn == m.turn
+	return ok && answer == m.answer && turn == m.turn, nil
 }
 
 // feishuMirrorRetry is how long a mirrored answer whose first card did not get out waits before it is sent again, and
@@ -230,14 +239,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 					s.logf("bots: mirror: given up after %d tries", attempt+1)
 					return
 				}
-				time.AfterFunc(feishuMirrorRetry, func() {
-					rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if !s.mirrorStillDue(rctx, m) {
-						return // switched off, unpaired, pushed meanwhile, or a newer turn
-					}
-					s.feishuMirrorPost(rctx, m, attempt+1)
-				})
+				s.retryFeishuMirror(m, attempt+1)
 				return
 			}
 			missing = append(missing, i+1)
@@ -251,6 +253,26 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 	if len(missing) > 0 {
 		s.botSay(ctx, missingPiecesNote(m.l, missing))
 	}
+}
+
+// retryFeishuMirror consumes the same bounded retry slots for status transport failures as for failed posts. Unknown
+// readiness never authorizes a post; a later slot must confirm the switches and original turn again.
+func (s *Service) retryFeishuMirror(m *mirrorSend, attempt int) {
+	time.AfterFunc(feishuMirrorRetry, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		due, err := s.mirrorStillDue(ctx, m)
+		if err != nil {
+			s.logf("bots: mirror retry status: %v", err)
+			if attempt < feishuMirrorRetries {
+				s.retryFeishuMirror(m, attempt+1)
+			}
+			return
+		}
+		if due {
+			s.feishuMirrorPost(ctx, m, attempt)
+		}
+	})
 }
 
 // agentDoneClip bounds the result text in a background agent's finished card; the rest is read in the app, so the
