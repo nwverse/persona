@@ -835,6 +835,9 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   non-conflicting facts with a known head, no requested changes and no failing checks.
   Multiple distinct PR links remain ambiguous. This is a passive `external_event` object,
   not a claim that a reviewer was contacted; it creates no contact or supervisor-inspection receipt.
+  The wait must positively name an outside actor, such as upstream, a maintainer or a reviewer.
+  Generic "pending" or "waiting for review" alone does not establish that dependency.
+  First-person unfinished review or merge work stays actionable even beside a valid PR or receipt.
 - For a sent person/review request, or an external object that cannot be identified from that text,
   the final closeout may add one `park: {"waiting_on":"...","until":"...","evidence":{...}}` line.
   This uses the evidence fields above, not a new receipt format; `waiting` must name the evidence
@@ -867,7 +870,8 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   The summary is informational and does not ask to resume unchanged work. Existing effective
   supervisor routing, queueing and durable deduplication apply; a task is listed at most once per
   supervisor/calendar day, including after a restart or replacement park. Failed sends remain
-  retryable. Expired parks use the actionable `parked_due` path instead.
+  retryable. Task-bound summary fingerprints are pruned on closure, including older summary
+  receipts whose exact key still identifies the task. Expired parks use the actionable `parked_due` path instead.
 
 For example, `waiting: deployment rollout-42` with
 `artifact: build https://example.org/deployments/rollout-42` records that deployment object and the

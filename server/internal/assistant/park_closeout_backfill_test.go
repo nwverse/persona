@@ -103,6 +103,40 @@ func TestAutomaticCloseoutReviewArtifactBinding(t *testing.T) {
 	}
 }
 
+func TestAutomaticCloseoutPassivePRRequiresExternalActor(t *testing.T) {
+	// i18n-ignore: literal Agent closeouts, including first-person and named-reviewer variants.
+	for _, tc := range []struct {
+		name, waiting string
+		want          bool
+	}{
+		{"pending own final review", "pending my final review before merging", false},
+		{"waiting for own review", "waiting for my final review before merging", false},
+		{"pending without actor", "pending final review before merging", false},
+		{"waiting without actor", "waiting for final review before merging", false},
+		{"merge without actor", "await merge", false},
+		{"own upstream review", "pending my final upstream review before merging", false},
+		{"review by me", "pending upstream review by me before merging", false},
+		{"internal work before review", "waiting for maintainer review after I finish tests", false},
+		{"own review before upstream merge", "等我复审后上游合并", false},
+		{"own Japanese review", "メンテナーのレビュー待ち；自分で最終レビュー", false},
+		{"named reviewer", "pending reviewer-a final review", true},
+		{"my reviewer is external", "waiting for my reviewer-a final review", true},
+		{"maintainer merge", "pending maintainer-a merge", true},
+		{"Chinese reviewer", "等评审人复审", true},
+		{"Japanese maintainer", "メンテナーのレビュー待ち", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, task, c, now := reviewArtifactFixture(t)
+			c.LastText = strings.Replace(reviewArtifactCloseout, "maintainer-a/上游维护者复审", tc.waiting, 1)
+			f.setSessions(c.MachineID, c)
+			kept := s.screenMechanicalSignals(context.Background(), []superviseSignal{{Todo: task.ID, Kind: sigIdle}}, now, now.Add(-time.Hour))
+			if parked := todoNow(s, task.ID).Supervision.State == reviewParked; parked != tc.want || (len(kept) == 0) != tc.want {
+				t.Fatalf("external actor admission parked=%v idle=%d want=%v", parked, len(kept), tc.want)
+			}
+		})
+	}
+}
+
 func TestAutomaticCloseoutStartupBackfill(t *testing.T) {
 	s, _, task, c, now := reviewArtifactFixture(t)
 	ctx := context.Background()

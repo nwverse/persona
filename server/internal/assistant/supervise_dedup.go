@@ -19,7 +19,7 @@ type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo makes an all_stopped fingerprint last until its key changes or the task closes.
+	// Todo bounds inactivity and daily-summary fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
@@ -137,7 +137,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict ||
 			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary}
-		if signals[i].Kind == sigAllStopped {
+		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary {
 			fingerprint.Todo = signals[i].Todo
 		}
 		next[key] = fingerprint
@@ -207,7 +207,7 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 	b.dedup = next
 }
 
-// Inactivity fingerprints are bounded by open tasks, not elapsed time. Load once
+// Task-scoped fingerprints are bounded by open tasks, not elapsed time. Load once
 // after restart; reservations keep the same cache current under dedupMu.
 func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	b := &s.supervise
@@ -226,7 +226,15 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	var remove []string
 	s.todos.mu.RLock()
 	for key, seen := range b.dedup {
-		if task := s.todos.todos[seen.Todo]; seen.Todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
+		todo := seen.Todo
+		if todo == "" && seen.Permanent {
+			// Older daily summaries omitted Todo; only their exact key shape supplies the missing binding.
+			var parts []string
+			if json.Unmarshal([]byte(key), &parts) == nil && len(parts) == 3 && parts[1] == sigParkedSummary {
+				todo = parts[0]
+			}
+		}
+		if task := s.todos.todos[todo]; todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
 			remove = append(remove, key)
 		}
 	}

@@ -31,6 +31,7 @@ type automaticPark struct {
 var closeoutDate = lazyre.New(`\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))?\b`)
 var closeoutSource = lazyre.New(`https?://[^\s<>"]+`)
 var closeoutPRWait = lazyre.New(`(?i)\b(review|reviews|re-review|merge|merging)\b`)
+var closeoutOwnPRWork = lazyre.New(`(?i)\b(?:my|our|own)\s+(?:(?:final|upstream)\s+)*(?:review|merge|merging)\b|\b(?:i|we)\s+(?:(?:will|must|need to|have to)\s+)?(?:review|merge|finish|complete|fix|test|verify)\b|\b(?:review|merge|merging)\s+by\s+(?:me|us)\b`)
 
 // The optional park line uses task_review's existing evidence contract, not another waiting schema.
 func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.Location) (Parked, bool) {
@@ -47,6 +48,11 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 		c.Waiting = delivery.Gate
 	}
 	if c.Waiting == "" {
+		return Parked{}, false
+	}
+	// i18n-ignore: own unfinished work stays actionable even beside an upstream PR or a recorded receipt.
+	if closeoutOwnPRWork.MatchString(c.Waiting) ||
+		containsAny(c.Waiting, []string{"等我", "待我", "由我", "我来", "自己复审", "自己评审", "自分で", "私が"}) {
 		return Parked{}, false
 	}
 	// i18n-ignore: literal Agent closeout inputs; an owner's decision must stay actionable.
@@ -156,8 +162,8 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 func upstreamCloseout(waiting string) bool {
 	// i18n-ignore: literal Agent upstream-wait inputs, not a sent-contact assertion.
 	intent := closeoutPRWait.MatchString(waiting) || containsAny(waiting, []string{"评审", "复审", "复评", "合并", "レビュー", "マージ"})
-	// i18n-ignore: literal external-wait cues; one's own unfinished review is not an upstream dependency.
-	external := containsAny(strings.ToLower(waiting), []string{"upstream", "maintainer", "reviewer", "wait for", "waiting for", "wait on", "waiting on", "await", "pending", "上游", "维护者", "等", "待", "待ち"})
+	// i18n-ignore: require an external actor; generic pending/waiting wording is not evidence of one.
+	external := containsAny(strings.ToLower(waiting), []string{"upstream", "maintainer", "reviewer", "上游", "维护者", "评审人", "评审者", "メンテナー", "レビュアー", "レビュー担当"})
 	return intent && external
 }
 
