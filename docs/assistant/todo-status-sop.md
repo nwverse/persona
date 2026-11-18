@@ -385,9 +385,10 @@ redesign changes them:
 The list carries it: every row of `GET /api/v1/todos` has its `view` and the answer the list's `counts`, worked out
 once per read over the whole list (`server/internal/assistant/todo_view_routes.go`); `GET /api/v1/todos/{id}` answers
 one row the same way and `GET /api/v1/todos/places` the places (`docs/protocol/protocol.md`, the to-dos rows). Every
-time in a view is absolute, so the list's bytes, and its `ETag`, stay the same while nothing changes. Across managers
-the hub only adds the counts up and joins the places; it never works out a view. The hello features `todo_view` and
-`todo_places` say every manager serves them.
+time in a view is absolute, so the list's bytes, and its `ETag`, stay the same while neither the to-dos nor their runs
+change (a working run's latest line is in its row's view). Across managers the hub only adds the counts up and joins
+the places; it never works out a view. The hello features `todo_view` and `todo_places` say every manager serves them,
+and only while they are listed do the counts cover every manager.
 
 No client reads `view` yet: the clients switch to it in stage 2, falling back to the rules above for a row without
 one. Until then every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`),

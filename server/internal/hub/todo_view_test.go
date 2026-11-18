@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extwire"
@@ -133,6 +134,18 @@ func TestTodoViewFeaturesWhileEveryManagerNamesThem(t *testing.T) {
 	if v, p := listed(); v || p {
 		t.Fatalf("the default stopped naming them: view %v, places %v", v, p)
 	}
+	// The default names both again, then goes offline: its to-dos are part of the list, so both are hidden.
+	todoViewCapabilities(t, a, assistantwire.CapabilityTodoView, assistantwire.CapabilityTodoPlaces)
+	if v, p := listed(); !v || !p {
+		t.Fatalf("every manager names both again: view %v, places %v", v, p)
+	}
+	if err := h.busConnOf(a.id).ws.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "the default offline", func() bool { return h.busConnOf(a.id) == nil })
+	if v, p := listed(); v || p {
+		t.Fatalf("listed with the default offline: view %v, places %v", v, p)
+	}
 }
 
 // An extension's report cannot add the To-dos view's features: only the managers' hellos promise them.
@@ -251,12 +264,29 @@ func TestTodoCountsMergeMatchesDecoding(t *testing.T) {
 	}
 	// What they add up to: one answer's counts as it sent them; two, key by key.
 	sums := todoListSums([]listAnswer{listOf("assistant", 200, `{"todos":[],"counts":`+ca+`}`), listOf("m-b", 200, `{"todos":[],"counts":`+cb+`}`)})
-	if got, want := string(sums["counts"]), todoCountsJSON(3, 1, 2, map[string]int{"needs_you": 1, "working": 1, "waiting": 1}); got != want {
+	if got, want := string(sums["counts"]), todoCountsJSON(3, 1, 2, map[string]int{"needs_you": 1, "working": 1, "waiting": 1}); !sameJSONValue(got, want) {
 		t.Fatalf("summed %s, want %s", got, want)
 	}
 	if got := string(todoListSums([]listAnswer{listOf("assistant", 200, `{"todos":[],"counts":`+ca+`}`)})["counts"]); got != ca {
 		t.Fatalf("one manager's %s, want %s", got, ca)
 	}
+	// Members a newer manager adds, which this hub does not know: passed on as sent from one manager; from two, a
+	// number and a map added up, anything else the first's.
+	newer := `{"open":1,"needs_you":1,"in_progress":0,"sections":{"needs_you":1,"later":2},"assistant_needs":3,"note":"a"}`
+	if got := string(todoListSums([]listAnswer{listOf("assistant", 200, `{"todos":[],"counts":`+newer+`}`)})["counts"]); got != newer {
+		t.Fatalf("one newer manager's %s, want %s", got, newer)
+	}
+	sums = todoListSums([]listAnswer{listOf("assistant", 200, `{"todos":[],"counts":`+newer+`}`),
+		listOf("m-b", 200, `{"todos":[],"counts":{"open":2,"sections":{"later":1,"todo":2},"assistant_needs":4,"note":"b","x":1}}`)})
+	if got, want := string(sums["counts"]), `{"open":3,"needs_you":1,"in_progress":0,"sections":{"needs_you":1,"later":3,"todo":2},"assistant_needs":7,"note":"a","x":1}`; !sameJSONValue(got, want) {
+		t.Fatalf("two newer managers' %s, want %s", got, want)
+	}
+}
+
+// sameJSONValue: a and b are the same JSON value, whatever the order of their members.
+func sameJSONValue(a, b string) bool {
+	var x, y any
+	return json.Unmarshal([]byte(a), &x) == nil && json.Unmarshal([]byte(b), &y) == nil && reflect.DeepEqual(x, y)
 }
 
 // The places of every manager joined: All To-dos, Today and Upcoming once with needs_you added up, each project kept as
@@ -323,6 +353,46 @@ func TestTodoPlacesJoined(t *testing.T) {
 	if code, _, body := read("/api/v1/todos/places"); code != http.StatusServiceUnavailable {
 		t.Fatalf("a manager failed: %d %s", code, body)
 	}
+}
+
+// What a newer manager adds to the places, which this hub does not know, is passed on: a place's members, a fixed
+// place of a new kind (joined by id, as All To-dos is), the answer's own members (the default's) and the counts'.
+func TestTodoPlacesKeepWhatTheHubDoesNotKnow(t *testing.T) {
+	h, srv, _, _, ra, rb := todoViewHub(t)
+	ra.set(`{"todos":[]}`, `{"rev":"r1","places":[{"id":"all","kind":"all","title":"","needs_you":1,"badge":"blue"},`+
+		`{"id":"someday","kind":"someday","title":"","needs_you":0},`+
+		`{"id":"project:garden","kind":"project","title":"Garden","project":"garden","needs_you":1,"color":"green"}],`+
+		`"counts":{"open":2,"needs_you":1,"in_progress":0,"sections":{"needs_you":1,"todo":1},"assistant_needs":1}}`, 0)
+	read := func() map[string]any {
+		t.Helper()
+		resp, body := todoViewGet(t, h, srv, "/api/v1/todos/places", nil)
+		var out map[string]any
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &out) != nil {
+			t.Fatalf("places: %d %s", resp.StatusCode, body)
+		}
+		return out
+	}
+	want := func(got map[string]any, js string) {
+		t.Helper()
+		b, _ := json.Marshal(got)
+		if !sameJSONValue(string(b), js) {
+			t.Fatalf("places %s, want %s", b, js)
+		}
+	}
+	// One manager answers (m-0c0c0c is an older one): everything as sent, its project stamped.
+	want(read(), `{"rev":"r1","places":[{"id":"all","kind":"all","title":"","needs_you":1,"badge":"blue"},`+
+		`{"id":"someday","kind":"someday","title":"","needs_you":0},`+
+		`{"manager":"assistant","id":"project:garden","kind":"project","title":"Garden","project":"garden","needs_you":1,"color":"green"}],`+
+		`"counts":{"open":2,"needs_you":1,"in_progress":0,"sections":{"needs_you":1,"todo":1},"assistant_needs":1}}`)
+
+	// Two: the new fixed place once with needs_you added up, the default's members first, the counts added up.
+	rb.set(`{"todos":[]}`, `{"rev":"r2","places":[{"id":"all","kind":"all","title":"","needs_you":2,"badge":"gray"},`+
+		`{"id":"someday","kind":"someday","title":"","needs_you":3}],`+
+		`"counts":{"open":3,"needs_you":2,"in_progress":1,"sections":{"needs_you":2,"working":1},"assistant_needs":2}}`, 0)
+	want(read(), `{"rev":"r1","places":[{"id":"all","kind":"all","title":"","needs_you":3,"badge":"blue"},`+
+		`{"id":"someday","kind":"someday","title":"","needs_you":3},`+
+		`{"manager":"assistant","id":"project:garden","kind":"project","title":"Garden","project":"garden","needs_you":1,"color":"green"}],`+
+		`"counts":{"open":5,"needs_you":3,"in_progress":1,"sections":{"needs_you":3,"todo":1,"working":1},"assistant_needs":3}}`)
 }
 
 // One to-do is relayed to the manager that listed it (byTodo), as the other to-do routes are.

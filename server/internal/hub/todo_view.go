@@ -1,12 +1,14 @@
 package hub
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -50,39 +52,92 @@ func (h *Hub) todoViewFeatures() []string {
 }
 
 // todoListSums are the members of a merged to-dos list the hub adds up over its answers (mergeList, before the list's
-// validator is taken): counts, those of every answer the merge takes that has them. None when no such answer has them
-// (every manager is older): the merged list then has none either.
+// validator is taken): counts, those of every answer the merge takes that has them (sumTodoCounts). None when no such
+// answer has them (every manager is older): the merged list then has none either.
 func todoListSums(answers []listAnswer) map[string]json.RawMessage {
-	var sum *assistantwire.TodoCounts
+	var all []json.RawMessage
 	for i := range answers {
-		raw, ok := mergedMember(&answers[i], "todos", "counts")
-		var c *assistantwire.TodoCounts
-		if !ok || json.Unmarshal(raw, &c) != nil || c == nil {
-			continue
+		if raw, ok := mergedMember(&answers[i], "todos", "counts"); ok {
+			all = append(all, raw)
 		}
-		if sum == nil {
-			sum = &assistantwire.TodoCounts{Sections: map[string]int{}}
-		}
-		addTodoCounts(sum, *c)
 	}
-	if sum == nil {
+	sum, ok := sumTodoCounts(all)
+	if !ok {
 		return nil
 	}
-	b, err := json.Marshal(sum)
-	if err != nil {
-		return nil
-	}
-	return map[string]json.RawMessage{"counts": b}
+	return map[string]json.RawMessage{"counts": sum}
 }
 
-// addTodoCounts adds c to sum, field by field and every key of its sections.
-func addTodoCounts(sum *assistantwire.TodoCounts, c assistantwire.TodoCounts) {
-	sum.Open += c.Open
-	sum.NeedsYou += c.NeedsYou
-	sum.InProgress += c.InProgress
-	for k, n := range c.Sections {
-		sum.Sections[k] += n
+// sumTodoCounts adds up the counts objects of all (each answer's; anything not an object, null included, is none):
+// one as it was sent, else member by member over the raw JSON (sumMembers), so a member a newer manager adds, which this
+// hub does not know, is passed on or added up too rather than dropped. False when none is an object.
+func sumTodoCounts(all []json.RawMessage) (json.RawMessage, bool) {
+	var objs []map[string]json.RawMessage
+	var first json.RawMessage
+	for _, raw := range all {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(raw, &m) != nil || m == nil {
+			continue
+		}
+		if first == nil {
+			first = raw
+		}
+		objs = append(objs, m)
 	}
+	switch len(objs) {
+	case 0:
+		return nil, false
+	case 1:
+		return first, true
+	}
+	out, err := json.Marshal(sumMembers(objs))
+	return out, err == nil
+}
+
+// sumMembers is objs added up member by member: a member that is an integer in the first object that has it is the sum
+// of the integers the objects hold there; one that is an object, those objects added up so (sections, by key); any
+// other, the first's as it is. The same objects in the same order give the same members.
+func sumMembers(objs []map[string]json.RawMessage) map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for _, o := range objs {
+		for k, v := range o {
+			if _, done := out[k]; done {
+				continue
+			}
+			v = bytes.TrimSpace(v)
+			switch {
+			case len(v) > 0 && v[0] == '{':
+				var subs []map[string]json.RawMessage
+				for _, o := range objs {
+					var m map[string]json.RawMessage
+					if json.Unmarshal(o[k], &m) == nil && m != nil {
+						subs = append(subs, m)
+					}
+				}
+				if b, err := json.Marshal(sumMembers(subs)); err == nil {
+					v = b
+				}
+			default:
+				if _, isInt := jsonInteger(v); isInt {
+					var n int64
+					for _, o := range objs {
+						if i, ok := jsonInteger(o[k]); ok {
+							n += i
+						}
+					}
+					v = strconv.AppendInt(nil, n, 10)
+				}
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// jsonInteger is raw as an integer, when it is one.
+func jsonInteger(raw json.RawMessage) (int64, bool) {
+	n, err := strconv.ParseInt(string(bytes.TrimSpace(raw)), 10, 64)
+	return n, err == nil
 }
 
 // mergedMember is the top-level member name of a, one answer of a list merged under key, as the merge reads it; false
@@ -113,52 +168,86 @@ func mergedMember(a *listAnswer, key, name string) (json.RawMessage, bool) {
 	return nil, false
 }
 
-// mergeTodoPlaces answers GET /api/v1/todos/places from the managers a merged list asks (mergedAsk): All To-dos, Today
-// and Upcoming once each, their needs_you added up; then each manager's other places (its projects) as it lists them,
-// stamped with it, the default's first (a project is its manager's knowledge base's: two managers' project:<slug> are
-// two places); and the counts added up as the list's are. A manager without the route (an older one answers 404 or 405)
-// adds nothing, nor does one that gives no places. When none gives places: the first other failure as it is (503
-// assistant_offline, say), else 404 as a hub without the route.
+// mergeTodoPlaces answers GET /api/v1/todos/places from the managers a merged list asks (mergedAsk): each place that
+// is no project (All To-dos, Today, Upcoming, and any fixed place a newer manager adds) once by id, its needs_you added
+// up; then each manager's projects as it lists them, stamped with it, the default's first (a project is its manager's
+// knowledge base's: two managers' project:<slug> are two places); and the counts added up as the list's are
+// (sumTodoCounts). The hub reads only a place's id, kind and needs_you, and passes every other member, of a place or of
+// the answer (the first answer's, the default's when it answers), on as sent: a newer manager's additions are not
+// dropped. A manager without the route (an older one answers 404 or 405) adds nothing, nor does one that gives no
+// places. When none gives places: the first other failure as it is (503 assistant_offline, say), else 404 as a hub
+// without the route.
 func (h *Hub) mergeTodoPlaces(w http.ResponseWriter, r *http.Request) {
 	ids, body, ok := h.mergedAsk(w, r)
 	if !ok {
 		return
 	}
-	var fixed, own []assistantwire.TodoPlace
-	counts := assistantwire.TodoCounts{Sections: map[string]int{}}
-	answered := false
+	type joined struct {
+		id       string
+		place    map[string]json.RawMessage
+		needsYou int64
+	}
+	var top map[string]json.RawMessage
+	var fixed []joined
+	var own, counts []json.RawMessage
 	var failed *bufferedWriter
 	for _, id := range ids {
 		bw := newBufferedWriter()
 		h.forwardHTTP(bw, withBody(r, body), id)
 		bw.status = cmp.Or(bw.status, http.StatusOK)
-		var p *assistantwire.TodoPlaces
-		if bw.status >= 300 || json.Unmarshal(bw.body.Bytes(), &p) != nil || p == nil {
+		var ans map[string]json.RawMessage
+		var places []json.RawMessage
+		if bw.status >= 300 || json.Unmarshal(bw.body.Bytes(), &ans) != nil || ans == nil ||
+			ans["places"] != nil && json.Unmarshal(ans["places"], &places) != nil {
 			if failed == nil && bw.status >= 300 && bw.status != http.StatusNotFound && bw.status != http.StatusMethodNotAllowed {
 				failed = bw
 			}
 			continue
 		}
-		answered = true
-		addTodoCounts(&counts, p.Counts)
-		for _, pl := range p.Places {
-			switch pl.ID {
-			case assistantwire.TodoPlaceKindAll, assistantwire.TodoPlaceKindToday, assistantwire.TodoPlaceKindUpcoming:
-				pl.Manager = ""
-				if i := slices.IndexFunc(fixed, func(f assistantwire.TodoPlace) bool { return f.ID == pl.ID }); i >= 0 {
-					fixed[i].NeedsYou += pl.NeedsYou
-				} else {
-					fixed = append(fixed, pl)
-				}
-			default:
-				pl.Manager = id
-				own = append(own, pl)
+		if top == nil {
+			top = ans
+		}
+		if c, has := ans["counts"]; has {
+			counts = append(counts, c)
+		}
+		for _, raw := range places {
+			var pl map[string]json.RawMessage
+			var head struct {
+				ID   string `json:"id"`
+				Kind string `json:"kind"`
 			}
+			if json.Unmarshal(raw, &pl) != nil || pl == nil || json.Unmarshal(raw, &head) != nil {
+				continue // no place
+			}
+			if head.Kind == assistantwire.TodoPlaceKindProject {
+				own = append(own, stampManager(raw, id))
+				continue
+			}
+			n, _ := jsonInteger(pl["needs_you"])
+			if i := slices.IndexFunc(fixed, func(f joined) bool { return f.id == head.ID }); i >= 0 {
+				fixed[i].needsYou += n
+				continue
+			}
+			delete(pl, ManagerQuery) // a place of every manager's is no one manager's
+			fixed = append(fixed, joined{id: head.ID, place: pl, needsYou: n})
 		}
 	}
 	switch {
-	case answered:
-		writeJSON(w, assistantwire.TodoPlaces{Places: append(append([]assistantwire.TodoPlace{}, fixed...), own...), Counts: counts})
+	case top != nil:
+		out := make([]json.RawMessage, 0, len(fixed)+len(own))
+		for _, f := range fixed {
+			if _, has := f.place["needs_you"]; has || f.needsYou != 0 {
+				f.place["needs_you"] = strconv.AppendInt(nil, f.needsYou, 10)
+			}
+			b, _ := json.Marshal(f.place)
+			out = append(out, b)
+		}
+		top["places"], _ = json.Marshal(append(out, own...))
+		delete(top, "counts")
+		if c, ok := sumTodoCounts(counts); ok {
+			top["counts"] = c
+		}
+		writeJSON(w, top)
 	case failed != nil:
 		copyHeader(w.Header(), failed.header)
 		w.WriteHeader(failed.status)

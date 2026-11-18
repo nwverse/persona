@@ -1,10 +1,12 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
-	"sort"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -58,8 +60,9 @@ func (s *Service) listedTodos(ctx context.Context, briefs bool) ([]listedTodo, e
 			list[i].Orphaned = &o
 		}
 	}
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].CreatedAt.After(list[j].CreatedAt)
+	// Newest first; equal times by id, so unchanged state is the same bytes whatever order the map gave (the ETag).
+	slices.SortFunc(list, func(a, b listedTodo) int {
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(a.ID, b.ID))
 	})
 	return list, nil
 }
@@ -77,6 +80,18 @@ func (s *Service) todoViewRoutes() {
 	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included → {"todo": row}; an unknown
 	// id 404 todo_not_found.
 	s.handle("GET /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := s.ensureTodosLoaded(r.Context()); err != nil {
+			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+			return
+		}
+		s.todos.mu.RLock()
+		_, known := s.todos.todos[id]
+		s.todos.mu.RUnlock()
+		if !known { // before the whole list's pass, which only a known id needs
+			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
+			return
+		}
 		list, err := s.listedTodos(r.Context(), false)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -84,13 +99,13 @@ func (s *Service) todoViewRoutes() {
 		}
 		s.viewed(r.Context(), list, time.Now())
 		for _, t := range list {
-			if t.ID == r.PathValue("id") {
+			if t.ID == id {
 				t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
 				apierr.WriteJSON(w, map[string]any{"todo": t})
 				return
 			}
 		}
-		apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
+		apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found")) // deleted meanwhile
 	})
 	// GET /api/v1/todos/places: the To-dos sidebar's places with the list's counts (assistantwire.TodoPlaces).
 	s.handle("GET /api/v1/todos/places", func(w http.ResponseWriter, r *http.Request) {
