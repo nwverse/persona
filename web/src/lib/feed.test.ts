@@ -13,9 +13,12 @@ import {
   mergeInto,
   quickResult,
   receiptState,
+  planTaskOf,
   removeTask,
   retryKey,
+  retryLauncher,
   retryTask,
+  TASK_RETRY_LAUNCHER_FEATURE,
   sendMessage,
   sendRouted,
   setRoute,
@@ -26,7 +29,7 @@ import {
 } from "./feed";
 import { conversationCards } from "./assistant-views";
 import { getPanel, openPanel } from "./panel";
-import { markConversationDeleted, refreshTodos, reset } from "./store";
+import { getState, markConversationDeleted, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
 import type { ChatLine, Segment } from "./turns";
 import type { Item } from "./types";
@@ -196,6 +199,36 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
       expect(posts).toHaveLength(1);
       expect(String(posts[0][0])).toMatch(/\/todos\/t1\/retry$/);
       expect(getFeedState().busy[retryKey("t1")]).toBe(false);
+    });
+
+    it("starts it on another launcher only with a hub that takes it: the body names it, else nothing is sent (#10365)", async () => {
+      const fetcher = vi.fn((_url: string, init?: RequestInit) => Promise.resolve(ok(init?.method === "POST" ? { todo: todo() } : { todos: [] })));
+      vi.stubGlobal("localStorage", { getItem: () => "jd_test" });
+      vi.stubGlobal("fetch", fetcher);
+      const failed = todo({ start_error: "x", done_at: "2026-11-04T10:00:05Z" });
+      const posts = () => fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      const features = getState().features;
+      Object.assign(getState(), { features: ["todo_seen"] });
+      // an older hub ignores the body and would start the launcher that failed again: refused here, nothing sent
+      await expect(retryTask(failed, { launcher: "claude" })).rejects.toThrow();
+      expect(posts()).toHaveLength(0);
+      expect(getFeedState().busy[retryKey("t1")]).toBeFalsy();
+      Object.assign(getState(), { features: [TASK_RETRY_LAUNCHER_FEATURE] });
+      await retryTask(failed, { launcher: "claude" });
+      await retryTask(failed);
+      expect(posts().map(([, init]) => init?.body ?? null)).toEqual([JSON.stringify({ launcher: "claude" }), null]);
+      Object.assign(getState(), { features });
+    });
+
+    it("suggests the plan task's first other launcher only where the hub takes it", () => {
+      const task = { title: "t", prompt: "p", machine: "box", cwd: "/w", todo_id: "t1", error: "x", retry_with: ["claude", "work2"] };
+      expect(retryLauncher(task, [TASK_RETRY_LAUNCHER_FEATURE])).toBe("claude");
+      expect(retryLauncher(task, ["todo_seen"])).toBeUndefined();
+      expect(retryLauncher({ ...task, retry_with: [] }, [TASK_RETRY_LAUNCHER_FEATURE])).toBeUndefined();
+      // a to-do a plan took over through todo_id has no plan id: the plan that holds it is found all the same
+      const plans: Record<string, TaskPlan> = { p1: { id: "p1", conversation: "c1", state: "started", tasks: [task] } };
+      expect(planTaskOf(todo({ plan_id: undefined }), plans)).toBe(task);
+      expect(planTaskOf(todo({ plan_id: undefined }), { p1: { ...plans.p1, state: "dismissed" } })).toBeUndefined();
     });
 
     it("says why when the hub refuses the retry, and can be tapped again", async () => {

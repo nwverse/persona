@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
 import { api, ApiError, enc } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
-import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
+import { getState, hubHas, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
@@ -46,6 +46,9 @@ export interface PlanTask {
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
   error_args?: Record<string, string>;
+  /** Its launcher could not start on that computer: the others there a Retry may start it with, the first suggested
+   *  (#10365, "Use … instead"). The hub's; absent from an older hub and for any other failure. */
+  retry_with?: string[];
   /** The brief the task will be held to (#3822, lib/brief.ts): the card shows it, and "Start" confirms it. Absent from
    *  a hub before briefs and on a plan made before them. */
   brief?: TaskBrief;
@@ -702,18 +705,34 @@ export async function dismissPlan(plan: TaskPlan) {
 /** The busy key of a task's "Retry" (busy is keyed by plan id otherwise). */
 export const retryKey = (todoId: string) => `retry:${todoId}`;
 
+/** The hub starts a failed task again on another launcher of its computer when a Retry names one (hello `features`,
+ *  #10365). An older hub ignores the body and starts the launcher that just failed again, so "Use … instead" is offered
+ *  only where it is listed. */
+export const TASK_RETRY_LAUNCHER_FEATURE = "task_retry_launcher";
+
+/** Another launcher a task whose Agent did not start may start with (`task`'s `retry_with`, the first suggested), when the
+ *  hub takes it; undefined otherwise. */
+export function retryLauncher(task: PlanTask | undefined, features: string[]): string | undefined {
+  const launcher = task?.retry_with?.[0];
+  return launcher && hubHas(features, TASK_RETRY_LAUNCHER_FEATURE) ? launcher : undefined;
+}
+
 /**
  * "Retry" on a task whose agent did not start (#1396): the hub starts the same task again (its plan's machine, directory,
  * prompt, launcher, model and permission) in the same todo, which it reopens at once — the card shows it starting
  * where it was. Taps while one is on its way do nothing; the hub starts one agent however many arrive. On a task the
- * model service cut off (#1516) it is "Continue": the hub tells its agent to go on, once.
+ * model service cut off (#1516) it is "Continue": the hub tells its agent to go on, once. `launcher` (and `model`):
+ * "Use … instead", on that launcher of the same computer (#10365), sent only to a hub that takes it; to any other the
+ * call is refused here rather than starting the launcher that failed again.
  */
-export async function retryTask(todo: Todo) {
+export async function retryTask(todo: Todo, opts: { launcher?: string; model?: string } = {}) {
   const key = retryKey(todo.id);
   if (st.busy[key]) return;
+  if (opts.launcher && !hubHas(getState().features, TASK_RETRY_LAUNCHER_FEATURE)) throw new Error(t("assistant-tasks.retry_launcher_unsupported"));
   set({ busy: { ...st.busy, [key]: true } });
   try {
-    const res = await api<{ todo: Todo }>(`/todos/${enc(todo.id)}/retry`, { method: "POST" });
+    const json = opts.launcher ? { launcher: opts.launcher, ...(opts.model ? { model: opts.model } : {}) } : undefined;
+    const res = await api<{ todo: Todo }>(`/todos/${enc(todo.id)}/retry`, json ? { method: "POST", json } : { method: "POST" });
     if (res.todo) putTodo(res.todo);
     void refreshTodos();
   } finally {
@@ -761,6 +780,20 @@ export function startFailure(todo: Todo, plans: Record<string, TaskPlan>): strin
   if (todo.start_error) return todo.start_error;
   if ((todo.agents ?? []).length > 0 || !todo.plan_id) return undefined;
   return plans[todo.plan_id]?.tasks.find((t) => t.todo_id === todo.id)?.error || undefined;
+}
+
+/** The plan task a to-do runs as: its plan's (`plan_id`), else the plan that took it over through todo_id (a to-do
+ *  such a plan runs keeps no `plan_id`, #8770); undefined while no plan the page has holds it. A failed start's carries
+ *  why (`error_code`, `error_args`) and the launchers it may start with instead (`retry_with`). */
+export function planTaskOf(todo: Todo, plans: Record<string, TaskPlan>): PlanTask | undefined {
+  const own = todo.plan_id ? plans[todo.plan_id]?.tasks.find((t) => t.todo_id === todo.id) : undefined;
+  if (own) return own;
+  for (const p of Object.values(plans)) {
+    if (p.state === "dismissed") continue;
+    const task = p.tasks.find((t) => t.todo_id === todo.id);
+    if (task) return task;
+  }
+  return undefined;
 }
 
 /**

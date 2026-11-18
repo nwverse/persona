@@ -72,6 +72,8 @@
   "list_separator": "、",
   "retrying": "再試行中",
   "retry": "再試行",
+  "use_launcher_instead": "{launcher} で開始",
+  "retry_launcher_unsupported": "このハブはまだ別のランチャーで再試行できません。ハブの Persona を更新するか、そのまま再試行してください。",
   "remove": "削除",
   "continue": "続行",
   "task_fallback": "タスク",
@@ -177,5 +179,7 @@
   "start_cause_timed_out": "起動に時間がかかりすぎました",
   "start_cause_not_allowed": "このコンピューターで許可されませんでした",
   "start_cause_needs_update": "このコンピューターの Persona を更新する必要があります",
+  "start_code_launcher_terminal": "{launcher} はこのコンピューターのターミナルで開始できません",
+  "start_code_worktree_path_taken": "前回の試行で作られた作業場所が残っています",
   "start_failed_details": "起動できませんでした。開いて詳細を確認してください。"
 }

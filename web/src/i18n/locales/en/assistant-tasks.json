@@ -78,6 +78,8 @@
   "list_separator": ", ",
   "retrying": "Retrying",
   "retry": "Retry",
+  "use_launcher_instead": "Use {launcher} instead",
+  "retry_launcher_unsupported": "This hub can't start it on another launcher yet. Update Persona on the hub, or Retry.",
   "remove": "Remove",
   "continue": "Continue",
   "task_fallback": "Task",
@@ -191,5 +193,7 @@
   "start_cause_timed_out": "It took too long to start",
   "start_cause_not_allowed": "This computer didn't allow it",
   "start_cause_needs_update": "Persona on this computer needs an update",
+  "start_code_launcher_terminal": "{launcher} can't start in this computer's terminal",
+  "start_code_worktree_path_taken": "A workspace from an earlier try is still in the way",
   "start_failed_details": "Didn't start. Open it for details."
 }

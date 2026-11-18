@@ -9,6 +9,8 @@
   "launcher_missing_terminal_here": "The shell of new terminal tabs on this computer ({pane_shell}) has no command “{launcher}”; Persona found it in {launcher_shell} ({rc_file}). Define it where the terminal's shell reads its startup files, or add it to Persona as a model provider.",
   "launcher_missing_terminal_path": "The shell of new terminal tabs on {machine} ({pane_shell}) can't run “{missing}” to start the model entry “{launcher}”: the terminal runs where that file is missing or can't be run (a container, for example). Start agents in a terminal that sees it, or pick another model entry.",
   "launcher_missing_terminal_path_here": "The shell of new terminal tabs on this computer ({pane_shell}) can't run “{missing}” to start the model entry “{launcher}”: the terminal runs where that file is missing or can't be run (a container, for example). Start agents in a terminal that sees it, or pick another model entry.",
+  "launcher_missing_terminal_short": "“{launcher}” can’t start in the terminal on {machine}",
+  "launcher_missing_terminal_short_here": "“{launcher}” can’t start in this computer’s terminal",
   "claude_missing_terminal": "The shell of new terminal tabs on {machine} ({pane_shell}) can't find Claude Code (“{missing}”) to start the model entry “{launcher}”. Install Claude Code where the terminal sees it, or put it on that shell's PATH.",
   "claude_missing_terminal_here": "The shell of new terminal tabs on this computer ({pane_shell}) can't find Claude Code (“{missing}”) to start the model entry “{launcher}”. Install Claude Code where the terminal sees it, or put it on that shell's PATH.",
   "terminal_default_shell": "the default shell",

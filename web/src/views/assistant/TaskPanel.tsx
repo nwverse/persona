@@ -10,7 +10,7 @@ import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
 import { PanelHeader } from "../../ui/PanelHeader";
-import { place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
+import { place, removeTaskNow, retryTaskNow, useFailedStart, useRetrying, useTaskState, useTodo } from "./Tasks";
 import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { href, type Route } from "../../lib/router";
@@ -29,6 +29,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const sessions = useStore((s) => s.sessions);
   const [picked, setPicked] = useState<string | null>(null);
   const retrying = useRetrying(todoId);
+  const { instead } = useFailedStart(todo);
   const plans = useFeed((s) => s.plans);
   const planned = Object.values(plans).flatMap((p) => p.tasks).find((t) => t.todo_id === todoId);
   if (!todo || !st) {
@@ -89,7 +90,13 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           <div className="flex flex-col items-start gap-3 p-6 text-[13px]">
             <div className="font-semibold text-red">{t("assistant-taskpanel.start_failed")}</div>
             <div className="text-ink-2">{st.failure ?? todo.agents?.find((a) => a.start_error)?.start_error}</div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {/* its launcher can't start there: on the computer's other launcher first (#10365) */}
+              {st.status === "failed" && instead && (
+                <Button icon="retry" tone="accent" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "retry", instead)} testId="task-retry-launcher">
+                  {t("assistant-tasks.use_launcher_instead", { launcher: instead })}
+                </Button>
+              )}
               {st.status === "failed" && (
                 <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo)}>
                   {t("assistant-taskpanel.retry")}
