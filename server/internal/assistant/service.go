@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -150,21 +151,23 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles     titleBook       // titles.go
-	phoneKept  keptPhoneTools  // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames agentNamingBook // agent_naming.go
-	prefs      settingsBook    // profile.go
-	main       mainBook        // start.go
-	archived   archiveBook     // conversations.go
-	origins    originBook      // origins.go
-	guests     guestBook       // guest.go
-	relays     relayBook       // conversations.go
-	avail      availBook       // availability.go
-	quiet      quietBook       // quiet.go
-	supervise  superviseBook   // supervise_signals.go
-	preempt    preemptBook     // owner_preempt.go
-	tbriefs    taskBriefBook   // task_brief.go
-	search     searchIndex     // search_index.go
+	titles     titleBook            // titles.go
+	phoneKept  keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames agentNamingBook      // agent_naming.go
+	prefs      settingsBook         // profile.go
+	main       mainBook             // start.go
+	archived   archiveBook          // conversations.go
+	tags       conversationTagsBook // conversation_tags.go
+	origins    originBook           // origins.go
+	guests     guestBook            // guest.go
+	relays     relayBook            // conversations.go
+	quotes     quoteBook            // relay_quote.go: the owner's messages relays carried, verified
+	avail      availBook            // availability.go
+	quiet      quietBook            // quiet.go
+	supervise  superviseBook        // supervise_signals.go
+	preempt    preemptBook          // owner_preempt.go
+	tbriefs    taskBriefBook        // task_brief.go
+	search     searchIndex          // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	conversationWrites   sync.RWMutex
@@ -188,6 +191,7 @@ type Service struct {
 	accept         acceptBook     // acceptance.go
 	pushQuiet      quietSwitch    // push_quiet.go: the hub's low-distraction switch as last read
 	deploy         deployProbe    // deploy_check.go: is the work in the running hub
+	parkReplies    parkReplyBook  // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
@@ -203,6 +207,7 @@ type Service struct {
 	deadlineSweeping atomic.Bool
 	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
 	askLaters        askLaterBook // ask_later.go: the questions asked without waiting, still out
+	approvals        approvalBook // approval_clarify.go: clarified prepared approvals and their result delivery
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
@@ -254,6 +259,12 @@ type Service struct {
 	trust      trustBook     // machine_trust.go: the computers waiting to be confirmed
 	ready      readinessBook // readiness.go: the main conversation's readiness
 
+	// pieceWriteHook, when set, runs as a write of part_of/after (editTodo, insertTodo) has passed its caller's check
+	// and is about to take todoBook.writing (tests: two writes held there both passed against the same graph).
+	pieceWriteHook func(id string)
+	// editWriteHook, when set, runs as any edit (editTodo) is about to take todos.writing, after pieceWriteHook: tests
+	// use it to change the to-do in between (a DELETE racing the edit).
+	editWriteHook func(id string)
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
@@ -282,7 +293,7 @@ func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
-	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf})
+	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
 	if s.store == nil {
 		s.store = func() Store { return nil }
 	}
@@ -292,6 +303,7 @@ func New(o Options) *Service {
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
+	s.conversationTagRoutes()
 	s.conversationDeleteRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
@@ -711,6 +723,13 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	for id, machine := range archived {
 		view(id, machine).Archived = true
 	}
+	tagRecords, ok := s.conversationTagsRecords()
+	snap.Partial = snap.Partial || !ok
+	for id, rec := range tagRecords {
+		if len(rec.Tags) > 0 {
+			view(id, rec.MachineID).Tags = slices.Clone(rec.Tags)
+		}
+	}
 	picks, ok := s.modelPicksSet()
 	snap.Partial = snap.Partial || !ok
 	for id, p := range picks {
@@ -760,8 +779,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
+	s.userSpokeText(ctx, r, "")
+}
+
+func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
-	s.agentDecisionSpoke(ctx, r, time.Now())
+	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
@@ -781,6 +804,7 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 // TurnStarted: one of a task's agents is working; what was going to be done about an agent's last turn is off.
 func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
+	s.approvalAnswerTurnStarted(r)
 	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
 		return // a meeting's batch started it: a side exchange (meeting_turns.go)
 	}
@@ -796,6 +820,7 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
+	s.approvalAnswerTurnEnded(r)
 	s.turnEnded(ctx, r, s.meetingTurnEnded(r.MachineID, r.SessionID))
 }
 

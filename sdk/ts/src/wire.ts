@@ -1438,6 +1438,12 @@ export type TextStyle = "body" | "secondary" | "caption" | "code" | "title" | "h
 export const TEXT_STYLES = ["body", "secondary", "caption", "code", "title", "headline"] as const;
 
 /**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+export type ProgressStyle = "bar" | "ring" | (string & {});
+export const PROGRESS_STYLES = ["bar", "ring"] as const;
+
+/**
  * date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM
  * (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline
  * the text with \n.
@@ -1602,13 +1608,19 @@ export interface MetricComponent {
 }
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 export interface ProgressComponent {
   type: "progress";
   key?: string;
   label: string;
   ratio: number;
+  /**
+   * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring; other
+   * surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not accept this
+   * field.
+   */
+  style?: ProgressStyle;
   detail?: string;
   tone?: Tone;
 }
@@ -3540,6 +3552,12 @@ export interface ConnectorTool {
    * conversation.
    */
   shell?: string[];
+  /**
+   * Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and
+   * loaded with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every
+   * list whatever a connector sent.
+   */
+  defer_loading?: boolean;
 }
 
 /**
@@ -4829,10 +4847,15 @@ export interface KBEntry {
   updated: string;
   /** A project's short / long · status, a chat's dm / group… */
   extra?: string;
-  /** A chat's source (lark, mail, wechat, github…). */
+  /** A chat's source (lark, mail, wechat, github…); a document's, meeting's or event's connector (#8872). */
   source?: string;
   /** A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub. */
   recording_kind?: string;
+  /**
+   * A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
+   * absent on other kinds, before a match and from an older hub.
+   */
+  meeting_id?: string;
 }
 
 /**

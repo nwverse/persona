@@ -408,7 +408,90 @@ class StreamRepairBindingFixtureTest {
         println("JNI StreamRepair Apple prefix replay: ${reply.codePointCount(0, reply.length) + 1} scalar prefixes plus finished controls")
     }
 
+    @Test fun plainOpenFenceMatchesEveryExplicitAppleAssertion() {
+        val drawn = listOf("mermaid", "math")
+        // StreamRepairTests.drawsAnOpenPictureFenceAsPlainCode: exact input/output pairs, not Rust-derived expected.
+        val cases = listOf(
+            "看图：\n```mermaid\ngraph TD" to "看图：\n```\ngraph TD",
+            "  ~~~ math \nx^2\n" to "  ~~~\nx^2\n",
+            "```mermaid\ngraph TD\n```\n" to "```mermaid\ngraph TD\n```\n",
+            "```mermaid\na\n```\n```swift\nlet" to "```mermaid\na\n```\n```swift\nlet",
+            "```swift\nlet" to "```swift\nlet",
+        )
+        for ((input, expected) in cases) {
+            assertEquals("Apple plainOpenFence assertion: ${input.replace("\n", "\\n")}",
+                expected, plainFence(input, drawn))
+        }
+        assertThrows("wrong complete plain-fence expectation is rejected", AssertionError::class.java) {
+            assertEquals("```mermaid\ngraph TD", plainFence("看图：\n```mermaid\ngraph TD", drawn))
+        }
+        println("JNI StreamRepair plainOpenFence: ${cases.size} explicit Apple assertions")
+    }
+
+    @Test fun plainOpenFenceBoundariesFollowTheAppleScannerAndPredicate() {
+        val drawn = listOf("mermaid", "math")
+        val cases = listOf(
+            "" to "",
+            "mermaid" to "mermaid",
+            "`mermaid`" to "`mermaid`",
+            "``mermaid\nx" to "``mermaid\nx",
+            "```code```\nx" to "```code```\nx",
+            "    ```mermaid\nx" to "    ```\nx",
+            "\t~~~math \nx" to "\t~~~\nx",
+            "````math \nx" to "````\nx",
+            "```mermaid" to "```",
+            "```mermaid\n" to "```\n",
+            "```mermaid\r" to "```",
+            "```mermaid\r\nx" to "```\nx",
+            "\r```mermaid\nx" to "\r```\nx",
+            "```mermaid \nx" to "```\nx",
+            " ```mermaid\nx" to " ```mermaid\nx",
+            "```\u000bmermaid\nx" to "```\nx",
+            "```mermaid\u0085\nx" to "```\nx",
+            "```mermaid \nx" to "```\nx",
+            "```mermaid \nx" to "```\nx",
+            "```mermaid extra\nx" to "```mermaid extra\nx",
+            "```MERMAID\nx" to "```MERMAID\nx",
+            "```mermaid\nx\n~~~\n" to "```\nx\n~~~\n",
+            "````mermaid\nx\n```\n" to "````\nx\n```\n",
+            "```mermaid\nx\n```\n~~~math\ny" to "```mermaid\nx\n```\n~~~\ny",
+            "${'$'}${'$'}\n```mermaid\nx" to "${'$'}${'$'}\n```mermaid\nx",
+            "```mermaid\n${'$'}${'$'}\nx" to "```\n${'$'}${'$'}\nx",
+            "```mermaid\nx" to "```mermaid\nx",
+        )
+        val predicates = cases.map { (input, _) ->
+            if (input == "```mermaid\nx") listOf("math") else drawn
+        }
+        for ((index, pair) in cases.withIndex()) {
+            assertEquals("plain-fence source boundary $index: ${pair.first.replace("\n", "\\n").replace("\r", "\\r")}",
+                pair.second, plainFence(pair.first, predicates[index]))
+        }
+        assertEquals("empty drawn input preserves the info", "```mermaid\nx", plainFence("```mermaid\nx", emptyList()))
+        assertEquals("drawn receives the complete trimmed info, not its first word", "```\nx",
+            plainFence("```mermaid extra\nx", listOf("mermaid extra")))
+        assertEquals("Unicode and extended-grapheme info reaches the predicate intact", "```\nx",
+            plainFence("```图 é \nx", listOf("图 é")))
+        assertThrows("wrong non-drawn predicate expectation is rejected", AssertionError::class.java) {
+            assertEquals("```\nx", plainFence("```swift\nx", drawn))
+        }
+        println("JNI StreamRepair plainOpenFence: ${cases.size + 4} source-derived boundaries")
+    }
+
+    private fun plainFence(text: String, drawn: List<String>): String {
+        val input = buildJsonObject {
+            put("text", text)
+            put("drawn", kotlinx.serialization.json.JsonArray(drawn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        }.toString()
+        val output = NativeBridge.projectPlainOpenFence(input)
+        assertTrue("JNI returned no plain-fence projection", output.isNotEmpty())
+        return (Json.parseToJsonElement(output) as JsonObject).getValue("text").jsonPrimitive.content
+    }
+
     @Test fun rejectsMalformedInputAndWrongExpectedObjects() {
+        assertEquals("", NativeBridge.projectPlainOpenFence("{\"text\":\"```mermaid\"}"))
+        assertEquals("", NativeBridge.projectPlainOpenFence("{\"drawn\":[]}"))
+        assertEquals("", NativeBridge.projectPlainOpenFence("{\"text\":1,\"drawn\":[]}"))
+        assertEquals("", NativeBridge.projectPlainOpenFence("not JSON"))
         assertEquals("", NativeBridge.projectStreamRepair("{\"invalid\":true}"))
         assertEquals("", NativeBridge.projectStreamRepair("not JSON"))
         val input = "text\n```ts\nconst a"

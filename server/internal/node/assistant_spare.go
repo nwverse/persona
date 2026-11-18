@@ -76,7 +76,7 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 	if agent, err := n.assistantAgent(context.Background(), launcher); err != nil {
 		return err
 	} else if agent == "claude" {
-		execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), "", launcher, execution.Runtime, execution.ConfigDir, false)
+		execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), "", launcher, execution.ConfigDir, false)
 		if err != nil {
 			return err
 		}

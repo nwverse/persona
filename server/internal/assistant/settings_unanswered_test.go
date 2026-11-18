@@ -66,11 +66,25 @@ func TestSettingCardExpiringUnansweredIsNoDecline(t *testing.T) {
 		return up && !p.Delegating // the user's from the start: not held by a supervisor
 	})
 	out := resultOf(t, done, 5*time.Second)
-	if out != prompts.RenderSettingUnanswered() || strings.Contains(out, "declined") {
-		t.Fatalf("an expired card: %q", out)
+	for _, want := range []string{ix.ID, "expired", "nothing was executed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("an expired card result %q does not contain %q", out, want)
+		}
+	}
+	if strings.Contains(out, "declined") {
+		t.Fatalf("an expired card was reported as a user refusal: %q", out)
 	}
 	if status, _, _ := a.mem.InteractionOutcome(context.Background(), ix.ID); status != "expired" {
 		t.Errorf("history: %q, want expired", status)
+	}
+	a.s.approvals.mu.Lock()
+	var journaled bool
+	for _, entry := range a.s.approvals.list {
+		journaled = journaled || entry.ID == ix.ID
+	}
+	a.s.approvals.mu.Unlock()
+	if journaled {
+		t.Error("an unclarified expiry started a second delivery instead of using only the original tool result")
 	}
 	if interjectOn(t, a.s) {
 		t.Error("the setting changed without the user's approval")
