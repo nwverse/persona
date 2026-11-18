@@ -104,6 +104,22 @@ function Banner({ tone, action, children }: { tone: "caution" | "alert"; action?
   );
 }
 
+/** What a control shows when the Document holds no valid value for it: its own empty/unselected state, never the field's
+ *  default (which would look like a committed value). */
+function emptyValue(field: KnownField): FieldValue {
+  switch (field.kind) {
+    case "toggle":
+      return false;
+    case "select":
+      return "";
+    case "multiselect":
+      return [];
+    case "text":
+    case "number":
+      return "";
+  }
+}
+
 /** A value as a line of text (the default value in the footer). */
 function valueText(field: KnownField, v: FieldValue): string {
   switch (field.kind) {
@@ -126,6 +142,7 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
   const titleId = useId();
   const descId = useId();
   const countId = useId();
+  const invalidId = useId();
   const doc = s.doc!;
   const fs: FieldState = s.fields[field.id] ?? {};
   const notice = doc.notices?.[field.id];
@@ -136,7 +153,8 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
   const editable = !!known && s.writable && !known.read_only && !known.disabled_reason;
   // a multiselect's unsaved checks are what it shows; its pending write once committed
   const checked = known?.kind === "multiselect" && fs.selection !== undefined ? (fs.selection as FieldValue) : undefined;
-  const shown = fs.pending !== undefined ? fs.pending : checked !== undefined ? checked : value;
+  // a saved value this build can't read still leaves a control to correct it: the field's own empty state, not its default
+  const shown = fs.pending !== undefined ? fs.pending : checked !== undefined ? checked : value !== undefined ? value : known ? emptyValue(known) : undefined;
   const inline = known && (known.kind === "toggle" || (known.kind === "select" && (known.select.presentation === "segmented" || known.select.presentation === "dropdown")));
   const selectionDirty = !!known && known.kind === "multiselect" && fs.selection !== undefined && !sameValue(fs.selection, value);
   const typed = !!known && (known.kind === "text" || known.kind === "number");
@@ -144,6 +162,8 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
   const text = fs.draft ?? committed;
   const typedDirty = typed && fs.draft !== undefined && fs.draft !== committed;
   const count = known?.kind === "text" && known.text.max_length !== undefined ? t("settings-configuration.count", { n: scalarLength(text), max: known.text.max_length }) : undefined;
+  const invalid = !!known && value === undefined;
+  const described = [field.description ? descId : undefined, count !== undefined ? countId : undefined, invalid ? invalidId : undefined].filter(Boolean).join(" ") || undefined;
   const resettable = !!known && s.writable && !known.read_only && !known.disabled_reason && !selectionDirty && (value === undefined || !sameValue(value, known.default));
 
   return (
@@ -153,17 +173,17 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
           <div id={titleId} className="text-[13px] text-ink">{field.title}</div>
           {field.description && <p id={descId} className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{field.description}</p>}
         </div>
-        {inline && shown !== undefined && <div className="shrink-0"><InlineControl ctl={ctl} field={known!} shown={shown} can={can} titleId={titleId} descId={field.description ? descId : undefined} /></div>}
+        {inline && shown !== undefined && <div className="shrink-0"><InlineControl ctl={ctl} field={known!} shown={shown} can={can} titleId={titleId} descId={described} /></div>}
       </div>
       {known && !inline && shown !== undefined && (
         <div className="mt-2">
-          <BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={field.description ? descId : undefined} countId={count !== undefined ? countId : undefined} />
+          <BlockControl ctl={ctl} field={known} shown={shown} fs={fs} can={can} editable={editable} titleId={titleId} descId={described} countId={count !== undefined ? countId : undefined} invalidValue={invalid} />
         </div>
       )}
       {fs.error && <p role="alert" className="mt-1.5 text-[11.5px] leading-snug text-red">{problemText(fs.error)}</p>}
       {notice && <Note tone={notice.kind === "warning" ? "caution" : undefined}>{notice.message}</Note>}
       {field.kind === "unsupported" && <Note tone="caution">{field.reason === "kind" ? t("settings-configuration.unsupported_kind") : t("settings-configuration.unsupported_definition")}</Note>}
-      {known && value === undefined && <Note tone="caution">{t("settings-configuration.invalid_value")}</Note>}
+      {invalid && <Note id={invalidId} tone="caution">{t("settings-configuration.invalid_value")}</Note>}
       {known?.disabled_reason ? <Note>{known.disabled_reason}</Note> : known?.read_only ? <Note>{t("settings-configuration.read_only")}</Note> : null}
       {known && known.details?.length ? (
         <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px] leading-snug">
@@ -227,8 +247,8 @@ function Detail({ term, children }: { term: string; children: React.ReactNode })
   );
 }
 
-function Note({ tone, children }: { tone?: "caution"; children: React.ReactNode }) {
-  return <p className={tone ? "mt-1.5 text-[11.5px] leading-snug text-orange" : "mt-1.5 text-[11.5px] leading-snug text-ink-3"}>{children}</p>;
+function Note({ tone, id, children }: { tone?: "caution"; id?: string; children: React.ReactNode }) {
+  return <p id={id} className={tone ? "mt-1.5 text-[11.5px] leading-snug text-orange" : "mt-1.5 text-[11.5px] leading-snug text-ink-3"}>{children}</p>;
 }
 
 interface ControlProps {
@@ -246,6 +266,8 @@ function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps
   if (field.select.presentation === "dropdown") {
     return (
       <select aria-labelledby={titleId} aria-describedby={descId} className={settingsInputClass} value={shown as string} disabled={!can} onChange={(e) => ctl.choose(field.id, e.target.value)}>
+        {/* no valid value: a placeholder, never the default or the first option as if it were saved */}
+        {(shown as string) === "" && <option value="" disabled hidden>{t("settings-configuration.none")}</option>}
         {field.select.options.map((o) => <option key={o.value} value={o.value}>{o.title}</option>)}
       </select>
     );
@@ -258,17 +280,17 @@ function InlineControl({ ctl, field, shown, can, titleId, descId }: ControlProps
 }
 
 /** Controls under the title: a list of choices, a list of checks, a text or number field. */
-function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId, countId }: ControlProps & { fs: FieldState; can: boolean; editable: boolean; countId?: string }) {
+function BlockControl({ ctl, field, shown, fs, can, editable, titleId, descId, countId, invalidValue }: ControlProps & { fs: FieldState; can: boolean; editable: boolean; countId?: string; invalidValue: boolean }) {
   if (field.kind === "select") {
     const options = field.select.options;
     return (
-      <fieldset disabled={!can}>
+      <fieldset disabled={!can} aria-describedby={descId}>
         <ChoiceRows label={field.title} options={options.map((o) => ({ label: o.title, hint: o.description ?? "" }))} at={options.findIndex((o) => o.value === shown)} onPick={(i) => ctl.choose(field.id, options[i].value)} />
       </fieldset>
     );
   }
   if (field.kind === "multiselect") return <Checks ctl={ctl} field={field} chosen={shown as string[]} editable={editable} titleId={titleId} descId={descId} />;
-  if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} editable={editable} titleId={titleId} descId={descId} countId={countId} />;
+  if (field.kind === "text" || field.kind === "number") return <Typed ctl={ctl} field={field} shown={shown} fs={fs} editable={editable} titleId={titleId} descId={descId} countId={countId} invalidValue={invalidValue} />;
   return null;
 }
 
@@ -320,7 +342,7 @@ function Checks({ ctl, field, chosen, editable, titleId, descId }: { ctl: Config
   );
 }
 
-function Typed({ ctl, field, shown, fs, editable, titleId, descId, countId }: ControlProps & { fs: FieldState; editable: boolean; countId?: string }) {
+function Typed({ ctl, field, shown, fs, editable, titleId, descId, countId, invalidValue }: ControlProps & { fs: FieldState; editable: boolean; countId?: string; invalidValue: boolean }) {
   const committed = String(shown);
   const text = fs.draft ?? committed;
   const dirty = fs.draft !== undefined && fs.draft !== committed;
@@ -346,7 +368,7 @@ function Typed({ ctl, field, shown, fs, editable, titleId, descId, countId }: Co
   const common = {
     "aria-labelledby": titleId,
     "aria-describedby": [descId, countId].filter(Boolean).join(" ") || undefined,
-    "aria-invalid": fs.error ? true : undefined,
+    "aria-invalid": fs.error || invalidValue ? true : undefined,
     value: text,
     disabled: !editable,
     onKeyDown: onKey,

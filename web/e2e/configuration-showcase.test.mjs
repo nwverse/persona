@@ -33,7 +33,7 @@ describe("the showcase in every language", () => {
       const strings = shell(lang);
       for (const key of ["title", "fixtureProblem"]) expect(strings[key].trim(), `${lang} ${key}`).not.toBe("");
     }
-    expect(SCENARIO_IDS).toEqual(["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "contract", "empty", "unsupported"]);
+    expect(SCENARIO_IDS).toEqual(["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "contract", "invalid", "empty", "unsupported"]);
   });
 
   it.each(LANGS.flatMap((lang) => SCENARIO_IDS.map((id) => [lang, id])))("%s %s: every document parses with valid effective values", async (lang, id) => {
@@ -52,7 +52,8 @@ describe("the showcase in every language", () => {
       expect(writable).toBe(module.key !== "showcase-newer-version");
       for (const group of doc.groups) {
         for (const field of group.fields) {
-          if (field.kind !== "unsupported") expect(fieldValue(doc, field), `${module.key}:${field.id}`).toBeDefined();
+          // The invalid scenario deliberately holds unreadable saved values; every other document must be fully valid.
+          if (id !== "invalid" && field.kind !== "unsupported") expect(fieldValue(doc, field), `${module.key}:${field.id}`).toBeDefined();
         }
       }
       if (id === "load-fail" && module.key === "showcase-terminal") {
@@ -79,6 +80,7 @@ describe("the showcase in every language", () => {
     expect(keys("load-fail")).toEqual(["showcase-terminal"]);
     for (const id of ["reject", "conflict", "unconfirmed"]) expect(keys(id), id).toEqual(["showcase-digest"]);
     expect(keys("contract")).toEqual(["showcase-shared"]);
+    expect(keys("invalid")).toEqual(["showcase-recovery"]);
   });
 
   it("keeps fixture framing out of the default module text", () => {

@@ -163,6 +163,8 @@ try {
     ["conflict", "light", 1280],
     ["unconfirmed", "light", 1280],
     ["contract", "light", 1280],
+    ["invalid", "light", 1280],
+    ["invalid", "light", 390],
     ["empty", "light", 1280],
     ["unsupported", "light", 1280],
     ["conflict", "dark", 390],
@@ -255,6 +257,33 @@ try {
       if (kinds.length !== 5) fail(`${tag}: the contract example kinds ${kinds}`);
       await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
       ok(`${tag}: the shared contract example draws all five kinds`);
+    } else if (scenario === "invalid") {
+      const recovery = form(page, "showcase-recovery");
+      const fieldOf = (id) => recovery.locator(`[data-configuration-field="${id}"]`);
+      const emptyStates = {
+        toggle: (await fieldOf("reminders").locator('[role="switch"]').getAttribute("aria-checked")) === "false",
+        dropdown: (await fieldOf("accent").locator("select").inputValue()) === "",
+        segmented: (await fieldOf("motion").locator('[role="radio"][aria-checked="true"]').count()) === 0,
+        list: (await fieldOf("arrangement").locator('[role="radio"][aria-checked="true"]').count()) === 0,
+        checks: (await fieldOf("sections").locator('[role="checkbox"][aria-checked="true"]').count()) === 0,
+        text: (await fieldOf("label").locator("input").inputValue()) === "",
+        number: (await fieldOf("interval").locator("input").inputValue()) === "",
+      };
+      for (const [name, empty] of Object.entries(emptyStates)) if (!empty) fail(`${tag}: ${name} does not show its empty state`);
+      if (!(await fieldOf("reminders").innerText()).includes("isn't valid here")) fail(`${tag}: no invalid-value hint`);
+      await page.screenshot({ path: join(shots, `${tag}-before.png`), fullPage: true });
+      // The hint itself says "saved", so wait for the exact save-state line, not any text containing it.
+      const saved = (fieldLocator, what) => fieldLocator.locator('[aria-live="polite"]', { hasText: /^Saved$/ }).waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: ${what} did not save`));
+      // Correct the toggle and a typed field; each hint goes away with its value.
+      await fieldOf("reminders").locator('[role="switch"]').click();
+      await saved(fieldOf("reminders"), "the toggle");
+      if ((await fieldOf("reminders").locator('[role="switch"]').getAttribute("aria-checked")) !== "true") fail(`${tag}: the toggle did not take true`);
+      if ((await fieldOf("reminders").innerText()).includes("isn't valid here")) fail(`${tag}: the toggle kept the invalid hint`);
+      await fieldOf("label").locator("input").fill("Recovered");
+      await fieldOf("label").locator("button", { hasText: "Save" }).click();
+      await saved(fieldOf("label"), "the text");
+      await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+      ok(`${tag}: invalid values show empty states and can be corrected`);
     } else if (scenario === "empty") {
       const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
       if (fields !== 0) fail(`${tag}: the empty form drew ${fields} fields`);
@@ -273,7 +302,7 @@ try {
       ok(`${tag}: an unknown kind and a newer version are shown read-only`);
     }
 
-    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed", "contract"].includes(scenario)) {
+    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed", "contract", "invalid"].includes(scenario)) {
       await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
       ok(`${tag}: scenario drawn`);
     }

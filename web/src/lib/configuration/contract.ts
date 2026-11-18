@@ -358,8 +358,9 @@ function fieldsOf(doc: ConfigurationDocument): Map<string, ConfigurationField> {
 /**
  * What the writer would say to `update` against `doc` (README "Change and reset", the server's CheckUpdate): null when
  * it would accept it, else the error. A version it doesn't know, then another resource or revision, then an empty update,
- * then each change (sorted by id) and each reset: unknown, read-only or invalid fields, duplicate resets, a field both
- * changed and reset. A field this client can't check (an unsupported definition) is left to the writer.
+ * then each change (sorted by id) and each reset: unknown, unsupported, read-only or invalid fields, duplicate resets, a
+ * field both changed and reset. A field this client can't check (an unsupported definition) is read-only here too: the
+ * server rejects a change or reset to it with `unsupported`, so the client says so before sending anything.
  */
 export function checkUpdate(doc: ConfigurationDocument, update: ConfigurationUpdate): ConfigurationError | null {
   if (update.schema_version !== CONFIGURATION_VERSION) return new ConfigurationError("configuration_version");
@@ -371,7 +372,7 @@ export function checkUpdate(doc: ConfigurationDocument, update: ConfigurationUpd
   const problems: ConfigurationFieldError[] = [];
   const check = (id: string, value: unknown, isReset: boolean) => {
     const f = fields.get(id);
-    const code = !f ? "unknown" : f.read_only ? "read_only" : isReset || f.kind === "unsupported" ? null : checkValue(f, value);
+    const code = !f ? "unknown" : f.kind === "unsupported" ? "unsupported" : f.read_only ? "read_only" : isReset ? null : checkValue(f, value);
     if (code) problems.push({ id, code });
   };
   for (const id of Object.keys(changes).sort()) check(id, changes[id], false);

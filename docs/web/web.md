@@ -1964,9 +1964,10 @@ codes (`type`, `option`, `duplicate`, `min_length`, `max_length`, `min_selected`
 writer's checks: lengths in Unicode scalar values, numbers finite and inside the safe integer range (decimal bounds
 allowed), choices known and distinct, counts within their limits. The shared `schema/configuration/validation-cases.json`
 (26 cases, the same file the Go checks run) is a Web test input; there is no Web-only copy of it or of the all-types
-document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a value that
-isn't valid is not shown and the field offers **Reset**; a schema version it doesn't know is shown and never written.
-Nothing in a Document is a URL, a scope or an instruction.
+document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a saved value
+that isn't valid is not shown as a value, but the field still draws its empty state with the invalid-value line so it can
+be chosen again, and offers **Reset**; a schema version it doesn't know is shown and never written. Nothing in a Document
+is a URL, a scope or an instruction.
 
 **Sources.** The form takes a `ConfigurationSource` injected by the owning module, already bound to its one resource:
 `key` (the resource's identity: another key starts the form over), `read`, `update` and, when the module can tell,
@@ -1985,6 +1986,9 @@ wire value stays an array); a larger maximum keeps ordinary checks, whose pendin
 value. Every field ends in one footer row that holds its default value, the count where a text field has a maximum, the
 save state and the **Reset** / **Cancel** / **Save** actions that apply, so the actions never sit between the control and
 its explanation. The footer reserves the small-button height when no action is shown and can grow for wrapping content.
+The invalid-value hint accompanies the control and is part of its accessible description. A valid choice or entry
+replaces the unavailable value, and **Reset** returns the default. A change or reset to an unsupported field is
+rejected locally with `unsupported`.
 Drafts stay through a failed write, a conflict, a re-read or a change elsewhere, including what is typed or checked
 while its save is on the way (that newer edit stays unsaved). One write at a time, each against the revision
 shown. A conflict, or a write whose outcome is unknown (`configuration_unavailable`, a request that threw or timed out, or
@@ -2000,10 +2004,11 @@ for screenshots (`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/
 three genuine-looking module settings — a browser-local terminal renderer, a server-style daily digest and a local editor
 — exactly as the real form draws them, with no mock or test framing on the page itself. Its sources are in that page's
 memory and read or write no real setting; the page checks its own documents with the real parser. Coverage scenarios use
-the URL only (`?scenario=slow|load-fail|reject|conflict|unconfirmed|contract|empty|unsupported`; the product view with no
-query or `?scenario=overview`), and none of that navigation is drawn. `contract` shows the shared all-types example
-unchanged, `empty` shows a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the
-failure scenarios show only the module they happen in. The page is never built.
+the URL only (`?scenario=slow|load-fail|reject|conflict|unconfirmed|contract|invalid|empty|unsupported`; the product view
+with no query or `?scenario=overview`), and none of that navigation is drawn. `contract` shows the shared all-types example
+unchanged, `invalid` shows a document whose saved values are missing or unreadable so every control is in its empty,
+correctable state, `empty` shows a document without groups, `unsupported` shows an unknown kind and a newer schema version,
+and the failure scenarios show only the module they happen in. The page is never built.
 
 ## Labs
 

@@ -42,6 +42,21 @@ function oneOfOne(): Doc {
   return doc;
 }
 
+/** The shared document with every kind's saved value missing or invalid; the definitions stay valid. */
+function invalidValues(): Doc {
+  const doc = clone(example);
+  const values = doc.values as Record<string, unknown>;
+  delete values.compact;
+  values.label = 7;
+  values.notes = false;
+  values.layout = "grid";
+  delete values.accent;
+  values.motion = "slow";
+  delete values.sections;
+  values.interval = "soon";
+  return doc;
+}
+
 /** An in-memory source: commits like a writer, or answers with `fail` once. */
 function memory(start: unknown = example, key = "example-preferences") {
   let doc = clone(start);
@@ -176,6 +191,17 @@ describe("single-step choices", () => {
     expect(m.updates.map((u) => u.revision)).toEqual(["revision-1", "revision-1+", "revision-1++", "revision-1+++"]);
   });
 
+  it("reverts to the saved value and says why when its write fails", async () => {
+    const m = memory();
+    await show(m.source);
+    m.state.fail = new ConfigurationError("storage_failed", "The disk is full");
+    act(() => [...row("motion").querySelectorAll<HTMLButtonElement>('[role="radio"]')][1].click());
+    await settle();
+    expect(m.updates).toHaveLength(1);
+    expect([...row("motion").querySelectorAll('[role="radio"]')].map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    expect(row("motion").querySelector('[role="alert"]')?.textContent).toBe("The disk is full");
+  });
+
   it("shows Saving… (not Saved) while the source hasn't answered", async () => {
     const m = memory();
     let go = () => {};
@@ -198,6 +224,84 @@ describe("single-step choices", () => {
     key(group, "ArrowDown"); // from Comfortable to Dense
     await settle();
     expect(m.updates.at(-1)?.changes).toEqual({ layout: "dense" });
+  });
+});
+
+describe("a saved value this build can't read", () => {
+  it("keeps the hint and lets every control be corrected, never showing a default as committed", async () => {
+    const m = memory(invalidValues());
+    await show(m.source);
+    const hint = t("settings-configuration.invalid_value");
+    for (const id of ["compact", "label", "notes", "layout", "accent", "motion", "sections", "interval"]) expect(row(id).textContent, id).toContain(hint);
+
+    // toggle: off (the notice says the saved value isn't readable), and clicking writes true
+    const sw = row("compact").querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    act(() => sw.click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ compact: true });
+    expect(row("compact").textContent).not.toContain(hint);
+
+    // text and number: empty, typed, saved
+    const label = row("label").querySelector("input")!;
+    expect(label.value).toBe("");
+    type(label, "Recovered");
+    act(() => buttonIn(row("label"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ label: "Recovered" });
+    expect(label.value).toBe("Recovered");
+    const interval = row("interval").querySelector("input")!;
+    expect(interval.value).toBe("");
+    type(interval, "45");
+    act(() => buttonIn(row("interval"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ interval: 45 });
+
+    // list and segmented: no choice appears selected; picking one writes it
+    expect(radios("layout").every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+    act(() => radios("layout")[1].click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ layout: "dense" });
+    expect(radios("motion").every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+    act(() => radios("motion")[1].click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ motion: "reduced" });
+
+    // native dropdown: a disabled placeholder, never the default/first option; choosing writes
+    const accent = row("accent").querySelector("select")!;
+    expect(accent.value).toBe("");
+    expect(accent.selectedOptions[0]?.disabled).toBe(true);
+    act(() => {
+      accent.value = "green";
+      accent.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ accent: "green" });
+
+    // multiselect: nothing checked; checking and Save write the array
+    expect(checks("sections").every((c) => c.getAttribute("aria-checked") === "false")).toBe(true);
+    act(() => checks("sections")[0].click());
+    act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
+    await settle();
+    expect(m.updates.at(-1)?.changes).toEqual({ sections: ["summary"] });
+  });
+
+  it("describes each control with the invalid-value hint", async () => {
+    await show(memory(invalidValues()).source);
+    const hint = t("settings-configuration.invalid_value");
+    const hintId = (id: string) => [...row(id).querySelectorAll("p")].find((p) => p.textContent === hint)?.id;
+    for (const [id, control] of [
+      ["compact", '[role="switch"]'],
+      ["label", "input"],
+      ["layout", "fieldset"],
+      ["accent", "select"],
+      ["motion", "fieldset"],
+      ["interval", "input"],
+    ] as const) {
+      const element = row(id).querySelector(control)!;
+      expect(element.getAttribute("aria-describedby"), id).toContain(hintId(id)!);
+    }
+    expect(row("label").querySelector("input")!.getAttribute("aria-invalid")).toBe("true");
   });
 });
 
