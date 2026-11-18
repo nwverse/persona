@@ -54,8 +54,9 @@ type lsHub struct {
 	ends   []devicewire.LinkSwitchEnd
 	refuse string // begin answers this code
 	drop   bool   // begin switches the entry, its answer lost
-	// endFail: how many ends fail first (-1: every one).
+	// endFail: how many ends fail first (-1: every one); endCode: every end answers this code.
 	endFail int
+	endCode string
 	onBegin func()
 }
 
@@ -93,11 +94,14 @@ func (hub *lsHub) Call(ctx context.Context, method string, params, out any) erro
 		_ = remarshal(params, &p)
 		hub.mu.Lock()
 		hub.ends = append(hub.ends, p)
-		n, fail := len(hub.ends), hub.endFail
+		n, fail, code := len(hub.ends), hub.endFail, hub.endCode
 		hub.mu.Unlock()
 		hub.h.note("hub end " + p.Outcome)
 		if fail < 0 || n <= fail {
 			return errors.New("the hub is away")
+		}
+		if code != "" {
+			return &rpc.Error{Code: code, Message: "refused"}
 		}
 		if p.Outcome == devicewire.LinkSwitchRolledBack {
 			hub.setKind("ssh")
@@ -679,13 +683,14 @@ func TestLinkSwitchTransferFails(t *testing.T) {
 		{"ssh drops", "", func(h *lsHarness) { h.force["stage"] = 255 }},
 		{"the build does not run", "#!/bin/sh\nexit 1\n", nil},
 		{"no build", "", func(h *lsHarness) { h.pkgErr = errNoConnector }},
+		{"the release site is away", "", func(h *lsHarness) { h.pkgErr = errors.New("release site: connection refused") }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newLSHarness(t, lsOptions{stub: c.stub, setup: c.setup})
 			h.start()
 			rec := h.finished()
 			want := proto.LinkSwitchReasonTransferFailed
-			if c.name == "no build" {
+			if h.pkgErr != nil {
 				want = proto.LinkSwitchReasonNoPackage
 			}
 			if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != want || rec.RollbackUnconfirmed || rec.BeginIntended {
@@ -695,7 +700,7 @@ func TestLinkSwitchTransferFails(t *testing.T) {
 				t.Errorf("the hub was asked: %+v %+v", begins, ends)
 			}
 			wantRuns := []string{"probe", "stage", "remove staged"}
-			if c.name == "no build" {
+			if h.pkgErr != nil {
 				wantRuns = []string{"probe"}
 			}
 			if got := h.whats(); !slices.Equal(got, wantRuns) {
@@ -1209,5 +1214,50 @@ func TestLinkSwitchKeepsALinkThatAppeared(t *testing.T) {
 	}
 	if h.exists(stagedName(rec.Operation)) || !h.d.sshOnline("box") {
 		t.Error("not as before")
+	}
+}
+
+// What each answer of the hub's end(rolled_back) says of the rollback: not_ssh is done (the hub revoked before it
+// looked at the kind), no_machine only with the pairing hash (without it the hub revoked nothing of a computer that
+// went to another manager), invalid_params never (asked once: it would answer the same), anything else after retries.
+func TestLinkSwitchEndAnswers(t *testing.T) {
+	for _, c := range []struct {
+		code, hash string
+		want       bool
+		once       bool
+	}{
+		{"", lsTestHash, true, true},
+		{devicewire.LinkSwitchCodeNotSSH, lsTestHash, true, true},
+		{devicewire.LinkSwitchCodeNotSSH, "", true, true},
+		{devicewire.LinkSwitchCodeNoMachine, lsTestHash, true, true},
+		{devicewire.LinkSwitchCodeNoMachine, "", false, true},
+		{"invalid_params", lsTestHash, false, true},
+		{devicewire.LinkSwitchCodeChanged, lsTestHash, false, false},
+	} {
+		t.Run(c.code+"/"+c.hash[:min(len(c.hash), 4)], func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{})
+			h.hub.endCode = c.code
+			r := &linkSwitchRun{d: h.d, t: lsTestTimes, rec: linkSwitchRecord{MachineID: "box", Operation: "ls_1", PairHash: c.hash}}
+			if got := r.end(context.Background(), devicewire.LinkSwitchRolledBack, 300*time.Millisecond); got != c.want {
+				t.Errorf("end confirmed %t, want %t", got, c.want)
+			}
+			if _, ends := h.hub.calls(); (len(ends) == 1) != c.once {
+				t.Errorf("asked %d times", len(ends))
+			}
+		})
+	}
+}
+
+// A rollback the hub answers invalid_params is not confirmed, and end is not asked again.
+func TestLinkSwitchRollbackRefusedByTheHub(t *testing.T) {
+	h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644) }})
+	h.hub.endCode = "invalid_params"
+	h.start()
+	rec := h.finished()
+	if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonInstallFailed || !rec.RollbackUnconfirmed {
+		t.Fatalf("record %+v", rec)
+	}
+	if _, ends := h.hub.calls(); len(ends) != 1 {
+		t.Errorf("end asked %d times", len(ends))
 	}
 }

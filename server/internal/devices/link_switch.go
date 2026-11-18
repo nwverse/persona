@@ -482,13 +482,9 @@ func (r *linkSwitchRun) run(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	if err != nil {
+	if err != nil { // none anywhere, the release site away, a build that did not check out: none to send
 		r.logf("no build: %v", err)
-		why := proto.LinkSwitchReasonTransferFailed
-		if errors.Is(err, errNoConnector) {
-			why = proto.LinkSwitchReasonNoPackage
-		}
-		r.finish(ctx, proto.LinkSwitchPhaseFailed, why, false)
+		r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonNoPackage, false)
 		return
 	}
 	if !r.save(ctx) {
@@ -846,9 +842,11 @@ func (r *linkSwitchRun) succeed(ctx context.Context) {
 	r.finish(ctx, proto.LinkSwitchPhaseSucceeded, "", false)
 }
 
-// end tells the hub how the switch ended, again until it answers or within passes; true once it did. A refusal
-// that says the entry is not of this switch any more (not kind link, no such machine) is taken as nothing left to
-// undo on the hub.
+// end tells the hub how the switch ended, again until it answers or within passes; true once it did. The hub revokes
+// this switch's code and credential before it looks at the entry, so not_ssh (the entry is not kind link any more)
+// leaves nothing to undo; so does no_machine (the computer went to another manager meanwhile) with the pairing hash,
+// but without it the hub revoked nothing. invalid_params (a hash that names no code of the machine) is not tried
+// again: it would only answer the same.
 func (r *linkSwitchRun) end(ctx context.Context, outcome string, within time.Duration) bool {
 	until := time.Now().Add(within)
 	for {
@@ -860,9 +858,13 @@ func (r *linkSwitchRun) end(ctx context.Context, outcome string, within time.Dur
 		switch {
 		case err == nil:
 			return true
-		case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNotSSH || re.Code == devicewire.LinkSwitchCodeNoMachine):
+		case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNotSSH ||
+			re.Code == devicewire.LinkSwitchCodeNoMachine && r.rec.PairHash != ""):
 			r.logf("end(%s): %s, nothing left on the hub", outcome, re.Code)
 			return true
+		case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNoMachine || re.Code == bus.CodeInvalidParams):
+			r.logf("end(%s) refused: %s, not asked again", outcome, re.Code)
+			return false
 		case errors.As(err, &re):
 			r.logf("end(%s) refused: %s", outcome, re.Code)
 		default:
