@@ -11,7 +11,7 @@ import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, 
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
-import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
+import { isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { useLayout } from "../../lib/layout";
 import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
@@ -72,7 +72,6 @@ import { mediaMatches, NARROW, NO_HOVER, SHORT, useFinePointer, useMedia } from 
 import { UserBubble } from "./SegmentView";
 import { LatestMessageTime } from "./latest-message-time";
 import { scrollsAFold } from "./fold-scroll";
-import { GoalBar } from "./GoalBar";
 import { CommentMarks } from "./CommentMarks";
 import { isWorker, recordTeam, shownWorker, teamPanelOf, teamWorkers, useTeamReveal, workerCount } from "../../lib/team";
 import { hubSides, isSide, sidesAmong, SESSIONS_SIDE_FOLD_FEATURE } from "../../lib/side-fold";
@@ -153,6 +152,7 @@ const ChatSearch = lazyDialog(() => import("./ChatSearch").then((m) => m.ChatSea
 const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => m.LinkTodoDialog));
 const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
+const GoalBar = lazy(() => import("./GoalBar").then((m) => ({ default: m.GoalBar })));
 const SessionOverview = lazy(() => import("./SessionOverview").then((m) => ({ default: m.SessionOverview })));
 // Full pages opened from a conversation's hand-off card or belonging to an Inbox item load their way-back strip on demand.
 const AgentStatusLine = lazy(() => import("./AgentStatusLine").then((m) => ({ default: m.AgentStatusLine })));
@@ -1992,7 +1992,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col @min-[760px]/session:flex-row">
+      <div className="session-workspace flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <ViewLayer bare={!switchable} on={view === "chat"} from="start">
       {/* what a stopped agent said of its own work, above the transcript and not part of it (#3612) */}
@@ -2194,7 +2194,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           />
         )}
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
-        {session?.goal && !assistant && <GoalBar goal={session.goal} />}
+        {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
         {voiceEntry.dialog}
         {voiceState === "live" && voiceCall && (
@@ -2567,11 +2567,8 @@ export const Header = memo(function Header({
   const compare = session && compareOf ? compareOf(session) : undefined;
   const othersNeed = others.some((s) => stateOf(s) === "needs_you");
   // the Agent's background work (#5421): the button shows while there is some, the loop mark while a /loop drives it
-  const now = useNow(30_000, Boolean(session && !assistant && (session.loop || session.workflows?.length)));
-  const background = Boolean(session && !assistant && hasBackgroundWork(session, now));
+  const now = useNow(30_000, Boolean(session?.loop && !assistant));
   const running = session && !assistant ? backgroundCount(session) : 0;
-  const backgroundOpen = Boolean(session && backgroundPanelOf(panel, session.machine_id, session.session_id));
-  const openBackground = () => session && toggleBackgroundPanel(session.machine_id, session.session_id);
   // a runtime's session renames where its node says it can (capabilities.rename, #6294), as Close goes by capabilities.close
   const canRename = Boolean(session && !main && !builtIn && sessionCanRename(session));
   const [editing, setEditing] = useState(false);
@@ -2717,12 +2714,13 @@ export const Header = memo(function Header({
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
       <div className={headerSlot(Boolean(topCenter), "end")}>
-      {overview ? (
+      {overview && (
         <button
           type="button"
           data-session-overview-trigger
           aria-label={t("chat-chatview.session_overview")}
           aria-pressed={overview.open}
+          aria-description={running > 0 ? t("chat-chatview.background_running", { count: running }) : undefined}
           aria-controls={overview.open ? overview.id : undefined}
           title={t("chat-chatview.session_overview")}
           onClick={overview.toggle}
@@ -2733,20 +2731,6 @@ export const Header = memo(function Header({
             <span aria-hidden data-background-count className="pointer-events-none absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-ink-2 tabular-nums shadow-[0_0_0_2px_var(--page)]">{running}</span>
           )}
         </button>
-      ) : background && (
-        <span className="relative flex shrink-0">
-          <IconButton
-            icon="list"
-            label={running ? t("chat-chatview.background_running", { count: running }) : t("chat-chatview.background_tasks")}
-            onClick={openBackground}
-            active={backgroundOpen}
-          />
-          {running > 0 && !backgroundOpen && (
-            <span aria-hidden data-background-count className="pointer-events-none absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-ink-2 tabular-nums shadow-[0_0_0_2px_var(--page)]">
-              {running}
-            </span>
-          )}
-        </span>
       )}
       {team && (
         <span className="relative flex shrink-0">

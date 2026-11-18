@@ -1,4 +1,5 @@
 // The session overview's scrollable contents, loaded when the user turns it on.
+import "./SessionOverview.css";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { formatTokens } from "../../lib/tokens";
@@ -66,7 +67,7 @@ export function SessionOverview({ id, session, machineName, items, tasks, childr
 
   return (
     <aside id={id} data-session-overview aria-labelledby={`${id}-title`}
-      className="-order-1 flex max-h-[45%] min-h-0 shrink-0 flex-col border-b border-line bg-surface @min-[760px]/session:order-none @min-[760px]/session:max-h-none @min-[760px]/session:w-84 @min-[760px]/session:border-b-0 @min-[760px]/session:border-l">
+      className="session-overview flex min-h-0 shrink-0 flex-col bg-surface">
       <h2 id={`${id}-title`} className="shrink-0 border-b border-line px-3 py-2.5 text-sm font-semibold text-ink">{t("chat-chatview.session_overview")}</h2>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
         <Environment session={session} machineName={machineName} onInfo={() => setInfoOpen(true)} />
