@@ -243,7 +243,8 @@ func TestCheckoutPathTakenIsCoded(t *testing.T) {
 }
 
 // workspace.resolve with terminal: the cwd is the home's own spelling of the directory, while its id stays the
-// physical path the hub compares; without terminal it is the physical path as before.
+// physical path; without terminal it is the physical path as before. (The hub folds the home's two spellings when it
+// compares task folders.)
 func TestWorkspaceResolveTerminalSpelling(t *testing.T) {
 	home, real := linkedHome(t)
 	if err := os.MkdirAll(filepath.Join(real, "src", "app"), 0o700); err != nil {
@@ -262,5 +263,72 @@ func TestWorkspaceResolveTerminalSpelling(t *testing.T) {
 	raw, err := n.handle(t.Context(), "workspace.resolve", []byte(`{"path":"~/src/app","terminal":true}`))
 	if err != nil || raw.(proto.Workspace).Cwd != filepath.Join(home, "src", "app") {
 		t.Fatalf("resolve RPC = %+v, %v", raw, err)
+	}
+}
+
+// realSpelledLinks: both links of dest name the resolved home, as git wrote them before the node made them portable.
+func realSpelledLinks(t *testing.T, real, dest string) bool {
+	t.Helper()
+	forward, back := gitLinks(t, dest)
+	return strings.HasPrefix(forward, real+string(filepath.Separator)) && strings.HasPrefix(back, real+string(filepath.Separator))
+}
+
+// A leftover of the to-do's branch that git made before (links under the resolved home) and that the node refuses as
+// dirty: the refusal names it for a workspace {existing}, so its links are made portable before the refusal, or an
+// Agent's terminal there would find no repository.
+func TestWorktreePrepareBranchRefusalMakesLinksPortable(t *testing.T) {
+	w := worktreeNode(t)
+	real := linkHome(t, &w)
+	at := filepath.Join(real, "left", "task-todo-x")
+	runPullGit(t, filepath.Join(real, "proj"), "worktree", "add", "-b", "task/todo_x", "--", at)
+	if !realSpelledLinks(t, real, at) {
+		t.Fatal("fixture: git should have written the resolved home's spelling")
+	}
+	if err := os.WriteFile(filepath.Join(at, "untracked.txt"), []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo, "branch": "task/todo_x"})
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != proto.CodeCheckoutDirty {
+		t.Fatalf("dirty leftover = %v, want %s", err, proto.CodeCheckoutDirty)
+	}
+	assertHomeLinks(t, w.home, real, w.repo, filepath.Join(w.home, "left", "task-todo-x"))
+}
+
+// workspace.resolve for a terminal in a checkout git made before (or a folder inside it) makes its links portable; a
+// plain resolve leaves the files alone.
+func TestWorkspaceResolveTerminalMakesWorktreeLinksPortable(t *testing.T) {
+	w := worktreeNode(t)
+	real := linkHome(t, &w)
+	at := filepath.Join(real, "trees", "old")
+	runPullGit(t, filepath.Join(real, "proj"), "worktree", "add", "-b", "old", "--", at)
+	mkdir(t, filepath.Join(at, "sub"))
+	if _, err := w.n.resolveWorkspace("~/trees/old/sub", false); err != nil || !realSpelledLinks(t, real, at) {
+		t.Fatalf("a plain resolve changed the links (or failed: %v)", err)
+	}
+	got, err := w.n.resolveWorkspace("~/trees/old/sub", true)
+	if err != nil || got.Cwd != filepath.Join(w.home, "trees", "old", "sub") {
+		t.Fatalf("terminal resolve = %+v, %v", got, err)
+	}
+	assertHomeLinks(t, w.home, real, w.repo, filepath.Join(w.home, "trees", "old"))
+	// The main checkout's .git is a folder: nothing to rewrite, and the resolve still answers.
+	if got, err := w.n.resolveWorkspace("~/proj", true); err != nil || got.Cwd != w.repo {
+		t.Fatalf("terminal resolve of the main checkout = %+v, %v", got, err)
+	}
+}
+
+// On Windows the links stay as Git for Windows wrote them, forward slashes and all.
+func TestPortableWorktreeLinksLeavesWindowsAlone(t *testing.T) {
+	w := worktreeNode(t)
+	real := linkHome(t, &w)
+	old := worktreeLinksGOOS
+	worktreeLinksGOOS = "windows"
+	t.Cleanup(func() { worktreeLinksGOOS = old })
+	dest := filepath.Join(real, "trees", "win")
+	runPullGit(t, filepath.Join(real, "proj"), "worktree", "add", "-b", "win", "--", dest)
+	forward, back := gitLinks(t, dest)
+	w.n.portableWorktreeLinks(dest)
+	if f, b := gitLinks(t, dest); f != forward || b != back {
+		t.Fatalf("links rewritten on Windows: %q %q, were %q %q", f, b, forward, back)
 	}
 }

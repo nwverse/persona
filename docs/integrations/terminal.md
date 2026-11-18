@@ -656,8 +656,10 @@ These suggestions apply only to creation and do not establish ownership for clos
   checks unfinished-task ownership before reuse. Older nodes omit `existing`; ordinary creation still refuses duplicate checkouts.
   Since #10365 `existing.path` is the checkouts folder's own spelling (`<path>/<dir name of the branch>`) when it is that
   checkout, else the home's spelling of git's resolved path (`node/selfprogram.go` `visiblePath`), `in_checkouts` says whether it lies in
-  the checkouts folder (not the main checkout or a folder of the user's own), and the checkout's git links are made
-  portable before it is handed back (`node/worktree_links.go`). The refusals carry codes, `checkout_dirty`, `checkout_in_use`,
+  the checkouts folder (not the main checkout or a folder of the user's own), and once it is known to be the branch's
+  checkout of this repository its git links are made portable (`node/worktree_links.go`), whether it is then handed back or
+  refused (a refusal names it for a workspace `{existing}`). Not on Windows, where Git for Windows misreads a link written
+  with backslashes and no terminal sees only one spelling of the home. The refusals carry codes, `checkout_dirty`, `checkout_in_use`,
   `checkout_changed`, `checkout_unverified`, with `branch`, `path` and `owner` as data. A create whose checkout path holds
   something is refused with code `worktree_path_taken` (data `path`), worded in the request's `locale`; nothing there is adopted.
 - **Unnamed worktrees** (#1399): prepare advertises `automatic_name: true`. A full device may send `{workspace_id, kind: "orca", parent_workspace_id?, auto_name: true}` without a branch or path. Only a boolean `true` enables this alternative; strings and missing fields remain invalid. The node verifies the source repository and parent, then sends Orca a random creature-name seed with `nameWasGenerated: true`, the source HEAD and the chosen parent, omitting `branchNameOverride`. Orca owns branch prefixes, retired names, collision retries and subsequent first-work branch naming. The result returns the actual branch and directory. Explicit branch/path creates keep the existing checks; combining overrides with automatic naming is refused. For other hosts that support worktree creation, the node chooses a unique `persona/worktree-<random>` branch and checkout path, then uses the same checked creation route. Content-based renaming is host-specific. Older nodes keep the manual form; an older hub refuses the new boolean mode safely, so update both before using it.

@@ -82,6 +82,12 @@ finds it clean, idle and inside the checkouts folder (`in_checkouts`), saved as 
 unverifiable, outside the checkouts folder, or a folder that is no checkout of the branch, `worktree_path_taken`) refuses the start
 with its path and the next step, workspace `{"existing": "<path>"}` to continue there or removing it; any other failure of the lookup
 falls back to creating the checkout as before, so a brand-new to-do is unchanged. Nothing is cleaned up automatically.
+Since the node names the directory an Agent starts in by a linked home's own spelling (`workspace.resolve` with `terminal`,
+#10365), while a claim or an Agent from before, or from an older node, has the resolved one (`home_real`), the hub compares
+task directories with the two spellings folded (`taskDirKey` in `server/internal/assistant/tasks_workspace.go`): a directory
+occupied under one spelling is occupied under the other. The leftover a refusal names for `{"existing": "<path>"}` gets portable
+git links before the refusal, and any linked worktree `workspace.resolve` hands to a terminal gets them too, so git works
+there in a terminal that sees only the home's spelling.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
 The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
 
