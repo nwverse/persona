@@ -423,7 +423,7 @@ struct CallAvatarStatesTests {
     }
 
     /// The new words in each language. Working is the state's own name (`StateName.working`, #10502), not a word of the
-    /// call screen's: 工作中, never the retired 正在工作.
+    /// call screen's: 「工作中」, never the retired 「正在工作」.
     @Test func theRowsWordsInEachLanguage() throws {
         let keys = ["Thinking [Call Screen]", "Working [State Names]", "Waiting for your decision [Call Screen]"]
         let words: [String: [String]] = [
