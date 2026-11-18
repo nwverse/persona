@@ -75,7 +75,13 @@ An explicit `workspace` overrides inference. When a caller knows a particular ch
 For an explicit `new.branch`, admission first asks the node whether that branch already has a checkout in the same repository.
 It reuses that checkout only after a successful clean-tree check, complete live-Agent inventory, and the hub's unfinished-task
 ownership check. Dirty, occupied, changed or unverifiable checkouts are refused with their path and known owner; nothing is forced.
-Older nodes omit branch lookup and keep the existing creation/refusal behavior. An unnamed `new` still creates its task-specific branch.
+Older nodes omit branch lookup and keep the existing creation/refusal behavior.
+An unnamed `new` asks the same about its own `task/<todo id>` (#10365): a plan that continues a to-do, or reuses its ID, gets that
+branch and checkout path again, and the checkout an earlier failed start or Agent of the same to-do left is reused when the node
+finds it clean, idle and inside the checkouts folder (`in_checkouts`), saved as `reused`. A leftover it cannot take (dirty, in use,
+unverifiable, outside the checkouts folder, or a folder that is no checkout of the branch, `worktree_path_taken`) refuses the start
+with its path and the next step, workspace `{"existing": "<path>"}` to continue there or removing it; any other failure of the lookup
+falls back to creating the checkout as before, so a brand-new to-do is unchanged. Nothing is cleaned up automatically.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
 The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
 
