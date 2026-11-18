@@ -135,6 +135,21 @@ const CodeWorktreeUnsupported = "worktree_unsupported"
 // unborn branch): there is nothing to check out, so the folder itself is the only workspace (#5548).
 const CodeWorktreeNoCommits = "worktree_no_commits"
 
+// CodeWorktreePathTaken: worktree.create / worktree.add's checkout path already holds something (data: path). The node
+// never adopts or overwrites what is there; a task's own leftover checkout is reused through worktree.prepare's
+// existing instead (#10365).
+const CodeWorktreePathTaken = "worktree_path_taken"
+
+// Codes of worktree.prepare's refusal to hand back the checkout of the branch it was asked about (data: branch, path,
+// and owner for one in use): it has uncommitted changes, an Agent works in it, it is no longer that branch of this
+// repository, or it could not be checked. The hub tells them from other failures (#10365).
+const (
+	CodeCheckoutDirty      = "checkout_dirty"
+	CodeCheckoutInUse      = "checkout_in_use"
+	CodeCheckoutChanged    = "checkout_changed"
+	CodeCheckoutUnverified = "checkout_unverified"
+)
+
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).
 const (
 	CodeNoGh        = "no_gh"

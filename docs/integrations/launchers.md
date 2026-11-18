@@ -195,6 +195,11 @@ To fix it, make the launcher exist where the terminal's shell reads it:
 
 Launcher health keeps such a launcher apart (`not_in_terminal`, `docs/server/launcher-health.md`): the login shell's check passes, so only a start with it that works clears it.
 
+**The node's own program, on a home reached through a link (#10365).** A home that is a link (`/home/me -> /data/home/me`) and a terminal in a container that mounts the home at `/home/me` without the real path: the node's resolved file (`/data/home/me/.persona/bin/personad`) does not exist there, so every managed launcher failed with `…/personad: No such file or directory`, and the Agents there lost Persona's hooks and MCP server, which name the same path.
+The node keeps two spellings of itself (`node/selfprogram.go`): the resolved file stays the update target (`node.info`'s `executable`) and what macOS attributes Full Disk Access to, while every process it starts is handed the data directory's spelling of the same file (`<PERSONA_HOME>/bin/personad`, where the start files already live), else the program under `$HOME`'s own spelling, else the file as it is. `personad node doctor` asks the same function, so the generated hooks, settings and MCP files it checks are the ones the node wrote and `--fix` does not flip them back.
+The checkouts the node makes with git (task and "New worktree…" checkouts on herdr-core or without herdr's worktree command, Agents' own worktrees, review copies) get their two git links rewritten to the home's spelling (`node/worktree_links.go`), and a directory the hub resolves for an Agent to start in (`workspace.resolve` with `terminal`) or a checkout `worktree.prepare` hands back is named the same way, so git and the Agent work inside the container too.
+After the update a `not_in_terminal` record left by the old path still holds until a start with that launcher works: one explicit retry of the failed task (which passes the fixed-machine gate for this kind of record) clears it.
+
 ## Detecting launchers in ~/.zshrc (`launcherScript` in `node/launchers.go`)
 
 node gathers two things in one login-shell invocation (`zsh -ic`, loading `~/.zshrc` first), cached for 1 minute.
