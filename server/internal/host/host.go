@@ -124,23 +124,13 @@ type Launcher interface {
 	NameAgent(ctx context.Context, pane PaneRef, name string) error
 }
 
-// spawnEnvKey carries WithSpawnEnv's variables from the node to a Launcher's CreateSpace / CreateSlot.
-type spawnEnvKey struct{}
-
-// WithSpawnEnv is ctx with env for the shell of a space or slot a Launcher opens with it: set in that shell's
-// environment as it starts, before it reads its startup files. A host that cannot set a new shell's environment
-// leaves them out; a split, and anything opened with another ctx, gets none.
-func WithSpawnEnv(ctx context.Context, env map[string]string) context.Context {
-	if len(env) == 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, spawnEnvKey{}, env)
-}
-
-// SpawnEnv is the environment WithSpawnEnv put on ctx for a new shell, nil when none.
-func SpawnEnv(ctx context.Context) map[string]string {
-	env, _ := ctx.Value(spawnEnvKey{}).(map[string]string)
-	return env
+// EnvLauncher is a Launcher that can start the new pane's shell with extra environment ("KEY=VALUE"): herdr's
+// workspace.create / tab.create env, the Herdr App's terminal.run env. The node opens an Agent's terminal this way so
+// the shell's own startup files can tell it from one the user opened (PERSONA_AGENT, #10111) and skip the questions
+// that would stop the start (#10365).
+type EnvLauncher interface {
+	CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*Created, error)
+	CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*Created, error)
 }
 
 // Organizer renames and closes.

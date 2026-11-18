@@ -149,7 +149,7 @@ func startLiveCodex(t *testing.T, bin, work string, o liveOptions) *liveCodex {
 			t.Fatalf("git %v: %v", args, err)
 		}
 	}
-	created, err := lc.c.WorkspaceCreate(bg, lc.dir, "codex "+lc.version, nil)
+	created, err := lc.c.WorkspaceCreate(bg, lc.dir, "codex "+lc.version)
 	if err != nil {
 		t.Fatal(err)
 	}

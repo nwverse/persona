@@ -57,7 +57,7 @@ func TestLiveFirstPrompt(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			created, err := c.WorkspaceCreate(ctx, cwd, "first-prompt-test", nil)
+			created, err := c.WorkspaceCreate(ctx, cwd, "first-prompt-test")
 			if err != nil {
 				t.Fatal(err)
 			}

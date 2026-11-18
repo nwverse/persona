@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -560,29 +559,53 @@ type Created struct {
 	} `json:"root_pane"`
 }
 
-// WorkspaceCreate opens a workspace in cwd, named label, without moving the computer's focus. env, when not empty,
-// is set in its first tab's shell as it starts (the API's env, the CLI's --env): only a herdr that takes it may be
-// given one (herdr 0.9.5 does; the caller checks, an older one may refuse the field).
-func (c *Client) WorkspaceCreate(ctx context.Context, cwd, label string, env map[string]string) (*Created, error) {
+// WorkspaceCreate opens a workspace in cwd without moving the computer's focus; env ("KEY=VALUE") is added to the
+// environment its first pane's shell starts with.
+func (c *Client) WorkspaceCreate(ctx context.Context, cwd, label string, env ...string) (*Created, error) {
+	return c.createWithEnv(ctx, "workspace.create", map[string]any{"cwd": cwd, "label": label, "focus": false},
+		[]string{"workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"}, env)
+}
+
+// createWithEnv is workspace.create / tab.create with env ("KEY=VALUE", herdr's `env` object and `--env`). A herdr
+// that refuses the request because it has no `env` (one before environment support) is asked again without it: the
+// shell then starts without those variables, as before, rather than no terminal opening.
+func (c *Client) createWithEnv(ctx context.Context, method string, params map[string]any, cli []string, env []string) (*Created, error) {
+	vars := map[string]string{}
+	var flags []string
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			vars[k] = v
+			flags = append(flags, "--env", kv)
+		}
+	}
 	var res Created
-	params := map[string]any{"cwd": cwd, "label": label, "focus": false}
-	cli := []string{"workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"}
-	params, cli = withEnv(params, cli, env)
-	err := c.call(ctx, "workspace.create", params, &res, cli...)
+	if len(vars) == 0 {
+		err := c.call(ctx, method, params, &res, cli...)
+		return &res, err
+	}
+	with := map[string]any{"env": vars}
+	for k, v := range params {
+		with[k] = v
+	}
+	err := c.call(ctx, method, with, &res, append(slices.Clone(cli), flags...)...)
+	if err == nil || !envRefused(err) {
+		return &res, err
+	}
+	res = Created{}
+	err = c.call(ctx, method, params, &res, cli...)
 	return &res, err
 }
 
-// withEnv adds env to a call's params (an object of strings) and to its CLI arguments (--env KEY=VALUE each, in key
-// order); nothing for an empty env.
-func withEnv(params map[string]any, cli []string, env map[string]string) (map[string]any, []string) {
-	if len(env) == 0 {
-		return params, cli
+// envRefused: herdr answered that it does not take the request as given (an unknown `env` field or `--env` flag),
+// so nothing was created.
+func envRefused(err error) bool {
+	var he *Error
+	if errors.As(err, &he) {
+		return strings.Contains(strings.ToLower(he.Code+" "+he.Message), "env") ||
+			strings.Contains(strings.ToLower(he.Message), "unknown field")
 	}
-	params["env"] = env
-	for _, k := range slices.Sorted(maps.Keys(env)) {
-		cli = append(cli, "--env", k+"="+env[k])
-	}
-	return params, cli
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "--env") || strings.Contains(msg, "unexpected argument")
 }
 
 // WorktreeCreated is what worktree.create opened: the new workspace (with its first tab and pane) and the checkout.
@@ -623,15 +646,11 @@ func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path st
 	return &res, err
 }
 
-// TabCreate opens a tab in workspace, in cwd and named label, without moving the computer's focus; env as for
-// WorkspaceCreate.
-func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string, env map[string]string) (*Created, error) {
-	var res Created
-	params := map[string]any{"workspace_id": workspace, "cwd": cwd, "label": label, "focus": false}
-	cli := []string{"tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"}
-	params, cli = withEnv(params, cli, env)
-	err := c.call(ctx, "tab.create", params, &res, cli...)
-	return &res, err
+// TabCreate opens a tab in a workspace without moving the computer's focus; env ("KEY=VALUE") is added to the
+// environment its shell starts with.
+func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string, env ...string) (*Created, error) {
+	return c.createWithEnv(ctx, "tab.create", map[string]any{"workspace_id": workspace, "cwd": cwd, "label": label, "focus": false},
+		[]string{"tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"}, env)
 }
 
 func (c *Client) TabRename(ctx context.Context, tab, label string) error {
@@ -664,8 +683,8 @@ func (c *Client) PaneClose(ctx context.Context, pane string) error {
 }
 
 // PaneSplit splits a pane (direction "right" or "down") without moving the computer's focus, the new pane starting
-// in cwd (the host's choice when empty); env as for WorkspaceCreate. It returns the new pane's id.
-func (c *Client) PaneSplit(ctx context.Context, pane, direction, cwd string, env map[string]string) (string, error) {
+// in cwd (the host's choice when empty). It returns the new pane's id.
+func (c *Client) PaneSplit(ctx context.Context, pane, direction, cwd string) (string, error) {
 	var res struct {
 		Pane struct {
 			ID string `json:"pane_id"`
@@ -677,7 +696,6 @@ func (c *Client) PaneSplit(ctx context.Context, pane, direction, cwd string, env
 		params["cwd"] = cwd
 		cli = append(cli, "--cwd", cwd)
 	}
-	params, cli = withEnv(params, cli, env)
 	if err := c.call(ctx, "pane.split", params, &res, cli...); err != nil {
 		return "", err
 	}

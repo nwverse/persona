@@ -284,7 +284,20 @@ IDs; no client asks for them by ID.
 An extension granted the `models` scope (docs/extensions/extensions.md "Model calls") gets an API purpose `extension.<extension id>`, named after the extension, in the group "Extensions":
 `kind: "api"`, `parent: "kb"`, `category_id: "kb"`, with its own record (`model_config.extension.<id>`), revision and writable `provider` / `model` (`effort` with a Responses, Messages or Chat Completions connection), the same shape as Lark /agent.
 With an empty binding it follows "Information processing" (`kb`), including later changes there; a pick here is the extension's alone and does not touch `kb`. Its `model.complete` calls resolve this purpose at the start of each call,
-so a change applies from the next call. The extension never chooses the connection and never sees a key. The prefix is not `plugin.`: the apps take `plugin.<id>` for a voice plugin and fetch its own model list for it. No budget, no cap and no fallback model (the user's decision).
+so a change applies from the next call. The extension never chooses the connection and never sees a key. The prefix is not `plugin.`: the apps take `plugin.<id>` for a voice plugin and fetch its own model list for it. No budget and no cap (the user's decision).
+
+**Candidate models (#10398).** A call may name candidate models (`models`, docs/extensions/extensions.md "Model calls"), tried in order. Each candidate runs only on a provider the user configured here that
+the manager calls directly and that lists the model; the extension names models, never providers or keys. The purpose's `candidates` object shows and keeps the user's control:
+
+- `mode`: `extension` (the default: the lists the extension sends), `off` (ignored: every call runs on the purpose's model, as without candidates) or `custom` (the user's own list, used for every call
+  whatever the extension sends).
+- `custom`: the user's list, `{model, provider, provider_name, available, problem?}` per entry; `requested`: the lists the extension sent lately (newest first, at most 8, each with `last_used`), each model
+  with the provider it resolves to now or `available: false` and why. `modes` and `most` (8) say what the hub takes.
+- PUT / PATCH take `"candidates": {"mode": "off"}`, `{"mode": "custom", "custom": [{"provider": "launcher.<name>", "model": "<id>"}]}` (1 to 8 entries; each provider one of the purpose's
+  `provider_ids` that can be called directly, the model a model ID or empty for the provider's default), or `null` to go back to the extension's lists, with the purpose's `revision` like its
+  other fields. Other purposes refuse it (400). Changing the purpose's provider or model keeps the candidate setting. The record is `model_config.extension.<id>` (`candidates`); the requested lists
+  are kept apart in `model_candidates.requested.<id>`, written only when a list is new or was last seen over an hour ago.
+- The web, iOS and Android editors for `candidates` follow separately; until then the API above is the way to change it.
 
 `GET /api/v1/model-config` lists these purposes after Lark /agent; the manager tells the assistant which extensions have one (`app.call plugins.models`: enabled, compatible, granted `models` itself; the legacy `hub_api` full access does not count).
 A switched-off or uninstalled extension's purpose is gone (404) and its record stays dormant until the extension is back. Each call's usage goes back to the extension in the result and into one log line of the manager; nothing is metered or limited. Chat Completions calls ask the server to stream that usage (`stream_options.include_usage`); a server that rejects the field gets the request once more without it and its usage reads zero.

@@ -71,7 +71,7 @@ func TestLiveSubscribe(t *testing.T) {
 	if err != nil || len(ws) == 0 {
 		t.Fatal(err)
 	}
-	created, err := c.TabCreate(ctx, ws[0].ID, "/tmp", "persona-live-test", nil)
+	created, err := c.TabCreate(ctx, ws[0].ID, "/tmp", "persona-live-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestLiveMenuActions(t *testing.T) {
 	ctx := context.Background()
 	c := New()
 	dir := t.TempDir()
-	created, err := c.TabCreate(ctx, ws, dir, "menu-live-check", nil)
+	created, err := c.TabCreate(ctx, ws, dir, "menu-live-check")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,14 +187,14 @@ func TestLiveMenuActions(t *testing.T) {
 	if err := c.TabRename(ctx, tab, "menu-live-renamed"); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
-	split, err := c.PaneSplit(ctx, root, "right", dir, nil)
+	split, err := c.PaneSplit(ctx, root, "right", dir)
 	if err != nil || split == "" || split == root {
 		t.Fatalf("split = %q, %v", split, err)
 	}
 	if n, err := c.TabPanes(ctx, ws, tab); err != nil || n != 2 {
 		t.Fatalf("panes after split = %d, %v", n, err)
 	}
-	down, err := c.PaneSplit(ctx, split, "down", "", nil)
+	down, err := c.PaneSplit(ctx, split, "down", "")
 	if err != nil || down == "" {
 		t.Fatalf("split down = %q, %v", down, err)
 	}
@@ -212,7 +212,7 @@ func TestLiveMenuActions(t *testing.T) {
 		t.Fatalf("panes after closing the tab = %d", n)
 	}
 	// Closing a tab's only pane closes the tab: the node's Close relies on it when it cannot count the panes (#4873).
-	lone, err := c.TabCreate(ctx, ws, dir, "menu-live-lone", nil)
+	lone, err := c.TabCreate(ctx, ws, dir, "menu-live-lone")
 	if err != nil {
 		t.Fatal(err)
 	}

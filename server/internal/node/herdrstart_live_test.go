@@ -103,7 +103,7 @@ func TestLiveHerdr(t *testing.T) {
 	t.Logf("LIVE started once: %s", strings.Join(strings.Fields(cli("status", "server")), " "))
 
 	// The pane's environment: no ANTHROPIC_* or proxies of the node, the login shell's PATH.
-	cr, err := c.WorkspaceCreate(ctx, home, "live", nil)
+	cr, err := c.WorkspaceCreate(ctx, home, "live")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestLiveHerdr(t *testing.T) {
 	t.Logf("LIVE pane env clean: no ANTHROPIC_* / proxy, PATH from the login shell")
 
 	// Two claudes: the user's own (herdr's integration reports its session), and Persona's started with work_gw.
-	tab, err := c.TabCreate(ctx, cr.Workspace.ID, home, "persona", nil)
+	tab, err := c.TabCreate(ctx, cr.Workspace.ID, home, "persona")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -195,7 +195,7 @@ Dynamic Type behavior:
 - The user's Small, Standard or Large setting shifts the system size by -1, 0 or +1 (`apple/Persona/DesignSystem/TextSize.swift:6-36`). Web maps the same ratios (12/13, 1, 14/13) through a build-time rewrite. Android has no in-app setting.
 - Shapes scale with `scaledFrame`, capped at 1.6x (`apple/Persona/DesignSystem/TextSize.swift:98-108`). `tapTargetFrame` and `tapTargetHeight` never go below 44 pt.
 - The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
-- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes.
+- Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes, and the browser sign-in number (`Theme.Font.signInNumber`, 64 pt rounded bold with fixed-width digits, `apple/Shared/Design/BrowserLoginTokens.swift`, #10293): two digits read off the iPhone to be typed in a browser, already far above the interface's cap at every size.
 
 ### 2.3 Spacing
 
@@ -649,6 +649,17 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+  (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
+  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
+  restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
+  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
+  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
+  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
+  or the app back in front.
 
 ### 3.3 Cards and surfaces
 
@@ -763,6 +774,8 @@ and a bottom collapse action that restores focus to the expansion control.
 Reply targets show a friendly name and a source-backed preview when available;
 opaque routing IDs and read diagnostics stay in details. The layout changes no
 sending identity or confirmation behavior.
+
+The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
 ### 3.4 Lists and rows
 
@@ -3176,6 +3189,23 @@ keeps the draft on failure, and a browser timeout asks the user to refresh becau
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
 
+A provider extension's source (#10330, `docs/extensions/repository-providers.md`) changes nothing on screen while
+none is installed and no saved repository uses one: the list and the menu's three options stay as they were. The only
+difference then is one more read, the sources beside the list (a 404 or a failure means the built-ins only).
+Once there is one, the expanded area adds a **Sources** part, plain rows of each source's mark, name and either
+"Built in" or its hosts in small mono text, with a neutral `Pill` **Unavailable** for one that is off. The provider
+menu adds extensions by name after the built-ins, an off one disabled unless the edited repository uses it. The
+preview of an extension's address waits for the source: the shared `Loading` line names it ("Reading the address
+with Acme Code…"), then the inset preview names the source rather than its id; a host the source does not claim, an
+unavailable source or its refusal (the hub's words) is one status line, and Save stays off until an identity
+arrives. A refusal or failure is never final: a quiet **Try again** under it reads the address again, as does
+editing the address. Until the sources are read (or when they can't be), the page claims no source is unavailable:
+the repository being edited asks its own source through the hub, whose answer is shown. A saved repository of an
+extension names its source under the address and, when that source is off or gone, adds the neutral **Unavailable**
+pill and one `data-repository-note` line on what still works on this page (it stays saved and its details can be
+edited). A source whose extension was renamed is still the saved repository's: the hub keeps the id it was saved
+with, so the page matches it to the listed source with the same contribution that claims its host.
+
 ## Optional repository associations
 
 Coding-work metadata belongs in the Web to-do detail's **Repositories and
@@ -3191,7 +3221,19 @@ presented as filesystem paths. A link carries its complete source title as one
 hyperlink, wrapping at narrow widths, followed by its number and an external
 mark. An unknown title falls back to the localized kind and number. GitHub PRs
 use the pull-request mark, GitLab MRs the merge mark and issues the existing
-issue mark. The associations an agent keeps show without an editor. Editing is
+issue mark. A provider extension's repository uses the extension mark
+(`Icon` `extension` in the secondary ink, `data-repository-mark="extension"`,
+hidden from assistive technology; `git` would read as the branch mark of
+**Source options** beside it). Its source's name, never the `ext:` id, follows
+the address, so a narrow line cuts the name before the repository's path. Its
+links open at their stored addresses, are numbered `#N` and take
+the source's own `link_kinds` word for an untitled link. A pasted address of such
+a repository is a pending link row ("Checked when you save") until the hub
+reads it on save. When its source is off or uninstalled, the repository row adds
+the neutral `Pill` **Unavailable** before its count and a `data-repository-note`
+line beneath it; links keep opening and only adding one is turned off. The
+picker shows the same mark and the source's name after the host. The
+associations an agent keeps show without an editor. Editing is
 the existing `Dialog` with a compact text button (**Manage links**), never an
 always-open form. `TaskRepositoryBindingsEditor` is the controlled editor;
 `TodoRepositoryBindings` owns existing-todo reads and writes and

@@ -11,28 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/herdr"
-	"github.com/nwverse/persona/server/internal/host"
 )
-
-// setHerdrEnvSupport decides whether the tests' herdr (no binary: herdrNode's client) takes env on tab create and
-// workspace create, for this test only.
-func setHerdrEnvSupport(t *testing.T, ok bool) {
-	t.Helper()
-	envSupport.Lock()
-	before := maps.Clone(envSupport.takes)
-	if envSupport.takes == nil {
-		envSupport.takes = map[string]bool{}
-	}
-	envSupport.takes["\x00tab create"], envSupport.takes["\x00workspace create"] = ok, ok
-	envSupport.Unlock()
-	t.Cleanup(func() {
-		envSupport.Lock()
-		envSupport.takes = before
-		envSupport.Unlock()
-	})
-}
 
 // spawnEnvOf is a recorded call's env param (nil when it has none).
 func spawnEnvOf(c herdrCall) map[string]any {
@@ -51,26 +30,37 @@ func callsOf(f *fakeHerdr, method string) []herdrCall {
 	return out
 }
 
+// startEnvVars is startShellEnv as a map of name to value.
+func startEnvVars() map[string]string {
+	out := map[string]string{}
+	for _, kv := range startShellEnv {
+		k, v, _ := strings.Cut(kv, "=")
+		out[k] = v
+	}
+	return out
+}
+
 // wantStartEnv fails unless env is exactly startShellEnv.
 func wantStartEnv(t *testing.T, what string, env map[string]any) {
 	t.Helper()
-	if len(env) != len(startShellEnv) {
-		t.Fatalf("%s: env %v, want %v", what, env, startShellEnv)
+	want := startEnvVars()
+	if len(env) != len(want) {
+		t.Fatalf("%s: env %v, want %v", what, env, want)
 	}
-	for k, v := range startShellEnv {
+	for k, v := range want {
 		if env[k] != v {
 			t.Errorf("%s: env %s=%v, want %s", what, k, env[k], v)
 		}
 	}
 }
 
-// The shell a start's new tab runs is told before it reads its startup files that oh-my-zsh's and oh-my-bash's update
-// question and powerlevel10k's wizard are off (#10365): tab.create into a workspace and workspace.create for a
-// directory with none both carry startShellEnv, on a herdr that takes env.
+// The shell a start's new tab runs is told before it reads its startup files that it is an Agent's (PERSONA_AGENT,
+// #10111) and that oh-my-zsh's and oh-my-bash's update question and powerlevel10k's wizard are off (#10365):
+// tab.create into a workspace and workspace.create for a directory with none both carry startShellEnv
+// (host.EnvLauncher).
 func TestStartTabCarriesStartupEnv(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
-	setHerdrEnvSupport(t, true)
 	withStartWaits(n, 200*time.Millisecond, 200*time.Millisecond) // the fake shell never runs claude
 	newShellTab(f, "zsh")
 	_, _ = request(t, n, "session.start", map[string]any{"cwd": home, "workspace_id": "w1", "launcher": "claude"})
@@ -100,7 +90,6 @@ func TestStartTabCarriesStartupEnv(t *testing.T) {
 // never get a start's environment, though herdr takes one.
 func TestUserShellTabHasNoStartupEnv(t *testing.T) {
 	n, f, home := herdrNode(t)
-	setHerdrEnvSupport(t, true)
 	cwd := mkdir(t, filepath.Join(home, "proj"))
 	f.reply("session.snapshot", paneSnapshot(cwd))
 	if _, err := n.listPanes(context.Background()); err != nil {
@@ -125,25 +114,11 @@ func TestUserShellTabHasNoStartupEnv(t *testing.T) {
 	}
 }
 
-// A herdr whose tab create does not list --env (an older one) is never sent env: it might refuse the whole call.
-func TestHerdrWithoutEnvSupportOmitsEnv(t *testing.T) {
-	withPaneShell(t, "/bin/zsh")
-	n, f, home := herdrNode(t)
-	setHerdrEnvSupport(t, false)
-	withStartWaits(n, 200*time.Millisecond, 200*time.Millisecond)
-	newShellTab(f, "zsh")
-	_, _ = request(t, n, "session.start", map[string]any{"cwd": home, "workspace_id": "w1", "launcher": "claude"})
-	assertTrace(t, f.trace("tab.create"), []string{
-		call("tab.create", map[string]any{"workspace_id": "w1", "cwd": home, "label": "agent-1", "focus": false}),
-	})
-}
-
-// A server older than the herdr binary the capability was read from may refuse env as a field it does not know: the
-// tab is made again without it, and the start goes on.
+// A herdr from before environment support refuses env as a field it does not know: the tab is made again without it
+// (herdr.Client's createWithEnv), and the start goes on in it.
 func TestHerdrRefusingEnvGetsTheTabWithout(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
-	setHerdrEnvSupport(t, true)
 	withStartWaits(n, 200*time.Millisecond, 200*time.Millisecond)
 	newShellTab(f, "zsh")
 	f.handle("tab.create", func(p map[string]any) any {
@@ -160,49 +135,6 @@ func TestHerdrRefusingEnvGetsTheTabWithout(t *testing.T) {
 	if len(sent(f, "w1:p2")) != 1 {
 		t.Errorf("the start did not go on in the tab made without env: %v", sent(f, "w1:p2"))
 	}
-}
-
-// Whether a herdr takes env is read from its own help, once per binary: an option line counts, a word in another
-// option's description does not, and a binary that fails says no.
-func TestHerdrEnvSupportFromItsHelp(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, help string) string {
-		bin := filepath.Join(dir, name)
-		script := "#!/bin/sh\necho run >> " + bin + ".runs\ncat <<'EOF'\n" + help + "\nEOF\n"
-		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		return bin
-	}
-	takes := write("herdr-new", "Usage: herdr tab create [OPTIONS]\n\nOptions:\n      --cwd <PATH>\n\n      --env <KEY=VALUE>\n          Set an environment variable for the launched process\n      --no-focus")
-	old := write("herdr-old", "Usage: herdr tab create [OPTIONS]\n\nOptions:\n      --cwd <PATH>\n          the --env of the shell is the server's\n      --no-focus")
-	ctx := withStartShellEnv(context.Background())
-	for _, tc := range []struct {
-		bin  string
-		want bool
-	}{{takes, true}, {old, false}, {filepath.Join(dir, "missing"), false}} {
-		h := &herdrHost{c: &herdr.Client{Bin: tc.bin}}
-		for range 2 {
-			if got := h.spawnEnv(ctx, "tab", "create") != nil; got != tc.want {
-				t.Errorf("%s: env sent %v, want %v", filepath.Base(tc.bin), got, tc.want)
-			}
-		}
-		if got := h.spawnEnv(context.Background(), "tab", "create"); got != nil {
-			t.Errorf("%s: env without a start's: %v", filepath.Base(tc.bin), got)
-		}
-	}
-	if b, _ := os.ReadFile(takes + ".runs"); strings.Count(string(b), "run") != 1 {
-		t.Errorf("help read %d times, want once", strings.Count(string(b), "run"))
-	}
-	t.Cleanup(func() {
-		envSupport.Lock()
-		for k := range envSupport.takes {
-			if strings.HasPrefix(k, dir) {
-				delete(envSupport.takes, k)
-			}
-		}
-		envSupport.Unlock()
-	})
 }
 
 // The Herdr App's new terminal for a start gets the app's terminal identity and the start's environment; one for the
@@ -222,23 +154,49 @@ func TestHerdrCoreStartTerminalEnv(t *testing.T) {
 		Env map[string]string `json:"env"`
 	}
 	_ = json.Unmarshal([]byte(strings.TrimPrefix(runs[0], "terminal.run ")), &run)
-	want := maps.Clone(hcAppTerminalEnv)
-	maps.Copy(want, startShellEnv)
+	want := startEnvVars()
+	maps.Copy(want, hcAppTerminalEnv)
 	if !maps.Equal(run.Env, want) {
 		t.Errorf("a start's terminal env %v, want %v", run.Env, want)
 	}
 
-	if got := shellEnv(context.Background()); !maps.Equal(got, hcAppTerminalEnv) {
+	if got := shellEnv(nil); !maps.Equal(got, hcAppTerminalEnv) {
 		t.Errorf("a user's terminal env %v", got)
 	}
 	// The app's identity is never replaced by a start's variable of the same name.
-	if got := shellEnv(host.WithSpawnEnv(context.Background(), map[string]string{"TERM": "dumb", "X": "1"})); got["TERM"] != "xterm-256color" || got["X"] != "1" {
+	if got := shellEnv([]string{"TERM=dumb", "X=1"}); got["TERM"] != "xterm-256color" || got["X"] != "1" {
 		t.Errorf("merged env %v", got)
 	}
 }
 
+// A terminal the user opens in the Herdr App gets only the app's terminal identity: no Agent mark, no startup env.
+func TestHerdrCoreUserTerminalHasNoStartupEnv(t *testing.T) {
+	n, _, hc, home := hcNode(t)
+	proj := mkdir(t, filepath.Join(home, "proj"))
+	hc.doc = appDoc(proj)
+	hc.setTerminals(hcTerminal("t1", "", "", 50, "zsh", proj, "S1", "T1", "proj / 1"))
+	if _, err := n.listPanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := request(t, n, "panes.new", map[string]any{"workspace_id": "S1"}); err != nil {
+		t.Fatal(err)
+	}
+	runs := hc.trace("terminal.run")
+	if len(runs) != 1 {
+		t.Fatalf("terminal.run %v", runs)
+	}
+	var run struct {
+		Env map[string]string `json:"env"`
+	}
+	_ = json.Unmarshal([]byte(strings.TrimPrefix(runs[0], "terminal.run ")), &run)
+	if !maps.Equal(run.Env, hcAppTerminalEnv) {
+		t.Errorf("a user's terminal env %v, want %v", run.Env, hcAppTerminalEnv)
+	}
+}
+
 // The start line unsets the startup variables in the sh family, so the Agent and the shell the tab keeps run with the
-// user's environment; fish (no unset there) and shells that take no `VAR=val cmd` get the line as before.
+// user's environment, and keeps the Agent mark; fish (no unset there) and shells that take no `VAR=val cmd` get the
+// line as before.
 func TestAgentCommandUnsetsStartupEnv(t *testing.T) {
 	n, _ := testNode(t)
 	n.dir = "/home/u/.persona"
@@ -249,13 +207,23 @@ func TestAgentCommandUnsetsStartupEnv(t *testing.T) {
 		t.Fatalf("no unset: %q", got)
 	}
 	names := strings.Fields(strings.TrimPrefix(head, "unset "))
-	for k := range startShellEnv {
+	mark, _, _ := strings.Cut(agentMarkEnv, "=")
+	var startup []string
+	for k := range startEnvVars() {
+		if k != mark {
+			startup = append(startup, k)
+		}
+	}
+	for _, k := range startup {
 		if !slices.Contains(names, k) || !slices.Contains(startupOnlyEnv, k) {
 			t.Errorf("%s is not unset", k)
 		}
 	}
-	if len(startupOnlyEnv) != len(startShellEnv) {
-		t.Errorf("startupOnlyEnv %v is not startShellEnv's names", startupOnlyEnv)
+	if len(startupOnlyEnv) != len(startup) {
+		t.Errorf("startupOnlyEnv %v is not startShellEnv's startup names %v", startupOnlyEnv, startup)
+	}
+	if slices.Contains(names, mark) || !strings.Contains(got, " "+agentMarkEnv+" ") {
+		t.Errorf("the Agent mark is not kept: %q", got)
 	}
 	if got := n.agentCommand(cmd, shellQuote, "/opt/homebrew/bin/fish"); strings.Contains(got, "DISABLE_AUTO_UPDATE") {
 		t.Errorf("fish: %q", got)
@@ -277,18 +245,19 @@ func TestAgentCommandUnsetsStartupEnv(t *testing.T) {
 		fakeProgram(t, filepath.Join(path, "claude"), `env >"$HOME/claude-env"`)
 		line := n.agentCommand("claude", shellQuote, bin) + `; printf '%s' "${DISABLE_AUTO_UPDATE-unset}" >"$HOME/after"`
 		c := exec.Command(bin, "-c", line)
-		c.Env = []string{"HOME=" + home, "PATH=" + path + ":/usr/bin:/bin"}
-		for k, v := range startShellEnv {
-			c.Env = append(c.Env, k+"="+v)
-		}
+		c.Env = append([]string{"HOME=" + home, "PATH=" + path + ":/usr/bin:/bin"}, startShellEnv...)
 		if out, err := c.CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v: %s", shell, err, out)
 		}
 		env, _ := os.ReadFile(filepath.Join(home, "claude-env"))
-		for k := range startShellEnv {
-			if strings.Contains(string(env), "\n"+k+"=") || strings.HasPrefix(string(env), k+"=") {
+		lines := strings.Split(string(env), "\n")
+		for _, k := range startup {
+			if slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, k+"=") }) {
 				t.Errorf("%s: %s reached claude", shell, k)
 			}
+		}
+		if !slices.Contains(lines, agentMarkEnv) {
+			t.Errorf("%s: claude has no %s", shell, agentMarkEnv)
 		}
 		if after, _ := os.ReadFile(filepath.Join(home, "after")); string(after) != "unset" {
 			t.Errorf("%s: the shell kept DISABLE_AUTO_UPDATE=%s", shell, after)
