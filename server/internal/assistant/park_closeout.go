@@ -50,9 +50,9 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 	if c.Waiting == "" {
 		return Parked{}, false
 	}
-	// i18n-ignore: own unfinished work stays actionable even beside an upstream PR or a recorded receipt.
+	// Own unfinished work stays actionable even beside an upstream PR or a recorded receipt.
 	if closeoutOwnPRWork.MatchString(c.Waiting) ||
-		containsAny(c.Waiting, []string{"等我", "待我", "由我", "我来", "自己复审", "自己评审", "自分で", "私が"}) {
+		containsAny(c.Waiting, []string{"等我", "待我", "由我", "我来", "自己复审", "自己评审", "自分で", "私が"}) { // i18n-ignore: literal Agent closeout inputs.
 		return Parked{}, false
 	}
 	// i18n-ignore: literal Agent closeout inputs; an owner's decision must stay actionable.
