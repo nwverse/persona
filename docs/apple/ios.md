@@ -922,7 +922,12 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - The tab bar's chosen item is reached by a lens (`TabBarLens`): clear glass over the items in the glass styles
     (`lensSurface`), swelling and stretching along the bar as it glides with a bounce, fading as it lands; the chosen
     Assistant item shows the persona's face. With Reduce Motion the items cross-fade.
-  - Tests: `TabSwitchLayoutTests` (what fits, the column's room), `DuoSideColumnTests` (UI, each posture: no two buttons of
+  - The lens's glide runs on the frames it is drawn in, not on the wall clock (`TabBarGlide.frame(at:)`, #10270): the
+    chosen page is swapped in under the bar in the same frames (85–165 ms on the open Duo on its side in the simulator).
+    Before it sets off, the lens waits where it starts through such frames (`longestWait`); once moving, a held-up frame
+    moves it on by `longestStep` at most, so it never jumps. In the shell (the outer display) the moving rail stands in
+    until the glide ends (`ShellPager.standsIn`), so the pages' own rails come back once nothing moves, not in its fade.
+  - Tests: `TabSwitchLayoutTests` (what fits, the column's room, the glide's clock), `DuoSideColumnTests` (UI, each posture: no two buttons of
     the column over one another on an Agent's chat, Messages, a to-do and the main chat, also at the largest text size).
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
   Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
