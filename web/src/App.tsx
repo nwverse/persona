@@ -58,6 +58,7 @@ import { SidePanel } from "./views/SidePanel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
+import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
 
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
@@ -133,6 +134,12 @@ function openWorkspaceInTree(target: WorkspaceTarget) {
   navigate({ name: "agent-list" });
 }
 
+// Developing Persona's To-dos view shadow (features/todos/model/view-shadow.ts) reads today's triage through this
+// module: its recorder can load before App, so importing lib/todo-triage.ts there would split it out of the first
+// screen's chunk (docs/lessons/web.md #10226). The cost is development only: under `npm run dev` an edit to
+// lib/todo-triage.ts changes App's exports, so the page reloads where it used to refresh in place.
+export { openMergePRs, supersededFailedStarts, triage } from "./lib/todo-triage";
+
 export function App() {
   const [authed, setAuthed] = useState(() => !linked?.token && Boolean(getToken()));
   const [joining, setJoining] = useState(() => Boolean(linked?.token));
@@ -163,6 +170,8 @@ export function App() {
     handleUnauthorized(() => {
       setToken("");
       reset();
+      // and the notch island's agents (#7669), as signing out clears them: not left to the shell's unmount
+      clearDesktopIsland();
       // say why the sign-in page is back: this browser's credential stopped working (revoked, or the hub forgot it)
       setLinkError(t("app.signed_out"));
       setAuthed(false);
@@ -475,7 +484,7 @@ function Shell() {
         route.name === "session" && target?.link === "ambiguous" ? <SessionChoices mid={route.mid} sid={route.sid} onToggleSidebar={toggle} />
           : !pane ? (loaded && route.name === "tab" && lookup.state === "missing" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
           : launch ? <StartingAgent launch={launch} onToggleSidebar={toggle} />
-          : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={terminalAvailable === undefined ? toggle : undefined} inPage terminalAvailable={terminalAvailable} />;
+          : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={terminalAvailable === undefined ? toggle : undefined} inPage terminalAvailable={terminalAvailable} landAt={route.at} />;
       main = inWorkView(route)
         ? <TerminalPage onToggleSidebar={toggle} onNewAgent={openNewAgent} detail={{ selected: pane, render: detail }} onWorkPane={reportWorkPane} />
         : detail();
@@ -621,6 +630,8 @@ function Shell() {
       {/* tab title with the "Needs you" count, favicon badge, optional sounds (#2332): a leaf, so a sessions push re-renders
           only it, not the whole shell */}
       <AttentionSignals label={title} pane={pane} />
+      {/* the counts for the desktop app's island at the MacBook notch (#7669), only in a desktop app that has it */}
+      {window.personaDesktop?.setIslandState && <DesktopIslandSignals />}
     </div>
   );
 }

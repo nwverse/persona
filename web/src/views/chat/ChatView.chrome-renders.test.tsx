@@ -4,7 +4,7 @@
 // the composer's context chips, the composer's permission picker).
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   globalThis.IntersectionObserver ??= class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } } as unknown as typeof IntersectionObserver;
@@ -76,6 +76,13 @@ const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 let host: HTMLDivElement;
 let root: Root;
 let fetcher: ReturnType<typeof vi.fn>;
+// An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and draws again when it
+// is in. Loaded here first, it is in before a test counts renders: cold, under a full parallel run, it came in during the
+// pushes and counted as one of their renders.
+beforeAll(async () => {
+  await import("../../lib/compare-runs");
+});
+
 beforeEach(() => {
   localStorage.clear();
   // the first page has one reply already, so the assistant's face starts from what the pushes keep showing
@@ -126,6 +133,18 @@ it("a completed task remains a labelled, clickable owner, not a prompt to link i
   } finally {
     navigate.mockRestore();
   }
+});
+
+// Rename…, Rename space… and Delete… open dialogs from a chunk of their own (#10382): the ⋯ menu starts it as it opens, so
+// the click draws the dialog in its own render, with no wait for the chunk and no empty frame.
+it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws its dialog on the click", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+  await import("./SessionMenuDialogs"); // the chunk the menu asked for, in
+  await settle();
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent?.includes(t("chat-chatview.rename")))!;
+  act(() => item.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("chat-sessiondialogs.session_name"));
 });
 
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
@@ -319,6 +338,30 @@ it("after the pushes, sending and stopping still go out", async () => {
   act(() => applyCompleteSessions([row({ status: "idle", state: "idle" })]));
   await settle();
   expect(pressed()).toBeNull();
+});
+
+it("toggles the session overview and leaves it open while using the chat", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  const composer = host.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  const overview = document.getElementById(trigger.getAttribute("aria-controls")!);
+  expect(overview?.tagName).toBe("ASIDE");
+  expect(overview?.textContent).toContain(t("chat-sessionoverview.environment"));
+  expect(trigger.getAttribute("aria-pressed")).toBe("true");
+  act(() => composer.click());
+  expect(overview?.isConnected).toBe(true);
+  act(() => overview!.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+  expect(overview?.isConnected).toBe(true);
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  expect(overview?.isConnected).toBe(false);
+  expect(host.querySelector("textarea")).toBe(composer);
 });
 
 it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {

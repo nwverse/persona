@@ -74,7 +74,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
     group: t("settings-assistantsettings.agents_title"),
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
-      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.agent_tasks"),
+      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
       t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",
@@ -85,6 +85,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.meeting_attendance"), hint: t("settings-assistantsettings.meetings_title"), anchor: "meetings" },
   { tab: "persona", group: t("settings-assistantsettings.recordings_title"), hint: words(t("settings-assistantsettings.recording_days"), t("settings-assistantsettings.minutes_days")), anchor: "recordings" },
   { tab: "persona", group: t("settings-assistantsettings.knows_title"), hint: words(t("settings-assistantsettings.about_me"), t("settings-assistantsettings.memory")), anchor: "knows" },
+  { tab: "persona", group: t("settings-directionnotes.title"), anchor: "direction-notes" },
   { tab: "persona", group: t("settings-repositories.title"), anchor: "repositories" },
   { tab: "persona", group: t("settings-skills.title"), anchor: "skills" },
   { tab: "persona", group: t("settings-assistantsettings.machine"), hint: t("settings-assistantsettings.runs_on_title"), anchor: "runs-on-machine" },
@@ -148,10 +149,10 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "shortcuts", group: t("settings-shortcutsettings.terminal_title"), anchor: "shortcuts-terminal" },
   ...LOCAL_SHORTCUTS.map((s): SearchGroup => ({ tab: "shortcuts", group: s.label, anchor: `shortcut-${s.id}` })),
   // This hub
-  { tab: "hub", group: t("settings-hubsettings.version"), hint: t("settings-hubsettings.last_check"), anchor: "hub-version" },
-  { tab: "hub", group: t("settings-hubsettings.channel"), anchor: "hub-channel" },
-  { tab: "hub", group: t("settings-hubsettings.update"), anchor: "hub-update" },
-  { tab: "hub", group: t("settings-hubsettings.auto_update"), anchor: "hub-auto-update" },
+  { tab: "hub", group: t("settings-hubsettings.version"), hint: words(t("settings-hubsettings.last_check"), t("settings-hubsettings.branch"), t("settings-hubsettings.current_commit"), t("settings-hubsettings.latest_commit")), anchor: "hub-version" },
+  { tab: "hub", group: t("settings-hubsettings.channel"), hint: words(t("settings-hubsettings.source"), t("settings-hubsettings.web_dev")), anchor: "hub-channel" },
+  { tab: "hub", group: t("settings-hubsettings.update"), hint: words(t("settings-hubsettings.update_version"), t("settings-hubsettings.target_commit"), t("settings-hubsettings.backup_created_at")), anchor: "hub-update" },
+  { tab: "hub", group: t("settings-hubsettings.auto_update"), hint: t("settings-hubsettings.computer_auto"), anchor: "hub-auto-update" },
   { tab: "hub", group: t("workspace-board.setting_label"), anchor: "workflow-board" },
   { tab: "hub", group: t("settings-hubsettings.mirrors"), hint: words(t("settings-hubsettings.registry_mirror"), t("settings-hubsettings.catalog_mirror")), anchor: "mirrors" },
   // Devices: the list (each with its own token, revoked there) and pairing a new one

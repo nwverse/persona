@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -70,6 +71,10 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		}
 		if key, ok := mergedLists[pattern]; ok { // the todos: every manager's
 			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardHTTP) })
+			continue
+		}
+		if pattern == todoPlacesRoute { // the To-dos places: every manager's, joined (todo_view.go)
+			api.HandleFunc(pattern, h.mergeTodoPlaces)
 			continue
 		}
 		if pattern == "POST /api/v1/assistant/conversations" {
@@ -154,10 +159,11 @@ type assistantLink struct{ h *Hub }
 // "manager.json").
 func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	h := l.h
-	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go).
+	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
+	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
 	// QuietPush: this hub's push tiering switch, which the managers follow for what is not a hub push (cards they
 	// post, cards they hand up); a change sends manager.updated.
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, QuietPush: h.push.lnModeOn()}
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, QuietPush: h.push.lnModeOn()}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
@@ -199,7 +205,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				m.mu.Unlock()
 				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: info.Home,
 					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
-					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info)})
+					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
+					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})
 			}
 			d := &h.devices
 			d.mu.Lock()
@@ -687,8 +694,12 @@ func (a assistantRemote) Action(ctx context.Context, act assistantwire.Action) (
 	return res, err
 }
 
-func (a assistantRemote) UserSpoke(_ context.Context, r assistantwire.SessionRef) {
-	a.notify(assistantwire.EventUserSpoke, r)
+func (a assistantRemote) UserSpoke(ctx context.Context, r assistantwire.SessionRef) {
+	a.userSpoke(ctx, assistantwire.UserSpokeParams{SessionRef: r})
+}
+
+func (a assistantRemote) userSpoke(_ context.Context, p assistantwire.UserSpokeParams) {
+	a.notify(assistantwire.EventUserSpoke, p)
 }
 
 func (a assistantRemote) UserStopped(_ context.Context, r assistantwire.SessionRef) {

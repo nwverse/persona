@@ -482,8 +482,7 @@ public actor ScreenLinkSession {
             chans[ch]?.closeAt = off
             finishIfClosed(ch)
         case let .reset(ch, off):
-            chans[ch]?.receiver.reset(to: off)
-            chans[ch]?.assembler?.reset()
+            resetChannel(ch, to: off)
             if let c = chans[ch] { out(id, .ack(channel: ch, offset: c.receiver.offset)) }
         case let .udpReady(r):
             udpReady(r, from: id)
@@ -756,6 +755,11 @@ extension ScreenLinkSession {
     /// After a flow failed or was left, the route asks again after this, doubling to `flowRetryMax`.
     public static let flowRetryFirst = 30.0
     public static let flowRetryMax = 300.0
+    /// How often the flows tick (#9492): every 5 ms while one carries the video, whose loss recovery is timed against
+    /// the round trip; otherwise every 50 ms, enough for the hellos (0.2 s), pings (1 s) and timeouts and for the video
+    /// to move onto a proved flow. A 5 ms clock with nothing to carry (a page on its sign-in form, a route still being
+    /// proved) woke the phone about 200 times a second.
+    public static func flowTickNanoseconds(carrying: Bool) -> UInt64 { carrying ? 5_000_000 : 50_000_000 }
     /// Pacing asked for before the packets say (kbit/s, `ScreenUDPPace`): a LAN route takes bursts; a Tailscale route
     /// may sit behind a slow uplink, and on cellular it likely does.
     public static let paceLAN: UInt32 = 150_000
@@ -820,9 +824,11 @@ extension ScreenLinkSession {
         emit.yield(.openFlow(route: route, port: port))
         if flowTicker == nil {
             flowTicker = Task { [weak self] in
+                var carrying = false
                 while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 5_000_000)
-                    guard let self, await self.flowTick() else { return }
+                    try? await Task.sleep(nanoseconds: Self.flowTickNanoseconds(carrying: carrying))
+                    guard let self, let next = await self.flowTick() else { return }
+                    carrying = next
                 }
             }
         }
@@ -925,10 +931,17 @@ extension ScreenLinkSession {
         return true
     }
 
+    /// The node's reset of a channel, over a route or a flow: the channel goes on at `off`, and a partial message from
+    /// before it is dropped. A reset at or behind the receiver changes nothing (#10005): it is a late copy, from a route
+    /// the channel has left, of a reset already applied, and the message the phone has received in part since is the
+    /// one the stream goes on with.
+    private func resetChannel(_ ch: UInt8, to off: UInt64) {
+        if chans[ch]?.receiver.reset(to: off) == true { chans[ch]?.assembler?.reset() }
+    }
+
     private func flowReset(_ route: String, _ ch: UInt8, _ off: UInt64, at t: Double) {
         guard var f = flows[route], f.carrying == ch, var rx = f.receiver else { return }
-        chans[ch]?.receiver.reset(to: off)
-        chans[ch]?.assembler?.reset()
+        resetChannel(ch, to: off)
         let d = rx.reset(to: off, at: t)
         f.receiver = rx
         flows[route] = f
@@ -961,11 +974,13 @@ extension ScreenLinkSession {
         sendFlow(route, .ping(micros: UInt64(t * 1e6), parity: UInt16(f.parity), paceKbps: f.pace.request(at: t, start: start)))
     }
 
-    /// Every 5 ms while a flow is open: proving, pings, moving the video onto it, asking for what is missing.
-    private func flowTick() -> Bool {
+    /// One tick of the open flows: proving, pings, moving the video onto one, asking for what is missing. Nil: none
+    /// left, the ticker ends; else whether any flow carries the video now (the next tick's interval,
+    /// `flowTickNanoseconds`).
+    private func flowTick() -> Bool? {
         guard !ended, !flows.isEmpty else {
             flowTicker = nil
-            return false
+            return nil
         }
         let t = now()
         for route in Array(flows.keys) {
@@ -1022,7 +1037,7 @@ extension ScreenLinkSession {
                 nack = nack.dropFirst(80)
             }
         }
-        return true
+        return flows.values.contains { $0.carrying != nil }
     }
 
     /// The route's stats with the flow's round trip, as the video sees it on `transport`.

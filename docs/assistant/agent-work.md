@@ -120,8 +120,9 @@ Responses relays that refuse the output bound fail closed, without retrying unbo
 lease precedes dispatch; failures back off from ten minutes and stop after three consecutive failures.
 Each failed attempt logs its computer/session and a static reason code (for example `no_dialogue`,
 `model_call_failed`, `invalid_name`, `model_output_truncated` or `naming_timeout`), even if a subsequent title
-or settings recheck discards the result. Provider error bodies, prompts and model replies never enter these
-logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
+or settings recheck discards the result. `model_not_configured` (no model set up for Sorting) is logged once
+and not again until a naming call reaches a model (#10435); each session still records it. Provider error
+bodies, prompts and model replies never enter these logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
 recoverable reason. A deployed hub does not add missing provenance to old nodes: those nodes remain excluded
 until an explicitly authorized compatible node update reports it.
 Before committing, the worker checks settings, counters, current provenance, native title and eligibility again.
@@ -154,12 +155,13 @@ Relationship to unified states: `state` values **do not change** (old Apps displ
 
 | Work state (this turn) | `state` | Explanation |
 | --- | --- | --- |
-| `done` | `idle` | No longer occupies "Unread"; conclusion is in `work.line` and included in pushes. |
+| `done` | `idle` | No longer occupies "Unread"; conclusion is in `work.line` and included in pushes. A turn nobody had seen is listed as Just finished (`work.just_finished`) for three hours ([agent-states.md](../protocol/agent-states.md) "Just finished", #9751). |
 | `blocked` · `user`, with options | `needs_you` | Persona created a question card (`pending_interactions` increases by one). |
 | `blocked` · `agent` / `external` / `transient`, with Persona waiting (`wake_at` or a target Agent) | `idle` | New Apps show "Waiting" + what it is waiting for; old Apps show Seen. |
 | Not triaged, triage failed, or unclear (`unsure`) | Unchanged (`unread`) | Better to leave a green dot than hide something not understood. |
 
-"Unread" then remains only while triage is pending (a dozen or so seconds after a turn ends) or when the model cannot tell.
+"Unread" then remains only while triage is pending (a dozen or so seconds after a turn ends) or when the model cannot tell;
+what the triage found done and nobody has looked at yet waits under Just finished instead of folding away with the seen sessions.
 
 ## Responsibilities (in the manager since 2026-11-04)
 
@@ -562,7 +564,7 @@ Users enable them under **Settings › Session Triage**. The switches are stored
 - Subswitches work only when the main switch is on (but `reply_reminder` and `transient_retry`). Disabling a switch takes effect immediately: Persona-created cards are removed, and queued retries / wakeups / status questions are not sent.
 - `GET / PUT /api/v1/agents/triage` (`{enabled, auto_continue, wake, decide, tool_loop, closeout, closeout_ask, reply_reminder, reply_reminder_minutes, transient_retry}`, forwarded by the hub to the manager); changes broadcast `{"type":"agents.triage"}`. A PUT without `tool_loop`, `closeout`, `closeout_ask`, `reply_reminder`, `reply_reminder_minutes` (or with minutes 0) or `transient_retry` keeps their values for older apps; negative minutes go back to the default 30. While the saved switches cannot be read, such a PUT saves their defaults.
 - A `GET` whose first read of the database fails answers `503` with an `error` in the request's language (Chinese, English or Japanese) saying why, instead of returning the defaults as if they were the saved switches (#4553). Failures are not cached: the next request reads again. Switches once read or saved stay cached in memory; `manager.json`'s initial values apply only when the database really has no setting. Triage itself still falls back to the defaults when its own read fails, and `PUT` saves as before.
-- `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 5, `retry_base_seconds` default 15, `max_wakes` default 6, `settle_seconds` default 15);
+- `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 5, `retry_base_seconds` default 15, `max_wakes` default 6, `settle_seconds` default 15, `just_finished_hours` default 3);
   its triage switches are initial values only when settings have never been saved in the App (omitted means off). The manager reads this section itself and lays it over the hub's handshake reply (`assistantwire.Hello.Agents`); the hub no longer reads or sends it.
 
 ## Storage

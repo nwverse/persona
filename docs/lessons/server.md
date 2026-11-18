@@ -1,5 +1,63 @@
 # Lessons: hub / node and networking
 
+## Empty assistant creation must not become a model turn
+
+Android allocates an assistant conversation before sending its queued message. The manager passed an empty prompt
+correctly, but the node appended its live snapshot and delivered a context-only turn. Check for text or images before
+requesting context or submitting model input, and keep the new conversation idle. Preserve deferred runtime instructions
+in the session record until the first successful delivery. A manager test with a fake node cannot catch this: exercise
+the real node against a recording CLI and runtime, including prewarmed sessions, whitespace, images and node restart.
+
+## Journal recovery before changing live update files (#6921)
+
+A fence saying an update started cannot restore a Web directory renamed before `pending.json`
+was saved. Save all program preimages first, then sync a complete recovery journal before
+replacing programs, and save the Web rename intent before moving it. Recovery must tolerate
+an intent whose rename never ran and a Web directory already restored by an earlier attempt.
+Restore first; only successful restoration permits deleting markers or staging. Startup pruning
+must honor retained recovery ownership too. Exercise abrupt process exits between the actual
+renames and pending publication, not only returned installation errors.
+Propagate restoration and exec failures through both Hub startup entry points: a boolean
+"update pending" cannot block a failed recovery when no pending marker exists. Keep the
+adoption journal and staging until the restored executable runs, so a failed exec can retry.
+The Edge callback must distinguish no matching update from failed restoration: returning only
+"not restored" can make activation fall back to the partially restored binary path. Propagate
+an error through slot/control activation and confirmation timeout, stop the Edge, and keep
+both journals/staging for repair. Test actual file failures and every callback consumer.
+
+Interruption consent belongs to the accepted operation. A manual request delayed in service
+discovery must not set `now` on a later attempt that overtook it; reject it after discovery,
+while preserving explicit confirmation of the currently accepted waiting attempt.
+
+Cancellation cleanup needs its own time budget: first signal the whole child group with SIGINT,
+escalate within bounded waits, and defer repeated cancellation while resuming paused writers.
+A failed resume keeps its coordination marker; successful resume does not make an interrupted
+snapshot publishable.
+
+`pg_dump` does not expand a connection URI stored in `PGDATABASE`: real libpq treats it
+as the database name. Parse URI or keyword connections with `PQconninfoParse` and pass
+explicit fields through their documented environment bindings; reject unsupported fields
+before pausing writers. A fake dump cannot prove this works. Use an owned PostgreSQL cluster,
+restore its synthetic dump, and inspect the actual child command line for credential leaks.
+
+Recovery metadata is editable input even when the snapshot has an ownership marker.
+Validate its complete schema and exact artifact mapping before reading payloads, then check
+the staged native hash independently. History verification and extraction must share the
+same canonical path and link rules; a checksum alone cannot make an unsafe tar safe.
+
+Run recovery on the oldest supported interpreter, not just the current Python. Early 3.9/3.11
+patch releases lack `extractall(filter=...)`; later security backports make the minor version
+alone an unreliable capability test. Recovery uses a single restricted writer on Python 3.9+:
+validate the complete inventory, create private directories and exclusive regular files, then
+create links last, without archive ownership or unsafe modes. Python 3.9 also needs `Z` UTC
+timestamps normalized to an explicit offset before `fromisoformat`. Exercise actual interpreter
+versions, legal recovery and hostile archives; a newer Python or mocked signature cannot prove
+that an older operator environment can recover its data.
+
+## Validate the APNs signing curve before a push (#9438)
+
+ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
+
 ## A transport made for one request opens a connection for one request (2026-11-16, #9202)
 
 The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
@@ -109,6 +167,30 @@ restarted, where the per-connection read had at least tried again. Keep only a f
 empty one after a backoff (five minutes), so a Mac where it always fails does not run it on every connection. Its
 output, like ioreg's, holds serial numbers: read only the one line. Tests fake both commands (`newModelLookup` takes
 the runner) and use `synctest`; a node-level test puts hanging fakes first on `PATH`.
+
+## A resolved path is not one every terminal has (2026-11-18, #10365)
+
+A computer whose home is a link (`/home/me -> /data/home/me`) ran its herdr terminals in a container that mounts the
+home at `/home/me` and has no `/data`. The node took its own program from `os.Executable()` plus `EvalSymlinks` (on
+Linux `/proc/self/exe` is already resolved, so dropping `EvalSymlinks` alone changes nothing) and typed that path into
+every managed launcher's start, hook, MCP config and codex-start line: the container answered `No such file or
+directory`, and Persona recorded the launcher as missing in the terminal. Git did the same to task checkouts: `git
+worktree add` writes both links between a worktree and its repository as resolved paths, so inside the container the
+checkout was "not a git repository" and the main checkout listed it as prunable (a `git worktree prune` there deletes
+its record). A path a process on this computer may open has to be the one that process can see, and a link is not
+always visible where the processes run: keep the resolved file for what needs the file itself (an update replaces it,
+macOS attributes Full Disk Access to it, comparisons use `realPath`), and hand out the home's own spelling of the same
+file (`os.SameFile`, `node/selfprogram.go`), in the generated files the doctor compares too, or the node and
+`personad node doctor` rewrite each other's files. Do not reach for git's relative worktree links: they set
+`extensions.relativeWorktrees` in the repository's shared config, and git before 2.48, libgit2 and go-git then refuse
+the whole repository; rewriting the absolute links to the home's spelling works for every git on both sides.
+
+A spelling handed out is not an identity. Once the node answered a task's directory by the home's spelling, the hub's
+check of which to-do writes there compared it as text with Agents recorded under the resolved spelling before the
+upgrade, and found nobody: a second to-do could be started in a directory the first still wrote in. Where the hub
+compares a node's paths, fold the home's two spellings (`home_real`) on both sides, as remembered task kinds do
+(`trustDir`) and task directories now do (`taskDirKey`). And repair git's links wherever a checkout's path is handed to a
+terminal, not only where the node reuses it: a refusal that names a leftover for `{existing}` leads there too.
 
 ## A node binary's name does not prove its platform (2026-11-14, #7206)
 
@@ -548,6 +630,9 @@ Successful checks may refresh release metadata and failed checks may advance the
 last-check time, but neither may replace an active update's state, progress or error.
 Apply the guard in the shared check path used by manual, startup and hourly checks,
 and keep automatic installation and held-release recording out of confirmation.
+The install script's separate checksum refresh needs the same protection: load the saved
+channel before fetching, recheck it after the response, and mutate availability under the
+install-state mutex. A result from the old channel must not replace a new selection.
 Regression tests must observe the state while the request is blocked as well as
 after success or failure; checking only the final state misses a transient
 `checking` event that already hid the progress in every client.
@@ -1447,7 +1532,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 - **Headers must travel the whole chain**: nginx `proxy_protocol on;` without headers from the preceding tunnel writes the tunnel client's `127.0.0.1` as source, still appearing local to hub.
   Hub logs once when "loopback upstream claims loopback source"; make the preceding layer send headers too, using nginx `listen … proxy_protocol` + `set_real_ip_from`.
 - **Don't read headers in Accept**: one silent connection stalls all connections. Read in the connection's goroutine on first Read / Write / RemoteAddr
-  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Preserve any earlier caller read deadline and restore it afterward, never overwrite or clear it permanently.
+  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Apply caller deadline changes to a pending header read using the earlier of the caller's deadline and the fixed header limit, then restore the caller's current deadline on success. A header timeout still refuses and closes that connection; extending it later cannot retry the header (#9445).
 - **Don't enable it for loopback on plaintext ports**: `hub pair`, `hub admin`, and plugins connect over loopback plaintext without headers. If `from` includes loopback and `listeners` includes `http`, refuse startup.
 - **Tests mustn't assume Accept returns their own connection**: other developer-machine processes scan loopback ports (a test once accepted an unfamiliar connection starting `GET`, causing intermittent failures).
   Identify the dialed connection by its socket peer address.
@@ -1788,6 +1873,12 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Separate HTTP requests were never ordered by the bus (the hub reads each body before calling, the manager runs each call in its own goroutine), so a side stream breaks no order anyone relied on: a flow that needs one request after another waits for the first's answer.
 - Prove a stall with a control: `TestLargeBodyDoesNotHoldUpTheBus` throttles the manager's reads and measures a small call during a large upload both ways (3 ms streamed, 2.5 s inline). Without the inline run failing its own bound, a too-fast test link would pass for a fix.
 
+## Rows nobody sees still cost every push (2026-11-14, #6836)
+
+- A machine's list told the hub carried a row for every archive record, kept without expiry, and the hub dropped all of them (`Hub.shown`) before anything reached an app. At 8,000 records and 200 live sessions, one session changing cost the manager 23 ms and 110 MB, the bus a 5.9 MB message, and the hub 4.4 ms and 27 MB. A list that is filtered at the far end grows with what it filters: send what the far end shows, and what it only looks up by id on its own, when it changes.
+- Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
+- A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -1896,6 +1987,9 @@ Error-valued message arguments and structured field errors also need the request
 
 - The session list asks `rolloutPath` once a second for every registered Codex thread; for a thread with no rollout (an app-server thread that never wrote one) that was a glob over every day directory of the whole history, each time. On a hub with 194 rollouts it was 61% of the node's CPU. Profile the live node before guessing: `perf record -p <pid>`, then map the addresses with an unstripped build of the same commit (`go tool addr2line`; the deployed binary is built with `-s -w`, but `.text` is laid out the same).
 - Caching a miss on directory mtimes needs care: a file created or moved into a directory changes its mtime, but the kernel stamps it with a coarse clock, so a second change within the same tick can leave it unchanged. Keep no miss whose directories changed in the last second (`TestRolloutPathMissRacy`).
+- A miss cache emptied on a timer pays the whole cost again each period (2026-11-18). The misses were cleared once a minute, so that a rollout put into an older day directory would still be found. Then Codex compressed most old rollouts to `.jsonl.zst`, which the `rollout-*.jsonl` globs never match: on one Mac, 528 listed threads had none, and each was globbed across 209 day directories once a minute (14 s of CPU in a row), and again whenever a new rollout changed today's directory. What the node already lists answers it: the minute listing of every day directory shows which ids appear in no file name, so only the misses whose id is in a name (and those nobody asked about for two minutes) are dropped, and a changed directory is listed once per list pass and checked by name (`TestRolloutPathMissesOutliveRelisting`). Finding a rollout still uses the per-id glob and the header check unchanged.
+- A per-row lookup that is cached can still pay for its cache check: `loadCodexAppState` globbed the Codex home for the state database before reading its cache, twice per App row per second (1,100 globs a second, about 16% of a core). Take such values once per list pass (`codexListPass.appState`, `TestCodexAppStateReadOncePerList`).
+- On macOS, `sample` cannot attribute a stripped Go binary's syscalls to Go callers (they go through libc on the system stack, and Go leaf functions keep no frame pointer); `go tool addr2line` still names the Go frames it does show. Calling the suspected functions from a throwaway test against the real Codex home, read-only, gave the per-call costs.
 
 ## Localized RPC summaries must not imply successful or absent delivery
 
@@ -1929,6 +2023,8 @@ Compare the original CSV decimal with the exact decimal written by the 15-signif
 ## Spreadsheet text coercion requires finite values (#6352)
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
+
+Cached spreadsheet formula ranges can expand millions of absent cells from a tiny input. Bound both each range and the aggregate work across a workbook, check coordinates before arithmetic, and leave the formula uncached for Excel to recalculate when the budget is exceeded. Test the generated file and normal aggregate results as well as the bound.
 
 ## Decimal rounding scales can overflow before the result does (#1335)
 
@@ -2036,6 +2132,7 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A list decorated again on every publish re-read every row's question (`transcript.AskOf` on the last words of each of 8,200 sessions). Keep the answer per machine and session with the text it was read from, and read again only when the text differs (`asksMemo`); a complete list drops the rows it no longer carries, a subset keeps them. Prove it with a table of lists that change between calls, each decorated warm and fresh.
 - To find out whether a list changed since it was last sent, do not keep a copy of each list sent: keep its length and digest and encode into one reused buffer (`sentList`; #3197, "A digest instead of the last bytes, a mirror without the lists" below).
 - An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
+- The race detector's instrumentation allocates too: under `-race` a decorated copy of 8,200 sessions measured about 89 MB against its 13.7 MB bound. Every such test starts with `if raceEnabled { t.Skip("race instrumentation allocates") }`, before `isolated`, so the parent skips without starting a child (`raceEnabled` comes from `assistant/race_test.go`). Two budgets written without it kept `go test -race ./internal/assistant/` red, and no CI lane runs `-race` to notice (#4582).
 - A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
 - Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
 - The paged index rebuilt every row's item (a summary marshalled, the full row and search text joined) on each list update and `sessions.revs`, for one changed row: 2.65 MB for 150 rows. The index's own item is the memo: when its stored full row is the row's new encoding with the same suffix, its summary is the row's too, since the summary is cut from the fields that encoding holds (`indexedRow`, 0.10 MB). Text read from the row itself is still compared, because the encoding folds every invalid UTF-8 byte into the same escape. The keys must line up: a list with two rows under one id pairs one row's summary with the other's bytes, so after such a list, and for the list after it, compute every row. Prove it with the full computation run beside it on changing lists, step for step (`TestIndexRowReuseMatchesFullPath`), and let `Replace` keep a payload that is the stored slice itself without walking it by reflection (`sessionlist.sameItem`).
@@ -2270,9 +2367,9 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 
 ## Embedded code: stored raw, copied per package, read whole on first use (2026-11-10, #3455)
 
-- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it the Agent SDK bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
+- `//go:embed` stores files as they are. The runtime packages (`server/internal/runtimepkg`) went into `personad`, `persona-node` and `persona-manager` raw: 1.63 MB, 1.06 MB of it one package's bundled bridge, and `runtime-sdk` three times over. Generate writes each `integrations/` directory a package takes as one gzipped tar, stored once however many packages take it: 425 KB. A release archive is gzipped anyway, so the download stays the same (within 0.1%); what shrinks is the binary on disk and in memory, by about 0.93 MB.
 - Keep generated archives byte-for-byte reproducible: no name or time in the gzip header, mode 0644, time 0 and no owner in tar entries, a fixed level, entries in path order (`TestGenerate` runs it twice and compares).
-- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held the 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
+- A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held that 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
 - Compressed code is noise to a strings scan. `check_bundle_privacy.py --whole-short` inflates every gzip member it finds in a binary and scans that text as well; a test hides a private word in a member inside binary bytes, after another member and in a member cut short.
 
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
@@ -2575,3 +2672,19 @@ nothing ran the old build after the new one.
   then installs that older build: here it moved a resident node back five days, to a build without the live screen's
   video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
   `node_mismatch`.
+
+## A fence keyed to the first credential keeps a re-paired phone under its old one (2026-11-17, #9611)
+
+- A push registration is keyed by the app's own `device_id` and fenced to the credential that first registered it.
+  Pairing the phone again issues a new credential but keeps the `device_id`, and the fence answered every registration
+  from the new credential with 409: pushes kept working through the old row, so nobody noticed for days. The old
+  credential then looked unused (Settings › Devices: not seen since the re-pair), and revoking it retired the push
+  registration of the phone still in use. Afterwards its settings and Live Activity writes hit the fence too and came
+  back as 500 / 503, which the app just retried.
+- Fix (migration 0541): an authenticated registration moves the row to its new credential when it proves the same
+  installation (topic, environment, push key or APNs token, the proof 0435 already took after a revocation) and the
+  old credential has not been seen since the new one was created; fenced writes answer 409
+  `push_registration_required`.
+- Lesson: a 409 the client swallows hides a broken ownership model until something else (here a cleanup) depends on
+  it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
+  and check what a "looks unused" revocation still owns before treating it as cleanup.

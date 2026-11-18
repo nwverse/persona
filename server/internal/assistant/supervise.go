@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -115,6 +116,8 @@ type TaskReview struct {
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
 	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
+	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
+	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -156,6 +159,10 @@ func (v *Supervision) clone() *Supervision {
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
+		if r.Reply != nil {
+			receipt := *r.Reply
+			out.Reviews[i].Reply = &receipt
+		}
 	}
 	if out.DoneWhen == nil {
 		out.DoneWhen = []string{}
@@ -357,7 +364,7 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	case reviewParked: // waits on purpose (parked.go): below everything that needs the assistant
 		return parkedHealth(v.parked(), now.Location()), 6
 	}
-	if t.DoneAt != nil && t.StartError != "" && !t.Cancelled() {
+	if t.failedStart() {
 		// Its agent never started: stored done (#1077) but nothing was done. Only the supervisor can retry it, so it
 		// heads the list rather than sitting among the finished ones.
 		return "启动失败，待你处理（重试只有你能做）", 0 // i18n-ignore: the snapshot is the assistant's prompt

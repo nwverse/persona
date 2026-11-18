@@ -56,6 +56,19 @@ type Fold struct {
 	// Usage: the tokens of the model requests the folded items stood for, summed per model and speed (TokenUsage), so
 	// a chat counts its turn's usage without opening the run. Absent when they carried none and from older nodes.
 	Usage []TokenUsage `json:"usage,omitempty"`
+	// Sources: the web pages the run's successful web calls used (FoldSource), so a chat shows its reply's sources
+	// without opening the run. Absent when it used none, and from older nodes.
+	Sources []FoldSource `json:"sources,omitempty"`
+}
+
+// FoldSourcesMax bounds Fold.Sources.
+const FoldSourcesMax = 10
+
+// FoldSource is one web page a folded run used (docs/protocol/protocol.md "Folded work"): a page it opened (WebFetch,
+// Codex's open page) or a result its web search returned, with the result's title when one was given.
+type FoldSource struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
 }
 
 // FoldToolNamesMax bounds Fold.ToolNames.
@@ -199,6 +212,9 @@ type Item struct {
 	Compact *Compact `json:"compact,omitempty"`
 	// ModelRefusal preserves Claude Code's refusal record on a notice.
 	ModelRefusal *ModelRefusal `json:"model_refusal,omitempty"`
+	// CodexHeartbeatQuiet identifies a generated answer from a DONT_NOTIFY envelope, not model-written prose.
+	// It travels from the node to the hub so the hub can localize Text without guessing from its wording.
+	CodexHeartbeatQuiet bool `json:"codex_heartbeat_quiet,omitempty"`
 	// Model is the model that wrote this assistant item as the transcript records it: Claude Code's message.model
 	// (never its "<synthetic>" placeholder), a Codex turn's turn_context model. Absent when the transcript does not
 	// say, on other roles, and from older nodes. Clients draw a divider where the model of the replies changes.
@@ -325,10 +341,11 @@ type MessageSource struct {
 }
 
 const (
-	SourceConversation = "conversation"
-	SourcePatrol       = "patrol"
-	SourceFollowup     = "followup"
-	SourceSupervision  = "supervision"
+	SourceConversation  = "conversation"
+	SourcePatrol        = "patrol"
+	SourceFollowup      = "followup"
+	SourceSupervision   = "supervision"
+	SourceScheduledTask = "scheduled_task" // a scheduler outside Persona, e.g. a Codex heartbeat
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"

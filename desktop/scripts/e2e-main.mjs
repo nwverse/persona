@@ -18,6 +18,8 @@ import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor, s
  * - `Notification.isSupported` and `powerMonitor.getSystemIdleTime` answer "supported" and "just used": a runner has
  *   no notification service and nobody at the keyboard. Lock and unlock are the power monitor's own events, emitted.
  * - `shell.openExternal` records the address instead of starting a browser.
+ * - `NotchIsland.prototype.setState` is only observed (it still runs, island.ts): the island draws only on a Mac, but
+ *   what it keeps, the rows of the web's last state, is checked across a hub change on every runner.
  */
 const output = process.env.PERSONA_DESKTOP_E2E ? resolve(process.env.PERSONA_DESKTOP_E2E) : "";
 const scenario = process.env.PERSONA_DESKTOP_E2E_SCENARIO ?? "";
@@ -29,6 +31,9 @@ const token = process.env.PERSONA_DESKTOP_E2E_TOKEN ?? ""; // a temporary pairin
 const otherToken = process.env.PERSONA_DESKTOP_E2E_OTHER_TOKEN ?? "";
 let card; // a pending permission or question card of the synthetic hub, chosen by the caller
 try { card = JSON.parse(process.env.PERSONA_DESKTOP_E2E_CARD ?? "null"); } catch { card = undefined; }
+// The link that starts the app (#10282): macOS hands it over as open-url before any window exists (emitted below).
+const coldLink = scenario === "root" && card?.session_id
+  ? `persona://open/s/${encodeURIComponent(card.machine_id)}/${encodeURIComponent(card.session_id)}` : undefined;
 const local = value => /^http:\/\/127\.0\.0\.1:\d+\//.test(value);
 const otherHub = otherHubURL ? new URL(otherHubURL) : undefined;
 const headless = process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
@@ -43,6 +48,22 @@ const DEVICE = "Persona desktop";
 const shown = []; // notifications that reached Notification.show()
 const closed = [];
 const external = []; // addresses handed to the system browser
+let island; // the shell's notch island (island.ts), seen with the web's first state
+/** The rows the island keeps: the web's last ones, none once their page is gone. */
+const islandRows = () => island?.state.rows.length ?? 0;
+/** What a Mac draws: the island's page from the shell's own scheme, as a packaged app must load it (its fuses keep
+ *  file:// out of the asar), with its stylesheet (the black pill) and its script (the leading count). */
+async function islandDrawn() {
+  const w = island?.window;
+  if (!w || w.isDestroyed()) throw new Error("no island window");
+  const url = w.webContents.getURL();
+  const seen = w.webContents.isLoading() ? { loading: true } : await w.webContents.executeJavaScript(
+    "({ pill: getComputedStyle(document.querySelector('#island')).backgroundColor, left: document.querySelector('#left').textContent })");
+  if (url !== "persona-island://app/island.html" || seen.pill !== "rgb(0, 0, 0)" || !/^\d+\+?$/.test(seen.left ?? "")) {
+    throw new Error(`the island's page at ${url} shows ${JSON.stringify(seen)}`);
+  }
+  return seen;
+}
 const notifyRequests = []; // what the renderer asked for over the production IPC
 const badges = []; // every count the renderer sent
 const localSettings = []; // the shell-owned options window, observed without exposing it to the hub page
@@ -225,6 +246,14 @@ async function chatAndAgents() {
 
 async function rootScenario() {
   await signIn();
+  await step("the persona:// link that started the app opens its page once the page listens", async () => {
+    // The signed-out page did not listen, so the route waited through sign-in for the app (page-routes.ts).
+    if (!coldLink) throw new Error("no cold-start link: the synthetic hub has no pending card");
+    await until("cold-start route", async () => (await path()).startsWith(`${prefix}/`) && (await path()).endsWith(`/${card.session_id}`));
+    const there = await path();
+    await go("/"); // the steps after this one start where sign-in leaves the page
+    return { path: there };
+  });
   await enableNotifications();
   await chatAndAgents();
   await step("Agent session with a waiting card", async () => {
@@ -272,6 +301,19 @@ async function rootScenario() {
     if (typeof setLogin.enabled !== "boolean") throw new Error(`the hub window lost its login-item setter: ${JSON.stringify(setLogin)}`);
     return { localWindows: localSettings.length, boundary, hubPath: await path() };
   });
+  await step("the notch island turns on and off and keeps the app in the Dock", async () => {
+    // Only a Mac draws it (#7669). Electron's default for a window over full-screen apps would make the whole app a
+    // background one, without its Dock icon and badge.
+    const mac = process.platform === "darwin";
+    const before = await page("window.personaDesktop.getIsland()");
+    if (before.supported !== mac || before.enabled) throw new Error(`the island before anyone turned it on: ${JSON.stringify(before)}`);
+    const on = await page("window.personaDesktop.setIslandEnabled(true)");
+    const dock = mac ? app.dock.isVisible() : undefined;
+    const off = await page("window.personaDesktop.setIslandEnabled(false)");
+    if (on.enabled !== mac || off.enabled) throw new Error(`the island answered ${JSON.stringify(on)}, then ${JSON.stringify(off)}`);
+    if (dock === false) throw new Error("turning the island on took the app out of the Dock");
+    return { on, off, ...(dock !== undefined ? { dock } : {}) };
+  });
 
   let target;
 
@@ -312,6 +354,10 @@ async function hubChangeScenario() {
   await signIn();
   await step("changing the hub replaces its window, session and IPC authorization together", async () => {
     if (!otherHub || !otherToken) throw new Error("the second synthetic hub is missing");
+    // The island on (#7669), with the first hub's agents in it: none of them may stay once that hub's window is gone.
+    await page("window.personaDesktop.setIslandEnabled(true)");
+    const firstHubRows = await until("the first hub's agents in the island", islandRows);
+    const drawn = process.platform === "darwin" ? await until("the island's page drawing the first hub's agents", islandDrawn) : undefined;
     await page("window.personaDesktop.setLaunchAtLogin(true)");
     // Linux has no login-item service; the production getter truthfully reports false there. The round trip must
     // work on the shipping platforms, while the hub-change assertion here is about IPC surviving, not a Linux autostart.
@@ -337,6 +383,7 @@ async function hubChangeScenario() {
     if (!win.webContents.getURL().startsWith(otherHub.href)) throw new Error("the replacement still shows the previous hub");
     await until("second hub window is shown", () => !win.isDestroyed() && win.isVisible() && !win.webContents.isLoading());
     await until("second hub sign-in page", () => page("!!document.querySelector('input[type=password]') || document.body.innerText.includes('Let this browser in from a device')"));
+    if (islandRows() !== 0) throw new Error(`the first hub's agents stayed in the island after the hub changed (${islandRows()} rows)`);
     // The driver forces notification support and idle=0. A denial here is therefore an IPC authorization failure,
     // not evidence that the native OS denied notification permission. Never substitute a visible/focused window for it.
     const permission = await page("window.personaDesktop.notificationPermission()");
@@ -354,6 +401,8 @@ async function hubChangeScenario() {
     if (!presence.active) throw new Error(`the second hub's presence was not authorized under forced support, zero idle and unlocked inputs: ${JSON.stringify({presence, permission, loginItemState, windowState})}`);
     app.emit("second-instance", {}, [`persona://pair?url=${encodeURIComponent(otherHub.href)}&token=${encodeURIComponent(otherToken)}`]);
     await until("second hub signed in", signedIn);
+    const secondHubRows = await until("the second hub's agents in the island", islandRows);
+    await page("window.personaDesktop.setIslandEnabled(false)");
     if (!win.webContents.session.storagePath) throw new Error("the replacement window has no persisted origin-isolated session");
     await go("/");
     await until("second hub chat", () => page("!!document.querySelector('[data-testid=\"composer-send\"]')"));
@@ -366,7 +415,7 @@ async function hubChangeScenario() {
     const accepted = await page(`window.personaDesktop.notify({title: 'Second hub notification', body: 'Bridge after the hub change', tag: 'second-hub-smoke', route: ${JSON.stringify(route)}})`);
     if (!accepted) throw new Error("the replacement hub's production notify IPC was refused");
     await until("second hub native notification", () => shown.find(n => n.title === "Second hub notification"));
-    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0 };
+    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0, islandRows: { firstHub: firstHubRows, afterChange: 0, secondHub: secondHubRows }, ...(drawn ? { islandDrawn: drawn } : {}) };
   });
 }
 
@@ -401,10 +450,8 @@ async function subpathScenario() {
   await lockWithdraws("close"); // a hub without desktop_unregister: only closing the socket withdraws (docs/desktop/desktop.md)
 }
 
-async function main() {
+async function main(created) {
   await mkdir(output, { recursive: true });
-  const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
-  await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
   win = await created;
   win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(String(event.message).slice(0, 300)); });
   await until("first load", () => !win.webContents.isLoading() && win.webContents.getURL().startsWith(hub.href), 45_000);
@@ -446,4 +493,12 @@ async function finish(error) {
   console.log(`desktop e2e ${scenario}: ${ok ? "PASS" : "FAIL"}${error ? ` (${result.error})` : consoleErrors.length ? ` (renderer errors: ${consoleErrors.join(" | ")})` : ""}`);
   app.exit(ok ? 0 : 1);
 }
-main().then(() => finish(), error => finish(error));
+// The production entry loads before the app can become ready: it registers the island's scheme as it is evaluated, which
+// Electron takes only before ready. The same module instance main.js imports: the island it makes is the one seen here.
+const { NotchIsland } = await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "island.js")).href);
+const setIslandState = NotchIsland.prototype.setState;
+NotchIsland.prototype.setState = function setState(...args) { island = this; return setIslandState.apply(this, args); };
+const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
+await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
+if (coldLink) app.emit("open-url", { preventDefault() {} }, coldLink);
+main(created).then(() => finish(), error => finish(error));

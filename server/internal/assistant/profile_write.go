@@ -115,6 +115,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("review_sample_percent must be 0–100"))
 		return
 	}
+	if p := in.MainCompactWindow; p != nil && !validMainCompactWindow(*p) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("main_compact_window must be 0 or 100000–10000000"))
+		return
+	}
 	if d := in.IdleCloseHours; d != nil && (*d < 0 || *d > maxIdleCloseHours) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("idle_close_hours must be 0–8760"))
 		return
@@ -213,6 +217,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
 		}
+		if in.MainCompactWindow != nil {
+			v.MainCompactWindow = in.MainCompactWindow
+		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
 		}
@@ -246,6 +253,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
+		}
+		if in.CloseEndedTerminals != nil {
+			v.CloseEndedTerminals = in.CloseEndedTerminals
 		}
 		if in.AgentAutoNaming != nil {
 			v.AgentAutoNaming = in.AgentAutoNaming
@@ -305,6 +315,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 // can (its launcher has assistant: docs/integrations/runtimes.md "Assistant"); anything else would fail every message. One that can't
 // be probed now goes.
 func (s *Service) checkLauncher(ctx context.Context, machine, launcher string) error {
+	if proto.IsExternalLauncher(launcher) {
+		return i18n.Err("external-adapter.purpose_unsupported")
+	}
 	if launcher == "claude" {
 		return nil
 	}

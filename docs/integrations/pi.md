@@ -42,7 +42,7 @@ both built on `integrations/runtime-sdk/`. pi follows the route of whichever hos
 At session start, the extension records where it runs using `pi.appendEntry("persona-host", {host})` (`herdr`, `terminal`, `pi-web`; only when it changes, excluded from model context;
 not recorded for sessions launched by other programs, such as `pi --mode rpc` or `pi -p`). After a session stops, the companion lists it from disk and uses the last record to decide:
 
-- Previously run in herdr or a terminal: the row carries `resume_argv: ["pi", "--session", <file>]`. When the phone sends a message, node opens a new tab in the herdr space for that directory,
+- Previously run in herdr or a terminal: the row carries `resume_argv: ["pi", "--approve", "--session", <file>]` (`--approve`: "Project trust" below). When the phone sends a message, node opens a new tab in the herdr space for that directory,
   runs it through `personad tab-start <0600 file>` (commands and paths do not pass through a shell or appear on screen), waits for the new pi extension to list the session, then sends the message.
   If herdr is unavailable, it rejects the request (`engine_missing`); it does **not** open it in pi-web instead. If node is too old to recognize `resume_argv`, the companion also rejects the request rather than waking pi-web.
 - Previously run in pi-web, or no record (sessions from before the extension was installed): pi-web wakes it, as before.
@@ -122,6 +122,12 @@ These are all terminal commands on that computer (or ask an Agent to do it); the
 
 The companion's `--port` / `--host` must match pi-web (default `127.0.0.1:30141`). If pi-web sets `PI_WEB_PASSWORD`, the companion needs the same environment variable.
 
+### Project trust
+
+pi asks before it loads project-local files (`.pi/`, `.agents/`, `AGENTS.md` and the like) from a directory it has no saved decision for. A pi Persona starts or resumes in a herdr pane has nobody at that prompt: a `task_plan` / `agent_start` start, herdr's resume of one, and a stopped session woken by a phone message would wait there, the extension would never list the session, and the first message would not be sent (#9462).
+So those runs pass `--approve` ("trust project-local files for this run"): the directory the task or the person chose is trusted for that process only. Nothing is written to `~/.pi/agent/trust.json`, so a pi the user starts in a terminal still asks, and a saved decision there stays the user's. pi versions without project trust also lack the flag and refuse it; update pi (`pi update self`).
+Persona's own health check runs `pi -p … --no-session` in an empty temporary directory, which has nothing to trust.
+
 ## Mapping
 
 `integrations/pi/lib/map.js`, entries in a pi session file → Persona items:
@@ -143,6 +149,11 @@ The companion's `--port` / `--host` must match pi-web (default `127.0.0.1:30141`
 - Sending: while the session waits in `ask_user`, the message is the answer to the question. Otherwise, while the session is running, `pi.sendUserMessage(…, {deliverAs: "steer"})` inserts it into the current turn, read after the step under way, and the send answers `queued` (the manager says "queued", not "sent"); when idle, it starts a new turn.
 - Interrupt: inside pi-web through pi-web's own Stop (`POST /api/agent/<id> {type: "abort"}`: it also cancels the dialogs extensions have open and takes back what was queued for the turn), elsewhere `ctx.abort()`; `ask_user` gives up on the turn's abort signal. The interrupt then waits up to 10 seconds for `agent_settled` and answers `settled`, or fails with `interrupt_timeout` (#8097). Rename uses `pi.setSessionName`.
   A given `client_msg_id` is sent only once.
+
+## Token usage
+
+The node meters pi's token usage from its session files (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`), whether or not Persona started the session: each assistant message's
+usage, cache warming's `usage` entries and the compaction and branch summaries' calls, under the agent `pi` on the token calendar (`docs/server/machines.md`, "Token usage").
 
 ## Limitations
 

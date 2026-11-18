@@ -93,6 +93,28 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 After searching the knowledge base, `kb_search` also searches `.md` files in these directories (skipping dot-prefixed directories such as `.git`); matching paths are absolute. The assistant's CLAUDE.md lists these directories
 and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Persona does not write, sync or index them.
 
+## Remote knowledge folders (`kb.remote_folders`)
+
+Add a named source in the manager's `manager.json` under `kb.remote_folders`. Use the connected personal computer's machine ID and an absolute path or `~/` path on that computer.
+
+```json
+{
+  "kb": {
+    "remote_folders": [{
+      "name": "handbook",
+      "machine": "laptop",
+      "path": "~/notes/handbook",
+      "exclude_dirs": ["private", "projects/drafts"],
+      "exclude_extensions": ["pdf", ".key"]
+    }]
+  }
+}
+```
+
+In a private assistant or Agent conversation, ask to search the source by name. The `kb_folder_search` tool lists source names when called without arguments, or searches file names and UTF-8 text for a case-insensitive literal substring. Use a returned relative path with `kb_folder_read`. The tools report an unreachable computer and flag partial results when a search reaches its work limit or a read reaches 64 KiB. Files can change between search and read.
+
+Exclusions are case-insensitive. Directory paths are relative to the configured folder with slash separators. Extension exclusions match filename suffixes. The node skips symlink entries and applies its ordinary remote-file protections. The manager keeps no index or archive of these folders. Text returned to a conversation is subject to that conversation's normal history and model processing. Restart the manager after editing this configuration, and reconnect the conversation’s tools if they were already loaded. Removing an entry and restarting revokes subsequent knowledge-folder calls. The tools are off by default and unavailable when the knowledge base is disabled.
+
 ## Why files
 
 - Files and grep are natural for Claude Code: the assistant, AI twin and Agents in herdr need no new API; `rg keyword ~/.persona/data` searches directly.
@@ -192,7 +214,10 @@ moving the archive into the user's zone ("Time zones") is the archive lane's fir
 lane's writes. The steps' backoffs (a failed source put off, `retryWait`) live with the manager's knowledge base, not the
 engine, so they carry over when the hub's settings change and a new engine is built; a lane already running finishes
 its run with the engine it started with. Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
-<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). While the
+<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). A call with
+no model set up for it (no provider with a key for the step's purpose) is neither a call nor a failure: the lane logs
+`kb: <lane> lane: no model is set up for <purpose> …` once for each purpose, and `kb: <lane> lane: a model answers <purpose>
+again` once a call for that purpose gets an answer (a failed call is no answer) (#10435; before, such a lane logged "1 model call(s), 1 failed" every 2 minutes). While the
 assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
 
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
@@ -218,7 +243,7 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    At most 8 chats per round, most relevant first. Direct-chat / email tags propagate to the other person; a person's `summary.md` is assembled from metadata and direct-chat context without a model call.
    When the model declines the batch (a `refusal` stop reason, e.g. a safety classifier), it would decline it again: the batch is marked covered without a new summary and the chat continues with later messages.
    Any other failure puts the chat off for 10 minutes, doubled with each failure in a row up to 6 hours (`compress_failures` / `compress_retry_at` in `meta.json`, cleared on success);
-   a paused model connection does not count. Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
+   a paused model connection, or no model set up for it, does not count: the chat stays due without a log line of its own, and the round's compression stops there (#10435; before, no model counted as a failure of each chat, put it off up to 6 hours and logged a line for each). Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
 3. **Evolution (evo)**: merge projects mentioned in compression into `projects/` (names or aliases equal after stripping punctuation and case are merged; otherwise create), append progress to `log.md`
    and mark dirty. Only aliases belonging to this project are accepted: names / aliases of other unmerged projects, single characters or two-letter abbreviations, and generic terms are rejected; at most 12 automatic aliases per project
    (#2546: previously, several projects accumulated hundreds of aliases after a week and crossed into each other). Manual aliases from `kb_update` have no limit; `remove_aliases` deletes them. If several unmerged projects match a name,
@@ -767,6 +792,11 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   `kb_get` (profile + last 7 days' messages) / `kb_update` (create projects, edit profiles, tag, link, add timeline entries; manual tags lock and are not overwritten by compression);
   live snapshots include the 6 most important projects and 8 chats. These four tools belong to the assistant (parameter defaults, limits and model-facing copy in `assistant/tools_apps.go`),
   and since 2026-11-04 so does the knowledge base, so they call the engine directly (formerly bus calls to hub `kb.search` / `kb.list` / `kb.get` / `kb.update`).
+- **What `kb_get` hands the model** (#7316, `assistant/kb_get_fit.go`): a project's people (every member of each group chat linked to it, thousands for a large one)
+  are folded to 20, ranked as the detail's links are (importance, relevance, last seen), with a line giving the total and the meta.json that has them all. Any result
+  past 20,000 estimated tokens (a CJK character as 1.25, an ASCII one as half) is cut at a line's end (inside the line when it began over 2,000 bytes back), with a
+  line saying how much was left out and where the files are: Claude Code refuses an MCP tool's output past 25,000 tokens. Only the tool's text changes; the
+  files, `kb.get` and the apps' detail pages are as before.
 - **Main chat**: hub settings `assistant.main` stores its session id (set by `POST /api/v1/assistant/conversations` with `main: true`,
   cleared by `PUT /api/v1/assistant {"main":"-"}`). When requesting a snapshot per message, node passes the session id to `assistant.context`; main-chat snapshots start with "This is the main chat".
 - **AI twin**: Agent prompts end with this chat's profile and its first 3 projects (`<persona-context>`), requiring new conclusions to be written back to the project timeline through `kb_update`.
@@ -930,7 +960,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count) |
+| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
 | `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`); projects also include `agents` |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
 | `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |

@@ -19,11 +19,13 @@ const (
 	sigUnjudged      = "unjudged"       // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou      = "needs_you"      // an agent waits for an answer
 	sigStalled       = "stalled"        // working, but nothing moved for long
+	sigNoProgress    = "no_progress"    // working, its session moves, but only waits and repeats: no real progress (supervise_progress.go)
 	sigAllStopped    = "all_stopped"    // every current participant stopped with nothing scheduled to resume it
 	sigInterrupted   = "interrupted"    // the model service cut its turn off
 	sigFailed        = "failed"         // its agent did not start
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
 	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
+	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -61,6 +63,7 @@ var (
 // the same signal with the same key is told once.
 type superviseSignal struct {
 	Todo, Kind, Key string
+	PRURL           string // draft_pr: the current or earlier followed PR, revalidated before delivery
 	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
 	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
 	Unreachable      bool
@@ -72,6 +75,8 @@ type superviseSignal struct {
 	Report      string
 	Evidence    []string
 	Step, Steps int
+	// no_progress: the tool calls the hub saw in the stretch, and how many were waits or repeats (supervise_progress.go).
+	Calls, Waits int
 	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
 	Orphan string
 	// To is the conversation it goes to when that is not digestTo's to say: a card's rung (sigAsk), the main
@@ -102,6 +107,9 @@ func (g superviseSignal) level() string {
 // id names what a newer signal replaces while it waits: the task's signal of that kind (a report: of that kind of
 // report, so a progress report does not push out a question).
 func (g superviseSignal) id() string {
+	if g.Kind == sigDraftPR {
+		return g.Todo + "|" + g.Kind + "@" + g.PRURL
+	}
 	if g.Kind == sigReport {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
@@ -120,7 +128,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
 		sigParkDecided, sigDecisionReply: // the owner answered: what they said is acted on soon
 		return true
@@ -147,6 +155,9 @@ type superviseBook struct {
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
+
+	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
+
 	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
 	// when that was last logged (sendDigest).
 	noMainSince, noMainLogged time.Time
@@ -425,22 +436,34 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		agents := s.taskAgentsIn(ctx, t, lists)
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
+		stalled := map[string]bool{}
 		for _, g := range watchSignals(t, agents, now, group) {
 			allStopped = allStopped || g.Kind == sigAllStopped
+			stalled[g.Session] = stalled[g.Session] || g.Kind == sigStalled
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already
 			}
 			s.signal(g)
 		}
+		if !allStopped && t.Supervision.state(t) == "" { // going on: neither parked nor with the owner nor waiting for review
+			for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
+				if g, ok := s.noProgressSignal(t, c, now); ok && !stalled[c.SessionID] {
+					s.signal(g)
+				}
+			}
+		}
 		if g, ok := s.orphanSignal(t); ok && !allStopped { // a fresh complete group outranks the minute pass's orphan snapshot
 			s.signal(g)
 		}
-		s.parkDecidedRetry(ctx, t)             // a stored decision ends its parking when the ledger write missed it then (parked.go)
+		ownerEvidencePending := s.parkDecidedRetry(ctx, t) // a stored owner answer outranks legacy reconciliation
+		t = s.reconcileLegacyOwnerPriority(ctx, t, ownerEvidencePending)
 		if g, ok := parkDecidedSignal(t); ok { // a decision ended its parking, and no message carried that yet (parked.go)
 			s.signal(g)
 		}
-		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
-			s.signal(g)
+		if !ownerEvidencePending { // a stored or unreadable answer must not be replaced with another question
+			if g, ok := s.undecidableSignal(ctx, t, now); ok {
+				s.signal(g)
+			}
 		}
 		s.briefClock(ctx, t, now)   // past its brief's clock with no end (task_brief_scope.go)
 		s.watchTurn(ctx, t, agents) // a turn that ended with no working heard, or was left half handled (task_turns.go)

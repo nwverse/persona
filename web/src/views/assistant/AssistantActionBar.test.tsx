@@ -7,7 +7,7 @@ import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
-import { putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -173,7 +173,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_changes_requested"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_checks_pending"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_conflicts"));
-    expect(row.querySelector("a")?.classList).toContain("truncate");
+    expect(row.querySelector("a")?.classList).toContain("break-all");
     act(() => row.querySelector<HTMLButtonElement>("[data-pr-task-link]")!.click());
     expect(getPanel()).toEqual({ kind: "task", todo: "tray-task" });
   });
@@ -294,6 +294,32 @@ describe("Assistant Needs you / In progress trays", () => {
     delete getFeedState().plans[reuse.id];
   });
 
+  it("offers a failed start's other launcher first in Needs you, with its code's short line, where the hub takes it (#10365)", async () => {
+    const reuse: TaskPlan = { id: "launcher-plan", conversation, state: "started", created_at: at, tasks: [{ title: "Reused", prompt: "Go on", cwd: "/demo", machine: "demo",
+      todo_id: "launcher-todo", error: "terminal", error_code: "launcher_missing", error_args: { where: "terminal", launcher: "work" }, retry_with: ["claude"] }] };
+    getFeedState().plans[reuse.id] = reuse;
+    const features = getState().features;
+    getState().features = [...features, "task_retry_launcher"];
+    moreTodos = [{ id: "launcher-todo", title: "Carry on the work", origin: conversation, created_at: at, updated_at: at, agents: [], done_at: at,
+      start_error: "Demo's terminal can't run the launcher's program; start agents where it can, or pick another launcher." }];
+    try {
+      await act(async () => {
+        await refreshTodos();
+      });
+      // the failed start's row comes with the tray's first one (TaskDecision's chunk), not with the first screen
+      await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+      const row = host.querySelector<HTMLElement>("[data-failed-task=launcher-todo]")!;
+      expect(row.textContent).toContain(t("lib-start-retry.start_code_launcher_terminal", { launcher: "work" }));
+      const buttons = [...row.querySelectorAll("button")].map((b) => b.textContent);
+      expect(buttons.slice(1)).toEqual([t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }), t("assistant-tasks.retry"), t("assistant-tasks.remove")]);
+      await act(async () => row.querySelector<HTMLButtonElement>("[data-retry-launcher=claude]")!.click());
+      expect(writes).toContain("/api/v1/todos/launcher-todo/retry");
+    } finally {
+      getState().features = features;
+      delete getFeedState().plans[reuse.id];
+    }
+  });
+
   it("says Not started on the owner's own to-do in the main conversation's In progress (#7552)", async () => {
     mainChat = conversation;
     moreTodos = [{ id: "owner-todo", title: "Book the dentist", created_at: at, updated_at: at, agents: [] }];
@@ -409,6 +435,75 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector('[data-parked-task-row="tray-parked"] .text-green')).toBeNull();
   });
 
+  it("shows the recorded wait contact in the parked tray", async () => {
+    const evidence = { kind: "person_reply" as const, target: "Schedule owner", wake: "The owner replies in the thread",
+      recorded_by: "recording-conversation",
+      contact: { sender: "Example sender", channel: "Email", url: "https://example.test/messages/7",
+        sent_at: "2026-11-10T08:00:00Z", request: "Please confirm the schedule", status: "sent" } };
+    moreTodos = [{
+      ...todo, id: "tray-wait-evidence", title: "Example schedule wait", pr_url: undefined, plan_id: undefined, agents: [],
+      supervision: { supervisor: conversation, state: "parked", parked: {
+        reason: "Waiting for the schedule owner", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1, evidence,
+      }, reviews: [{ at: "2026-11-10T09:00:00Z", verdict: "parked", parks: 1, evidence }] },
+    }];
+    const older = moreTodos[0];
+    const newerEvidence = { ...evidence, contact: { ...evidence.contact, sent_at: "2026-11-10T08:30:00Z" } };
+    moreTodos = [{ ...older, id: "tray-wait-newer", title: "Newer example wait", updated_at: "2026-11-10T08:40:00Z",
+      supervision: { ...older.supervision!, parked: { ...older.supervision!.parked!, evidence: newerEvidence },
+        reviews: [{ at: "2026-11-10T08:40:00Z", verdict: "parked", parks: 1, evidence: newerEvidence }] } }, older];
+    await act(async () => { await refreshTodos(); });
+    await act(async () => entry("parked").click());
+    expect([...host.querySelectorAll("[data-parked-task-row]")].map((row) => row.getAttribute("data-parked-task-row")))
+      .toEqual(["tray-wait-evidence", "tray-wait-newer"]);
+    const info = host.querySelector('[data-task-wait-info="tray-wait-evidence"]');
+    expect(info?.querySelector("[data-wait-target]")?.textContent).toContain("Schedule owner");
+    expect(info?.querySelector("[data-wait-contact]")?.textContent).toContain("Example sender");
+    expect(info?.querySelector("[data-wait-contact]")?.getAttribute("href")).toBe(evidence.contact.url);
+    expect(info?.querySelector("[data-wait-age]")?.textContent).not.toContain(t("task-wait.age_unknown"));
+    expect(info?.textContent).not.toContain("recording-conversation");
+  });
+
+  it("says only the Agent's own state in the status column, with the to-do's state as its own chip (#6492)", async () => {
+    moreTodos = [{
+      ...todo, id: "tray-rework-stopped", title: "Needs rework, Agent gone", pr_url: undefined, plan_id: undefined,
+      agents: [{ machine_id: "demo", session_id: "gone-worker", linked_at: at }],
+      supervision: { supervisor: conversation, state: "rework", updated_at: at, reviews: [] },
+    }, {
+      ...todo, id: "tray-merge", title: "PR waiting to merge", plan_id: undefined, stage: "merge",
+      agents: [{ machine_id: "demo", session_id: "quiet-worker", linked_at: at }], supervision: undefined,
+    }];
+    await act(async () => {
+      await refreshTodos();
+      upsertSession({ machine_id: "demo", session_id: "gone-worker", title: "Gone agent", cwd: "/demo", state: "offline", status: "offline", updated_at: at });
+      upsertSession({ machine_id: "demo", session_id: "quiet-worker", title: "Quiet agent", cwd: "/demo", state: "idle", status: "idle", updated_at: at });
+    });
+    act(() => entry("running").click());
+    const row = (title: string) => [...host.querySelectorAll("[data-task-slot]")].find((r) => r.querySelector(".font-semibold")?.textContent === title)!;
+    const rework = row("Needs rework, Agent gone");
+    // Explicit holds now have their own Parked tray; unfinished rework still has an Agent-only In progress row.
+    expect(rework.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.agent_stopped"));
+    expect(rework.querySelector("[data-task-status]")!.getAttribute("data-task-status")).toBe("stopped");
+    expect(rework.querySelector("[data-task-todo-state]")!.textContent).toBe(t("assistant-tasks.todo_chip", { state: t("assistant-tasks.review_rework", { round: 1 }) }));
+    // one mark set for Agent states: the stopped Agent's hollow ring, as the sidebar draws it
+    expect(rework.querySelector('[data-task-mark="stopped"] [data-state="offline"]')).not.toBeNull();
+    const merge = row("PR waiting to merge");
+    expect(merge.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.agent_idle"));
+    expect(merge.querySelector("[data-task-todo-state]")!.textContent).toBe(t("assistant-tasks.todo_chip", { state: t("assistant-tasks.todo_waiting_merge") }));
+    // a to-do with nothing to add beyond its Agent has no chip
+    expect(row("Demo task").querySelector("[data-task-todo-state]")).toBeNull();
+    expect(row("Demo task").querySelector("[data-task-status]")!.textContent).toBe(t("lib-state-labels.working"));
+  });
+
+  it.each(["pending_review", "rework"] as const)("keeps a stale %s chip off a working Agent's rendered row (#6492)", (state) => {
+    act(() => putTodo({ ...todo, supervision: { supervisor: conversation, state, reviews: [], round: 2 } }));
+    expect(entry("review")).toBeNull();
+    act(() => entry("running").click());
+    const row = host.querySelector("[data-task-slot]")!;
+    expect(row.querySelector("[data-task-status]")!.textContent).toBe(t("lib-state-labels.working"));
+    expect(row.querySelector('[data-task-mark="working"] [data-state="working"]')).not.toBeNull();
+    expect(row.querySelector("[data-task-todo-state]")).toBeNull();
+  });
+
   it("updates the same row while it runs, opens the task, and moves it under Just finished once it is accepted", () => {
     act(() => entry("running").click());
     const row = host.querySelector("[data-task-slot]");
@@ -432,7 +527,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entry("running").textContent).toBe(label.running);
     expect(entry("needs").textContent).toBe(label.needs);
     expect(host.textContent).toContain(t("assistant-tasks.tray_empty_progress"));
-    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${t("assistant-tasks.tray_just_finished")}1`);
+    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${stateName("just_finished")}1`);
     const finished = host.querySelector("[data-task-slot]")!;
     expect(finished.getAttribute("data-counts-open")).toBe("false");
     expect(finished.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("done");
@@ -521,6 +616,12 @@ describe("Assistant Needs you / In progress trays", () => {
     const row = trayRow("Reviewed task")!;
     expect(row.dataset.countsOpen).toBe("true");
     expect(row.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.review_supervisor"));
+    expect(row.querySelector("[data-task-status]")!.getAttribute("data-task-status")).toBe("review");
+    expect(row.querySelector('[data-task-mark="follow_up"]')).not.toBeNull();
+    // A released Agent does not change whose turn it is: this tray is waiting for Persona, not the Agent.
+    act(() => upsertSession({ ...moreSessions[0], state: "offline", status: "offline" }));
+    expect(trayRow("Reviewed task")!.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.review_supervisor"));
+    expect(trayRow("Reviewed task")!.querySelector('[data-task-mark="stopped"]')).toBeNull();
     act(() => row.click());
     expect(getPanel()).toEqual({ kind: "task", todo: "tray-review" });
     // an hour on, nobody reviewed it yet: still Persona's, not the owner's
@@ -849,7 +950,7 @@ describe("Assistant Needs you / In progress trays", () => {
     act(() => entry("running").click());
     const rows = [...host.querySelectorAll("[data-task-slot]")];
     expect(rows.map((row) => row.querySelector(".font-semibold")?.textContent)).toEqual(["Demo task", "Finished, not seen", "Stopped between rounds"]);
-    expect(rows.map((row) => row.querySelector("[data-task-mark]")?.getAttribute("data-task-mark"))).toEqual(["working", "unread", "follow_up"]);
+    expect(rows.map((row) => row.querySelector("[data-task-mark]")?.getAttribute("data-task-mark"))).toEqual(["working", "unread", "idle"]);
     expect(host.textContent).not.toContain("Another chat's task");
     expect(host.textContent).not.toContain("Closed long ago");
     expect(host.textContent).not.toContain("Needs a decision");

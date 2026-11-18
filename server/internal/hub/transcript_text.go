@@ -73,6 +73,8 @@ func localizedItem(l i18n.Lang, it proto.Item) (proto.Item, bool) {
 	case it.Kind == proto.KindText && it.Role == "user" && it.From != "":
 		set(&it.From, fromName(l, it.From))
 		set(&it.Text, teammateText(l, it.Text))
+	case it.Kind == proto.KindText && it.Role == "assistant" && it.CodexHeartbeatQuiet:
+		set(&it.Text, tt(l, "codex_heartbeat_quiet"))
 	case it.Kind == proto.KindText && it.Role == "assistant" && strings.Contains(it.Text, codexNewChatLink):
 		set(&it.Text, strings.ReplaceAll(it.Text, codexNewChatLink, "["+tt(l, "open_new_chat")+"](persona://session/"))
 	case it.Kind == proto.KindToolResult && strings.Contains(it.Text, loadedToolPrefix):
@@ -114,6 +116,8 @@ func noticeText(l i18n.Lang, s string) string {
 	switch {
 	case s == transcript.InterruptedNotice:
 		return tt(l, "interrupted")
+	case s == transcript.OmpStoppedNotice:
+		return tt(l, "omp_stopped")
 	case s == loopFired:
 		return tt(l, "loop_fired")
 	case strings.HasPrefix(s, loopFired+"："):

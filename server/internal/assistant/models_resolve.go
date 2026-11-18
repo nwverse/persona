@@ -138,7 +138,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 	stored := s.storedLaunchers(ctx)
 	hidden := s.hiddenLaunchers(ctx)
 	usable := func(l storedLauncher) bool {
-		return !slices.Contains(hidden, l.Name) && l.BaseURL != "" && l.Model != "" && l.KeySealed != ""
+		return !proto.IsExternalLauncher(l.Name) && !slices.Contains(hidden, l.Name) && l.BaseURL != "" && l.Model != "" && l.KeySealed != ""
 	}
 	for _, l := range stored {
 		if l.Kind == "api" && usable(l) {
@@ -156,16 +156,13 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 // mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
-		base = ModelBinding{Provider: over.Provider, Runtime: base.Runtime, ConfigDir: base.ConfigDir}
+		base = ModelBinding{Provider: over.Provider, ConfigDir: base.ConfigDir}
 	}
 	if over.Model != "" {
 		base.Model = over.Model
 	}
 	if over.Effort != "" {
 		base.Effort = over.Effort
-	}
-	if over.Runtime != "" {
-		base.Runtime = over.Runtime
 	}
 	if over.ConfigDir != "" {
 		base.ConfigDir = over.ConfigDir
@@ -174,14 +171,10 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 }
 
 // effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
-// The In-meeting conversation takes no runtime from the main chat it follows: a room runs on Claude Code's CLI only.
 func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
 	b := mergeModel(base, over)
 	if p.ID == "inbox.triage" && b.Effort == "" {
 		b.Effort = "off"
-	}
-	if p.ID == purposeMeetingRoom {
-		b.Runtime = ""
 	}
 	return b
 }
@@ -212,7 +205,11 @@ func (s *Service) resolveModelRecord(ctx context.Context, id string, r *modelRec
 		}
 		r = &read
 	}
-	return effectiveModel(p, base, r.Binding), nil
+	b := effectiveModel(p, base, r.Binding)
+	if err := checkExternalPurpose(b); err != nil {
+		return b, err
+	}
+	return b, nil
 }
 
 func launcherProvider(name string) string {
@@ -262,6 +259,9 @@ func chatEffortForModel(models []proto.ProviderModel, model, effort string) stri
 // apiConfig is the connection an API binding calls, with its key opened.
 func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, error) {
 	var c ai.Config
+	if err := checkExternalPurpose(b); err != nil {
+		return c, err
+	}
 	var providerModels []proto.ProviderModel
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		c = s.legacyModelConfig(ctx, b.Provider)
@@ -315,6 +315,9 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	} else {
 		return c, i18n.Err("assistant-models.err_not_api")
 	}
+	if proto.IsExternalLauncher(c.RunLauncher) {
+		return c, i18n.Err("external-adapter.purpose_unsupported")
+	}
 	if b.Model != "" {
 		c.Model = b.Model
 	}
@@ -332,6 +335,10 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 
 // purposeModel is purpose id's model, resolved at the start of every request.
 func (s *Service) purposeModel(id string) *ai.Client {
+	return s.purposeModelFor(id, "")
+}
+
+func (s *Service) purposeModelFor(id, operation string) *ai.Client {
 	return ai.NewResolved(func(ctx context.Context) (*ai.Client, error) {
 		b, err := s.resolveModel(ctx, id)
 		if err != nil {
@@ -341,7 +348,7 @@ func (s *Service) purposeModel(id string) *ai.Client {
 		if err != nil {
 			return nil, err
 		}
-		return s.aiClient(c), nil
+		return s.countedClient(id, operation, b.Provider, c), nil
 	})
 }
 

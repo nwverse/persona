@@ -14,6 +14,10 @@ import (
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
 func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+	if event == "launchers.changed" {
+		s.launchersChanged(machine)
+		return false
+	}
 	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
 		return false
 	}
@@ -159,19 +163,33 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		out, err := s.mailAttachment(ctx, machine, p)
 		return out, true, err
 	case "mcp.tools":
+		ctx = withToolSet(ctx, params) // a narrower set the process asks for (supervise_round.go)
 		var p struct {
-			Assistant bool   `json:"assistant"`
-			SessionID string `json:"session_id"`
-			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
-			Revision  string `json:"revision"`
+			Assistant  bool   `json:"assistant"`
+			SessionID  string `json:"session_id"`
+			Guest      bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Revision   string `json:"revision"`
+			LeaderOnly bool   `json:"leader_only"`
 		}
 		_ = json.Unmarshal(params, &p)
-		return s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision), true, nil
+		if p.LeaderOnly {
+			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
+		}
+		out := s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision)
+		// Only an assistant conversation defers tools: a guest, by the node's word or by the manager's own record
+		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go). An unchanged or failed answer
+		// carries no list to mark.
+		if tools, ok := out["tools"].([]proto.Tool); ok {
+			deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
+			out["tools"] = s.withToolLoading(ctx, p.SessionID, tools, deferring)
+		}
+		return out, true, nil
 	case "mcp.call":
 		var p struct {
 			Name        string          `json:"name"`
 			Args        json.RawMessage `json:"args"`
 			SessionID   string          `json:"session_id"`
+			Origin      string          `json:"origin"` // the node's attested origin, including during assistant startup
 			Assistant   bool            `json:"assistant"`
 			Guest       bool            `json:"guest"`
 			WaitUpdates bool            `json:"wait_updates"`
@@ -193,7 +211,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			}
 			return s.roomToolCall(ctx, rec, p.Name, p.Args), true, nil // bound to its own recording
 		}
-		return s.mcpCall(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant), true, nil
+		return s.mcpCallWithOrigin(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant, p.Origin), true, nil
 	}
 	return nil, false, nil
 }
@@ -207,7 +225,7 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleetStart(context.WithoutCancel(ctx))
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
-	s.fleet.sent = nil
+	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
 	for _, m := range s.fleetMachines() {

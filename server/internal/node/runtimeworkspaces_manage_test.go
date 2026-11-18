@@ -313,6 +313,50 @@ func TestRuntimeWorktreeDeleteWhileAtWork(t *testing.T) {
 	}
 }
 
+// A foreground turn can finish while a native command or delegated agent still writes in its workspace.
+func TestRuntimeWorktreeDeleteWithBackgroundWork(t *testing.T) {
+	for _, kind := range []string{"shell", "agent"} {
+		t.Run(kind, func(t *testing.T) {
+			r := runtimeRepoNode(t)
+			r.manageAnswers(t, nil)
+			tree := filepath.Join(r.trees, "background")
+			if _, err := request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "background", "path": tree}); err != nil {
+				t.Fatal(err)
+			}
+			tell := func(tasks []map[string]any) {
+				t.Helper()
+				r.tellSessions(t, map[string]any{"session_id": "paseo-bg", "status": "idle", "workspace_id": "wks_new1", "background": tasks})
+				waitFor(t, "background inventory", func() bool { return len(listed(t, r.n)["paseo-bg"].Background) == len(tasks) })
+			}
+			del := func(params map[string]any) (map[string]any, error) {
+				params["workspace_id"], params["kind"], params["locale"] = "wks_new1", "paseo", "en"
+				return request(t, r.n, "worktree.delete", params)
+			}
+			tell(nil)
+			preview, err := del(map[string]any{"preview": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tell([]map[string]any{{"id": "background-task", "kind": kind}})
+			for _, params := range []map[string]any{{"preview": true}, {"preview_token": preview["preview_token"]}} {
+				if _, err := del(params); err == nil || !strings.Contains(err.Error(), "An Agent is still working in this worktree") {
+					t.Fatalf("background work was not protected: %v", err)
+				}
+			}
+			if len(r.rt.got("workspace.archive")) != 0 {
+				t.Fatal("background work reached workspace archive")
+			}
+			if _, err := os.Stat(tree); err != nil {
+				t.Fatalf("protected worktree disappeared: %v", err)
+			}
+			tell(nil)
+			if res, err := del(map[string]any{"preview_token": preview["preview_token"]}); err != nil || res["removed"] != true {
+				t.Fatalf("deletion did not recover after background work finished: %v %v", res, err)
+			}
+		})
+	}
+}
+
 // The preview says why a worktree Paseo lists is not one to delete: its folder gone, git no longer knowing it (its
 // record in the repository pruned), a folder inside a worktree; a main checkout is said apart from those.
 func TestRuntimeWorktreeDeleteSaysWhyNot(t *testing.T) {
@@ -349,29 +393,35 @@ func TestRuntimeWorktreeDeleteSaysWhyNot(t *testing.T) {
 }
 
 // A confirmed deletion has one deadline for the node's checks and Paseo's archive: one that runs out says the outcome
-// is not known (reconcile tells), rather than the hub timing out while it goes on.
+// is not known (reconcile tells), rather than the hub timing out while it goes on; the node's own deadline ends a
+// deletion that nothing else ends.
 func TestRuntimeWorktreeDeleteHasOneDeadline(t *testing.T) {
 	r := runtimeRepoNode(t)
 	r.manageAnswers(t, nil)
-	tree := filepath.Join(r.trees, "feat-s")
-	if _, err := request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "feat/s", "path": tree}); err != nil {
-		t.Fatal(err)
+	// Two worktrees, one for each deadline, each with its preview: a confirmed deletion's token is spent.
+	tokens := map[string]any{}
+	for _, w := range []struct{ id, branch, folder string }{{"wks_new1", "feat/s", "feat-s"}, {"wks_new2", "feat/t", "feat-t"}} {
+		if _, err := request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": w.branch,
+			"path": filepath.Join(r.trees, w.folder)}); err != nil {
+			t.Fatal(err)
+		}
+		prev, err := request(t, r.n, "worktree.delete", map[string]any{"workspace_id": w.id, "kind": "paseo", "preview": true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[w.id] = prev["preview_token"]
 	}
-	prev, err := request(t, r.n, "worktree.delete", map[string]any{"workspace_id": "wks_new1", "kind": "paseo", "preview": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := runtimeWorktreeDeadline
-	runtimeWorktreeDeadline = 500 * time.Millisecond
-	t.Cleanup(func() { runtimeWorktreeDeadline = old })
-	// Paseo's archive is held until the test ends: only the deadline ends the call. Should the node not give up, the
-	// archive goes ahead after 3 s, so that the test fails rather than hangs.
+	// Paseo's archive is held until the test ends: only a deadline ends the call. Should the node not give up, the
+	// archive goes ahead after 3 s, so that the test fails rather than hangs. The call's deadline runs out once Paseo is
+	// asked to archive, however long the node's checks before it took.
 	held := make(chan struct{})
 	t.Cleanup(func() { close(held) })
+	cue := newCueDeadline()
 	r.rt.mu.Lock()
 	prevAnswer := r.rt.answer
 	r.rt.answer = func(method string, params json.RawMessage) (any, error) {
 		if method == "workspace.archive" {
+			cue.expire()
 			select {
 			case <-held:
 				return nil, errors.New("the test ended")
@@ -381,13 +431,29 @@ func TestRuntimeWorktreeDeleteHasOneDeadline(t *testing.T) {
 		return prevAnswer(method, params)
 	}
 	r.rt.mu.Unlock()
-	start := time.Now()
-	res, err := request(t, r.n, "worktree.delete", map[string]any{"workspace_id": "wks_new1", "kind": "paseo", "preview_token": prev["preview_token"]})
+	confirm := func(ctx context.Context, id string) (map[string]any, error) {
+		return requestCtx(t, ctx, r.n, "worktree.delete", map[string]any{"workspace_id": id, "kind": "paseo", "preview_token": tokens[id]})
+	}
+	res, err := confirm(cue, "wks_new1")
 	if err != nil || res["state"] != "unknown" || res["removed"] == true {
 		t.Fatalf("past the deadline: %v %v", res, err)
 	}
+	if took := cue.since(); took > 2*time.Second {
+		t.Fatalf("ended %s after its deadline", took)
+	}
+
+	// Nothing else ends it: the node's own deadline does, wherever it runs out (in the checks on a busy machine, which
+	// then refuse).
+	old := runtimeWorktreeDeadline
+	runtimeWorktreeDeadline = 300 * time.Millisecond
+	t.Cleanup(func() { runtimeWorktreeDeadline = old })
+	start := time.Now()
+	res, err = confirm(context.Background(), "wks_new2")
+	if res["removed"] == true || err == nil && res["state"] != "unknown" {
+		t.Fatalf("past the node's deadline: %v %v", res, err)
+	}
 	if took := time.Since(start); took > 2*time.Second {
-		t.Fatalf("took %s", took)
+		t.Fatalf("took %s: the node's deadline did not end the deletion", took)
 	}
 }
 

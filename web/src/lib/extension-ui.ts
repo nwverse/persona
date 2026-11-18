@@ -294,6 +294,8 @@ export interface UIPlace {
   badge?: UIBadge | null;
   /** The connector whose inbox items an inbox_item draws (the items' `source`). */
   connector?: string;
+  /** The sidebar group a nav_page goes in unless the user put it elsewhere (#9071), its title in the app's language. */
+  group?: { id: string; title: string };
 }
 
 export interface UIBadge {

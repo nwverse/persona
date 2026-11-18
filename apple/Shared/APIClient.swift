@@ -692,6 +692,11 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var text: String }
         _ = try await request("POST", "/api/v1/machines/\(machine)/computer/clipboard", body: Body(text: text))
     }
+    /// Phone Screen (#9314, docs/protocol/protocol.md): start / windows / place / stop for the live screen whose RFB
+    /// stream carries `pair`. A refusal keeps the node's code (`APIError.code`: busy, permission, not_signed_in…).
+    func phoneScreen(machine: String, _ body: PhoneScreenRequest) async throws -> PhoneScreenReply {
+        try JSON.decoder.decode(PhoneScreenReply.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/phone-screen", body: body))
+    }
     /// The apps always allowed for the assistant on this Mac (#1507), and taking one back (asked again next time).
     func computerApps(machine: String) async throws -> [ComputerApp] {
         struct Out: Decodable { var apps: [ComputerApp] }
@@ -1097,14 +1102,41 @@ nonisolated struct APIClient: Sendable {
     @discardableResult
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
               clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Bool {
+        try await sendReply(k, text: text, images: images, launcher: launcher, model: model, clientMsgID: clientMsgID,
+                            clearDraft: clearDraft, todoID: todoID, via: via, opID: opID).waitsOnComputer == true
+    }
+
+    /// The hub's answer to a message it took: whether it waits behind a question on the computer (#5890), or that it
+    /// did not go in and the assistant keeps it to send by itself (`delivered` "later", `undelivered`: #10194).
+    nonisolated struct SendReply: Decodable, Sendable {
+        var waitsOnComputer: Bool?
+        var delivered: String?
+        var undelivered: UndeliveredMessage?
+        var kept: Bool { delivered == "later" }
+        enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer", delivered, undelivered }
+    }
+
+    /// `send`, with the whole answer (`SendReply`).
+    func sendReply(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
+                   clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> SendReply {
         let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
                                                                       model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
                                   timeout: 100, opID: opID)
-        struct Answer: Decodable {
-            var waitsOnComputer: Bool?
-            enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer" }
-        }
-        return (try? JSON.decoder.decode(Answer.self, from: data))?.waitsOnComputer == true
+        return (try? JSON.decoder.decode(SendReply.self, from: data)) ?? SendReply()
+    }
+
+    /// Retry on a kept message that gave up (#10194): the assistant tries it again from now.
+    func retryUndelivered(conversation: String, id: String) async throws {
+        try await post("/api/v1/assistant/conversations/\(Self.pathPart(conversation))/undelivered/\(Self.pathPart(id))/retry", body: [String: String]())
+    }
+
+    /// Delete on a kept message (#10194): it is never sent.
+    func deleteUndelivered(conversation: String, id: String) async throws {
+        try await delete("/api/v1/assistant/conversations/\(Self.pathPart(conversation))/undelivered/\(Self.pathPart(id))")
+    }
+
+    private nonisolated static func pathPart(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? s
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
     func attach(_ k: SessionKey) async throws { try await post(sp(k) + "/attach") }
@@ -1286,6 +1318,32 @@ nonisolated struct APIClient: Sendable {
     }
     func sessionInfo(_ k: SessionKey) async throws -> SessionInfo { try await get(sp(k) + "/info") }
 
+    /// A session's permission mode changes the hub recorded, oldest first (#10297, docs/protocol/protocol.md「Session
+    /// mode changes」): each change made through /modes, and what became of a queued restart into Allow Everything.
+    nonisolated struct ModeChange: Decodable, Hashable, Sendable {
+        /// "set", "restart_done", "restart_failed" or "restart_dropped".
+        var kind: String
+        var from: String?
+        var to: String?
+        /// For "set": "now", or "restart" for a restart into it that waits for the turn to end; empty from an older node.
+        var applied: String?
+        /// Who asked: "device", "hub" (the hub's own token), "extension".
+        var actorKind: String?
+        var deviceName: String?
+        /// What became of a restart, why: a code ("process_exited", "replaced"…).
+        var reason: String?
+        var at: Date
+        enum CodingKeys: String, CodingKey {
+            case kind, from, to, applied, reason, at
+            case actorKind = "actor_kind", deviceName = "device_name"
+        }
+    }
+    private struct ModeChanges: Decodable, Sendable { var changes: [ModeChange]? }
+    /// Off the main actor (`docs/apple/performance.md` P1): a chat opening reads it.
+    func modeChanges(_ k: SessionKey) async throws -> [ModeChange] {
+        try await getDecodedOffMain(sp(k) + "/mode-changes", as: ModeChanges.self).changes ?? []
+    }
+
     struct ModesBody: Encodable {
         var permissionMode: String?
         var effort: String?
@@ -1415,6 +1473,8 @@ nonisolated struct APIClient: Sendable {
         var taskWorkspacePreference: String?
         /// Every Agent Persona starts gets a quiet, supervised task (#3617). Off by default.
         var agentTasks: Bool?
+        /// Close an Agent's terminal tab when its session ends (#10355). Off by default.
+        var closeEndedTerminals: Bool?
         /// Hours an idle Agent Persona started runs before it is stopped, its terminal kept (#4754): 0 is never, at
         /// most 8760; 12 by default.
         var idleCloseHours: Int?
@@ -1439,6 +1499,7 @@ nonisolated struct APIClient: Sendable {
             case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case closeEndedTerminals = "close_ended_terminals"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
             case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
@@ -1543,6 +1604,7 @@ nonisolated struct APIClient: Sendable {
         var startRequestedTasks: Bool?
         var taskWorkspacePreference: String?
         var agentTasks: Bool?
+        var closeEndedTerminals: Bool?
         var idleCloseHours: Int?
         var archiveClosedDays: Int?
         var agentAutoNaming: Bool?
@@ -1559,6 +1621,7 @@ nonisolated struct APIClient: Sendable {
             case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case closeEndedTerminals = "close_ended_terminals"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
             case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
@@ -2172,6 +2235,18 @@ nonisolated struct APIClient: Sendable {
             var usage: Usage
         }
         return try await get("/api/v1/usage", as: Body.self).usage.hourly ?? []
+    }
+    /// Every computer's tokens on each of the last `days` days (1–371) in the user's zone, oldest first, the last today
+    /// (`GET /api/v1/usage/days`, docs/server/machines.md "Token usage history"): the assistant's on the Persona page.
+    /// 404 from a hub before it.
+    func usageDays(_ days: Int) async throws -> UsageDays {
+        struct Body: Decodable { var usage: UsageDays }
+        return try await currentAssistantSettings().get("/api/v1/usage/days", query: ["days": String(days)], as: Body.self).usage
+    }
+    /// The last `days` days (1–7) by the hour, each computer's share and the total (`GET /api/v1/usage/hours`).
+    func usageHours(_ days: Int = 7) async throws -> UsageHours {
+        struct Body: Decodable { var usage: UsageHours }
+        return try await currentAssistantSettings().get("/api/v1/usage/hours", query: ["days": String(days)], as: Body.self).usage
     }
     /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
     /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.

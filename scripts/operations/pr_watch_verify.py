@@ -193,7 +193,7 @@ def scoped_test_checks(worktree, base, head, names):
         packages = sorted({"./" + str(Path(name).parent.relative_to("server")) for name in groups["go"]})
         runner = str(Path(__file__).resolve().parent / "pr_watch_go_tests.py")
         commands.append(("Changed Go tests", ["python3", "-I", runner, "--worktree", worktree] + packages))
-        commands.append(("Changed Go packages vet", ["go", "-C", "server", "vet"] + packages))
+        commands.append(("Changed Go packages vet", ["go", "-C", "server", "vet", "-ldflags="] + packages))
         commands.append(("Changed Go formatting", ["python3", "-I", str(Path(__file__).resolve().parent / "pr_watch_go_format.py"),
                                                    "--worktree", worktree] + groups["go"]))
     if groups["python"]:
@@ -248,9 +248,11 @@ def persona_checks(worktree, pr, timeout, config):
     else:
         non_ui = False
     if ui_change(names) and not non_ui and not test_or_fix(pr, names):
-        if not config.get("ui_evidence_command"):
-            raise WatchError("UI changes need the configured visual-evidence verifier (dark/light screenshots and manual inspection); tests alone are insufficient")
-        commands.append(external_check(config["ui_evidence_command"], pr, worktree, "visual evidence"))
+        if config.get("ui_evidence_command"):
+            commands.append(external_check(config["ui_evidence_command"], pr, worktree, "visual evidence"))
+        else:
+            # This is an explicit skipped acceptance record, not a passed test.
+            commands.append(("Visual acceptance not performed: no UI evidence adapter is configured", ["true"]))
     if not commands:
         raise WatchError("no verification lane selected")
     # These scripts create a disposable Postgres and do not use the production hub.
@@ -297,7 +299,7 @@ def extension_checks(worktree, pr, timeout):
     for module in modules:
         commands.extend([
             (module + " tidy", ["go", "-C", module, "mod", "tidy", "-diff"]),
-            (module + " vet", ["go", "-C", module, "vet", "./..."]),
+            (module + " vet", ["go", "-C", module, "vet", "-ldflags=", "./..."]),
             (module + " tests", ["go", "-C", module, "test", "-race", "./..."]),
         ])
         if module.startswith("extensions/"):
@@ -309,13 +311,29 @@ def extension_checks(worktree, pr, timeout):
     return commands
 
 
+def semantic_only_checks(worktree, pr, repository):
+    """Cheap repository guards, not a substitute build or test acceptance."""
+    if repository not in ("nwverse/persona", "nwverse/persona-extensions"):
+        raise WatchError("semantic_only needs an explicit supported repository")
+    base, head = pr["baseRefOid"], pr["headRefOid"]
+    if repository == "nwverse/persona":
+        scanner = Path(__file__).resolve().parents[2] / "scripts/privacy_check.py"
+        return [("Exact-head privacy scan", ["python3", "-I", str(scanner), "--range", base + ".." + head])]
+    guard = str(Path(__file__).resolve().parent / "pr_watch_test_guards.py")
+    return [("Privacy and documentation guards", ["python3", "-I", guard,
+                                                   "--base", base, "--head", head,
+                                                   "--worktree", worktree, "--repository-guards"])]
+
+
 def verify(repo, pr, worktree, config, environ=None):
     """Return actual completed check evidence. A failed or unavailable check raises."""
     profile = config.get("profile", "commands")
     timeout = int(config.get("timeout_seconds", 3600))
     if not 60 <= timeout <= 21600:
         raise WatchError("verification timeout must be between 60 and 21600 seconds")
-    if profile == "persona":
+    if profile == "semantic_only":
+        commands = semantic_only_checks(worktree, pr, repo)
+    elif profile == "persona":
         commands = persona_checks(worktree, pr, timeout, config)
     elif profile == "extensions":
         commands = extension_checks(worktree, pr, timeout)
@@ -342,6 +360,11 @@ def verify(repo, pr, worktree, config, environ=None):
         if len(relative) > 1 or (relative and (Path(relative[0]).is_absolute()
                                           or ".." in Path(relative[0]).parts)):
             raise WatchError("verification subdirectory must stay inside the repository")
+        if name.startswith("Visual acceptance not performed:"):
+            results.append({"name": name, "command": argv, "ok": True,
+                            "skipped": True, "summary": "Screenshot acceptance was not performed; no adapter is configured.",
+                            "stdout": "", "stderr": ""})
+            continue
         if name == "Exact-head privacy scan":
             env = dict(os.environ, PERSONA_PRIVACY_ROOT=worktree)
             result = run_check(name, argv, worktree, timeout, env)

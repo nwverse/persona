@@ -34,7 +34,8 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	p := n.spare
 	if p == nil || !p.alive() || time.Since(p.born) > assistantSpareMaxAge ||
 		((p.agent == "claude" || p.agent == "codex") && p.personaMCPOnly != n.hubSupportsPersonaContracts()) ||
-		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) {
+		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) ||
+		n.toolSearchStale(p) { // its endpoint refused tool search since it started (#10365)
 		return nil
 	}
 	// A Claude start names the profile it resolved (assistantProfileSelection), Persona's own included; a spare warmed in
@@ -49,6 +50,9 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 
 // assistantWarm makes sure a fresh spare process is waiting for the next new conversation.
 func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) error {
+	if proto.IsExternalLauncher(launcher) {
+		return externalRefusal(context.Background(), "adapter_purpose_unsupported")
+	}
 	if n.assistantRuntime(launcher) != nil { // a runtime is running already: nothing to start ahead
 		if executionOption(options).SupervisionInstructions != "" {
 			return supervisionRuntimeRefusal(context.Background())
@@ -71,10 +75,12 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 	if err := n.ensureManaged(context.Background(), launcher); err != nil {
 		return err
 	}
+	// The main chat's spare starts with its window as the main conversation's start carries it (assistantSend, #7314).
+	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.IsMain, execution.MainCompactWindow)
 	if agent, err := n.assistantAgent(context.Background(), launcher); err != nil {
 		return err
 	} else if agent == "claude" {
-		execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), "", launcher, execution.Runtime, execution.ConfigDir, false)
+		execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), "", launcher, execution.ConfigDir, false)
 		if err != nil {
 			return err
 		}
@@ -86,7 +92,8 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 	if old != nil && old.alive() && old.launcher == launcher && old.cwd == cwd &&
 		((old.agent != "claude" && old.agent != "codex") || old.personaMCPOnly == n.hubSupportsPersonaContracts()) &&
 		(old.agent != "claude" || sameAssistantProfile(old.model.ConfigDir, execution.ConfigDir)) &&
-		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 {
+		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 &&
+		!n.toolSearchStale(old) { // one adoptSpare would refuse: replaced by one started with every tool loaded (#10365)
 		n.mu.Unlock()
 		return nil
 	}

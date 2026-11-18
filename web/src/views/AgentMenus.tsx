@@ -1,6 +1,6 @@
 // The Agents list's menus (iOS AgentRowMenu / SpaceMenuItems): a row's ⋯ or right click, a space's ⋯ on its header,
 // and the confirmation of "Mark all as seen". What they do is in lib/agent-actions.ts.
-import { attachLive, flipMute, flipPin, handToPersona } from "../lib/agent-actions";
+import { flipMute, flipPin, handToPersona } from "../lib/agent-actions";
 import { errorText } from "../lib/api";
 import { resumeCommand, sessionCanRename, sessionDeletable, sessionMenuActions } from "../lib/format";
 import { appArchiveDeps, archiveAgent, archiveOffers, deleteInsteadOfArchive } from "../lib/agent-archives";
@@ -15,9 +15,10 @@ import { sessionNode } from "../lib/node-actions";
 import { Button, copyText, Dialog, toast, type MenuItem } from "../ui/atoms";
 import type { MenuAt } from "../ui/menu-model";
 import { NodeMenu } from "./NodeMenu";
+import { preloadSessionDialogs } from "./chat/SessionDialogs";
 import { t } from "../i18n";
 import { markAllSeenLabel } from "../lib/state-labels";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import type { SpaceMenuProps } from "./SpaceMenu";
 
 /** What a row's ⋯ (and its right click) offers. `onLinkTodo`: the row can hang on a todo ("Link to to-do…"; "Move to another to-do…" and
@@ -28,7 +29,7 @@ export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boole
   // "Live link" shows when the chat's ⋯ shows it (sessionMenuActions), and does the same (#3405); so do Archive and Close…
   const allowed = sessionMenuActions(s);
   return [
-    ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attachLive(s) }] : []),
+    ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void import("../lib/attach-live").then((m) => m.attachLive(s)) }] : []),
     { key: "pin", label: o.pinned ? t("agentmenus.unpin") : t("agentmenus.pin"), icon: "pin", accel: "p", onSelect: () => void flipPin(s) },
     // as the chat's ⋯: by capabilities.rename where the node says so (a runtime's session, #6294)
     ...(sessionCanRename(s) ? [{ key: "rename", label: t("agentmenus.rename"), icon: "pencil" as const, accel: "r", onSelect: () => onRename(s) }] : []),
@@ -82,11 +83,14 @@ export function AgentRowMenu({ s, anchor, at, onClose, ...o }: { s: Session; anc
   const muted = useStore((st) => isMuted(s, st.mutes));
   const features = useStore((st) => st.features);
   const online = useStore((st) => st.machines.find((m) => m.id === s.machine_id)?.online !== false);
+  // its Rename… and Delete… open dialogs from a chunk of their own: on its way while the pointer moves to them (#10382)
+  useEffect(preloadSessionDialogs, []);
   return <NodeMenu node={sessionNode(s, online)} at={at ?? { anchor }} onClose={onClose} before={agentRowMenuItems(s, { pinned, muted, features, ...o })} omit={["node-copy-path", "node-rename"]} />;
 }
 
 const LazySpaceMenu = lazy(() => import("./SpaceMenu").then((module) => ({ default: module.SpaceMenu })));
 export function SpaceMenu(props: SpaceMenuProps) {
+  useEffect(preloadSessionDialogs, []); // its Rename… opens a dialog from a chunk of its own (#10382)
   return <Suspense fallback={null}><LazySpaceMenu {...props} /></Suspense>;
 }
 

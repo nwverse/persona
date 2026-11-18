@@ -58,6 +58,9 @@ func init() {
 			if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
 				return // only its manager lists a machine's sessions (ownership.go)
 			}
+			if m := h.localMachine(p.MachineID); m != nil {
+				m.archivedOnlyOf(c.managerID())
+			}
 			h.takeFleetSessions(p)
 			return
 		}
@@ -75,8 +78,20 @@ func init() {
 		if err != nil {
 			return
 		}
+		m.archivedOnlyOf(c.managerID())
 		p.Sessions = list
 		h.takeFleetSessionsFrom(m, p, raws)
+	})
+	// A machine's archived rows told apart from its list (assistantwire.Hello.ArchivedApart, #6836): kept for lookups
+	// by session only. They change nothing the apps get, so nothing is pushed.
+	handleBusEvent(assistantwire.EventFleetArchived, func(h *Hub, c *busConn, params json.RawMessage) {
+		var p assistantwire.FleetArchived
+		if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
+			return
+		}
+		if m := h.localMachine(p.MachineID); m != nil {
+			m.setArchived(c.managerID(), p.Sessions)
+		}
 	})
 	handleBusEvent(assistantwire.EventFleetInteraction, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p assistantwire.FleetInteraction
@@ -283,7 +298,8 @@ func sameJSON(a, b any) bool {
 	return string(x) == string(y)
 }
 
-// decorated is a machine's sessions as the apps get them: the manager's last list.
+// decorated is a machine's sessions as the manager listed them, stamped: its last list, with the archived rows it
+// told apart (Machine.sessionList). The apps get it through Hub.shown, which leaves those out.
 func (h *Hub) decorated(m *Machine) []proto.Session {
 	list := m.sessionList()
 	h.stampSessions(m, list)
@@ -610,6 +626,17 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
+		h.forwardOwned(w, h.captureOwnerAnswer(r), h.byInteraction)
+	})))
+	// A clarification is an owner's free-text message to the originating
+	// conversation, not a card answer. Restricted answer-only devices and
+	// extension principals cannot speak as the owner here. The operation receipt
+	// and the manager's client_msg_id together make an unchanged retry one message.
+	api.HandleFunc("POST /api/v1/interactions/{id}/clarify", h.withoutTerminalControls(h.withClientOp("clarify", func(w http.ResponseWriter, r *http.Request) {
+		if answerOnly(r) || principalOf(r.Context()).Role == roleExtension {
+			writeErr(w, http.StatusForbidden, errors.New("only the owner can ask an approval question"))
+			return
+		}
 		h.forwardOwned(w, r, h.byInteraction)
 	})))
 	// Body client_id uses the same durable operation receipts as resolve.

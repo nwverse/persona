@@ -634,6 +634,9 @@ func (d *Devices) forward(machine, event string, params any) {
 // Call is devices.call: a call to a machine's node, coded for the hub (no_device, machine_offline, node_closed;
 // the node's own coded errors as they are).
 func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	if reservedOwnerControl(p.Method) {
+		return nil, errReservedOwnerControl
+	}
 	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
 		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
 	}
@@ -659,6 +662,15 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 		if params, err = ownerInputParams(p, params); err != nil {
 			return nil, err
 		}
+	} else if carriesOwnerInput(p.Method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if p.Method == "session.interrupt" && trustedHumanInput(p) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, p.Method)
+		}
 	}
 	if refusesHandoff(p.Method, params) {
 		return nil, errHandoffRefused
@@ -681,8 +693,12 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if p.Method == "sessions.list" {
 		snapshot = new(sessionSnapshot)
 	}
+	modeSID, modeFrom, modeTo, recordMode := m.modeSetFrom(p, params) // the record of mode changes (mode_changes.go)
 	var out json.RawMessage
 	err := m.callWithSnapshot(ctx, p.Method, params, &out, snapshot)
+	if recordMode && err == nil {
+		m.recordModeSet(p.Actor, modeSID, modeFrom, modeTo, out)
+	}
 	d.observeCreationCall(p, params, out, preparation, err)
 	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
@@ -894,12 +910,25 @@ func (d *Devices) NodeAnnounced(id, capability string) bool {
 // CallNode is a call to a machine's node from the manager itself (the assistant's device.call): errors as the
 // hub's were (apierr.ErrOffline, rpc.ErrClosed, the node's *rpc.Error).
 func (d *Devices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
+	if reservedOwnerControl(method) {
+		return nil, errReservedOwnerControl
+	}
 	m := d.machineByID(id)
 	if m == nil {
 		return nil, ErrNoMachine
 	}
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
+	}
+	if carriesOwnerInput(method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if method == "codex.answer" && devicewire.IsOwnerAnswer(ctx) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, method)
+		}
 	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {

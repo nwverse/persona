@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -18,14 +17,24 @@ import (
 
 // probeLauncherHealth runs launchers.check for launcher on machine; false when the machine could not be asked (no result).
 func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher string) (healthResult, bool) {
+	if proto.IsExternalLauncher(launcher) {
+		return healthResult{}, false // no automatic calls to an opt-in, main-chat-only source
+	}
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
+	observed, _ := s.launcherHealth(ctx, machine, launcher)
+	params := map[string]any{"name": launcher}
+	if observed.Kind == errKindUsageLimit && observed.unusable() {
+		if models := observed.limitModels(); len(models) > 0 {
+			params["model"] = models[0] // one family per probe; a pass clears it and the next probe asks the next
+		}
+	}
 	var res proto.LauncherCheck
-	if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": launcher}, &res); err != nil {
+	if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, params, &res); err != nil {
 		s.logf("launcher health: check %s on %s: %v", launcher, machine, err)
 		return healthResult{}, false
 	}
-	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck}, true
+	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck, observed: &observed}, true
 }
 
 // healthLaunchers are the launchers to check on machine: those it can start (its ~/.zshrc's, the managed ones) and
@@ -38,7 +47,7 @@ func (s *Service) healthLaunchers(ctx context.Context, machine string) ([]string
 	}
 	var out []string
 	for _, l := range list {
-		if l.Source == "" || machineSource(l.Source) || compat.Source(l.Source) == "persona" {
+		if startableLauncher(l) {
 			out = append(out, l.Name)
 		}
 	}
@@ -208,13 +217,18 @@ func (s *Service) healthyMachine(ctx context.Context, launcher, except string, s
 
 // launcherOn: machine has launcher (a managed one is on every machine; a failed list says no).
 func (s *Service) launcherOn(ctx context.Context, machine, launcher string) bool {
+	if proto.IsExternalLauncher(launcher) {
+		return false // external targets are never automatic relocation candidates
+	}
 	if launcher == "claude" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == launcher && l.Kind != "api" }) {
 		return true
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	list, err := s.machineLaunchers(cctx, machine)
-	return err == nil && slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == launcher })
+	return err == nil && slices.ContainsFunc(list, func(l proto.Launcher) bool {
+		return l.Name == launcher && l.Source != proto.ExternalLauncherSource && !proto.IsExternalLauncher(l.Name)
+	})
 }
 
 // rehome moves dir from one machine's home to another's (a path outside the home stays).
@@ -273,7 +287,8 @@ func (s *Service) claimHealthRecheck(ctx context.Context, machine, launcher stri
 }
 
 // runHealthRecheck publishes the health result before releasing waiters. A start's follow-up records failures too;
-// an on-demand detour probe only clears an old failure, preserving the periodic repair cadence.
+// an on-demand detour also records usage-limit failures so a later reset is not discarded. Other failures keep the
+// periodic repair cadence.
 func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string, rc *healthRecheck, recordFailure bool) {
 	defer func() {
 		s.health.mu.Lock()
@@ -282,24 +297,25 @@ func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string
 		s.health.mu.Unlock()
 	}()
 	rc.res, rc.got = s.probeLauncherHealth(ctx, machine, launcher)
-	if rc.got && (rc.res.ok || recordFailure) {
+	if rc.got && (rc.res.ok || recordFailure || classifyLauncherError(rc.res.err) == errKindUsageLimit) {
 		s.recordHealth(ctx, machine, launcher, rc.res)
 	}
 }
 
 // launcherUnusableNow is launcherUnusable after one on-the-spot probe of a failing record, for a start about to
 // move or be refused because of it: the record can lag behind a fix, so a pass clears it and the start stays on the
-// asked machine (#2018). Two records cannot be settled by a probe: a subscription usage limit (the request would be
-// refused too) and a launcher the terminal's shell cannot run (the probe's login shell runs it fine); only a real
-// start clears those.
+// asked machine (#2018). A usage limit can be over before its reset, or with its reset unknown (#9386): it is probed
+// too, once its evidence is healthRecheckThrottle old, and the claim's throttle spaces the probes after that. A
+// terminal-shell failure cannot be settled by the probe's login shell; only a real start clears it.
 func (s *Service) launcherUnusableNow(ctx context.Context, machine, launcher string) (LauncherHealth, bool) {
 	r, bad := s.launcherUnusable(ctx, machine, launcher)
-	if !bad || r.Kind == errKindUsageLimit || r.Kind == errKindNotInTerminal {
+	if !bad || r.Kind == errKindNotInTerminal {
 		return r, bad
 	}
-	if res, got, checked := s.recheckLauncherNow(ctx, machine, launcher); checked && got && res.ok {
-		return LauncherHealth{}, false
+	if r.Kind == errKindUsageLimit && time.Since(r.CheckedAt) < healthRecheckThrottle {
+		return r, bad
 	}
+	s.recheckLauncherNow(ctx, machine, launcher)
 	// The shared follow-up may have finished between the first read and the throttled claim. Decide from its
 	// published result, not the stale failure that led us here.
 	return s.launcherUnusable(ctx, machine, launcher)

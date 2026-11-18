@@ -33,6 +33,7 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 	}
 	tools := append(s.phoneTools(ctx), agents...)
 	if !assistant {
+		tools = append(tools, s.knowledgeFolderTools(ctx)...)
 		tools = append(tools, s.AgentTools()...)       // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
 		tools = append(tools, s.dispatchTools(ctx)...) // dispatch_start, dispatch_read, when agents.dispatch is on (dispatch.go)
 	}
@@ -101,7 +102,10 @@ func (s *Service) phoneTools(ctx context.Context) []proto.Tool {
 }
 
 // sessionMCPTools are machine's conversation session's tools: a guest conversation's only its own (guest.go; the
-// node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools.
+// node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools. The set the process
+// asked for (mcp.tools tool_set, on ctx: toolSetOf): "supervise", a background supervisor's round, narrows an
+// assistant conversation's list to the round's (roundTools, supervise_round.go); none, or one this manager does not
+// know, is the whole list.
 func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, assistant, guestHint bool) []proto.Tool {
 	tools, err := s.sessionMCPToolsChecked(ctx, machine, session, assistant, guestHint)
 	if err != nil {
@@ -141,13 +145,16 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
 			tools = append(tools, s.spawnTools(ctx, machine, session)...)
+		} else if toolSetOf(ctx) == toolSetSupervise {
+			tools = roundTools(tools)
 		}
 		return tools, nil
 	}
 	if s.isWorkMachine(machine) {
 		return []proto.Tool{}, nil
 	}
-	return guestTools(s.mcpTools(ctx, assistant), allowed), nil
+	tools := guestTools(s.mcpTools(ctx, assistant), allowed)
+	return slices.DeleteFunc(tools, func(t proto.Tool) bool { return isKnowledgeFolderTool(t.Name) }), nil
 }
 
 // guestRefuses refuses a guest conversation's call of a tool it was not given (and any call of one the hub cannot
@@ -160,7 +167,7 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 		return proto.TextResult("tool unavailable for the moment: "+name, true), true
 	case !guest && guestHint:
 		return proto.TextResult("unknown tool "+name, true), true
-	case guest && !slices.Contains(allowed, name):
+	case guest && (isKnowledgeFolderTool(name) || !slices.Contains(allowed, name)):
 		return proto.TextResult("unknown tool "+name, true), true
 	}
 	return proto.ToolResult{}, false
@@ -169,6 +176,12 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 // mcpCall runs one: a connector's, Cua's or ego's at the hub (it says whether it is one of them), else the
 // assistant's own (for its conversations), else the phone's.
 func (s *Service) mcpCall(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool) proto.ToolResult {
+	return s.mcpCallWithOrigin(ctx, machine, session, name, args, assistant, "")
+}
+
+// mcpCallWithOrigin also takes the node's attested conversation origin. It is needed before assistant.send returns:
+// the manager's origin book is written from the returned session afterwards.
+func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool, origin string) proto.ToolResult {
 	if res, refused := s.meetingRefuses(ctx, machine, session, name, assistant); refused {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
 	}
@@ -180,6 +193,12 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	}
 	if assistant && !s.assistantCaller(ctx, machine, session) {
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
+	}
+	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
+		return res
+	}
+	if isKnowledgeFolderTool(name) && !assistant {
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
 		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
