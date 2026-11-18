@@ -15,13 +15,20 @@ let starts = 0;
 let clockOffset = 0;
 let pollFailure: "" | "network" | "503" = "";
 let pollBodies: string[] = [];
+let startBodies: string[] = [];
+let oldHub = false;
 let onDone = vi.fn<() => void>();
 const reply = (data: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
 beforeEach(() => {
- vi.useFakeTimers(); fake.paired.mockReset(); status = "pending"; pollCount = 0; starts = 0; clockOffset = 0; pollFailure = ""; pollBodies = []; onDone = vi.fn<() => void>();
+ vi.useFakeTimers(); fake.paired.mockReset(); status = "pending"; pollCount = 0; starts = 0; clockOffset = 0; pollFailure = ""; pollBodies = []; startBodies = []; oldHub = false; onDone = vi.fn<() => void>();
+ localStorage.clear();
  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
  vi.stubGlobal("fetch", vi.fn((url: string, options: RequestInit) => {
-  if (url.endsWith("/start")) { starts++; return reply({ id: `request-${starts}`, secret: "browser-only", expires_at: new Date(Date.now()+clockOffset+300000).toISOString(), qr: { rows: ["1"] } }); }
+  if (url.endsWith("/start")) {
+    startBodies.push(String(options.body));
+    if (oldHub && String(options.body).includes("replaces")) return Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({}) });
+    starts++; return reply({ id: `request-${starts}`, secret: "browser-only", expires_at: new Date(Date.now()+clockOffset+300000).toISOString(), qr: { rows: ["1"] } });
+  }
   pollCount++;
   pollBodies.push(String(options.body));
   if (pollFailure) {
@@ -69,4 +76,20 @@ it.each(["network", "503"] as const)("retries the same approved challenge after 
  expect(fake.paired).not.toHaveBeenCalled(); expect(host.textContent).toContain(t("login.qr_retry"));
  await tick(3000); expect(starts).toBe(1); expect(pollBodies).toHaveLength(2); expect(pollBodies[0]).toBe(pollBodies[1]);
  expect(fake.paired).toHaveBeenCalledExactlyOnceWith("device-token", "device-id");
+});
+
+it("names this browser's previous credential for the hub to replace, then forgets the kept one", async () => {
+ localStorage.setItem("persona.unrevokedTokenId", "dev_old");
+ status = "approved"; await mount();
+ expect(JSON.parse(startBodies[0])).toMatchObject({ replaces: "dev_old" });
+ expect(fake.paired).toHaveBeenCalledExactlyOnceWith("device-token", "device-id");
+ expect(localStorage.getItem("persona.unrevokedTokenId")).toBeNull();
+});
+
+it("starts without replacing on a hub that does not know the field", async () => {
+ localStorage.setItem("persona.unrevokedTokenId", "dev_old"); oldHub = true;
+ status = "approved"; await mount();
+ expect(startBodies).toHaveLength(2); expect(JSON.parse(startBodies[1])).not.toHaveProperty("replaces");
+ expect(fake.paired).toHaveBeenCalledOnce();
+ expect(localStorage.getItem("persona.unrevokedTokenId")).toBe("dev_old");
 });
