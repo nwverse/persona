@@ -634,6 +634,8 @@ func writePingActivity(t *testing.T, w io.Writer, peer *rpc.Peer, chunk string) 
 // count, a connection already gone counts neither way, and a new connection starts over.
 func TestPingMissesCountInARowOnOneConnection(t *testing.T) {
 	d := newTestDevices(t)
+	var log logLines
+	d.logf = log.logf
 	m := newMachine(d, MachineConfig{ID: "m1", Kind: "ssh", SSHHost: "m1"})
 	peer := rpc.New("h", io.Discard)
 	m.mu.Lock()
@@ -673,6 +675,9 @@ func TestPingMissesCountInARowOnOneConnection(t *testing.T) {
 	m.pingAnswered(peer, &rpc.Error{Message: "context deadline exceeded"}) // a relay's words for its wait running out
 	if open() {
 		t.Fatal("two misses in a row did not close the connection")
+	}
+	if got := log.with("no answer to 2 pings in a row over", "nothing received yet"); len(got) != 1 {
+		t.Fatalf("close lines = %q, want one saying nothing was received", log.lines)
 	}
 
 	// A connection the machine no longer uses is not closed (it is the run loop's to end).
