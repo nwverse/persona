@@ -685,7 +685,7 @@ Decided by the owner in #3862; every phase follows them.
 5. **Transcription.** Privacy mode transcribes on the iPhone, and the meeting's audio never leaves it (only Talk's spans go to the realtime voice service, decision 7 and "Decided"). Hub mode transcribes with a GPT-Live-compatible live model, through that interface only (no second vendor), and is never locked to the recording's language: Chinese, English and sentences that mix them are written as spoken, never translated ("Language is a hint, never a lock"). Audio may be kept on both sides as quality needs: the phone keeps its audio until the hub confirms, and gaps can be uploaded and transcribed after the meeting. The architecture is the measured one in "Phase 5".
 6. **No speaker attribution.** The live model cannot tell voices apart (measured near chance). `who` keeps today's rule: only what the words or the calendar support.
 7. **Realtime voice first**, connected for the whole meeting (its cost is not a concern). Addressing stays a tap or push-to-talk (#2981 decision 4: no wake phrase): the voice session hears only what the owner says to it, while transcription hears everything.
-8. **Echo.** The system's echo cancellation (Persona requires iOS 26), and a transcript line that overlaps a span when Persona spoke and says its words is Persona's echo: kept and marked, left out of the minutes, the summaries and the live log ("Persona's echo", #5905; before it, every line in such a span was dropped).
+8. **Echo.** The system's echo cancellation (voice processing, on every iOS Persona supports), and a transcript line that overlaps a span when Persona spoke and says its words is Persona's echo: kept and marked, left out of the minutes, the summaries and the live log ("Persona's echo", #5905; before it, every line in such a span was dropped).
 9. **A new `transcription` extension point**, not a mode of the dictation proposal (#2083).
 10. **A new meeting card**: an in-app meeting page plus the Live Activity and Dynamic Island, with the live transcript and topics, Ask / Talk, photos, the role and the Just me switch, instead of today's pause / bookmark / stop recorder.
 11. **v1 stays.** #3746 shipped the iPhone side of #2981; the redesign comes in new PRs, and phones from before it keep the #2981 contract (`attendance` / `attending_session`, `…/live`, `…/ask`).
@@ -901,6 +901,30 @@ A meeting Persona is not in still gets its live view. Since #8731 a meeting star
 - One per recording, made at most once under the recording's lock and across restarts as the room is ("Made once" in "The room conversation"); `meeting.json` keeps the follow-up's ids. A node that cannot start under a given id starts it without one, and after a restart the manager looks for it by its origin (`meeting_followup`, this recording) before starting it again. Retention never deletes it.
 - Errors, checked in this order: `403 forbidden`, `503`, `413 too_large` (32 MiB), `410 recording_deleted`, `404 recording_not_found`, `400` (`id` missing or not a UUID, neither `text` nor `images`, `text` over 8000 characters, more than 4 images), `409 meeting_running`, `409 no_material` (neither transcript text nor minutes; a trimmed recording has only its minutes), then the start or send errors as `POST /api/v1/assistant/conversations` and `POST …/messages` give them.
 - `409 meeting_running` while the recording has no `ended_at` (one that never sends it counts as ended 12 hours after its last upload, and a trimmed one as ended), or, in a room meeting, while its room is still `starting`, `ready` or `unavailable`, which lasts at most 6 minutes after the first upload with `ended_at` ("The meeting's end"). A recording with no room, or whose room is `none`, `ended` or `deleted`, never waits for a room.
+
+#### Handing a meeting to an Agent (#8852)
+
+`POST /api/v1/recordings/{id}/handoff` sends the meeting to one of the owner's Agents after it, as the owner's own message to that Agent: the meeting's name, calendar title, start and minutes in a context block (`prompts/meeting/handoff.md`; its transcript too when asked, its start and its end within 40,000 characters), then the owner's line, or, without one, a plain ask for what in it concerns the Agent's work. An Agent has no `kb_*` tools, so everything it gets is in the message.
+
+```jsonc
+{"machine_id": "<machine id>", "session_id": "<session id>", "title": "Site redesign", "text": "Update the home page.", "transcript": false}
+```
+
+`200`: `{"handoff": {"id", "at", "machine_id", "session_id", "title"?, "transcript"?, "state": "sent" | "failed", "problem"?}}`.
+
+- **Who:** full device credentials only (an extension token gets `403`).
+- **The Agent:** held to attending's rules ("Sessions that never attend"). One of this manager's computers, not a work computer, reachable, listed there, taking messages, not `bypassPermissions`, not closed. A Persona conversation is not an Agent (the follow-up is its way). A busy Agent takes it as it takes any of the owner's messages. A refusal is kept as `failed` with `problem`: `not_agent`, `not_allowed`, `unavailable`, or `send_failed` when the computer didn't take it.
+- **When:** `409 meeting_running` while the meeting goes on (as the follow-up); `409 no_material` with neither minutes nor (asked for) a transcript.
+- **Kept:** each try in `meeting.json`'s `handoffs`, oldest first, the last 20, and as `detail.meta.handoffs`, for the meeting's page to show the last one ("Handed to …", or why not, with Retry). No part of the live protocol: the apps read them with the detail and from the call's answer.
+- **`title`** is the name the app showed for the Agent (at most 120 characters), kept only for that row.
+
+In the apps (web and iPhone; Android: its own issue):
+
+- **Where:** the recording's page on the web (**Hand to Agent…** beside Ask Persona and Rename); on the iPhone the meeting's page after it, in its **⋯**. Only once the meeting is over and has something to hand (its minutes, or its text on the hub), and only for someone with an Agent that can take it: someone who only uses the assistant never sees it.
+- **The Agents:** the Inbox's Hand to AI list (not Persona's own, taking messages, live, on a computer online now), less those the hub refuses outright: a subagent, one cut off by a restart, one in Allow All; the iPhone also leaves out what "Sessions that never attend" keeps out by what it can see (a work computer, another manager's). The latest is picked.
+- **The sheet:** the Agent, an optional line, **Include the transcript** (off; offered while the transcript is kept), and what it gets ("the summary, decisions, to-dos and open questions"). A try kept as `failed` says why in the sheet, where another Agent can be picked.
+- **The row:** at the top of the page, the latest hand-off: **Handed to "…"** with **Open** (its conversation), or **Couldn't hand to "…"** with the reason and **Retry**, which opens the sheet again with that Agent and transcript choice picked (the line is not kept). A try made on the page shows at once, before the detail is read again.
+- **Mock hub:** `POST …/handoff` as the hub has it, kept in `detail.meta.handoffs`; `MOCK_HANDOFF_FAIL=<problem>` or `POST /mock/meeting_handoff {"fail": "<problem>"}` keeps every try as failed (`scripts/mock/test_meeting_handoff_mock.py`).
 
 #### One thread
 

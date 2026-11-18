@@ -83,6 +83,45 @@ class BetaChannelReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(tag_release.ConfigError, "source"):
                 beta.previous_source(self.root, "example/project", pointer, "gh")
 
+    def test_pointer_replaces_an_old_beta_index_after_authenticating_ancestry(self):
+        previous = "b" * 40
+        old = self.root / "old.json"
+        old.write_text(json.dumps({"version": "0.7.0-beta.1", "channel": "beta", "commit": previous}))
+        old_digest = "sha256:" + hashlib.sha256(old.read_bytes()).hexdigest()
+        uploaded = []
+
+        def output(gh, path):
+            if path.endswith("/" + beta.POINTER):
+                return {"tag_name": beta.POINTER, "draft": False, "prerelease": True,
+                        "target_commitish": self.commit if uploaded else previous,
+                        "assets": [{"name": "latest.json", "digest": self.digest if uploaded else old_digest}]}
+            return {"tag_name": "v0.7.0-beta.2", "draft": False, "prerelease": True,
+                    "assets": [{"name": "latest.json", "digest": self.digest}]}
+
+        def run(argv, **kwargs):
+            if argv[:3] == ["gh", "release", "download"]:
+                shutil.copyfile(old, Path(argv[-1]))
+            if argv[:3] == ["gh", "release", "upload"]:
+                uploaded.append(argv)
+            return beta.subprocess.CompletedProcess(argv, 0)
+
+        manifest = json.loads(self.manifest.read_text())
+        manifest["version"] = "0.7.0-beta.2"
+        self.manifest.write_text(json.dumps(manifest))
+        self.receipt.write_text(json.dumps({"commit": self.commit, "assets": [{"path": str(self.manifest),
+            "name": "latest.json", "sha256": hashlib.sha256(self.manifest.read_bytes()).hexdigest()}]}))
+        self.digest = "sha256:" + hashlib.sha256(self.manifest.read_bytes()).hexdigest()
+        with patch.object(beta, "resolve_tag", side_effect=[self.commit, previous]), \
+                patch.object(beta, "get_json", side_effect=output), \
+                patch.object(beta.subprocess, "check_output", return_value=json.dumps(
+                    {"tag_name": "v0.7.0-beta.2", "draft": False, "prerelease": True,
+                     "assets": [{"name": "latest.json", "digest": self.digest}]})), \
+                patch.object(beta.subprocess, "run", side_effect=run), \
+                patch.object(beta.sys, "argv", ["beta", "--repo", str(self.root), "--repository", "example/project",
+                                                "--tag", "v0.7.0-beta.2", "--receipt", str(self.receipt)]):
+            beta.main()
+        self.assertTrue(uploaded)
+
     def test_pointer_rejects_a_stable_previous_manifest(self):
         old = self.root / "old.json"
         old.write_text(json.dumps({"version": "0.7.0", "commit": "b" * 40}))

@@ -73,7 +73,8 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	}
 	if stoppedAgent(c) { // read-only (#4754): nothing runs to stop; a resume is agent_send's (#8099)
 		return "", fmt.Errorf("%s has already stopped: nothing to interrupt, and nothing was sent. To go on with it and its "+
-			"context, use agent_send with resume true and resume_why; for unrelated work start a new agent with agent_start", agentLabel(c))
+			"context, use agent_send with resume true and resume_why; otherwise start a replacement: for its task, task_plan "+
+			"with continues (the task's todo id) and continues_why; for work on no task, agent_start", agentLabel(c))
 	}
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil { // refused before the turn is stopped or the user asked
 		return "", err
@@ -791,6 +792,7 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 
 // reportNow sends a report to the supervisor of task t as a signal, and shows it in its conversation.
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
+	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
 	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
