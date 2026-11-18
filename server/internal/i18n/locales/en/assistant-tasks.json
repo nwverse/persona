@@ -17,6 +17,7 @@
   "retried_on_launcher": "started again with {to}: {from} couldn’t start on {machine}",
   "retry_launcher_unusable": "{launcher} can’t start on {machine} right now: {reason}. Nothing was started. Launchers to try instead: {launchers}",
   "retry_model_without_launcher": "A model goes with a launcher: name the launcher too.",
+  "retry_launcher_not_started": "Nothing was started on {launcher}: this task is already starting again, or it started since. If that start fails too, choose the launcher again.",
   "start_answer_read_only": "This device can’t answer a question in a computer’s terminal.",
   "start_answer_need_choice": "Choose one of the answers.",
   "start_answer_node_outdated": "Update Persona on {machine} to answer its terminal’s question from here. Nothing was typed.",

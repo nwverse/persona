@@ -17,6 +17,7 @@
   "retried_on_launcher": "{to} で開始し直しました：{from} は {machine} で開始できませんでした",
   "retry_launcher_unusable": "{launcher} は今 {machine} で開始できません：{reason}。何も起動していません。代わりに使えるランチャー：{launchers}",
   "retry_model_without_launcher": "モデルはランチャーと一緒に指定してください。",
+  "retry_launcher_not_started": "{launcher} では何も起動していません：このタスクはすでに開始し直しているか、開始済みです。それも開始できなかったら、もう一度ランチャーを選んでください。",
   "start_answer_read_only": "このデバイスからは、コンピューターのターミナルの質問に答えられません。",
   "start_answer_need_choice": "回答を1つ選んでください。",
   "start_answer_node_outdated": "ここから答えるには、{machine} の Persona を更新してください。何も入力していません。",
