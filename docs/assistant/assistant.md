@@ -1081,7 +1081,12 @@ messages and the leader's answers to them, `ask_user` / `notify_user` rounds and
 It is the same `assistant.main_background_folded` switch (on unless turned off); an ordinary side conversation is
 unchanged. The hub's mid-turn interject note (`prompts/assistant/interject.md`,
 `<persona-context kind="context" title="插话">`) is model instructions and never renders as a quote in the owner's
-bubble on any client, while staying in the model's input:
+bubble on any client. It stays in the model's input.
+
+A known runtime placeholder at the end of a verified background input is projected as folded work on transcript
+pages and live item updates. The transcript keeps the original words and the item ID. A normal background
+completion with only a placeholder or no written reply adds no finished push. Substantive replies and
+explicit user-facing actions still follow the usual visibility rules.
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
@@ -1098,7 +1103,7 @@ bubble on any client, while staying in the model's input:
 - **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
   `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
   `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
-  with user visibility.
+  with user visibility. A completed substantive answer also opens the round unless it settled with silent visibility.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
