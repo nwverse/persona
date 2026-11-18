@@ -1010,6 +1010,11 @@ the New agent field come with W1 / I1 / A1.
   `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
   `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
   conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).
+- **The main chat moves an existing task**: `agent_transfer {machine, session_id, supervisor}` uses the same Move to
+  operation as the App, without adoption. The destination is a current direction or the main conversation; transfer
+  back to undo. The task, brief, criteria, estimate, origin and Agent session stay. Its supervision and task card move;
+  no message, interruption or restart is sent. Non-main callers, owner-created to-dos, assistant sessions and Agents
+  without an open task are refused.
 - **A leader hands out its own** `task_plan`, as before.
 
 A plan of a leader's (its own, or one the main chat handed to it) that waits for the owner's Start is a `decision`
