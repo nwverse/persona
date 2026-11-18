@@ -887,7 +887,8 @@ VITEST_RELATED = "web|npx --no -- vitest related --run --passWithNoTests "
 WEB_FULL = ["web|run check:deps", "web|run typecheck", "web|test"]
 
 # A web tree that reads files outside web/ in each form the scan knows (#10619). reads.test.ts reads through fs and a
-# Vite glob, so it always runs; tiers.ts is a module that reads through fs, so its importers always run; stream.ts and
+# Vite glob, so it always runs; build.test.mjs builds through a Vite config, whose reads no import of the test shows,
+# so it always runs too; tiers.ts is a module that reads through fs, so its importers always run; stream.ts and
 # frame-host.ts read through Vite query imports, so they join when a file they name changes.
 WEB_TREE = {
     "web/src/lib/reads.test.ts": (
@@ -900,6 +901,8 @@ WEB_TREE = {
         'const view = (name: string) => readFileSync(new URL(`../../../schema/extension/examples/View.v8-${name}.json`, import.meta.url));\n'
         'const joined = join(__dirname, "..", "..", "..", "spec", "fixtures", "joined", "x.json");\n'
         '// Comments name spec/fixtures/other without reading it.\n'),
+    "web/scripts/build.test.mjs": ('import { build } from "vite";\n'
+                                   'await build({ configFile: new URL("../vite.config.ts", import.meta.url).pathname });\n'),
     "web/src/lib/tiers.ts": ('import { readdirSync } from "node:fs";\n'
                              'export const root = new URL("../../../spec/fixtures/tiers/", import.meta.url);\n'),
     "web/src/lib/stream.ts": 'import schema from "../../../schema/extension/stream.schema.json?raw";\nexport default schema;\n',
@@ -931,7 +934,7 @@ WEB_TREE_INPUTS = [
     "spec/fixtures/tiers/**",
 ]
 # The files every related run starts from on top of the changed ones, relative to web/.
-WEB_TREE_READERS = ["src/lib/reads.test.ts", "src/lib/tiers.ts"]
+WEB_TREE_READERS = ["scripts/build.test.mjs", "src/lib/reads.test.ts", "src/lib/tiers.ts"]
 
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
@@ -1034,7 +1037,7 @@ class CheckFastWebInputsTests(unittest.TestCase):
     def test_a_view_change_runs_its_related_tests_and_the_readers(self):
         self.write("web/src/views/View.tsx", "export const View = () => 'changed';\n")
         out, npm_calls = self.check_fast()
-        self.assertIn("check-fast: web tests: vitest related, 1 changed file(s) and 2 that read files from disk", out)
+        self.assertIn("check-fast: web tests: vitest related, 1 changed file(s) and 3 that read files from disk", out)
         self.assertEqual(self.related("src/views/View.tsx"), npm_calls, out)
         self.assertIn("PASS     web", out)
 
@@ -1158,6 +1161,13 @@ class WebPlanTests(unittest.TestCase):
                        "src/lib/extension-ui-stream.test.ts"):
             self.assertIn(reader, files)
         self.assertNotIn("src/lib/forward.test.ts", files)  # imports its fixture: the import graph has it
+
+    def test_a_stylesheet_change_runs_the_build_that_reads_it(self):
+        # vite.public.config.ts reads src/styles.css with readFileSync during the public viewer's build, which
+        # scripts/public-share-build.test.mjs runs through Vite's build(): no import of the test reaches the file.
+        mode, _, files = self.paths.web_plan(["web/src/styles.css"])
+        self.assertEqual("related", mode)
+        self.assertIn("scripts/public-share-build.test.mjs", files)
 
     def test_shared_entry_points_run_the_whole_suite(self):
         for path in ("web/src/lib/store.ts", "web/src/lib/api.ts", "web/src/ui/atoms.tsx", "web/src/i18n/index.ts",

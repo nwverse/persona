@@ -36,6 +36,8 @@ _WILDCARD = re.compile(r"[*?\[{$]")
 WEB_FULL_SUITE = ("web/src/lib/store.ts", "web/src/lib/api.ts", "web/src/ui/atoms.tsx", "web/src/i18n/*")
 WEB_CONFIGS = ("web/vite.config.ts", "web/vite.public.config.ts")
 _CONFIG_IMPORT = re.compile(r"""from\s+["'](\./src/[^"']+)["']""")
+# The modules a file imports to build, serve or test through a Vite config (WebFile.build).
+_VITE_API = ("vite", "vitest/node")
 
 
 class WebFile:
@@ -44,6 +46,9 @@ class WebFile:
     fs: it reads through node's fs (fs, node:fs, readFileSync), so the path can be built at run time.
     vite: it reads through Vite, a glob or a query import (?raw, ?url, ?inline, ?worker). Those paths are literal, but
     vitest related follows a dependency only when its id is a file on disk, which a query import's never is.
+    build: it imports Vite's or vitest's node API (vite, vitest/node), so it builds or serves through a Vite config
+    (scripts/public-share-build.test.mjs). What that build reads, the config's own reads included (vite.public.config.ts
+    reads src/styles.css with readFileSync), is in no import of the file.
     named: the repository paths it names relative to itself (a trailing / for a directory), wildcards kept.
     """
 
@@ -55,6 +60,7 @@ class WebFile:
         refs += ["/".join(_ELEMENT.findall(match.group(0))) for match in _JOINED.finditer(text)]
         self.fs = "readFileSync" in text or (("fs\"" in text or "fs'" in text) and bool(_FS_IMPORT.search(text)))
         self.vite = "import.meta.glob" in text or any("?" in ref for ref in refs)
+        self.build = any(f"{quote}{name}{quote}" in text for name in _VITE_API for quote in "\"'")
         base = posixpath.dirname(path)
         named = set()
         for ref in refs:
@@ -164,8 +170,8 @@ def web_plan(changed, root=ROOT):
     "none" when nothing changed under web/ or in a file web/src and its tests read; "full" when the whole suite runs
     (WEB_FULL_SUITE, anything in web/ outside web/src, a module the Vite configs import); "related" when vitest related
     runs from files, relative to web/: the changed web/src and outside files, every vitest file that reads through fs
-    or Vite (the import graph does not see what they read), every other web/src module that reads through fs, and each
-    one that reads through Vite a path a changed file matches.
+    or Vite or builds through a Vite config (the import graph does not see what they read), every other web/src module
+    that reads through fs or builds, and each one that reads through Vite a path a changed file matches.
     """
     root = Path(root)
     inputs = web_inputs(root)
@@ -184,10 +190,9 @@ def web_plan(changed, root=ROOT):
             return "full", f"{path} is part of the Vite config", []
     readers = []
     for file in web_scan(root):
-        if file.test and (file.fs or file.vite):
-            readers.append(file.path)
-        elif file.fs or (file.vite and any(fnmatch.fnmatchcase(path, pattern)
-                                            for pattern in _read_patterns(root, file) for path in changed)):
+        always = file.fs or file.build or (file.test and file.vite)
+        if always or (file.vite and any(fnmatch.fnmatchcase(path, pattern)
+                                        for pattern in _read_patterns(root, file) for path in changed)):
             readers.append(file.path)
     files = list(dict.fromkeys(web + outside + sorted(readers)))
     reason = f"{len(web) + len(outside)} changed file(s) and {len(readers)} that read files from disk"

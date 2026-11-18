@@ -16,8 +16,9 @@
 #                              node_modules against package-lock.json, typecheck, then the tests that python3
 #                              scripts/ci/paths.py --web-plan picks (#10619):
 #     web/src/** only          npx vitest related --run: the tests whose imports reach a changed file, plus every
-#                              vitest file that reads files from disk (fs, readFileSync, import.meta.glob, ?raw: the
-#                              import graph does not see those reads), found by scanning the tests at run time
+#                              vitest file that reads files from disk (fs, readFileSync, import.meta.glob, ?raw) or
+#                              builds through a Vite config (imports vite): the import graph does not see those
+#                              reads. They are found by scanning the tests at run time
 #     web/src/lib/store.ts, web/src/lib/api.ts, web/src/ui/atoms.tsx, web/src/i18n/**, a web/src module the Vite
 #     configs import, anything in web/ outside web/src (configs, package.json, package-lock.json, scripts/, e2e/)
 #                              npm test, the whole suite (as --all does)
