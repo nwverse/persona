@@ -19,6 +19,21 @@ unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call`
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
   `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
 
+## Compact unattended delivery from actual context and user activity (#8658)
+
+Supervision and scheduled messages are inputs but are not user activity. Keep their structured source when deciding
+whether the owner has been away; reset the idle clock when the owner's input arrives, before a send lock can wait.
+Claude's `result.usage` and `modelUsage` aggregate requests and cannot stand in for context size. Use the last
+main-model request's input plus cache-read and cache-creation tokens, or `compact_boundary`'s `post_tokens`.
+Wait for the compaction command's result, not just its boundary, before writing the next message: the result still
+ends that command. Persist the attempt latch with the session, and rearm only after user activity or a context drop
+below the threshold followed by another idle interval. Failed compactions must not turn every background wake into
+another summary attempt.
+
+Node-only JSON round trips do not prove this state survives a restart. The manager decodes `state.put` through
+`db.NodeSession`, then writes the `node_model` settings value and projects it back for `state.load`. Carry the opaque
+idle state through every boundary, and test the real manager entry points against Postgres after reopening the store.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt

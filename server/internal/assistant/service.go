@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/saved"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -492,6 +493,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
+		}
+	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) && p["is_main"] == true {
+		p["idle_compaction"] = assistantwire.IdleCompaction{
+			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {

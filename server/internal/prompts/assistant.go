@@ -1127,13 +1127,9 @@ func RenderTaskAttachments(a TaskAttachments) string {
 	return strings.TrimRight(render("assistant/task_attachments", a), "\n")
 }
 
-// SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
-type SideConversation struct {
-	From, Text string
-}
-
-func RenderSideConversation(in SideConversation) string {
-	return render("assistant/side_conversation", in)
+// RenderSideConversation marks a separate request for an Agent assigned to a task.
+func RenderSideConversation(text string) string {
+	return render("assistant/side_conversation", text)
 }
 
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
