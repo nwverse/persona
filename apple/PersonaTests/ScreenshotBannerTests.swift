@@ -119,6 +119,50 @@ import UIKit
         #expect(PersonaBrandLockup.showsProduct(after: "Persona Two"))
     }
 
+    /// The banner's row (#10172): the face and the name at the left, GitHub's mark and the repository at the right.
+    /// Where an iPhone's bar has room the repository stays whole and a long name is cut; a short name stays whole with
+    /// it; where not even the name's first characters fit beside it (the narrowest iPad split), the mark alone. The
+    /// banner draws what the row it picks draws, to the pixel, as `FirstFittingTests` checks `ViewThatFits`.
+    @Test func theRepositoryStaysWholeWhileTheNameIsCut() throws {
+        let long = "家庭生活、研究资料与日程整理全能助理", short = "助手"
+        // An iPhone 17 Pro's bar and a narrow iPhone's between the page margins; an iPad split's narrowest column.
+        for width: CGFloat in [370, 343] {
+            let banner = try png(PersonaBrandLockup(size: .banner, name: long), width: width)
+            #expect(banner == (try png(PersonaBannerRow(name: long, slim: false, showsRepository: true), width: width)),
+                    "\(width) pt: a long name and the repository")
+            #expect(banner != (try png(PersonaBannerRow(name: long, slim: false, showsRepository: false), width: width)))
+            #expect((try png(PersonaBrandLockup(size: .banner, name: short), width: width))
+                    == (try png(PersonaBannerRow(name: short, slim: false, showsRepository: true), width: width)),
+                    "\(width) pt: a short name and the repository")
+        }
+        let narrow: CGFloat = 288
+        #expect((try png(PersonaBrandLockup(size: .banner, name: long), width: narrow))
+                == (try png(PersonaBannerRow(name: long, slim: false, showsRepository: false), width: narrow)),
+                "\(narrow) pt: the mark alone")
+        // The bar's largest text size (xxxLarge, where the slim row stands in the bar): the repository still stays.
+        let large = try png(PersonaBrandLockup(size: .slim, name: long), width: 370, typeSize: .xxxLarge)
+        #expect(large == (try png(PersonaBannerRow(name: long, slim: true, showsRepository: true), width: 370, typeSize: .xxxLarge)),
+                "xxxLarge: a long name and the repository")
+        save(large, "banner-row-slim-xxxLarge-370")
+        save(try png(PersonaBrandLockup(size: .banner, name: long), width: narrow), "banner-row-288")
+        save(try png(PersonaBrandLockup(size: .banner, name: long), width: 343), "banner-row-343")
+        #expect(PersonaBrandLockup.repository == "nwverse/persona")
+    }
+
+    private func png(_ v: some View, width: CGFloat, typeSize: DynamicTypeSize = .large) throws -> Data {
+        let r = ImageRenderer(content: v.frame(width: width, alignment: .leading).background(Color.white)
+            .environment(AppModel.shared).dynamicTypeSize(typeSize))
+        r.scale = 2
+        return try #require(r.uiImage?.pngData())
+    }
+
+    /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps the rows drawn here, for a look.
+    private func save(_ png: Data, _ name: String) {
+        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+    }
+
     /// A picture of the window shows the banner where the bar is; revealed, the bar; after, the banner again.
     @Test func picturesShowTheBannerUnlessRevealed() async throws {
         let w = try await window(Sample())
