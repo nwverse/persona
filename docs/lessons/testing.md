@@ -458,6 +458,15 @@ listed" did, and its title check (the row takes the old session's title, read of
 transcript was long enough to be listed (`longTurn`). Before asserting a row is absent, assert it is there in the same
 setup.
 
+## A throwaway hub started from an Agent's terminal uses the real state directory (2026-11-17, #10096)
+
+An Agent that Persona started inherits `PERSONA_HOME`, and `identity.DataDir` takes it before `HOME`: a throwaway
+`personad hub run` with only `HOME=<tmp>` reads and writes the machine's real `~/.persona/hub.json` (a first run writes a
+default one), and `personad hub setup` then creates the shared `persona-postgres` container and writes its address into
+that file. Set `PERSONA_HOME=<tmp>/.persona` (and `HOME`), give the throwaway `hub.json` its own `database_url` and
+`listen` instead of running `hub setup`, and list the real state directory and `docker ps -a` afterwards. If it happened,
+remove only what the run created (check creation times first), never a file that was there before.
+
 ## A simulator that ran against the mock hub uploads its recordings to the next hub it pairs with (2026-11-17, #9417)
 
 Recordings a UI test makes against the mock hub stay in the simulator's library, and the app syncs whatever the hub it
@@ -1204,3 +1213,5 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - A Windows-looking `NodeContext` does not make a Linux process use Windows `filepath` semantics. Run the Windows-specific naming tests on Windows, or explicitly label any extracted lexical-path fixture and its substitutions. Cross-compilation checks compilation only. Keep settings syntax, target-native resolution, Node authorization and actual filesystem behavior as separate claims; never widen path permissions to make a host-mismatched reproduction pass.
 - Windows namespace prefixes can make `filepath.Rel` reject an equivalent ordinary path as a different volume. Test both workspace and private-state spellings, including drive and UNC forms; a failed containment comparison is not proof that a path is outside private state. Naming rejects these namespaces rather than stripping their special semantics.
 - A lazy settings subtree needs its own `PageBoundary` inside the surrounding settings page. Reproduce a chunk failure by blocking the browser's actual module request, then verify that sibling settings remain editable and their drafts can still save. Restore the resource and use the existing Reload action to verify recovery of the module and persisted rules; a mocked component or a JSX-shape assertion cannot establish that behavior.
+
+- An export-only change in a deferred editor need not reduce the first screen. Measure it, revert an ineffective trial, and inspect the shared code that startup actually ships. Remove duplicated work there while retaining validation and request-lifetime guards; keep the original budget and verify the normal app/public build.
