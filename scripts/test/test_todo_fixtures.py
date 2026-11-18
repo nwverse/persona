@@ -1,13 +1,13 @@
 """spec/fixtures/todo-detail and spec/fixtures/todo-layout (#10465): the to-do page's elements and the To-dos window
-rule as data, which every client replays (iOS first: the paper's elements and `todoPanes`).
+rule as data. No client reads them yet: iOS will replay them from its paper and its layout (#10465), the web and
+Android from their stages.
 
     python3 -B scripts/test/test_todo_fixtures.py
 
 Each set's format and ids; every case follows the rules its README states (written out below as `paper` and
-`todo_panes`, so a case and its README cannot drift apart); a layout's regions fill its window; every window of
-docs/design/proposals/todos-redesign.md 3.8's table is there at the default text size with the conversation closed and
-open, with the table's widths; and the guard of the proposal's 7.7: the everyday cases name no engine, runtime, model,
-path, repository or session id.
+`todo_panes`, so a case and its README cannot drift apart); the proposal's three page columns (3.5) and its table of
+windows (3.8), written down apart from those rules; a layout's regions fill its window; and the guard of the
+proposal's 7.7: the everyday cases name no engine, runtime, model, path, repository or session id.
 """
 
 import importlib.util
@@ -22,6 +22,7 @@ FIXTURES = ROOT / "spec" / "fixtures"
 DETAIL = FIXTURES / "todo-detail"
 LAYOUT = FIXTURES / "todo-layout"
 SCHEMA = ROOT / "schema" / "wire" / "todo-view.schema.json"
+ASSISTANT = ROOT / "server" / "internal" / "assistant"
 
 
 def load_module(name):
@@ -42,40 +43,86 @@ CASE_KEYS = {"name", "description", "source", "input", "expected"}
 
 ELEMENTS = ("bar", "title", "state_line", "recap", "ask_card", "ask_door", "ask_pointer", "chips", "notes", "brief",
             "help", "steps", "results", "conversation_block", "conversation_pointer", "work_details", "composer")
-ONE_OF = (("ask_card", "ask_door", "ask_pointer"), ("conversation_block", "conversation_pointer"))
-PRIMARY = ("ask", "mark_done", "tick", "none")
+ASK_ELEMENTS = ("ask_card", "ask_door", "ask_pointer")
+ONE_OF = (("conversation_block", "conversation_pointer"),)
+PAGES = ("paper", "as_before")
+PRIMARY = ("ask_card", "ask_door", "mark_done", "tick", "none")
 AUDIENCES = ("everyday", "agents")
 RUN = re.compile(r"^run:([^/\s]+)/(\S+)$")
 OPENERS = ("list", "assistant")  # or run:<machine_id>/<session_id>
-# What GET /api/v1/todos lists on every row (the hub's listedTodo writes them always).
-ROW_FIELDS = {"id", "title", "notes", "done_at", "created_at", "updated_at", "spaces", "agents", "quiet", "view"}
-# The pages #10465 asks these cases for, by case: the proposal's three columns and the states around them.
+# What GET /api/v1/todos lists on every row (the hub's listedTodo writes them always); `view` only from a manager that
+# names todo_view.
+ROW_FIELDS = {"id", "title", "notes", "done_at", "created_at", "updated_at", "spaces", "agents", "quiet"}
+# The pages these cases must cover: the proposal's three columns, the states around them, several asks on one page and
+# rows a client of this version does not know all of.
 DETAIL_NAMED = {"kyoto_needs_your_choice", "login_fix_waits_for_merge", "release_door_from_widget", "fresh_todo",
                 "closed_done_by_persona", "failed_start_with_origin", "failed_start_without_origin",
-                "just_finished_mark_done", "release_pane_on_the_steward", "release_pane_on_the_widget_run"}
+                "just_finished_mark_done", "release_pane_on_the_steward", "release_pane_on_the_widget_run",
+                "nara_step_and_plan_both_ask", "nara_pane_on_the_guide_run", "can_wait_decision",
+                "row_from_an_older_manager", "section_from_a_newer_hub", "unknown_ask_is_skipped"}
+# Cases whose view carries a value of an open enum this version's schema does not list, as a newer hub may send.
+NEWER_HUB = {"section_from_a_newer_hub", "unknown_ask_is_skipped"}
+# Cases whose row has no view, as from a manager that does not name todo_view.
+OLDER_MANAGER = {"row_from_an_older_manager"}
+
+VIEW_SCHEMA = json.loads(SCHEMA.read_text())
+
+
+def known(definition):
+    """The values of a view schema enum: what a client generated from this version of the schema knows."""
+    return set(VIEW_SCHEMA["$defs"][definition]["enum"])
+
+
+PHASES, SECTIONS, REASONS = known("TodoPhase"), known("TodoListSection"), known("TodoReason")
+ASK_KINDS, ASK_HOMES = known("OwnerAskKind"), known("OwnerAskHome")
+
+
+# Proposal 3.5's three columns, closed on a phone: the elements and the primary each page draws, written from the
+# table apart from `paper` below, so a rule changed in both `paper` and the cases is still held to the proposal. Its
+# everyday column lists notes only; the prototype's iphone/kyoto also draws What you asked, which the cases follow
+# (spec/fixtures/todo-detail/README.md "Judgement calls").
+COLUMNS = {
+    "kyoto_needs_your_choice": (["bar", "title", "state_line", "recap", "ask_card", "chips", "notes", "brief", "steps",
+                                 "results", "conversation_block", "composer"], "ask_card"),
+    "login_fix_waits_for_merge": (["bar", "title", "state_line", "chips", "brief", "steps", "results",
+                                   "conversation_block", "work_details", "composer"], "tick"),
+    "release_door_from_widget": (["bar", "title", "state_line", "recap", "ask_door", "chips", "brief", "steps",
+                                  "results", "conversation_block", "work_details", "composer"], "ask_door"),
+}
 
 
 def run_ref(ref):
     return f"run:{ref['machine_id']}/{ref['session_id']}"
 
 
+def runs_of(todo):
+    """The runs a page can name: the to-do's own (agents) and those its steps ask from (an ask id starting step:)."""
+    asks = (todo.get("view") or {}).get("asks", [])
+    return ({run_ref(a) for a in todo["agents"]}
+            | {run_ref(a["run"]) for a in asks if a.get("home") == "run" and a["id"].startswith("step:")})
+
+
 def paper(i):
-    """The elements, primary action and addressee spec/fixtures/todo-detail/README.md's rules give input i."""
+    """The page, elements, primary action and addressee spec/fixtures/todo-detail/README.md's rules give input i."""
     todo, ctx, timeline = i["item"]["todo"], i["context"], i.get("timeline")
-    view = todo["view"]
+    view = todo.get("view")
+    if view is None or view["phase"] not in PHASES or view["section"] not in SECTIONS or view["reason"] not in REASONS:
+        return {"page": "as_before"}
     pane = ctx["pane_channel"] if ctx["pane_open"] else None
     out = ["bar", "title"]
     if not (view["phase"] == "todo" and "line" not in view and "inactive" not in view and not todo.get("start_error")):
         out.append("state_line")
     if timeline and timeline["recap"]:
         out.append("recap")
+    drawn = []  # the element each ask the page draws takes, in the order of view.asks
     for ask in view.get("asks", []):
+        if ask["home"] not in ASK_HOMES or ask["kind"] not in ASK_KINDS:
+            continue  # a newer hub's: this version cannot answer it
         if ask["home"] == "run":
-            out.append("ask_pointer" if pane == run_ref(ask["run"]) else "ask_door")
-            break
-        if ask["kind"] != "retry" or todo.get("origin"):  # the retry route refuses a to-do with no origin
-            out.append("ask_card")
-            break
+            drawn.append("ask_pointer" if pane == run_ref(ask["run"]) else "ask_door")
+        elif ask["kind"] != "retry" or todo.get("origin"):  # the retry route refuses a to-do with no origin
+            drawn.append("ask_card")
+    out += [e for e in ASK_ELEMENTS if e in drawn]
     is_open = view["phase"] != "done"
     if is_open or any(todo.get(k) for k in ("due_at", "due_date", "remind_at", "priority", "project", "part_of")):
         out.append("chips")
@@ -94,10 +141,10 @@ def paper(i):
         out.append("work_details")
     if not ctx["pane_open"]:
         out.append("composer")
-    if "ask_pointer" in out:
+    if drawn:  # the first ask drawn, the most urgent; its home in the pane holds the primary for a pointer
+        primary = "none" if drawn[0] == "ask_pointer" else drawn[0]
+    elif view["phase"] == "needs_you":  # nothing on the page to answer, and marking it done is not what it waits for
         primary = "none"
-    elif "ask_card" in out or "ask_door" in out:
-        primary = "ask"
     elif view["phase"] == "ready":
         primary = "mark_done"
     else:
@@ -106,7 +153,27 @@ def paper(i):
         addressee = pane
     else:
         addressee = ctx["opened_from"] if RUN.match(ctx["opened_from"]) else "steward"
-    return {"elements": out, "primary": primary, "addressee": addressee}
+    return {"page": "paper", "elements": out, "primary": primary, "addressee": addressee}
+
+
+def open_schema(schema):
+    """schema with the enums it marks open ("a newer hub may send other values") left open."""
+    out = json.loads(json.dumps(schema))
+    for d in out["$defs"].values():
+        if "enum" in d and "a newer hub may send other values" in d.get("description", ""):
+            del d["enum"]
+    return out
+
+
+def go_json_names(path, struct):
+    """The JSON names of a Go struct's fields, as encoding/json writes them (a field tagged "-" is never written)."""
+    body = path.read_text().split(f"type {struct} struct {{", 1)[1].split("\n}", 1)[0]
+    return set(re.findall(r'`json:"([a-z_]+)', body))
+
+
+def row_keys():
+    """Every field GET /api/v1/todos may write on a row: Todo's and those listedTodo adds (ask, decision_review, ...)."""
+    return go_json_names(ASSISTANT / "todos.go", "Todo") | go_json_names(ASSISTANT / "todo_ask.go", "listedTodo")
 
 
 def line_keys():
@@ -116,7 +183,10 @@ def line_keys():
     return set(re.findall(r"^\| `([a-z_]+)` \|", table, re.M))
 
 
-# The proposal's 7.7 guard: words an everyday to-do's page never has a reason to carry. Runtimes from the shared names.
+# The proposal's 7.7 guard: words an everyday to-do's page never has a reason to carry. Runtimes come from the shared
+# names. The engines are docs/integrations/engines.md's and the terminal hosts (docs/integrations/terminal.md,
+# docs/integrations/dsh.md): add one when those docs gain an engine. The models are the families the model providers
+# name (docs/integrations/launchers.md): add a family when a provider brings a new one.
 ENGINES = ("herdr", "orca", "tern", "paseo", "tmux", "dsh")
 MODELS = ("gpt", "sonnet", "opus", "haiku", "o1", "o3", "o4", "deepseek", "qwen", "kimi", "glm", "llama", "mistral")
 REPOSITORY = (r"github", r"gitlab", r"bitbucket", r"\.git\b", r"\brepo(?:sitory|sitories|s)?\b", r"pull request",
@@ -177,7 +247,9 @@ POSTURES = ("flat", "half_folded")
 DEEPEST = ("list", "paper", "conversation")
 CALLED = ("sidebar", "list")
 HYSTERESIS = 24
-SCALE = (14 / 17, 23 / 17)  # xSmall to xxxLarge: the interface caps the text size at xxxLarge
+# xSmall to xxxLarge: the interface's text size stops at xxxLarge (Theme.interfaceTypeSize), so its sizeScale does,
+# though Theme.sizeScale itself goes on to 1.6 at the accessibility sizes.
+SCALE = (14 / 17, 23 / 17)
 SIDE_COLUMN = 84  # the safe-area inset of the Duo's side bars (Theme.Shell.sideColumnEdge's comment)
 WEB = {"sidebar": 284, "rail": 56, "list": 360, "paper": 400, "conversation": 440}
 
@@ -188,13 +260,13 @@ def todo_panes(i):
     room = width - i["side_column"]
     deepest, called = i["wants"]["deepest"], i["wants"].get("called")
     out = {r: ("hidden", 0) for r in REGIONS}
-    held = set()
+    held = set()  # (region, form): a rail held is only the rail
     prev = i.get("previous")
     if prev and prev["text_scale"] == s and (prev["wants"]["deepest"] == "conversation") == (deepest == "conversation"):
-        held = {r["region"] for r in prev["regions"] if r["form"] in ("beside", "rail")}
+        held = {(r["region"], r["form"]) for r in prev["regions"] if r["form"] in ("beside", "rail")}
 
-    def fits(region, need, room=room):
-        return need - (HYSTERESIS if region in held else 0) <= room
+    def fits(region, need, room=room, form="beside"):
+        return need - (HYSTERESIS if (region, form) in held else 0) <= room
 
     def one_page():
         out[deepest] = ("beside", room) if deepest == "list" else ("pushed", room)
@@ -244,7 +316,7 @@ def todo_panes(i):
             content += lst
             if fits("sidebar", side + content):
                 beside["sidebar"] = side
-            elif device == "web" and fits("sidebar", WEB["rail"] + content):
+            elif device == "web" and fits("sidebar", WEB["rail"] + content, form="rail"):
                 out["sidebar"] = ("rail", WEB["rail"])
         for r, w in beside.items():
             out[r] = ("beside", w)
@@ -340,7 +412,7 @@ class TodoDetail(unittest.TestCase):
     def setUpClass(cls):
         cls.doc = json.loads((DETAIL / "todo_detail.json").read_text())
         cls.cases = cls.doc["cases"]
-        cls.schema = json.loads(SCHEMA.read_text())
+        cls.schema = VIEW_SCHEMA
 
     def test_format(self):
         self.assertEqual(set(self.doc), {"version", "cases"})
@@ -355,26 +427,39 @@ class TodoDetail(unittest.TestCase):
                 self.assertTrue(c["description"].strip())
                 self.assertTrue(c["source"] and all(isinstance(s, str) and s for s in c["source"]))
                 self.assertLessEqual(set(c["input"]), {"item", "context", "timeline"})
-                self.assertEqual(set(c["expected"]), {"elements", "primary", "addressee"})
+                self.assertIn(c["expected"].get("page"), PAGES)
+                if c["expected"]["page"] == "paper":
+                    self.assertEqual(set(c["expected"]), {"page", "elements", "primary", "addressee"})
+                else:
+                    self.assertEqual(c["expected"], {"page": "as_before"})
 
     def test_items_are_what_the_item_route_answers(self):
-        v = ext.Validator({SCHEMA.name: self.schema})
+        strict = ext.Validator({SCHEMA.name: self.schema})
+        loose = ext.Validator({SCHEMA.name: open_schema(self.schema)})
         summary = self.schema["$defs"]["TodoSummary"]
-        keys = line_keys()
+        keys, fields = line_keys(), row_keys()
+        self.assertLessEqual(ROW_FIELDS | {"ask", "decision_review", "orphaned", "view", "brief"}, fields)
         for c in self.cases:
             with self.subTest(case=c["name"]):
                 self.assertEqual(set(c["input"]["item"]), {"todo"})
                 todo = c["input"]["item"]["todo"]
                 self.assertLessEqual(ROW_FIELDS, set(todo))
+                self.assertLessEqual(set(todo), fields, "fields a listed row never has")
+                self.assertEqual("view" not in todo, c["name"] in OLDER_MANAGER, "a row without its view")
+                if "view" not in todo:
+                    continue
                 view = todo["view"]
-                self.assertEqual(v.errors(summary, view, SCHEMA.name), [])
+                self.assertEqual(loose.errors(summary, view, SCHEMA.name), [])
+                newer = strict.errors(summary, view, SCHEMA.name)
+                self.assertEqual(bool(newer), c["name"] in NEWER_HUB, newer or "a value this version does not know")
                 self.assertEqual(wire.walk(self.schema, summary, view, "$", set()), [], "fields the schema lacks")
                 if "line" in view:
                     self.assertIn(view["line"]["key"], keys)
-                runs = {run_ref(a) for a in todo["agents"]}
+                own = {run_ref(a) for a in todo["agents"]}
                 for ask in view.get("asks", []):
-                    if ask["home"] == "run":
-                        self.assertIn(run_ref(ask["run"]), runs, "a run's ask names one of the to-do's runs")
+                    if ask.get("home") == "run":
+                        self.assertTrue(run_ref(ask["run"]) in own or ask["id"].startswith("step:"),
+                                        "a run's ask names one of the to-do's runs, or a step's")
                 timeline = c["input"].get("timeline")
                 if timeline is not None:
                     self.assertEqual(set(timeline), {"rounds", "results", "recap"})
@@ -389,7 +474,7 @@ class TodoDetail(unittest.TestCase):
                 self.assertEqual(set(ctx), {"wide", "pane_open", "pane_channel", "opened_from"})
                 self.assertIsInstance(ctx["wide"], bool)
                 self.assertIsInstance(ctx["pane_open"], bool)
-                runs = {run_ref(a) for a in c["input"]["item"]["todo"]["agents"]}
+                runs = runs_of(c["input"]["item"]["todo"])
                 if ctx["pane_open"]:
                     self.assertTrue(ctx["wide"], "the conversation is a pane only at regular widths")
                     self.assertTrue(ctx["pane_channel"] == "steward" or ctx["pane_channel"] in runs)
@@ -401,11 +486,15 @@ class TodoDetail(unittest.TestCase):
         for c in self.cases:
             with self.subTest(case=c["name"]):
                 e = c["expected"]
+                if e["page"] != "paper":
+                    continue
                 self.assertEqual(e["elements"][:2], ["bar", "title"])
                 self.assertEqual(e["elements"], sorted(set(e["elements"]), key=ELEMENTS.index), "known, in order, once")
                 for group in ONE_OF:
                     self.assertLessEqual(len(set(group) & set(e["elements"])), 1, group)
                 self.assertIn(e["primary"], PRIMARY)
+                if e["primary"].startswith("ask_"):
+                    self.assertIn(e["primary"], e["elements"], "the primary is on the page")
                 self.assertTrue(e["addressee"] == "steward" or RUN.match(e["addressee"]), e["addressee"])
 
     def test_cases_follow_the_readme(self):
@@ -413,13 +502,26 @@ class TodoDetail(unittest.TestCase):
             with self.subTest(case=c["name"]):
                 self.assertEqual(c["expected"], paper(c["input"]))
 
+    def test_the_proposals_three_columns(self):
+        by_name = {c["name"]: c for c in self.cases}
+        for name, (elements, primary) in COLUMNS.items():
+            with self.subTest(case=name):
+                c = by_name[name]
+                ctx = c["input"]["context"]
+                self.assertEqual((ctx["wide"], ctx["pane_open"]), (False, False), "closed, on a phone")
+                self.assertEqual((c["expected"]["elements"], c["expected"]["primary"]), (elements, primary))
+
     def test_coverage(self):
         names = {c["name"] for c in self.cases}
         self.assertLessEqual(DETAIL_NAMED, names)
-        drawn = {e for c in self.cases for e in c["expected"]["elements"]}
+        pages = [c["expected"] for c in self.cases if c["expected"]["page"] == "paper"]
+        drawn = {e for p in pages for e in p["elements"]}
         # Persona can help waits for the steps routes (#10465): no case draws it yet.
         self.assertEqual(drawn, set(ELEMENTS) - {"help"})
-        self.assertEqual({c["expected"]["primary"] for c in self.cases}, set(PRIMARY))
+        self.assertEqual({p["primary"] for p in pages}, set(PRIMARY))
+        self.assertEqual({c["expected"]["page"] for c in self.cases}, set(PAGES))
+        self.assertTrue(any({"ask_card", "ask_door"} <= set(p["elements"]) for p in pages), "a card and a door")
+        self.assertTrue(any({"ask_card", "ask_pointer"} <= set(p["elements"]) for p in pages), "a card and a pointer")
         self.assertEqual({c["audience"] for c in self.cases}, set(AUDIENCES))
         self.assertTrue(any(c["input"].get("timeline") is None for c in self.cases), "a hub without todo_timeline")
 
@@ -429,7 +531,7 @@ class TodoDetail(unittest.TestCase):
         for c in everyday:
             with self.subTest(case=c["name"]):
                 self.assertEqual(guard_misses(c), [])
-                self.assertNotIn("work_details", c["expected"]["elements"])
+                self.assertNotIn("work_details", c["expected"].get("elements", []))
 
     def test_the_guard_finds_machinery(self):
         def case(**todo):
@@ -622,15 +724,59 @@ class Model(unittest.TestCase):
         self.assertEqual(todo_panes(dict(base, previous=dict(prev, text_scale=0.9412)))["paper"], ("pushed", 690))
         self.assertEqual(todo_panes(dict(base, wants={"deepest": "conversation"}))["conversation"], ("pushed", 690))
 
+    def test_the_band_holds_a_region_in_the_form_it_had(self):
+        def web(width, sidebar):
+            regions = [{"region": "sidebar", "form": sidebar[0], "width": sidebar[1]},
+                       {"region": "list", "form": "beside", "width": 360},
+                       {"region": "paper", "form": "beside", "width": width - 800 - sidebar[1]},
+                       {"region": "conversation", "form": "beside", "width": 440}]
+            prev = {"text_scale": 1, "wants": {"deepest": "conversation"}, "regions": regions}
+            return {"width": 1460, "height": 900, "side_column": 0, "text_scale": 1, "posture": "flat",
+                    "device": "web", "crease_split": False, "wants": {"deepest": "conversation"}, "previous": prev}
+
+        # The full sidebar needs 1484 with the conversation open: held from 1460, back from a rail only once it fits.
+        self.assertEqual(todo_panes(web(1484, ("beside", 284)))["sidebar"], ("beside", 284))
+        self.assertEqual(todo_panes(web(1440, ("rail", 56)))["sidebar"], ("rail", 56))
+        self.assertEqual(todo_panes(dict(web(1440, ("rail", 56)), width=1484))["sidebar"], ("beside", 284))
+
+    CLOSED = {"wide": False, "pane_open": False, "pane_channel": None, "opened_from": "list"}
+    RETRY = {"id": "todo:retry@x", "kind": "retry", "home": "todo"}
+    DECISION = {"id": "todo:decision@x", "kind": "decision", "home": "todo", "round": "x"}
+    RUN_ASK = {"id": "step:t2/run:m1/s1@x", "kind": "question", "home": "run",
+               "run": {"machine_id": "m1", "session_id": "s1", "title": "Guide"}}
+
+    def page(self, asks, context=CLOSED, **todo):
+        view = {"phase": "needs_you", "section": "needs_you", "reason": "owner_decides", "rank": 0, "asks": asks}
+        row = {"view": view, "agents": [], "spaces": [], "notes": "", **todo}
+        return paper({"item": {"todo": row}, "context": context})
+
+    def asks_and_primary(self, out):
+        return [e for e in out["elements"] if e in ASK_ELEMENTS], out["primary"]
+
     def test_the_paper_draws_no_retry_the_hub_refuses(self):
-        view = {"phase": "needs_you", "section": "needs_you", "reason": "failed_start", "rank": 0,
-                "asks": [{"id": "todo:retry@x", "kind": "retry", "home": "todo"}]}
-        todo = {"view": view, "agents": [], "spaces": [], "notes": "", "start_error": "offline"}
-        ctx = {"wide": False, "pane_open": False, "pane_channel": None, "opened_from": "list"}
-        self.assertNotIn("ask_card", paper({"item": {"todo": todo}, "context": ctx})["elements"])
-        with_origin = paper({"item": {"todo": dict(todo, origin="conv_main")}, "context": ctx})
-        self.assertIn("ask_card", with_origin["elements"])
-        self.assertEqual(with_origin["primary"], "ask")
+        self.assertEqual(self.asks_and_primary(self.page([self.RETRY], start_error="offline")), ([], "none"))
+        with_origin = self.page([self.RETRY], start_error="offline", origin="conv_main")
+        self.assertEqual(self.asks_and_primary(with_origin), (["ask_card"], "ask_card"))
+
+    def test_the_first_ask_drawn_holds_the_primary(self):
+        self.assertEqual(self.asks_and_primary(self.page([self.RUN_ASK, self.DECISION])),
+                         (["ask_card", "ask_door"], "ask_door"))
+        pane = dict(self.CLOSED, wide=True, pane_open=True, pane_channel="run:m1/s1")
+        self.assertEqual(self.asks_and_primary(self.page([self.RUN_ASK, self.DECISION], pane)),
+                         (["ask_card", "ask_pointer"], "none"))
+        self.assertEqual(self.asks_and_primary(self.page([self.RETRY, self.RUN_ASK], origin="conv_main")),
+                         (["ask_card", "ask_door"], "ask_card"))
+
+    def test_values_this_version_does_not_know(self):
+        newer = [dict(self.DECISION, id="todo:payment@x", kind="payment"), dict(self.RUN_ASK, home="steward")]
+        self.assertEqual(self.asks_and_primary(self.page(newer)), ([], "none"))
+        self.assertEqual(self.asks_and_primary(self.page([*newer, self.DECISION])), (["ask_card"], "ask_card"))
+        ctx = {"item": {"todo": {"agents": [], "spaces": [], "notes": ""}}, "context": self.CLOSED}
+        self.assertEqual(paper(ctx), {"page": "as_before"})
+        for key, value in (("phase", "paused"), ("section", "scheduled"), ("reason", "on_hold")):
+            view = {"phase": "todo", "section": "todo", "reason": "rest", "rank": 0, key: value}
+            ctx["item"]["todo"]["view"] = view
+            self.assertEqual(paper(ctx), {"page": "as_before"}, key)
 
 
 if __name__ == "__main__":

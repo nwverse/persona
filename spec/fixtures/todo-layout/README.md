@@ -1,15 +1,16 @@
 # To-do layout fixtures
 
 The To-dos window rule (#10465; `docs/design/proposals/todos-redesign.md` ("3.8 Layout per device: the window rule")): a
-window, its text size and what the owner asked for → which regions show, in which form and how wide. Each client
-replays these cases with its own pure function (`todoPanes` on iOS, #10465), never in the shared core (proposal 7.2).
+window, its text size and what the owner asked for → which regions show, in which form and how wide.
 `scripts/test/test_todo_fixtures.py` checks the format, that the regions fill the window, that every window of the
 proposal's table is here at the default text size with the conversation closed and open and the table's widths, and
-holds every case to the rule below.
+holds every case to the rule below. No client reads them yet: each will replay them with its own pure function
+(proposal 3.8's `todoPanes`), never in the shared core (proposal 7.2), iOS first (#10465), the web and Android from
+their stages.
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `todo_layout.json` | A window and what is wanted → four regions, each with a form and a width | 59: every window of proposal 3.8's table with the conversation closed and open, the text sizes that drop a region, the 24-pt hysteresis, regions called over the page, and the iPhone Duo's halves under `crease_split` |
+| `todo_layout.json` | A window and what is wanted → four regions, each with a form and a width | 60: every window of proposal 3.8's table with the conversation closed and open, the text sizes that drop a region, the 24-pt hysteresis, regions called over the page, and the iPhone Duo's halves under `crease_split` |
 
 ## Format
 
@@ -23,8 +24,10 @@ are English.
 - `input.width`, `input.height`: the window in points (the scene's, never the screen's), side column included.
 - `input.side_column`: what the iPhone Duo's side bars take from the width (84, the safe-area inset the system gives
   them), else 0. The regions share the room, `width − side_column`.
-- `input.text_scale`: `Theme.sizeScale`, 1 at the default text size: xLarge 1.1176 (19/17), xxLarge 1.2353,
-  xxxLarge 1.3529, where the interface stops growing; below 1 at the smaller sizes.
+- `input.text_scale`: `Theme.sizeScale` at the interface's text size, 1 at the default: xLarge 1.1176 (19/17),
+  xxLarge 1.2353, xxxLarge 1.3529; below 1 at the smaller sizes. The interface's text size stops at xxxLarge
+  (`Theme.interfaceTypeSize`), and so does this scale, though `Theme.sizeScale` itself goes on to 1.6 at the
+  accessibility sizes: proposal 3.8's minimums grow "up to the xxxLarge cap".
 - `input.posture`: `flat`, or `half_folded` (a foldable held like a book).
 - `input.device`: `iphone`, `duo_outer` (the iPhone Duo folded), `duo_inner` (open), `ipad`, `web`, or `android` (a
   foldable's inner display).
@@ -75,10 +78,11 @@ drops a region by arithmetic, with no accessibility-size branch):
    - The paper takes the room the others leave. With nothing selected its region holds the place summary.
    - A called sidebar lies over the page at its own width while it is hidden; a called list lies over the paper at its
      width while it has stepped aside.
-4. **Hysteresis.** A region the previous layout showed beside (or as the rail) keeps its place while the room is short
-   of what it needs by at most 24 pt; a region that did not show comes back only once it fits. The band holds between
-   layouts at the same text size with the conversation open in both or closed in both: a selection keeps it, while
-   changing the text size or opening or closing the conversation decides afresh.
+4. **Hysteresis.** A region the previous layout showed beside (or as the rail) keeps that form while the room is
+   short of what it needs by at most 24 pt; a region that did not show in a form comes back in it only once it fits,
+   so a rail held is only the rail, and the full sidebar returns once it fits. The band holds between layouts at the
+   same text size with the conversation open in both or closed in both: a selection keeps it, while changing the text
+   size or opening or closing the conversation decides afresh.
 
 ## Cases
 
@@ -133,14 +137,15 @@ drops a region by arithmetic, with no accessibility-size branch):
 | `ipad_window_shrinks_past_the_band` | 670 × 900, after a layout | paper | Paper pushed 670 |
 | `ipad_window_grows_inside_the_band` | 690 × 900, after a layout | paper | Paper pushed 690 |
 | `ipad_window_selection_keeps_the_band` | 690 × 900, after a layout | paper | List 300 │ Paper 390 |
-| `ipad_window_sidebar_held` | 1110 × 834, after a layout | paper | Sidebar 400 │ List 320 │ Paper 390 |
-| `ipad_window_sidebar_first_layout` | 1110 × 834 | paper | List 320 │ Paper 790 |
-| `ipad_window_pane_held` | 790 × 900, after a layout | conversation | Paper 390 │ Conversation 400 |
-| `ipad_window_opening_the_pane_skips_the_band` | 1100 × 834, after a layout | conversation | Paper 700 │ Conversation 400 |
+| `ipad_split_sidebar_held` | 1110 × 834, after a layout | paper | Sidebar 400 │ List 320 │ Paper 390 |
+| `ipad_split_sidebar_first_layout` | 1110 × 834 | paper | List 320 │ Paper 790 |
+| `ipad_split_pane_held` | 790 × 900, after a layout | conversation | Paper 390 │ Conversation 400 |
+| `ipad_split_opening_the_pane_skips_the_band` | 1100 × 834, after a layout | conversation | Paper 700 │ Conversation 400 |
 | `web_1440_closed` | 1440 × 900 | paper | Sidebar 284 │ List 360 │ Paper 796 |
 | `web_1440_open` | 1440 × 900 | conversation | Rail 56 │ List 360 │ Paper 584 │ Conversation 440 |
 | `web_1600_closed` | 1600 × 1000 | paper | Sidebar 284 │ List 360 │ Paper 956 |
 | `web_1600_open` | 1600 × 1000 | conversation | Sidebar 284 │ List 360 │ Paper 516 │ Conversation 440 |
+| `web_band_holds_the_rail_not_the_sidebar` | 1460 × 900, after the rail | conversation | Rail 56 │ List 360 │ Paper 604 │ Conversation 440 |
 | `android_book_closed` | 673 × 841, crease_split, half-folded | paper | List 336 │ Paper 337 |
 | `android_book_open` | 673 × 841, crease_split, half-folded | conversation | Paper 336 │ Conversation 337 |
 
@@ -153,19 +158,21 @@ xLarge (894.1 of 834); the iPad 13-inch upright, the pane at xxxLarge (1082.3 of
 
 Where the proposal leaves a choice open, these cases make it; change a case and this list together.
 
-- **The iPad mini upright is a window of 600–759**, so its list is 300 and its paper 444. Proposal 3.8's table writes
-  List 320 │ Paper 424 for it while its `todoList` token says 300 in iPad windows of 600–759; the rule reads widths, not
-  models, so a 744-pt window looks the same on every iPad.
+- **The iPad mini upright is a window of 600–759**, so its list is 300 and its paper 444, as proposal 3.8's
+  `todoList` token says for iPad windows of 600–759 (its table first wrote List 320 │ Paper 424); the rule reads widths,
+  not models, so a 744-pt window looks the same on every iPad.
 - **The list is 340 where the window's shorter side is 1032 or more.** The table gives 340 to both 13-inch rows and
   320 to the 11-inch on its side (1194 wide), which no width threshold yields; the shorter side does, and the list
   keeps its width when the iPad turns.
 - **The band keeps a region that fits less well, not one that fits better.** A region that showed stays while it is
   short by up to 24 pt; one that did not comes back as soon as it fits. The other reading, coming back only with
   24 pt to spare, would leave the Duo's halves (14 pt to spare) on one page after an unfold from the outer display
-  or a text size set back to the default. The cost: a region up to 24 pt under its minimum inside the band.
+  or a text size set back to the default. The cost: a region up to 24 pt under its minimum inside the band. The band
+  holds a form, not just a region: a rail held does not bring the full sidebar back early
+  (`web_band_holds_the_rail_not_the_sidebar`).
 - **The band does not outlast a text size change or the conversation opening or closing**, which are the owner's own
   choices rather than a window settling (`duo_inner_portrait_text_size_skips_the_band`,
-  `ipad_window_opening_the_pane_skips_the_band`). A selection does not end it: list and paper are one arrangement,
+  `ipad_split_opening_the_pane_skips_the_band`). A selection does not end it: list and paper are one arrangement,
   whatever the paper's region holds (`ipad_window_selection_keeps_the_band`).
 - **`crease_split` is all of decision 2 (iv)**: the halves upright and the 320-pt paper minimum, which also keeps the
   pane on the Duo's side at xLarge (`duo_inner_landscape_open_at_xlarge_with_the_320_paper`).
