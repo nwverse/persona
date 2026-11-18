@@ -1015,7 +1015,7 @@ schedule through an authorized `schedule_routine` edit. This is not permission t
 Each dispatched linked run starts with its to-do ID. When its watched turn settles, the hub records `todo_progress`
 on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` or `inactive`, with the to-do ID,
 consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
-a newer completed run makes a late older result `superseded`. A still-running, unassessed run is `pending`.
+a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
 
 The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
 any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
@@ -1030,6 +1030,8 @@ One assessed no-progress run queues an existing blocked supervisor signal. At tw
 including for `push: asked`. Choosing another approach asks for a proposal within existing permissions, not
 permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it; the hub never applies
 the proposed strategy change by default. Existing notification preferences and decision routing still apply.
+For a worker supervised by a task-leader Agent, the conversation above that leader reviews the decision through
+its existing authority; the worker stays supervised by its leader.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
 The first escalation attempt's run identity is saved with the assessment before creating its review. If the
 review succeeded but the final escalation-marker write failed, later assessments or restart replays recognize
@@ -1043,6 +1045,8 @@ The latest evidence, run identity, count and escalation markers live with the sc
 survive restart and do not depend on the shared 200-run display history. Replaying a completion does not count
 it twice. Writes must succeed before escalation; signal and owner-card delivery reuse their existing mechanisms,
 not a separate scheduler outbox.
+A failed run-history write retains the assessment already committed with its schedule and retries the history
+write without counting the run again. Only an assessment that could not be committed is recorded as `error`.
 
 Deployment: update hub and node together (`resume_only` is new; old node ignores it and creates a new chat under a missing old id).
 

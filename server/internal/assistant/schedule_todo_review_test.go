@@ -227,8 +227,13 @@ func TestScheduledTodoDelayedHistoryReplayPreservesNewerAssessment(t *testing.T)
 			}
 			_, runs := scheduleState(s)
 			i := slices.IndexFunc(runs, func(r ScheduleRun) bool { return r.ID == first.ID })
-			if i < 0 || runs[i].TodoProgress.State != "superseded" {
-				t.Fatal("the old replay did not receive a superseded assessment")
+			wantState, wantCount := "no_progress", 1
+			if strings.HasSuffix(mode, "evicted") {
+				// Only an evicted assessment has to be reconstructed as superseded.
+				wantState, wantCount = "superseded", 0
+			}
+			if i < 0 || runs[i].TodoProgress.State != wantState || runs[i].TodoProgress.NoProgress != wantCount {
+				t.Fatalf("the old replay lost its committed result or counted again: %+v", runs)
 			}
 		})
 	}

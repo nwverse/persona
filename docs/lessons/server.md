@@ -23,6 +23,9 @@ newly linked workers' genuine output. Equal-time runs need their distinct
 IDs and dispatch order when recovering a delayed history write. Recover a watcher's evicted history row under the
 same ID, within the existing cap; history retention must not determine whether a completed run is assessed.
 Runtime failures and their automatic retries belong to the scheduler's failure handling, not the no-progress count.
+Distinguish an assessment commit failure from its history projection failing: keep a committed result and its count
+while retrying the latter. A task-leader Agent reference is not a conversation identity; use the existing authority
+of the conversation above that leader for scheduler-triggered worker decisions, without taking over the worker.
 
 ## Journal recovery before changing live update files (#6921)
 

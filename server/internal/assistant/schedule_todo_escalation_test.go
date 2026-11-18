@@ -35,6 +35,62 @@ func (st *scheduleEscalationWriteStore) PutSetting(ctx context.Context, key stri
 	return st.DB.PutSetting(ctx, key, value)
 }
 
+func TestScheduledTodoTaskLeaderEscalation(t *testing.T) {
+	for _, supervisor := range []string{"conv1", "lead1"} {
+		t.Run(supervisor, func(t *testing.T) {
+			s, _, worker := scheduledTodoFixture(t)
+			ctx := t.Context()
+			leader := Todo{ID: "task-leader", Origin: supervisor,
+				Agents:      []TodoAgent{{MachineID: "box", SessionID: "leader", Source: sourceLeader}},
+				Supervision: &Supervision{Supervisor: supervisor}}
+			putTodo(s, leader)
+			worker.Origin = leaderRef("box", "leader")
+			worker.Supervision.Supervisor = worker.Origin
+			putTodo(s, worker)
+			if !s.agentSupervised(worker) || !s.mayReviewForLeader(ctx, supervisor, worker) {
+				t.Fatal("the fixture is not a worker beneath the supervising conversation")
+			}
+			task := todoProgressTask(worker.ID)
+			setTasks(s, task)
+			_, first := assessTodoRun(t, s, task.ID, nil)
+			if first.State != "no_progress" || first.NoProgress != 1 {
+				t.Fatalf("first worker assessment: %+v", first)
+			}
+			_, second := assessTodoRun(t, s, task.ID, nil)
+			current, _ := taskByID(s, task.ID)
+			cur, _ := s.todoNow(worker.ID)
+			if second.State != "no_progress" || second.NoProgress != 2 || !current.TodoProgress.Escalated ||
+				cur.Supervision.State != reviewNeedsUser || len(cur.Supervision.Reviews) != 1 {
+				t.Fatalf("the worker did not escalate: %+v %+v", current.TodoProgress, cur.Supervision)
+			}
+			if cur.Supervision.Supervisor != worker.Origin || cur.DoneAt != nil {
+				t.Fatalf("escalation took over or closed the worker: %+v", cur)
+			}
+			reviews := 0
+			for _, event := range testEvents(s) {
+				if event.Kind == taskReviewedEvent && event.Detail["todo"] == worker.ID {
+					reviews++
+					if event.Detail["conversation"] != supervisor {
+						t.Fatalf("the decision used an Agent reference instead of the conversation above it: %+v", event.Detail)
+					}
+				}
+			}
+			if reviews != 1 {
+				t.Fatalf("expected one review by the supervising conversation, got %d", reviews)
+			}
+			ask := askOf(s, worker.ID)
+			if ask == nil || !decideAsk(ask) || len(ask.Options) != 2 {
+				t.Fatalf("the worker lacks the existing actionable owner decision: %+v", ask)
+			}
+			assessTodoRun(t, s, task.ID, nil)
+			cur, _ = s.todoNow(worker.ID)
+			if len(cur.Supervision.Reviews) != 1 {
+				t.Fatal("a later no-progress run repeated the worker's owner decision")
+			}
+		})
+	}
+}
+
 func TestScheduledTodoEscalationMarkerRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		name                           string

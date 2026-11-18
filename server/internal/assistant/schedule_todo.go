@@ -329,7 +329,7 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 		}
 		if err != nil {
 			sc.mu.Unlock()
-			s.scheduledTodoSaveFailed(ctx, task, run, err)
+			s.scheduledTodoSaveFailed(ctx, task, run, err, nil)
 			return
 		}
 		sc.runs[j].TodoProgress = &result
@@ -341,7 +341,7 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 	cur = sc.tasks[i]
 	sc.mu.Unlock()
 	if err != nil {
-		s.scheduledTodoSaveFailed(ctx, task, run, err)
+		s.scheduledTodoSaveFailed(ctx, task, run, err, &result)
 		// The task's assessment is durable even if its history write failed.
 	}
 	s.broadcastSchedule()
@@ -351,14 +351,18 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 	s.escalateScheduledTodo(ctx, cur, run, result)
 }
 
-func (s *Service) scheduledTodoSaveFailed(ctx context.Context, task Task, run ScheduleRun, cause error) {
+func (s *Service) scheduledTodoSaveFailed(ctx context.Context, task Task, run ScheduleRun, cause error, committed *ScheduleTodoAssessment) {
 	s.logf("task %s run %s: save to-do progress: %v", task.ID, run.ID, cause)
 	detail := i18n.T(s.lang(ctx), "assistant-schedule.todo_save_failed", i18n.Args{
 		"name": task.labelIn(s.lang(ctx)), "error": strings.ReplaceAll(cause.Error(), "\x00", ""),
 	})
 	if sc, err := s.lockedSchedule(ctx); err == nil {
 		if j := slices.IndexFunc(sc.runs, func(r ScheduleRun) bool { return r.ID == run.ID }); j >= 0 {
-			sc.runs[j].TodoProgress = &ScheduleTodoAssessment{TodoID: task.TodoID, State: "error", Reason: detail}
+			result := ScheduleTodoAssessment{TodoID: task.TodoID, State: "error", Reason: detail}
+			if committed != nil {
+				result = *committed
+			}
+			sc.runs[j].TodoProgress = &result
 			if st := s.store(); st != nil {
 				if err := st.PutSetting(ctx, runsKey, sc.runs); err != nil {
 					s.logf("task %s run %s: save progress error: %v", task.ID, run.ID, err)
@@ -368,7 +372,7 @@ func (s *Service) scheduledTodoSaveFailed(ctx context.Context, task Task, run Sc
 		sc.mu.Unlock()
 	}
 	s.broadcastSchedule()
-	// A failed assessment must reach supervision without claiming durable no-progress evidence.
+	// A failed write must reach supervision; a committed assessment keeps its evidence and count.
 	s.signal(superviseSignal{Todo: task.TodoID, Kind: sigReport, Report: upReportBlocked,
 		Key: run.ID + ":progress_error", At: run.At, Machine: run.MachineID, Session: run.SessionID,
 		Detail: detail + "\n" + run.ID})
@@ -417,7 +421,10 @@ func (s *Service) escalateScheduledTodo(ctx context.Context, task Task, run Sche
 			"deadline": time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339), "reversible": false,
 		})
 		supervisor := t.Supervision.Supervisor
-		if supervisor == "" {
+		if s.agentSupervised(t) {
+			// A worker's Agent reference is not a conversation; use the authority above its leader.
+			supervisor, _ = s.supervisorAboveTask(ctx, t)
+		} else if supervisor == "" {
 			supervisor = t.Origin
 		}
 		if _, err := s.toolTaskReview(ctx, supervisor, args); err != nil {

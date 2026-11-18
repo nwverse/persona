@@ -297,8 +297,12 @@ func TestScheduledTodoPersistenceFailureIsVisibleWithoutDoubleCount(t *testing.T
 				t.Fatal("a failed assessment disappeared without a log and blocked supervisor signal")
 			}
 			_, failedRuns := scheduleState(s)
-			if failedRuns[0].TodoProgress.State != "error" || failedRuns[0].TodoProgress.Reason == "" {
-				t.Fatal("the failed assessment was still shown as pending")
+			wantState := "error"
+			if key == runsKey {
+				wantState = "no_progress"
+			}
+			if failedRuns[0].TodoProgress.State != wantState || failedRuns[0].TodoProgress.Reason == "" {
+				t.Fatalf("the failed write misrepresented the assessment: %+v", failedRuns[0].TodoProgress)
 			}
 			if key == tasksKey {
 				cur, _ := taskByID(s, task.ID)
@@ -337,11 +341,16 @@ func TestScheduledTodoPartialWriteReplayAfterRestart(t *testing.T) {
 	run.ID = s.recordRun(run)
 	store.failWrites(runsKey)
 	s.finishScheduledTodo(t.Context(), task, run)
+	current, _ := taskByID(s, task.ID)
+	_, runs := scheduleState(s)
+	if *runs[0].TodoProgress != current.TodoProgress.Assessment {
+		t.Fatalf("history lost the committed assessment before restart: %+v %+v", runs[0].TodoProgress, current.TodoProgress)
+	}
 	store.failWrites("")
 	other, _ := newQuietServiceOn(t, store)
 	other.superviseTimes.gather = time.Hour
 	putTodo(other, todo)
-	current, _ := taskByID(other, task.ID)
+	current, _ = taskByID(other, task.ID)
 	other.finishScheduledTodo(t.Context(), current, run)
 	current, _ = taskByID(other, task.ID)
 	if current.TodoProgress.NoProgress != 1 || !current.TodoProgress.Signaled {
@@ -365,7 +374,8 @@ func TestScheduledTodoHistoryFailureDoesNotSwallowEscalation(t *testing.T) {
 	run, result := assessTodoRun(t, s, task.ID, func() { store.failWrites(runsKey) })
 	current, _ := taskByID(s, task.ID)
 	cur, _ := s.todoNow(todo.ID)
-	if result.State != "error" || current.TodoProgress.NoProgress != 2 || !current.TodoProgress.Escalated ||
+	if result.State != "no_progress" || result.NoProgress != 2 || result != current.TodoProgress.Assessment ||
+		current.TodoProgress.NoProgress != 2 || !current.TodoProgress.Escalated ||
 		cur.Supervision.State != reviewNeedsUser || len(cur.Supervision.Reviews) != 1 {
 		t.Fatalf("a failed history write swallowed escalation from durable evidence: assessment=%+v progress=%+v supervision=%+v",
 			result, current.TodoProgress, cur.Supervision)
