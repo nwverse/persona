@@ -67,6 +67,10 @@ type Facts struct {
 	// Sessions are the to-do's linked runs' sessions as the hub sends them to the apps (state worked out); a linked
 	// run whose session is not among them is offline.
 	Sessions []proto.Session `json:"-"`
+	// Interactions are the pending cards of its linked runs' sessions as the hub holds them, a health conversation's
+	// marked Private (its push says nothing of what it asks, as a Just me card's); a run that asks is asked by one of
+	// its own (asksBefore), which says what kind of ask it is and how risky answering it is.
+	Interactions []proto.Interaction `json:"-"`
 	// Unreached: a computer one of its active runs is on did not answer, so their sessions are unknown; it then gets no
 	// Inactive mark, since a run there may be working on it (as the direction tree judges no task stuck then).
 	Unreached bool `json:"-"`
@@ -90,12 +94,15 @@ type Agent struct {
 }
 
 // Ask is the to-do's own open ask (the list's ask): a conclusion's outcome (done, cannot, decide; "" a deployed task's
-// Please verify), the round it was asked in, and a decision's question, options, deadline and whether it can wait.
+// Please verify), the round it was asked in, how risky answering it is, and a decision's question, options, deadline
+// and whether it can wait. Risk is the manager's rule (askRisk), which reads what the list does not carry (whether
+// taking it at its deadline can be undone, also once that deadline passed): the view reads it as listed.
 type Ask struct {
 	Outcome     string                         `json:"outcome,omitempty"`
 	Verdict     string                         `json:"verdict"`
 	Recommend   string                         `json:"recommend,omitempty"`
 	AskedAt     time.Time                      `json:"asked_at"`
+	Risk        string                         `json:"risk,omitempty"`
 	Question    string                         `json:"question,omitempty"`
 	Options     []assistantwire.OwnerAskOption `json:"options,omitempty"`
 	Deadline    *time.Time                     `json:"deadline,omitempty"`

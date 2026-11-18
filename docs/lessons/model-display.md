@@ -15,3 +15,7 @@ If Android's existing input bar has no model list / current-model data, do not a
 
 - A launcher that names no model sends an empty `model`, not a localized placeholder. Normalize the legacy placeholder at the pure display/fallback boundary too: older nodes still send it, and an empty-catalog fallback must not turn it into a concrete row or a model pick.
 - Removing the placeholder must not change launcher inference. An absent model is unknown, never evidence for choosing between several launchers on one endpoint; keep the no-guess test beside the wire tests.
+
+## A launcher label must survive the narrow composer (#10248)
+
+Two launchers can run the same model. Reuse the panel's launcher name in an Agent's pill and keep it alongside the shortened model at phone width; an engine mark alone cannot distinguish accounts. Keep the full current and queued setups accessible, and preserve the model-only fallback when the session has no explicit launcher. A label correction must not change the launcher or model sent to the hub.

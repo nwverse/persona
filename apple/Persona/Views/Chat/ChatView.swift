@@ -1534,14 +1534,26 @@ struct ChatView: View {
 
     /// Persona's last turn ended on a model set-up error the hub named (`turn_error_code`, docs/assistant/onboarding.md 4.4):
     /// the fix to show instead of Claude Code's 「Not logged in」 as an answer. Persona's conversations only, as the web.
-    private var turnFix: TurnErrorFix? { style == .assistant ? TurnErrorFix(code: session?.turnErrorCode) : nil }
+    private var turnFix: TurnErrorFix? { style == .assistant ? TurnErrorFix(code: session?.turnErrorCode, launcher: session?.launcher) : nil }
 
     /// The Model Not Connected card for the line, when it is the turn's error: the last line, an answer or an API error.
     private func turnErrorCard(_ line: ChatLine, raw: String?) -> ReadinessCard? {
         guard let fix = turnFix, ChatLines.lastOfChat(currentLines())?.id == line.id else { return nil }
         return ReadinessCard(title: fix.title, detail: fix.detail, tone: .danger,
                              actionTitle: String(localized: "Fix it"),
-                             action: { readinessRoute = fix.action == "edit_provider" ? .provider(session?.launcher) : .providerWizard },
+                             action: {
+                                 switch fix.action {
+                                 case "edit_provider": readinessRoute = .provider(session?.launcher)
+                                 case "connect_model":
+                                     let launcher = session?.launcher?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                     if let launcher, !launcher.isEmpty {
+                                         readinessRoute = .provider(launcher)
+                                     } else {
+                                         readinessRoute = .providerWizard
+                                     }
+                                 default: readinessRoute = .providerWizard
+                                 }
+                             },
                              details: [raw].compactMap { $0 })
     }
 
@@ -5315,11 +5327,12 @@ struct ChatView: View {
 
     /// The extension that opened this Persona conversation (#3758), when `item` is the message it opened it with: the
     /// conversation's first user message, once the page has loaded back to its start (with more to load, the first one
-    /// here is not the first). nil for every other message and conversation.
-    private func externalOpening(_ item: Item) -> AutoConversationSource? {
+    /// here is not the first). nil for every other message and conversation. With it, which extension that was, whose
+    /// own icon the line draws when it can (#10358).
+    private func externalOpening(_ item: Item) -> (source: AutoConversationSource, opener: ConversationOpener?)? {
         guard style == .assistant, let source = AutoConversationSource.external(session?.origin), !store.hasMore,
               store.items.first(where: { $0.role == "user" && $0.kind == .text })?.id == item.id else { return nil }
-        return source
+        return (source, session.flatMap(ConversationOpener.of))
     }
 
     /// A user's line: a bubble, or what stands for it (a message from a source, one Persona injected, a loop's tick, a peer's).
@@ -5334,7 +5347,8 @@ struct ChatView: View {
         } else if let from = i.from {
             PeerMessage(item: i, from: from)
         } else {
-            UserBubble(item: i, external: externalOpening(i)).equatable()
+            let opening = externalOpening(i)
+            UserBubble(item: i, external: opening?.source, opener: opening?.opener).equatable()
         }
     }
 
@@ -5373,6 +5387,33 @@ struct ChatSkeleton: View {
             }
         }
         .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 0.9).repeatForever()) { on = true } } }
+    }
+}
+
+/// The model request Claude is retrying now, above the composer. Its plain reason leads; the observed error stays as
+/// secondary detail. Ordinary work, a null live event, turn end and subscription cleanup leave no note behind.
+struct SessionLiveRetryNote: View {
+    let key: SessionKey
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let retry = model.liveRetry(key) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                ThemedIcon(Theme.Icon.retry).font(Theme.Font.labelStrong).foregroundStyle(Theme.cautionText)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    Text(retry.attemptText).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.cautionText)
+                    Text(retry.error.reason).font(Theme.Font.secondary)
+                    Text(retry.error.raw).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("chat.model-retry")
+        }
     }
 }
 
@@ -6016,6 +6057,7 @@ struct Composer: View, Equatable {
         let call = voiceCall
         let inCall = call.map { !$0.isOver } ?? false
         return VStack(spacing: Theme.Space.s) {
+            SessionLiveRetryNote(key: key)
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
