@@ -922,7 +922,10 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - The tab bar's chosen item is reached by a lens (`TabBarLens`): clear glass over the items in the glass styles
     (`lensSurface`), swelling and stretching along the bar as it glides with a bounce, fading as it lands; the chosen
     Assistant item shows the persona's face. With Reduce Motion the items cross-fade.
-  - Tests: `TabSwitchLayoutTests` (what fits, the column's room), `DuoSideColumnTests` (UI, each posture: no two buttons of
+  - The lens's glide runs on the frames it is drawn in, not on the wall clock (`TabBarGlide.frame(at:)`, #ISSUE): the
+    chosen page is swapped in under the bar in the same frames, and a frame held up by that (95–150 ms on the open Duo on
+    its side in the simulator) moves the glide on by `TabBarGlide.longestStep` at most, so the lens never jumps.
+  - Tests: `TabSwitchLayoutTests` (what fits, the column's room, the glide's clock), `DuoSideColumnTests` (UI, each posture: no two buttons of
     the column over one another on an Agent's chat, Messages, a to-do and the main chat, also at the largest text size).
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
   Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
