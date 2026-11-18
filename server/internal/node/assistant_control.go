@@ -68,7 +68,17 @@ func (p *assistantProc) controlAnswer(ctx context.Context, request map[string]an
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
-	timedOut := func(stage string) error {
+	stage := "control_write_timeout"
+	timedOut := func() error {
+		if ready != nil {
+			p.mu.Lock()
+			shellReady := !p.shellReadyAt.IsZero()
+			p.mu.Unlock()
+			stage = "shell_start_timeout"
+			if shellReady {
+				stage = "assistant_ready_timeout"
+			}
+		}
 		return &assistantControlTimeoutError{stage: stage, wait: time.Since(started)}
 	}
 	id := fmt.Sprintf("persona-%d", p.reqSeq.Add(1))
@@ -89,7 +99,6 @@ func (p *assistantProc) controlAnswer(ctx context.Context, request map[string]an
 	// The caller retires the process on transport failure, closing stdin and releasing this writer.
 	written := make(chan error, 1)
 	go func() { written <- p.write(line) }()
-	stage := "control_write_timeout"
 	for {
 		select {
 		case err := <-written:
@@ -109,17 +118,13 @@ func (p *assistantProc) controlAnswer(ctx context.Context, request map[string]an
 			// the full normal response budget, regardless of shell startup time.
 			timer.Reset(assistantControlTimeout)
 		case <-timer.C:
-			if ready != nil {
-				p.mu.Lock()
-				shellReady := !p.shellReadyAt.IsZero()
-				p.mu.Unlock()
-				stage = "shell_start_timeout"
-				if shellReady {
-					stage = "assistant_ready_timeout"
-				}
-			}
-			return nil, timedOut(stage)
+			return nil, timedOut()
 		case <-ctx.Done():
+			// A shorter caller deadline must retain the phase and elapsed wait
+			// too; assistantSend sees ctx.Err and never retries that deadline.
+			if ctx.Err() == context.DeadlineExceeded {
+				return nil, timedOut()
+			}
 			return nil, ctx.Err()
 		case <-p.exited:
 			return nil, io.EOF

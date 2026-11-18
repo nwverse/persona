@@ -240,3 +240,23 @@ func TestAssistantColdStartDormantSpareBudget(t *testing.T) {
 		}
 	})
 }
+
+func TestAssistantColdStartCallerDeadlineKeepsCause(t *testing.T) {
+	f := cliTest(t)
+	controlFile(t, f, "control-hold", "")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := f.n.assistantSend(ctx, "", t.TempDir(), "claude", "hello", nil, "acceptEdits", "high", cliExec())
+	var re *rpc.Error
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &re) {
+		t.Fatalf("deadline error = %v", err)
+	}
+	for _, want := range []string{"停止了助手", "确认设置请求超时", "已等"} {
+		if !strings.Contains(re.Message, want) {
+			t.Fatalf("deadline error missing %q: %s", want, re.Message)
+		}
+	}
+	if strings.Contains(f.log.String(), "starting it again") || strings.Contains(f.file("stdin.jsonl"), `"type":"user"`) {
+		t.Fatal("caller deadline retried or delivered input")
+	}
+}

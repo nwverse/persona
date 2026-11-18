@@ -665,7 +665,8 @@ func (n *Node) setAssistantModes(ctx context.Context, p *assistantProc, mode, ef
 				p.mu.Unlock()
 				n.logf("assistant %s: control request %s failed after startup elapsed_ms=%d: %v; stopping process from node", short(p.id), field, time.Since(p.born).Milliseconds(), err)
 				p.stop()
-				return &assistantControlUnconfirmed{error: refusal("assistant_control_failed", err.Error(), nil), cause: err}
+				message := i18n.T(i18n.Default, "node-assistant-start.stopped_by_node", i18n.Args{"reason": err.Error()})
+				return &assistantControlUnconfirmed{error: refusal("assistant_control_failed", message, nil), cause: err}
 			}
 			return err
 		}
