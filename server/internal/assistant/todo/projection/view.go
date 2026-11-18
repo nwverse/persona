@@ -35,6 +35,7 @@ const (
 	lineDeployed        = "deployed"
 	linePROpen          = "pr_open"
 	lineUsageLimit      = "usage_limit"
+	lineRunWaits        = "run_waits"
 	lineFinishedSeen    = "finished_seen"
 	lineCompleted       = "completed"
 	lineCanceled        = "canceled"
@@ -45,7 +46,8 @@ const (
 
 // placement is a view and what ranks it within its section, worked out from the facts together with the view (the
 // ranking never reads them back off it): the soonest deadline of the decisions on the row, when it wakes (a park's
-// end, a usage limit's reset and its grace) and when it comes back from Someday; a zero time is none.
+// end, a usage limit's reset and its grace, the hub's next wake of a run that waits) and when it comes back from
+// Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
 	deadline, wake, back time.Time
@@ -395,9 +397,9 @@ func (r *reading) canWait() (placement, bool) {
 
 // ---- row 5: someone works on it ----
 
-// working: Persona or an Agent works on it now, else a run starts, else one works in the background; within each
-// kind the first such run in the list's order (the newest link first) decides. queued needs the start's admission
-// queue, which the plan keeps and the list does not carry yet.
+// working: Persona or an Agent works on it now, else a run starts, else one works in the background or the hub
+// retries its moment's model failure; within each kind the first such run in the list's order (the newest link first)
+// decides. queued needs the start's admission queue, which the plan keeps and the list does not carry yet.
 func (r *reading) working() (placement, bool) {
 	for _, rn := range r.runs {
 		if rn.kind != runRunning && rn.kind != runPersona {
@@ -526,9 +528,10 @@ func (r *reading) finishedSeen() (placement, bool) {
 
 // ---- row 10: waiting on something named ----
 
-// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), or a run
-// stopped on a usage limit until it resets. computer_offline needs Start When It's Back, scheduled_report a report's
-// schedule: neither is kept yet; someone_else comes with a park (row 8).
+// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), else a run
+// stopped on a usage limit until it resets, else a run's turn ended blocked on another Agent or an outside event
+// (someone_else; it also comes with a park, row 8), in the order 6.3 lists them. computer_offline needs Start When
+// It's Back, scheduled_report a report's schedule: neither is kept yet.
 func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
@@ -541,6 +544,15 @@ func (r *reading) waiting() (placement, bool) {
 		if reset := usageLimitReset(rn.s); reset != nil {
 			p.Line = line(lineUsageLimit, "run", rn.title(), "resets_at", stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
+		}
+		return p, true
+	}
+	if rn, ok := firstRun(r.runs, runWaits); ok {
+		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonSomeoneElse)
+		p.Line, p.Since = line(lineRunWaits, "run", rn.title(), "on", waitsOn(rn.s)), utc(rn.since())
+		// When the hub looks next ranks it; that moment passing changes nothing by itself, as a park's end does not.
+		if w := rn.s.Work.WakeAt; w != nil {
+			p.wake = *w
 		}
 		return p, true
 	}

@@ -1836,6 +1836,452 @@
           ]
         }
       }
+    },
+    {
+      "name": "waiting_ranked_by_wake",
+      "description": "Runs that wait on another Agent or an outside event are Waiting rows, counted In progress, and rank by the hub's next wake of them (work.wake_at) with the park and the usage limit: the soonest first, rows with no wake after them (a fallback check the hub dropped as long overdue, a wait the Agent ends by itself, an open PR), the longest waiting first. A moment's model failure the hub retries is Working.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.4 \"Within a section\"",
+        "docs/design/proposals/todos-redesign.md 3.7 \"Counts\"",
+        "#10226 (runs that wait on another Agent or an outside event are Waiting)"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "todos": [
+          {
+            "id": "todo_wr_e1",
+            "title": "Publish the trip site",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-10T09:00:00Z",
+            "updated_at": "2026-11-10T09:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-deploy",
+                "linked_at": "2026-11-10T09:01:00Z",
+                "title": "Trip site deploy",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          },
+          {
+            "id": "todo_wr_a1",
+            "title": "Merge the trip notes into the itinerary",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-merge",
+                "linked_at": "2026-11-10T08:01:00Z",
+                "title": "Itinerary merge",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          },
+          {
+            "id": "todo_wr_u1",
+            "title": "Translate the museum guide",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-10T07:00:00Z",
+            "updated_at": "2026-11-10T07:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-museum",
+                "linked_at": "2026-11-10T07:01:00Z",
+                "title": "Museum guide",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          },
+          {
+            "id": "todo_wr_p1",
+            "title": "Confirm the cooking class",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-08T08:00:00Z",
+            "updated_at": "2026-11-08T08:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-cook",
+                "linked_at": "2026-11-08T08:01:00Z",
+                "title": "Confirm the cooking class",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false,
+            "supervision": {
+              "supervisor": "conv_main",
+              "done_when": [
+                "The venue answered"
+              ],
+              "criteria": [],
+              "state": "parked",
+              "parked": {
+                "reason": "Waiting for the venue to answer",
+                "until": "2026-11-11T09:00:00Z",
+                "waiting_on": "external_event",
+                "count": 1
+              },
+              "round": 0,
+              "reviews": [
+                {
+                  "at": "2026-11-09T15:00:00Z",
+                  "verdict": "parked",
+                  "reason": "Waiting for the venue to answer",
+                  "until": "2026-11-11T09:00:00Z",
+                  "waiting_on": "external_event",
+                  "parks": 1
+                }
+              ],
+              "updated_at": "2026-11-09T15:00:00Z"
+            }
+          },
+          {
+            "id": "todo_wr_a2",
+            "title": "Collect the restaurant shortlist",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-10T06:00:00Z",
+            "updated_at": "2026-11-10T06:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-shortlist",
+                "linked_at": "2026-11-10T06:01:00Z",
+                "title": "Restaurant shortlist",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          },
+          {
+            "id": "todo_wr_l1",
+            "title": "Watch the ferry timetable",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-10T06:30:00Z",
+            "updated_at": "2026-11-10T06:30:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-timetable",
+                "linked_at": "2026-11-10T06:31:00Z",
+                "title": "Ferry timetable",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          },
+          {
+            "id": "todo_wr_r1",
+            "title": "Fix the map links on the trip site",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-09T08:00:00Z",
+            "updated_at": "2026-11-09T08:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-links",
+                "linked_at": "2026-11-09T08:01:00Z",
+                "title": "Map links",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false,
+            "pr_url": "https://github.com/example/trip-site/pull/7",
+            "pr_status": {
+              "url": "https://github.com/example/trip-site/pull/7",
+              "state": "open",
+              "draft": false,
+              "review": "required",
+              "checks": "passing",
+              "conflicts": false,
+              "checked_at": "2026-11-10T11:55:00Z"
+            }
+          },
+          {
+            "id": "todo_wr_t1",
+            "title": "Summarize the museum reviews",
+            "notes": "",
+            "done_at": null,
+            "created_at": "2026-11-10T10:00:00Z",
+            "updated_at": "2026-11-10T10:00:00Z",
+            "origin": "conv_main",
+            "spaces": [],
+            "agents": [
+              {
+                "machine_id": "m1",
+                "session_id": "s-reviews",
+                "linked_at": "2026-11-10T10:01:00Z",
+                "title": "Museum reviews",
+                "cwd": "/home/user/project",
+                "agent": "claude",
+                "source": "manual"
+              }
+            ],
+            "quiet": false
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s-deploy",
+            "title": "Trip site deploy",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:40:00Z",
+            "updated_at": "2026-11-10T11:40:00Z",
+            "pending_interactions": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Waiting for the deploy to finish, then checking the live site",
+              "wait": "The deploy finishes",
+              "then": "Check the live site",
+              "every_minutes": 30,
+              "wake_at": "2026-11-10T12:10:00Z",
+              "max": 6,
+              "turn_at": "2026-11-10T11:40:00Z",
+              "at": "2026-11-10T11:40:15Z",
+              "by": "model"
+            }
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-merge",
+            "title": "Itinerary merge",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:20:00Z",
+            "updated_at": "2026-11-10T11:20:00Z",
+            "pending_interactions": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "agent",
+              "line": "Waiting for the hotel search to finish",
+              "wait": "The hotel search finishes",
+              "then": "Merge its picks into the itinerary",
+              "every_minutes": 60,
+              "wake_at": "2026-11-10T12:20:00Z",
+              "agent": {
+                "machine_id": "m1",
+                "session_id": "s-hotels",
+                "label": "Hotel search"
+              },
+              "turn_at": "2026-11-10T11:20:00Z",
+              "at": "2026-11-10T11:20:20Z",
+              "by": "model"
+            }
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-museum",
+            "title": "Museum guide",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 0,
+            "turn_error": "You've hit your usage limit",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-10T13:00:00Z"
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-cook",
+            "title": "Confirm the cooking class",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-09T14:50:00Z",
+            "updated_at": "2026-11-09T14:50:00Z",
+            "pending_interactions": 0
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-shortlist",
+            "title": "Restaurant shortlist",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T10:00:00Z",
+            "updated_at": "2026-11-10T10:00:00Z",
+            "pending_interactions": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "agent",
+              "line": "Waiting for the reviews summary",
+              "wait": "The reviews summary finishes",
+              "then": "Pick the top five",
+              "agent": {
+                "machine_id": "m1",
+                "session_id": "s-reviews",
+                "label": "Museum reviews"
+              },
+              "turn_at": "2026-11-10T10:00:00Z",
+              "at": "2026-11-10T10:00:20Z",
+              "by": "model"
+            }
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-timetable",
+            "title": "Ferry timetable",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "pending_interactions": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "line": "Checks the timetable again by itself",
+              "turn_at": "2026-11-10T11:00:00Z",
+              "at": "2026-11-10T11:00:10Z",
+              "by": "rule"
+            }
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-links",
+            "title": "Map links",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T10:00:00Z",
+            "updated_at": "2026-11-10T10:00:00Z",
+            "pending_interactions": 0
+          },
+          {
+            "machine_id": "m1",
+            "session_id": "s-reviews",
+            "title": "Museum reviews",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-10T11:59:40Z",
+            "updated_at": "2026-11-10T11:59:40Z",
+            "pending_interactions": 0,
+            "turn_error": "API Error: 529 overloaded",
+            "turn_error_kind": "transient",
+            "work": {
+              "phase": "blocked",
+              "on": "transient",
+              "line": "The model service failed for a moment; continuing",
+              "wait": "API Error: 529 overloaded",
+              "wake_at": "2026-11-10T12:00:10Z",
+              "attempts": 1,
+              "max": 5,
+              "turn_at": "2026-11-10T11:59:40Z",
+              "at": "2026-11-10T11:59:40Z",
+              "by": "rule"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "counts": {
+          "open": 8,
+          "needs_you": 0,
+          "in_progress": 8,
+          "sections": {
+            "needs_you": 0,
+            "can_wait": 0,
+            "working": 1,
+            "waiting": 7,
+            "todo": 0,
+            "just_finished": 0,
+            "someday": 0,
+            "done": 0
+          }
+        },
+        "places": {
+          "places": [
+            {
+              "id": "all",
+              "kind": "all",
+              "title": "",
+              "needs_you": 0
+            },
+            {
+              "id": "today",
+              "kind": "today",
+              "title": "",
+              "needs_you": 0
+            },
+            {
+              "id": "upcoming",
+              "kind": "upcoming",
+              "title": "",
+              "needs_you": 0
+            }
+          ],
+          "counts": {
+            "open": 8,
+            "needs_you": 0,
+            "in_progress": 8,
+            "sections": {
+              "needs_you": 0,
+              "can_wait": 0,
+              "working": 1,
+              "waiting": 7,
+              "todo": 0,
+              "just_finished": 0,
+              "someday": 0,
+              "done": 0
+            }
+          }
+        },
+        "order": {
+          "working": [
+            "todo_wr_t1"
+          ],
+          "waiting": [
+            "todo_wr_e1",
+            "todo_wr_a1",
+            "todo_wr_u1",
+            "todo_wr_p1",
+            "todo_wr_a2",
+            "todo_wr_l1",
+            "todo_wr_r1"
+          ]
+        }
+      }
     }
   ]
 }

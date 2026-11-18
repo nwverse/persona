@@ -31,7 +31,8 @@ const (
 	runInterrupted                // cut off by a model error that is not a usage limit
 	runAwaitsReply                // stopped on a plain-text question nobody answered
 	runUnread                     // finished a turn nobody has seen
-	runBackground                 // its turn ended, and background work or a wake brings it back by itself
+	runWaits                      // its turn ended blocked on another Agent or an outside event, which wakes it
+	runBackground                 // background work still runs, or the hub retries a moment's model failure
 	runStarting                   // Persona is opening it
 	runRunning                    // an Agent works now
 	runPersona                    // one of Persona's own conversations works now
@@ -83,7 +84,7 @@ func activeRuns(f *Facts, now time.Time) []run {
 }
 
 // runReading is how run r stands: the first that holds of offline, asks, a usage limit, interrupted, awaits a reply,
-// unread, background, starting, running.
+// unread, waits on another Agent or an outside event, background, starting, running.
 func runReading(r run, now time.Time) runKind {
 	if !r.found {
 		return runOffline
@@ -101,6 +102,8 @@ func runReading(r run, now time.Time) runKind {
 		return runAwaitsReply
 	case st == proto.StateUnread:
 		return runUnread
+	case waitsOn(s) != "":
+		return runWaits
 	case waitsByItself(s):
 		return runBackground
 	case s.Starting:
@@ -160,25 +163,48 @@ func usageLimited(s proto.Session, now time.Time) bool {
 	return reset == nil || now.Before(reset.Add(usageLimitGrace))
 }
 
-// interrupted: cut off by a model error that is not a usage limit.
+// interrupted: cut off by a model error that is not a usage limit, and that the hub does not retry by itself.
 func interrupted(s proto.Session, now time.Time) bool {
-	if s.TurnError == "" || usageLimited(s, now) {
+	if s.TurnError == "" || usageLimited(s, now) || retrying(s) {
 		return false
 	}
 	st := stateOf(s)
 	return st == proto.StateUnread || st == proto.StateIdle
 }
 
-// waitsByItself: its turn ended and something brings it back without the owner: background work still running, or
-// the hub waking it for another Agent, an outside event or a moment's model failure.
-func waitsByItself(s proto.Session) bool {
+// blockedOn is what s's turn ended blocked on (its work's on), when it is not working, asking or unread; "" otherwise.
+func blockedOn(s proto.Session) string {
 	st := stateOf(s)
-	if st == proto.StateWorking {
+	if st == proto.StateWorking || st == proto.StateNeedsYou || st == proto.StateUnread || s.Work == nil ||
+		s.Work.Phase != proto.WorkBlocked {
+		return ""
+	}
+	return s.Work.On
+}
+
+// waitsOn is what s waits on when its turn ended blocked on another Agent (agent) or an outside event (external):
+// the hub wakes it when that comes (docs/assistant/agent-work.md "Waiting: scheduled wakeups"); "" otherwise.
+func waitsOn(s proto.Session) string {
+	if on := blockedOn(s); on == proto.WaitAgent || on == proto.WaitExternal {
+		return on
+	}
+	return ""
+}
+
+// retrying: the hub's "Continue" after a moment's model failure is on its way (work blocked on transient with its
+// wake_at, docs/assistant/agent-work.md "Transient errors: automatic continuation"). The session keeps its turn_error
+// meanwhile, but the hub writes no Interrupted receipt until its retries run out, and neither does the view.
+func retrying(s proto.Session) bool {
+	return blockedOn(s) == proto.WaitTransient && s.Work.WakeAt != nil
+}
+
+// waitsByItself: something brings it back without the owner and with nothing to wait for: background work still
+// running after its turn ended, or the hub sending "Continue" after a moment's model failure (transient).
+func waitsByItself(s proto.Session) bool {
+	if stateOf(s) == proto.StateWorking {
 		return s.BackgroundWorking
 	}
-	w := s.Work
-	return st != proto.StateNeedsYou && st != proto.StateUnread && w != nil && w.Phase == proto.WorkBlocked &&
-		(w.On == proto.WaitAgent || w.On == proto.WaitExternal || w.On == proto.WaitTransient)
+	return blockedOn(s) == proto.WaitTransient
 }
 
 // firstRun is the first of runs (in the list's order) of kind k.
