@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,10 @@ type tuiBridge struct {
 	tasks     string    // the background tasks last reported, as a key
 	tasksSent bool      // a list went out at all
 
+	clientOut  *tuiTail      // what the tmux client printed, last bytes
+	clientDone chan struct{} // closed once the tmux client exited and what it printed is in clientOut
+	clientErr  error         // how it exited
+
 	typeText func(context.Context, string) error // types a message in place of submit (tests)
 }
 
@@ -81,6 +86,10 @@ func envWithoutTMUX(env []string) []string {
 }
 
 // launch starts the private tmux server with Claude Code in it, attached through the bridge's pseudo-terminal.
+//
+// The pane runs a script holding Claude Code's command, not the command itself: tmux hands a new session's command to
+// its server in one message of at most 16 KB (MAX_IMSGSIZE) and refuses longer ones ("command too long"), and an
+// assistant's start, with its system prompt and tool rules, is often longer than that.
 func (b *tuiBridge) launch() error {
 	p, err := exec.LookPath("tmux")
 	if err != nil {
@@ -93,20 +102,75 @@ func (b *tuiBridge) launch() error {
 	if err := os.WriteFile(conf, []byte(tuiConf), 0o600); err != nil {
 		return err
 	}
+	script := filepath.Join(b.dir, "claude.sh")
+	if err := os.WriteFile(script, []byte(tuiScript(b.spec.TUI)), 0o600); err != nil {
+		return err
+	}
 	b.tm = tmux.Client{Bin: p, Socket: filepath.Join(b.dir, "s")}
-	// Claude Code in the pane must not know it is in tmux: Persona's tmux engine finds the agents in tmux panes by their
-	// environment and by what Claude Code writes down of its pane, and this pane is no Agent's, on no server it drives.
-	args := append([]string{"-S", b.tm.Socket, "-f", conf, "new-session", "-s", tuiPane, "-c", b.spec.Cwd, "--",
-		"env", "-u", "TMUX", "-u", "TMUX_PANE", "-u", "TERM_PROGRAM", "-u", "TERM_PROGRAM_VERSION"}, b.spec.TUI...)
+	args := []string{"-S", b.tm.Socket, "-f", conf, "new-session", "-s", tuiPane, "-c", b.spec.Cwd, "--", "/bin/sh", script}
 	b.client = exec.Command(p, args...)
 	b.client.Dir = b.spec.Cwd
 	b.client.Env = append(envWithoutTMUX(os.Environ()), "TERM=xterm-256color")
 	if b.ptmx, err = pty.StartWithSize(b.client, &pty.Winsize{Rows: 50, Cols: 200}); err != nil {
 		return fmt.Errorf("start tmux: %w", err)
 	}
-	go func() { _, _ = io.Copy(io.Discard, b.ptmx) }()
-	go func() { _ = b.client.Wait() }()
+	// What the client prints is kept: a tmux that refuses to start says why there, and nowhere else.
+	b.clientOut = &tuiTail{}
+	b.clientDone = make(chan struct{})
+	copied := make(chan struct{})
+	go func() { _, _ = io.Copy(b.clientOut, b.ptmx); close(copied) }()
+	go func() {
+		err := b.client.Wait()
+		select { // all it printed, unless something else keeps its terminal open
+		case <-copied:
+		case <-time.After(time.Second):
+		}
+		b.clientErr = err
+		close(b.clientDone)
+	}()
 	return nil
+}
+
+// tuiScript is the pane's script: Claude Code's command, run by a shell that first forgets it is in tmux. Persona's
+// tmux engine finds the agents in tmux panes by their environment and by what Claude Code writes down of its pane, and
+// this pane is no Agent's, on no server it drives.
+func tuiScript(argv []string) string {
+	var sb strings.Builder
+	sb.WriteString("unset TMUX TMUX_PANE TERM_PROGRAM TERM_PROGRAM_VERSION\nexec")
+	for _, a := range argv {
+		sb.WriteString(" '" + strings.ReplaceAll(a, "'", `'\''`) + "'")
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// tuiTail keeps the last bytes written to it.
+type tuiTail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const tuiTailSize = 4096
+
+func (t *tuiTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > tuiTailSize {
+		t.buf = t.buf[len(t.buf)-tuiTailSize:]
+	}
+	return len(p), nil
+}
+
+// tuiEscape matches a terminal's control sequences: CSI, OSC and the short ones.
+var tuiEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[@-_]`)
+
+// lines are the last n non-blank lines written, as plain text.
+func (t *tuiTail) lines(n int) []string {
+	t.mu.Lock()
+	text := string(t.buf)
+	t.mu.Unlock()
+	return screenTail(strings.ReplaceAll(tuiEscape.ReplaceAllString(text, ""), "\r", "\n"), n)
 }
 
 // shutdown ends the private server and removes its directory.
@@ -149,6 +213,38 @@ func (b *tuiBridge) dead(ctx context.Context) (bool, int) {
 	return d == 1, status
 }
 
+// ended says why Claude Code is gone (before it was ready, or later), from the pane's last lines (plain) or, when its
+// tmux is gone too, from what the tmux client printed as it exited.
+func (b *tuiBridge) ended(ctx context.Context, plain string, status int, early bool) string {
+	when, whenTmux := "", ""
+	if early {
+		when, whenTmux = " before it was ready", " before Claude Code was ready"
+	}
+	if tail := screenTail(plain, 5); len(tail) > 0 {
+		return fmt.Sprintf("Claude Code exited%s (status %d): %s", when, status, strings.Join(tail, " | "))
+	}
+	if _, err := b.tmuxRun(ctx, "has-session", "-t", tuiPane); err == nil {
+		return fmt.Sprintf("Claude Code exited%s (status %d) and printed nothing", when, status)
+	}
+	why := "tmux ended" + whenTmux
+	if b.clientDone != nil {
+		select {
+		case <-b.clientDone:
+			var exit *exec.ExitError
+			if errors.As(b.clientErr, &exit) {
+				why = fmt.Sprintf("tmux exited%s (status %d)", whenTmux, exit.ExitCode())
+			}
+		case <-time.After(time.Second):
+		}
+	}
+	if b.clientOut != nil {
+		if tail := b.clientOut.lines(3); len(tail) > 0 {
+			return why + ": " + strings.Join(tail, " | ")
+		}
+	}
+	return why + " and printed nothing"
+}
+
 // screenTail are the screen's last non-blank lines, for saying why it ended.
 func screenTail(plain string, n int) []string {
 	var out []string
@@ -178,7 +274,7 @@ func (b *tuiBridge) awaitReady(ctx context.Context) error {
 		}
 		plain, _, err := b.screens(ctx)
 		if dead, status := b.dead(ctx); dead || err != nil {
-			return fmt.Errorf("Claude Code exited before it was ready (status %d): %s", status, strings.Join(screenTail(plain, 5), " | "))
+			return errors.New(b.ended(ctx, plain, status, true))
 		}
 		keys := trustKeys(plain)
 		if keys == nil {

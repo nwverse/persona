@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -506,3 +507,58 @@ func (o *tuiTestOut) String() string {
 }
 
 func (o *tuiTestOut) Len() int { return len(o.String()) }
+
+// An assistant's interactive start is often longer than the 16 KB tmux takes for a new session's command (its system
+// prompt and tool rules): tmux refused it ("command too long") and every interactive start fell back to claude -p.
+func TestALongInteractiveCommandStartsInTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	long := strings.Repeat("a'b ", 10000) // 40 KB, quotes included
+	b := &tuiBridge{spec: tuiSpec{Cwd: t.TempDir(),
+		TUI: []string{"/bin/sh", "-c", `printf 'persona-long-ok %s\n' "${#1}"; exec sleep 30`, "sh", long}}}
+	if err := b.launch(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.shutdown()
+	var plain string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if plain, _, _ = b.screens(context.Background()); strings.Contains(plain, "persona-long-ok 40000") {
+			return
+		}
+	}
+	t.Fatalf("the long command did not run in tmux; screen %q, tmux printed %q", plain, b.clientOut.lines(3))
+}
+
+// A tmux that refuses to start says why only on its own terminal: that is the reason the start fails with, the one the
+// node's log and the conversation's execution report show, not an empty "exited (status 1)".
+func TestATmuxThatRefusesToStartSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	fake := "#!/bin/sh\ncase \"$*\" in\n*new-session*) echo 'command too long'; exit 1;;\n" +
+		"*) echo \"no server running on $2\" >&2; exit 1;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	b := &tuiBridge{spec: tuiSpec{Cwd: dir, TUI: []string{"claude"}}}
+	if err := b.launch(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.shutdown()
+	err := b.awaitReady(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "tmux exited before Claude Code was ready (status 1): command too long") {
+		t.Fatalf("start failed with %v", err)
+	}
+}
+
+// The pane's script runs the command word for word, whatever its arguments hold.
+func TestTUIScriptQuotesEveryArgument(t *testing.T) {
+	args := []string{"printf", `%s|`, "it's", `$HOME`, "a b", "`id`", "", "line\nbreak"}
+	out, err := exec.Command("/bin/sh", "-c", tuiScript(args)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "it's|$HOME|a b|`id`||line\nbreak|"; string(out) != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+}

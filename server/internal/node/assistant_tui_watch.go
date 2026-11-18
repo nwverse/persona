@@ -173,7 +173,7 @@ func (b *tuiBridge) watch(ctx context.Context) int {
 		plain, _, err := b.screens(ctx)
 		if dead, status := b.dead(ctx); dead || err != nil {
 			b.readTranscript()
-			fmt.Fprintf(b.stderr, "assistant-tui: Claude Code exited (status %d): %s\n", status, strings.Join(screenTail(plain, 5), " | "))
+			fmt.Fprintf(b.stderr, "assistant-tui: %s\n", b.ended(ctx, plain, status, false))
 			return status
 		}
 		b.screenState(plain)
