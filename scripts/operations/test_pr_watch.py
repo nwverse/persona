@@ -1591,17 +1591,78 @@ class WatcherTests(unittest.TestCase):
             commands = pr_watch_verify.persona_checks(".", pr(title="test: update an argument-driven check"), 1, {})
         self.assertEqual(commands[0], ("CI scripts", ["bash", "scripts/ci/scripts.sh"]))
 
+    def test_documentation_guards_use_base_not_stale_watcher_or_pr_source(self):
+        import pr_watch_test_guards
+        base_source = (
+            "from pathlib import Path\n"
+            "import unittest\n"
+            "ROOT = Path(__file__).resolve().parent\n"
+            "class BaseGuard(unittest.TestCase):\n"
+            "    def test_base_revision(self):\n"
+            "        self.assertTrue((ROOT / 'base-ok').is_file())\n"
+        )
+        section_source = (
+            "from pathlib import Path\n"
+            "import unittest\n"
+            "ROOT = Path(__file__).resolve().parent\n"
+            "KNOWN = Path(__file__).resolve().with_name('doc_sections_known.txt')\n"
+            "class BaseGuard(unittest.TestCase):\n"
+            "    def test_base_revision(self):\n"
+            "        self.assertTrue((ROOT / 'base-ok').is_file())\n"
+            "        self.assertEqual('', KNOWN.read_text())\n"
+            "        self.assertEqual('doc_sections_known.txt', KNOWN.relative_to(ROOT).name)\n"
+        )
+        stale_source = (
+            "import unittest\n"
+            "class StaleGuard(unittest.TestCase):\n"
+            "    def test_stale_watcher(self):\n"
+            "        self.fail('stale watcher guard ran')\n"
+        )
+        relatives = ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.py", "test_doc_wire.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            watcher = root / "watcher"
+            checkout = root / "pr"
+            for base in (watcher, checkout):
+                tests = base / "scripts/test"
+                tests.mkdir(parents=True)
+                for relative in relatives:
+                    (tests / relative).write_text(stale_source)
+            (checkout / "base-ok").write_text("")
+            shown = []
+
+            def fake_checked(argv, **kwargs):
+                if argv[:2] == ["git", "show"]:
+                    shown.append(argv[2])
+                    if argv[2].endswith("doc_sections_known.txt"):
+                        return ""
+                    if argv[2].endswith("test_doc_sections.py"):
+                        return section_source
+                    return base_source
+                return ""
+
+            with patch.dict(sys.modules), \
+                    patch.object(pr_watch_test_guards, "ROOT", watcher), \
+                    patch.object(pr_watch_test_guards, "privacy_environment", return_value={}), \
+                    patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked):
+                self.assertEqual(0, pr_watch_test_guards.main([
+                    "--base", SHA_BASE, "--head", SHA_A, "--worktree", str(checkout), "--repository-guards",
+                ]))
+            self.assertIn(SHA_BASE + ":scripts/test/test_doc_paths.py", shown)
+
     def test_documentation_guard_reads_pr_not_watcher_root(self):
         import pr_watch_test_guards
         module = type("Guard", (), {"ROOT": None, "checked_root": None})
         module.TestRepository = type("TestRepository", (unittest.TestCase,), {
             "test_root": lambda self: setattr(module, "checked_root", module.ROOT)
         })
-        with patch.object(pr_watch_test_guards, "load_guard", return_value=module):
-            pr_watch_test_guards.documentation_guard("test_doc_paths.py", Path("/tmp/pr-root"))
+        with patch.object(pr_watch_test_guards, "load_guard", return_value=module), \
+                patch.object(pr_watch_test_guards, "checked", return_value=""):
+            pr_watch_test_guards.documentation_guard("test_doc_paths.py", Path("/tmp/pr-root"), SHA_BASE)
         self.assertEqual(module.checked_root, Path("/tmp/pr-root"))
-        with patch.object(pr_watch_test_guards, "load_guard", return_value=module):
-            pr_watch_test_guards.documentation_guard("test_doc_paths.py", Path("/tmp/watcher-root"))
+        with patch.object(pr_watch_test_guards, "load_guard", return_value=module), \
+                patch.object(pr_watch_test_guards, "checked", return_value=""):
+            pr_watch_test_guards.documentation_guard("test_doc_paths.py", Path("/tmp/watcher-root"), SHA_BASE)
         self.assertEqual(module.checked_root, Path("/tmp/watcher-root"))
 
     def test_go_format_guard_checks_each_changed_file(self):

@@ -13,8 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pr_watch_common import WatchError, checked
 
 
-def load_guard(relative, name):
-    spec = importlib.util.spec_from_file_location(name, ROOT / relative)
+def load_guard(relative, name, root=None):
+    source_root = ROOT if root is None else Path(root)
+    spec = importlib.util.spec_from_file_location(name, source_root / relative)
     if spec is None or spec.loader is None:
         raise WatchError("cannot load trusted guard: " + relative)
     module = importlib.util.module_from_spec(spec)
@@ -61,15 +62,28 @@ def privacy_environment(checkout):
     return env
 
 
-def documentation_guard(relative, checkout):
-    """Load trusted tests, rebind their repository root, then use unittest discovery."""
-    module = load_guard("scripts/test/" + relative, "pr_watch_doc_" + relative[:-3])
-    module.ROOT = Path(checkout)
-    for related in ("test_doc_paths", "pr_watch_doc_test_doc_paths"):
-        if related in sys.modules:
-            sys.modules[related].ROOT = Path(checkout)
-    loader = unittest.TestLoader()
-    result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromModule(module))
+def documentation_guard(relative, checkout, base):
+    """Run the exact base's trusted tests against the PR's files, never the PR's Python."""
+    with tempfile.TemporaryDirectory(prefix="pr-watch-base-guards-") as directory:
+        source_root = Path(directory)
+        for name in sorted({"test_doc_paths.py", relative}):
+            source = checked(["git", "show", base + ":scripts/test/" + name], cwd=checkout)
+            (source_root / name).write_text(source, encoding="utf-8")
+        if relative == "test_doc_sections.py":
+            known = checked(["git", "show", base + ":scripts/test/doc_sections_known.txt"], cwd=checkout)
+            (source_root / "doc_sections_known.txt").write_text(known, encoding="utf-8")
+
+        common = load_guard("test_doc_paths.py", "test_doc_paths", source_root)
+        module = common if relative == "test_doc_paths.py" else load_guard(
+            relative, "pr_watch_doc_" + relative[:-3], source_root)
+        common.ROOT = Path(checkout)
+        module.ROOT = Path(checkout)
+        if relative == "test_doc_sections.py":
+            # The base test formats KNOWN relative to ROOT. Keep that lexical relationship while the path resolves
+            # through .. to the temporary base copy, never to the PR's own data file.
+            module.KNOWN = Path(checkout) / os.path.relpath(source_root / "doc_sections_known.txt", checkout)
+        loader = unittest.TestLoader()
+        result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromModule(module))
     if result.testsRun == 0 or not result.wasSuccessful():
         raise WatchError("documentation guard did not pass: " + relative)
 
@@ -90,7 +104,7 @@ def main(argv=None):
                  "--range", args.base + ".." + args.head], cwd=checkout,
                 environ=privacy_environment(checkout))
         for relative in ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.py", "test_doc_wire.py"):
-            documentation_guard(relative, checkout)
+            documentation_guard(relative, checkout, args.base)
         return 0
     violations = []
     for name in args.names:
