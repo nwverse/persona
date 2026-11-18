@@ -104,6 +104,58 @@ func TestNewNodeAddsVersionManagerShims(t *testing.T) {
 	}
 }
 
+// A resident node (persona-node attach) makes a new Node for each hub connection in one process. The next one starts
+// from the PATH the last one made, without the directories hub.json added for it, so [] still takes them out, from
+// PATH and from the herdr server's tool directories (review of #10131), and the node's own directories are not put in
+// front again at each connection.
+func TestReconnectedNodeCanStillTakeOutExtraPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix paths")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, k := range []string{"MISE_DATA_DIR", "ASDF_DATA_DIR", "XDG_DATA_HOME"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("PATH", "/usr/bin:/bin")
+	resetExtraPathForTest(t)
+	first, err := New("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	made := os.Getenv("PATH")
+	if _, err := request(t, first, "node.configure", map[string]any{"extra_path": []string{"/opt/tools/bin"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("PATH"); got != "/opt/tools/bin:"+made {
+		t.Fatalf("configured PATH %q", got)
+	}
+	second, err := New("test") // the hub connection came back
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("PATH"); got != made {
+		t.Fatalf("PATH at the next connection\n got %q\nwant %q", got, made)
+	}
+	if _, err := request(t, second, "node.configure", map[string]any{"extra_path": []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("PATH"); got != made {
+		t.Fatalf("PATH after []\n got %q\nwant %q", got, made)
+	}
+	if got := herdrToolDirs(home); slices.Contains(got, "/opt/tools/bin") {
+		t.Fatalf("herdr's tool directories kept the old entry: %q", got)
+	}
+	// someone else set PATH meanwhile: that one is the base, with the node's directories in front as at a first start
+	t.Setenv("PATH", "/usr/local/sbin:/usr/bin")
+	if _, err := New("test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("PATH"); !strings.HasPrefix(got, filepath.Join(home, ".local/bin")+":") || !strings.HasSuffix(got, ":/usr/local/sbin:/usr/bin") {
+		t.Fatalf("PATH after it was set elsewhere %q", got)
+	}
+}
+
 // hub.json's machines[].extra_path (node.configure extra_path) goes in front of the node's PATH, replaces what was
 // said before, and [] takes it out; a call that says nothing of it, an older hub's, leaves PATH alone. Only "~/" and
 // absolute directories count.

@@ -365,8 +365,14 @@ func New(version string) (*Node, error) {
 	}
 	// ssh sessions get a minimal PATH; herdr and claude usually live in ~/.local/bin. Tools a version manager installs
 	// (git-lfs through mise, #10127) come after the rest (toolpath.go).
+	// A later hub connection of a resident node starts from the PATH the last New made, without hub.json's directories
+	// (withoutExtraPath): those already lead with these, and the configure that follows puts hub.json's back.
 	extra := []string{filepath.Join(home, ".local/bin"), filepath.Join(home, "bin"), filepath.Join(home, "go/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/local/go/bin"}
-	path := withDirsAfter(strings.Join(append(extra, os.Getenv("PATH")), string(os.PathListSeparator)), versionManagerShims(home, os.Getenv))
+	path, resident := withoutExtraPath(os.Getenv("PATH"))
+	if !resident {
+		path = strings.Join(append(extra, path), string(os.PathListSeparator))
+	}
+	path = withDirsAfter(path, versionManagerShims(home, os.Getenv))
 	os.Setenv("PATH", path)
 	resetExtraPath(path)
 	dir, err := identity.PrepareHome(home)

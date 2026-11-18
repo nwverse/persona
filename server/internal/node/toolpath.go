@@ -62,6 +62,30 @@ var extraPath struct {
 	dirs []string
 }
 
+// withoutExtraPath is path without the directories setExtraPath put in front of it, while path is still the PATH New
+// or setExtraPath made: a resident node (persona-node attach) makes a new Node for each hub connection in one process,
+// and the next one starts from that base, not with the directories hub.json added for the last one baked in (which [])
+// could then never take out, review of #10131). resident is false for a PATH someone else set since, or before any New.
+func withoutExtraPath(path string) (base string, resident bool) {
+	extraPath.mu.Lock()
+	defer extraPath.mu.Unlock()
+	if extraPath.base == nil {
+		return path, false
+	}
+	made := *extraPath.base
+	if len(extraPath.dirs) > 0 {
+		list := slices.Clone(extraPath.dirs)
+		if made != "" {
+			list = append(list, made)
+		}
+		made = strings.Join(list, string(os.PathListSeparator))
+	}
+	if path != made {
+		return path, false
+	}
+	return *extraPath.base, true
+}
+
 // resetExtraPath makes path the node's PATH without configured directories (New).
 func resetExtraPath(path string) {
 	extraPath.mu.Lock()
