@@ -512,9 +512,17 @@ data class TodoTimelineEntry(
     val actor: TodoActor = TodoActor(),
     /**
      * Words someone wrote, as they wrote them: the owner's instruction or answer, a relay, a run's latest summary or
-     * what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any.
+     * what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any. Today's stores
+     * keep a few of the hub's own sentences in the place of such words, in the language they were written in
+     * (spec/fixtures/todo-rounds/README.md "Judgement calls"): a failed start's that names no error, a turn's that
+     * ended without a summary, a permission or plan card's answer.
      */
     val text: String? = null,
+    /**
+     * The option the owner chose, on an answer whose text is what they said in a conversation rather than the option
+     * itself; absent otherwise.
+     */
+    val choice: String? = null,
     /**
      * What an answer or a decision answers, in the words it was asked in; absent when nothing says.
      */
@@ -631,6 +639,18 @@ object TodoResultKind {
 }
 
 /**
+ * How a code change stands as the hub last saw it: open, under review; draft, open but not ready for review; merged;
+ * closed without merging. Open: a newer hub may send other values.
+ */
+object TodoChangeState {
+    const val OPEN = "open"
+    const val DRAFT = "draft"
+    const val MERGED = "merged"
+    const val CLOSED = "closed"
+    val ALL = listOf("open", "draft", "merged", "closed")
+}
+
+/**
  * Something a to-do's work produced, with how it stands: one chip of the paper's Results (proposal 3.5 row 9).
  */
 @Serializable
@@ -654,8 +674,7 @@ data class TodoResult(
      */
     val url: String? = null,
     /**
-     * How a change stands now: open, draft, merged or closed; absent while the hub has not looked, and for the other
-     * kinds.
+     * How a change stands now; absent while the hub has not looked, and for the other kinds.
      */
     val state: String? = null,
     /**

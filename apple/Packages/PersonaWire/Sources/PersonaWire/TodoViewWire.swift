@@ -609,8 +609,14 @@ public nonisolated struct TodoTimelineEntry: Codable, Hashable, Sendable {
     public var at: String
     public var actor: TodoActor
     /// Words someone wrote, as they wrote them: the owner's instruction or answer, a relay, a run's latest summary or
-    /// what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any.
+    /// what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any. Today's stores
+    /// keep a few of the hub's own sentences in the place of such words, in the language they were written in
+    /// (spec/fixtures/todo-rounds/README.md "Judgement calls"): a failed start's that names no error, a turn's that
+    /// ended without a summary, a permission or plan card's answer.
     public var text: String?
+    /// The option the owner chose, on an answer whose text is what they said in a conversation rather than the option
+    /// itself; absent otherwise.
+    public var choice: String?
     /// What an answer or a decision answers, in the words it was asked in; absent when nothing says.
     public var question: String?
     /// Why, in the words of whoever answered or decided; absent when nobody said.
@@ -636,12 +642,13 @@ public nonisolated struct TodoTimelineEntry: Codable, Hashable, Sendable {
     /// The run works now: only on a run line of the latest round. Written only when true.
     public var live: Bool?
 
-    public init(id: String = "", type: String = "", at: String = "", actor: TodoActor = TodoActor(), text: String? = nil, question: String? = nil, reason: String? = nil, line: TodoLine? = nil, run: TodoRunRef? = nil, ask: String? = nil, via: String? = nil, state: String? = nil, decision: String? = nil, supersededBy: String? = nil, turns: Int? = nil, live: Bool? = nil) {
+    public init(id: String = "", type: String = "", at: String = "", actor: TodoActor = TodoActor(), text: String? = nil, choice: String? = nil, question: String? = nil, reason: String? = nil, line: TodoLine? = nil, run: TodoRunRef? = nil, ask: String? = nil, via: String? = nil, state: String? = nil, decision: String? = nil, supersededBy: String? = nil, turns: Int? = nil, live: Bool? = nil) {
         self.id = id
         self.type = type
         self.at = at
         self.actor = actor
         self.text = text
+        self.choice = choice
         self.question = question
         self.reason = reason
         self.line = line
@@ -661,6 +668,7 @@ public nonisolated struct TodoTimelineEntry: Codable, Hashable, Sendable {
         case at
         case actor
         case text
+        case choice
         case question
         case reason
         case line
@@ -681,6 +689,7 @@ public nonisolated struct TodoTimelineEntry: Codable, Hashable, Sendable {
         self.at = (try? c.decodeIfPresent(String.self, forKey: .at)) ?? ""
         self.actor = (try? c.decodeIfPresent(TodoActor.self, forKey: .actor)) ?? TodoActor()
         self.text = try? c.decodeIfPresent(String.self, forKey: .text)
+        self.choice = try? c.decodeIfPresent(String.self, forKey: .choice)
         self.question = try? c.decodeIfPresent(String.self, forKey: .question)
         self.reason = try? c.decodeIfPresent(String.self, forKey: .reason)
         self.line = try? c.decodeIfPresent(TodoLine.self, forKey: .line)
@@ -784,6 +793,16 @@ public nonisolated enum TodoResultKind {
     public static let all = ["booking", "doc", "file", "link", "change", "deploy", "report"]
 }
 
+/// How a code change stands as the hub last saw it: open, under review; draft, open but not ready for review; merged;
+/// closed without merging. Open: a newer hub may send other values.
+public nonisolated enum TodoChangeState {
+    public static let open = "open"
+    public static let draft = "draft"
+    public static let merged = "merged"
+    public static let closed = "closed"
+    public static let all = ["open", "draft", "merged", "closed"]
+}
+
 /// Something a to-do's work produced, with how it stands: one chip of the paper's Results (proposal 3.5 row 9).
 public nonisolated struct TodoResult: Codable, Hashable, Sendable {
     /// Unique among the to-do's results and stable while the hub keeps what it was read from; opaque to clients.
@@ -796,8 +815,7 @@ public nonisolated struct TodoResult: Codable, Hashable, Sendable {
     public var text: String?
     /// Where it opens (the change, the first link a report named); absent when there is none.
     public var url: String?
-    /// How a change stands now: open, draft, merged or closed; absent while the hub has not looked, and for the other
-    /// kinds.
+    /// How a change stands now; absent while the hub has not looked, and for the other kinds.
     public var state: String?
     /// The run that produced it; absent when not known.
     public var run: TodoRunRef?

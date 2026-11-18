@@ -393,8 +393,14 @@ type TodoTimelineEntry struct {
 	At    time.Time `json:"at"`
 	Actor TodoActor `json:"actor"`
 	// Words someone wrote, as they wrote them: the owner's instruction or answer, a relay, a run's latest summary or
-	// what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any.
+	// what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any. Today's stores
+	// keep a few of the hub's own sentences in the place of such words, in the language they were written in
+	// (spec/fixtures/todo-rounds/README.md "Judgement calls"): a failed start's that names no error, a turn's that ended
+	// without a summary, a permission or plan card's answer.
 	Text string `json:"text,omitempty"`
+	// The option the owner chose, on an answer whose text is what they said in a conversation rather than the option
+	// itself; absent otherwise.
+	Choice string `json:"choice,omitempty"`
 	// What an answer or a decision answers, in the words it was asked in; absent when nothing says.
 	Question string `json:"question,omitempty"`
 	// Why, in the words of whoever answered or decided; absent when nobody said.
@@ -473,6 +479,18 @@ const (
 // TodoResultKinds are the values of TodoResultKind, in order.
 var TodoResultKinds = []string{"booking", "doc", "file", "link", "change", "deploy", "report"}
 
+// TodoChangeState: how a code change stands as the hub last saw it: open, under review; draft, open but not ready for
+// review; merged; closed without merging. Open: a newer hub may send other values.
+const (
+	TodoChangeStateOpen   = "open"
+	TodoChangeStateDraft  = "draft"
+	TodoChangeStateMerged = "merged"
+	TodoChangeStateClosed = "closed"
+)
+
+// TodoChangeStates are the values of TodoChangeState, in order.
+var TodoChangeStates = []string{"open", "draft", "merged", "closed"}
+
 // TodoResult: something a to-do's work produced, with how it stands: one chip of the paper's Results (proposal 3.5
 // row 9).
 type TodoResult struct {
@@ -486,8 +504,7 @@ type TodoResult struct {
 	Text string `json:"text,omitempty"`
 	// Where it opens (the change, the first link a report named); absent when there is none.
 	URL string `json:"url,omitempty"`
-	// How a change stands now: open, draft, merged or closed; absent while the hub has not looked, and for the other
-	// kinds.
+	// How a change stands now; absent while the hub has not looked, and for the other kinds.
 	State string `json:"state,omitempty"`
 	// The run that produced it; absent when not known.
 	Run *TodoRunRef `json:"run,omitempty"`

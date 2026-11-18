@@ -32,7 +32,7 @@ const (
 	verdictAccepted  = "accepted"
 	verdictCancelled = "cancelled"
 	verdictParked    = "parked"
-	byBackground     = "background"
+	verdictRework    = "rework"
 	byJudge          = "judge"
 	byReviewer       = "reviewer"
 
@@ -58,6 +58,7 @@ const (
 	doneByAuto      = "auto"
 	doneByCancelled = "cancelled"
 	doneByReported  = "reported"
+	doneByReview    = "review" // the list's done_by of a review's close, a cancellation's included
 )
 
 // The line keys the timeline writes (spec/fixtures/todo-rounds/README.md "Line keys"). interrupted, parked and cannot
@@ -76,6 +77,7 @@ const (
 	lineCannot            = "cannot"
 	lineReport            = "report"
 	lineAnsweredByPersona = "answered_by_persona"
+	lineOwnerResponse     = "owner_response"
 )
 
 // Who closed a to-do and how, as the closed line says it.
@@ -94,6 +96,9 @@ const (
 	// pairWindow: the two rows one owner act leaves (R1): an answered card and its card decisions, a relayed choice and
 	// its decision. Both are written in one go.
 	pairWindow = 10 * time.Second
+	// relayWindow: a decision recorded before its relay (the owner's reply to its card in Lark) is relayed once its run
+	// took it, which the hub waits for up to 90 seconds, or 5 minutes for a run it resumes first.
+	relayWindow = 5 * time.Minute
 	// reviewWindow: a review's feed row is written after its ledger entry, once the review's other writes are done (R6).
 	reviewWindow = time.Minute
 	// wakeWindow: a task card that says how a run came to work for the task, and the run's link.
@@ -299,7 +304,7 @@ func (r *reader) receipt(f FeedItem) {
 		return
 	}
 	switch b.State {
-	case receiptFailed: // no run started: the hub's words, as the conversation shows them
+	case receiptFailed: // no run started: the hub's words, as the conversation shows them, until a start error says why
 		it := r.add(feedID(f), f.At, assistantwire.TodoEntryTypeRunFailed, assistantwire.TodoActorKindHub)
 		it.e.Text, it.failedStart = b.Summary, true
 	case receiptDone, receiptInterrupted:
@@ -319,8 +324,8 @@ func (r *reader) receipt(f FeedItem) {
 }
 
 // receiptRun is the run a receipt is a turn of: the one it names (#10465); on an older receipt, the one link whose
-// computer has the receipt's machine name and that was on the to-do at its time. "" when none or several are: the
-// line is then "A run".
+// computer has the receipt's machine name, whose run started, and that was on the to-do at its time. "" when none or
+// several are: the line is then "A run".
 func (r *reader) receiptRun(b receiptBody, at time.Time) (string, *assistantwire.TodoRunRef) {
 	if b.MachineID != "" && b.SessionID != "" {
 		return runKey(b.MachineID, b.SessionID), r.ref(b.MachineID, b.SessionID)
@@ -328,7 +333,7 @@ func (r *reader) receiptRun(b receiptBody, at time.Time) (string, *assistantwire
 	var found *Agent
 	for i := range r.in.Todo.Agents {
 		a := &r.in.Todo.Agents[i]
-		if b.Machine == "" || r.in.Machines[a.MachineID] != b.Machine || a.LinkedAt.After(at) ||
+		if b.Machine == "" || r.in.Machines[a.MachineID] != b.Machine || a.StartError != "" || a.LinkedAt.After(at) ||
 			a.ReleasedAt != nil && !at.Before(*a.ReleasedAt) {
 			continue
 		}
@@ -344,27 +349,30 @@ func (r *reader) receiptRun(b receiptBody, at time.Time) (string, *assistantwire
 }
 
 // answered: someone dealt with a run's card. The owner's answer opens a round; Persona's in their place is its call.
+// Each question's answer is the answer itself, whole; the summary line is clipped, and a card without questions (a
+// permission, a plan) has only that line, in the hub's words.
 func (r *reader) answered(f FeedItem) {
 	var b answeredBody
 	if !decode(f.Body, &b) {
 		return
 	}
-	it := r.add(feedID(f), f.At, assistantwire.TodoEntryTypeAnswer, assistantwire.TodoActorKindOwner)
-	it.e.Question = b.Question
-	if b.By != answeredByAssistant {
-		it.e.Text, it.e.Via, it.head, it.from = b.Answer, assistantwire.TodoEntryViaCard, true, fromAnswered
-		return
-	}
-	// The summary line says "Persona answered" in the hub's words; each question's answer is the answer itself.
 	var answers []string
 	for _, i := range b.Items {
 		if i.Answer != "" {
 			answers = append(answers, i.Answer)
 		}
 	}
+	it := r.add(feedID(f), f.At, assistantwire.TodoEntryTypeAnswer, assistantwire.TodoActorKindOwner)
+	it.e.Question = b.Question
+	if b.By != answeredByAssistant {
+		it.e.Text, it.e.Via = cmp.Or(strings.Join(answers, "\n"), b.Answer), assistantwire.TodoEntryViaCard
+		it.head, it.from = true, fromAnswered
+		return
+	}
+	// The summary line says "Persona answered" in the hub's words: the key says that, with the answers when there are.
 	it.e.Type, it.e.Actor.Kind = assistantwire.TodoEntryTypeDecision, assistantwire.TodoActorKindPersona
 	it.e.Reason = b.Reason
-	it.e.Line = line(lineAnsweredByPersona, "answer", cmp.Or(strings.Join(answers, "\n"), b.Answer))
+	it.e.Line = line(lineAnsweredByPersona, "answer", strings.Join(answers, "\n"))
 }
 
 // report: a run reported to its supervisor (question, blocked, done): supervision nobody asked for (R3).
@@ -377,12 +385,12 @@ func (r *reader) report(f FeedItem) {
 	it.e.Text, it.e.Line, it.bg = b.Text, line(lineReport, "kind", b.Kind), true
 }
 
-// review is one acceptance review, read from the feed, the ledger or both (R6).
+// review is one acceptance review, read from the feed, the ledger or both (R6), with the owner's fixed answer to its
+// decision and the ledger's time of it, which that answer's id is formed from.
 type review struct {
-	id, verdict, by, note, reason, waitingOn string
-	at, until                                time.Time
-	round                                    int
-	background                               bool
+	id, verdict, by, note, reason, response string
+	at, until, ledgerAt, responseAt         time.Time
+	round                                   int
 }
 
 // reviews reads the reviews (R6): a feed row and the ledger entry it was written after (same verdict, at most
@@ -395,7 +403,7 @@ func (r *reader) reviews(feed []FeedItem) {
 		var b reviewBody
 		if decode(f.Body, &b) {
 			out = append(out, review{id: feedID(f), at: f.At, verdict: b.Verdict, note: b.Note, round: b.Round,
-				until: b.Until, waitingOn: b.WaitingOn, background: b.By == byBackground})
+				until: b.Until})
 		}
 	}
 	slices.SortFunc(out, func(a, b review) int { return cmp.Or(a.at.Compare(b.at), strings.Compare(a.id, b.id)) })
@@ -418,8 +426,8 @@ func (r *reader) reviews(feed []FeedItem) {
 		}
 		l := ledger[best]
 		used[best] = true
-		f.by, f.reason, f.note = l.By, l.Reason, cmp.Or(f.note, l.Note)
-		f.round, f.waitingOn = cmp.Or(f.round, l.Round), cmp.Or(f.waitingOn, l.WaitingOn)
+		f.by, f.reason, f.note, f.round = l.By, l.Reason, cmp.Or(f.note, l.Note), cmp.Or(f.round, l.Round)
+		f.ledgerAt, f.response, f.responseAt = l.At, l.OwnerResponse, l.OwnerResponseAt
 		if f.until.IsZero() {
 			f.until = l.Until
 		}
@@ -427,7 +435,8 @@ func (r *reader) reviews(feed []FeedItem) {
 	for j, l := range ledger {
 		if !used[j] {
 			out = append(out, review{id: "review:" + nano(l.At), at: l.At, verdict: l.Verdict, by: l.By, note: l.Note,
-				reason: l.Reason, round: l.Round, until: l.Until, waitingOn: l.WaitingOn})
+				reason: l.Reason, round: l.Round, until: l.Until, ledgerAt: l.At, response: l.OwnerResponse,
+				responseAt: l.OwnerResponseAt})
 		}
 	}
 	for _, rv := range out {
@@ -451,6 +460,7 @@ func (r *reader) review(rv review) {
 	switch rv.verdict {
 	case verdictNeedsUser:
 		it.e.Type, it.e.Text, it.needsUser = assistantwire.TodoEntryTypeAsk, cmp.Or(rv.reason, rv.note), true
+		r.ownerResponse(rv, it.e.Text)
 		return
 	case verdictParked:
 		it.e.Type, it.bg = assistantwire.TodoEntryTypeParked, true
@@ -461,11 +471,23 @@ func (r *reader) review(rv review) {
 	default:
 		it.bg = true
 	}
-	round := ""
-	if rv.round > 0 {
+	round := "" // the ledger's rework count rides on every later review; only a rework starts a round
+	if rv.round > 0 && rv.verdict == verdictRework {
 		round = strconv.Itoa(rv.round)
 	}
 	it.e.Text, it.e.Line = rv.note, line(lineReview, "verdict", rv.verdict, "round", round)
+}
+
+// ownerResponse: the fixed answer the owner gave a needs_user review's decision instead of an option (decide it
+// yourself, not what I asked, explain first) is their answer, and opens a round. The ledger keeps it on the review
+// alone: no decision and no feed item says it.
+func (r *reader) ownerResponse(rv review, question string) {
+	if rv.response == "" || rv.responseAt.IsZero() {
+		return
+	}
+	it := r.add("review:"+nano(rv.ledgerAt)+":response", rv.responseAt, assistantwire.TodoEntryTypeAnswer,
+		assistantwire.TodoActorKindOwner)
+	it.e.Question, it.e.Line, it.head = question, line(lineOwnerResponse, "response", rv.response), true
 }
 
 // ---- decisions ----
@@ -489,6 +511,9 @@ func (r *reader) decision(d Decision) {
 		it.head, it.from = true, fromManual
 		if d.SourceSession != "" { // recorded from the owner's words in a conversation (task_decided)
 			it.e.Via = assistantwire.TodoEntryViaChat
+			if d.Reason != "" { // which are its reason: the header says them, and the option they chose beside
+				it.e.Text, it.e.Choice, it.e.Reason = d.Reason, d.Choice, ""
+			}
 		}
 	case sourceCard:
 		it.head, it.from, it.e.Via = true, fromCard, assistantwire.TodoEntryViaCard
@@ -498,7 +523,8 @@ func (r *reader) decision(d Decision) {
 		it.e.Type, it.e.Actor.Kind = assistantwire.TodoEntryTypeDecision, assistantwire.TodoActorKindPersona
 		switch {
 		case d.SourceMachine == "" && d.SourceSession == "" && d.SourceMessage == "":
-			it.e.Via = assistantwire.TodoEntryViaDefault // the hub took the recommendation at its deadline
+			// The hub took the recommendation at its deadline; its reason is the hub's sentence saying so, which via says.
+			it.e.Via, it.e.Reason = assistantwire.TodoEntryViaDefault, ""
 		case run != nil && d.SourceMessage == "": // a run noted its own call (todo_decision_add)
 			it.e.Actor = assistantwire.TodoActor{Kind: assistantwire.TodoActorKindRun, Run: run}
 		}
@@ -529,8 +555,8 @@ func (r *reader) decision(d Decision) {
 
 // ---- runs ----
 
-// links: each run's link starts it, or says it did not start, and its release or dismissal ends it. Read oldest
-// first, so two runs that failed to start near one receipt take it in that order.
+// links: each run's link starts it, or says it did not start, and its release ends it. Read oldest first, so two runs
+// that failed to start near one receipt take it in that order. A run the owner took off the to-do is not listed.
 func (r *reader) links() {
 	agents := slices.Clone(r.in.Todo.Agents)
 	slices.SortFunc(agents, func(a, b Agent) int {
@@ -546,17 +572,13 @@ func (r *reader) links() {
 				it = r.add(id+":failed", a.LinkedAt, assistantwire.TodoEntryTypeRunFailed, assistantwire.TodoActorKindHub)
 				it.failedStart = true
 			}
-			it.e.Run, it.e.Line = run, line(lineRunFailed, "run", title(run), "error", a.StartError)
+			it.e.Run, it.e.Line, it.e.Text = run, line(lineRunFailed, "run", title(run), "error", a.StartError), ""
 			continue
 		}
 		it := r.add(id+":linked", a.LinkedAt, assistantwire.TodoEntryTypeRunStarted, assistantwire.TodoActorKindRun)
 		it.e.Actor.Run, it.e.Run, it.e.Line = run, run, line(lineRunStarted, "run", title(run))
 		it.from, it.key = fromLink, key
-		end := a.ReleasedAt
-		if a.DismissedAt != nil && (end == nil || a.DismissedAt.Before(*end)) {
-			end = a.DismissedAt
-		}
-		if end != nil {
+		if end := a.ReleasedAt; end != nil {
 			it := r.add(id+":ended", *end, assistantwire.TodoEntryTypeRunEnded, assistantwire.TodoActorKindHub)
 			it.e.Run, it.e.Line = run, line(lineRunEnded, "run", title(run))
 		}
@@ -609,7 +631,7 @@ func (r *reader) failedStart() {
 		it = r.add("todo:failed@"+nano(*t.DoneAt), *t.DoneAt, assistantwire.TodoEntryTypeRunFailed,
 			assistantwire.TodoActorKindHub)
 	}
-	it.e.Line = line(lineRunFailed, "run", title(it.e.Run), "error", t.StartError)
+	it.e.Line, it.e.Text = line(lineRunFailed, "run", title(it.e.Run), "error", t.StartError), ""
 }
 
 // ---- the to-do itself ----
@@ -664,7 +686,8 @@ func (r *reader) continues() {
 
 // closed: the to-do's close (the stores keep only the latest: a to-do reopened since has none until it closes again),
 // by whom its done_by says: the owner, the done judge, or a review, the done judge's when the accepting review nearest
-// the close was its own.
+// the close was its own. A cancellation is read off the ledger, as the view reads it: the list sends a cancelled
+// to-do's done_by as review, and its ledger says cancelled; the owner's close of a once cancelled to-do is theirs.
 func (r *reader) closed() {
 	t := r.in.Todo
 	if t.DoneAt == nil || t.StartError != "" {
@@ -683,7 +706,8 @@ func (r *reader) closed() {
 			actor, by = assistantwire.TodoActorKindHub, closedByJudge
 		}
 	}
-	if t.CancelledAt != nil || t.DoneBy == doneByCancelled {
+	if t.CancelledAt != nil || t.DoneBy == doneByCancelled ||
+		t.DoneBy == doneByReview && t.Supervision != nil && t.Supervision.State == verdictCancelled {
 		outcome = closedCanceled
 	}
 	it := r.add("todo:closed@"+nano(*t.DoneAt), *t.DoneAt, assistantwire.TodoEntryTypeClosed, actor)

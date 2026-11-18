@@ -358,7 +358,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "r:feed:feed_k1c",
+          "r:feed:feed_k1f"
+        ]
       }
     },
     {
@@ -532,7 +536,11 @@
               "entries": []
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "r:feed:feed_w1c"
+        ]
       }
     },
     {
@@ -743,7 +751,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "r:feed:feed_r1b"
+        ]
       }
     },
     {
@@ -925,12 +937,16 @@
               "entries": []
             }
           ]
-        }
+        },
+        "latest": [
+          "r:feed:feed_c1a",
+          "r:dec:dec_c2"
+        ]
       }
     },
     {
       "name": "chosen_option_folds_its_relay",
-      "description": "The owner chose an option: the hub worded it for the run (a relay), then recorded the decision a moment later. The decision heads the round and the relay folds under it. Later nobody answered a second decision by its deadline, so Persona took the recommendation: that is Persona's call (via default), relayed and recorded the same way, and it stays in the round it falls in.",
+      "description": "The owner chose an option: the hub worded it for the run (a relay), then recorded the decision a moment later. The decision heads the round and the relay folds under it. Later nobody answered a second decision by its deadline, so Persona took the recommendation: that is Persona's call (via default, which says what the hub's reason sentence says, so the entry leaves it out), relayed and recorded the same way, and it stays in the round it falls in.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.6",
         "spec/fixtures/todo-rounds/README.md R1 (chooseOption, server/internal/assistant/decision.go; takeRecommendation, server/internal/assistant/conclusion.go)"
@@ -1119,22 +1135,26 @@
                   },
                   "text": "Morning pickup",
                   "question": "Morning or evening pickup?",
-                  "reason": "No answer by Tue 18:00; took the recommendation.",
                   "via": "default",
                   "decision": "dec_d2"
                 }
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "r:dec:dec_d1"
+        ]
       }
     },
     {
       "name": "background_round_per_day_in_the_owners_zone",
-      "description": "Supervision nobody asked for (a rework, the run's report to its supervisor, a park, the overdue mark, a review waiting to be done) forms one Background round per day in the owner's zone (Tokyo here): 14:50 and 15:10 UTC are one UTC day but two Tokyo days. Each Background round sits among the owner's rounds by its first entry's time. A needs_user review the background supervisor gave stays in its round, since it asks the owner.",
+      "description": "Supervision nobody asked for (a rework, the run's report to its supervisor, a park, the overdue mark, a review waiting to be done) forms one Background round per day in the owner's zone (Tokyo here): 14:50 and 15:10 UTC are one UTC day but two Tokyo days. Each Background round sits among the owner's rounds by its first entry's time. The paper shows the latest two rounds that are not Background ones: the start round and the owner's round, which holds the ask, though both Background rounds began after it. A needs_user review the background supervisor gave stays in its round, since it asks the owner.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.6 (\"one folded Background round per day\")",
-        "spec/fixtures/todo-rounds/README.md R3"
+        "spec/fixtures/todo-rounds/README.md R3",
+        "docs/design/proposals/todos-redesign.md 3.5 row 10 (\"the latest 2 rounds\")"
       ],
       "input": {
         "todo": {
@@ -1431,12 +1451,16 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "r:feed:feed_b1a"
+        ]
       }
     },
     {
       "name": "older_receipts_given_to_their_run",
-      "description": "Receipts written before #10465 name only the run's computer. Each goes to the one run on that computer whose link covers its time: on MacBook only Widget; on Desk Mac Release notes alone at 08:10, both Release notes and Screenshots at 08:40 (several: \"A run\"), Screenshots alone at 09:30 once Release notes was let go of. A computer no run is on gives \"A run\" too, and the unnamed turns of a round make one line.",
+      "description": "Receipts written before #10465 name only the run's computer. Each goes to the one run on that computer whose link covers its time: on MacBook only Widget; on Desk Mac Release notes alone at 08:10 (Icons, whose start failed, never ran), both Release notes and Screenshots at 08:40 (several: \"A run\"), Screenshots alone at 09:30 once Release notes was let go of. A computer no run is on gives \"A run\" too, and the unnamed turns of a round make one line.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.6",
         "spec/fixtures/todo-rounds/README.md R4"
@@ -1479,6 +1503,16 @@
               "cwd": "/home/user/project",
               "agent": "claude",
               "source": "manual"
+            },
+            {
+              "machine_id": "mac-2",
+              "session_id": "s-icons",
+              "linked_at": "2026-11-17T08:05:00Z",
+              "title": "Icons",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "start_error": "The launcher was not found"
             }
           ],
           "quiet": false,
@@ -1656,6 +1690,26 @@
                   }
                 },
                 {
+                  "id": "run:mac-2/s-icons:failed",
+                  "type": "run_failed",
+                  "at": "2026-11-17T08:05:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_failed",
+                    "args": {
+                      "error": "The launcher was not found",
+                      "run": "Icons"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-2",
+                    "session_id": "s-icons",
+                    "title": "Icons"
+                  }
+                },
+                {
                   "id": "run:mac-2/s-notes@r:feed:feed_g1a",
                   "type": "run",
                   "at": "2026-11-17T08:10:00Z",
@@ -1771,7 +1825,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "r:feed:feed_g1a"
+        ]
       }
     },
     {
@@ -1942,7 +1999,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "r:dec:dec_s1",
+          "r:dec:dec_s2"
+        ]
       }
     },
     {
@@ -2155,7 +2216,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "bg:2026-11-17"
+        ]
       }
     },
     {
@@ -2345,12 +2410,16 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "r:dec:dec_p1"
+        ]
       }
     },
     {
       "name": "failed_starts",
-      "description": "Each failed start is one line: a failed start's receipt says why in the hub's words, as the conversation showed them. A run whose own start failed is the same failure as the receipt written with it, which then names the run and its error; such a run never starts or ends. The latest failure, which the to-do's start error belongs to, says that error as a line.",
+      "description": "Each failed start is one line. A run whose own start failed is the same failure as the receipt written with it, which then names the run and its error; such a run never starts or ends. The latest failure, which the to-do's start error belongs to, says that error as a line. Where the hub kept an error, the line says it and the receipt's words are left out; a failure nothing names an error for keeps the receipt's words, the hub's sentence as the conversation showed it.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.6",
         "spec/fixtures/todo-rounds/README.md \"Entries\""
@@ -2406,6 +2475,18 @@
               "state": "failed",
               "summary": "Could not start: Desk Mac is offline."
             }
+          },
+          {
+            "id": "feed_f1c",
+            "conversation": "conv_main",
+            "at": "2026-11-17T02:00:00Z",
+            "kind": "receipt",
+            "ref": "todo_f1",
+            "body": {
+              "title": "Fix the login crash for SSO users",
+              "state": "failed",
+              "summary": "Could not start: no computer could take it."
+            }
           }
         ],
         "decisions": [],
@@ -2429,7 +2510,6 @@
                   "actor": {
                     "kind": "hub"
                   },
-                  "text": "Could not start: the launcher was not found.",
                   "line": {
                     "key": "run_failed",
                     "args": {
@@ -2444,13 +2524,21 @@
                   }
                 },
                 {
+                  "id": "feed:feed_f1c",
+                  "type": "run_failed",
+                  "at": "2026-11-17T02:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "Could not start: no computer could take it."
+                },
+                {
                   "id": "feed:feed_f1b",
                   "type": "run_failed",
                   "at": "2026-11-17T05:00:01Z",
                   "actor": {
                     "kind": "hub"
                   },
-                  "text": "Could not start: Desk Mac is offline.",
                   "line": {
                     "key": "run_failed",
                     "args": {
@@ -2461,7 +2549,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -2532,7 +2623,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -2585,7 +2679,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -2896,12 +2993,15 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "r:feed:feed_i1a"
+        ]
       }
     },
     {
       "name": "calls_made_for_the_owner",
-      "description": "Persona answering a run's card in the owner's place is Persona's decision, its answer as a line; a call Persona made on a run's card (a standing permission) is Persona's too, and a run's own note is the run's. A run the task did not start but took on as it was says how it came (wake) on its start.",
+      "description": "Persona answering a run's card in the owner's place is Persona's decision, its answer as a line; a card without questions (a plan, a permission) has no answer but the hub's summary sentence, so its line says only that Persona answered. A call Persona made on a run's card (a standing permission) is Persona's too, and a run's own note is the run's. A run the task did not start but took on as it was says how it came (wake) on its start.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.6",
         "spec/fixtures/todo-rounds/README.md \"Entries\""
@@ -2958,6 +3058,19 @@
               ],
               "by": "assistant",
               "reason": "Running the tests changes nothing."
+            }
+          },
+          {
+            "id": "feed_m1c",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:30:00Z",
+            "kind": "answered",
+            "ref": "todo_m1",
+            "body": {
+              "question": "Approve the plan?",
+              "answer": "Persona answered: Approved, because it only edits the page.",
+              "by": "assistant",
+              "reason": "It only edits the page."
             }
           }
         ],
@@ -3057,6 +3170,19 @@
                   }
                 },
                 {
+                  "id": "feed:feed_m1c",
+                  "type": "decision",
+                  "at": "2026-11-17T01:30:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "question": "Approve the plan?",
+                  "reason": "It only edits the page.",
+                  "line": {
+                    "key": "answered_by_persona"
+                  }
+                },
+                {
                   "id": "dec:dec_m1",
                   "type": "decision",
                   "at": "2026-11-17T02:00:00Z",
@@ -3087,12 +3213,15 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
       "name": "results_close_and_recap",
-      "description": "What the work produced: the code change a receipt named (at that receipt, with how the hub last saw it), the work going live, and what it came to (the hub's outcome line, with the first link it named); an earlier change the hub only looked at is the fourth result and is left out. The outcome's decisions and pitfalls are the run's decisions. The done judge accepted the work and closed the to-do (the hub's, both). Since the owner looked, everything counts in the recap but their own answer and the hub's relay of it, which folds under it; the recap points at the round of the first change.",
+      "description": "What the work produced: the code change a receipt named (at that receipt, with how the hub last saw it; the receipt wrote its address in other letters, and one PR is one chip), the work going live, and what it came to (the hub's outcome line, with the first link it named); an earlier change the hub only looked at is the fourth result and is left out. The outcome's decisions and pitfalls are the run's decisions. The done judge accepted the work and closed the to-do (the hub's, both). Since the owner looked, everything counts in the recap but their own answer and the hub's relay of it, which folds under it; the recap points at the round of the first change.",
       "source": [
         "docs/design/proposals/todos-redesign.md 3.5 rows 3 and 9, 3.6",
         "spec/fixtures/todo-rounds/README.md \"Results\" and \"Since you looked\""
@@ -3186,7 +3315,7 @@
               "title": "Fix the forecast for the widget",
               "state": "done",
               "summary": "Fixed the cache key; the widget refreshes at midnight.",
-              "pr": "https://example.com/acme/weather/pull/301",
+              "pr": "https://example.com/Acme/weather/pull/301",
               "machine": "MacBook",
               "machine_id": "mac-1",
               "session_id": "s-forecast"
@@ -3518,7 +3647,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "r:feed:feed_n1a",
+          "r:dec:dec_n1"
+        ]
       }
     },
     {
@@ -3637,7 +3770,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -3727,7 +3863,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -3933,7 +4072,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start",
+          "bg:2026-11-17"
+        ]
       }
     },
     {
@@ -3947,7 +4090,7 @@
       "input": {
         "todo": {
           "id": "todo_x1",
-          "title": "Get a table at Kikunoi",
+          "title": "Get a table at Kaiseki Hanare",
           "notes": "",
           "done_at": null,
           "created_at": "2026-11-17T00:00:00Z",
@@ -3981,9 +4124,9 @@
             "kind": "receipt",
             "ref": "todo_x1",
             "body": {
-              "title": "Get a table at Kikunoi",
+              "title": "Get a table at Kaiseki Hanare",
               "state": "done",
-              "summary": "Kikunoi is fully booked in April; no waiting list.",
+              "summary": "Kaiseki Hanare is fully booked in April; no waiting list.",
               "machine": "MacBook",
               "machine_id": "mac-1",
               "session_id": "s-kikunoi"
@@ -4051,7 +4194,7 @@
                       "title": "Restaurant booking"
                     }
                   },
-                  "text": "Kikunoi is fully booked in April; no waiting list.",
+                  "text": "Kaiseki Hanare is fully booked in April; no waiting list.",
                   "run": {
                     "machine_id": "mac-1",
                     "session_id": "s-kikunoi",
@@ -4074,7 +4217,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -4148,7 +4294,10 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "start"
+        ]
       }
     },
     {
@@ -4376,7 +4525,11 @@
               ]
             }
           ]
-        }
+        },
+        "latest": [
+          "r:feed:feed_z1a",
+          "r:feed:feed_z1c"
+        ]
       }
     },
     {
@@ -4406,6 +4559,1334 @@
         "timeline": {
           "rounds": []
         }
+      }
+    },
+    {
+      "name": "cancelled_by_its_supervisor",
+      "description": "Its supervisor cancelled the to-do: the list sends that close's done_by as review and the ledger says cancelled, so the close is a cancellation, Persona's. The cancelling review stays in the round it ends; its round argument is left out, since only a rework starts a round (the ledger's rework count rides on every later review).",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\" (formatTodo, server/internal/assistant/todos.go; the view's outcome, server/internal/assistant/todo/projection/view.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x1",
+          "title": "Get quotes for the garden gate",
+          "notes": "",
+          "done_at": "2026-11-17T06:00:01Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-gate",
+              "linked_at": "2026-11-17T00:31:00Z",
+              "title": "Gate quotes",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual",
+              "released_at": "2026-11-17T06:00:01Z"
+            }
+          ],
+          "quiet": false,
+          "done_by": "review",
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "cancelled",
+            "round": 2,
+            "reviews": [
+              {
+                "at": "2026-11-17T01:00:00Z",
+                "verdict": "rework",
+                "round": 1,
+                "note": "Two quotes so far; get a third."
+              },
+              {
+                "at": "2026-11-17T03:00:00Z",
+                "verdict": "rework",
+                "round": 2,
+                "note": "The third quote has no price."
+              },
+              {
+                "at": "2026-11-17T06:00:00Z",
+                "verdict": "cancelled",
+                "round": 2,
+                "note": "The owner bought a gate at the market; no quotes needed."
+              }
+            ],
+            "updated_at": "2026-11-17T06:00:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_x1a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T00:30:00Z",
+            "kind": "routed",
+            "ref": "todo_x1",
+            "body": {
+              "text": "Get three quotes for a wooden gate.",
+              "machine_id": "mac-1",
+              "session_id": "s-gate"
+            }
+          },
+          {
+            "id": "feed_x1b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T06:00:00.5Z",
+            "kind": "review",
+            "ref": "todo_x1",
+            "body": {
+              "title": "Get quotes for the garden gate",
+              "verdict": "cancelled",
+              "round": 2,
+              "note": "The owner bought a gate at the market; no quotes needed."
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "r:feed:feed_x1a",
+              "kind": "owner",
+              "at": "2026-11-17T00:30:00Z",
+              "header": {
+                "id": "feed:feed_x1a",
+                "type": "instruction",
+                "at": "2026-11-17T00:30:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Get three quotes for a wooden gate.",
+                "run": {
+                  "machine_id": "mac-1",
+                  "session_id": "s-gate",
+                  "title": "Gate quotes"
+                },
+                "state": "delivered"
+              },
+              "entries": [
+                {
+                  "id": "run:mac-1/s-gate:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:31:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-gate",
+                      "title": "Gate quotes"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Gate quotes"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-gate",
+                    "title": "Gate quotes"
+                  }
+                },
+                {
+                  "id": "feed:feed_x1b",
+                  "type": "review",
+                  "at": "2026-11-17T06:00:00.5Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "The owner bought a gate at the market; no quotes needed.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "verdict": "cancelled"
+                    }
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-gate:ended",
+                  "type": "run_ended",
+                  "at": "2026-11-17T06:00:01Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_ended",
+                    "args": {
+                      "run": "Gate quotes"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-gate",
+                    "title": "Gate quotes"
+                  }
+                },
+                {
+                  "id": "todo:closed@2026-11-17T06:00:01Z",
+                  "type": "closed",
+                  "at": "2026-11-17T06:00:01Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "persona",
+                      "outcome": "canceled"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "bg:2026-11-17",
+              "kind": "background",
+              "at": "2026-11-17T01:00:00Z",
+              "entries": [
+                {
+                  "id": "review:2026-11-17T01:00:00Z",
+                  "type": "review",
+                  "at": "2026-11-17T01:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Two quotes so far; get a third.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "round": "1",
+                      "verdict": "rework"
+                    }
+                  }
+                },
+                {
+                  "id": "review:2026-11-17T03:00:00Z",
+                  "type": "review",
+                  "at": "2026-11-17T03:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "The third quote has no price.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "round": "2",
+                      "verdict": "rework"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "latest": [
+          "r:feed:feed_x1a",
+          "bg:2026-11-17"
+        ]
+      }
+    },
+    {
+      "name": "owner_closes_a_once_cancelled_task",
+      "description": "Its supervisor cancelled the to-do, which was opened again, and the owner then ticked it done: the ledger still says cancelled, but the close is the owner's, and done.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md \"Entries\" (the view's outcome, server/internal/assistant/todo/projection/view.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x2",
+          "title": "Renew the car insurance",
+          "notes": "",
+          "done_at": "2026-11-17T09:00:00Z",
+          "created_at": "2026-11-16T00:00:00Z",
+          "updated_at": "2026-11-16T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [],
+          "quiet": false,
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "cancelled",
+            "round": 0,
+            "reviews": [
+              {
+                "at": "2026-11-16T05:00:00Z",
+                "verdict": "cancelled",
+                "note": "The broker renews it."
+              }
+            ],
+            "updated_at": "2026-11-16T05:00:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_x2a",
+            "conversation": "conv_main",
+            "at": "2026-11-16T05:00:00.4Z",
+            "kind": "review",
+            "ref": "todo_x2",
+            "body": {
+              "title": "Renew the car insurance",
+              "verdict": "cancelled",
+              "note": "The broker renews it."
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [],
+        "machines": {}
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-16T05:00:00.4Z",
+              "entries": [
+                {
+                  "id": "feed:feed_x2a",
+                  "type": "review",
+                  "at": "2026-11-16T05:00:00.4Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "The broker renews it.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "verdict": "cancelled"
+                    }
+                  }
+                },
+                {
+                  "id": "todo:closed@2026-11-17T09:00:00Z",
+                  "type": "closed",
+                  "at": "2026-11-17T09:00:00Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "owner",
+                      "outcome": "done"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "latest": [
+          "start"
+        ]
+      }
+    },
+    {
+      "name": "owner_cannot_answer_a_decision",
+      "description": "The owner gave a decision one of the fixed answers instead of an option: decide it yourself, not what I asked, explain first. The ledger keeps each on the review that asked (no decision and no feed item says it), and each is the owner's answer: it heads a round, the line saying which, under the question it answers. What the supervisor did next follows in that round or the day's Background one. Since the owner looked, the asks count and their own answers do not.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1 (ownerCannotAnswer, server/internal/assistant/decision.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x3",
+          "title": "Draft the school newsletter",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-news",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Newsletter",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "seen_at": "2026-11-17T03:00:00Z",
+          "supervision": {
+            "supervisor": "conv_main",
+            "done_when": [],
+            "criteria": [],
+            "state": "needs_user",
+            "round": 1,
+            "reviews": [
+              {
+                "at": "2026-11-17T01:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Lead with the bake sale or the sports day?",
+                "owner_response": "decide_yourself",
+                "owner_response_at": "2026-11-17T02:00:00Z"
+              },
+              {
+                "at": "2026-11-17T02:05:00Z",
+                "verdict": "rework",
+                "round": 1,
+                "note": "Lead with the sports day."
+              },
+              {
+                "at": "2026-11-17T04:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Add the head teacher's letter?",
+                "owner_response": "not_what_i_asked",
+                "owner_response_at": "2026-11-17T05:00:00Z"
+              },
+              {
+                "at": "2026-11-17T06:00:00Z",
+                "verdict": "needs_user",
+                "reason": "Print 200 or 300 copies?",
+                "owner_response": "explain_first",
+                "owner_response_at": "2026-11-17T06:30:00Z"
+              }
+            ],
+            "updated_at": "2026-11-17T06:00:00Z"
+          }
+        },
+        "feed": [
+          {
+            "id": "feed_x3a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:00:00.5Z",
+            "kind": "review",
+            "ref": "todo_x3",
+            "body": {
+              "title": "Draft the school newsletter",
+              "verdict": "needs_user",
+              "note": ""
+            }
+          },
+          {
+            "id": "feed_x3b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T06:00:00.5Z",
+            "kind": "review",
+            "ref": "todo_x3",
+            "body": {
+              "title": "Draft the school newsletter",
+              "verdict": "needs_user",
+              "note": ""
+            }
+          }
+        ],
+        "decisions": [],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-news",
+            "title": "Newsletter",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T06:00:00Z",
+            "updated_at": "2026-11-17T06:00:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-news:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-news",
+                      "title": "Newsletter"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Newsletter"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-news",
+                    "title": "Newsletter"
+                  }
+                },
+                {
+                  "id": "feed:feed_x3a",
+                  "type": "ask",
+                  "at": "2026-11-17T01:00:00.5Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Lead with the bake sale or the sports day?"
+                }
+              ]
+            },
+            {
+              "id": "r:review:2026-11-17T01:00:00Z:response",
+              "kind": "owner",
+              "at": "2026-11-17T02:00:00Z",
+              "header": {
+                "id": "review:2026-11-17T01:00:00Z:response",
+                "type": "answer",
+                "at": "2026-11-17T02:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "question": "Lead with the bake sale or the sports day?",
+                "line": {
+                  "key": "owner_response",
+                  "args": {
+                    "response": "decide_yourself"
+                  }
+                }
+              },
+              "entries": [
+                {
+                  "id": "review:2026-11-17T04:00:00Z",
+                  "type": "ask",
+                  "at": "2026-11-17T04:00:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Add the head teacher's letter?"
+                }
+              ]
+            },
+            {
+              "id": "bg:2026-11-17",
+              "kind": "background",
+              "at": "2026-11-17T02:05:00Z",
+              "entries": [
+                {
+                  "id": "review:2026-11-17T02:05:00Z",
+                  "type": "review",
+                  "at": "2026-11-17T02:05:00Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Lead with the sports day.",
+                  "line": {
+                    "key": "review",
+                    "args": {
+                      "round": "1",
+                      "verdict": "rework"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:review:2026-11-17T04:00:00Z:response",
+              "kind": "owner",
+              "at": "2026-11-17T05:00:00Z",
+              "header": {
+                "id": "review:2026-11-17T04:00:00Z:response",
+                "type": "answer",
+                "at": "2026-11-17T05:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "question": "Add the head teacher's letter?",
+                "line": {
+                  "key": "owner_response",
+                  "args": {
+                    "response": "not_what_i_asked"
+                  }
+                }
+              },
+              "entries": [
+                {
+                  "id": "feed:feed_x3b",
+                  "type": "ask",
+                  "at": "2026-11-17T06:00:00.5Z",
+                  "actor": {
+                    "kind": "persona"
+                  },
+                  "text": "Print 200 or 300 copies?"
+                }
+              ]
+            },
+            {
+              "id": "r:review:2026-11-17T06:00:00Z:response",
+              "kind": "owner",
+              "at": "2026-11-17T06:30:00Z",
+              "header": {
+                "id": "review:2026-11-17T06:00:00Z:response",
+                "type": "answer",
+                "at": "2026-11-17T06:30:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "question": "Print 200 or 300 copies?",
+                "line": {
+                  "key": "owner_response",
+                  "args": {
+                    "response": "explain_first"
+                  }
+                }
+              },
+              "entries": []
+            }
+          ]
+        },
+        "recap": {
+          "since": "2026-11-17T03:00:00Z",
+          "round": "r:review:2026-11-17T01:00:00Z:response",
+          "counts": {
+            "ask": 2
+          }
+        },
+        "latest": [
+          "r:review:2026-11-17T04:00:00Z:response",
+          "r:review:2026-11-17T06:00:00Z:response"
+        ]
+      }
+    },
+    {
+      "name": "one_card_many_questions_without_a_feed",
+      "description": "A to-do a task leader handed to its Agent has no feed, so a card the owner answered there is known only by its decisions, one per question, under the card's id. They are one answer: the first heads the round and the others follow in it.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1 (cardDecisions, server/internal/assistant/todo_decisions.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x4",
+          "title": "Fix widget refresh crash",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "lead:weather-release",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-wfix",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Widget fix",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "leader"
+            }
+          ],
+          "quiet": false
+        },
+        "feed": [],
+        "decisions": [
+          {
+            "id": "dec_x4a",
+            "todo_id": "todo_x4",
+            "question": "Reload on a timer or when the app opens?",
+            "choice": "When the app opens",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-wfix",
+            "source_message": "ix_x4",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T02:00:00Z"
+          },
+          {
+            "id": "dec_x4b",
+            "todo_id": "todo_x4",
+            "question": "Keep the 15-minute floor?",
+            "choice": "Yes",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-wfix",
+            "source_message": "ix_x4",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T02:00:00.000001Z"
+          },
+          {
+            "id": "dec_x4c",
+            "todo_id": "todo_x4",
+            "question": "Log refresh failures?",
+            "choice": "Only in debug builds",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-wfix",
+            "source_message": "ix_x4",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T02:00:00.000002Z"
+          }
+        ],
+        "sessions": [],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-wfix:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-wfix",
+                      "title": "Widget fix"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Widget fix"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-wfix",
+                    "title": "Widget fix"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_x4a",
+              "kind": "owner",
+              "at": "2026-11-17T02:00:00Z",
+              "header": {
+                "id": "dec:dec_x4a",
+                "type": "answer",
+                "at": "2026-11-17T02:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "When the app opens",
+                "question": "Reload on a timer or when the app opens?",
+                "via": "card",
+                "decision": "dec_x4a"
+              },
+              "entries": [
+                {
+                  "id": "dec:dec_x4b",
+                  "type": "answer",
+                  "at": "2026-11-17T02:00:00.000001Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "Yes",
+                  "question": "Keep the 15-minute floor?",
+                  "via": "card",
+                  "decision": "dec_x4b"
+                },
+                {
+                  "id": "dec:dec_x4c",
+                  "type": "answer",
+                  "at": "2026-11-17T02:00:00.000002Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "Only in debug builds",
+                  "question": "Log refresh failures?",
+                  "via": "card",
+                  "decision": "dec_x4c"
+                }
+              ]
+            }
+          ]
+        },
+        "latest": [
+          "start",
+          "r:dec:dec_x4a"
+        ]
+      }
+    },
+    {
+      "name": "answer_in_lark_relayed_later",
+      "description": "The owner answered the decision by replying to its card in Lark: the hub recorded the decision first and relayed it once the run took it, 40 seconds later. The relay is still the owner's answer passed on: it folds under the decision, and Since you looked does not count it as news.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6",
+        "spec/fixtures/todo-rounds/README.md R1 (the acceptance reply, server/internal/assistant/acceptance_reply.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x5",
+          "title": "Book the dentist",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-dentist",
+              "linked_at": "2026-11-17T08:00:00Z",
+              "title": "Dentist booking",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false,
+          "seen_at": "2026-11-17T09:30:00Z"
+        },
+        "feed": [
+          {
+            "id": "feed_x5a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T10:00:40Z",
+            "kind": "routed",
+            "ref": "todo_x5",
+            "body": {
+              "text": "The owner decided: Thursday, after work.",
+              "relay": "answer",
+              "machine_id": "mac-1",
+              "session_id": "s-dentist"
+            }
+          },
+          {
+            "id": "feed_x5b",
+            "conversation": "conv_main",
+            "at": "2026-11-17T10:05:00Z",
+            "kind": "receipt",
+            "ref": "todo_x5",
+            "body": {
+              "title": "Book the dentist",
+              "state": "done",
+              "summary": "Booked Thursday at 16:30.",
+              "machine": "MacBook",
+              "machine_id": "mac-1",
+              "session_id": "s-dentist"
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_x5",
+            "todo_id": "todo_x5",
+            "question": "Tuesday 9:00 or Thursday 16:00?",
+            "choice": "Thursday, after work",
+            "reason": "",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "",
+            "source_message": "feishu-om_x5",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T10:00:00Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-dentist",
+            "title": "Dentist booking",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T10:05:00Z",
+            "updated_at": "2026-11-17T10:05:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T08:00:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-dentist:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T08:00:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-dentist",
+                      "title": "Dentist booking"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Dentist booking"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-dentist",
+                    "title": "Dentist booking"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_x5",
+              "kind": "owner",
+              "at": "2026-11-17T10:00:00Z",
+              "header": {
+                "id": "dec:dec_x5",
+                "type": "answer",
+                "at": "2026-11-17T10:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Thursday, after work",
+                "question": "Tuesday 9:00 or Thursday 16:00?",
+                "decision": "dec_x5"
+              },
+              "entries": [
+                {
+                  "id": "feed:feed_x5a",
+                  "type": "relay",
+                  "at": "2026-11-17T10:00:40Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "text": "The owner decided: Thursday, after work.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-dentist",
+                    "title": "Dentist booking"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-dentist@r:dec:dec_x5",
+                  "type": "run",
+                  "at": "2026-11-17T10:05:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-dentist",
+                      "title": "Dentist booking"
+                    }
+                  },
+                  "text": "Booked Thursday at 16:30.",
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-dentist",
+                    "title": "Dentist booking"
+                  },
+                  "turns": 1
+                }
+              ]
+            }
+          ]
+        },
+        "recap": {
+          "since": "2026-11-17T09:30:00Z",
+          "round": "r:dec:dec_x5",
+          "counts": {
+            "run": 1
+          }
+        },
+        "latest": [
+          "start",
+          "r:dec:dec_x5"
+        ]
+      }
+    },
+    {
+      "name": "owner_words_head_their_answers",
+      "description": "A round's header is the owner's own words. Their answer of a run's card with two questions is both answers, whole (the conversation's summary line is clipped); the card's two decisions fold under it. A decision recorded from what they said in a conversation says those words, with the option they chose beside them (via chat).",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.6 (\"Its header is the owner's exact words\")",
+        "spec/fixtures/todo-rounds/README.md R1 (taskAnswered, server/internal/assistant/answered.go; decisionTold, server/internal/assistant/task_decided.go)"
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x6",
+          "title": "Plan the Kyoto trip",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "conv_main",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-ryokan",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Ryokan search",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "manual"
+            }
+          ],
+          "quiet": false
+        },
+        "feed": [
+          {
+            "id": "feed_x6a",
+            "conversation": "conv_main",
+            "at": "2026-11-17T01:00:00Z",
+            "kind": "answered",
+            "ref": "todo_x6",
+            "body": {
+              "question": "Which ryokan?",
+              "answer": "Which ryokan?: Ryokan Hanami; How many nights?: Two nights, the second one by the river if they…",
+              "items": [
+                {
+                  "question": "Which ryokan?",
+                  "answer": "Ryokan Hanami"
+                },
+                {
+                  "question": "How many nights?",
+                  "answer": "Two nights, the second one by the river if they have a room"
+                }
+              ]
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "id": "dec_x6a",
+            "todo_id": "todo_x6",
+            "question": "Which ryokan?",
+            "choice": "Ryokan Hanami",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-ryokan",
+            "source_message": "ix_x6",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T01:00:00.2Z"
+          },
+          {
+            "id": "dec_x6b",
+            "todo_id": "todo_x6",
+            "question": "How many nights?",
+            "choice": "Two nights, the second one by the river if they have a room",
+            "reason": "",
+            "source": "card",
+            "source_machine": "mac-1",
+            "source_session": "s-ryokan",
+            "source_message": "ix_x6",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T01:00:00.200001Z"
+          },
+          {
+            "id": "dec_x6c",
+            "todo_id": "todo_x6",
+            "question": "Kaede or Tsuki for dinner?",
+            "choice": "Tsuki",
+            "reason": "Tsuki. The river view matters more than the menu.",
+            "source": "manual",
+            "source_machine": "",
+            "source_session": "conv_main",
+            "source_message": "",
+            "supersedes_id": "",
+            "superseded_by": "",
+            "created_at": "2026-11-17T03:00:00Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac-1",
+            "session_id": "s-ryokan",
+            "title": "Ryokan search",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-17T03:10:00Z",
+            "updated_at": "2026-11-17T03:10:00Z",
+            "pending_interactions": 0
+          }
+        ],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-ryokan:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-ryokan",
+                      "title": "Ryokan search"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Ryokan search"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-ryokan",
+                    "title": "Ryokan search"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "r:feed:feed_x6a",
+              "kind": "owner",
+              "at": "2026-11-17T01:00:00Z",
+              "header": {
+                "id": "feed:feed_x6a",
+                "type": "answer",
+                "at": "2026-11-17T01:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Ryokan Hanami\nTwo nights, the second one by the river if they have a room",
+                "question": "Which ryokan?",
+                "via": "card"
+              },
+              "entries": [
+                {
+                  "id": "dec:dec_x6a",
+                  "type": "answer",
+                  "at": "2026-11-17T01:00:00.2Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "Ryokan Hanami",
+                  "question": "Which ryokan?",
+                  "via": "card",
+                  "decision": "dec_x6a"
+                },
+                {
+                  "id": "dec:dec_x6b",
+                  "type": "answer",
+                  "at": "2026-11-17T01:00:00.200001Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "text": "Two nights, the second one by the river if they have a room",
+                  "question": "How many nights?",
+                  "via": "card",
+                  "decision": "dec_x6b"
+                }
+              ]
+            },
+            {
+              "id": "r:dec:dec_x6c",
+              "kind": "owner",
+              "at": "2026-11-17T03:00:00Z",
+              "header": {
+                "id": "dec:dec_x6c",
+                "type": "answer",
+                "at": "2026-11-17T03:00:00Z",
+                "actor": {
+                  "kind": "owner"
+                },
+                "text": "Tsuki. The river view matters more than the menu.",
+                "choice": "Tsuki",
+                "question": "Kaede or Tsuki for dinner?",
+                "via": "chat",
+                "decision": "dec_x6c"
+              },
+              "entries": []
+            }
+          ]
+        },
+        "latest": [
+          "r:feed:feed_x6a",
+          "r:dec:dec_x6c"
+        ]
+      }
+    },
+    {
+      "name": "change_known_only_by_its_pr_url",
+      "description": "A to-do a task leader handed to its Agent has no receipts, and the hub never looked at its PR: the PR its runs named (pr_url) is still a result, at the to-do's close since nothing else dates it. An earlier PR the hub looked at is one too, at that look, with how it stood.",
+      "source": [
+        "docs/design/proposals/todos-redesign.md 3.5 row 9",
+        "spec/fixtures/todo-rounds/README.md \"Results\""
+      ],
+      "input": {
+        "todo": {
+          "id": "todo_x7",
+          "title": "Tidy the settings code",
+          "notes": "",
+          "done_at": "2026-11-17T06:00:00Z",
+          "created_at": "2026-11-17T00:00:00Z",
+          "updated_at": "2026-11-17T00:00:00Z",
+          "origin": "lead:weather-release",
+          "spaces": [],
+          "agents": [
+            {
+              "machine_id": "mac-1",
+              "session_id": "s-tidy",
+              "linked_at": "2026-11-17T00:01:00Z",
+              "title": "Settings tidy",
+              "cwd": "/home/user/project",
+              "agent": "claude",
+              "source": "leader",
+              "released_at": "2026-11-17T05:00:00Z"
+            }
+          ],
+          "quiet": false,
+          "pr_url": "https://example.com/acme/weather/pull/312",
+          "other_prs": [
+            {
+              "url": "https://example.com/acme/weather/pull/305",
+              "state": "closed",
+              "draft": false,
+              "review": "",
+              "checks": "",
+              "conflicts": false,
+              "checked_at": "2026-11-17T02:00:00Z"
+            }
+          ]
+        },
+        "feed": [],
+        "decisions": [],
+        "sessions": [],
+        "machines": {
+          "mac-1": "MacBook"
+        }
+      },
+      "expected": {
+        "timeline": {
+          "rounds": [
+            {
+              "id": "start",
+              "kind": "start",
+              "at": "2026-11-17T00:01:00Z",
+              "entries": [
+                {
+                  "id": "run:mac-1/s-tidy:linked",
+                  "type": "run_started",
+                  "at": "2026-11-17T00:01:00Z",
+                  "actor": {
+                    "kind": "run",
+                    "run": {
+                      "machine_id": "mac-1",
+                      "session_id": "s-tidy",
+                      "title": "Settings tidy"
+                    }
+                  },
+                  "line": {
+                    "key": "run_started",
+                    "args": {
+                      "run": "Settings tidy"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-tidy",
+                    "title": "Settings tidy"
+                  }
+                },
+                {
+                  "id": "run:mac-1/s-tidy:ended",
+                  "type": "run_ended",
+                  "at": "2026-11-17T05:00:00Z",
+                  "actor": {
+                    "kind": "hub"
+                  },
+                  "line": {
+                    "key": "run_ended",
+                    "args": {
+                      "run": "Settings tidy"
+                    }
+                  },
+                  "run": {
+                    "machine_id": "mac-1",
+                    "session_id": "s-tidy",
+                    "title": "Settings tidy"
+                  }
+                },
+                {
+                  "id": "todo:closed@2026-11-17T06:00:00Z",
+                  "type": "closed",
+                  "at": "2026-11-17T06:00:00Z",
+                  "actor": {
+                    "kind": "owner"
+                  },
+                  "line": {
+                    "key": "closed",
+                    "args": {
+                      "by": "owner",
+                      "outcome": "done"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "results": [
+          {
+            "id": "change:https://example.com/acme/weather/pull/312",
+            "kind": "change",
+            "at": "2026-11-17T06:00:00Z",
+            "url": "https://example.com/acme/weather/pull/312"
+          },
+          {
+            "id": "change:https://example.com/acme/weather/pull/305",
+            "kind": "change",
+            "at": "2026-11-17T02:00:00Z",
+            "url": "https://example.com/acme/weather/pull/305",
+            "state": "closed"
+          }
+        ],
+        "latest": [
+          "start"
+        ]
       }
     }
   ]

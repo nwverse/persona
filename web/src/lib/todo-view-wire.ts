@@ -327,9 +327,17 @@ export interface TodoTimelineEntry {
   actor: TodoActor;
   /**
    * Words someone wrote, as they wrote them: the owner's instruction or answer, a relay, a run's latest summary or
-   * what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any.
+   * what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any. Today's stores
+   * keep a few of the hub's own sentences in the place of such words, in the language they were written in
+   * (spec/fixtures/todo-rounds/README.md "Judgement calls"): a failed start's that names no error, a turn's that
+   * ended without a summary, a permission or plan card's answer.
    */
   text?: string;
+  /**
+   * The option the owner chose, on an answer whose text is what they said in a conversation rather than the option
+   * itself; absent otherwise.
+   */
+  choice?: string;
   /** What an answer or a decision answers, in the words it was asked in; absent when nothing says. */
   question?: string;
   /** Why, in the words of whoever answered or decided; absent when nobody said. */
@@ -410,6 +418,13 @@ export type TodoResultKind = "booking" | "doc" | "file" | "link" | "change" | "d
 export const TODO_RESULT_KINDS = ["booking", "doc", "file", "link", "change", "deploy", "report"] as const;
 
 /**
+ * How a code change stands as the hub last saw it: open, under review; draft, open but not ready for review; merged;
+ * closed without merging. Open: a newer hub may send other values.
+ */
+export type TodoChangeState = "open" | "draft" | "merged" | "closed" | (string & {});
+export const TODO_CHANGE_STATES = ["open", "draft", "merged", "closed"] as const;
+
+/**
  * Something a to-do's work produced, with how it stands: one chip of the paper's Results (proposal 3.5 row 9).
  */
 export interface TodoResult {
@@ -425,11 +440,8 @@ export interface TodoResult {
   text?: string;
   /** Where it opens (the change, the first link a report named); absent when there is none. */
   url?: string;
-  /**
-   * How a change stands now: open, draft, merged or closed; absent while the hub has not looked, and for the other
-   * kinds.
-   */
-  state?: string;
+  /** How a change stands now; absent while the hub has not looked, and for the other kinds. */
+  state?: TodoChangeState;
   /** The run that produced it; absent when not known. */
   run?: TodoRunRef;
 }

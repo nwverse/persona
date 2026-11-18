@@ -42,6 +42,7 @@ type fixtureCase struct {
 		Timeline json.RawMessage `json:"timeline"`
 		Results  json.RawMessage `json:"results"`
 		Recap    json.RawMessage `json:"recap"`
+		Latest   []string        `json:"latest"`
 	} `json:"expected"`
 }
 
@@ -157,10 +158,18 @@ func holdsTo(t *testing.T, def string, raw []byte) string {
 func TestTimelineFollowsTheCases(t *testing.T) {
 	for _, c := range readCases(t) {
 		t.Run(c.Name, func(t *testing.T) {
-			timeline, results, recap := written(t, Derive(input(t, c.Input)))
+			d := Derive(input(t, c.Input))
+			timeline, results, recap := written(t, d)
 			sameJSON(t, "timeline", timeline, c.Expected.Timeline)
 			sameJSON(t, "results", results, c.Expected.Results)
 			sameJSON(t, "recap", recap, c.Expected.Recap)
+			var latest []string
+			for _, rd := range Latest(d.Rounds, PaperRounds) {
+				latest = append(latest, rd.ID)
+			}
+			if !slices.Equal(latest, c.Expected.Latest) {
+				t.Errorf("the paper's rounds %v, want %v", latest, c.Expected.Latest)
+			}
 			if p := holdsTo(t, "TodoTimeline", timeline); p != "" {
 				t.Errorf("the timeline does not hold to the schema: %s", p)
 			}

@@ -10,8 +10,8 @@ import (
 // Input is everything one to-do's timeline is read from. The JSON fields are the stores' own, under the same names, so
 // the manager's rows decode straight into them; what a type does not read is left out.
 type Input struct {
-	// Todo is the to-do as GET /api/v1/todos/{id} lists it: its runs' links, its ledger, its brief and lineage, its open
-	// ask.
+	// Todo is the to-do as GET /api/v1/todos/{id} lists it: its runs' links (the ones the owner took off the to-do are
+	// not listed), its ledger, its brief and lineage, its open ask.
 	Todo Todo `json:"todo"`
 	// Feed are the conversation feed's items whose ref is the to-do, in any order; kinds the timeline does not read are
 	// skipped.
@@ -45,8 +45,9 @@ type Todo struct {
 	// Ask is its own open ask and DecisionReview the decision round's review, set when the owner chose Don't handle.
 	Ask            *Ask            `json:"ask,omitempty"`
 	DecisionReview *DecisionReview `json:"decision_review,omitempty"`
-	// What its work produced: the PR its runs named and how the hub last saw it and its earlier ones, and how far the
-	// finished work went out.
+	// What its work produced: the PR its runs named (pr_url), how the hub last saw it and its earlier ones, and how far
+	// the finished work went out.
+	PRURL    string     `json:"pr_url,omitempty"`
 	PRStatus *PRStatus  `json:"pr_status,omitempty"`
 	OtherPRs []PRStatus `json:"other_prs,omitempty"`
 	Delivery *Delivery  `json:"delivery,omitempty"`
@@ -54,32 +55,35 @@ type Todo struct {
 
 // Agent is one of the to-do's runs as its link has it (agents[]).
 type Agent struct {
-	MachineID   string     `json:"machine_id"`
-	SessionID   string     `json:"session_id"`
-	LinkedAt    time.Time  `json:"linked_at"`
-	ReleasedAt  *time.Time `json:"released_at,omitempty"`
-	Title       string     `json:"title"`
-	StartError  string     `json:"start_error,omitempty"`
-	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
+	MachineID  string     `json:"machine_id"`
+	SessionID  string     `json:"session_id"`
+	LinkedAt   time.Time  `json:"linked_at"`
+	ReleasedAt *time.Time `json:"released_at,omitempty"`
+	Title      string     `json:"title"`
+	StartError string     `json:"start_error,omitempty"`
 }
 
-// Supervision is a supervised to-do's ledger: its reviews, the latest last.
+// Supervision is a supervised to-do's ledger: where it stands (a cancelled to-do's says cancelled, which the list's
+// done_by does not) and its reviews, the latest last.
 type Supervision struct {
+	State   string   `json:"state"`
 	Reviews []Review `json:"reviews"`
 }
 
 // Review is one review of the ledger: when, its verdict, who gave it (judge, the done judge; reviewer, the independent
-// reviewer; "" the supervisor), the rework round it started, its note, a needs_user review's question or a park's
-// reason (reason), and what a park waits for until when.
+// reviewer; "" the supervisor), the rework round it started, its note, a needs_user review's question or what a park
+// waits for (reason), until when a park waits, and the fixed answer the owner gave a needs_user review's decision and
+// when (decide_yourself, not_what_i_asked, explain_first).
 type Review struct {
-	At        time.Time `json:"at"`
-	Verdict   string    `json:"verdict"`
-	By        string    `json:"by,omitempty"`
-	Round     int       `json:"round,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	Until     time.Time `json:"until,omitzero"`
-	WaitingOn string    `json:"waiting_on,omitempty"`
+	At              time.Time `json:"at"`
+	Verdict         string    `json:"verdict"`
+	By              string    `json:"by,omitempty"`
+	Round           int       `json:"round,omitempty"`
+	Note            string    `json:"note,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+	Until           time.Time `json:"until,omitzero"`
+	OwnerResponse   string    `json:"owner_response,omitempty"`
+	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 }
 
 // Brief is the to-do's brief: who started the work, the owner's request when they did, and its log.
@@ -207,14 +211,11 @@ type (
 		Kind string `json:"kind"`
 		Text string `json:"text"`
 	}
-	// reviewBody: one acceptance review, as the conversation shows it; by background when the background supervisor
-	// gave it.
+	// reviewBody: one acceptance review, as the conversation shows it.
 	reviewBody struct {
-		Verdict   string    `json:"verdict"`
-		Round     int       `json:"round,omitempty"`
-		Note      string    `json:"note,omitempty"`
-		By        string    `json:"by,omitempty"`
-		Until     time.Time `json:"until,omitzero"`
-		WaitingOn string    `json:"waiting_on,omitempty"`
+		Verdict string    `json:"verdict"`
+		Round   int       `json:"round,omitempty"`
+		Note    string    `json:"note,omitempty"`
+		Until   time.Time `json:"until,omitzero"`
 	}
 )

@@ -426,6 +426,8 @@ about the to-do (the owner's instructions, relays, receipts, answered cards, rev
 supervision ledger, its brief's request and log, and its runs' links and sessions. The rules live in
 `server/internal/assistant/todo/timeline`, pure as the projection is, and the shared cases in
 `spec/fixtures/todo-rounds` pin them; its README says what each entry is read from, the round rules and every line key.
+The paper shows the latest two rounds that are not Background ones, so a day's supervision never pushes the round that
+asks the owner off it.
 Receipts and relayed messages written since #10465 name their run; an older receipt goes to the one run on its
 computer at its time, else to "A run". Stage 3 stores the entries themselves (`todo_activity`) and with them what the
 stores cannot show today: messages sent straight to a run, the steward's replies, message states other than

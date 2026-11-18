@@ -60,10 +60,14 @@ func byTime(a, b *item) int {
 // under it.
 //   - a decision recorded with the instruction that carried it (its source message is the instruction's feed item)
 //     folds under the instruction;
-//   - a card decision folds under the owner's answer of the card nearest it, within pairWindow (both are written when
-//     the card is answered, in no fixed order, and the answer does not say its run);
-//   - the hub's relay of the owner's choice folds under the owner's decision nearest it, within pairWindow (the choice
-//     is relayed to the run, then recorded);
+//   - the card decisions of one card (one per question, under the card's id as their source message) are one answer:
+//     the earliest stands for the card, and the others fold with it;
+//   - a card's decisions fold under the owner's answer of the card nearest the earliest, within pairWindow (both are
+//     written when the card is answered, in no fixed order, and the answer does not say its run);
+//   - the hub's relay of the owner's choice folds under the owner's decision it relays: the one nearest it within
+//     pairWindow when the choice was relayed, then recorded; else the latest before it within relayWindow, recorded
+//     before it was relayed (the owner's reply to its card in Lark). A relay with another decision beside it (the hub's
+//     default) relays that one;
 //   - the run an instruction started when every run had stopped folds under that instruction.
 func (r *reader) pair() {
 	instructions := map[string]*item{}
@@ -80,6 +84,17 @@ func (r *reader) pair() {
 			it.join, it.head = in.e.ID, false
 		}
 	}
+	cards := map[string]*item{}
+	for _, it := range r.items { // in time order: the earliest of a card's decisions comes first
+		if it.from != fromCard || !it.head || it.key == "" {
+			continue
+		}
+		if first, ok := cards[it.key]; ok {
+			it.join, it.head = first.e.ID, false
+		} else {
+			cards[it.key] = it
+		}
+	}
 	for _, it := range r.items {
 		var with *item
 		switch it.from {
@@ -88,7 +103,7 @@ func (r *reader) pair() {
 				with = r.nearest(it.e.At, pairWindow, func(c *item) bool { return c.from == fromAnswered })
 			}
 		case fromRelayAnswer:
-			with = r.nearest(it.e.At, pairWindow, func(c *item) bool { return c.from == fromManual && c.head })
+			with = r.relayed(it)
 		}
 		if with != nil {
 			it.join, it.head = with.e.ID, false
@@ -104,6 +119,33 @@ func (r *reader) pair() {
 			}
 		}
 	}
+	byID := map[string]*item{}
+	for _, it := range r.items {
+		byID[it.e.ID] = it
+	}
+	for _, it := range r.items { // a card's later decisions go where its first went
+		if to := byID[it.join]; to != nil && to.join != "" {
+			it.join = to.join
+		}
+	}
+}
+
+// relayed is the owner's decision relay it relays (pair); nil when it relays none of theirs.
+func (r *reader) relayed(relay *item) *item {
+	if d := r.nearest(relay.e.At, pairWindow, func(c *item) bool { return c.e.Decision != "" }); d != nil {
+		if d.from == fromManual && d.head {
+			return d
+		}
+		return nil
+	}
+	var out *item
+	for _, c := range r.items {
+		if c.from == fromManual && c.head && !c.e.At.After(relay.e.At) && relay.e.At.Sub(c.e.At) <= relayWindow &&
+			(out == nil || byTime(c, out) > 0) {
+			out = c
+		}
+	}
+	return out
 }
 
 // round is a round being put together: the wire round, and the items it holds (its header's included).
@@ -193,6 +235,32 @@ func latestRound(rounds []*round) *round {
 	return nil
 }
 
+// PaperRounds is how many rounds the paper shows (proposal 3.5 row 10).
+const PaperRounds = 2
+
+// Latest are the n rounds the paper shows of a timeline's rounds (oldest first): the latest n that are not Background
+// ones, where the work and the owner's asks are; with fewer, the latest Background ones make up the rest. Oldest
+// first, as in the timeline. A Background round of today can begin after the round that holds the open ask, which the
+// paper must not lose.
+func Latest(rounds []assistantwire.TodoRound, n int) []assistantwire.TodoRound {
+	take := make([]bool, len(rounds))
+	left := n
+	for _, background := range []bool{false, true} {
+		for i := len(rounds) - 1; i >= 0 && left > 0; i-- {
+			if (rounds[i].Kind == assistantwire.TodoRoundKindBackground) == background {
+				take[i], left = true, left-1
+			}
+		}
+	}
+	var out []assistantwire.TodoRound
+	for i, rd := range rounds {
+		if take[i] {
+			out = append(out, rd)
+		}
+	}
+	return out
+}
+
 // runLineID is the id of run key's line in round (R4); an unnamed run's key is "?".
 func runLineID(key, round string) string { return "run:" + cmp.Or(key, "?") + "@" + round }
 
@@ -234,7 +302,7 @@ func (rd *round) collapse() {
 // began).
 func (r *reader) live(rd *round) {
 	for _, a := range r.in.Todo.Agents {
-		if a.ReleasedAt != nil || a.DismissedAt != nil || a.StartError != "" {
+		if a.ReleasedAt != nil || a.StartError != "" {
 			continue
 		}
 		s := r.session(a.MachineID, a.SessionID)

@@ -383,7 +383,11 @@
         "actor": {"$ref": "#/$defs/TodoActor"},
         "text": {
           "type": "string",
-          "description": "Words someone wrote, as they wrote them: the owner's instruction or answer, a relay, a run's latest summary or what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any."
+          "description": "Words someone wrote, as they wrote them: the owner's instruction or answer, a relay, a run's latest summary or what it does now, a decision's choice, a report, a review's note; absent when nobody wrote any. Today's stores keep a few of the hub's own sentences in the place of such words, in the language they were written in (spec/fixtures/todo-rounds/README.md \"Judgement calls\"): a failed start's that names no error, a turn's that ended without a summary, a permission or plan card's answer."
+        },
+        "choice": {
+          "type": "string",
+          "description": "The option the owner chose, on an answer whose text is what they said in a conversation rather than the option itself; absent otherwise."
         },
         "question": {
           "type": "string",
@@ -481,6 +485,11 @@
       "type": "string",
       "enum": ["booking", "doc", "file", "link", "change", "deploy", "report"]
     },
+    "TodoChangeState": {
+      "description": "How a code change stands as the hub last saw it: open, under review; draft, open but not ready for review; merged; closed without merging. Open: a newer hub may send other values.",
+      "type": "string",
+      "enum": ["open", "draft", "merged", "closed"]
+    },
     "TodoResult": {
       "description": "Something a to-do's work produced, with how it stands: one chip of the paper's Results (proposal 3.5 row 9).",
       "type": "object",
@@ -505,8 +514,8 @@
           "description": "Where it opens (the change, the first link a report named); absent when there is none."
         },
         "state": {
-          "type": "string",
-          "description": "How a change stands now: open, draft, merged or closed; absent while the hub has not looked, and for the other kinds."
+          "$ref": "#/$defs/TodoChangeState",
+          "description": "How a change stands now; absent while the hub has not looked, and for the other kinds."
         },
         "run": {
           "$ref": "#/$defs/TodoRunRef",
