@@ -65,6 +65,14 @@ asking first when something is recorded.
   seconds per page (the address's first word: `s` for an Agent's chat, `settings`, `home`), `online`, `memory_mb` where the
   browser tells it.
 - `foreground` per visible period; `app` (recording, visible, hidden), `page`, `network`, `socket`, `request_error`.
+- While the hub lists `todo_view`, from the To-dos view's shadow (`docs/web/web.md` "Developing Persona"): `todo_view`, at
+  most a minute apart, counts the rows with a view: `compared`; `same`; `by_design` (apart by a decided difference, by
+  which); `unknown` (a newer hub's section or reason); `client_gap` (a run whose session this page lacks); `boundary`
+  (the view changes by time alone within 2 minutes); `stale_view` (a run moved since the list was read: the list is read
+  again); `unsettled` (apart, until a run 10 s later still sees it); `mismatch` (apart, nothing explains it); `errors`
+  (runs that failed). `todo_view_mismatch`, one per unexplained row an hour: its id, its manager's id, and both sides'
+  section and reason words. Drawing the To-dos sections from the view also needs `localStorage`
+  `persona.todos.viewDraw` = `1` (no settings row; reload the page after setting it).
 - `errors.jsonl`: uncaught errors, unhandled rejections and freezes of 5 s or more (`lib/freeze-watch.ts`), whether or not
   the hub takes error reports. `log.txt`: `console.error` / `console.warn` lines, scrubbed (an error a boundary caught is
   logged there too).
@@ -77,7 +85,9 @@ asking first when something is recorded.
 first screen's budget. The recorder hooks `fetch`, `history`, `popstate`, `error`, `unhandledrejection`, the console and
 the freeze watch itself and puts them back when the switch goes off; it imports nothing from the first screen's modules
 that they do not already export, so its route word list is a copy of `lib/error-reports.ts`'s (`dev-mode.test.ts` keeps
-them equal). A socket already open when the switch is turned on is counted from its next connection.
+them equal). A socket already open when the switch is turned on is counted from its next connection. The To-dos view's
+shadow (`web/src/features/todos/model/view-shadow.ts`, a chunk of its own) reads the triage through App's module: the
+recorder can load before App, so importing `lib/todo-triage.ts` would move it out of App's chunk into one of its own.
 
 ## The desktop app (#9675)
 
@@ -159,5 +169,6 @@ Tests: `apple/PersonaTests/DevModeTests.swift`.
 
 `web/src/lib/dev-probe.ts` (the switch's key, the WebSocket wrap), `web/src/lib/dev-mode.ts` (recorder, store, hooks),
 `web/src/lib/dev-scrub.ts`, `web/src/lib/dev-package.ts`, `web/src/views/settings/DevModeSettings.tsx` (About Persona's
-rows), `web/src/views/settings/DevExportDialog.tsx` (export, Send To, Download). Tests: `web/src/lib/dev-mode.test.ts`,
-`web/src/views/settings/DevModeSettings.test.tsx`.
+rows), `web/src/views/settings/DevExportDialog.tsx` (export, Send To, Download), `web/src/features/todos/model/view-shadow.ts`
+(the To-dos view's shadow). Tests: `web/src/lib/dev-mode.test.ts`, `web/src/views/settings/DevModeSettings.test.tsx`,
+`web/src/features/todos/model/view-shadow.test.ts`.

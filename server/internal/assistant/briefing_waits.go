@@ -123,6 +123,10 @@ func (s *Service) briefDirections(ctx context.Context, now time.Time, l i18n.Lan
 		return nil, s.briefDisabledRoutines(ctx, now, l, nil)
 	}
 	names := s.leaderNames(ctx, ids)
+	if cfg.Main != "" {
+		names[cfg.Main] = i18n.T(l, "assistant-feishu_cards.main_chat")
+	}
+	loc := s.location(ctx)
 	dirs := make([]prompts.BriefDirection, len(ids))
 	byID := make(map[string]int, len(ids))
 	for i, id := range ids {
@@ -198,7 +202,9 @@ func (s *Service) briefDirections(ctx context.Context, now time.Time, l i18n.Lan
 			continue
 		}
 		w.Link = todoLink(web, t.ID)
-		if len(cards[t.ID]) > 0 && w.InteractionID != "" {
+		if w.Kind == "private" && w.InteractionID != "" {
+			// A task-linked ordinary card still opens its to-do. A Private card keeps only its conversation link, never a
+			// URL that would reveal the task identity it deliberately omits.
 			ix := cards[t.ID][0]
 			for _, candidate := range cards[t.ID] {
 				if candidate.ID == w.InteractionID {
@@ -208,14 +214,14 @@ func (s *Service) briefDirections(ctx context.Context, now time.Time, l i18n.Lan
 			}
 			w.Link = sessionLink(web, ix.MachineID, ix.SessionID, s.sessionAssistantLocal(ix.MachineID, ix.SessionID))
 		}
-		w.Line = briefWaitLine(l, w, now)
+		w.Line = briefWaitLine(l, w, now, loc)
 		d.Waits = append(d.Waits, w)
 	}
 	for _, ix := range loose {
 		i := byID[ix.SessionID]
 		w := briefCardWait(ix, l)
 		w.Link = sessionLink(web, ix.MachineID, ix.SessionID, s.sessionAssistantLocal(ix.MachineID, ix.SessionID))
-		w.Line = briefWaitLine(l, w, now)
+		w.Line = briefWaitLine(l, w, now, loc)
 		dirs[i].Waits = append(dirs[i].Waits, w)
 	}
 	for i := range dirs {
@@ -412,11 +418,11 @@ func briefCardWait(ix proto.Interaction, l i18n.Lang) prompts.BriefWait {
 	return w
 }
 
-func briefWaitLine(l i18n.Lang, w prompts.BriefWait, now time.Time) string {
+func briefWaitLine(l i18n.Lang, w prompts.BriefWait, now time.Time, loc *time.Location) string {
 	line := i18n.T(l, "assistant-briefing.wait_line", i18n.Args{"title": w.Title,
 		"kind": i18n.T(l, "assistant-briefing.wait_kind_"+w.Kind), "wait": boardWait(l, boardWaited(now, w.Since))})
 	if !w.Until.IsZero() {
-		line = i18n.T(l, "assistant-briefing.wait_until", i18n.Args{"line": line, "time": w.Until.Format("2006-01-02 15:04")})
+		line = i18n.T(l, "assistant-briefing.wait_until", i18n.Args{"line": line, "time": w.Until.In(loc).Format("2006-01-02 15:04")})
 	}
 	if w.Reason != "" && w.Kind != "private" {
 		line += " — " + w.Reason
