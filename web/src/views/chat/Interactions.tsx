@@ -13,6 +13,7 @@ import type { Interaction } from "../../lib/types";
 import { defaults, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, urlHost, urlTarget, validate, type ElicitationAction, type Field, type Values } from "../../lib/elicitation";
 import { answerLines } from "../../lib/answered";
 import { answerBlock, interactionCanAnswer, sessionTitle } from "../../lib/format";
+import { modeTitle, PERMISSION_MODES } from "../../lib/session-actions";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { cardToolName, mcpServerLabel } from "../../lib/turns";
@@ -475,16 +476,17 @@ function PlanCard({ ix }: { ix: Interaction }) {
   const [rejecting, setRejecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const menu = useMenu();
+  const planThen = ix.plan_then && ix.plan_then !== "plan" && PERMISSION_MODES.some((m) => m.id === ix.plan_then) ? ix.plan_then : undefined;
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);
     await resolve(ix, body);
     setBusy(false);
   };
-  // Enter approves with edits (the Approve button); rejecting has its own field, whose Enter is the field's
+  // Enter approves in the recorded following mode, else with edits (the Approve button); rejecting's Enter is its field's
   const keys = useCardKeys({
     enter: () => {
       if (busy || rejecting) return false;
-      void go({ approve: true, mode: "acceptEdits" });
+      void go({ approve: true, mode: planThen ?? "acceptEdits" });
     },
   });
   const tapGuard = useChatCardTapGuard(ix);
@@ -520,14 +522,15 @@ function PlanCard({ ix }: { ix: Interaction }) {
               {t("chat-interactions.request_changes")}
             </Button>
             <span className="flex items-center">
-              <Button tone="primary" busy={busy} className="rounded-r-none" onClick={() => go({ approve: true, mode: "acceptEdits" })}>
+              {planThen && <span className="mr-2 text-meta font-medium whitespace-nowrap text-ink-2">{modeTitle(planThen)}</span>}
+              <Button tone="primary" busy={busy} className={planThen ? undefined : "rounded-r-none"} onClick={() => go({ approve: true, mode: planThen ?? "acceptEdits" })}>
                 {t("chat-interactions.approve")}
                 {keys.focused && <Kbd>Enter</Kbd>}
               </Button>
-              <button type="button" aria-label={t("chat-interactions.approve_mode")} disabled={busy} onClick={menu.open} className="touch-hit flex h-8 w-7 items-center justify-center rounded-r-control border-l border-white/15 bg-ink text-surface enabled:hover:opacity-90 disabled:opacity-40">
+              {!planThen && <button type="button" aria-label={t("chat-interactions.approve_mode")} disabled={busy} onClick={menu.open} className="touch-hit flex h-8 w-7 items-center justify-center rounded-r-control border-l border-white/15 bg-ink text-surface enabled:hover:opacity-90 disabled:opacity-40">
                 <Icon name="chevron" size={12} stroke={2.4} />
-              </button>
-              {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" side="top" width={196} items={MODES.map((m) => ({ key: m.key, label: m.label, onSelect: () => go({ approve: true, mode: m.key }) }))} />}
+              </button>}
+              {!planThen && menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" side="top" width={196} items={MODES.map((m) => ({ key: m.key, label: m.label, onSelect: () => go({ approve: true, mode: m.key }) }))} />}
             </span>
           </>
         )
