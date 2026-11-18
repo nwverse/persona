@@ -35,9 +35,21 @@ func shellWaitingRefusal(line, choices string, until time.Time, extra map[string
 	return &rpc.Error{Code: proto.CodeShellWaiting, Message: "the new tab's shell is waiting for an answer: " + line, Data: raw}
 }
 
-// answeredNode has box's node answer start.answer with answer (nil: it types and says ok), and returns what it was
+// answeredNode has box's node answer start.answer with answer (nil: it types and says so), and returns what it was
 // asked, in order.
 func answeredNode(f *fakeHub, answer func(p proto.StartAnswerParams) error) func() []proto.StartAnswerParams {
+	return replyingNode(f, func(p proto.StartAnswerParams) (any, error) {
+		if answer != nil {
+			if err := answer(p); err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{"ok": true, "typed": true}, nil
+	})
+}
+
+// replyingNode has box's node answer start.answer with reply's, and returns what it was asked, in order.
+func replyingNode(f *fakeHub, reply func(p proto.StartAnswerParams) (any, error)) func() []proto.StartAnswerParams {
 	var mu sync.Mutex
 	var asked []proto.StartAnswerParams
 	f.answerNode(proto.MethodStartAnswer, func(machine string, raw json.RawMessage) (any, error) {
@@ -49,12 +61,7 @@ func answeredNode(f *fakeHub, answer func(p proto.StartAnswerParams) error) func
 		if machine != "box" {
 			return nil, errors.New("asked the wrong computer: " + machine)
 		}
-		if answer != nil {
-			if err := answer(p); err != nil {
-				return nil, err
-			}
-		}
-		return map[string]any{"ok": true}, nil
+		return reply(p)
 	})
 	return func() []proto.StartAnswerParams {
 		mu.Lock()
@@ -123,6 +130,56 @@ func TestTaskStartAnswerTypesAndStartsInTheKeptTab(t *testing.T) {
 		return it.Kind == feedStartRemedy && it.Ref == todo.ID && b.Action == "answer" && b.By == "user" && b.Choice == "n" && b.Text == "" && len(b.Keys) == 0
 	}) {
 		t.Fatalf("no answer step in the task's history: %s", feedKinds(s, "conv1"))
+	}
+}
+
+// remedySteps is the start_remedy steps of todo id's history in conv1, by action.
+func remedySteps(s *Service, id string) map[string][]startRemedyBody {
+	items, _, _ := s.feed(context.Background(), "conv1", time.Time{})
+	steps := map[string][]startRemedyBody{}
+	for _, it := range items {
+		var b startRemedyBody
+		if it.Kind == feedStartRemedy && it.Ref == id && json.Unmarshal(it.Body, &b) == nil {
+			steps[b.Action] = append(steps[b.Action], b)
+		}
+	}
+	return steps
+}
+
+// The question had left the tab's last line before the owner's answer came (answered at the computer): the node types
+// nothing and says so (typed false), and the task still starts in the tab, but its history does not say the owner
+// answered: its step is answer_not_typed, with the answer they picked. A node whose reply does not say typed (the first
+// start.answer) typed, as the hub took it before.
+func TestTaskStartAnswerNotTypedIsNotTheOwnersAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply map[string]any
+		step  string
+	}{
+		{"answered at the computer", map[string]any{"ok": true, "typed": false}, "answer_not_typed"},
+		{"typed", map[string]any{"ok": true, "typed": true}, "answer"},
+		{"a reply without typed", map[string]any{"ok": true}, "answer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := launcherRetryHub(t)
+			asked := replyingNode(f, func(proto.StartAnswerParams) (any, error) { return tc.reply, nil })
+			todo, _ := failOnWork(t, s, f, shellWaitingRefusal(omzLine, "y,n,enter", time.Now().Add(5*time.Minute), nil))
+			if status, body := postAnswer(t, s, todo.ID, "", `{"choice":"n"}`); status != http.StatusOK || body["todo"] == nil {
+				t.Fatalf("answer: %d %v", status, body)
+			}
+			waitFor(t, "the agent to start", func() bool { return len(onlyTodo(s).Agents) == 1 })
+			f.mu.Lock()
+			starts := slices.Clone(f.starts)
+			f.mu.Unlock()
+			if len(asked()) != 1 || len(starts) != 2 || starts[1]["in_pane"] != "w1:p2" {
+				t.Fatalf("asked %v, starts %v", asked(), starts)
+			}
+			steps := remedySteps(s, todo.ID)
+			other := map[string]string{"answer": "answer_not_typed", "answer_not_typed": "answer"}[tc.step]
+			if got := steps[tc.step]; len(got) != 1 || got[0].By != "user" || got[0].Choice != "n" || len(steps[other]) != 0 {
+				t.Fatalf("steps %+v: want one %s", steps, tc.step)
+			}
+		})
 	}
 }
 
@@ -241,7 +298,7 @@ func TestTaskStartAnswerNeedsANewerNode(t *testing.T) {
 	old := &Service{devs: oldNodeDevs{}}
 	pt := PlanTask{ErrorCode: proto.CodeShellWaiting, ErrorArgs: map[string]string{"line": omzLine, "choices": "y,n,enter"}}
 	var refused answerRefused
-	if err := old.answerKeptTab(context.Background(), Device{ID: "box", Name: "box"}, pt, "w1:p2", "n"); !errors.As(err, &refused) ||
+	if _, err := old.answerKeptTab(context.Background(), Device{ID: "box", Name: "box"}, pt, "w1:p2", "n"); !errors.As(err, &refused) ||
 		refused.code != proto.CodeNodeOutdated {
 		t.Fatalf("a node that did not announce %s: %v", nodeproto.StartAnswer, err)
 	}

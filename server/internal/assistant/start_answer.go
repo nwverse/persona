@@ -62,30 +62,35 @@ func (s *Service) answerTaskStart(ctx context.Context, todoID, choice string) (j
 // pane (keptTabOf: "" when its computer no longer keeps it) on computer m, through the node's start.answer. Only a
 // shell_waiting refusal that listed the question and offered choice is answered; a node from before start.answer is
 // refused node_outdated before anything is asked. The node's own refusals (start_tab_gone, choice_not_offered) come
-// back as it gave them; a question no longer on the tab's last line (answered at the computer) gets nothing typed,
-// and the task starts in the tab all the same.
-func (s *Service) answerKeptTab(ctx context.Context, m Device, t PlanTask, pane, choice string) error {
+// back as it gave them; a question no longer on the tab's last line (answered at the computer) gets nothing typed
+// (typed false), and the task starts in the tab all the same. A node's reply that does not say typed is taken as
+// typed, as before the node said.
+func (s *Service) answerKeptTab(ctx context.Context, m Device, t PlanTask, pane, choice string) (typed bool, _ error) {
 	line := t.ErrorArgs["line"]
 	if t.ErrorCode != proto.CodeShellWaiting || line == "" {
-		return errAnswerNotWaiting
+		return false, errAnswerNotWaiting
 	}
 	if pane == "" {
-		return errAnswerTabGone
+		return false, errAnswerTabGone
 	}
 	if !slices.Contains(strings.Split(t.ErrorArgs[proto.ShellAskChoices], ","), choice) {
-		return errAnswerNotOffered
+		return false, errAnswerNotOffered
 	}
 	outdated := answerRefused{http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("assistant-tasks.start_answer_node_outdated", i18n.Args{"machine": m.Name})}
 	if nodes, ok := s.devs.(nodeAnnouncer); ok && s.devs.Has(m.ID) && !nodes.NodeAnnounced(m.ID, nodeproto.StartAnswer) {
-		return outdated
+		return false, outdated
 	}
 	cctx, cancel := context.WithTimeout(ctx, startAnswerTimeout)
 	defer cancel()
-	err := s.call(cctx, m.ID, proto.MethodStartAnswer, proto.StartAnswerParams{Pane: pane, Line: line, Choice: choice}, nil)
+	var out proto.StartAnswerResult
+	err := s.call(cctx, m.ID, proto.MethodStartAnswer, proto.StartAnswerParams{Pane: pane, Line: line, Choice: choice}, &out)
 	if unknownMethod(err) { // a node from before start.answer, through a hub that relays it
-		return outdated
+		return false, outdated
 	}
-	return err
+	if err != nil {
+		return false, err
+	}
+	return out.Typed == nil || *out.Typed, nil
 }
 
 // postTaskStartAnswer: POST /api/v1/todos/{id}/start/answer {"choice":"n"} → {"todo": Todo}.

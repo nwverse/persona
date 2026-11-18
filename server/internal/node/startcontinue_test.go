@@ -441,8 +441,12 @@ func TestStartAnswerAnswersAKeptTabByItsPane(t *testing.T) {
 	})
 	claudeUpOnStart(t, f, "w1:p2")
 	f.reset()
-	if _, err := request(t, n, proto.MethodStartAnswer, map[string]any{"pane": "w1:p2", "line": omzQuestion, "choice": "n"}); err != nil {
+	out, err := request(t, n, proto.MethodStartAnswer, map[string]any{"pane": "w1:p2", "line": omzQuestion, "choice": "n"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if out["ok"] != true || out["typed"] != true {
+		t.Errorf("answered %v: the hub records the owner's answer only when the node says it typed it", out)
 	}
 	if got := keysInto(f, "w1:p2"); !slices.Equal(got, []string{"n"}) {
 		t.Errorf("keys pressed %v: one key, no Enter after a key read alone", got)
@@ -496,8 +500,9 @@ func TestStartKeysThenRetryWaitsOutTheAnsweredQuestion(t *testing.T) {
 
 // start.answer types nothing for an answer the question was not offered, anything but Ctrl-C into a password prompt,
 // or a pane that is no failed start's kept tab (any more): refused. A question that is not the tab's last line any
-// more (another one there, or answered at the computer) gets nothing typed and the tab is not marked typed: the
-// hub's start there then goes on, or ends at once with the question the tab shows.
+// more (another one there, or answered at the computer) gets nothing typed and the tab is not marked typed, and the
+// reply says so (typed false), so the hub does not record the owner's answer: the hub's start there then goes on, or
+// ends at once with the question the tab shows.
 func TestStartAnswerRefusals(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
@@ -505,8 +510,12 @@ func TestStartAnswerRefusals(t *testing.T) {
 	keptByAQuestion(t, n, f, home)
 	f.reset()
 	const passphrase = "Enter passphrase for key '/home/me/.ssh/id_ed25519':"
+	var replies []map[string]any
 	answer := func(pane, line, choice string) error {
-		_, err := request(t, n, proto.MethodStartAnswer, map[string]any{"pane": pane, "line": line, "choice": choice})
+		out, err := request(t, n, proto.MethodStartAnswer, map[string]any{"pane": pane, "line": line, "choice": choice})
+		if err == nil {
+			replies = append(replies, out)
+		}
 		return err
 	}
 	for _, tc := range []struct {
@@ -533,6 +542,14 @@ func TestStartAnswerRefusals(t *testing.T) {
 	if got := f.trace("pane.send_keys", "pane.send_text", "pane.send_input"); len(got) != 0 {
 		t.Errorf("typed %v into a question gone", got)
 	}
+	for _, out := range replies {
+		if typed, said := out["typed"]; out["ok"] != true || !said || typed != false {
+			t.Errorf("answered %v with nothing typed: the reply must say typed false", out)
+		}
+	}
+	if len(replies) != 2 {
+		t.Errorf("replies %v", replies)
+	}
 	n.mu.Lock()
 	typed := n.keptStarts["w1:p2"].typed
 	n.mu.Unlock()
@@ -542,6 +559,9 @@ func TestStartAnswerRefusals(t *testing.T) {
 	f.setScreen("w1:p2", "Last login: today\n"+passphrase+" ")
 	if err := answer("w1:p2", passphrase, "cancel"); err != nil {
 		t.Fatalf("Ctrl-C to a password prompt: %v", err)
+	}
+	if out := replies[len(replies)-1]; out["typed"] != true {
+		t.Errorf("answered %v with Ctrl-C typed", out)
 	}
 	if got := keysInto(f, "w1:p2"); !slices.Equal(got, []string{"ctrl+c"}) {
 		t.Errorf("keys %v: only Ctrl-C", got)

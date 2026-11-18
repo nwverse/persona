@@ -1588,10 +1588,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := json.Unmarshal(params, &a); err != nil {
 			return nil, err
 		}
-		if err := n.startAnswer(ctx, a.Pane, a.Line, a.Choice); err != nil {
+		typed, err := n.startAnswer(ctx, a.Pane, a.Line, a.Choice)
+		if err != nil {
 			return nil, err
 		}
-		return ok(nil)
+		return proto.StartAnswerResult{OK: true, Typed: &typed}, nil
 	case "session.keys":
 		if a, ok := n.agent(p.SessionID); ok {
 			defer n.forgetDialog(a.PaneID) // the dialog it showed may be gone (dialogstatus.go)

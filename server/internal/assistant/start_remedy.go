@@ -66,7 +66,9 @@ type startRemedyBody struct {
 	// LauncherFrom, LauncherTo: a retry on another launcher of the same computer (start_retry_launcher.go, #10365).
 	LauncherFrom string `json:"launcher_from,omitempty"`
 	LauncherTo   string `json:"launcher_to,omitempty"`
-	// Choice: the id of the answer the owner gave the tab's startup question from the app (start_answer.go, #10365).
+	// Choice: the id of the answer the owner gave the tab's startup question from the app (start_answer.go, #10365):
+	// typed into the tab (action answer), or not, the question having left the tab's last line before it came
+	// (answer_not_typed: answered at the computer, or gone by itself).
 	Choice string `json:"choice,omitempty"`
 }
 
