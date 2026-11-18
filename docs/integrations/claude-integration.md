@@ -1269,7 +1269,11 @@ Claude Code has Allow All (`bypassPermissions`) in its Shift+Tab cycle only when
   A start that does not come up is followed by one in the mode the agent had (`switch_failed`), or the agent is left
   stopped (`switch_failed_stopped`).
 - **What the apps see**: `bypass_pending: true` on the row while the restart waits, with `permission_mode` still the mode
-  it runs in. Picking any other mode first drops the restart, and so does a pick older than a day.
+  it runs in. Picking any other mode first drops the restart, and so does a pick older than two hours (`modeRestartMaxAge`).
+- **For which process** (#10296): the pick belongs to the claude process it was made for, its pid and start as the hooks
+  report them (else its `sessions/<pid>.json`). Once that process has exited, or the session runs in another one (a
+  resume at the computer or Persona's Resume), the pick is dropped: a later claude of the same conversation was never
+  chosen for Full access and is never restarted into it. Where Persona cannot tell the process, the pick is refused.
 - **Where**: only a Claude Code Agent in a pane of a terminal host that can say what runs there and start an agent in it
   (herdr), on a launcher Persona can tell, in a folder it can tell. Runtimes, Antigravity, Codex and sessions outside
   Persona's terminals keep the refusal. The restart is kept in the node's memory (shared by a resident node's Nodes), so
