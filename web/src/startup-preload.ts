@@ -399,13 +399,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
 // so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
 // separate work.
-// #10047: personal verification reuses the review chip and Needs you, with an open-task state and label on the first
-// screen. Against main e6a2faac12 in one environment: ja 482,752 B to 482,931 B (+179 B), en 479,646 B to 479,839 B,
-// zh-Hans 480,469 B to 480,657 B. Pristine main already exceeds its 482,683 B budget by 69 B after this merge.
-// The budget covers that inherited 69 B, this change's measured 179 B, and 40 B headroom as in #9847.
-// Against the earlier main 40ee4e32fb, routing the label through reviewState added 25 B per language, so the direct
-// guard stays; the review chip and Needs you are reused.
-export const FIRST_SCREEN_BUDGET = 482_971;
+// #10226: Developing Persona's To-dos view shadow reads today's triage through App's module (App.tsx re-exports three of
+// lib/todo-triage.ts's functions; a direct import from the recorder's chunk split lib/todo-triage.ts into a chunk of its
+// own, about 700 B). 49 B in each language, measured in one environment against main d5050affc5 (ja 482,098 B to
+// 482,147 B; en 478,979 B to 479,028 B, zh-Hans 479,841 B to 479,890 B). The budget stays.
+// #10047: personal verification reuses the review chip and Needs you. Its open-task state and label must fit the
+// latest main's first-screen budget rather than retaining the allowance measured against an older main.
+export const FIRST_SCREEN_BUDGET = 482_683;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
