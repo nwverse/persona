@@ -3308,6 +3308,14 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+# MOCK_TODO_ASK_LONG=1 (with MOCK_TODO_ASKS): the PR check's decision has a question and a recommendation of several lines, the
+# way a supervisor writes them, so the Needs you tray's decision card can be checked with long text, hours of waiting and its
+# buttons at the bottom of a short window.
+if os.environ.get("MOCK_TODO_ASK_LONG") == "1" and "todo_review" in TODO_ASKS:
+    TODO_ASKS["todo_review"].update(
+        verdict="🤔 要你拍板：PR #42 改的公开接口已经合进 2.0 版，但旧接口还有一半的客户端在用，2.0 放量之前它们的列表页会整个空掉。要不要先把旧接口加回来止损？",
+        recommend="先加回旧接口，通知客户端的负责人这个版本之后再删")
+    TODO_ASKED_AT = ago(hours=12, minutes=31)
 # MOCK_ASK_HELD=1 (#4930, #5803, docs/assistant/todos.md "Decisions that can wait"): with MOCK_TODO_ASKS, the PR
 # check's decision is held for the next briefing (`ask.for_briefing`), so the apps mark it.
 if os.environ.get("MOCK_ASK_HELD") == "1" and "todo_review" in TODO_ASKS:
@@ -7136,7 +7144,8 @@ def transcription_control(h, method):
                 sock["fail"](TRANSCRIPTION_MODE["fatal"])
     elif method != "GET": return h.send_json({"code": "method_not_allowed"}, 405) or True
     return h.send_json({"on": meeting_transcription_on(), **TRANSCRIPTION_MODE,
-                        "recordings": {rid: {"frames": t["frames"], "bytes": t["bytes"], "timeline": t["timeline"],
+                        # lines: the hub's final lines so far, what a test waits on before it looks for them (#10109)
+                        "recordings": {rid: {"frames": t["frames"], "bytes": t["bytes"], "lines": len(t["hub"]), "timeline": t["timeline"],
                                               "gaps": transcription_gaps(t), "held": t["held"], "socket": t.get("socket") is not None,
                                               "transcription": transcription_view(rid)}
                                        for rid, t in TRANSCRIPTIONS.items()}}) or True
