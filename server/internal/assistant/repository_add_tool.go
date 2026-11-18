@@ -22,7 +22,7 @@ func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, r
 	if err := repositoryArguments(raw, &in); err != nil {
 		return "", err
 	}
-	binding, err := in.binding()
+	binding, err := s.repositoryBinding(withProviderBudget(ctx), in, "")
 	if err != nil {
 		return "", s.repositoryToolError(ctx, err)
 	}
@@ -71,10 +71,14 @@ func (s *Service) repositoryToolError(ctx context.Context, err error) error {
 	code := "store"
 	var problem repositoryProblem
 	var check *repository.CheckError
+	var provider *repository.ProviderError
 	if errors.As(err, &problem) {
 		code = string(problem)
 	} else if errors.As(err, &check) {
 		code = check.Code
+	} else if errors.As(err, &provider) {
+		code = providerCode(provider)
+		return fmt.Errorf("repository_%s: %s", code, i18n.T(s.lang(ctx), "assistant-repositories."+code, providerArgs(provider)))
 	}
 	return fmt.Errorf("repository_%s: %s", code, i18n.T(s.lang(ctx), "assistant-repositories."+code))
 }

@@ -256,6 +256,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/places",
 	"GET /api/v1/assistant/repositories",
 	"GET /api/v1/assistant/repositories/{id}",
+	"GET /api/v1/assistant/repositories/providers",
 	"POST /api/v1/assistant/repositories/preview",
 	"POST /api/v1/assistant/repositories",
 	"PUT /api/v1/assistant/repositories/{id}",
