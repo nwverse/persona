@@ -826,8 +826,12 @@ this feature.
 
 The node sends `/compact` through the same path as manual compaction and reports it in `session.compaction`. The
 unattended message is written only after the compaction command ends, not merely when its boundary is reported.
-A failed compaction still allows the original message through; a cancelled request, exited process or ten-minute
-timeout leaves it unsent for the sender's existing retry path.
+A failed compaction still allows the original message through. Delivery waits at most 30 seconds, below the manager's
+90-second relay deadline; a still-running compaction returns a retryable `compacting` refusal and leaves the original
+message unsent in the sender's existing queue. Further unattended retries refuse immediately while compaction is in
+flight, without issuing another `/compact` or consuming another attempt. Delivery can resume after the real result,
+not merely its boundary. The compaction itself retains its separate ten-minute limit. A cancelled request or exited
+process also leaves the message unsent for the existing retry path.
 
 The idle clock, last actual context and attempt latch are kept in the node's existing Postgres-backed session
 record. User activity resets the clock on receipt, even while a send lock is held. A context reduction also restarts

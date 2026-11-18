@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+const idleCompactionDeliveryWait = 30 * time.Second
 
 type idleCompactionInputKey struct{}
 
@@ -117,11 +120,17 @@ func (n *Node) idleCompactBeforeInput(ctx context.Context, p *assistantProc) err
 			return err
 		}
 		n.logf("assistant %s: compacting before unattended delivery", short(p.id))
+	} else {
+		return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 	}
 
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
-	timeout := time.NewTimer(assistantCompactTimeout)
+	wait := n.idleCompactWait
+	if wait <= 0 {
+		wait = idleCompactionDeliveryWait
+	}
+	timeout := time.NewTimer(wait)
 	defer timeout.Stop()
 	for {
 		p.mu.Lock()
@@ -138,7 +147,7 @@ func (n *Node) idleCompactBeforeInput(ctx context.Context, p *assistantProc) err
 		case <-p.exited:
 			return errors.New("assistant exited during idle compaction")
 		case <-timeout.C:
-			return errors.New("assistant idle compaction timed out")
+			return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 		case <-tick.C:
 		}
 	}

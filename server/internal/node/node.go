@@ -72,6 +72,8 @@ type Node struct {
 	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go). readyPoll replaces only
 	// the Claude/Codex polling interval for scripted hosts; the normal interval remains 500 ms.
 	claudeStart, claudeReady, readyPoll time.Duration
+	// idleCompactWait shortens only the unattended delivery wait in tests, not the running compaction.
+	idleCompactWait time.Duration
 	// shellSettle, shellQuiet, shellAsk: when set, how long a start waits at most for a new tab's shell to settle, how
 	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
 	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).

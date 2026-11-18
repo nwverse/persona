@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestIdleCompactPolicyReachesMainDeliveryPaths(t *testing.T) {
@@ -71,5 +72,40 @@ func TestIdleCompactPolicyReachesMainDeliveryPaths(t *testing.T) {
 	}
 	if _, exists := f.lastSend(t)["main_compact_window"]; exists {
 		t.Fatal("side chat received the main chat's compact window")
+	}
+}
+
+func TestIdleCompactRefusalKeepsOriginalRelayQueued(t *testing.T) {
+	s, f := newQuietService(t)
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	msg := relayMsg{From: "conv2", Tool: "conversation_send", Text: "original relay", At: time.Now().UTC()}
+	s.queueRelay(idle.SessionID, msg)
+	tries := relayTries(f, idle.SessionID)
+	pending := &rpc.Error{Code: "compacting", Message: "The conversation is still compacting."}
+	if relayInDoubt(pending) {
+		t.Fatal("an explicit compaction refusal was mistaken for an ambiguous delivery")
+	}
+	f.mu.Lock()
+	f.failAssistant = pending
+	f.mu.Unlock()
+	for attempt := 1; attempt <= 2; attempt++ {
+		s.drainRelays("server", []proto.Session{idle})
+		waitFor(t, "compacting relay refusal", func() bool {
+			return len(triesOf(f, tries)) == attempt && !drainingNow(s, idle.SessionID)
+		})
+		if s.queuedFor(idle.SessionID) != 1 || f.sentTo(idle.SessionID) != 0 {
+			t.Fatal("a compacting refusal dropped or delivered the original relay")
+		}
+	}
+	f.mu.Lock()
+	f.failAssistant = nil
+	f.mu.Unlock()
+	s.drainRelays("server", []proto.Session{idle})
+	waitFor(t, "original relay after compaction", func() bool {
+		return s.queuedFor(idle.SessionID) == 0 && f.sentTo(idle.SessionID) == 1 && !drainingNow(s, idle.SessionID)
+	})
+	got := triesOf(f, tries)
+	if len(got) != 3 || got[0] != relayMsgID(idle.SessionID, msg) || got[1] != got[0] || got[2] != got[0] {
+		t.Fatalf("the original relay lost its retry identity: %q", got)
 	}
 }
