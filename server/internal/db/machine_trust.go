@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -82,6 +83,20 @@ func (d *DB) RevokeMachineCredentials(ctx context.Context, machine string) ([]st
 		return nil
 	})
 	return ids, err
+}
+
+// MachineLinkInUse: the machine has a live Persona Link credential, or a pairing code for one not used yet and not
+// over by either clock (the hub's or the database's: the codes RevokeMachineCredentials expires). Role link only, as
+// there.
+func (d *DB) MachineLinkInUse(ctx context.Context, machine string) (bool, error) {
+	if machine == "" {
+		return false, errors.New("machine is required")
+	}
+	var inUse bool
+	err := d.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM device_tokens WHERE machine_id = $1 AND role = 'link' AND revoked_at IS NULL)
+		OR EXISTS (SELECT 1 FROM pair_tokens WHERE machine_id = $1 AND used_at IS NULL AND expires_at > LEAST(now(), $2))`,
+		machine, time.Now()).Scan(&inUse)
+	return inUse, err
 }
 
 // MachineAudit is one row of a computer's audit.
