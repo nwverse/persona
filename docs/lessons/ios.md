@@ -1415,6 +1415,39 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Build-product Info.plist script stages (Settings › About › Build commit, `project.yml` `Stamp the commit`) must declare `$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)`
   as input, or Xcode may run the script then rewrite the plist, losing values (bundle-id changes trigger this, 2026-10-31). Reading `.git` requires disabling `ENABLE_USER_SCRIPT_SANDBOXING` for this target.
 
+### iOS 18.6 floor
+
+- **The iPhone and iPad app runs from iOS 18.6** (2026-11-17, #6730; the watch from watchOS 10, visionOS from 26). The
+  build at that target is the check: an unguarded iOS 26 symbol fails with "is only available in iOS 26.0 or newer". Wrap
+  it in `if #available(iOS 26.0, *)` with the older behavior under `else`, or go through
+  `apple/Persona/DesignSystem/SystemCompat.swift`. Running it needs the iOS 18.6 simulator runtime (8.86 GB,
+  `xcodebuild -downloadPlatform iOS -buildVersion 18.6`; an interrupted download resumes).
+- **A same-named stand-in calls itself on iOS.** visionOS's `apple/Vision/Compat/SwiftUICompat.swift` can reuse the system
+  names because visionOS marks those modifiers unavailable. On iOS the system modifier exists, only newer than the target:
+  the module's own overload wins, and its `if #available { navigationSubtitle(…) }` calls itself. iOS helpers get their
+  own names (`…WhenSupported`).
+- **`ToolbarContentBuilder` has no `buildLimitedAvailability`.** `if #available(iOS 26.0, *) { ToolbarSpacer(…) }` or
+  `.sharedBackgroundVisibility(.hidden)` inside a toolbar does not compile, and neither does a `ToolbarContent` wrapper
+  that branches. Choose on the view: an `@available(iOS 26.0, *)` set of items and one without, with `if #available`
+  around `.toolbar { … }` (`ChatsView.barItems` / `barItemsBeforeGlass`, `DrawerButtonItem`). `ViewBuilder` erases the
+  `if #available` branch to `AnyView`, which draws the same.
+- **App Intents' `supportedModes` (`IntentModes`) is iOS 26.** Mark it `@available(iOS 26.0, *)`. An intent that opens
+  the app also says `openAppWhenRun { true }` for iOS 18; the two agree, so whichever one a system reads, it opens the app.
+  `continueInForeground` has nothing to stand in for it in a file the widget extension also compiles
+  (`ForegroundContinuableIntent` is unavailable in extensions): on iOS 18 the meeting intent says what to do instead.
+- **iPadOS 18 puts an automatic search field in the bar beside the title.** A wide field squeezed Inbox's title to "In…",
+  where iPadOS 26 folds search into a button. `pageSearchable` without a placement uses `.navigationBarDrawer` (under
+  the title) before iOS 26 at regular width only; compact widths keep `.automatic`, which on an iOS 18 iPhone is that
+  drawer already (iOS 26 puts the field at the bottom instead).
+- **A `@backDeployed` API runs the SDK's copy inside the app on iOS 18, and it can fail where iOS 26's own does not.**
+  `AVAssetExportSession.export(to:as:)` is back-deployed before iOS 26: its copy awaits the imported `export()`, and on
+  an iOS 18.6 simulator it crashed the app as every export ended, done or failed (`EXC_BAD_ACCESS` resuming the
+  continuation; `VideoAttachTests`). `VideoPrep` waits on `exportAsynchronously` itself there. A test host that only
+  restarts ("Restarting after unexpected exit") hides such a crash from the totals: compare restarts with an iOS 26 run.
+- **`AppIntentsSSUTraining` failing with "Unable to parse Info.plist" means an empty bundle id** (`--bundle-id` with nothing
+  after it), not a bad plist: the machine's config has no `app.bundle_id`. Build with a placeholder config as
+  `scripts/ci/apple.sh` does (`{"app": {"bundle_id": "org.example.persona.ci"}}` through `PERSONA_CONFIG`).
+
 ## Recording and WatchConnectivity
 
 - Receiving `WCSessionFile` must move audio synchronously before delegate return; system deletes the temporary file afterwards. Transport success does not mean index persistence: phone sends application acknowledgement after atomic index write, and watch deletes original only after acknowledgement.
