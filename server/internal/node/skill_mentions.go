@@ -133,8 +133,9 @@ func readClaudeManagedSettings() ([]map[string]any, error) {
 			}
 		}
 		for _, file := range files {
+			// readSettingsFile gives a missing file as an empty map (no policy) and nil only for a file that holds null.
 			settings, err := readSettingsFile(file)
-			if err == nil && settings == nil { // the file holds null
+			if err == nil && settings == nil {
 				err = errors.New(file + " is not a JSON object")
 			}
 			if err != nil {
