@@ -37,24 +37,21 @@ extension View {
 
 /// The banner a chat's screenshot shows where its bar is: the brand lockup across it between the page margins (the
 /// face and the name at the leading one, the repository at the trailing one), centred in `row` (the bar's row of
-/// buttons) or in the whole height, `.slim` where the large one does not fit (a folded header).
+/// buttons) or in the whole height; slim where the large one does not fit (a folded header, large text).
 struct ScreenshotBannerContent: View {
     /// The row the lockup stands in: from the top by `top`, `height` tall; nil centres it in the whole banner.
     var row: (top: CGFloat, height: CGFloat)?
 
     var body: some View {
-        ViewThatFits(in: .vertical) {
-            PersonaBrandLockup(size: .banner)
-            PersonaBrandLockup(size: .slim)
-        }
-        .padding(.horizontal, Theme.Space.l)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: row?.height)
-        .padding(.top, row?.top ?? 0)
-        .frame(maxHeight: .infinity, alignment: row == nil ? .center : .top)
-        .clipped()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        PersonaBrandLockup(size: .banner)
+            .padding(.horizontal, Theme.Space.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: row?.height)
+            .padding(.top, row?.top ?? 0)
+            .frame(maxHeight: .infinity, alignment: row == nil ? .center : .top)
+            .clipped()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

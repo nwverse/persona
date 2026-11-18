@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Persona's mark wherever the app signs a picture (#9468, #9508). One component for every place, in three sizes.
+/// Persona's mark wherever the app signs a picture (#9468, #9508). One component for every place, in two sizes.
 /// `.mark` is the small signature at the foot of an exported picture: the assistant's face, its name and "(Persona)"
-/// after it, quiet. `.banner` is what a screenshot shows where a chat's top bar is, `.slim` the same in a folded
-/// header's slim bar: the face and the name at the leading edge, GitHub's mark and `repository` at the trailing one
-/// (#10172, `PersonaBannerRow`).
+/// after it, quiet. `.banner` is what a screenshot shows where a chat's top bar is: the face and the name at the
+/// leading edge, GitHub's mark and `repository` at the trailing one (#10172, `PersonaBannerRow`), large or slim, with
+/// the repository wherever it can be.
 struct PersonaBrandLockup: View {
     enum Size {
-        case mark, banner, slim
+        case mark, banner
     }
 
     @Environment(AppModel.self) private var model
@@ -33,11 +33,13 @@ struct PersonaBrandLockup: View {
             }
             .lineLimit(1)
             .accessibilityElement(children: .combine)
-        case .banner, .slim:
-            // The repository while the name keeps its least; then GitHub's mark alone.
-            ViewThatFits(in: .horizontal) {
-                PersonaBannerRow(name: shown, slim: size == .slim, showsRepository: true)
-                PersonaBannerRow(name: shown, slim: size == .slim, showsRepository: false)
+        case .banner:
+            // The repository is why the banner is there (a screenshot carries it away): the large row with it, then
+            // the slim one with it (a folded header, a narrow page, large text), and only then GitHub's mark alone.
+            ViewThatFits(in: [.horizontal, .vertical]) {
+                PersonaBannerRow(name: shown, slim: false, showsRepository: true)
+                PersonaBannerRow(name: shown, slim: true, showsRepository: true)
+                PersonaBannerRow(name: shown, slim: true, showsRepository: false)
             }
             // A bar's text (6.2): it grows with the text size up to xxxLarge, never past the bar.
             .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
@@ -61,10 +63,10 @@ struct PersonaBrandLockup: View {
 /// `PersonaBrandLockup.repository` at the trailing one, one type level below the name in the secondary color (the
 /// mark too), centred on one line. A picture, not a link: the banner takes no touches.
 ///
-/// `PersonaBrandLockup` offers it with the repository first and the mark alone second (`ViewThatFits`, which compares
-/// ideal widths). With the repository the name asks for no more than its first `nameLeast` characters and the
-/// ellipsis: a long name is cut at its tail where the row has room and the repository stays whole; the repository goes
-/// only where not even that much of the name fits (the narrowest iPad split, the largest text sizes).
+/// `PersonaBrandLockup` offers it large with the repository, slim with the repository, then slim with the mark alone
+/// (`ViewThatFits`, which compares ideal sizes). With the repository the name asks for no more than its first
+/// `nameLeast` characters and the ellipsis: a long name is cut at its tail where the row has room and the repository
+/// stays whole; the repository goes only where not even the slim row has that much room.
 struct PersonaBannerRow: View {
     var name: String
     var slim: Bool

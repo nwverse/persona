@@ -120,32 +120,36 @@ import UIKit
     }
 
     /// The banner's row (#10172): the face and the name at the left, GitHub's mark and the repository at the right.
-    /// Where an iPhone's bar has room the repository stays whole and a long name is cut; a short name stays whole with
-    /// it; where not even the name's first characters fit beside it (the narrowest iPad split), the mark alone. The
-    /// banner draws what the row it picks draws, to the pixel, as `FirstFittingTests` checks `ViewThatFits`.
+    /// Where an iPhone's bar has room the large row keeps the repository whole and cuts a long name; at the bar's
+    /// largest text size (xxxLarge) and in the narrowest iPad split the slim row keeps it; only where not even the slim
+    /// row has room for the name's first characters beside it, the mark alone. The banner draws what the row it picks
+    /// draws, to the pixel, as `FirstFittingTests` checks `ViewThatFits`.
     @Test func theRepositoryStaysWholeWhileTheNameIsCut() throws {
         let long = "家庭生活、研究资料与日程整理全能助理", short = "助手"
-        // An iPhone 17 Pro's bar and a narrow iPhone's between the page margins; an iPad split's narrowest column.
-        for width: CGFloat in [370, 343] {
-            let banner = try png(PersonaBrandLockup(size: .banner, name: long), width: width)
-            #expect(banner == (try png(PersonaBannerRow(name: long, slim: false, showsRepository: true), width: width)),
-                    "\(width) pt: a long name and the repository")
-            #expect(banner != (try png(PersonaBannerRow(name: long, slim: false, showsRepository: false), width: width)))
-            #expect((try png(PersonaBrandLockup(size: .banner, name: short), width: width))
-                    == (try png(PersonaBannerRow(name: short, slim: false, showsRepository: true), width: width)),
-                    "\(width) pt: a short name and the repository")
+        func banner(_ name: String, _ width: CGFloat, _ size: DynamicTypeSize = .large) throws -> Data {
+            try png(PersonaBrandLockup(size: .banner, name: name), width: width, typeSize: size)
         }
-        let narrow: CGFloat = 288
-        #expect((try png(PersonaBrandLockup(size: .banner, name: long), width: narrow))
-                == (try png(PersonaBannerRow(name: long, slim: false, showsRepository: false), width: narrow)),
-                "\(narrow) pt: the mark alone")
-        // The bar's largest text size (xxxLarge, where the slim row stands in the bar): the repository still stays.
-        let large = try png(PersonaBrandLockup(size: .slim, name: long), width: 370, typeSize: .xxxLarge)
-        #expect(large == (try png(PersonaBannerRow(name: long, slim: true, showsRepository: true), width: 370, typeSize: .xxxLarge)),
-                "xxxLarge: a long name and the repository")
-        save(large, "banner-row-slim-xxxLarge-370")
-        save(try png(PersonaBrandLockup(size: .banner, name: long), width: narrow), "banner-row-288")
-        save(try png(PersonaBrandLockup(size: .banner, name: long), width: 343), "banner-row-343")
+        func row(_ name: String, slim: Bool, repository: Bool, _ width: CGFloat, _ size: DynamicTypeSize = .large) throws -> Data {
+            try png(PersonaBannerRow(name: name, slim: slim, showsRepository: repository), width: width, typeSize: size)
+        }
+        // An iPhone 17 Pro's bar and a 375 pt iPhone's, between the page margins: large, with the repository.
+        for width: CGFloat in [370, 343] {
+            for name in [long, short] {
+                #expect(try banner(name, width) == row(name, slim: false, repository: true, width), "\(width) pt, \(name)")
+            }
+            #expect(try banner(long, width) != row(long, slim: false, repository: false, width))
+        }
+        // xxxLarge on the iPhone 17 Pro, and the narrowest iPad split (320 pt): slim, the repository still there.
+        for name in [long, short] {
+            #expect(try banner(name, 370, .xxxLarge) == row(name, slim: true, repository: true, 370, .xxxLarge), "xxxLarge, \(name)")
+            #expect(try banner(name, 288) == row(name, slim: true, repository: true, 288), "288 pt, \(name)")
+        }
+        // Narrower than any bar: the mark alone.
+        let narrow: CGFloat = 200
+        #expect(try banner(long, narrow) == row(long, slim: true, repository: false, narrow), "\(narrow) pt: the mark alone")
+        save(try banner(long, 370, .xxxLarge), "banner-row-xxxLarge-370")
+        save(try banner(long, 288), "banner-row-288")
+        save(try banner(long, narrow), "banner-row-200")
         #expect(PersonaBrandLockup.repository == "nwverse/persona")
     }
 
