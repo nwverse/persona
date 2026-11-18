@@ -1117,6 +1117,8 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const [expanded, setExpanded] = useState(false);
   // the Needs you rows opened in place (#5569), by key; every row is folded again when the tray changes
   const [openRows, setOpenRows] = useState<ReadonlySet<string>>(new Set());
+  const bar = useRef<HTMLDivElement>(null);
+  const lastOwn = useRef<string | null>(null);
   const setTray = (next: AssistantTray | null) => {
     setTrayNow(next);
     setExpanded(false);
@@ -1172,10 +1174,41 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const badgeOf = (items: { kind: string; countsOpen?: boolean }[]) =>
     items.reduce((n, item) => n + (item.kind === "task" ? (item.countsOpen ? 1 : 0) : 1), 0);
   const counts: Record<AssistantTray, number> = { needs: ownAsks.length + badgeOf(entries.needsYou), running: badgeOf(entries.running), parked: badgeOf(entries.parked), review: badgeOf(entries.review) };
-  // the card is in the chat already: close the tray onto it and bring it into view
-  const openOwn = (id: string) => {
+  // the card is in the chat already: close the tray onto it and bring it into view. A folded stack shows only its first
+  // card, so use its existing expander before looking for another one (#10347).
+  const scrollOwn = (id: string, keepBar = false) => {
+    const scope = bar.current?.closest("[data-chat-dock]") ?? document;
+    const card = [...scope.querySelectorAll<HTMLElement>("[data-card]")].find((el) => el.dataset.card === id);
+    if (!card) return false;
+    card.firstElementChild?.scrollIntoView?.({ block: "nearest" });
+    // Revealing another card can scroll the capsule row out of the dock's own scroll box; keep Next clickable for the
+    // following card and the wrap to the first (#10347). A Needs you row keeps its existing landing.
+    if (keepBar) bar.current?.scrollIntoView?.({ block: "nearest" });
+    return true;
+  };
+  const openOwn = (id: string, keepBar = false) => {
     setTray(null);
-    requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>("[data-card]")].find((el) => el.dataset.card === id)?.firstElementChild?.scrollIntoView?.({ block: "nearest" }));
+    requestAnimationFrame(() => {
+      if (scrollOwn(id, keepBar)) return;
+      const dock = bar.current?.closest("[data-chat-dock]");
+      // On a narrow screen a keyboard or short height first folds the whole stack to one row; that row is the first
+      // expander, then the position chip opens the other cards. Desktop starts at the position-chip step.
+      dock?.querySelector<HTMLButtonElement>("[data-chat-cards-position][aria-expanded='false'], [data-chat-cards-fold]")?.click();
+      requestAnimationFrame(() => {
+        if (scrollOwn(id, keepBar)) return;
+        const queue = dock?.querySelector<HTMLButtonElement>("[data-chat-cards-position][aria-expanded='false']");
+        if (!queue) return;
+        queue.click();
+        requestAnimationFrame(() => scrollOwn(id, keepBar));
+      });
+    });
+  };
+  const openNextOwn = () => {
+    if (!ownAsks.length) return;
+    const previous = ownAsks.findIndex((ix) => ix.id === lastOwn.current);
+    const next = ownAsks[(previous + 1) % ownAsks.length];
+    lastOwn.current = next.id;
+    openOwn(next.id, true);
   };
   useEffect(() => {
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
@@ -1208,7 +1241,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar onKeyDownCapture={onTrayKey}>
+    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", ownAsks.length > 0 && !tray ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
@@ -1261,6 +1294,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           open tray is the selected capsule. The scroller pads by the focus ring's width and takes it back, as the
           dock's did, so a large font scrolls sideways instead of clipping the ring. */}
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
+        {ownAsks.length > 0 && (
+          <button type="button" data-next-own-ask onClick={openNextOwn} className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink hover:bg-hover")}>
+            <span className="whitespace-nowrap">{t("assistant-tasks.next_unanswered")}</span>
+            <span className="tabular-nums text-ink-2">{ownAsks.length}</span>
+          </button>
+        )}
         {entryKeys.map((key) => {
           const open = tray === key;
           // An empty entry is drawn quiet (grey), Needs you and In progress alike, and still opens its "nothing here" line.

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -253,6 +254,7 @@ type claudeOut struct {
 	bare    bool // an error whose result was empty: it says only its subtype
 	model   string
 	millis  int
+	usage   aiwire.Usage
 }
 
 // claudeResult reads `claude -p --output-format json`'s answer: the last line that holds a JSON object, from its first
@@ -283,6 +285,7 @@ func claudeResultJSON(body string) (claudeOut, bool) {
 		Subtype    string                     `json:"subtype"`
 		DurationMS int                        `json:"duration_ms"`
 		ModelUsage map[string]json.RawMessage `json:"modelUsage"`
+		Usage      json.RawMessage            `json:"usage"`
 	}
 	if json.Unmarshal([]byte(strings.TrimSpace(body)), &r) != nil || (r.Result == "" && r.Subtype == "" && r.ModelUsage == nil) {
 		return claudeOut{}, false
@@ -290,6 +293,11 @@ func claudeResultJSON(body string) (claudeOut, bool) {
 	c := claudeOut{result: r.Result, subtype: r.Subtype, isError: r.IsError || (r.Subtype != "" && r.Subtype != "success"), millis: r.DurationMS}
 	if c.isError && c.result == "" {
 		c.result, c.bare = r.Subtype, true
+	}
+	// Missing or malformed usage must not turn a valid answer into an error.
+	var usage aiwire.Usage
+	if len(r.Usage) > 0 && json.Unmarshal(r.Usage, &usage) == nil {
+		c.usage = usage
 	}
 	for m := range r.ModelUsage {
 		if c.model == "" || len(m) > len(c.model) { // the main model; the small one is usually a prefix-free other name

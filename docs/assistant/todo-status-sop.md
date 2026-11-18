@@ -394,6 +394,8 @@ change (a working run's latest line is in its row's view). Across managers the h
 the places; it never works out a view. The hello features `todo_view` and `todo_places` say every manager serves them,
 and only while they are listed do the counts cover every manager.
 
-No client reads `view` yet: the clients switch to it in stage 2, falling back to the rules above for a row without
-one. Until then every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`),
-follows the rules above.
+No client draws from `view` by default yet: the clients switch to it in stage 2, falling back to the rules above for a
+row without one. Until then every client, and the hub's own triage for the direction tree and leader reports
+(`todo_triage.go`), follows the rules above. The web's Developing Persona shadow compares the two on real data and
+records what the decided differences (the list above, Steps rolling up and Someday;
+`web/src/features/todos/model/view-legacy.ts` `BY_DESIGN`) do not explain (`docs/web/web.md` "Developing Persona").
