@@ -35,7 +35,7 @@ type StartDefaults struct {
 	// Ultracode: applied only to a Claude Code start whose caller did not say.
 	Ultracode *bool
 	// Goal: GoalFromDoneWhen turns the task's done_when into one checkable condition typed as /goal before the first
-	// message (docs/integrations/agent-goal.md "A goal set at the start"). Only new Claude Code starts take it.
+	// message (docs/integrations/agent-goal.md "A goal set at the start"). Only new Claude Code and Codex starts take it.
 	Goal string
 	// PlanFirst asks for the self-planning constraint in the task's prompt, for a launcher whose model does not act
 	// on a thinking-effort setting (the prompt is then the only lever).
@@ -293,9 +293,11 @@ func (s *Service) applyStartPreset(ctx context.Context, t *PlanTask, caller star
 }
 
 // applyStartExtras adds the defaults' effort, ultracode, goal and self-planning prompt to a task's start, after the
-// launcher fit (claude: what runs is Claude Code). caller is what the task named before any tier, Model Settings, the
-// fit or a preset filled something in. Explicit caller values always win; why is the preset's note, said with the rest.
-func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller startPick, d StartDefaults, claude bool, params map[string]any, why string) {
+// launcher fit (agent: what runs, "claude" for Claude Code). caller is what the task named before any tier, Model
+// Settings, the fit or a preset filled something in. Explicit caller values always win; why is the preset's note, said
+// with the rest.
+func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller startPick, d StartDefaults, agent string, params map[string]any, why string) {
+	claude := agent == "claude"
 	// Effort, strongest first: the caller's own effort, then the effort of a tier the caller named; otherwise the
 	// policy's effort wins over a preset's and Model Settings' default (the policy says how this kind of task starts).
 	// Claude Code only; other agents keep whatever they were given.
@@ -316,7 +318,8 @@ func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller star
 		t.Ultracode = &on
 		t.startFilled.ultracode = true
 	}
-	if claude && d.Goal == GoalFromDoneWhen && len(t.DoneWhen) > 0 {
+	// The goal: Claude Code's /goal and Codex's alike, typed after the first message (docs/integrations/agent-goal.md).
+	if (claude || agent == "codex") && d.Goal == GoalFromDoneWhen && len(t.DoneWhen) > 0 {
 		goal := prompts.RenderTaskGoal(t.DoneWhen)
 		if utf8.RuneCountInString(goal) <= proto.StartGoalMax {
 			params["goal"] = goal
@@ -395,8 +398,8 @@ func (s *Service) chooseStartPreset(ctx context.Context, t *PlanTask, choices []
 	return pick.Name, note, true
 }
 
-// goalRefusal: a session.start that carried a goal was refused for it (an old node, an agent other than Claude Code, a
-// resume or a screenless host). A goal is an extra, so the caller starts the agent again without it and says why.
+// goalRefusal: a session.start that carried a goal was refused for it (an old node, an agent other than Claude Code or
+// Codex, a resume or a screenless host). A goal is an extra, so the caller starts the agent again without it and says why.
 func (s *Service) goalRefusal(err error, params map[string]any) (reason string, refused bool) {
 	if on, _ := params["goal"].(string); on == "" {
 		return "", false

@@ -275,7 +275,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
 A feature flag means the implementation supports it; `tls` does not mean the listener is on, so also check `tls_port` / `fp`. A new client talking to an old hub falls back to the old behavior based on the flags. `node_version` / `node_mismatch` in the machine list flag whether the hub offers to redeploy the node: it runs another build than the one its platform gets (the hub's, or, with no build of the hub's version for that platform, the newest release its manager drives: `docs/operations/node-update.md` ("Node packages")) (the personad on that computer was not deployed by this hub deployment, i.e. `deploy.sh` deployed only part of it, or it was installed on its own; the hub also logs a line when it connects), or its manager cannot drive it. Another build alone is an upgrade offer, not a fault: whether a node can be used is decided by the node handshake (`node_protocol`, `node_incompatible`; see "Node handshake"). New fields are all optional, and the App currently checks whether a field is present. When a future request would be "misunderstood by an old hub", check here first.
 
 `ultracode` indicates support for Claude Code's independent session toggle (#3427; see "Claude Code ultracode" below). This is a hub capability: switching it on a computer with an older node can still return `409 node_outdated`.
-`start_goal` (a per-node capability, not a hub feature) indicates that node's `session.start` can carry `goal`: a Claude Code `/goal` the node types and verifies after the first message is in the transcript (see "A goal set at the start" below). The hub answers a start carrying a non-empty `goal` toward a node without the capability with `409 start_goal_unsupported` before anything starts, so the caller can start again without it.
+`start_goal` (a per-node capability, not a hub feature) indicates that node's `session.start` can carry `goal`: a Claude Code (or, on newer nodes, Codex) `/goal` the node types and verifies after the first message is in the transcript (see "A goal set at the start" below). The hub answers a start carrying a non-empty `goal` toward a node without the capability with `409 start_goal_unsupported` before anything starts, so the caller can start again without it.
 
 `launcher_switch` is a hub capability too: a computer whose node has not announced the `launcher_switch` capability (or that the manager has not reported yet) answers a `launcher` with `409 node_outdated`.
 
@@ -639,8 +639,8 @@ Assistant snapshots and `agents_list` also carry the state. When on, they explai
 ## A goal set at the start
 
 A `POST /api/v1/sessions` (the node's `session.start`) can carry `goal: string` alongside `prompt`. Only a brand-new
-Claude Code session in a terminal the node can read and type into takes it, and only with a `prompt` to set it after;
-a resume, an agent other than Claude Code, a screenless engine, a start without a `prompt` (an `async` one whose first
+Claude Code or Codex session in a terminal the node can read and type into takes it, and only with a `prompt` to set it
+after; a resume, an agent other than Claude Code or Codex, a screenless engine, a start without a `prompt` (an `async` one whose first
 message comes later) or a condition over 2000 characters is refused before anything starts with
 `409 start_goal_unsupported`, and a node without the `start_goal` capability gets the same code. The condition is
 one line: newlines collapse to spaces.
@@ -660,6 +660,10 @@ The assistant supplies the condition from a task's `done_when` as one checkable 
 assistant's policy, not the node's. The goal is otherwise the documented Claude Code goal (see
 [Agent goals](../integrations/agent-goal.md)): its `goal_status` attachment and "Goal set:" output update
 `Session.goal` in the usual way.
+
+A new Codex start takes the goal as Codex's own `/goal <objective>`, typed once the start found the thread its
+`prompt` began, and confirmed from the rollout's `thread_goal_updated` line instead of the screen; a Codex older than
+0.169 gets no command ([Agent goals](../integrations/agent-goal.md), "Codex").
 
 ## Switching a running Agent to another provider (`launcher_switch`, #5035)
 

@@ -1304,7 +1304,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 		// A goal is set after the first message is in, so a start without a first message cannot take one: a new
-		// Claude Code in a terminal is the only start that does (startgoal.go).
+		// Claude Code or Codex in a terminal is the only start that does (startgoal.go, codex_start_goal.go).
 		goal := cleanStartGoal(p.Goal)
 		if goal != "" {
 			kind := p.AgentType

@@ -170,7 +170,7 @@ func TestStartGoalRefusedBeforeAnythingStarts(t *testing.T) {
 	n, f, home := herdrNode(t)
 	cwd := mkdir(t, filepath.Join(home, "project"))
 	for name, params := range map[string]map[string]any{
-		"codex":  {"cwd": cwd, "workspace_id": "w1", "prompt": "x", "launcher": "codex", "goal": "done"},
+		"traex":  {"cwd": cwd, "workspace_id": "w1", "prompt": "x", "launcher": "traex", "goal": "done"},
 		"resume": {"cwd": cwd, "workspace_id": "w1", "prompt": "x", "resume_session_id": sidA, "goal": "done"},
 		"long":   {"cwd": cwd, "workspace_id": "w1", "prompt": "x", "goal": strings.Repeat("y", proto.StartGoalMax+1)},
 		// The goal is set after the first message; an App's async start that sends its first message later has none.
