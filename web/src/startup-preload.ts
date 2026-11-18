@@ -401,12 +401,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // separate work.
 // #10365: a model error's card fixes a model the chat can't run in the chat (lib/readiness.ts pick_model, the pill's
 // opener and useAssistantTurnFix in views/chat/ModelPill.tsx, the card's way back to the default with
-// lib/assistant-pick.ts, which the lazy model panel used alone before) and says a gateway refused on-demand tools
-// (tool_search_unsupported, its words and lib/api-errors.ts reading it from the 400). 521 B in ja, measured in one
-// environment against main 80e59cccc6 (ja 482,519 B to 483,040 B; en 479,419 B to 479,938 B, zh-Hans 480,240 B to
-// 480,787 B); the pick's DELETE loaded on the tap instead measured 10 B more. Main had 164 B of room; the budget moves up
-// 357 B.
-export const FIRST_SCREEN_BUDGET = 483_040;
+// lib/assistant-pick.ts) and says a gateway refused on-demand tools (tool_search_unsupported, lib/api-errors.ts reading
+// it from the 400); a task that did not start says why by its code and offers "Use <launcher> instead" (lib/feed.ts,
+// lib/start-failure.ts, the failed rows in views/assistant/Tasks.tsx and TaskPanel.tsx and their strings); the answer
+// card for a startup question stays a lazy chunk, only its check is on the first screen. 938 B in ja, measured against
+// main 80e59cccc6 (ja 482,519 B to 483,457 B; en 479,419 B to 480,341 B, zh-Hans 480,240 B to 481,180 B); main's 164 B
+// of room are kept.
+export const FIRST_SCREEN_BUDGET = 483_621;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
