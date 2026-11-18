@@ -1912,6 +1912,9 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   a large `model.http` body then filled ssh's buffer ahead of the ping, which with lines would have waited unwritten
   (not counted) and framed was written and missed. Large events still go to the transport at once; the middle of a
   long line keeps excusing a late pong, as with lines.
+- **A delay-based window compares like with like.** Once short interactive frames fed it round trips, the link's base
+  delay came from them, and a full frame's own 137 ms on the wire at 30 KB/s read as queueing: the window sat at its
+  least and a 1 MiB transfer took 109 s instead of 47 s. Only frames cut to the frame size are samples now.
 - **Taking turns among long lines finishes all of them last.** Ten 200 KiB answers sharing a link frame by frame all
   end at the end, so every caller with a deadline gives up where one after another most would finish. Within a lane,
   short lines take turns with the oldest long line; the other long lines wait, as on the one writer.

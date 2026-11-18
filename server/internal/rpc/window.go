@@ -4,7 +4,7 @@ import "time"
 
 // creditWindow is how many bytes of interactive and bulk frames a framed connection may have sent and not yet seen
 // acknowledged (creditLane). It adapts to the link by delay (as LEDBAT does): each acknowledgement gives a round trip
-// for the newest such frame it covers, the
+// for the newest full-size such frame it covers (sentFrame.full), the
 // smallest round trip seen lately is the link's own, and what a sample takes beyond it is time the frame spent queued
 // (in the transport's buffers, behind other frames). Below queueTarget the window grows, quickly while the queue is
 // short; above it the window shrinks once a round trip. On a link of 30 KB/s the window settles near what the link
