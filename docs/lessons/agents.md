@@ -1206,6 +1206,16 @@ Native settings and `session/new` can disagree even when the configured model is
 IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
 explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
 
+## A long-running agy acp keeps the account it saw (#10368)
+
+`agy acp` kept the model list it read when the plan lapsed after the user renewed and signed in again: `session/set_model`
+failed with `Unknown model ID` until the process was restarted, and each `session/new` published the stale list over the
+five-minute `agy models` discovery. Treat a discovery that began after the ACP process started as the newer source, and
+compare by process generation rather than wall-clock time. Pending requests do not show who uses the process: a call
+between two requests, or a native read over HTTP, has none. Hold a lease for each call, turn and read, replace only when
+no other lease is held, with no await between that check and the replacement, and make new users wait for it. Retry once,
+and test with a fake whose ACP side reads the account once at startup.
+
 ## Codex speed has separate native metadata (#3865)
 
 Reasoning effort and speed are independent. Read `serviceTiers` rather than deriving Fast support from a model name,
