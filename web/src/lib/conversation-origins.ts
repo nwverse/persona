@@ -39,6 +39,12 @@ export function originMarkLabel(o: AutoOrigin): string {
   return (EXTERNAL_ORIGINS as readonly string[]).includes(o) ? externalFrom(o as ExternalOrigin) : originLabel(o);
 }
 
+/** The words for an origin's mark and the line under the opening message: "From <name>" while the mark draws the icon of
+ *  the extension `name` names (#10358, OriginMark's `onName`), else the origin's own (originMarkLabel). */
+export function openerFrom(o: AutoOrigin, name: string | undefined): string {
+  return name ? t("chat-segmentview.from", { name }) : originMarkLabel(o);
+}
+
 /** Each group's mark (OriginMark), on the rows of the conversations in it: the sidebar's and All chats' (#5195). */
 export const ORIGIN_ICON: Record<AutoOrigin, IconName> = { inbox: "inbox", task: "clock", lark_agent: "at", spawned: "fork", extension: "extension", other: "more" };
 /** A group with a brand of its own draws its mark instead of the icon (#3758). */

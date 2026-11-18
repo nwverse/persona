@@ -1,9 +1,9 @@
 // A channel's mark (docs/extensions/channels.md "UI"): Feishu's own for the Feishu bot and /agent, else an icon of its kind —
 // WeChat's mark and its terms of use are undecided (lib/connectors.ts), so it draws the generic chat icon until they are.
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { Channel } from "../lib/channels";
 import type { BrandId } from "../lib/connectors";
-import { ORIGIN_BRAND, ORIGIN_ICON, openerOf, originMarkLabel, type AutoOrigin } from "../lib/conversation-origins";
+import { ORIGIN_BRAND, ORIGIN_ICON, openerFrom, openerOf, type AutoOrigin } from "../lib/conversation-origins";
 import type { Session } from "../lib/types";
 import { cx } from "./atoms";
 import { BrandMark } from "./BrandMark";
@@ -27,16 +27,22 @@ const OpenerTile = lazy(() => import("./OpenerTile").then((m) => ({ default: m.O
  *  filter for it names (Inbox, Scheduled, From a chat, Extensions, Other; #5195). One per row, in place of the channel's.
  *  An extension's conversation (Lark /agent's or another's) whose `session` names the extension that opened it is drawn
  *  with that extension's own icon once it is known (OpenerTile, #10358): a third-party extension that reuses lark.agent
- *  is not drawn as Lark. Named "From Lark /agent" / "From an extension" / the group's name, as its tooltip too;
+ *  is not drawn as Lark. Named "From Lark /agent" / "From an extension" / the group's name, as its tooltip too, and
+ *  "From <the extension's name>" while its icon is drawn, which `onName` tells the words beside it (`openerFrom`);
  *  `decorative` beside words that say it already (under the first message). */
-export function OriginMark({ origin, size, decorative, className, session }: { origin: AutoOrigin; size: number; decorative?: boolean; className?: string; session?: Pick<Session, "opened_by" | "origin_ref" | "manager"> }) {
+export function OriginMark({ origin, size, decorative, className, session, onName }: { origin: AutoOrigin; size: number; decorative?: boolean; className?: string; session?: Pick<Session, "opened_by" | "origin_ref" | "manager">; onName?: (name: string | undefined) => void }) {
   const brand = ORIGIN_BRAND[origin];
-  const label = originMarkLabel(origin);
+  const [name, setName] = useState<string>();
+  const label = openerFrom(origin, name);
   const mark = brand ? <BrandTile brand={brand} size={size} /> : <Icon name={ORIGIN_ICON[origin]} size={size - GLYPH_INSET} className="text-ink-2" />;
   const by = openerOf(origin, session);
+  useEffect(() => {
+    onName?.(name);
+    return () => onName?.(undefined);
+  }, [onName, name]);
   return (
     <span data-origin-mark={origin} {...(decorative ? { "aria-hidden": true } : { role: "img", "aria-label": label, title: label })} className={cx("flex shrink-0 items-center justify-center", className)} style={{ width: size, height: size }}>
-      {by ? <Suspense fallback={mark}><OpenerTile id={by} manager={session?.manager} size={size} radius={radius(size)}>{mark}</OpenerTile></Suspense> : mark}
+      {by ? <Suspense fallback={mark}><OpenerTile id={by} manager={session?.manager} brand={brand} size={size} radius={radius(size)} onName={setName}>{mark}</OpenerTile></Suspense> : mark}
     </span>
   );
 }
