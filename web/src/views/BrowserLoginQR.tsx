@@ -64,12 +64,12 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
   }, [generation, onDone]);
   const ended = ["expired", "denied", "failed"].includes(state);
   return <section className="rounded-card bg-surface p-4 text-center shadow-card" aria-labelledby="login-qr-title">
-    <h2 id="login-qr-title" className="text-[14px] font-semibold text-ink">{t("login.phone_title")}</h2>
+    <h2 id="login-qr-title" className="text-card-title font-semibold text-ink">{t("login.phone_title")}</h2>
     <div className="my-4 flex items-center justify-center" style={{ minHeight: 184 }}>
       {state === "loading" ? <Spinner /> : challenge && !ended ? <Suspense fallback={<Spinner />}><QRCode rows={challenge.qr.rows} label={t("login.phone_title")} /></Suspense> : null}
-      {ended && <p className="text-[13px] text-ink-2">{error || t(state === "denied" ? "login.qr_denied" : "login.qr_expired")}</p>}
+      {ended && <p className="text-meta text-ink-2">{error || t(state === "denied" ? "login.qr_denied" : "login.qr_expired")}</p>}
     </div>
-    <p className="text-[13px] text-ink-2" role="status">{t(state === "scanned" ? "login.qr_scanned" : state === "retrying" ? "login.qr_retry" : "login.qr_hint")}</p>
+    <p className="text-meta text-ink-2" role="status">{t(state === "scanned" ? "login.qr_scanned" : state === "retrying" ? "login.qr_retry" : "login.qr_hint")}</p>
     <Button tone="secondary" type="button" className="mt-3" onClick={() => refresh((n) => n + 1)}>{t("login.qr_refresh")}</Button>
   </section>;
 }
