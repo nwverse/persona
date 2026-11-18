@@ -11,7 +11,7 @@ import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, 
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
-import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
+import { isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { useLayout } from "../../lib/layout";
 import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
@@ -31,9 +31,8 @@ import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { assertDelivered, isKept, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
+import { assertDelivered, isKept, keptBubble, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
 import { lazyPage } from "../../lib/lazy-page";
-const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, registerOutboxRecheck, relayNotice, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type DeliveryReply } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
@@ -73,7 +72,6 @@ import { mediaMatches, NARROW, NO_HOVER, SHORT, useFinePointer, useMedia } from 
 import { UserBubble } from "./SegmentView";
 import { LatestMessageTime } from "./latest-message-time";
 import { scrollsAFold } from "./fold-scroll";
-import { GoalBar } from "./GoalBar";
 import { CommentMarks } from "./CommentMarks";
 import { isWorker, recordTeam, shownWorker, teamPanelOf, teamWorkers, useTeamReveal, workerCount } from "../../lib/team";
 import { hubSides, isSide, sidesAmong, SESSIONS_SIDE_FOLD_FEATURE } from "../../lib/side-fold";
@@ -99,6 +97,7 @@ import { useTranscript } from "./useTranscript";
 import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
+import type { ChatRowWithModes, ModeChanges } from "./mode-changes";
 import { useFoldSearch } from "./useFoldSearch";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
@@ -154,6 +153,8 @@ const ChatSearch = lazyDialog(() => import("./ChatSearch").then((m) => m.ChatSea
 const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => m.LinkTodoDialog));
 const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
+const GoalBar = lazy(() => import("./GoalBar").then((m) => ({ default: m.GoalBar })));
+const SessionOverview = lazy(() => import("./SessionOverview").then((m) => ({ default: m.SessionOverview })));
 // Full pages opened from a conversation's hand-off card or belonging to an Inbox item load their way-back strip on demand.
 const AgentStatusLine = lazy(() => import("./AgentStatusLine").then((m) => ({ default: m.AgentStatusLine })));
 const HandoffBack = lazy(() => import("./HandoffBack").then((m) => ({ default: m.HandoffBack })));
@@ -168,6 +169,9 @@ const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ 
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
+// A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
+// a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
+const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
 
 const NO_FEED: FeedItem[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
@@ -1251,7 +1255,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
       // panel (it closes it) and to the page beside it
       if (embedded || inPanel) return;
-      if (e.key === "Escape" && (state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
+      if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
         e.preventDefault();
         void interrupt();
       }
@@ -1301,6 +1307,21 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       return d === undefined || !dayTaken.has(d);
     }),
     [lines, dayTaken],
+  );
+  // the permission mode changes the hub recorded (#10297), each among the rows at its time, read when the chat opens and
+  // when its mode or a waiting restart changes, nothing else; their code and words load with an Agent's chat. While older history is
+  // still to load (or sits in an earlier engine's stretch), a change from before the first loaded item waits for it.
+  const [modes, setModes] = useState<ModeChanges>();
+  const modeKey = `${session?.permission_mode}|${session?.bypass_pending}`;
+  useEffect(() => {
+    if (assistant) return;
+    const ctl = new AbortController();
+    void import("./mode-changes").then((kit) => kit.watchModeChanges(mid, sid, modeKey, ctl.signal, kit, setModes), () => {});
+    return () => ctl.abort();
+  }, [mid, sid, assistant, modeKey]);
+  const chatRows: ChatRowWithModes[] = useMemo(
+    () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
+    [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],
   );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
@@ -1415,6 +1436,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const expandFold = tr.expandFold;
   const jumpToCall = useCallback(
     async (call: string) => {
+      if (viewNow.current === "term") setView("chat");
       const scope = `${mid}/${sid}:`;
       const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
       const found = await seekCall(scope, call, items.current, expandFold, frame);
@@ -1436,7 +1458,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       landRow(row, -(sc.clientHeight - row.getBoundingClientRect().height) / 2);
       row.animate?.([{ backgroundColor: "var(--accent-tint)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
     },
-    [mid, sid, follow, expandFold, landRow],
+    [mid, sid, follow, expandFold, landRow, setView],
   );
   const jump = useCallback((call: string) => void jumpToCall(call), [jumpToCall]);
   // A link to one of its subagents' conversations (#5030, lib/subagent-link.ts): that subagent's card in view, opened; a
@@ -1950,10 +1972,18 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     />
   );
 
+  const overviewId = useId();
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const showOverview = !assistant && !embedded && Boolean(session);
+  const overview = useMemo(() => showOverview
+    ? { id: overviewId, open: overviewOpen, toggle: () => setOverviewOpen((open) => !open) }
+    : undefined, [overviewId, overviewOpen, showOverview]);
+
   const page = (
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="@container/session flex h-full min-w-0 flex-col">
       {!embedded && <Header
         session={session}
+        overview={overview}
         title={title}
         direction={directionName !== undefined && !isMain && !notFound}
         machineName={machineName}
@@ -1981,8 +2011,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 
-      {/* the page's middle: the chat and (once shown) the terminal stacked in one box; without a terminal to show it adds no box */}
-      <div className={switchable ? "relative min-h-0 flex-1" : "contents"}>
+      <div className="session-workspace flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <ViewLayer bare={!switchable} on={view === "chat"} from="start">
       {/* what a stopped agent said of its own work, above the transcript and not part of it (#3612) */}
       {closeoutShown && session && <CloseoutCard key={`${mid}/${sid}`} session={session} segment={closeoutSegment} expandFold={tr.expandFold} />}
@@ -2058,8 +2088,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                       />
                     ),
                   ])
-                : dayRows.flatMap((row) => row.kind === "day" ? (
+                : chatRows.flatMap((row) => row.kind === "day" ? (
                   <div key={row.id} data-day-divider={row.id}><DayLine date={row.date} /></div>
+                ) : row.kind === "mode" ? (
+                  modes && <modes.kit.ModeChangeDivider key={row.id} change={row.change} session={session} />
                 ) : [...failedBefore(row.line.id), open?.line === row.line.id ? (
                 <OpenRecapLine key={row.line.id} open={open} onClose={dismissRecap} />
               ) : row.line.id === bannerError?.id ? null : (
@@ -2088,11 +2120,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
-              ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: <PageBoundary key={`undelivered:${m.id}`} page="undelivered">
-                <Suspense fallback={<UserBubble msg={{ id: `undelivered:${m.id}`, client_msg_id: m.id, ...parseUserText(m.text), images: [] }} mid={mid} sid={sid} sendState="failed" />}>
-                  <UndeliveredBubble mid={mid} sid={sid} m={m} />
-                </Suspense>
-              </PageBoundary> }))]
+              ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
+                <PageBoundary key={`undelivered:${m.id}`} page="undelivered">
+                  <Suspense fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
+                    <UndeliveredBubble mid={mid} sid={sid} m={m} />
+                  </Suspense>
+                </PageBoundary>
+              ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
             {(shownPending.some((p) => p.waits) || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (
@@ -2187,7 +2221,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           />
         )}
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
-        {session?.goal && !assistant && <GoalBar goal={session.goal} />}
+        {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
         {voiceEntry.dialog}
         {voiceState === "live" && voiceCall && (
@@ -2252,6 +2286,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             </Suspense>
           </PageBoundary>
         </ViewLayer>
+      )}
+      </div>
+      {session && overview?.open && (
+        <PageBoundary page={`overview:${mid}/${sid}`}>
+          <Suspense fallback={<div className="p-3"><Loading /></div>}>
+            <SessionOverview id={overviewId} session={session} machineName={machineName} items={tr.items} tasks={tasks}
+              children={kids.rows} onJumpToCall={jump} />
+          </Suspense>
+        </PageBoundary>
       )}
       </div>
 
@@ -2425,6 +2468,7 @@ function AttentionNote({ session }: { session: Session }) {
 // the model is the composer's pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
 export const Header = memo(function Header({
   session,
+  overview,
   title,
   machineName,
   assistant,
@@ -2447,6 +2491,7 @@ export const Header = memo(function Header({
   direction = false,
 }: {
   session?: Session;
+  overview?: { id: string; open: boolean; toggle: () => void };
   title: string;
   machineName: string;
   assistant?: boolean;
@@ -2549,11 +2594,8 @@ export const Header = memo(function Header({
   const compare = session && compareOf ? compareOf(session) : undefined;
   const othersNeed = others.some((s) => stateOf(s) === "needs_you");
   // the Agent's background work (#5421): the button shows while there is some, the loop mark while a /loop drives it
-  const now = useNow(30_000, Boolean(session && !assistant && (session.loop || session.workflows?.length)));
-  const background = Boolean(session && !assistant && hasBackgroundWork(session, now));
+  const now = useNow(30_000, Boolean(session?.loop && !assistant));
   const running = session && !assistant ? backgroundCount(session) : 0;
-  const backgroundOpen = Boolean(session && backgroundPanelOf(panel, session.machine_id, session.session_id));
-  const openBackground = () => session && toggleBackgroundPanel(session.machine_id, session.session_id);
   // a runtime's session renames where its node says it can (capabilities.rename, #6294), as Close goes by capabilities.close
   const canRename = Boolean(session && !main && !builtIn && sessionCanRename(session));
   const [editing, setEditing] = useState(false);
@@ -2699,20 +2741,23 @@ export const Header = memo(function Header({
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
       <div className={headerSlot(Boolean(topCenter), "end")}>
-      {background && (
-        <span className="relative flex shrink-0">
-          <IconButton
-            icon="list"
-            label={running ? t("chat-chatview.background_running", { count: running }) : t("chat-chatview.background_tasks")}
-            onClick={openBackground}
-            active={backgroundOpen}
-          />
-          {running > 0 && !backgroundOpen && (
-            <span aria-hidden data-background-count className="pointer-events-none absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-ink-2 tabular-nums shadow-[0_0_0_2px_var(--page)]">
-              {running}
-            </span>
+      {overview && (
+        <button
+          type="button"
+          data-session-overview-trigger
+          aria-label={t("chat-chatview.session_overview")}
+          aria-pressed={overview.open}
+          aria-description={running > 0 ? t("chat-chatview.background_running", { count: running }) : undefined}
+          aria-controls={overview.open ? overview.id : undefined}
+          title={t("chat-chatview.session_overview")}
+          onClick={overview.toggle}
+          className={cx("touch-hit relative flex size-7 shrink-0 items-center justify-center rounded-control transition-colors hover:bg-hover hover:text-ink", overview.open ? "bg-hover text-ink" : "text-ink-3")}
+        >
+          <Icon name="list" size={15} />
+          {running > 0 && !overview.open && (
+            <span aria-hidden data-background-count className="pointer-events-none absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-ink-2 tabular-nums shadow-[0_0_0_2px_var(--page)]">{running}</span>
           )}
-        </span>
+        </button>
       )}
       {team && (
         <span className="relative flex shrink-0">

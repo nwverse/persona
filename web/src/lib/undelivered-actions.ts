@@ -1,4 +1,5 @@
-// Actions on kept messages, loaded with their optional chat bubble rather than the startup send path.
+// Retry and Delete on a kept message (lib/undelivered.ts, #10194). Only the kept message's bubble uses them, so they
+// come with its chunk (views/chat/UndeliveredBubbles.tsx), not with the first screen (#10357).
 import { api, enc } from "./api";
 import { getSession, upsertSession } from "./store";
 

@@ -649,6 +649,17 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+  (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
+  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
+  restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
+  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
+  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
+  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
+  or the app back in front.
 
 ### 3.3 Cards and surfaces
 
@@ -763,6 +774,8 @@ and a bottom collapse action that restores focus to the expansion control.
 Reply targets show a friendly name and a source-backed preview when available;
 opaque routing IDs and read diagnostics stay in details. The layout changes no
 sending identity or confirmation behavior.
+
+The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
 ### 3.4 Lists and rows
 

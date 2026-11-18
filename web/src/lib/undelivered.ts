@@ -1,9 +1,12 @@
 // The owner's messages to a Persona conversation that could not go in (its assistant did not start, its computer was
 // away), which the conversation's manager keeps and sends again by itself (#10194, docs/assistant/assistant.md
 // "Messages that could not go in"). The row carries them (`undelivered`), so every device shows them, not only the one
-// that sent: as the owner's own bubbles marked not delivered, with Delete, and Retry once it gave up.
+// that sent: as the owner's own bubbles marked not delivered, with Delete, and Retry once it gave up. This module holds
+// what a send and the chat need on the first screen; Retry and Delete are in lib/undelivered-actions.ts, which only
+// the bubble's own chunk loads (views/chat/UndeliveredBubbles.tsx, #10357).
 import { ApiError } from "./api";
 import { getSession, upsertSession } from "./store";
+import { parseUserText, type UserMessage } from "./turns";
 import type { Item, Session, UndeliveredMessage } from "./types";
 
 /** A send's answer when the manager kept the message to send later: 202 {"delivered":"later","undelivered":{…}}. */
@@ -43,3 +46,6 @@ export function shownUndelivered(row: Pick<Session, "undelivered"> | undefined, 
   const landed = new Set([...items.map((i) => i.client_msg_id).filter(Boolean), ...sending]);
   return list.filter((m) => !landed.has(m.id));
 }
+
+/** The owner's bubble a kept message draws as: the same while its chunk loads as once it is in (ChatView). */
+export const keptBubble = (m: UndeliveredMessage): UserMessage => ({ id: `undelivered:${m.id}`, client_msg_id: m.id, ...parseUserText(m.text), images: [] });
