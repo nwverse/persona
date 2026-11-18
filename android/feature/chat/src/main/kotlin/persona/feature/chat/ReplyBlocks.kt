@@ -47,6 +47,7 @@ import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.findChildOfType
 import org.intellij.markdown.ast.getTextInNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JTextButton
@@ -90,9 +91,9 @@ internal fun copyingCode(ink: Color, copy: ((String) -> Unit)?): MarkdownAnnotat
     if (child.type != MarkdownElementTypes.CODE_SPAN) return@markdownAnnotator false
     val ancestors = generateSequence(child.parent) { it.parent }
     val link = ancestors.firstOrNull { it.type in LINKS }
-    val quote = ancestors.any { it.type == MarkdownElementTypes.BLOCK_QUOTE }
+    val customInk = ancestors.any { it.type == MarkdownElementTypes.BLOCK_QUOTE || it.type == GFMElementTypes.HIGHLIGHT }
     val style = SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.94.em,
-        color = if (link != null || quote) Color.Unspecified else ink)
+        color = if (link != null || customInk) Color.Unspecified else ink)
     val words = codeSpanWords(child.getTextInNode(content).toString())
 
     // PathLinks wraps a bare path span in a synthetic link. Use the original span's neighbors outside that wrapper.

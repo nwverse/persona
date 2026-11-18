@@ -93,7 +93,7 @@ class ReplyBlocksShotsTest {
                 val ink = palette.replyCodeInk
                 assertTrue("$s dark=$d must use a quieter ink", ink != palette.ink && ink != palette.ink2)
                 for (surface in listOf(palette.background, palette.surface, palette.surfaceOpaque, palette.surfaceStrong,
-                    palette.sunken, palette.accentSoft, palette.marker)) {
+                    palette.sunken, palette.accentSoft)) {
                     assertTrue("$s dark=$d has insufficient code contrast on $surface",
                         ExtensionThemeColors.contrast(ink, surface.compositeOver(palette.background)) >= 4.5)
                 }
@@ -134,6 +134,7 @@ class ReplyBlocksShotsTest {
         assertEquals("a `b` c", codeSpanWords("`` a `b` c ``"))
         assertEquals("  ", codeSpanWords("`  `"))
     }
+
     @Test fun inlineCodeAddsGapsOnlyNextToCjkLettersAndCopiesOnlyTheWords() {
         val code = "`cmd`"
         val copied = mutableListOf<String>()
