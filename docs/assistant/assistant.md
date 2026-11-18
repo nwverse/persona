@@ -1470,7 +1470,11 @@ What the numbers do and do not say:
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:
 
-- Title = `MMDD | Type | Topic`. MMDD is the chat's start date in **user timezone** (`Hub.userLocation()`; hub runs UTC, but a 00:30 start uses the user's local date).
+- **Active direction exception**: every client shows the existing canonical direction name as its session title,
+  without a date or task-kind prefix. `conversation_rename` accepts a plain `name` from the main conversation and uses
+  the existing direction-name operation; user-chosen names require `user_asked`. The ordinary stored title is retained
+  and returns when the direction ends. Explicit name changes publish immediately.
+- Ordinary title = `MMDD | Type | Topic`. MMDD is the chat's start date in **user timezone** (`Hub.userLocation()`; hub runs UTC, but a 00:30 start uses the user's local date).
   Types: Feature / Design / Fix / Optimization / Release / Exploration / Docs / Research / Review / Scheduled; topic ≤ 14 characters, no project / repo names. Example: `1101 | 修复 | 搜索框和顶栏重叠` ("1101 | Fix | Search and top bar overlap").
 - **When generated**: new hub chats (App `POST /api/v1/assistant/conversations`) are recorded "pending title". After the first turn (working → done / idle),
   the assistant uses the "Chat title" purpose model in the background (`assistant.title`, Model Configuration › Information processing), reading first message / reply to produce "Type | Topic". No interruption, not delegated to the assistant chat itself, replies don't wait.
@@ -1551,7 +1555,7 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
 
 - **Archive only hides**: hub settings `assistant.archived` (session id → machine, time, actor), session list `archived: true`;
   `GET /api/v1/assistant` excludes by default, includes with `?archived=1`. No transcript deletion / hard delete. Main chat can't archive (API 400, tool error); replace through "New main chat" ("Compaction" above).
-  - **Archive itself**: allowed ("We're done, archive this" in a side chat is natural). Finish the turn normally; an open App chat isn't closed, only hidden from lists;
+  - **Archive itself**: allowed ("We're done, archive this" in a side chat is natural). Finish the turn normally; an open chat on iOS, Android or the web stays open and is only hidden from lists;
     new user messages restore it (`unarchiveOnSend` in `sendMessage`), as does another chat's `conversation_send`.
   - node lists only recent sessions: old archived chats can disappear from Archived (as they do from normal lists), but archive records remain and `conversation_unarchive` can retrieve by id.
 - **Delete a conversation** (#6172, server and web): after confirmation, an ordinary or archived former main chat disappears permanently from Persona lists and history reads. A Postgres setting (`assistant.deleted_conversations`) retains only machine/session identity, space and deletion time. Old links say **Conversation deleted**; task plans, to-dos, run records, saved briefs and extracted knowledge keep their references and content, and delegated Agents continue untouched. The computer's transcript file is retained; this is not an erasure of previously derived knowledge or a filesystem cleanup. A new node inventory, send or unarchive never restores a deleted chat. Active turns, compaction, queued messages and pending requests must finish or be stopped first. A chat that still owns or supervises an unfinished task also refuses deletion (409); finish or move that task first. Former-main work uses the existing handover once a successor main exists, so a historical reference alone does not block deletion; an idle process is allowed because later Persona sends, tool calls and reads are refused. The main chat and built-in supervisor cannot be deleted. To remove the main chat's previous history, use **Clear context**, then delete the archived former main chat. Native deletion controls are not included in this phase; native Clear context remains #5100.
@@ -1577,12 +1581,22 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     of its own leaves the answer it owes free. So a main chat that hands work to others goes back and forth with each of them three times
     (main → worker at hop 1, its answer at 1, … the third request and its answer at 3); counting every message refused the worker's second answer
     (hop 4). Two chats that keep writing to each other still stop after 2 × 3 messages however slowly they write, which the rate limit alone would not do.
-    Per chat, at most 3 sends to the same target and 10 total within 10 minutes (memory only, reset on hub restart). User messages reset hops to 0.
+    Per chat, at most 20 sends to the same target and 30 total within 10 minutes, a cost cap only (memory only, reset on hub restart). User messages reset hops to 0.
   - **The main chat dispatches** (#10099, `relayAllowedOn`): the limits above guard against loops (per pair), spread (hops) and fan-out (per
     sender); none of them should leave the owner's dispatch center stuck. So a request from the main chat is never refused for its hop: past
     3 it goes at hop 3, where the receiver may answer it but sends nothing further. Requests *to* the main chat cost hops as before, so a
     leader can't keep the main chat going (leader ↔ main still stops after 2 × 3 messages). The main chat's sends to its leader chats count
-    per pair (3 per leader in 10 minutes) but not against its 10-per-sender cap, which stays for every other target.
+    per pair (20 per leader in 10 minutes) but not against its 30-per-sender cap, which stays for every other target.
+  - **Rates queue, loops are round trips, the owner's words are free** (#10400, `relayAdmit`). A fixed 3 per pair in 10 minutes refused
+    one-way traffic (the main chat forwarding the owner's requests one after another) while a slow ping-pong never tripped it. Now:
+    - Past the per-pair or per-sender cap a `conversation_send` is not refused: it gets the first time the window has room (`Due`),
+      waits in the receiver's relay queue held until then (`holdLocked`; after a restart `drainHeldRelays` finds it) and goes in once,
+      in order. The sender's result says it is queued and at about what time. At most 5 per pair wait this way (`relayQueueMax`);
+      past that the send is refused. `conversation_new` is not queued: a new chat starting minutes later is not what was asked.
+    - The loop guard counts turns: two chats whose messages change direction more than 2 × 6 times in an hour (6 round trips,
+      `relayRoundsMax`, `turnsLocked`) are cut, the main chat included, until the owner speaks in one of them.
+    - A send whose `quote` the hub verified (#3822), written in the last hour, is the owner's request: no rate, no round trip, hop 1.
+      Only the first send of a quoted message to a target is free (`quoted`); the same quote to the same chat again counts as usual.
   - **A scheduled run starts a new chain** (`scheduledWake`): a follow-up or routine that goes into an existing chat clears its hop, as a
     run in a fresh chat always did. At most once per chat per 10 minutes, so a chat cut off by the hops can't schedule itself a minute
     ahead over and over to keep a loop alive; the rates hold either way.

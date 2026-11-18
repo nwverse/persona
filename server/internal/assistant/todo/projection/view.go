@@ -542,7 +542,7 @@ func (r *reading) waiting() (placement, bool) {
 	if rn, ok := firstRun(r.runs, runLimited); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonUsageLimit)
 		p.Line, p.Since = line(lineUsageLimit, "run", rn.title()), utc(rn.since())
-		if reset := usageLimitReset(rn.s); reset != nil {
+		if reset := usageLimitReset(*rn.s); reset != nil {
 			p.Line = line(lineUsageLimit, "run", rn.title(), "resets_at", stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
 		}
@@ -550,7 +550,7 @@ func (r *reading) waiting() (placement, bool) {
 	}
 	if rn, ok := firstRun(r.runs, runWaits); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonSomeoneElse)
-		p.Line, p.Since = line(lineRunWaits, "run", rn.title(), "on", waitsOn(rn.s)), utc(rn.since())
+		p.Line, p.Since = line(lineRunWaits, "run", rn.title(), "on", waitsOn(*rn.s)), utc(rn.since())
 		// When the hub looks next ranks it; that moment passing changes nothing by itself, as a park's end does not.
 		if w := rn.s.Work.WakeAt; w != nil {
 			p.wake = *w

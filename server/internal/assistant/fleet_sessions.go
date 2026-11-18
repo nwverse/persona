@@ -467,6 +467,9 @@ func (s *Service) listedSession(machine, sid string) (proto.Session, bool) {
 	if err != nil {
 		s.logf("load agent archives: %v", err)
 	}
+	if len(list) == 0 {
+		return proto.Session{}, false // an unreadable deletion ledger hides assistant rows rather than exposing them
+	}
 	return list[0], true
 }
 
