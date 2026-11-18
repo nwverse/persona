@@ -1098,6 +1098,7 @@ data class Interaction(
     /** The runtime can discard this question without answering or interrupting the task. */
     @SerialName("can_cancel") val canCancel: Boolean? = null,
     @SerialName("plan") val plan: String? = null,
+    @SerialName("plan_then") val planThen: String? = null,
     @SerialName("tool_input") val toolInput: JsonElement? = null,
     @SerialName("summary") val summary: String? = null,
     @SerialName("screen") val screen: String? = null,
@@ -1136,6 +1137,12 @@ data class Interaction(
     val suggestion: RuleSuggestion? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */
+    val recordedPlanThen: String?
+        get() = when (planThen) {
+            "default", "acceptEdits", "auto", "bypassPermissions" -> planThen
+            else -> null
+        }
     /** The page that answers it; resolution still uses this interaction's own id and session. */
     val homeKey: SessionKey get() = SessionKey(machineId, foldedUnder?.takeIf(String::isNotBlank) ?: sessionId)
 
