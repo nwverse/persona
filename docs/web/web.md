@@ -2093,6 +2093,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   audit 2026-11-14, item 50). It shrinks only when the row is short of room: the name gives way first, the engine mark stays, and the effort truncates only
   once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the tile and the chevron; only a
   waiting switch's clock makes it grow there (a spinner or a warning stays within the 64 px).
+- **Agent launcher label (#10248)**: an explicit session launcher is shown as **launcher · model**, matching its
+  model-panel row. The launcher's name and shortened model remain visible on phones, with full names in the tooltip
+  and accessible name. The engine mark remains; a pending switch names the target launcher even across engines and
+  keeps its clock and current-to-next tooltip. Without an explicit launcher the earlier model-only label and compact
+  fallback apply. Persona's pill is unchanged. This changes presentation only, never the model-selection payload.
 - **States**: reading the list for the first time with no model known: a spinner and "Loading model…"; that read failed: a
   warning in the error colour ("Model loading failed" in the tooltip); a switch to another launcher waiting for the next
   message (`pending_switch` on the session, #5035): a clock first, then the setup the next message runs on: that launcher's
