@@ -39,19 +39,6 @@ struct AgentsSearchVisibilityTests {
         }
     }
 
-    @Test func pushAndRiseGuardsCoverTheKeyboardStartWindow() {
-        for searching in [false, true] {
-            for floating in [false, true] {
-                #expect(AgentsSearchVisibility.closesSearchForPush(searching: searching, floating: floating)
-                        == (searching || floating))
-                for atList in [false, true] {
-                    #expect(AgentsSearchVisibility.shouldRise(floating: floating, atList: atList, searching: searching)
-                            == (floating && atList && !searching))
-                }
-            }
-        }
-    }
-
     @Test func clearingRestoresTheCurrentEmptyScrollState() {
         #expect(AgentsSearchVisibility.rowShown(scrolled: 120, band: band, floating: false, query: "a") == 0)
         #expect(AgentsSearchVisibility.rowShown(scrolled: 120, band: band, floating: false, query: "") == 0)

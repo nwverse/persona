@@ -14,14 +14,6 @@ nonisolated enum AgentsSearchVisibility {
         #endif
     }
 
-    static func closesSearchForPush(searching: Bool, floating: Bool) -> Bool {
-        searching || floating
-    }
-
-    static func shouldRise(floating: Bool, atList: Bool, searching: Bool) -> Bool {
-        floating && atList && !searching
-    }
-
     /// The row copy keeps its band but has no visible, hittable or accessible field whenever the overlay owns it.
     static func rowShown(scrolled: CGFloat, band: CGFloat, floating: Bool, query: String) -> CGFloat {
         guard !floating, !retained(query: query) else { return 0 }

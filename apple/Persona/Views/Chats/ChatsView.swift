@@ -326,23 +326,15 @@ struct ChatsView: View {
     /// first and pushes on the next turn of the run loop. The search's text and results stay for coming back.
     private var pushing: Binding<NavigationPath> {
         Binding(get: { path }, set: { new in
-            #if os(iOS) || os(visionOS)
-            let openingSearch = header.floating // explicit activation can still be waiting for the first keyboard callback
-            #else
-            let openingSearch = false
-            #endif
-            guard AgentsSearchVisibility.closesSearchForPush(searching: searching, floating: openingSearch),
-                  new.count > path.count else { return path = new }
+            guard searching, new.count > path.count else { return path = new }
             #if os(iOS) || os(visionOS)
             if ownsTop {
                 // Our own field holds no navigation bar up: the search closes (the keyboard goes, the text and the
-                // results stay for coming back) and the page goes on at once. Before the rise there is no compact
-                // layout to reset, and the list must keep the retained result's place.
-                let restoreRestLayout = header.compact || header.rising
+                // results stay for coming back) and the page goes on at once.
                 searching = false
                 header.floating = false
                 header.up = false
-                if restoreRestLayout { header.setCompact(false) }
+                header.setCompact(false)
                 return path = new
             }
             #endif
@@ -773,8 +765,7 @@ struct ChatsView: View {
     /// The floating field has the keyboard: up into the bar's row.
     private func riseSearch() {
         #if os(iOS) || os(visionOS)
-        // A result can open while the first keyboard is still starting. Its close cancels this and any deferred callback.
-        guard AgentsSearchVisibility.shouldRise(floating: header.floating, atList: path.isEmpty, searching: searching) else { return }
+        guard !searching else { return }
         var still = Transaction()
         still.disablesAnimations = true
         withTransaction(still) { searching = true }
