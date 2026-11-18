@@ -10,22 +10,23 @@ import (
 	"testing"
 )
 
-// Persona never closes an agent's terminal on its own (#4754, docs/integrations/engines.md "Agents run in a terminal"):
-// session.stop and session.retire quit the agent and keep its pane. These are the only functions that close a pane or
-// a tab (n.close, or a host's Close with a pane, workspace and tab), each for what the user asked or for a tab whose
-// start failed before any agent ran in it. A new one fails here: stop the agent instead (quitAgent), or add it with
+// Persona does not close an agent's terminal when it stops it (#4754, docs/integrations/engines.md "Agents run in a
+// terminal"): session.stop and session.retire quit the agent and keep its pane. These are the only functions that close
+// a pane or a tab (n.close, or a host's Close with a pane, workspace and tab), each for what the user asked, for a tab
+// whose start failed before any agent ran in it, or for a finished Agent's terminal after its grace period. A new one fails here: stop the agent instead (quitAgent), or add it with
 // the reason.
 var paneClosers = map[string]string{
-	"handle":          "session.close: the user's Close, or a session with no terminal (hub supervise_leader.go)",
-	"closePane":       "panes.close: the user closes a pane or tab",
-	"retire":          "session.retire with close_terminal: the user's Archive and close",
-	"close":           "n.close itself",
-	"closeAfterExit":  "session.close after its Agent exits: the user's Close of its marked Herdr shell (#9648)",
-	"closeCodexStart": "a Codex start abandoned before Codex ran",
-	"closeNewTab":     "a start whose command never ran",
-	"failedTerminal":  "a Herdr App terminal whose launch failed",
-	"closeFinished":   "panes.close_finished: the user's Close finished terminals (stopped.go)",
-	"closeStalledTab": "the user's retry of a stalled Orca start: its kept tab, with no agent in it, whose one launch is used (#9534)",
+	"handle":            "session.close: the user's Close, or a session with no terminal (hub supervise_leader.go)",
+	"closePane":         "panes.close: the user closes a pane or tab",
+	"retire":            "session.retire with close_terminal: the user's Archive and close",
+	"close":             "n.close itself",
+	"closeAfterExit":    "session.close after its Agent exits: the user's Close of its marked Herdr shell (#9648)",
+	"closeCodexStart":   "a Codex start abandoned before Codex ran",
+	"closeNewTab":       "a start whose command never ran",
+	"failedTerminal":    "a Herdr App terminal whose launch failed",
+	"closeFinished":     "panes.close_finished: the user's Close finished terminals (stopped.go)",
+	"closeFinishedPane": "a finished Agent's terminal after its grace period, rechecked under its recovery lock (finished_close.go, #10111)",
+	"closeStalledTab":   "the user's retry of a stalled Orca start: its kept tab, with no agent in it, whose one launch is used (#9534)",
 }
 
 func TestOnlyUserActionsClosePanes(t *testing.T) {
