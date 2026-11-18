@@ -28,10 +28,18 @@ type todoProjection struct {
 // to-dos the projection reads as open (a failed start included, whose runs still date its last activity), each
 // computer asked once (todoRunSessions).
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
+	return s.todoProjectionRunsOf(ctx, list, now, nil)
+}
+
+// todoProjectionRunsOf is todoProjectionOf reading the runs of the to-dos whose ids are in runsOf alone (nil: of every
+// to-do); the others read as if their runs were offline, so a view holds only for a to-do in runsOf whose steps all
+// are in it too (todo_view_push.go reads the rest only for how they relate).
+func (s *Service) todoProjectionRunsOf(ctx context.Context, list []listedTodo, now time.Time,
+	runsOf map[string]bool) todoProjection {
 	want := map[string]map[string]bool{} // by computer, the session ids of the open to-dos' active runs
 	for i := range list {
 		t := &list[i]
-		if t.DoneAt != nil && t.StartError == "" {
+		if t.DoneAt != nil && t.StartError == "" || runsOf != nil && !runsOf[t.ID] {
 			continue
 		}
 		for _, a := range t.Agents {

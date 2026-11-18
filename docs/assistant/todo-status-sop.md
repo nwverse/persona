@@ -388,7 +388,8 @@ one row the same way and `GET /api/v1/todos/places` the places (`docs/protocol/p
 time in a view is absolute, so the list's bytes, and its `ETag`, stay the same while neither the to-dos nor their runs
 change (a working run's latest line is in its row's view). Across managers the hub only adds the counts up and joins
 the places; it never works out a view. The hello features `todo_view` and `todo_places` say every manager serves them,
-and only while they are listed do the counts cover every manager.
+and only while they are listed do the counts cover every manager. The manager also pushes `{"type":"todos"}` when a
+run's change or time alone changes what a row is filed under (`docs/assistant/todos.md` "Live WebSocket pushes").
 
 No client reads `view` yet: the clients switch to it in stage 2, falling back to the rules above for a row without
 one. Until then every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`),
