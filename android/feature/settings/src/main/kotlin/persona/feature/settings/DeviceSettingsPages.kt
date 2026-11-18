@@ -10,6 +10,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.contracts.api.*
 import kotlinx.coroutines.launch
@@ -56,7 +57,7 @@ internal fun DevicesPage(
                 JButton(stringResource(R.string.settings_browser_login_scan), {
                     scanner.launch(com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
                         .setOrientationLocked(false).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("").setBeepEnabled(false))
-                }, kind = JButtonKind.Secondary, icon = PhIcons.QrCode)
+                }, kind = JButtonKind.Secondary, icon = PersonaIcons.scanCode)
             }
             if (connect != null) item("connect") {
                 JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
