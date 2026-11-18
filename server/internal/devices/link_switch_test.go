@@ -161,6 +161,7 @@ type lsHarness struct {
 	order                 []string
 	gates                 map[string]chan struct{}
 	force                 map[string]int
+	forceOut              map[string]string // what a forced script prints
 	pkgErr                error
 	logs                  bytes.Buffer
 	cancel                context.CancelFunc
@@ -169,8 +170,8 @@ type lsHarness struct {
 }
 
 // lsStubLink is the build the tests send: persona-link's commands as a switch uses them, against $HOME. The
-// installer writes what came on its stdin to .pair-got; files in $HOME make it fail (.fail-install), never connect
-// (.no-connect) or fail to uninstall (.fail-uninstall).
+// installer writes what came on its stdin to .pair-got; files in $HOME make it fail before it paired (.fail-pair), after
+// it paired (.fail-install), never connect (.no-connect) or fail to uninstall (.fail-uninstall).
 const lsStubLink = `#!/bin/sh
 D="$HOME/.persona"; U="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 case "$1 $2" in
@@ -178,6 +179,7 @@ case "$1 $2" in
 "install --pair")
 	[ "$3" = "-" ] || exit 2
 	cat > "$D/.pair-got"
+	if [ -e "$HOME/.fail-pair" ]; then exit 1; fi
 	mkdir -p "$U"
 	echo '{}' > "$D/link.json"
 	[ -e "$U/personad-node.service" ] || echo written-by-the-installer > "$U/personad-node.service"
@@ -221,7 +223,7 @@ func newLSHarness(t *testing.T, o lsOptions) *lsHarness {
 	root := t.TempDir()
 	h := &lsHarness{t: t, root: root, home: filepath.Join(root, "home"), stubs: filepath.Join(root, "stubs"),
 		runDir: filepath.Join(root, "run"), pkg: filepath.Join(root, "pkg", "persona-link-linux-amd64"),
-		gates: map[string]chan struct{}{}, force: map[string]int{}}
+		gates: map[string]chan struct{}{}, force: map[string]int{}, forceOut: map[string]string{}}
 	h.persona = filepath.Join(h.home, ".persona")
 	h.binOf = filepath.Join(h.persona, "bin")
 	h.units = filepath.Join(h.home, ".config", "systemd", "user")
@@ -383,6 +385,7 @@ func (h *lsHarness) run(ctx context.Context, what string, argv []string, stdin i
 	h.order = append(h.order, "ssh "+what)
 	gate := h.gates[what]
 	code, forced := h.force[what]
+	forcedOut := h.forceOut[what]
 	env := slices.Clone(h.extraEnv)
 	h.mu.Unlock()
 	if gate != nil {
@@ -394,6 +397,7 @@ func (h *lsHarness) run(ctx context.Context, what string, argv []string, stdin i
 	}
 	if forced {
 		_, _ = io.Copy(io.Discard, stdin)
+		_, _ = io.WriteString(stdout, forcedOut)
 		return code, nil
 	}
 	if h.sshDown.Load() {
@@ -1259,5 +1263,54 @@ func TestLinkSwitchRollbackRefusedByTheHub(t *testing.T) {
 	}
 	if _, ends := h.hub.calls(); len(ends) != 1 {
 		t.Errorf("end asked %d times", len(ends))
+	}
+}
+
+// An installer that gave up before it paired (the hub not reachable from the computer) fails the switch at once:
+// no link can come, so the rollback starts without waiting for one. One that paired, or whose ssh failed, may still
+// connect and is waited for.
+func TestLinkSwitchInstallerThatNeverPairedFailsAtOnce(t *testing.T) {
+	const connect = 4 * time.Second
+	for _, c := range []struct {
+		name  string
+		setup func(h *lsHarness)
+		wait  bool
+	}{
+		{"never paired", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 1, "placed=1\n" }, false},
+		{"paired", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 1, "placed=1\npaired=1\n" }, true},
+		{"ssh failed", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 255, "placed=1\n" }, true},
+		{"the installer, before pairing", func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-pair"), "", 0o644) }, false},
+		{"the installer, after pairing", func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644) }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) {
+				h.d.switches.times.Connect = connect
+				c.setup(h)
+			}})
+			begun := time.Now()
+			h.start()
+			var took time.Duration // until the rollback began
+			eventually(t, 30*time.Second, "the rollback begins", func() bool {
+				r := h.d.linkSwitchRecordOf("box")
+				took = time.Since(begun)
+				return r != nil && (r.Phase == proto.LinkSwitchPhaseRollingBack || r.finished())
+			})
+			rec := h.finished()
+			if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonInstallFailed || rec.RollbackUnconfirmed {
+				t.Fatalf("record %+v", rec)
+			}
+			if c.wait && took < connect {
+				t.Errorf("rolling back after %s, before the link had its %s", took, connect)
+			}
+			if !c.wait && took >= connect/2 {
+				t.Errorf("waited %s for a link that cannot come", took)
+			}
+			if _, ends := h.hub.calls(); len(ends) != 1 || ends[0].Outcome != devicewire.LinkSwitchRolledBack {
+				t.Errorf("ends %+v", ends)
+			}
+			if h.exists(".persona/bin/persona-link") || h.exists(".persona/link.json") || !h.d.sshOnline("box") {
+				t.Error("not rolled back")
+			}
+		})
 	}
 }
