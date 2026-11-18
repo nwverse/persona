@@ -2044,6 +2044,7 @@ hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people 
 | | Follow Up Every Agent Persona Starts | `agent_tasks` (off) | switch |
 | Tidying up | Stop Idle Agents After | `idle_close_hours` (12; 0 never; at most 8760) | menu: Never, 1, 2, 4, 8, 12, 24, 48 hours, 1 week, Custom… |
 | | Archive Closed Sessions After | `archive_closed_days` (3; 0 never; at most 3650) | menu: Never, 1, 3, 7, 14, 30, 90 days, Custom… |
+| Terminals | Close an Agent's Terminal When It Ends | `close_ended_terminals` (off; #10355) | switch |
 | Session names | Fix Unhelpful Session Names | `agent_auto_naming` (on) | switch |
 | | Name Changes per Session (while on) | `agent_auto_naming_max` (1; 1–1000) | menu: 1, 3, 5, 10, Unlimited (1000, the hub's most), Custom… |
 | | Update Names Regularly (while on) | `agent_auto_naming_interval_hours` ≠ 0 (off; on starts at 24) | switch |

@@ -70037,6 +70037,75 @@
         }
       }
     },
+    "Close an Agent's Terminal When It Ends" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close an Agent's Terminal When It Ends"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェント終了時にターミナルを閉じる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 结束后关掉它的终端"
+          }
+        }
+      }
+    },
+    "Terminals [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminals"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端"
+          }
+        }
+      }
+    },
+    "Off by default. When an Agent Persona started is done, cancelled or quits, its terminal tab closes too. Busy Agents and terminals you opened yourself are never closed; the conversation is kept and can be resumed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default. When an Agent Persona started is done, cancelled or quits, its terminal tab closes too. Busy Agents and terminals you opened yourself are never closed; the conversation is kept and can be resumed."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既定ではオフです。Persona が開始したエージェントが完了・キャンセル・自分で終了したら、そのターミナルのタブも閉じます。作業中のエージェントや自分で開いたターミナルは閉じません。会話は残り、あとで再開できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭。Persona 启动的 Agent 做完、被取消或自己退出后，顺手关掉它的终端标签页。正在忙的 Agent 和你自己开的终端不会被关；对话会保留，之后还能继续。"
+          }
+        }
+      }
+    },
     "Follow the Rules" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -216,6 +216,10 @@ Where the built-in background supervisor shows (what it is:
 - **Switch**: Settings › Assistant › Task follow-up › **Main chat supervises its own tasks**
   (`main_supervises_own_tasks`, `AssistantSettingsState.setMainSupervisesOwnTasks`, as the fold switch: it moves at
   once and comes back on a failure), with one sentence under it. Shown when the hub sends the field.
+- **Closing an Agent's terminal when it ends** (#10355): Settings › Assistant › Terminals › **Close an Agent's terminal
+  when it ends** (`close_ended_terminals`, `AssistantSettingsState.setCloseEndedTerminals`, the same switch pattern), off
+  by default, with one sentence under it; shown when the hub sends the field (`docs/integrations/engines.md`, "Agents run
+  in a terminal").
 - **Model**: the same section has **Background supervisor model**, which opens
   `ModelPurposeRoute("assistant.supervise")` (`BackgroundSupervisor.PURPOSE`); the row is there whichever way the
   switch is, as the use is in Model configuration, and the value is on the page it opens. A hub before #5806 leaves
