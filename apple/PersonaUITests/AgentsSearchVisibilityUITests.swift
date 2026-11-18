@@ -194,8 +194,12 @@ final class AgentsSearchVisibilityUITests: XCTestCase {
     @MainActor private func leaveAndReturnToAgents() {
         if app.buttons["shell-assistant"].firstMatch.exists {
             let finger = ShellFinger(app)
-            finger.switchTo(agents: false, "Assistant with a retained Agents query", limit: 5)
-            finger.switchTo(agents: true, "Agents again with a retained query", limit: 5)
+            finger.switchTo(agents: false, "Assistant, leaving Agents", limit: 5)
+            // Not at once, as in `AgentsTopMotionTests`: a tap on the switch within about a second of leaving can be
+            // lost while the Assistant page is first built (#10227). These tests are about the field once Agents is
+            // back, not about the switch.
+            sleep(2)
+            finger.switchTo(agents: true, "Agents again", limit: 5)
         } else {
             let persona = app.buttons["Persona"].firstMatch
             let agents = app.buttons["Agents"].firstMatch
