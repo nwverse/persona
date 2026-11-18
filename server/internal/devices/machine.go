@@ -227,8 +227,10 @@ func (m *Machine) snapshot() proto.Machine {
 	engine := d.engineOf(m.cfg.ID) // before m.mu: it may read settings
 	choice := d.engineChoiceOf(m.cfg.ID)
 	m.mu.Lock()
-	info := m.info
+	info, online, deploying := m.info, m.online, m.deploying
 	m.mu.Unlock()
+	// Switching to Persona Link (link_switch.go): before m.mu, as it reads the hub's handover.
+	linkSwitch := d.linkSwitchView(m, info, online, deploying)
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
@@ -256,6 +258,9 @@ func (m *Machine) snapshot() proto.Machine {
 		icon = "laptop"
 	}
 	blocked := m.canDeployLocked()
+	if blocked == nil && linkSwitch != nil && linkSwitch.Reason == proto.LinkSwitchReasonInProgress {
+		blocked = errLinkSwitchDeploy
+	}
 	if blocked == nil {
 		blocked = noPackage
 	}
@@ -291,6 +296,7 @@ func (m *Machine) snapshot() proto.Machine {
 		Clipboard:    m.clipboardStateLocked(clipboardOn),
 		FileTransfer: m.fileTransferState(fileTransferOn),
 		ClaudePlugin: m.info.ClaudePlugin,
+		LinkSwitch:   linkSwitch,
 	}
 }
 
