@@ -112,8 +112,12 @@ func (h *Hub) renameMachineLive(id, name string) {
 }
 
 // nameAfterSystem names a computer that has just paired its Persona Link after what its system calls it, when it has
-// no name of its own yet (added without one: its id); a name it was given is kept.
+// no name of its own yet (added without one: its id); a name it was given is kept, and so is the name of one switching
+// from ssh (link_switch.go: it is the same computer, as the user knows it).
 func (h *Hub) nameAfterSystem(ctx context.Context, id, system string) {
+	if _, switching := h.linkSwitch.get(id); switching {
+		return
+	}
 	system = strings.Join(strings.Fields(system), " ")
 	if r := []rune(system); len(r) > maxMachineName {
 		system = string(r[:maxMachineName])
