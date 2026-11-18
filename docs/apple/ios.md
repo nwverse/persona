@@ -1998,13 +1998,26 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   them, each row's `view` (by to-do id) and the list's `counts` (`TodosPage`); a view that does not decode is none.
   `TodoItem` gains only facts (`part_of`, `after`, `restored_at`, `someday_until`); the store keeps `views`, `counts` and
   `places` apart from `todos`, so a change to a view alone (a run's latest line) redraws nothing that reads the rows and
-  does not refresh the watch or the widgets. A 304 applies the views and counts read with that tag again. While V1 is on
-  they are kept in their own StateCache entry, `todo-view`, beside `todo-items`; on the first V1 launch without it,
-  `viewsRead` stays false until the first read ends, so the list does not file its rows twice. The places are read with
-  the list while V1 is on and the hub lists `todo_places`, again only when the list changed. One timer, to the
-  earliest `next_change_at` of any row, reads the list again (coalesced), only while V1 is on and the scene is in
-  front. `TodosAPI.swift` has the item, places, Someday, restore and origin-route calls (the last with its op id and a
-  timeout above the hub's five-minute relay).
+  does not refresh the watch or the widgets. A 304 applies the views and counts read with that tag again. Views and
+  counts are read whether V1 is on or not (V1 coming on in a run has them); everything else is done only while it is on:
+  - the `todo-view` StateCache entry beside `todo-items`: the views, counts and places, with the numbers the pages
+    showed, so the first frame draws them. It is written at most every 15 s while a run's line moves (`Throttle`) and
+    at once when the scene leaves the front; forgetting the hub removes it whether V1 is on or not, and an entry none
+    of whose views is for the kept rows is not used at all;
+  - the first V1 launch without it: `viewsRead` stays false until the first read ends, so the list does not file its
+    rows twice, but no longer than a second (no connection yet, or a hub that does not answer);
+  - the places, read with the list while the hub lists `todo_places`, again only when the list changed; a hub without
+    the route, or whose hello stopped listing it, has none (All only);
+  - one timer, to the earliest `next_change_at` of any row, reads the list again (coalesced) through the app's hub, only
+    while the scene is in front. A read that still shows that moment (the hub's clock behind) is tried again after 5 s
+    and 30 s, then left to the next push, and the timer never reads sooner than 5 s after its last read. The timer is
+    the store's, not the page's: the drawer's and sidebar's counts change by time too.
+
+  Tests inject all of this through `TodoStore.V1` (whether V1 is on, the features, the cache, the client the store's
+  own reads go through, and `Timing`); only `TodoStore.shared` follows the scene (`followsScene`). When the gate
+  changes, `TodosV1` tells the store (`v1Changed`), which counts, writes the cache, arms the timer and reads the places
+  from what the last read had, or lets the numbers go. `TodosAPI.swift` has the item, places, Someday, restore and
+  origin-route calls (the last with its op id and a timeout above the hub's five-minute relay).
 - **Filing and counts.** `TodoFiling` files a row by its `view` when its section is one this build knows, else by the
   app's own rules (`TodoTriageLogic`, frozen) mapped onto the V1 sections (Needs you → Needs you, Working → Working,
   PR to merge → Waiting, Other open → To do, Just finished → Just finished, Shelved → To do with the Inactive mark,
@@ -2012,13 +2025,20 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager; with several, counted
   from the current assistant's filed rows (`TodoCountsFallback`, the hub's rules, replayed against
   `spec/fixtures/todo-counts`) with only its own project places; less the answers given on the device that the hub's
-  view does not show yet.
-- **The gate and its memory.** `TodoFeatures` reads `todo_view`, `todo_places`, `todo_timeline` and `todo_asks` from the
-  hub-level group's hello and remembers them per group (`hubTodoFeatures.<group>`, written only when they change);
-  before this launch's hello the remembered value is used. `TodosV1` turns on when the hub-level group's hello lists
-  `todo_view`, or at launch when its last one did, and then stays on until the app quits: a hello without it while a
-  manager reconnects never swaps the page back. It is off in every build until the switch-on (`TodosV1.released`).
-  The hello's `todo_send_state` marker is trusted from the current hello only and is never remembered.
+  view does not show yet. A row filed by the app's own rules is counted when the store reads, not as its sessions
+  change: such rows exist only while a manager is older than the hub's features say, or sends a section this build
+  does not know.
+- **The gate and its memory.** `TodoFeatures` reads `todo_view`, `todo_places`, `todo_timeline` and `todo_asks` from each
+  group's hello and remembers them per group (`hubTodoFeatures.<group>`, written only when they change); before a
+  group's hello in this run the remembered value is used. `TodosV1` is on while the hub-level group's hello listed
+  `todo_view` in this run, or, before that hello, its last one did; once on for a group it stays on for that group
+  until the app quits, so a hello without it while a manager reconnects never swaps the page back, and such a hello is
+  not remembered as a downgrade (the first hello of a run is). It follows the owner's pick of the hub-level group:
+  picking an older group's hub turns it off, picking back a group it was on for turns it on without another hello.
+  Signing out of every hub forgets the remembered values. It is off in every build until the switch-on
+  (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
+  and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
+  visionOS) names them; the V1 views will be iOS only. The hub's `todo_send_state` marker is not read yet.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides

@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import PersonaWire
 
-/// Every To-dos number in one place (#10465, decision S2-23; DESIGN_SYSTEM 4.8, "every place that collects requests
-/// shows the same number"): the To-dos row in the drawer and sidebar, the folded Pages tally, the section bar, the Needs
+/// Every To-dos number in one place (#10465, docs/apple/ios.md "Filing and counts"; DESIGN_SYSTEM 4.8, "every place
+/// that collects requests shows the same number"): the To-dos row in the drawer and sidebar, the folded Pages tally, the section bar, the Needs
 /// you header, the places and the to-do's page all read these, so an answer anywhere moves every number in one update.
 ///
 /// - One manager: the hub's `counts` and places as sent.
@@ -69,6 +69,13 @@ final class TodoCountsSource {
         guard overlay[todo]?.remove(ask) != nil else { return }
         if overlay[todo]?.isEmpty == true { overlay[todo] = nil }
         recount()
+    }
+
+    /// What the last run showed, kept with the views (`TodoViewCache`), until the first count of this one: the first
+    /// frame draws the numbers it will keep.
+    func seed(_ counts: TodoCounts?, places: [TodoPlace]?) {
+        if let counts, counts != self.counts { self.counts = counts }
+        if let places, !places.isEmpty, places != self.places { self.places = places }
     }
 
     /// Another hub, or none: nothing kept.

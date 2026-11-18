@@ -43,7 +43,7 @@ final class TodoStore {
     /// then the V1 list draws nothing rather than filing its rows by the app's rules first and by the views a moment
     /// later.
     private(set) var viewsRead = false
-    /// Every To-dos number the pages show (decision S2-23), counted while V1 is on.
+    /// Every To-dos number the pages show (docs/apple/ios.md "Filing and counts"), counted while V1 is on.
     let countsSource: TodoCountsSource
 
     @ObservationIgnored private let reads = CoalescedRefresh()
@@ -56,24 +56,30 @@ final class TodoStore {
     @ObservationIgnored private let managers: Managers
     @ObservationIgnored private let saver = Debouncer(.seconds(1))
     @ObservationIgnored private let v1: V1
-    @ObservationIgnored private let viewSaver = Debouncer(.seconds(1))
+    /// The views' cache entry is rewritten as a run's line moves: at most once per `Timing.saveGap`, and at once when the
+    /// scene leaves the front.
+    @ObservationIgnored private let viewSaver: Throttle
     /// The moments the rows' views change by time alone (their `next_change_at`), soonest first, parsed once per
-    /// change of the views (P4).
+    /// change of the views while V1 is on (P4).
     @ObservationIgnored private var changes: [Date] = []
     @ObservationIgnored private var changeTimer: Task<Void, Never>?
     @ObservationIgnored private var timedFor: Date?
-    /// The last moment the timer fired for: a read that still says it (the hub's clock behind this one) waits for a push.
+    /// The last moment the timer gave up on: its reads still said it (the hub's clock behind this one), so a push files it.
     @ObservationIgnored private var firedFor = Date.distantPast
+    /// The moment the timer last read for, and how many times: a read that still says it is tried again later.
+    @ObservationIgnored private var timerReads: (moment: Date, count: Int)?
+    @ObservationIgnored private var lastTimerRead = Date.distantPast
+    /// Ends the first V1 launch's wait for the views (`viewsRead`) when the first read is slow.
+    @ObservationIgnored private var holdTimer: Task<Void, Never>?
     /// The scene is in front: the timer runs only then (P9).
     @ObservationIgnored private var active = true
-    /// The client the last read went through when a caller gave one (tests); the timer's read uses it too.
-    @ObservationIgnored private var lastInjected: APIClient?
     @ObservationIgnored private var sceneObservers: [NSObjectProtocol] = []
     private static let stateName = "todo-items"
     static let viewStateName = "todo-view"
 
     /// What the V1 list needs besides the rows (#10465): whether V1 is on, the hub's to-do features, the sessions to
-    /// file a row without a view, and the views' own cache entry, written only while V1 is on.
+    /// file a row without a view, the views' own cache entry (written only while V1 is on), the client the
+    /// `next_change_at` timer reads through (nil: the app's hub, as every automatic read), and how long things wait.
     struct V1 {
         var isOn: @MainActor () -> Bool
         var features: @MainActor () -> TodoFeatures
@@ -81,8 +87,25 @@ final class TodoStore {
         var loadCache: @MainActor () -> TodoViewCache?
         /// nil: take the entry away.
         var saveCache: (@MainActor (TodoViewCache?) -> Void)?
-        /// How long after a row's `next_change_at` it is read again: the hub's clock may be a little behind this one.
-        var changeSlack: Duration = .seconds(1)
+        /// The client the store's own reads go through (the timer's, V1 coming on); nil: the app's hub.
+        var api: @MainActor () -> APIClient? = { nil }
+        var timing = Timing()
+
+        /// How long the store waits (tests make these short).
+        struct Timing {
+            /// How long after a row's `next_change_at` it is read again: the hub's clock may be a little behind this one.
+            var slack: TimeInterval = 1
+            /// A moment the timer's read still showed is read again after each of these, then left to the next push.
+            var retries: [TimeInterval] = [5, 30]
+            /// The timer never reads sooner than this after its last read, whatever moments the hub sends.
+            var floor: TimeInterval = 5
+            /// How long the first V1 launch without kept views waits for the first read before the rows are drawn by
+            /// the app's own rules.
+            var hold: TimeInterval = 1
+            /// The views' cache entry: written this long after a quiet spell, then at most once per `saveGap`.
+            var saveFirst: Duration = .seconds(2)
+            var saveGap: Duration = .seconds(15)
+        }
 
         static var live: V1 {
             .init(isOn: { TodosV1.shared.isOn }, features: { AppModel.shared.todoFeatures },
@@ -161,6 +184,7 @@ final class TodoStore {
         self.read = read
         self.managers = managers
         self.v1 = v1
+        viewSaver = Throttle(first: v1.timing.saveFirst, gap: v1.timing.saveGap)
         countsSource = TodoCountsSource(scope: managers.scope, lookup: v1.lookup)
         let initial = cachedTodos ?? StateCache.load(Self.stateName, as: [TodoItem].self) ?? []
         let initialIndex = Self.index(initial)
@@ -170,13 +194,19 @@ final class TodoStore {
         lastPushed = initialIndex
         self.cacheWriter = cacheWriter
         self.hubListChanged = hubListChanged
-        // The views kept with the rows they were read with: none for rows that are not there (another hub's).
-        if v1.isOn(), !initial.isEmpty, let kept = v1.loadCache() {
-            views = kept.views.filter { initialIndex[$0.key] != nil }
-            counts = kept.counts
-            places = kept.places
-            changes = Self.changeMoments(views)
-            viewsRead = true
+        // The views kept with the rows they were read with. When none of them is for these rows (another hub's, or the
+        // rows were forgotten and the views not yet), nothing of the entry is used.
+        if v1.isOn(), let kept = v1.loadCache() {
+            let mine = kept.views.filter { initialIndex[$0.key] != nil }
+            if !mine.isEmpty || (kept.views.isEmpty && initial.isEmpty) {
+                views = mine
+                counts = kept.counts
+                places = kept.places
+                changes = Self.changeMoments(views)
+                viewsRead = true
+                // The numbers the last run showed, until this one counts (the current assistant is the app model's).
+                countsSource.seed(kept.shownCounts, places: kept.shownPlaces)
+            }
         }
         #if canImport(UIKit)
         if followsScene {
@@ -190,6 +220,7 @@ final class TodoStore {
             })
         }
         #endif
+        boundHold()
         // Counted once the app is made: the current assistant is the app model's, which may be making this store now.
         Task { @MainActor [weak self] in self?.recount() }
     }
@@ -246,11 +277,32 @@ final class TodoStore {
         viewsRead = false
         changes = []
         firedFor = .distantPast
+        timerReads = nil
         armTimer()
-        if v1.isOn() {
+        if v1.isOn() { countsSource.reset() }
+        // Whether V1 is on or not (it may have been for the last hub), and now: a write of the last hub's views still
+        // waiting is replaced, so it cannot land after this.
+        if let save = v1.saveCache {
+            viewSaver.run { save(nil) }
+            viewSaver.flush()
+        }
+        boundHold()
+    }
+
+    /// V1 came on (a hello listed the view, or the owner picked a hub whose last hello did) or went off (another hub's
+    /// pages, without it): what only V1 reads is brought up to date from what the last read had, or let go.
+    func v1Changed() {
+        let on = v1.isOn()
+        changes = on ? Self.changeMoments(views) : []
+        armTimer()
+        if on {
+            recount()
+            persistView()
+            boundHold()
+            reload(api: v1.api()) // and the places, which only V1 reads
+        } else {
             countsSource.reset()
-            // Through the debounce, so a write of the last hub's views still waiting cannot land after it.
-            if let save = v1.saveCache { viewSaver.run { save(nil) } }
+            holdTimer?.cancel()
         }
     }
 
@@ -274,7 +326,6 @@ final class TodoStore {
 
     /// The hub's merged list, every manager's: read with none named, also after a change that named one.
     private func fetch(api injected: APIClient? = nil) async {
-        if let injected { lastInjected = injected }
         guard let api = (injected ?? AppModel.shared.api)?.manager(nil) else { return }
         let requestedGeneration = generation
         let requestedRevision = mutationRevision
@@ -333,27 +384,31 @@ final class TodoStore {
         if recounting { recount() }
     }
 
-    /// The views and counts of a read, each set only when it changed.
+    /// The views and counts of a read, each set only when it changed. Kept while V1 is off too, so V1 coming on in this
+    /// run has them; their moments are parsed, and they are written down, only while it is on.
     private func applyView(_ newViews: [String: TodoSummary], _ newCounts: TodoCounts?) {
-        var changed = false
-        if newViews != views {
-            views = newViews
-            changes = Self.changeMoments(newViews)
-            changed = true
-        }
-        if newCounts != counts {
-            counts = newCounts
-            changed = true
-        }
-        if changed { persistView() }
+        let viewsChanged = newViews != views, countsChanged = newCounts != counts
+        if viewsChanged { views = newViews }
+        if countsChanged { counts = newCounts }
+        guard v1.isOn() else { return }
+        if viewsChanged { changes = Self.changeMoments(newViews) }
+        if viewsChanged || countsChanged { persistView() }
         armTimer()
     }
 
     /// The places, read with the list while V1 is on and the hub lists them: again only when the list changed (a 304
-    /// changes none of its numbers). A hub or manager without the route ("not there") has none; any other failure keeps
-    /// the last until the next read.
+    /// changes none of its numbers). A hub or manager without the route ("not there"), or a hub whose hello stopped
+    /// listing them, has none (All only); any other failure keeps the last until the next read.
     private func readPlaces(_ api: APIClient, listChanged: Bool, generation requested: Int) async {
-        guard v1.isOn(), v1.features().places, listChanged || places == nil else { return }
+        guard v1.isOn() else { return }
+        guard v1.features().places else {
+            guard places != nil else { return }
+            places = nil
+            persistView()
+            recount()
+            return
+        }
+        guard listChanged || places == nil else { return }
         do {
             let read = try await api.todoPlaces()
             guard generation == requested, !Task.isCancelled, read != places else { return }
@@ -368,11 +423,28 @@ final class TodoStore {
         recount()
     }
 
+    /// Read when the write is made, so a burst of reads is written once, with the numbers they ended on.
     private func persistView() {
         guard v1.isOn(), let save = v1.saveCache else { return }
         viewSaver.run { [weak self] in
             guard let self else { return }
-            save(TodoViewCache(views: views, counts: counts, places: places))
+            save(TodoViewCache(views: views, counts: counts, places: places, shownCounts: countsSource.counts,
+                               shownPlaces: countsSource.places))
+        }
+    }
+
+    /// The first V1 launch without kept views waits for the first read, so its rows are not filed twice, but no longer
+    /// than `Timing.hold` (a hub that does not answer, or no connection yet): then the rows are drawn by the app's own
+    /// rules, and filed again when the views come.
+    private func boundHold() {
+        holdTimer?.cancel()
+        holdTimer = nil
+        guard v1.isOn(), !viewsRead else { return }
+        let requested = generation
+        holdTimer = Task { [weak self, wait = v1.timing.hold] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled, let self, generation == requested else { return }
+            viewsRead = true
         }
     }
 
@@ -382,7 +454,7 @@ final class TodoStore {
         countsSource.update(.init(rows: todos, views: views, counts: counts, places: places, now: Date()))
     }
 
-    // MARK: Rows that change by time alone (decision S2-20)
+    // MARK: Rows that change by time alone (docs/apple/ios.md "The data")
 
     /// The `next_change_at` moments of `views`, soonest first.
     private static func changeMoments(_ views: [String: TodoSummary]) -> [Date] {
@@ -390,8 +462,10 @@ final class TodoStore {
     }
 
     /// One timer, to the earliest moment a row's view changes by time alone, then the list is read again (coalesced
-    /// with any other read): only while V1 is on and the scene is in front. A moment already passed (the scene was
-    /// away) is read at once, once.
+    /// with any other read) through the app's hub: only while V1 is on and the scene is in front. A moment already
+    /// passed (the scene was away) is read at once. A read that still says it (the hub's clock behind this one) is
+    /// tried again after each of `Timing.retries`, then left to the next push; and the timer never reads sooner than
+    /// `Timing.floor` after its last read.
     private func armTimer() {
         let due = v1.isOn() && active ? changes.first { $0 > firedFor } : nil
         guard due != timedFor else { return }
@@ -401,21 +475,33 @@ final class TodoStore {
             changeTimer = nil
             return
         }
-        let wait = Duration.seconds(max(0, due.timeIntervalSinceNow)) + v1.changeSlack
+        let timing = v1.timing
+        let tries = timerReads?.moment == due ? timerReads?.count ?? 0 : 0
+        var at = due.addingTimeInterval(timing.slack)
+        if tries > 0, tries <= timing.retries.count { at = max(at, lastTimerRead.addingTimeInterval(timing.retries[tries - 1])) }
+        at = max(at, lastTimerRead.addingTimeInterval(timing.floor))
+        let wait = max(0, at.timeIntervalSinceNow)
         changeTimer = Task { [weak self] in
-            try? await Task.sleep(for: wait)
+            try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled, let self else { return }
-            firedFor = due
+            lastTimerRead = Date()
+            if tries >= timing.retries.count {
+                firedFor = due
+                timerReads = nil
+            } else {
+                timerReads = (due, tries + 1)
+            }
             timedFor = nil
             changeTimer = nil
-            reload(api: lastInjected)
+            reload(api: v1.api())
         }
     }
 
-    /// The scene came to the front or left it.
+    /// The scene came to the front or left it: the timer stops while it is away, and the views' cache is written now.
     func sceneActive(_ active: Bool) {
         guard active != self.active else { return }
         self.active = active
+        if !active { viewSaver.flush() }
         armTimer()
     }
 
@@ -736,4 +822,7 @@ nonisolated struct TodoViewCache: Codable, Equatable, Sendable {
     var views: [String: TodoSummary] = [:]
     var counts: TodoCounts?
     var places: TodoPlaces?
+    /// The numbers and places the pages showed (`TodoCountsSource`, the current assistant's), drawn in the first frame.
+    var shownCounts: TodoCounts?
+    var shownPlaces: [TodoPlace]?
 }

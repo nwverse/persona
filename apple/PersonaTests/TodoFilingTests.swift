@@ -3,8 +3,9 @@ import Testing
 @testable import Persona
 import PersonaWire
 
-/// Where the V1 list files each to-do (#10465, decision S2-1): by its view, else by the app's own rules mapped onto the
-/// V1 sections (`TodoFiling`); and the list's order within a section, `rank`, then `manager`, then `id` (D12).
+/// Where the V1 list files each to-do (#10465, docs/apple/ios.md "Filing and counts"): by its view, else by the app's own
+/// rules mapped onto the V1 sections (`TodoFiling`); and the list's order within a section, `rank`, then `manager`, then
+/// `id` (docs/protocol/protocol.md, the `GET /api/v1/todos` row).
 struct TodoFilingTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private func ago(_ hours: Double) -> Date { now.addingTimeInterval(-hours * 3600) }

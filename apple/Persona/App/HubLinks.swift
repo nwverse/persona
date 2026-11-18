@@ -116,11 +116,7 @@ final class HubLink: Identifiable {
         let ext = f.contains("extensions")
         if !f.isEmpty, ext != Self.remembersExtensions(group) { UserDefaults.standard.set(ext, forKey: "hubExtensionsAPI." + group) }
         if !f.isEmpty { SideFold.remember(f.contains(SideFold.feature), group: group) }
-        if !f.isEmpty {
-            let todo = TodoFeatures(f)
-            TodoFeatures.remember(todo, group: group)
-            TodosV1.shared.saw(todo, group: group)
-        }
+        if !f.isEmpty { TodosV1.shared.heard(TodoFeatures(f), from: group) }
     }
 }
 

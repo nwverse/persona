@@ -25,7 +25,7 @@ nonisolated struct TodoFiled: Equatable, Sendable {
     var asks: [String]
 }
 
-/// Where the V1 list files each to-do (#10465, decision S2-1): by its `view` when it has one whose section this build
+/// Where the V1 list files each to-do (#10465, docs/apple/ios.md "Filing and counts"): by its `view` when it has one whose section this build
 /// knows, else by the app's own rules (`TodoTriageLogic`, the frozen fallback for rows from older managers) mapped
 /// onto the V1 sections. The only new reader of `TodoTriageLogic` (proposal 7.7). Pure: no store, no clock of its own.
 nonisolated enum TodoFiling {
@@ -81,7 +81,7 @@ nonisolated enum TodoFiling {
             legacy[n].last = t.last
         }
         // Rows the app's rules filed have no rank: by when they last moved, newest first, within each manager's section,
-        // so a merged list orders them with the hub's ranks as it orders two managers' rows (D12).
+        // so a merged list orders them with the hub's ranks as it orders two managers' rows.
         let groups = Dictionary(grouping: legacy) { "\(out[$0.index].manager ?? "")\n\(out[$0.index].section)" }
         for group in groups.values {
             let sorted = group.sorted { $0.last != $1.last ? $0.last > $1.last : out[$0.index].id < out[$1.index].id }
@@ -90,8 +90,8 @@ nonisolated enum TodoFiling {
         return out
     }
 
-    /// `rows` in the list's order: by section (proposal 3.4), then rank, then manager, then id (D12: ranks are per
-    /// manager, so a merged section can hold equal ones).
+    /// `rows` in the list's order: by section (proposal 3.4), then rank, then manager, then id: ranks are per manager, so
+    /// a merged section can hold equal ones (docs/protocol/protocol.md, the `GET /api/v1/todos` row).
     static func ordered(_ rows: [TodoFiled]) -> [TodoFiled] {
         let order = Dictionary(uniqueKeysWithValues: TodoListSection.all.enumerated().map { ($0.element, $0.offset) })
         return rows.sorted { a, b in

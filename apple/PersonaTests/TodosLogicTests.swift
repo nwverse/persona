@@ -958,6 +958,16 @@ struct TodosLogicTests {
         #expect(store.todo(id: "t1")?.restoredAt == ISO8601DateFormatter().date(from: "2026-11-19T09:00:00Z"))
         hub.on("PUT", "/api/v1/todos/t1/restored") { _ in throw APIError(status: 404, message: "not found", fields: ["code": "not_found"]) }
         await #expect(throws: APIError.self) { try await store.restore(id: "t1", api: hub.client) }
+        // The to-do itself gone (or another manager's): told apart from a hub without the route.
+        hub.on("PUT", "/api/v1/todos/t1/someday") { _ in
+            throw APIError(status: 404, message: "not found", fields: ["code": TodoNotThere.goneCode])
+        }
+        do {
+            try await store.setSomeday(id: "t1", until: nil, api: hub.client)
+            Issue.record("a gone to-do is refused")
+        } catch {
+            #expect(TodoNotThere.gone(error) && !TodoNotThere.matches(error))
+        }
     }
 
     /// A message to a to-do's work through its origin route carries its op id and, for a decision's round, its

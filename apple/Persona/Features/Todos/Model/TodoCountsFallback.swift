@@ -1,7 +1,7 @@
 import Foundation
 import PersonaWire
 
-/// The To-dos counts worked out from filed rows (`TodoFiling`), by the hub's rules (decision D3, proposal 3.7;
+/// The To-dos counts worked out from filed rows (`TodoFiling`), by the hub's rules (proposal 3.7;
 /// spec/fixtures/todo-counts/README.md "The rules the cases pin"): for a hub with several managers, whose counts add every
 /// manager's up while the pages list the current assistant's, and for a hub that sends none.
 ///

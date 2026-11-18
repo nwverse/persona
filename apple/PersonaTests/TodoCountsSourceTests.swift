@@ -11,9 +11,9 @@ private final class TodoAssistantPick {
     var scope: AssistantScope { AssistantScope(group: "", current: current, defaultID: "home", installed: ["home", "work"]) }
 }
 
-/// One number per place (#10465, decision S2-23): with one manager the hub's counts and places as sent; with several,
-/// counted from the current assistant's rows, with only its own project places; less the answers given on this device
-/// that the hub's view does not show yet.
+/// One number per place (#10465, docs/apple/ios.md "Filing and counts"): with one manager the hub's counts and places as
+/// sent; with several, counted from the current assistant's rows, with only its own project places; less the answers
+/// given on this device that the hub's view does not show yet.
 @MainActor
 struct TodoCountsSourceTests {
     @MainActor private final class Flag { var on = false }

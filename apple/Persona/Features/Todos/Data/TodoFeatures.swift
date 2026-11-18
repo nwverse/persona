@@ -19,18 +19,14 @@ nonisolated struct TodoFeatures: Equatable, Sendable {
     var timeline = false
     /// `POST /api/v1/todos/{id}/asks/{ask}/answer`.
     var asks = false
-    /// The hub's `todo_send_state` hello marker: it says Processing for a to-do's message (docs/protocol/protocol.md
-    /// "Message feedback (#5258)"). Trusted only from the current hello, so never remembered; false until the app reads
-    /// that marker.
-    var sendState = false
 
-    init(view: Bool = false, places: Bool = false, timeline: Bool = false, asks: Bool = false, sendState: Bool = false) {
-        (self.view, self.places, self.timeline, self.asks, self.sendState) = (view, places, timeline, asks, sendState)
+    init(view: Bool = false, places: Bool = false, timeline: Bool = false, asks: Bool = false) {
+        (self.view, self.places, self.timeline, self.asks) = (view, places, timeline, asks)
     }
 
-    init(_ features: Set<String>, sendState: Bool = false) {
+    init(_ features: Set<String>) {
         self.init(view: features.contains(Self.viewName), places: features.contains(Self.placesName),
-                  timeline: features.contains(Self.timelineName), asks: features.contains(Self.asksName), sendState: sendState)
+                  timeline: features.contains(Self.timelineName), asks: features.contains(Self.asksName))
     }
 
     // MARK: Remembered per group
@@ -49,6 +45,11 @@ nonisolated struct TodoFeatures: Equatable, Sendable {
         if defaults.integer(forKey: key(group)) != bits { defaults.set(bits, forKey: key(group)) }
     }
 
+    /// The group's hub is gone (signed out): a hub paired later under the same group starts from nothing.
+    static func forget(_ group: String, in defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: key(group)) != nil { defaults.removeObject(forKey: key(group)) }
+    }
+
     private static func key(_ group: String) -> String { "hubTodoFeatures." + group }
 }
 
@@ -62,36 +63,101 @@ extension AppModel {
     var todoFeatures: TodoFeatures { hub?.todoFeatures ?? TodoFeatures() }
 }
 
-/// Whether To-dos is the V1 design (#10465, decision S2-1): on for the hub-level group once its hello lists `todo_view`,
-/// or at launch when its last hello did, and then on until the app quits. A hello without `todo_view` while a manager
-/// reconnects never takes the page back to today's (rows without a view are filed by `TodoFiling`, and the item and
-/// places routes answering 404 or 405 are "not there"); a hub that never listed it keeps today's screens.
+/// Whether To-dos is the V1 design (#10465; docs/apple/ios.md "To-dos (V1, #10465)", "The gate and its memory"): on
+/// while the hub-level group is one whose hello listed `todo_view` in this run, or, before its hello, whose last hello
+/// did; and once on for a group, on for it until the app quits. A hello without `todo_view` while a manager reconnects
+/// never takes the page back to today's (rows without a view are filed by `TodoFiling`, and the item and places routes
+/// answering 404 or 405 are "not there"); picking another group's hub follows that group, so a hub that never listed it
+/// keeps today's screens.
 @MainActor @Observable
 final class TodosV1 {
-    static let shared = TodosV1()
+    static let shared = TodosV1(changed: { TodoStore.shared.v1Changed() }, followsHub: true)
 
     /// Whether this build shows V1 at all: off until #10465's switch-on, so hubs that send the view keep today's
-    /// screens in every build that reaches people before then (S2-2).
+    /// screens in every build that reaches people before then.
     nonisolated static let released = false
+    /// The iPhone and iPad only: visionOS keeps today's To-dos, so it never reads what only V1 draws.
+    #if os(iOS)
+    nonisolated static let platform = true
+    #else
+    nonisolated static let platform = false
+    #endif
 
     private(set) var isOn: Bool
     @ObservationIgnored private let allowed: Bool
-    @ObservationIgnored private let hubGroup: @MainActor () -> String
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let hubGroup: @MainActor () -> String?
+    @ObservationIgnored private let features: @MainActor (String) -> TodoFeatures
+    @ObservationIgnored private let changed: @MainActor () -> Void
+    /// The groups V1 has been on for in this run: it stays on for them.
+    @ObservationIgnored private var onGroups: Set<String> = []
+    /// The groups whose hello listed `todo_view` in this run: a later hello without it does not change how the next
+    /// launch starts.
+    @ObservationIgnored private var listed: Set<String> = []
+    /// The groups this run has known, forgotten when every hub is signed out.
+    @ObservationIgnored private var known: Set<String> = []
 
     /// `launchGroup`: the hub-level group at launch, read from where the app keeps it rather than from `AppModel`, which
-    /// may still be restoring itself when this is first made. `hubGroup`: the hub-level group when a hello arrives.
-    init(allowed: Bool = TodosV1.released, defaults: UserDefaults = .standard, launchGroup: String? = nil,
-         hubGroup: @escaping @MainActor () -> String = { AppModel.shared.hub?.group ?? AppModel.shared.hubGroup }) {
+    /// may still be restoring itself when this is first made. `hubGroup`: the hub-level group now (nil: no hub paired).
+    /// `features`: what a group's hub can do, by its hello or before it by the last. `changed`: told when `isOn` changes.
+    /// `followsHub`: the app's own gate, which follows the hub-level group as the owner picks another.
+    init(allowed: Bool = TodosV1.released && TodosV1.platform, defaults: UserDefaults = .standard, launchGroup: String? = nil,
+         hubGroup: @escaping @MainActor () -> String? = { AppModel.shared.hub?.group },
+         features: @escaping @MainActor (String) -> TodoFeatures = { AppModel.shared.link($0)?.todoFeatures ?? .remembered($0) },
+         changed: @escaping @MainActor () -> Void = {}, followsHub: Bool = false) {
         self.allowed = allowed
+        self.defaults = defaults
         self.hubGroup = hubGroup
+        self.features = features
+        self.changed = changed
         let group = launchGroup ?? defaults.string(forKey: AppModel.hubGroupKey) ?? ""
         isOn = allowed && TodoFeatures.remembered(group, in: defaults).view
+        if isOn { onGroups.insert(group) }
+        // Followed once the app is made: the hub-level group is the app model's, which may be making this gate now.
+        if followsHub { Task { @MainActor [weak self] in self?.followHub() } }
     }
 
-    /// A hello from `group` listed `features`: V1 comes on when it is the hub-level group's and lists `todo_view`; it
-    /// never goes off.
-    func saw(_ features: TodoFeatures, group: String) {
-        guard allowed, !isOn, features.view, group == hubGroup() else { return }
-        isOn = true
+    /// A hello from `group` listed `features`: remembered for the next launch, and V1 comes on when it lists
+    /// `todo_view` and `group` is the hub-level one. A hello without it after one with it in this run (a manager
+    /// reconnecting) is remembered with it, so the next launch starts the way this one ends.
+    func heard(_ features: TodoFeatures, from group: String) {
+        known.insert(group)
+        if features.view { listed.insert(group) }
+        var kept = features
+        if listed.contains(group) { kept.view = true }
+        TodoFeatures.remember(kept, group: group, in: defaults)
+        guard allowed, features.view else { return }
+        onGroups.insert(group)
+        if group == hubGroup() { set(true) }
+    }
+
+    /// The hub-level group is (or may be) another: on when V1 has been on for it in this run, or its hub lists
+    /// `todo_view` (before this run's hello, its last hello did). No hub paired: every hub was signed out, so nothing
+    /// is kept for the groups this run knew.
+    func follow() {
+        guard let group = hubGroup() else {
+            for g in known { TodoFeatures.forget(g, in: defaults) }
+            (onGroups, listed, known) = ([], [], [])
+            set(false)
+            return
+        }
+        known.insert(group)
+        let on = allowed && (onGroups.contains(group) || features(group).view)
+        if on { onGroups.insert(group) }
+        set(on)
+    }
+
+    private func set(_ on: Bool) {
+        guard on != isOn else { return }
+        isOn = on
+        changed()
+    }
+
+    /// Follows the hub-level group: told once per change, before it lands, so followed again once it has.
+    private func followHub() {
+        _ = withObservationTracking { hubGroup() } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.followHub() }
+        }
+        follow()
     }
 }

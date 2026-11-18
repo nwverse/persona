@@ -2,14 +2,22 @@ import Foundation
 @testable import Persona
 import PersonaWire
 
-/// What the V1 To-dos tests (#10465) share: a store's V1 dependencies with V1 on and its cache in memory, and list rows
-/// as the hub writes them, each with its `view`.
+/// What the V1 To-dos tests (#10465) share: a store's V1 dependencies with V1 on, its cache in memory and its waits
+/// short, and list rows as the hub writes them, each with its `view`.
 extension TodoStore.V1 {
     @MainActor
     static func on(features: TodoFeatures = TodoFeatures(view: true, places: true), cache: TodoViewCache? = nil,
-                   saved: (@MainActor (TodoViewCache?) -> Void)? = nil, slack: Duration = .seconds(1)) -> TodoStore.V1 {
+                   saved: (@MainActor (TodoViewCache?) -> Void)? = nil, api: APIClient? = nil,
+                   timing: Timing = .fast) -> TodoStore.V1 {
         TodoStore.V1(isOn: { true }, features: { features }, lookup: { nil }, loadCache: { cache }, saveCache: saved,
-                     changeSlack: slack)
+                     api: { api }, timing: timing)
+    }
+}
+
+extension TodoStore.V1.Timing {
+    /// Waits a test can sit through: the cache written within milliseconds, the timer read again soon after.
+    static var fast: Self {
+        .init(slack: 0, retries: [0.15, 0.3], floor: 0, hold: 0.3, saveFirst: .milliseconds(10), saveGap: .milliseconds(10))
     }
 }
 

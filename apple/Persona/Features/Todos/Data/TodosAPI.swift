@@ -30,7 +30,7 @@ nonisolated struct ViewedTodo: Equatable, Sendable {
 /// session's ids (`run:<machine>/<session>…`), and `APIClient.encodedPath` takes a path that has escapes as it is.
 nonisolated extension APIClient {
     /// How long a message to a to-do may take: the hub relays it for up to five minutes (its forward's deadline) while
-    /// the node takes it or a new Agent starts for it, so the call waits a little longer than that (decision S2-5).
+    /// the node takes it or a new Agent starts for it, so the call waits a little longer than that.
     static let todoRelayWait: TimeInterval = 5 * 60 + 20
 
     /// `id` escaped for one segment of a path.
