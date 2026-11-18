@@ -2704,3 +2704,14 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Moving an element to the front with `slices.Delete` in the same expression (2026-11-19, #10659)
+
+`append([]T{s[i]}, slices.Delete(s, i, i+1)...)` sometimes reads `s[i]` after `Delete` ran. Go doesn't fix the order
+between an index expression and a call in the same expression, and `Delete` clears the slot it frees, so the moved
+element came out as a zero value (a nil func in `link.dialActive`'s route list, which panicked). Copy the element into a variable
+first, then delete and insert.
+
+`golang.org/x/net/http/httpproxy.FromEnvironment` reads `https_proxy` before `HTTPS_PROXY` (lower case first) in the
+version this repository uses. Older notes and reviews often say upper case first. Check the module's source before
+documenting an order.
