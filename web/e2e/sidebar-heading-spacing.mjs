@@ -13,8 +13,8 @@
 //
 // Both Agents lists have their own heading: the complete list (the mock's pinned space keeps the sidebar on it) and the
 // paged one (the runner clears the pins, then puts them back). Each in Simplified Chinese, light and dark, at
-// 1440 × 1000 (the wide sidebar), 390 × 844 with a mouse and 390 × 844 on a touch screen (the drawer, where Pages is a
-// grid and not a heading), with the headings folded and then unfolded. Every heading's row is measured (its content
+// 1440 × 1000 (the wide sidebar, at the standard and the largest text size), 390 × 844 with a mouse and 390 × 844 on a
+// touch screen (the drawer, where Pages is a grid and not a heading), with the headings folded and then unfolded. Every heading's row is measured (its content
 // box, padding left out) with its title's text:
 // - the rows are as tall as each other, and each title is centred as far down its row;
 // - folded, title to title is the same distance down the list (three or more headings);
@@ -41,6 +41,7 @@ const TOLERANCE = 0.5;
 const TITLES = ["页面", "Persona 对话", "个人 Agent", "Agents"];
 const VARIANTS = [
   { name: "1440", viewport: { width: 1440, height: 1000 } },
+  { name: "1440-large", viewport: { width: 1440, height: 1000 }, large: true },
   { name: "390", viewport: { width: 390, height: 844 } },
   { name: "390-touch", viewport: { width: 390, height: 844 }, touch: true },
 ];
@@ -94,7 +95,11 @@ async function run(browser, list, variant, theme) {
     viewport: variant.viewport, deviceScaleFactor: 2, colorScheme: theme, locale: "zh-CN", serviceWorkers: "block",
     hasTouch: Boolean(variant.touch), isMobile: Boolean(variant.touch),
   });
-  await context.addInitScript((theme) => { localStorage.setItem("persona.theme", theme); localStorage.setItem("persona.language", "zh-Hans"); }, theme);
+  await context.addInitScript(([theme, large]) => {
+    localStorage.setItem("persona.theme", theme);
+    localStorage.setItem("persona.language", "zh-Hans");
+    if (large) localStorage.setItem("persona.text-size", "large");
+  }, [theme, Boolean(variant.large)]);
   await context.route("**/*", (route) => (new URL(route.request().url()).origin === origin ? route.continue() : route.abort()));
   const page = await context.newPage();
   await page.goto(`${origin}/?token=mock`);
@@ -108,6 +113,7 @@ async function run(browser, list, variant, theme) {
   await page.locator("[data-sidebar-rows] span", { hasText: /^Agents$/ }).first().waitFor({ timeout: 20_000 });
   const label = `${list} ${variant.name} ${theme}`;
   if (variant.touch) check(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), `${label}: the touch screen has a coarse pointer`);
+  if (variant.large) check(await page.locator("html").getAttribute("data-text-size") === "large", `${label}: the app's largest text is on`);
   for (const folded of [true, false]) {
     await foldAll(page, folded);
     const { paged, headings: hs } = await measure(page, TITLES);

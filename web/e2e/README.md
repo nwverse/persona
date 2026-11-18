@@ -89,8 +89,8 @@ node web/e2e/sidebar-heading-spacing.mjs <loopback-web-origin> [--shots <artifac
 Against an exclusively owned mock-backed web server, in Simplified Chinese, light and dark. It measures the sidebar's
 top-level headings (Pages, Persona chats, Personal Agents when listed, Agents) with both Agents lists: the complete one
 (the mock's pinned space keeps the sidebar on it) and the paged one (the run clears the pins and puts them back; the
-paged list needs one assistant, hence `MOCK_MANAGERS=1`). At 1440 × 1000, 390 × 844 with a mouse and 390 × 844 on a
-touch screen (the drawer, where Pages is a grid), folded and then unfolded, it checks that every heading's row is as
+paged list needs one assistant, hence `MOCK_MANAGERS=1`). At 1440 × 1000 (standard and Large text), 390 × 844 with a
+mouse and 390 × 844 on a touch screen (the drawer, where Pages is a grid), folded and then unfolded, it checks that every heading's row is as
 tall and its title centred as far down it, that folded the title-to-title gaps are equal, and that unfolded each title
 stands as far below the group before it, all within 0.5 px (iOS: `SidebarHeadingGapsUITests`, #10561). Only the
 mock's own requests leave the browser. Screenshots and `results.json` go to the artifact directory; a four-minute
