@@ -158,7 +158,7 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
             dimens = markdownDimens(blockQuoteThickness = Dp(0f)), // none (a hairline still draws a pixel)
             padding = markdownPadding(blockQuote = PaddingValues(start = Tokens.Space.m), blockQuoteBar = PaddingValues.Absolute()),
             colors = markdownColor(text = color, codeBackground = palette.sunken,
-                inlineCodeBackground = Color.Transparent, dividerColor = palette.line,
+                inlineCodeBackground = palette.sunken.copy(alpha = 0f), dividerColor = palette.line,
                 tableBackground = palette.surface, darkTheme = palette.dark,
                 highlightText = palette.ink, highlightBackground = palette.marker),
             typography = markdownTypography(h1 = type.largeTitle, h2 = type.title, h3 = type.headline,
