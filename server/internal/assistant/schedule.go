@@ -201,15 +201,21 @@ func (t *Task) started(now time.Time) {
 	t.LastRun = now.UTC()
 }
 
-// ended sets the outcome of the run LastRun marks (its automatic retry's too: the retry goes on with that run).
-func (t *Task) ended(status, errText string) {
-	t.LastStatus, t.LastError, t.StatusRun = status, errText, t.LastRun
+// ended sets the outcome of the run that started at of: a record's own start (an automatic retry's is the retry's), so
+// the outcome keeps its own run's time even when LastRun has moved to a run that ended without recording one, such as
+// a Run now that never started its conversation. A zero of (a record without one) falls back to LastRun.
+func (t *Task) ended(status, errText string, of time.Time) {
+	if of.IsZero() {
+		of = t.LastRun
+	}
+	t.LastStatus, t.LastError, t.StatusRun = status, errText, of.UTC()
 }
 
 // lastShown is when the run that LastStatus and LastError describe started, the time every view shows with them:
-// LastRun, unless a newer run has started and not been recorded yet (or was lost to a restart).
+// StatusRun, which a newer run's start leaves alone until that run is recorded (or lost to a restart); LastRun for a
+// task stored before StatusRun was kept, or one with no outcome yet.
 func (t Task) lastShown() time.Time {
-	if !t.StatusRun.IsZero() && t.LastRun.After(t.StatusRun) {
+	if !t.StatusRun.IsZero() {
 		return t.StatusRun
 	}
 	return t.LastRun
@@ -1548,7 +1554,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			reason := i18n.T(s.lang(ctx), "assistant-schedule.until")
 			t.Enabled = false
 			t.started(now)
-			t.ended(runSkipped, reason)
+			t.ended(runSkipped, reason, now)
 			skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: t.Until.UTC(), At: now.UTC(),
 				Status: runSkipped, Error: reason, Ended: true, of: now.UTC()})
 			changed = true
@@ -1583,7 +1589,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			if now.Sub(next) < dailyCatchUp {
 				due = append(due, dueTask{*t, next})
 			} else { // missed by a long hub outage: skip rather than send a stale morning briefing at noon
-				t.ended(runSkipped, i18n.T(s.lang(ctx), "assistant-schedule.missed"))
+				t.ended(runSkipped, i18n.T(s.lang(ctx), "assistant-schedule.missed"), now)
 				skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: next.UTC(), At: now.UTC(),
 					Status: runSkipped, Error: t.LastError, of: now.UTC()})
 			}
@@ -1619,7 +1625,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			if now.Sub(next) < dailyCatchUp {
 				due = append(due, dueTask{*t, next})
 			} else {
-				t.ended(runSkipped, i18n.T(s.lang(ctx), "assistant-schedule.missed"))
+				t.ended(runSkipped, i18n.T(s.lang(ctx), "assistant-schedule.missed"), now)
 				skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: next.UTC(), At: now.UTC(),
 					Status: runSkipped, Error: t.LastError, of: now.UTC()})
 			}
@@ -1691,7 +1697,7 @@ func (s *Service) recordRun(r ScheduleRun) string {
 	}
 	if i := sc.indexLocked(r.RefID); i >= 0 && (r.of.IsZero() || !sc.tasks[i].LastRun.After(r.of)) {
 		t := &sc.tasks[i]
-		t.ended(r.Status, r.Error)
+		t.ended(r.Status, r.Error, r.of)
 		if r.SessionID != "" {
 			t.LastSessionID = r.SessionID
 		}
@@ -1734,7 +1740,7 @@ func (s *Service) updateRun(r ScheduleRun, status, errText string) bool {
 	wasOK := sc.runs[i].Status == runOK
 	sc.runs[i].Status, sc.runs[i].Error = status, errText
 	if j := sc.indexLocked(r.RefID); j >= 0 && (r.of.IsZero() || !sc.tasks[j].LastRun.After(r.of)) {
-		sc.tasks[j].ended(status, errText)
+		sc.tasks[j].ended(status, errText, r.of)
 	}
 	streakTask, streakN, streak := streakToldLocked(sc, i, wasOK) // a turn that ends in an error is a failed run too (schedule_streak.go)
 	streakRun := sc.runs[i]

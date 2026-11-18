@@ -254,3 +254,52 @@ func TestARunCutShortByARestartDoesNotShowTheLastRunsFailure(t *testing.T) {
 		t.Errorf("list_followups pairs the lost run with the earlier failure: %s", d)
 	}
 }
+
+// An outcome keeps the time of the run it is of, also when LastRun has moved on to a run that recorded none of its own
+// (review of #10182): a daily run fails, a Run now never starts its conversation, then the daily run's automatic retry
+// succeeds. Its outcome is shown with the retry's time, never with the Run now's, before and after the next day's
+// start; and an outcome recorded at the LastRun == of boundary stays with that run when the next one starts.
+func TestAnOutcomeKeepsItsOwnRunsTime(t *testing.T) {
+	f := newFakeHub()
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	h := newStorelessService(t, f)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	at := func(day, hh, mm int) time.Time { return time.Date(2026, 11, day, hh, mm, 0, 0, loc).UTC() }
+	setTasks(h, Task{ID: "r", Title: "日报", Prompt: "x", Repeat: repeatDaily, Time: "08:45", Enabled: true})
+	start := func(now time.Time) {
+		sc := h.loadSchedule(context.Background())
+		sc.mu.Lock()
+		sc.tasks[sc.indexLocked("r")].started(now)
+		sc.mu.Unlock()
+	}
+	shown := func(when string, wantAt time.Time, wantStatus string) {
+		t.Helper()
+		r, _ := taskByID(h, "r")
+		if got := r.lastShown(); !got.Equal(wantAt) || r.LastStatus != wantStatus {
+			t.Errorf("%s: shown %s %q, want %s %q", when, got.In(loc).Format("01-02 15:04"), r.LastStatus,
+				wantAt.In(loc).Format("01-02 15:04"), wantStatus)
+		}
+		views := h.tasksView(context.Background(), nil)
+		if len(views) != 1 || !views[0].LastRun.Equal(wantAt) || views[0].LastStatus != wantStatus {
+			t.Errorf("%s: the tasks API shows %+v, want last_run %s with %q", when, views, wantAt, wantStatus)
+		}
+	}
+
+	// The LastRun == of boundary: the run of the current LastRun records its outcome, and the next start keeps it.
+	start(at(14, 8, 45))
+	h.recordRun(ScheduleRun{Kind: "routine", RefID: "r", Status: runOK, SessionID: "s1", of: at(14, 8, 45)})
+	start(at(15, 8, 45))
+	shown("the next run starting", at(14, 8, 45), runOK)
+
+	h.recordRun(ScheduleRun{Kind: "routine", RefID: "r", Status: runFailed, Error: "launcher failed", of: at(15, 8, 45)})
+	shown("the daily run failed", at(15, 8, 45), runFailed)
+	// A Run now that never started its conversation: no session, so it does not cancel the daily run's retry.
+	start(at(15, 10, 0))
+	h.recordRun(ScheduleRun{Kind: "routine", RefID: "r", Status: runFailed, Error: "no machine", Manual: true, of: at(15, 10, 0)})
+	shown("the Run now failed to start", at(15, 10, 0), runFailed)
+	// The daily run's automatic retry succeeds: its outcome goes with its own time, not the Run now's.
+	h.recordRun(ScheduleRun{Kind: "routine", RefID: "r", Status: runOK, SessionID: "s3", Retried: true, of: at(15, 10, 5)})
+	shown("the retry succeeded", at(15, 10, 5), runOK)
+	start(at(16, 8, 45))
+	shown("the next day's run starting", at(15, 10, 5), runOK)
+}
