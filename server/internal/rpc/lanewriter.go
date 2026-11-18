@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math/bits"
@@ -49,7 +50,7 @@ type laneTotals struct {
 
 // outLine is a line queued on a laneWriter.
 type outLine struct {
-	b       []byte // the line as it goes out: filtered, its newline dropped
+	b       []byte // the line; once it starts, as it goes out: filtered, its newline dropped
 	off     int    // written so far
 	lane    Lane
 	credit  bool // it waits for credit (route)
@@ -273,6 +274,14 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 				return nil, 0, false // the next frame in priority goes first in the next write
 			}
 			if !l.started {
+				// Filtered as it goes on the wire, as a line on the one writer was: a value handed over (node/secretenv.go)
+				// while the line waited is hidden too. Under the lock, the scan holds up the writers and the reader's
+				// acknowledgements for as long as it takes, only while values are handed over.
+				if lw.filter != nil {
+					l.b = lw.filter(l.b)
+				}
+				l.b = bytes.TrimSuffix(l.b, newline)
+				n = min(len(l.b), most)
 				l.slot = uint16(bits.TrailingZeros16(^q.slots)) // a free one: not every slot is busy (above)
 				q.slots |= 1 << l.slot
 				l.started = true
@@ -285,8 +294,13 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 	return nil, 0, false
 }
 
-// left is what of l is still to go.
-func (l *outLine) left() int { return len(l.b) - l.off }
+// left is what of l is still to go; before it starts, before filter, which may change it a little: a hint is enough.
+func (l *outLine) left() int {
+	if l.started {
+		return len(l.b) - l.off
+	}
+	return len(bytes.TrimSuffix(l.b, newline))
+}
 
 // long is the lane's long line whose frames go now, among those only takes (nil: all): the one in progress, else the
 // oldest that needs more than one frame (most); nil when there is none.

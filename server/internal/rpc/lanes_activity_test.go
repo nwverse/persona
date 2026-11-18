@@ -9,6 +9,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -459,5 +460,40 @@ func TestLanesReadLoopWaitingForItsOwnAnswer(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatalf("the answer waited for credit the blocked read loop would bring (%s)", h.LaneStats())
+	}
+}
+
+// A line is filtered as it goes on the wire, as on the one writer: a value handed over while it waited is hidden too.
+func TestLanesFilterAsTheLineGoesOut(t *testing.T) {
+	g := newGate()
+	n := New("n", g)
+	n.EnableLanes(testControl, testBulk)
+	var hide atomic.Bool
+	n.LineFilter = func(b []byte) []byte {
+		if !hide.Load() {
+			return b
+		}
+		return bytes.ReplaceAll(b, []byte("secret"), []byte("******"))
+	}
+	lw := n.frameWriter()
+	lw.start()
+	n.out.Store(lw)
+	defer n.Close(errors.New("done"))
+	go func() { _ = n.Notify("evt", map[string]string{"x": strings.Repeat("x", 2*framePayloadMax)}) }()
+	g.waitWrite(t) // the writer is busy: the next line waits
+	sent := make(chan error, 1)
+	go func() { sent <- n.Notify("evt2", map[string]string{"v": "a secret"}) }()
+	eventually(t, func() bool { lw.mu.Lock(); defer lw.mu.Unlock(); return len(lw.lanes[LaneEvents].lines) == 2 })
+	hide.Store(true) // handed over while the line waited
+	g.release(100)
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, w := range g.writes {
+		if bytes.Contains(w, []byte("a secret")) {
+			t.Fatal("a value handed over while its line waited went out")
+		}
 	}
 }
