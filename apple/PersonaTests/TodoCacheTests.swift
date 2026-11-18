@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor
 private final class TodoObservationFlag { var changed = false }
@@ -74,8 +75,9 @@ struct TodoCacheTests {
     /// again without being read (#9590); a new one replaces it and its tag.
     @Test func aListThatDidNotChangeIsNotReadAgain() async throws {
         var asked: [String?] = []
-        var answers: [(list: [TodoItem]?, etag: String?)] = [
-            ([TodoItem(id: "a", title: "A")], "t1"), (nil, "t1"), ([TodoItem(id: "b", title: "B")], "t2"),
+        var answers: [TodosPage] = [
+            TodosPage(list: [TodoItem(id: "a", title: "A")], etag: "t1"), TodosPage(list: nil, etag: "t1"),
+            TodosPage(list: [TodoItem(id: "b", title: "B")], etag: "t2"),
         ]
         let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, read: { _, etag in
             asked.append(etag)
@@ -91,7 +93,7 @@ struct TodoCacheTests {
         #expect(asked == [nil, "t1", "t1"])
         #expect(store.todos.map(\.id) == ["b"])
         store.forget()
-        answers = [([TodoItem(id: "c", title: "C")], "t3")]
+        answers = [TodosPage(list: [TodoItem(id: "c", title: "C")], etag: "t3")]
         await store.refresh(api: api)
         #expect(asked.last == .some(nil), "another hub: no tag of the last one's")
     }
@@ -648,4 +650,150 @@ struct TodoCacheTests {
         await new.value
         #expect(store.byID.keys.sorted() == ["new"] && !store.loading)
     }
+
+    // MARK: The V1 list's views and counts (#10465)
+
+    /// Views and counts come with the list, apart from its rows, and a 304 applies the ones read with the tag again.
+    @Test func viewsAndCountsSurviveAListThatDidNotChange() async throws {
+        let view = TodoSummary(phase: TodoPhase.working, section: TodoListSection.working, reason: TodoReason.agentRunning, rank: 0)
+        let counts = TodoCounts(open: 1, needsYou: 0, inProgress: 1, sections: [TodoListSection.working: 1])
+        var answers = [TodosPage(list: [TodoItem(id: "a", title: "A")], views: ["a": view], counts: counts, etag: "t1"),
+                       TodosPage(list: nil, etag: "t1")]
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, read: { _, _ in answers.removeFirst() },
+                              v1: .on(features: TodoFeatures(view: true)))
+        defer { store.forget() }
+        let api = FakeHub().client
+        await store.refresh(api: api)
+        #expect(store.views == ["a": view] && store.counts == counts)
+        await store.refresh(api: api)
+        #expect(answers.isEmpty)
+        #expect(store.views == ["a": view] && store.counts == counts, "a 304: the views and counts of the tagged list stand")
+        #expect(store.todo(id: "a")?.title == "A")
+    }
+
+    /// A row whose view alone changed (its run's latest line) is no news for the watch and the widgets, and nothing
+    /// that reads the rows is drawn again (P5).
+    @Test func aViewOnlyChangeLeavesTheRowsAlone() async throws {
+        var pushes = 0
+        let hub = FakeHub()
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: { pushes += 1 }, v1: .on())
+        defer { store.forget() }
+        let row = { (line: String) in
+            TodoViewJSON.list([TodoViewJSON.row("t", view: TodoViewJSON.view(TodoListSection.working, line: line))],
+                              counts: TodoViewJSON.counts(needsYou: 0, inProgress: 1, open: 1, sections: [TodoListSection.working: 1]))
+        }
+        hub.on("GET", "/api/v1/todos", json: row("persona_working"))
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[{"id":"all","kind":"all","title":"","needs_you":0}],"counts":{}}"#)
+        await store.refresh(api: hub.client)
+        #expect(pushes == 1 && store.views["t"]?.line?.key == "persona_working")
+        let observed = TodoObservationFlag()
+        withObservationTracking { _ = store.todos } onChange: { MainActor.assumeIsolated { observed.changed = true } }
+        hub.on("GET", "/api/v1/todos", json: row("agent_running"))
+        await store.refresh(api: hub.client)
+        #expect(store.views["t"]?.line?.key == "agent_running")
+        #expect(pushes == 1, "only the facts tell the watch and the widgets")
+        #expect(!observed.changed, "the rows did not change")
+    }
+
+    /// While V1 is on the views, counts and places are kept on disk beside the rows (debounced), and a new store draws
+    /// them before its first read; with V1 off nothing is written.
+    @Test func viewsAreKeptOnDiskWhileV1IsOn() async throws {
+        var saved: [TodoViewCache?] = []
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([TodoViewJSON.row("t", view: TodoViewJSON.view(TodoListSection.todo))],
+                                                              counts: TodoViewJSON.counts(needsYou: 0, open: 1, sections: [TodoListSection.todo: 1])))
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[{"id":"all","kind":"all","title":"","needs_you":0}],"counts":{}}"#)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on(saved: { saved.append($0) }))
+        await store.refresh(api: hub.client)
+        for _ in 0..<150 where saved.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        let kept = try #require(saved.last ?? nil)
+        #expect(kept.views.keys.sorted() == ["t"] && kept.counts?.open == 1 && kept.places?.places.map(\.id) == ["all"])
+
+        let next = TodoStore(cachedTodos: store.todos, cacheWriter: nil, hubListChanged: {}, v1: .on(cache: kept))
+        defer { next.forget() }
+        #expect(next.viewsRead, "kept from the last run: the list draws at once")
+        #expect(next.views == kept.views && next.counts == kept.counts && next.places == kept.places)
+        let other = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on(cache: kept))
+        #expect(!other.viewsRead && other.views.isEmpty, "no rows kept: another hub's views are not drawn")
+
+        var offSaved = 0
+        var off = TodoStore.V1.on(saved: { _ in offSaved += 1 })
+        off.isOn = { false }
+        let quiet = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: off)
+        await quiet.refresh(api: hub.client)
+        try await Task.sleep(for: .milliseconds(1_300))
+        #expect(offSaved == 0 && hub.sent("GET", "/api/v1/todos/places").count == 1, "V1 off: no cache, no places")
+        #expect(quiet.views.keys.sorted() == ["t"], "the views are read all the same")
+        store.forget()
+        try await waitForTodoTest { saved.last == .some(nil) } // forget takes the entry away
+    }
+
+    /// The first V1 launch has no views kept: the list waits for the first read to end, answered or failed.
+    @Test func theFirstReadEndsTheWait() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos") { _ in throw APIError(status: 503, message: "assistant offline") }
+        let store = TodoStore(cachedTodos: [TodoItem(id: "t", title: "Kept")], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        #expect(!store.viewsRead)
+        await store.refresh(api: hub.client)
+        #expect(store.viewsRead && store.error != nil && store.todo(id: "t") != nil)
+        store.forget()
+        #expect(!store.viewsRead, "another hub: wait for its first read")
+    }
+
+    /// The places are read with the list while V1 is on and the hub lists them, again only when the list changed, and
+    /// a hub without the route (405) has none.
+    @Test func placesAreReadWithTheList() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[{"id":"all","kind":"all","title":"","needs_you":2}],"counts":{"needs_you":2}}"#)
+        var answers = [TodosPage(list: [TodoItem(id: "a", title: "A")], etag: "t1"), TodosPage(list: nil, etag: "t1"),
+                       TodosPage(list: [TodoItem(id: "a", title: "A2")], etag: "t2")]
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, read: { _, _ in answers.removeFirst() },
+                              v1: .on())
+        defer { store.forget() }
+        await store.refresh(api: hub.client)
+        #expect(store.places?.places.first?.needsYou == 2)
+        await store.refresh(api: hub.client)
+        #expect(hub.sent("GET", "/api/v1/todos/places").count == 1, "a 304 changes no place")
+        hub.on("GET", "/api/v1/todos/places") { _ in throw APIError(status: 405, message: "method not allowed") }
+        await store.refresh(api: hub.client)
+        #expect(hub.sent("GET", "/api/v1/todos/places").count == 2)
+        #expect(store.places == nil, "not there")
+
+        let unlisted = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {},
+                                 read: { _, _ in TodosPage(list: [TodoItem(id: "b", title: "B")], etag: "t3") },
+                                 v1: .on(features: TodoFeatures(view: true)))
+        defer { unlisted.forget() }
+        await unlisted.refresh(api: hub.client)
+        #expect(hub.sent("GET", "/api/v1/todos/places").count == 2, "a hub that does not list todo_places is not asked")
+    }
+
+    /// One timer to the earliest moment a row changes by time alone reads the list again then, only while the scene is
+    /// in front; a moment that still reads the same afterwards does not set it again.
+    @Test func aRowsNextChangeReadsTheListAgain() async throws {
+        let hub = FakeHub()
+        let soon = ISO8601DateFormatter().string(from: Date().addingTimeInterval(1))
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([
+            TodoViewJSON.row("a", view: TodoViewJSON.view(TodoListSection.justFinished, phase: TodoPhase.ready, next: soon)),
+            TodoViewJSON.row("b", view: TodoViewJSON.view(TodoListSection.todo, next: "2099-01-01T00:00:00Z")),
+        ]))
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[],"counts":{}}"#)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on(slack: .zero))
+        defer { store.forget() }
+        store.sceneActive(false)
+        await store.refresh(api: hub.client)
+        try await Task.sleep(for: .milliseconds(1_500))
+        #expect(hub.sent("GET", "/api/v1/todos").count == 1, "away from the front: no timer")
+        store.sceneActive(true)
+        try await waitForTodoTest { hub.sent("GET", "/api/v1/todos").count == 2 }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(hub.sent("GET", "/api/v1/todos").count == 2, "the same moment again: the next push files it")
+    }
+}
+
+/// Waits (up to 5 s) for something a timer does.
+@MainActor
+private func waitForTodoTest(_ condition: @MainActor () -> Bool) async throws {
+    for _ in 0..<250 where !condition() { try await Task.sleep(for: .milliseconds(20)) }
+    try #require(condition(), "it did not happen in time")
 }

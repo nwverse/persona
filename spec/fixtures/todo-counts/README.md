@@ -24,6 +24,8 @@ values to the schema and the generated types read them back unchanged (the tests
 - `expected.counts`: the `TodoCounts`. `expected.places`: the `TodoPlaces` answer, whose `counts` equal
   `expected.counts`. Compare as JSON values.
 - `expected.order` (optional, added here): every to-do of the list by its view's section, in the order of its `rank`.
+  Every case with to-dos has it, so a client that files rows itself can replay the counts from the sections
+  (`apple/PersonaTests/TodoCountsFallbackTests.swift`).
 
 All data is made up.
 
