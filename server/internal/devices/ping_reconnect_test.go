@@ -724,3 +724,68 @@ func (w *stuckWriter) writeCount() int {
 	defer w.mu.Unlock()
 	return w.calls
 }
+
+// A relayed link whose every pong comes back after pingWait but well within one cycle (a high-RTT path) is working:
+// the previous ping's late pong clears the next miss however the rounds fall, so it is never closed as half-open.
+// Once the pongs stop, two misses in a row still close it.
+func TestLatePongsOnEveryCycleKeepTheConnection(t *testing.T) {
+	oldWait, oldInterval, oldWindow := pingWait, pingInterval, pingActivityWindow
+	pingWait, pingInterval, pingActivityWindow = 100*time.Millisecond, 600*time.Millisecond, 0
+	t.Cleanup(func() { pingWait, pingInterval, pingActivityWindow = oldWait, oldInterval, oldWindow })
+	r, w := io.Pipe()
+	writes := &signalWriter{ch: make(chan string, 16)}
+	peer := rpc.New("h", writes)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- peer.Serve(context.Background(), r) }()
+	ctx, cancel := context.WithCancel(context.Background())
+	var silent atomic.Bool
+	answerDone := make(chan struct{})
+	go func() { // the node: every pong arrives 140 ms after its ping, past pingWait
+		defer close(answerDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case line := <-writes.ch:
+				var ping struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal([]byte(line), &ping) != nil || ping.ID == "" || silent.Load() {
+					continue
+				}
+				go func() {
+					<-time.After(140 * time.Millisecond)
+					_, _ = io.WriteString(w, `{"id":"`+ping.ID+`","result":{}}`+"\n")
+				}()
+			}
+		}
+	}()
+	d, _ := pingMachine(t, peer)
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		d.measureLoop(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-loopDone
+		<-answerDone
+		_ = w.Close()
+		_ = r.Close()
+		peer.Close(io.EOF)
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+			t.Error("Serve did not stop")
+		}
+	})
+	<-time.After(5*pingInterval + pingInterval/2) // five rounds, every pong late
+	assertPeerOpen(t, peer)
+
+	silent.Store(true)
+	select {
+	case <-peer.Done():
+	case <-time.After(pingActivityWindowNow() + time.Duration(pingMissLimit+2)*pingInterval):
+		t.Fatal("silent connection stayed open")
+	}
+}
