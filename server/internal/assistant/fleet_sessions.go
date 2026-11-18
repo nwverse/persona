@@ -242,6 +242,7 @@ func (s *Service) publishList(machine string) []proto.Session {
 	// told as null either way.
 	s.hub.Tell(assistantwire.EventFleetSessions, rpc.Marshaled(b))
 	s.liveChanged(false)
+	s.todoRunsChanged(machine) // a card, a seen turn: a to-do's view may file it elsewhere (todo_view_push.go)
 	return list
 }
 
@@ -466,6 +467,9 @@ func (s *Service) listedSession(machine, sid string) (proto.Session, bool) {
 	list, err := s.archivedListed(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false), mark)
 	if err != nil {
 		s.logf("load agent archives: %v", err)
+	}
+	if len(list) == 0 {
+		return proto.Session{}, false // an unreadable deletion ledger hides assistant rows rather than exposing them
 	}
 	return list[0], true
 }

@@ -75,7 +75,8 @@ All data is made up.
   they are. A wait the run ends by itself (background commands, a `/loop`) is Working, not Waiting.
 - Every to-do is ranked within its section, a step its parent carries too: clients sort the rows they draw by rank,
   and a gap left by a step they do not draw changes nothing.
-- Not pinned yet: Today's and Upcoming's own rows, and what the hub does across several managers (its own test).
+- Not pinned yet: Today's and Upcoming's own rows. What the hub does across several managers has its own test
+  (`server/internal/hub/todo_view_test.go`): it adds the counts up and joins the places, ranking nothing again.
   `rank` is worked out per manager's list, and the hub only joins the lists, so a merged section can hold equal ranks:
   clients order by `rank`, then the manager, then the id.
 

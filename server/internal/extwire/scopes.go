@@ -108,6 +108,8 @@ var RouteScopes = map[string]string{
 	"PUT /api/v1/todos/{id}/repositories":                 ScopeTodosWrite,
 	"PUT /api/v1/todos/{id}/repositories/{repo_id}/links": ScopeTodosWrite,
 	"GET /api/v1/todos":                                   ScopeTodosRead,
+	"GET /api/v1/todos/places":                            ScopeTodosRead,
+	"GET /api/v1/todos/{id}":                              ScopeTodosRead,
 	"GET /api/v1/todos/{id}/decisions":                    ScopeTodosRead,
 	"POST /api/v1/todos":                                  ScopeTodosWrite,
 	"PATCH /api/v1/todos/{id}":                            ScopeTodosWrite,
