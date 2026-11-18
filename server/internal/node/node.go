@@ -41,6 +41,8 @@ import (
 )
 
 type Node struct {
+	runtimeUsage runtimeUsageReports
+
 	memoryMu     sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer

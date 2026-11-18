@@ -850,8 +850,8 @@ Muted and Seen, and it keeps its space, repository and worktree out of the idle 
 a plain dot, its state word "Just finished" (the To-dos' section word, `StateName`), its second line the triage's
 "✓ conclusion". A muted one is plain Seen. Why not Unread: Unread stays what needs a look. Why not plain Seen: work
 that ended minutes ago sank under sessions seen days ago. Why after the work still going: as in the To-dos' order
-above, what still runs comes before what is done. The web has it first; Apple, Android and HarmonyOS follow in their
-own issues and show these rows as Seen until then.
+above, what still runs comes before what is done. The web and Android (#9786; there the dot is Unread's, as Awaiting
+reply's) have it; Apple and HarmonyOS follow in their own issues and show these rows as Seen until then.
 
 #### The work-item row
 
@@ -1150,6 +1150,12 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
+- Agent launcher label (#10248): when the session reports its launcher, the existing pill says **launcher · model**,
+  using the same launcher name as its model-panel row. Both the launcher and abbreviated model stay visible at phone
+  width, truncating within the existing capsule; the full names remain in its tooltip and spoken label. The existing
+  engine mark stays. A queued switch shows its target launcher with the clock, while the tooltip retains current and
+  next setups. An unknown launcher keeps the model-only label and compact fallback. This label correction applies to
+  Agents; Persona's pill keeps its existing presentation.
 - Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
   `--orange`, wrapping), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"
   for another launcher of the same engine, "Switching engines rebuilds context and may lose content" for the other engine
@@ -1788,6 +1794,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   Wherever an Allow is in view, what it allows is in view too.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
 - **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
+- **A plan's recorded following mode** (#3784): when the plan interaction carries `plan_then`, the existing approval card names that mode with the general permission-mode label and offers one approval, not a competing set of modes; the recorded mode came from the task's start, so it wins on older clients too. Send Back stays. A card without the field keeps the existing approval-mode choices and default. This changes only the affected approval's content, reusing the current buttons, menu-free action row and localized labels.
 - **Editing before Allow** (web Lark send/reply): the default card remains read-only with Allow primary. **Edit text** and **Deny with note…** progressively disclose their fields only when the server declares the capability. An actual edit hides Always and makes Allow apply to the reviewed replacement, never the original command; blank text disables Allow. Deny remains an explicit action, with its optional reason secondary to the decision. Other clients and other permission kinds keep the unchanged Allow/Deny layout.
 - **One scroll, the answers in view** (iOS and iPadOS, #6605): a card scrolls in one place at most. A lone card fits the
   cards' area (half the page), so the area never scrolls under it; several scroll in the area, as above. Inside a card
