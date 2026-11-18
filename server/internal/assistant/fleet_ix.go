@@ -1045,7 +1045,13 @@ func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool 
 
 // honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not
 // read the field, may still send it, and the answer's history must not say "always allowed" for a grant no one keeps.
+// An approved plan likewise uses the mode its start recorded, not an older client's hard-coded mode.
 func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
+	if ix.Kind == proto.IxPlan && r.Approve != nil && *r.Approve {
+		if mode := proto.PlanAfterMode(ix.PlanThen); mode != "" {
+			r.Mode = mode
+		}
+	}
 	if ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
 		r.Always = false
 	}
