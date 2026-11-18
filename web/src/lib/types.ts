@@ -385,6 +385,8 @@ export interface Session {
   /** Its own task list (Claude Code's TodoWrite / TaskCreate): how far along it is (docs/integrations/agent-goal.md "Plan"). */
   plan?: PlanInfo;
   background?: BackgroundTask[];
+  /** Recent shell / Monitor outcomes from the last day; absent on older hubs and omitted from list summaries. */
+  background_ended?: BackgroundTask[];
   /** Bounded list summaries omit task arrays; these scalars are authoritative when present. */
   waiting?: boolean;
   background_count?: number;
@@ -532,6 +534,10 @@ export interface BackgroundTask {
   command?: string;
   output_file?: string;
   started_at?: string;
+  /** A retained outcome: completed / failed / killed / stopped; absent on older hubs and while running. */
+  status?: string;
+  ended_at?: string;
+  exit_code?: number;
   /** A Monitor: when it stops by itself. */
   expires_at?: string;
   /** A workflow: its run in Session.workflows. */
