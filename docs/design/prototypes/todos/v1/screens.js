@@ -134,7 +134,7 @@
     // first), so Needs you and its count sit beside it in any column; the trailing end holds only the grouping control.
     const at = items.findIndex((x) => x.id === sel);
     const group = `<span class="v1-group"${A(o.group || T('Opens: Group By (Phase · Project · Due Date)'))} title="Group By">${I('line-3-decrease', o.web ? 15 : 19)}</span>`;
-    const html = ui.sectionBar(items, { selected: at, trailing: `<i class="v1-sbar-sep"></i>${group}` });
+    const html = ui.sectionBar(items, { selected: at, trailing: group });
     return `<div class="v1-bar${o.compact ? ' is-compact' : ''}">${html}</div>`;
   }
 
