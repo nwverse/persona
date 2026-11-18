@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -49,16 +48,17 @@ func compactThenRequest(t *testing.T, c *codexConn, input int64) {
 	}
 }
 
-func waitInterrupt(t *testing.T, f *fakeAppServer) bool {
+// loopStop is the reason the loop has decided to stop the turn with, "" while it has not: noteRequest decides it
+// within the notification, before its interrupt goes out on a goroutine of its own.
+func loopStop(c *codexConn) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loop.stop
+}
+
+func waitInterrupt(t *testing.T, f *fakeAppServer) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(f.sent("turn/interrupt")) > 0 {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return false
+	waitFor(t, "the loop's turn/interrupt", func() bool { return len(f.sent("turn/interrupt")) > 0 })
 }
 
 // The recorded loop: each request after a compaction was 166–173k tokens against a 124,518-token window. The second
@@ -66,13 +66,14 @@ func waitInterrupt(t *testing.T, f *fakeAppServer) bool {
 func TestCodexCompactionLoopStopsTheTurn(t *testing.T) {
 	_, p, c, f := loopTurn(t, "small-131k")
 	compactThenRequest(t, c, 173247)
-	if len(f.sent("turn/interrupt")) > 0 {
+	if loopStop(c) != "" || len(f.sent("turn/interrupt")) > 0 {
 		t.Fatal("one compaction that fell short stopped the turn")
 	}
 	compactThenRequest(t, c, 170533)
-	if !waitInterrupt(t, f) {
-		t.Fatal("the loop was not interrupted")
+	if loopStop(c) == "" {
+		t.Fatal("two compactions in a row that made no room did not stop the turn")
 	}
+	waitInterrupt(t, f)
 	codexEvent(t, c, "turn/completed", map[string]any{"threadId": testThread, "turn": map[string]any{"id": "turn-1", "status": "interrupted"}})
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -93,9 +94,9 @@ func TestCodexCompactionThatMakesRoomGoesOn(t *testing.T) {
 	codexEvent(t, c, "turn/completed", map[string]any{"threadId": testThread, "turn": map[string]any{"id": "turn-1", "status": "completed"}})
 	codexEvent(t, c, "turn/started", map[string]any{"threadId": testThread, "turn": map[string]any{"id": "turn-2"}})
 	compactThenRequest(t, c, 119000) // the new turn's first
-	time.Sleep(100 * time.Millisecond)
-	if got := f.sent("turn/interrupt"); len(got) > 0 {
-		t.Fatalf("a turn whose compactions made room was interrupted: %d", len(got))
+	// The decision is made within each notification, and no interrupt goes out without one.
+	if stop := loopStop(c); stop != "" || len(f.sent("turn/interrupt")) > 0 {
+		t.Fatalf("a turn whose compactions made room is stopped: %q", stop)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -111,8 +112,7 @@ func TestCodexLargeRequestWithoutCompactionIsNotALoop(t *testing.T) {
 		codexEvent(t, c, "thread/tokenUsage/updated", map[string]any{"threadId": testThread, "turnId": "turn-1",
 			"tokenUsage": map[string]any{"last": map[string]any{"inputTokens": 123000}, "modelContextWindow": 124518}})
 	}
-	time.Sleep(100 * time.Millisecond)
-	if len(f.sent("turn/interrupt")) > 0 {
+	if loopStop(c) != "" || len(f.sent("turn/interrupt")) > 0 {
 		t.Fatal("requests without a compaction were taken for a loop")
 	}
 }
@@ -129,9 +129,7 @@ func TestCodexCompactionLoopLeavesTheFallback(t *testing.T) {
 	}
 	compactThenRequest(t, c, 173247)
 	compactThenRequest(t, c, 170533)
-	if !waitInterrupt(t, f) {
-		t.Fatal("the loop was not interrupted")
-	}
+	waitInterrupt(t, f)
 	codexEvent(t, c, "turn/completed", map[string]any{"threadId": testThread, "turn": map[string]any{"id": "turn-1", "status": "interrupted"}})
 	if r := n.modelRecovery(testThread); modelRecoverySwitched(r) {
 		t.Fatalf("the looping fallback is kept: %+v", r)
