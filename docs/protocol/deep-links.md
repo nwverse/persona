@@ -103,6 +103,7 @@ checks; none of them is ever written by the hub's link builder.
 | `persona://pair?url=&token=` | pairs the app with a hub | asks "Connect to <host>?" first (#9929) |
 | `persona://link?…`, `persona://peer?…`, `persona://connector?…` | a computer's, a linked hub's, a connector's pairing | not for this device; pasted where they belong |
 | `persona://password-login?state=&code=` | finishes a sign-in | its `state` |
+| `persona://browser-login?hub=&request=` | a browser asks to sign in (the web sign-in page's code) | read only by the app's own scanner in Settings › Devices; opened as a link it signs nothing in ([protocol.md](protocol.md) "Browser QR sign-in") |
 | `persona://shortcut-callback/…` | a Shortcut Persona ran came back | its token |
 | `persona://ask?text=`, `persona://sources-graph` | the subscriptions pages' actions | only from those pages |
 | `persona://widget/<kind>`, `persona://record…`, `persona://allday?action=` | Home Screen widgets, Live Activities, watch complications | Persona's own surfaces |
