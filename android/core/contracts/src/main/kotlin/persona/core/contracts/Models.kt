@@ -866,6 +866,8 @@ data class Item(
     val model: String? = null,
     /** What the model requests this item stands for used (#5426). Older hubs omit it. */
     val usage: List<TokenUsage> = emptyList(),
+    val narration: Boolean? = null,
+    @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
 )
 
 /**

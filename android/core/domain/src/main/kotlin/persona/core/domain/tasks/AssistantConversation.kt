@@ -14,6 +14,7 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
          * round as it was. [inline] (Glass, #4339 C13, iOS `ChatLines.lines`): a quiet round stays in the conversation
          * rather than going to the background record: a supervision round folds into one "Handled in the background" line
          * (with [folding]), and the scheduled and follow-up rounds read as they are unless the background rounds fold.
+         * Visible supervision rounds in a folding conversation stay in the chat in every style.
          */
         fun project(lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding? = null, inline: Boolean = false): AssistantConversation {
             val quiet = mutableSetOf<String>()
@@ -38,7 +39,7 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                             injected?.kind in setOf("supervision", "routine", "patrol", "schedule"))
                         // A round lasts until the next genuine input, a queued one included; a folded one is drawn, not moved.
                         round = folding?.let { f ->
-                            BackgroundFolding.supervision.takeIf { inline && source?.kind == it.kind }
+                            BackgroundFolding.supervision.takeIf { (inline || f.rounds) && source?.kind == it.kind }
                                 ?: BackgroundFolding.sourceOf(item)?.takeIf { f.rounds }
                         }?.let { folded ->
                             background = false
@@ -52,10 +53,20 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                 // An upstream refusal (#2528) is the user's to see in Persona's chats too, as on the web.
                 if ((item.role == "system" || item.kind == "notice" || item.kind == "recap") && item.modelRefusal == null) hints += item.id
             }
+            // Keep Brief and Board's quiet supervision in their existing background record.
+            val results = if (rounds.isEmpty()) emptyMap() else
+                items.filter { it.kind == "tool_result" && it.toolUseId != null }.associateBy { it.toolUseId!! }
+            val liveRound = round.takeIf { lines.any { it is ChatLine.Work && it.live } }
+            if (!inline) for ((id, detail) in rounds) {
+                val (source, ordered) = detail
+                if (source == BackgroundFolding.supervision && !supervisionVisible(ordered, results, id == liveRound)) {
+                    ordered.mapTo(quiet) { it.id }
+                }
+            }
             val quietGroups = lines.filterIsInstance<ChatLine.Work>().filter { line ->
                 line.id.removePrefix("w-") in quiet || line.steps.any { it.originalId() in quiet }
             }.mapTo(mutableSetOf()) { it.id }
-            if (background) quietGroups += persona.core.domain.lines.LiveWorkId
+            if (background || (!inline && liveRound != null && liveRound in quiet)) quietGroups += persona.core.domain.lines.LiveWorkId
             val record = mutableListOf<ChatLine>()
             val visible = lines.mapNotNull { line ->
                 val hidden = when (line) {
@@ -79,7 +90,7 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                 } else line
             }
             if (folding == null || rounds.isEmpty()) return AssistantConversation(visible, record)
-            return AssistantConversation(fold(visible, items, folding, roundOf, rounds, liveRound = round), record)
+            return AssistantConversation(fold(visible, results, folding, roundOf, rounds, liveRound, inline), record)
         }
 
         /**
@@ -87,8 +98,8 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
          * open; a round that must stay shown ([supervisionVisible]) keeps its lines as they are.
          */
         private fun fold(
-            lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding, roundOf: Map<String, String>,
-            rounds: Map<String, Pair<persona.core.contracts.MessageSource, List<Item>>>, liveRound: String?,
+            lines: List<ChatLine>, results: Map<String, Item>, folding: BackgroundFolding, roundOf: Map<String, String>,
+            rounds: Map<String, Pair<persona.core.contracts.MessageSource, List<Item>>>, liveRound: String?, inline: Boolean,
         ): List<ChatLine> {
             val workRound = mutableMapOf<String, String>()
             fun of(line: ChatLine): String? = when (line) {
@@ -105,7 +116,6 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                 else -> null
             }
             val owners = lines.map(::of)
-            val results = items.filter { it.kind == "tool_result" && it.toolUseId != null }.associateBy { it.toolUseId!! }
             val out = ArrayList<ChatLine>(lines.size)
             var i = 0
             while (i < lines.size) {
@@ -117,7 +127,10 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                 i = end + 1
                 val live = members.any { it is ChatLine.Work && it.live }
                 val (source, ordered) = rounds.getValue(id)
-                if (supervisionVisible(ordered, results, live)) { out += members; continue }
+                if ((!inline && source == BackgroundFolding.supervision) || supervisionVisible(ordered, results, live)) {
+                    out += members
+                    continue
+                }
                 val lineId = BackgroundFolding.lineId(id)
                 val open = lineId in folding.open || ordered.any { it.id == folding.reveal }
                 out += ChatLine.Extra(lineId, BackgroundRound(lineId, source, live, open, members.toList()))

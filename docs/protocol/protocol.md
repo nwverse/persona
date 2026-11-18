@@ -1157,6 +1157,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "client_msg_id":"…",                                 // this item comes from a message the App sent with this client_msg_id (text, image, or the notice /compact turns into),
                                                       // recognized by the node, see "Matching pending messages"; old hubs / nodes omit it
  "wake":true,                                         // a notice or agent tool result started a new turn after Claude was idle
+ "narration":true,                                    // optional Codex commentary, still a text item but not a final reply
  "injected":{"kind":"task_notice","state":"done",…},   // user text only: this is a message Persona sent to the model (task notification, scheduled task, wake-up…), not written by the user; added by the hub when sending, see "Messages Persona injects"
  "source":{"kind":"conversation|patrol|followup|supervision|meeting","conversation_id":"…","title":"…"}, // optional input provenance, independent of role; id/title optional, see "Message source"
  "from":"peer name",                                  // optional native peer sender (another Claude session, a teammate, a Paseo Agent); a display name, not necessarily a conversation id
@@ -3341,6 +3342,11 @@ own result text, so statuses read from words (any line without `toolDenialKind`)
 starts drawing outcomes must bump its item cache version: items cached from older pages have none.
 
 ### Folded work
+
+A successful `supervision_finish` with `visibility: "silent"` keeps its call and receipt on a folded page so clients
+can honor the disposition when other work is folded. They remain in the work summary in the app. The app uses the
+optional `narration` and `codex_heartbeat_quiet` markers to exclude commentary and generated quiet acknowledgements
+from the final-reply rule for background rounds.
 
 The tool calls, thinking and intermediate Codex commentary of a turn are normally folded into one line in the chat ("Tools 502 · Thinking 81"). But in one long Codex session, the page for the last two turns had 1412 items and 1.08 MB,
 with only 6 actual replies: on a weak network the top of the chat page kept spinning. When a request carries `fold_work` (HTTP `fold_work=1`, `fold_work: true` when subscribing), pages read backward from the end
