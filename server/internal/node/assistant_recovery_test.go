@@ -365,20 +365,25 @@ func TestNextAssistantModelFollowsLauncherOrderOnce(t *testing.T) {
 		{ID: "fallback", Resolved: "resolved-fallback"},
 		{ID: "third"},
 	}}
-	if got, ok := nextAssistantModel(list, "resolved-primary", map[string]bool{"resolved-primary": true, "primary": true}); !ok || got != "fallback" {
+	if got, ok := nextAssistantModel(list, "resolved-primary", map[string]bool{"resolved-primary": true, "primary": true}, assistantFit{}); !ok || got != "fallback" {
 		t.Fatalf("next after a resolved alias = %q %v", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "fallback", map[string]bool{"fallback": true}); !ok || got != "third" {
+	if got, ok := nextAssistantModel(list, "fallback", map[string]bool{"fallback": true}, assistantFit{}); !ok || got != "third" {
 		t.Fatalf("next after fallback = %q %v", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "custom", map[string]bool{"custom": true}); !ok || got != "primary" {
+	if got, ok := nextAssistantModel(list, "custom", map[string]bool{"custom": true}, assistantFit{}); !ok || got != "primary" {
 		t.Fatalf("a custom current model starts with the first concrete entry = %q %v", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "third", map[string]bool{"third": true}); ok || got != "" {
+	// Past the last entry the list goes on from the top (#10277); it is exhausted once every entry was tried.
+	if got, ok := nextAssistantModel(list, "third", map[string]bool{"third": true}, assistantFit{}); !ok || got != "primary" {
+		t.Fatalf("next after the last entry = %q %v, want primary", got, ok)
+	}
+	tried := map[string]bool{"third": true, "primary": true, "fallback": true}
+	if got, ok := nextAssistantModel(list, "third", tried, assistantFit{}); ok || got != "" {
 		t.Fatalf("the exhausted list selected %q", got)
 	}
 	list.Locked = "the launcher fixes its model"
-	if got, ok := nextAssistantModel(list, "primary", nil); ok || got != "" {
+	if got, ok := nextAssistantModel(list, "primary", nil, assistantFit{}); ok || got != "" {
 		t.Fatalf("a locked launcher selected %q", got)
 	}
 }
@@ -389,14 +394,14 @@ func TestNextAssistantModelResolvesAnUnreportedDefault(t *testing.T) {
 		{ID: "primary-model"},
 		{ID: "fallback-model"},
 	}}
-	if got, ok := nextAssistantModel(list, "", map[string]bool{}); !ok || got != "fallback-model" {
+	if got, ok := nextAssistantModel(list, "", map[string]bool{}, assistantFit{}); !ok || got != "fallback-model" {
 		t.Fatalf("an unreported default selected %q %v, want the genuinely different fallback-model", got, ok)
 	}
 	codex := proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model", Default: true}, {ID: "fallback-model"}}}
-	if got, ok := nextAssistantModel(codex, "", nil); !ok || got != "fallback-model" {
+	if got, ok := nextAssistantModel(codex, "", nil, assistantFit{}); !ok || got != "fallback-model" {
 		t.Fatalf("a native default model selected %q %v, want fallback-model", got, ok)
 	}
-	if got, ok := nextAssistantModel(list, "default", nil); !ok || got != "fallback-model" {
+	if got, ok := nextAssistantModel(list, "default", nil, assistantFit{}); !ok || got != "fallback-model" {
 		t.Fatalf("the literal default alias selected %q %v, want fallback-model", got, ok)
 	}
 }

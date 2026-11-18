@@ -946,3 +946,20 @@ func (c *Client) Panes(ctx context.Context, workspace string) ([]Agent, error) {
 	err := c.call(ctx, "pane.list", map[string]any{"workspace_id": workspace}, &res, "pane", "list", "--workspace", workspace)
 	return res.Panes, err
 }
+
+// PaneCount is how many panes the server has, in every workspace (socket only: no CLI fallback, which could reach
+// another server).
+func (c *Client) PaneCount(ctx context.Context) (int, error) {
+	var res struct {
+		Panes []json.RawMessage `json:"panes"`
+	}
+	if err := c.rpc(ctx, "pane.list", map[string]any{}, &res); err != nil {
+		return 0, err
+	}
+	return len(res.Panes), nil
+}
+
+// ServerStop stops the server listening on c's socket (socket only, like PaneCount).
+func (c *Client) ServerStop(ctx context.Context) error {
+	return c.rpc(ctx, "server.stop", map[string]any{}, nil)
+}
