@@ -357,7 +357,7 @@ struct AssistantTopBar: View {
     /// copy's confirmation shows in it for a moment, as on the Mac's bar.
     private var namePill: some View {
         let link = model.connection.shown
-        return HStack(spacing: 0) {
+        return HStack(spacing: Theme.Space.flush) {
             Menu { menuItems(link) } label: {
                 Self.pill {
                     if let hint {

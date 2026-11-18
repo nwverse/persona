@@ -449,6 +449,9 @@ export interface Session {
   origin?: string;
   /** What it was opened for: the inbox item, the task, the conversation, the channel, the extension. */
   origin_ref?: string;
+  /** The extension whose token opened it, by id (docs/protocol/protocol.md "Origin of assistant chats"): noted when it
+   *  opened, never backfilled; absent for any other and on older hubs. */
+  opened_by?: string;
   /** The channels messages came into it from, newest first (docs/extensions/channels.md "Source markers"). */
   channels?: string[];
   todo?: { id: string; title: string };
@@ -1005,6 +1008,12 @@ export interface SessionLive {
   thinking?: boolean;
   /** It just thought for this many seconds ("thought for 3s"). */
   thought_s?: number;
+  /** The model request error Claude is retrying, without the countdown or attempt suffix. */
+  retry_error?: string;
+  /** Current model request attempt, as shown on screen. */
+  retry_attempt?: number;
+  /** Maximum number of attempts, as shown on screen. */
+  retry_max?: number;
   /** When the node read it (RFC 3339). */
   at?: string;
 }
