@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -299,5 +300,154 @@ func TestProjectionOfTheManagersList(t *testing.T) {
 	if v := e.s.todoProjectionOf(ctx, listed.Todos, later).byID()[failed.ID]; v.Reason != assistantwire.TodoReasonRest ||
 		!v.Inactive.IsZero() || !v.NextChangeAt.IsZero() {
 		t.Errorf("the failed start with its computer unreached: %+v", v)
+	}
+}
+
+// On a manager that carries the fleet, as in production, the adapter reads only the sessions of the open to-dos'
+// active runs, never a computer's whole list or its archive's records, and the archive's row of a run the computer no
+// longer lists, which reads as offline as in the computer's whole list: the views are those the whole list gives.
+func TestProjectionReadsOnlyTheLinkedRunsOnTheFleet(t *testing.T) {
+	d := newFleetDevs()
+	d.add("box", "Computer")
+	st := newFleetMem()
+	s := New(Options{Hub: newFakeHub(), Devices: d, Store: func() Store { return st }, Logf: func(string, ...any) {}})
+	ctx := context.Background()
+	gone := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	archive := map[string]agentArchive{}
+	for _, sid := range []string{"gone", "old1", "old2"} {
+		archive[runtimeListID("box", sid)] = agentArchive{Session: archiveSnapshot(proto.Session{MachineID: "box", SessionID: sid,
+			Title: "Ferry booking", UpdatedAt: gone}), Archived: true, ChangedAt: gone}
+	}
+	if err := st.PutSetting(ctx, agentArchivesKey, archive); err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now().UTC().Add(-time.Minute)
+	d.setSessions("box", []proto.Session{
+		{SessionID: "s1", Title: "Hedge trimming", Status: proto.StatusWorking, StateSince: began, UpdatedAt: began,
+			Activity: "measuring the hedge"},
+		{SessionID: "s2", Title: "Something else", Status: proto.StatusIdle, UpdatedAt: began},
+	})
+	created := began.Add(-time.Hour)
+	todo := func(id, machine, sid string) listedTodo {
+		return listedTodo{Todo: formatTodo(Todo{ID: id, Title: id, CreatedAt: created, UpdatedAt: created,
+			Agents: []TodoAgent{{MachineID: machine, SessionID: sid, LinkedAt: created}}})}
+	}
+	list := []listedTodo{todo("todo_worked", "box", "s1"), todo("todo_archived", "box", "gone"),
+		todo("todo_elsewhere", "nowhere", "s9")}
+	now := time.Now()
+
+	d.mu.Lock()
+	lists := d.machines["box"].lists
+	d.mu.Unlock()
+	got := s.todoProjectionOf(ctx, list, now)
+	d.mu.Lock()
+	if d.machines["box"].lists != lists {
+		t.Error("the computer's whole list was read")
+	}
+	d.mu.Unlock()
+	if n := len(got.facts[0].Sessions); n != 1 || got.facts[0].Sessions[0].SessionID != "s1" {
+		t.Errorf("the working run's sessions: %+v", got.facts[0].Sessions)
+	}
+	if ss := got.facts[1].Sessions; len(ss) != 1 || ss[0].SessionID != "gone" || ss[0].State != proto.StateOffline {
+		t.Errorf("the archived run's sessions: %+v", ss)
+	}
+	if !got.facts[2].Unreached || got.facts[0].Unreached || got.facts[1].Unreached {
+		t.Errorf("unreached: %v %v %v", got.facts[0].Unreached, got.facts[1].Unreached, got.facts[2].Unreached)
+	}
+
+	whole, err := s.sessions(ctx, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := map[[2]string]proto.Session{}
+	for _, c := range whole {
+		c.MachineID = "box"
+		all[[2]string{"box", c.SessionID}] = c
+	}
+	facts := make([]projection.Facts, len(list))
+	for i := range list {
+		facts[i] = projectionFacts(list[i], all, s.location(ctx))
+	}
+	facts[2].Unreached = true
+	if want := projection.Views(facts, now); !reflect.DeepEqual(got.views, want) {
+		t.Fatalf("from the linked runs:\n%+v\nfrom the whole list:\n%+v", got.views, want)
+	}
+	if v := got.views[0]; v.Reason != assistantwire.TodoReasonAgentRunning {
+		t.Errorf("the working run's to-do: %+v", v)
+	}
+}
+
+// The adapter hands the projection the pending cards of the open to-dos' active runs: a run that asks is asked by its
+// card, whose id rides on the ask and whose kind says what it asks, and a card of a session no run of the to-do is on
+// is no ask of its. Of two cards of one instant the same one is named on every read, so the same state read again is
+// the same bytes and the list's ETag holds. A health conversation's question is open, as its push offers nothing to
+// answer it with; once the cards are answered the run's ask is a question again until the session moves on.
+func TestProjectionAsksByTheRunsCard(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	began := time.Now().UTC().Add(-time.Minute)
+	e.sessions("server", proto.Session{SessionID: "s1", Title: "Visa form", Status: proto.StatusBlocked,
+		State: proto.StateNeedsYou, StateSince: began, UpdatedAt: began, PendingInteractions: 1,
+		AttentionReason: "Wants to run a command"})
+	todo := e.create("Fill in the visa form")
+	e.must("PUT", "/api/v1/todos/"+todo.ID+"/agents/server/s1", "")
+	cards := []proto.Interaction{
+		{ID: "ix_other", MachineID: "server", SessionID: "s2", Kind: proto.IxQuestion, CreatedAt: began.Add(-time.Hour),
+			ExpiresAt: began.Add(time.Hour), Questions: []proto.Question{{Question: "Which folder?",
+				Options: []proto.QuestionOption{{Label: "Documents"}}}}},
+		{ID: "ix_visa", MachineID: "server", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash", CreatedAt: began,
+			ExpiresAt: began.Add(time.Hour)},
+		{ID: "ix_visa_q", MachineID: "server", SessionID: "s1", Kind: proto.IxQuestion, CreatedAt: began,
+			ExpiresAt: began.Add(time.Hour), Cwd: "/home/user/.persona/health", Questions: []proto.Question{{
+				Question: "Which clinic?", Options: []proto.QuestionOption{{Label: "The one by the station"}}}}},
+	}
+	e.s.fleet.mu.Lock()
+	if e.s.fleet.interactions == nil {
+		e.s.fleet.interactions = map[string]*pending{}
+	}
+	for _, c := range cards {
+		e.s.fleet.interactions[c.ID] = &pending{ix: c}
+	}
+	e.s.fleet.mu.Unlock()
+
+	runAsk := func(body []byte) assistantwire.OwnerAsk {
+		t.Helper()
+		var got struct{ Todos []listedTodo }
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range got.Todos {
+			if r.ID == todo.ID && r.View != nil && len(r.View.Asks) == 1 {
+				return r.View.Asks[0]
+			}
+		}
+		t.Fatalf("no one ask on %s: %s", todo.ID, body)
+		return assistantwire.OwnerAsk{}
+	}
+	body := e.must("GET", "/api/v1/todos", "").Body.Bytes()
+	if a := runAsk(body); a.Kind != assistantwire.OwnerAskKindTool || a.Interaction != "ix_visa" ||
+		a.Home != assistantwire.OwnerAskHomeRun || a.Risk != assistantwire.OwnerAskRiskOpen ||
+		a.Lockscreen != assistantwire.OwnerAskLockscreenOpenOnly || a.Text != "Wants to run a command" {
+		t.Fatalf("the run's ask %+v", a)
+	}
+	for range 8 { // the fleet's cards are a map: each read ranges over them in another order
+		if again := e.must("GET", "/api/v1/todos", "").Body.Bytes(); !bytes.Equal(again, body) {
+			t.Fatalf("unchanged state read again:\n%s\n%s", body, again)
+		}
+	}
+
+	e.s.fleet.mu.Lock()
+	delete(e.s.fleet.interactions, "ix_visa")
+	e.s.fleet.mu.Unlock()
+	if a := runAsk(e.must("GET", "/api/v1/todos", "").Body.Bytes()); a.Kind != assistantwire.OwnerAskKindQuestion ||
+		a.Interaction != "ix_visa_q" || a.Risk != assistantwire.OwnerAskRiskOpen ||
+		a.Lockscreen != assistantwire.OwnerAskLockscreenOpenOnly {
+		t.Fatalf("the run's ask by a health conversation's question %+v", a)
+	}
+	e.s.fleet.mu.Lock()
+	delete(e.s.fleet.interactions, "ix_visa_q")
+	e.s.fleet.mu.Unlock()
+	if a := runAsk(e.must("GET", "/api/v1/todos", "").Body.Bytes()); a.Kind != assistantwire.OwnerAskKindQuestion ||
+		a.Interaction != "" || a.Risk != assistantwire.OwnerAskRiskOpen {
+		t.Fatalf("the run's ask with its cards answered %+v", a)
 	}
 }
