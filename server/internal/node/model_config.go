@@ -119,9 +119,10 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		IsMain                  bool    `json:"is_main"`
 		MainCompact             int     `json:"main_compact_window"`
 		SupervisionInstructions *string `json:"supervision_instructions"`
+		ClaudeInteractive       bool    `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, IsMain: res.IsMain, MainCompactWindow: res.MainCompact}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, IsMain: res.IsMain, MainCompactWindow: res.MainCompact, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions)
 }

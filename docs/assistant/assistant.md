@@ -564,6 +564,9 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
   error; permission mode and effort are start flags, so changing one resumes the conversation in a new process (as
   `bypassPermissions` always has; a busy one finishes its turn first). Guests, meeting rooms, supervision rounds (`--resume-session-at`
   is print-only), plan mode, warm spares (none is warmed while the switch is on) and Codex keep running as before.
+- **Starts no message makes**: the manager also answers `claude_interactive` on `assistant.model`, so a process the node starts
+  by itself (compacting a stopped conversation, resending what lost background tasks were doing after a restart) runs in the
+  same kind of Claude Code as a send would start, and the next message does not restart it into the other kind.
 - **A message that cannot be typed is never dropped quietly**: when the bridge cannot type a message (an image that does not
   decode, an input box that takes nothing for 10 minutes), its turn fails with the reason, as a send claude -p could not deliver
   does, and the messages already waiting behind it fail with it instead of reaching Claude Code out of order. Sent while a turn
@@ -584,7 +587,7 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
 - Tests: `TestTUITranslatorReadsATranscriptAsStreamJSON`, `TestTUIArgsDropPrintFlagsAndCarryTheStartModes`,
   `TestTUIProcessRestartsForModeAndEffort`, `TestInteractiveStartGoesThroughTheBridgeAndItsFallbackIsVisible`,
   `TestPrintModeStartNeverRunsTheBridge`, `TestBridgeFallsBackToPrintModeVisibly`, `TestUndeliveredMessagesFailTheirTurn`,
-  `TestFallbackForwardsOnlyMessages` (`node/assistant_tui_test.go`),
+  `TestFallbackForwardsOnlyMessages`, `TestCompactingAStoppedConversationKeepsInteractive` (`node/assistant_tui_test.go`),
   `TestSendParamsClaudeInteractive`, `TestClaudeInteractiveSetting` (`assistant/claude_interactive_test.go`).
 
 ## Next-message suggestions (#4644)

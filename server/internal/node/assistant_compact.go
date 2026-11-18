@@ -70,9 +70,13 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// (no built-in tools, strict MCP config, project setting sources, its own settings and profile), and
 		// spawnAssistant refuses one whose launcher runs another agent by now.
 		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions}
-		if _, current := n.assistantModel(ctx, id); current.SupervisionResolved {
+		_, current := n.assistantModel(ctx, id)
+		if current.SupervisionResolved {
 			execution.SupervisionInstructions = current.SupervisionInstructions
 		}
+		// It starts as a send would: in interactive Claude Code while the setting is on (#10058; tuiWanted leaves guests
+		// and plan mode in print mode), so neither the compaction nor the next message runs a process of the other kind.
+		execution.Interactive = current.Interactive
 		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
 			return err
 		}

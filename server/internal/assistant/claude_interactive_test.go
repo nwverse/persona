@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -31,6 +32,11 @@ func TestSendParamsClaudeInteractive(t *testing.T) {
 	params, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: sess.SessionID, Params: map[string]any{"text": "next"}})
 	if err != nil || params["claude_interactive"] != true {
 		t.Fatalf("app send while on: %v %v", params, err)
+	}
+	// assistant.model, what the node asks for a start no send makes (a compaction's), says it too
+	raw, _ := json.Marshal(map[string]any{"session_id": sess.SessionID})
+	if out, _, err := s.NodeAnswer(ctx, "server", "assistant.model", raw); err != nil || out.(map[string]any)["claude_interactive"] != true {
+		t.Fatalf("assistant.model while on: %v %v", out, err)
 	}
 	if _, err := s.start(ctx, StartParams{Text: "side"}); err != nil {
 		t.Fatal(err)

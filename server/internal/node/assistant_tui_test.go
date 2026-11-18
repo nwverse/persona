@@ -399,3 +399,45 @@ func TestFallbackForwardsOnlyMessages(t *testing.T) {
 		t.Fatalf("output:\n%s", out.String())
 	}
 }
+
+// A compaction that starts a stopped conversation starts it as a send would: through the bridge while the hub says
+// claude_interactive (assistant.model), not in print mode.
+func TestCompactingAStoppedConversationKeepsInteractive(t *testing.T) {
+	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	resetTUICooldown(t)
+	n := codexTestNode(t)
+	fh := withFakeHub(t, n)
+	cwd := t.TempDir()
+	id, err := n.assistantSend(context.Background(), "", cwd, "claude", "hello", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.stopAssistant(id) })
+	st, _ := n.state.get(id)
+	transcript := filepath.Join(n.assistantConfigPath(st.ConfigDir), "projects", claudeProjectName(cwd), id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(`{"type":"user","message":{"role":"user","content":"hello"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n.setPath(id, transcript)
+	n.stopAssistant(id)
+	specFile := fakeTUIBridge(t, n)
+	fh.mu.Lock()
+	fh.model = map[string]any{"launcher": "claude", "claude_interactive": true}
+	fh.mu.Unlock()
+	if err := n.assistantCompact(context.Background(), id, false); err != nil {
+		t.Fatal(err)
+	}
+	var spec tuiSpec
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		raw, _ := os.ReadFile(specFile)
+		if json.Unmarshal(bytes.TrimSpace(raw), &spec) == nil {
+			break
+		}
+	}
+	if spec.Session != id || !spec.Resume || len(spec.TUI) == 0 {
+		t.Fatalf("the compaction's start did not go through the bridge: %+v", spec)
+	}
+}
