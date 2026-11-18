@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -71,7 +72,19 @@ type codexRemote struct {
 	ready      bool
 	// models: the efforts each model takes, from model/list (codex_effort.go); nil until read.
 	models map[string]codexModelEfforts
+	// slow: loaded threads whose last thread/read timed out; read again only after codexRetryWait (codex_backoff.go).
+	slow map[string]codexRetry
+	// readWait: one thread/read's timeout; 0 is codexReadWait.
+	readWait time.Duration
 }
+
+// A refresh reads the loaded threads a few at a time, each read with its own timeout inside the refresh's: one slow
+// thread neither uses up the others' time nor fails them with it.
+const (
+	codexRefreshWait = 20 * time.Second
+	codexReadWait    = 5 * time.Second
+	codexReadWorkers = 4
+)
 
 func (n *Node) ensureCodexRemote(ctx context.Context, spec proto.CodexServer) {
 	r := n.codices
@@ -351,7 +364,7 @@ type remoteThreadData struct {
 }
 
 func (c *codexRemote) refresh() error {
-	ctx, cancel := context.WithTimeout(c.ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(c.ctx, codexRefreshWait)
 	defer cancel()
 	ids, err := c.loaded(ctx)
 	if err != nil {
@@ -359,26 +372,74 @@ func (c *codexRemote) refresh() error {
 	}
 	seenRevision := map[string]uint64{}
 	next := map[string]remoteThread{}
+	known := map[string]remoteThread{}
+	var reads []string
+	tried := map[string]bool{}
+	waiting := 0
+	now := time.Now()
+	c.mu.Lock()
+	wait := cmp.Or(c.readWait, codexReadWait)
 	for _, raw := range ids {
-		if !validID(raw) {
+		if _, dup := known[raw]; dup || !validID(raw) {
 			continue
 		}
-		c.mu.Lock()
 		t := c.threads[raw]
-		seenRevision[raw] = t.revision
-		c.mu.Unlock()
-		var reply struct {
-			Thread remoteThreadData `json:"thread"`
+		known[raw], seenRevision[raw] = t, t.revision
+		if b, ok := c.slow[raw]; ok && now.Sub(b.at) < codexRetryWait(b.fails) {
+			// Timed out lately: keep the last copy until its next read is due.
+			if t.id != "" {
+				next[raw] = t
+			}
+			waiting++
+			continue
 		}
-		if err := c.wire.call(ctx, "thread/read", map[string]any{"threadId": raw, "includeTurns": false}, &reply); err != nil {
+		reads, tried[raw] = append(reads, raw), true
+	}
+	c.mu.Unlock()
+	type read struct {
+		data remoteThreadData
+		err  error
+	}
+	results := make([]read, len(reads))
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for range min(codexReadWorkers, len(reads)) {
+		wg.Go(func() {
+			for i := range work {
+				var reply struct {
+					Thread remoteThreadData `json:"thread"`
+				}
+				rctx, rcancel := context.WithTimeout(ctx, wait)
+				results[i].err = c.wire.call(rctx, "thread/read", map[string]any{"threadId": reads[i], "includeTurns": false}, &reply)
+				rcancel()
+				results[i].data = reply.Thread
+			}
+		})
+	}
+	for i := range reads {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+	failed, timedOut := 0, map[string]bool{}
+	var firstErr error
+	for i, raw := range reads {
+		t := known[raw]
+		if err := results[i].err; err != nil {
 			// Still loaded, just not read this time (a slow or failed call): keep the last copy and its asks.
-			c.n.logf("codex %s: read %s: %v", c.spec.ID, raw, err)
+			if failed == 0 {
+				firstErr = err
+			}
+			failed++
+			if errors.Is(err, context.DeadlineExceeded) {
+				timedOut[raw] = true
+			}
 			if t.id != "" {
 				next[raw] = t
 			}
 			continue
 		}
-		d := reply.Thread
+		d := results[i].data
 		// Ephemeral threads are Codex's own background jobs (a title, say): no rollout, never resumable, and they stay
 		// loaded as "active" after they finish. Not a conversation, so not a session.
 		if d.ID != raw || d.Status.Type == "notLoaded" || d.Ephemeral {
@@ -420,7 +481,20 @@ func (c *codexRemote) refresh() error {
 		}
 		next[raw] = t
 	}
+	if failed > 0 {
+		c.n.logf("codex %s: thread/read failed for %d of %d threads (%d timed out, %d waiting after a timeout): %v", c.spec.ID, failed, len(reads), len(timedOut), waiting, firstErr)
+	}
 	c.mu.Lock()
+	slow := map[string]codexRetry{}
+	for raw := range known { // threads no longer loaded are forgotten
+		if b, ok := c.slow[raw]; timedOut[raw] {
+			b.at, b.fails = now, b.fails+1
+			slow[raw] = b
+		} else if ok && !tried[raw] {
+			slow[raw] = b // still waiting
+		}
+	}
+	c.slow = slow
 	// Preserve events that arrived during metadata RPCs; metadata never overwrites a joined thread's current turn.
 	for raw, t := range next {
 		if old, ok := c.threads[raw]; ok && old.revision != seenRevision[raw] {
