@@ -160,7 +160,8 @@ func (s *Service) KeepUndelivered(ctx context.Context, p assistantwire.KeepUndel
 		At: now, State: proto.UndeliveredWaiting, Attempts: 1, NextAt: now.Add(undeliveredBackoff[0]),
 		Error: undeliveredReason(lang, p.Code)}
 	if p.Code == assistantwire.CodeUndeliveredAhead {
-		k.Attempts, k.NextAt, k.Error = 0, now, "" // never tried: it goes right after the ones ahead of it
+		// never tried: it goes right after the ones ahead of it, and says so
+		k.Attempts, k.NextAt, k.Error = 0, now, i18n.T(lang, "assistant-undelivered.behind")
 	}
 	b.st[p.SessionID] = append(b.st[p.SessionID], k)
 	err := s.saveUndeliveredLocked()

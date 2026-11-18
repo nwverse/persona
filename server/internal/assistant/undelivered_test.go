@@ -183,6 +183,9 @@ func TestUndeliveredNewerMessageGoesBehindAndInOrder(t *testing.T) {
 		Params: p.Params, Human: true, Code: assistantwire.CodeUndeliveredAhead}); err != nil {
 		t.Fatal(err)
 	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 2 || q[1].Error == "" || q[1].Error == q[0].Error {
+		t.Fatalf("the one behind says why it waits: %+v", q)
+	}
 	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
 	if got := ownerSends(f); len(got) != 2 || got[0] != "msg-1" || got[1] != "msg-2" {
 		t.Fatalf("sent %q, want msg-1 then msg-2", got)
