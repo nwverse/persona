@@ -23,7 +23,16 @@ export interface LinkSwitchAttempt {
   notice?: LinkSwitchNotice;
   /** the list's `link_switch` when it was pressed (`linkSwitchKey`) */
   seen: string;
+  /** when the answer (and the read after it) came back, by this browser's clock */
+  settled?: number;
 }
+
+/** How long a finished start may speak for the list at most: the list catches up within seconds (pushed, or the admin
+ *  page's poll), and a start nobody watched retire must not come back when the list returns to what it was. */
+export const LINK_SWITCH_ATTEMPT_TTL_MS = 2 * 60_000;
+
+const live = (a: LinkSwitchAttempt | undefined): LinkSwitchAttempt | undefined =>
+  a && (a.starting || a.settled === undefined || Date.now() - a.settled < LINK_SWITCH_ATTEMPT_TTL_MS) ? a : undefined;
 
 // One per computer, for every mount (the detail and a remounted one alike): a second press anywhere waits for this one.
 const attempts = new Map<string, LinkSwitchAttempt>();
@@ -61,9 +70,10 @@ const time = (at?: string) => {
 
 /** What to show: the list's state, unless a start made here was accepted and the list is not as new yet (both times are
  *  the hub's; without them, until the list moves at all). */
-export function shownLinkSwitch(listed: MachineLinkSwitch | undefined, attempt: LinkSwitchAttempt | undefined): MachineLinkSwitch | undefined {
+export function shownLinkSwitch(listed: MachineLinkSwitch | undefined, current: LinkSwitchAttempt | undefined): MachineLinkSwitch | undefined {
+  const attempt = live(current);
   const accepted = attempt?.accepted;
-  if (!accepted || !listed) return listed;
+  if (!attempt || !accepted || !listed) return listed;
   const a = time(accepted.at);
   const l = time(listed.at);
   const caughtUp = a !== undefined && l !== undefined ? l >= a : linkSwitchKey(listed) !== attempt.seen;
@@ -71,9 +81,26 @@ export function shownLinkSwitch(listed: MachineLinkSwitch | undefined, attempt: 
 }
 
 /** The last start's notice, while the list has not moved since it was pressed (once it has, the list says more). */
-export function linkSwitchNotice(listed: MachineLinkSwitch | undefined, attempt: LinkSwitchAttempt | undefined): LinkSwitchNotice | undefined {
+export function linkSwitchNotice(listed: MachineLinkSwitch | undefined, current: LinkSwitchAttempt | undefined): LinkSwitchNotice | undefined {
+  const attempt = live(current);
   if (!attempt || attempt.starting || !attempt.notice) return undefined;
   return linkSwitchKey(listed) === attempt.seen ? attempt.notice : undefined;
+}
+
+/**
+ * Forgets a finished start once the list has caught up with it (a 202's state no newer than the list's, a notice the list
+ * has moved past) or it is older than LINK_SWITCH_ATTEMPT_TTL_MS: from then on only the list speaks, even when it later
+ * returns to what it said before the press (a finished switch's record is dropped after an hour). The page calls it
+ * whenever the list changes.
+ */
+export function retireLinkSwitch(machineId: string, listed: MachineLinkSwitch | undefined) {
+  const a = attempts.get(machineId);
+  if (!a || a.starting) return;
+  const caughtUp = a.accepted ? shownLinkSwitch(listed, a) === listed : linkSwitchKey(listed) !== a.seen;
+  if (!live(a) || caughtUp) {
+    attempts.delete(machineId);
+    listeners.forEach((l) => l());
+  }
 }
 
 const statusOf = (e: unknown) => (typeof e === "object" && e !== null && typeof (e as { status?: unknown }).status === "number" ? (e as { status: number }).status : 0);
@@ -102,14 +129,14 @@ export async function startLinkSwitch(
     const answer = await post();
     const state = answer?.link_switch;
     if (state && typeof state === "object" && typeof state.available === "boolean") {
-      put(machineId, { starting: false, accepted: state, seen });
+      put(machineId, { starting: false, accepted: state, seen, settled: Date.now() });
       return;
     }
     notice = { kind: "uncertain" };
   } catch (e) {
     const status = statusOf(e);
     if (status === 403) {
-      put(machineId, { starting: false, notice: { kind: "forbidden" }, seen });
+      put(machineId, { starting: false, notice: { kind: "forbidden" }, seen, settled: Date.now() });
       return;
     }
     notice = status === 409 || (status >= 400 && status < 500 && status !== 408 && status !== 429) ? { kind: "refused", code: codeOf(e) } : { kind: "uncertain" };
@@ -119,5 +146,5 @@ export async function startLinkSwitch(
   } catch {
     // the list is pushed again with the next machine update
   }
-  put(machineId, { starting: false, notice, seen });
+  put(machineId, { starting: false, notice, seen, settled: Date.now() });
 }

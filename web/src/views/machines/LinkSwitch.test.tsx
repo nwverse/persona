@@ -155,6 +155,66 @@ describe("LinkSwitch states", () => {
   });
 });
 
+describe("after a start", () => {
+  const accepted = { available: false, reason: "in_progress", phase: "checking" as const, at: at(5) };
+
+  it("lets the list speak once it has caught up, even when it later says what it said before the press", async () => {
+    const post = vi.fn(async () => ({ link_switch: accepted }));
+    const before: MachineLinkSwitch = { available: true };
+    await render(view(before, post));
+    await open();
+    await act(async () => buttons(CONFIRM)[0]!.click());
+    await flush();
+    expect(host.querySelector("[data-step=checking]")?.getAttribute("data-state")).toBe("current");
+    await render(view({ available: false, reason: "in_progress", phase: "installing", at: at(9) }, post));
+    await render(view({ available: false, phase: "succeeded", at: at(30) }, post));
+    expect(text()).toContain("已切换到 Persona Link。");
+    // an hour later the hub drops the finished record: the list is back to the press's own state
+    await render(view({ ...before }, post));
+    expect(host.querySelector("[data-testid=link-switch-steps]")).toBeNull();
+    expect(buttons(START)).toHaveLength(1);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a notice the list has moved past, so it does not come back with the old state", async () => {
+    const post = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const before: MachineLinkSwitch = { available: true };
+    await render(view(before, post, vi.fn(async () => {})));
+    await open();
+    await act(async () => buttons(CONFIRM)[0]!.click());
+    await flush();
+    expect(host.querySelector("[data-link-switch-notice]")).not.toBeNull();
+    await render(view({ available: false, reason: "in_progress", phase: "checking", at: at(3) }, post));
+    await render(view({ ...before }, post));
+    expect(host.querySelector("[data-link-switch-notice]")).toBeNull();
+    expect(buttons(START)).toHaveLength(1);
+  });
+
+  it("does not let a start nobody watched retire speak for the list later", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(Date.UTC(2026, 10, 19, 8, 0, 0));
+      const post = vi.fn(async () => ({ link_switch: accepted }));
+      const before: MachineLinkSwitch = { available: true };
+      await render(view(before, post));
+      await open();
+      await act(async () => buttons(CONFIRM)[0]!.click());
+      await flush();
+      // the page is left before the list moves; an hour later it opens again on the pre-press state
+      act(() => root.unmount());
+      root = createRoot(host);
+      now.mockReturnValue(Date.UTC(2026, 10, 19, 9, 0, 0));
+      await render(view({ ...before }, post));
+      expect(host.querySelector("[data-testid=link-switch-steps]")).toBeNull();
+      expect(buttons(START)).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
 describe("starting a switch", () => {
   it("asks first, posts once on a double click, shows Starting… at once and then the 202's state", async () => {
     const answer = deferred<{ link_switch?: MachineLinkSwitch }>();
