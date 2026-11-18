@@ -7,6 +7,7 @@ import { sessionTitle, shortPath, stateOf } from "../../lib/format";
 import { openBackgroundPanel } from "../../lib/background-panel";
 import { credentialOwner } from "../../lib/api";
 import { openPanel } from "../../lib/panel";
+import { followChildSession, followSubagentLink } from "../../lib/subagent-link";
 import { getSession, useStore } from "../../lib/store";
 import { subagentTitle, subagentTree, taskLabel, taskPill, type FinishedTask } from "../../lib/tasks";
 import type { Session, Subagent } from "../../lib/types";
@@ -65,7 +66,12 @@ export function SessionOverview({ session, machineName, finished, children, onJu
         <Environment session={session} machineName={machineName} onInfo={() => setInfoOpen(true)} />
         <OverviewContext session={session} />
         {agents.length > 0 && <Subagents agents={agents} running={running} open={(agent) => {
-          if (current()) openPanel({ kind: "agent", mid, sid: agent.session_id });
+          if (!current()) return;
+          if (session.subagents?.some((entry) => entry.session_id === agent.session_id)) {
+            followSubagentLink(mid, `${sid}@${agent.id}`);
+          } else {
+            followChildSession(mid, agent.session_id, sid);
+          }
         }} />}
         <div className="border-t border-line">
           <BackgroundList session={session} mid={mid} sid={sid} inOverview
