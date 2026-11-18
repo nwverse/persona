@@ -877,6 +877,12 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
+- **The open Duo keeps the system's tab bar** (#10362): at regular width the tabs no longer hide the system's tab bar and
+  nothing is drawn over them, so iOS places it as Apple's iPhone Duo guidance describes: along the foot upright, down the side
+  column on its side, in Liquid Glass, with its own overflow and fold avoidance. The outer display keeps the shell's rail and
+  its tab bar, described below; what the next item says about the open Duo (`TabSwitchOverlay`, the bar along the foot, its
+  room, `PhoneTabBarHidden`) is history, its code removed. Tests: `TabSwitchLayoutTests.theTabsKeepTheSystemsBar`,
+  `DuoOpenChromeTests` (the system's tab items on the open Duo, no drawn bar).
 - **The Duo's tab bar on both displays** (#4231, the owner: first the corner design of #4206 drawn on 2026-11-11 / 12, then on
   2026-11-17, after a tab bar down the side of the outer display, a tab bar like it): in the Separate layout one component,
   the shell's switch as a tab bar (`ShellSwitch(axis: .vertical)` down the side, `ShellSwitch(bottomBar: true)` along the foot;
