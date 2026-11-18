@@ -110,6 +110,7 @@ var Features = []string{
 	"file_chmod",               // POST /api/v1/machines/{mid}/files/chmod: a file's or folder's permission bits (docs/protocol/protocol.md "Changing files")
 	"pane_cwd",                 // POST /api/v1/machines/{mid}/panes takes cwd: a new terminal in a folder (docs/integrations/terminal.md "Standalone terminal")
 	"pane_new_space",           // POST /api/v1/machines/{mid}/panes takes new_space: a terminal on a computer with no workspace yet, or 409 node_outdated (docs/integrations/terminal.md "Standalone terminal")
+	"start_continue",           // POST /api/v1/sessions/{mid}/{sid}/start/continue: answer the startup question a start's new tab stopped on (shell_waiting), or 409 node_outdated (docs/protocol/protocol.md "Answering a start's question")
 	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
 	"file_inbox",               // POST /api/v1/machines/{mid}/files?dest=inbox: into the machine's receive folder, kept for good (docs/protocol/file-transfer.md)
 	"upload_attachment",        // POST /api/v1/machines/{mid}/files?dest=attachment: a chat attachment kept for good in the node's uploads/<date>/ (docs/protocol/protocol.md "Sending files", #8361)

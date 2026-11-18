@@ -200,6 +200,8 @@ The node keeps two spellings of itself (`node/selfprogram.go`): the resolved fil
 The checkouts the node makes with git (task and "New worktree…" checkouts on herdr-core or without herdr's worktree command, Agents' own worktrees, review copies) get their two git links rewritten to the home's spelling (`node/worktree_links.go`), and a directory the hub resolves for an Agent to start in (`workspace.resolve` with `terminal`) or a checkout `worktree.prepare` hands back is named the same way, so git and the Agent work inside the container too.
 After the update a `not_in_terminal` record left by the old path still holds until a start with that launcher works: one explicit retry of the failed task (which passes the fixed-machine gate for this kind of record) clears it.
 
+The terminal's shell can also stop before the start types anything, on a question its startup files ask (oh-my-zsh's update question, compinit's insecure directories, a passphrase; #2570, #10365). The start then ends with `shell_waiting`, not a launcher problem: the tab is kept for 10 minutes and the App offers the question's answers. Picking one types it into that tab and starts the Agent there; the message that start refused goes out once it is up (`docs/protocol/protocol.md` "Answering a start's question"). The tab a start opens gets oh-my-zsh's, oh-my-bash's and powerlevel10k's own switches for those questions in its shell's environment where the engine takes one, unset again before the launcher runs (`docs/integrations/engines.md` "What a start tab's shell starts with").
+
 ## Detecting launchers in ~/.zshrc (`launcherScript` in `node/launchers.go`)
 
 node gathers two things in one login-shell invocation (`zsh -ic`, loading `~/.zshrc` first), cached for 1 minute.

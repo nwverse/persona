@@ -37,7 +37,7 @@ func TestLiveWorktree(t *testing.T) {
 	runPullGit(t, repo, "commit", "-m", "first")
 
 	client := herdr.New()
-	base, err := client.WorkspaceCreate(ctx, repo, "persona-live-worktree")
+	base, err := client.WorkspaceCreate(ctx, repo, "persona-live-worktree", nil)
 	if err != nil || base.Workspace == nil {
 		t.Fatalf("workspace create: %+v %v", base, err)
 	}
@@ -115,7 +115,7 @@ func TestLiveHerdrWorkspaceActions(t *testing.T) {
 	runPullGit(t, repo, "add", "app.txt")
 	runPullGit(t, repo, "commit", "-m", "initial")
 	client := herdr.New()
-	base, err := client.WorkspaceCreate(ctx, repo, "persona-check-workspace-actions")
+	base, err := client.WorkspaceCreate(ctx, repo, "persona-check-workspace-actions", nil)
 	if err != nil || base.Workspace == nil {
 		t.Fatalf("workspace create: %+v %v", base, err)
 	}

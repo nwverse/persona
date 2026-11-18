@@ -252,6 +252,9 @@ var rpcFailureKeys = map[string]string{
 	// a start's new tab stopped on its shell (node/shellsettle.go, #2570)
 	proto.CodeShellWaiting:               "rpc-errors.shell_waiting",
 	proto.CodeStartLineRejected:          "rpc-errors.start_line_rejected",
+	"start_tab_gone":                     "rpc-errors.start_tab_gone", // the app's answer to its question (node/startcontinue.go, #10365)
+	"start_not_waiting":                  "rpc-errors.start_not_waiting",
+	"choice_not_offered":                 "rpc-errors.choice_not_offered",
 	"node_outdated":                      "rpc-errors.node_outdated",
 	"assistant_service_tier_start_only":  "rpc-errors.assistant_service_tier_start_only",
 	"assistant_service_tier_unsupported": "rpc-errors.assistant_service_tier_unsupported",

@@ -288,3 +288,21 @@ func (h *herdrHost) has(cache *struct {
 	})
 	return cache.ok
 }
+
+// helpLists runs `herdr <args> --help`: whether this herdr's command takes flag (its help lists it as one of its
+// options, not only as a word in another's description).
+func (h *herdrHost) helpLists(flag string, args ...string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, h.c.Bin, append(args, "--help")...).Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f, _, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if f = strings.TrimSuffix(f, ","); f == flag || strings.HasPrefix(f, flag+"=") {
+			return true
+		}
+	}
+	return false
+}

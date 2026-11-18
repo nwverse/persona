@@ -28,6 +28,12 @@ var assistantOnlyEnv = []string{
 	"CLAUDE_PID", "CLAUDE_PLUGIN_DATA",
 }
 
+// startupOnlyEnv is what a start tab's shell is given only for its startup files (startShellEnv, startenv.go): the
+// typed start line unsets it again, so the Agent, and the shell the tab keeps once it exits, have the environment
+// the user's own terminals have. Nothing an Agent's own shells read: they are not interactive and load none of
+// those frameworks.
+var startupOnlyEnv = []string{"DISABLE_AUTO_UPDATE", "DISABLE_UPDATE_PROMPT", "POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD"}
+
 // assistantOnlyEnvNames is assistantOnlyEnv with each Persona variable's older spelling after it.
 func assistantOnlyEnvNames() []string {
 	var out []string
@@ -49,9 +55,9 @@ func rootAssign(dir string, q func(string) string) string {
 
 // agentCommand is cmd, a command line quoted with q that starts an Agent in a pane whose shell is shells (the programs
 // in front of it, takesAssign): with this node's directory in front as PERSONA_HOME where the shell takes `VAR=val
-// cmd`, and, in the sh family, after `unset` of assistantOnlyEnvNames, joined with && so that a start whose shell
-// refused the unset does not run. fish has no unset: there the directory alone. Another shell, or a node without a
-// directory, gets cmd as it is.
+// cmd`, and, in the sh family, after `unset` of assistantOnlyEnvNames and startupOnlyEnv, joined with && so that a
+// start whose shell refused the unset does not run. fish has no unset: there the directory alone. Another shell, or
+// a node without a directory, gets cmd as it is.
 func (n *Node) agentCommand(cmd string, q func(string) string, shells ...string) string {
 	if n.dir == "" || !takesAssign(shells...) {
 		return cmd
@@ -62,7 +68,12 @@ func (n *Node) agentCommand(cmd string, q func(string) string, shells ...string)
 			return cmd
 		}
 	}
-	return "unset " + strings.Join(assistantOnlyEnvNames(), " ") + " && " + cmd
+	return "unset " + strings.Join(agentUnsetNames(), " ") + " && " + cmd
+}
+
+// agentUnsetNames are the variables agentCommand unsets in the sh family: the assistant's, then a start tab's startup ones.
+func agentUnsetNames() []string {
+	return append(assistantOnlyEnvNames(), startupOnlyEnv...)
 }
 
 // agentStartCommand is agentCommand for a command that may go into a start file. On Windows the outer pane is

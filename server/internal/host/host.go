@@ -124,6 +124,25 @@ type Launcher interface {
 	NameAgent(ctx context.Context, pane PaneRef, name string) error
 }
 
+// spawnEnvKey carries WithSpawnEnv's variables from the node to a Launcher's CreateSpace / CreateSlot.
+type spawnEnvKey struct{}
+
+// WithSpawnEnv is ctx with env for the shell of a space or slot a Launcher opens with it: set in that shell's
+// environment as it starts, before it reads its startup files. A host that cannot set a new shell's environment
+// leaves them out; a split, and anything opened with another ctx, gets none.
+func WithSpawnEnv(ctx context.Context, env map[string]string) context.Context {
+	if len(env) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, spawnEnvKey{}, env)
+}
+
+// SpawnEnv is the environment WithSpawnEnv put on ctx for a new shell, nil when none.
+func SpawnEnv(ctx context.Context) map[string]string {
+	env, _ := ctx.Value(spawnEnvKey{}).(map[string]string)
+	return env
+}
+
 // Organizer renames and closes.
 type Organizer interface {
 	RenameSpace(ctx context.Context, space, name string) error
