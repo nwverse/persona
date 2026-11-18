@@ -217,11 +217,14 @@ func TestTaskStuckEstimateBoundaries(t *testing.T) {
 			}
 		})
 	}
+	t.Run("sub-day reports", checkLeaderStuckSubDayWording)
 }
 
 // A short task can be stuck within its first day. Neither the localized report nor the
 // assistant's supervision and briefing may turn that signal into a one-day age claim.
-func TestLeaderStuckSubDayWording(t *testing.T) {
+// Keep these cases under the existing estimate-boundary test: the shared runner partitions
+// top-level names round-robin, so adding a new name would reassign unrelated tests.
+func checkLeaderStuckSubDayWording(t *testing.T) {
 	now := time.Now().UTC()
 	task := Todo{Title: "Example task", Supervision: &Supervision{ExpectMinutes: 180},
 		Agents: []TodoAgent{{SessionID: "worked"}}}

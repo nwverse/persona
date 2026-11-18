@@ -605,7 +605,7 @@ type BriefTask struct {
 type BriefCriterion struct{ Criterion, State, Change string }
 
 // BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
-// past its inactivity threshold, and its leader's latest summary of the day (empty parts: none).
+// past their inactivity thresholds, and its leader's latest summary of the day (empty parts: none).
 type BriefLeader struct {
 	Name                     string
 	Open, Waiting, Stuck     int
