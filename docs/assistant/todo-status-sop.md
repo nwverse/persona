@@ -392,4 +392,5 @@ and only while they are listed do the counts cover every manager.
 
 No client reads `view` yet: the clients switch to it in stage 2, falling back to the rules above for a row without
 one. Until then every client, and the hub's own triage for the direction tree and leader reports (`todo_triage.go`),
-follows the rules above.
+follows the rules above. The web's Developing Persona shadow compares the two on real data and records what the list
+above does not explain (`docs/web/web.md` "Developing Persona").

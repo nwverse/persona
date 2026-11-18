@@ -65,6 +65,9 @@ asking first when something is recorded.
   seconds per page (the address's first word: `s` for an Agent's chat, `settings`, `home`), `online`, `memory_mb` where the
   browser tells it.
 - `foreground` per visible period; `app` (recording, visible, hidden), `page`, `network`, `socket`, `request_error`.
+- While the hub lists `todo_view`: `todo_view` (how many to-do rows the hub's view and today's triage read alike, apart by
+  a decided difference, or apart unexplained) and `todo_view_mismatch` (one unexplained row: its id and both sides'
+  section and reason words), from the To-dos view's shadow (`docs/web/web.md` "Developing Persona").
 - `errors.jsonl`: uncaught errors, unhandled rejections and freezes of 5 s or more (`lib/freeze-watch.ts`), whether or not
   the hub takes error reports. `log.txt`: `console.error` / `console.warn` lines, scrubbed (an error a boundary caught is
   logged there too).
@@ -77,7 +80,9 @@ asking first when something is recorded.
 first screen's budget. The recorder hooks `fetch`, `history`, `popstate`, `error`, `unhandledrejection`, the console and
 the freeze watch itself and puts them back when the switch goes off; it imports nothing from the first screen's modules
 that they do not already export, so its route word list is a copy of `lib/error-reports.ts`'s (`dev-mode.test.ts` keeps
-them equal). A socket already open when the switch is turned on is counted from its next connection.
+them equal). A socket already open when the switch is turned on is counted from its next connection. The To-dos view's
+shadow (`web/src/features/todos/model/view-shadow.ts`, a chunk of its own) reads the triage through App's module: the
+recorder can load before App, so importing `lib/todo-triage.ts` would move it out of App's chunk into one of its own.
 
 ## The desktop app (#9675)
 

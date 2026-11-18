@@ -134,6 +134,11 @@ function openWorkspaceInTree(target: WorkspaceTarget) {
   navigate({ name: "agent-list" });
 }
 
+// Developing Persona's To-dos view shadow (features/todos/model/view-shadow.ts) reads today's triage through this
+// module: its recorder can load before App, so importing lib/todo-triage.ts there would split it out of the first
+// screen's chunk.
+export { supersededFailedStarts, triage } from "./lib/todo-triage";
+
 export function App() {
   const [authed, setAuthed] = useState(() => !linked?.token && Boolean(getToken()));
   const [joining, setJoining] = useState(() => Boolean(linked?.token));

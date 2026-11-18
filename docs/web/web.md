@@ -1954,6 +1954,16 @@ Settings › About Persona's switch that records this browser's requests, socket
 and exports them as one zip, sent to an Agent's chat or downloaded: [developing-persona.md](../operations/developing-persona.md).
 It costs the first screen nothing (its chunks load only while it is on).
 
+**The To-dos view's shadow (#10226).** With the switch on, the recorder also starts
+`web/src/features/todos/model/view-shadow.ts` (a chunk of its own). While the hub lists `todo_view`, every row the list
+carries with a `view` goes through today's triage too, and `view-legacy.ts` maps the view onto today's sections (Waiting
+is Parked, Can wait is Needs you, To do with the Inactive mark is Shelved) and explains the differences the redesign
+decided (`docs/assistant/todo-status-sop.md` "The hub's view"), so the `todo_view` summary (at most a minute apart) and
+the `todo_view_mismatch` lines carry only what nothing explains, by ids and enum words. It draws nothing unless
+`localStorage persona.todos.viewDraw` is `1` as well; then the To-dos page's status sections come from the view
+(`view-triage.ts`, a row without one placed as before), and nothing else on the page changes. Users without the switch
+run exactly the code they ran before.
+
 ## Error reports (#5533)
 
 The page reports its own errors to `POST /api/v1/error-reports` (`lib/error-reports.ts`, wired up in `lib/error-reports-start.ts`; format and rules in [protocol.md](../protocol/protocol.md) "Error reports"). No UI, no strings.
