@@ -107,6 +107,9 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		if kind, ok := meetingReceiptRoutes[pattern]; ok {
 			relay = h.withBodyIDReceipt(kind, relay) // meeting_receipts.go
 		}
+		if kind, ok := todoReceiptRoutes[pattern]; ok {
+			relay = h.withTodoReceipt(kind, relay) // todo_receipts.go
+		}
 		api.HandleFunc(pattern, relay)
 	}
 }
