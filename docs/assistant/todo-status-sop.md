@@ -373,6 +373,9 @@ redesign changes them:
   long, accepted and deployed work included (this table's rules 6 and 7).
 - **Parked is Waiting**, on the hub too (this table's rule 5a, until now the web's alone) and above finished work; an
   open PR and a usage limit wait there with it.
+- **A run that waits on another Agent or an outside event it names is Waiting** (`someone_else`, line `run_waits`),
+  not Working (rule 4); background work and a `/loop`, which end by themselves, stay Working, and so does a moment's
+  model failure while the hub's "Continue" is on its way, which rule 2 reads as cut off.
 - **Can wait**: a decision marked for the briefing (`can_wait`) and a run that ended on a plain-text question
   (`awaits_reply`) are listed under Needs you's fold, not counted in its number.
 - **Inactive is a mark, not a section**: the to-do keeps its section (To do) with the time activity stopped. A restore
