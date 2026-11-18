@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -502,5 +503,89 @@ func TestTodoListCarriesTheAskRisk(t *testing.T) {
 				t.Fatalf("the view's decision %v, of %v", own, view)
 			}
 		})
+	}
+}
+
+// The shared To-dos fixtures (spec/fixtures/todo-view, spec/fixtures/todo-counts) list each ask's risk as the manager
+// would (askRisk): the view reads it as listed, so a case could otherwise state a risk the manager never gives and
+// still pass. Every ask a case's input lists, steps included, is checked wherever what it lists tells the answer.
+func TestTodoFixturesListTheManagersRisk(t *testing.T) {
+	type listed struct {
+		Outcome   string     `json:"outcome"`
+		WhyOwner  string     `json:"why_owner"`
+		Recommend string     `json:"recommend"`
+		Deadline  *time.Time `json:"deadline"`
+		Default   string     `json:"default"`
+		Risk      string     `json:"risk"`
+	}
+	// fixtureAsk is an acceptance ask todoAsks lists as l, and whether l says enough to tell its risk: a listed
+	// deadline taken by default can be undone, one never taken though it recommends an option cannot (todoAsks lists
+	// that only then), and with neither a deadline nor a default it had none. A deadline listed without its default (a
+	// fixture's shorthand), or a default of never alone (a handled deadline, or no recommendation), could be either.
+	fixtureAsk := func(l listed) (acceptAsk, bool) {
+		a := acceptAsk{Outcome: l.Outcome, WhyOwner: l.WhyOwner}
+		switch {
+		case neverDefault(l.WhyOwner):
+		case l.Deadline != nil && l.Default == defaultTaken:
+			a.Deadline, a.Reversible = *l.Deadline, true
+		case l.Deadline != nil && l.Default == defaultNever && l.Recommend != "":
+			a.Deadline = *l.Deadline
+		case l.Deadline == nil && l.Default == "":
+		default:
+			return a, false
+		}
+		return a, true
+	}
+	checked := map[string]int{}
+	for _, file := range []string{"todo-view/todo_view.json", "todo-counts/todo_counts.json"} {
+		raw, err := os.ReadFile("../../../spec/fixtures/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Cases []struct {
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			} `json:"cases"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range doc.Cases {
+			var in struct {
+				Todo  *struct{ Ask *listed }  `json:"todo"`
+				Steps []struct{ Ask *listed } `json:"steps"`
+				Todos []struct{ Ask *listed } `json:"todos"`
+			}
+			if err := json.Unmarshal(c.Input, &in); err != nil {
+				t.Fatalf("%s %s: %v", file, c.Name, err)
+			}
+			asks := []*listed{}
+			if in.Todo != nil {
+				asks = append(asks, in.Todo.Ask)
+			}
+			for _, r := range append(in.Steps, in.Todos...) {
+				asks = append(asks, r.Ask)
+			}
+			for _, l := range asks {
+				if l == nil {
+					continue
+				}
+				a, told := fixtureAsk(*l)
+				if !told {
+					continue
+				}
+				if want := askRisk(&a); l.Risk != want {
+					t.Errorf("%s %s: the ask lists risk %q, the manager gives %q", file, c.Name, l.Risk, want)
+				}
+				checked[c.Name]++
+			}
+		}
+	}
+	for _, name := range []string{"decision_safe_choice", "decision_irreversible_open", "decision_visible_to_others_open",
+		"ranked_list"} {
+		if checked[name] == 0 {
+			t.Errorf("%s: no listed ask was checked", name)
+		}
 	}
 }

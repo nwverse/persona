@@ -379,8 +379,9 @@ func TestProjectionReadsOnlyTheLinkedRunsOnTheFleet(t *testing.T) {
 
 // The adapter hands the projection the pending cards of the open to-dos' active runs: a run that asks is asked by its
 // card, whose id rides on the ask and whose kind says what it asks, and a card of a session no run of the to-do is on
-// is no ask of its. The same state read twice is the same bytes, so the list's ETag holds; once the card is answered
-// the run's ask is a question again until the session moves on.
+// is no ask of its. Of two cards of one instant the same one is named on every read, so the same state read again is
+// the same bytes and the list's ETag holds. A health conversation's question is open, as its push offers nothing to
+// answer it with; once the cards are answered the run's ask is a question again until the session moves on.
 func TestProjectionAsksByTheRunsCard(t *testing.T) {
 	e := newTodoEnv(t, nil)
 	began := time.Now().UTC().Add(-time.Minute)
@@ -395,6 +396,9 @@ func TestProjectionAsksByTheRunsCard(t *testing.T) {
 				Options: []proto.QuestionOption{{Label: "Documents"}}}}},
 		{ID: "ix_visa", MachineID: "server", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash", CreatedAt: began,
 			ExpiresAt: began.Add(time.Hour)},
+		{ID: "ix_visa_q", MachineID: "server", SessionID: "s1", Kind: proto.IxQuestion, CreatedAt: began,
+			ExpiresAt: began.Add(time.Hour), Cwd: "/home/user/.persona/health", Questions: []proto.Question{{
+				Question: "Which clinic?", Options: []proto.QuestionOption{{Label: "The one by the station"}}}}},
 	}
 	e.s.fleet.mu.Lock()
 	if e.s.fleet.interactions == nil {
@@ -425,15 +429,25 @@ func TestProjectionAsksByTheRunsCard(t *testing.T) {
 		a.Lockscreen != assistantwire.OwnerAskLockscreenOpenOnly || a.Text != "Wants to run a command" {
 		t.Fatalf("the run's ask %+v", a)
 	}
-	if again := e.must("GET", "/api/v1/todos", "").Body.Bytes(); !bytes.Equal(again, body) {
-		t.Fatalf("unchanged state read twice:\n%s\n%s", body, again)
+	for range 8 { // the fleet's cards are a map: each read ranges over them in another order
+		if again := e.must("GET", "/api/v1/todos", "").Body.Bytes(); !bytes.Equal(again, body) {
+			t.Fatalf("unchanged state read again:\n%s\n%s", body, again)
+		}
 	}
 
 	e.s.fleet.mu.Lock()
 	delete(e.s.fleet.interactions, "ix_visa")
 	e.s.fleet.mu.Unlock()
 	if a := runAsk(e.must("GET", "/api/v1/todos", "").Body.Bytes()); a.Kind != assistantwire.OwnerAskKindQuestion ||
+		a.Interaction != "ix_visa_q" || a.Risk != assistantwire.OwnerAskRiskOpen ||
+		a.Lockscreen != assistantwire.OwnerAskLockscreenOpenOnly {
+		t.Fatalf("the run's ask by a health conversation's question %+v", a)
+	}
+	e.s.fleet.mu.Lock()
+	delete(e.s.fleet.interactions, "ix_visa_q")
+	e.s.fleet.mu.Unlock()
+	if a := runAsk(e.must("GET", "/api/v1/todos", "").Body.Bytes()); a.Kind != assistantwire.OwnerAskKindQuestion ||
 		a.Interaction != "" || a.Risk != assistantwire.OwnerAskRiskOpen {
-		t.Fatalf("the run's ask with its card answered %+v", a)
+		t.Fatalf("the run's ask with its cards answered %+v", a)
 	}
 }

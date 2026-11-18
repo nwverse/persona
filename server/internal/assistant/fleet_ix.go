@@ -921,6 +921,22 @@ func (s *Service) pendingCards() ([]proto.Interaction, map[string]bool) {
 	return out, told
 }
 
+// pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and
+// session, as they are held, in no order: without the task each agent works for (withTask), which a to-do's view
+// does not read. A list read copies only its runs' few cards this way, never the whole fleet's.
+func (s *Service) pendingOf(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
+	out := map[[2]string][]proto.Interaction{}
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	for _, p := range s.fleet.interactions {
+		if want[p.ix.MachineID][p.ix.SessionID] {
+			k := [2]string{p.ix.MachineID, p.ix.SessionID}
+			out[k] = append(out[k], p.ix)
+		}
+	}
+	return out
+}
+
 // pendingIx is one pending interaction; false when it is not pending.
 func (s *Service) pendingIx(id string) (proto.Interaction, bool) {
 	s.fleet.mu.Lock()

@@ -67,8 +67,9 @@ type Facts struct {
 	// Sessions are the to-do's linked runs' sessions as the hub sends them to the apps (state worked out); a linked
 	// run whose session is not among them is offline.
 	Sessions []proto.Session `json:"-"`
-	// Interactions are the pending cards of its linked runs' sessions as the hub sends them to the apps; a run that
-	// asks shows its oldest, which says what kind of ask it is and how risky answering it is.
+	// Interactions are the pending cards of its linked runs' sessions as the hub holds them, a health conversation's
+	// marked Private (its push says nothing of what it asks, as a Just me card's); a run that asks is asked by one of
+	// its own (asksBefore), which says what kind of ask it is and how risky answering it is.
 	Interactions []proto.Interaction `json:"-"`
 	// Unreached: a computer one of its active runs is on did not answer, so their sessions are unknown; it then gets no
 	// Inactive mark, since a run there may be working on it (as the direction tree judges no task stuck then).

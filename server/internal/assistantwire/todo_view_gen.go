@@ -141,12 +141,14 @@ const (
 var OwnerAskHomes = []string{"todo", "run"}
 
 // OwnerAskRisk: how risky answering an ask is (proposal 3.7, decision 4(a)): safe, the row, the card or a push may
-// answer it in place; open, it cannot be undone or other people will see it, or nothing says it can, so the owner
+// answer it in place; open, it cannot be undone, other people will see it or what it asks needs a look, so the owner
 // answers it after a look, on its page or at its run. The manager's rule: a decision is open when why only the owner
 // decides is irreversible or visible_to_others, or Persona would take it at a deadline that cannot be undone; a retry
-// is safe; a run's question card whose every question offers options is safe, and anything else a run asks is open (a
-// question in words, a dialog on the screen, a plan, a tool approval, a form, a secret, or a card the hub does not
-// hold). Open: a newer hub may send other values, which clients read as open.
+// is safe; a run's card is safe when a notification may answer it too (one question with options and no fields, not
+// from a Just me turn or a health conversation) and its asker did not say going ahead cannot be undone, and anything
+// else a run asks is open (a question in words, several questions, a dialog on the screen, a plan, a tool approval, a
+// form, a secret, or a run whose card the hub does not hold). Open: a newer hub may send other values, which clients
+// read as open.
 const (
 	OwnerAskRiskSafe = "safe"
 	OwnerAskRiskOpen = "open"
@@ -204,8 +206,9 @@ type OwnerAsk struct {
 	Risk string `json:"risk,omitempty"`
 	// What a push about it may offer on the lock screen. Absent from an older manager: clients read it as open_only.
 	Lockscreen string `json:"lockscreen,omitempty"`
-	// The id of the run's pending card this ask is, answered through POST /api/v1/interactions/{id}/resolve; only on a
-	// run's ask, and absent while the hub holds no card for the run (its kind is then question).
+	// The id of the run's pending card this ask is (the session's own before Persona's card about its turn, then the
+	// oldest), answered through POST /api/v1/interactions/{id}/resolve; only on a run's ask, and absent while the hub
+	// holds no card for the run (its kind is then question).
 	Interaction string `json:"interaction,omitempty"`
 }
 

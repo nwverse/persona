@@ -280,8 +280,10 @@ func (r *reading) runAsks() (placement, bool) {
 }
 
 // runAsk is run rn's ask, at home in its session, its id following the moment the session came to wait: what its
-// pending card asks (cardKind), with the card's id to answer it by, safe to answer in place only for a question with
-// options; a question, open, while the hub holds no card for it (the session list says that it waits, not on what).
+// pending card asks (cardKind), with the card's id to answer it by, safe to answer in place only when a notification
+// may answer it too (proto.Interaction.OneTapQuestion: one question with options, no fields, not a Just me turn's or a
+// health conversation's) and its asker did not say going ahead cannot be undone; a question, open, while the hub holds
+// no card for it (the session list says that it waits, not on what).
 func runAsk(rn run) assistantwire.OwnerAsk {
 	text := rn.s.Asks
 	if text == "" {
@@ -295,7 +297,7 @@ func runAsk(rn run) assistantwire.OwnerAsk {
 	risk := assistantwire.OwnerAskRiskOpen
 	if c := rn.card; c != nil {
 		a.Kind, a.Interaction = cardKind(c), c.ID
-		if a.Kind == assistantwire.OwnerAskKindQuestion && withOptions(c) {
+		if _, ok := c.OneTapQuestion(); ok && !cardCannotUndo(c) {
 			risk = assistantwire.OwnerAskRiskSafe
 		}
 	}
@@ -319,10 +321,10 @@ func cardKind(c *proto.Interaction) string {
 	return assistantwire.OwnerAskKindQuestion
 }
 
-// withOptions: a question card whose every question offers options to choose from.
-func withOptions(c *proto.Interaction) bool {
-	return c.Kind == proto.IxQuestion && len(c.Questions) > 0 &&
-		!slices.ContainsFunc(c.Questions, func(q proto.Question) bool { return len(q.Options) == 0 })
+// cardCannotUndo: card c's asker said going ahead cannot be undone (an ask_user's reversible false), the card's twin
+// of the manager's rule for a decision (askRisk), which makes such a decision open.
+func cardCannotUndo(c *proto.Interaction) bool {
+	return c.Reversible != nil && !*c.Reversible
 }
 
 // withRisk is ask a with its risk and the lock-screen action that follows from it, open_only exactly when open; a risk

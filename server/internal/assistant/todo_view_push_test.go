@@ -547,6 +547,48 @@ func TestTodoViewPushFollowsACard(t *testing.T) {
 	}
 }
 
+// A run that came to ask before the manager held its card (a runtime without a terminal, whose card is still on its
+// way) is told once; its card landing then tells the apps once more, with no new list from the node, since the card
+// says what the run asks and how its row may answer it. Read again, nothing more goes out.
+func TestTodoViewPushWhenTheAskGetsItsCard(t *testing.T) {
+	ft := newFleetTest(t)
+	e := &todoEnv{t: t, s: ft.s, f: ft.f}
+	clock := todoViewClock(e)
+	began := time.Now().UTC().Add(-time.Minute)
+	run := asking(workingRun("s1", began, ""), began.Add(10*time.Second))
+	run.MachineID, run.SourceKind = "mac", "runtime" // no screen to read a dialog off, so no screen card meanwhile
+	ft.sessions("mac", run)
+	id := e.create("Prune the hedge").ID
+	e.must("PUT", "/api/v1/todos/"+id+"/agents/mac/s1", "")
+	waitFleetOrder(t, ft.s)
+	clock.advance(time.Minute)
+	todoViewsNow(e)
+	clock.advance(time.Minute) // a started manager's first views tell the apps once
+	if v := todoViewsNow(e)[id]; v.Section != assistantwire.TodoListSectionNeedsYou || len(v.Asks) != 1 ||
+		v.Asks[0].Interaction != "" {
+		t.Fatalf("a run asking with no card held: %+v", v)
+	}
+	sent := todosSent(e)
+
+	ix := proto.Interaction{ID: "ix_trim", MachineID: "mac", SessionID: "s1", Kind: proto.IxQuestion,
+		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC(), Questions: []proto.Question{{
+			Question: "Trim the top too?", Options: []proto.QuestionOption{{Label: "Yes"}, {Label: "Not this time"}}}}}
+	ft.hold(ix)
+	ft.s.tellApps(ix)
+	clock.advance(todoViewSettle + todosSettle)
+	if n := todosSent(e); n != sent+1 {
+		t.Fatalf("the run's card landing sent %d todos events, want 1", n-sent)
+	}
+	if v := todoViewsNow(e)[id]; len(v.Asks) != 1 || v.Asks[0].Interaction != "ix_trim" ||
+		v.Asks[0].Risk != assistantwire.OwnerAskRiskSafe {
+		t.Fatalf("after the card: %+v", v)
+	}
+	clock.advance(todoViewSettle + todosSettle)
+	if n := todosSent(e); n != sent+1 {
+		t.Fatalf("reading it again sent %d more todos events", n-sent-1)
+	}
+}
+
 // What the apps were told is the manager's memory alone: the first views worked out after Run starts tell them once,
 // since a run may have come to ask while it was away; later reads tell nothing.
 func TestTodoViewFirstViewsAfterStartTell(t *testing.T) {

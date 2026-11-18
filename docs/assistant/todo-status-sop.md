@@ -389,8 +389,10 @@ redesign changes them:
   place, or `open`, which the owner answers after a look, at its home, with `lockscreen` `open_only` so a push about it
   offers nothing on the lock screen. A decision is `open` when it cannot be undone or other people will see it (the
   manager's `askRisk`, also written on the list's `ask`, one rule for every place that answers it); a retry is
-  `safe`; a run's ask is what its oldest pending card asks (`question`, `plan`, `tool`, `form` or `secret`, the card's
-  id as `interaction`), `safe` only for a question with options. A failed start of a to-do no conversation opened
+  `safe`; a run's ask is what its pending card asks (`question`, `plan`, `tool`, `form` or `secret`, the card's id as
+  `interaction`; the session's own card before Persona's about its turn, then the oldest), `safe` only when a
+  notification may answer that card too (one question with options, not a Just me turn's or a health conversation's)
+  and its asker did not say going ahead cannot be undone. A failed start of a to-do no conversation opened
   carries no retry, since the hub would refuse it; its row still says why it did not start. The table is in
   `spec/fixtures/todo-view/README.md` ("Risk and the lock screen").
 

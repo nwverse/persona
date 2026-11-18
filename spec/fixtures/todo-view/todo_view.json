@@ -3310,7 +3310,7 @@
     },
     {
       "name": "decision_safe_choice",
-      "description": "A decision that can be undone (why only the owner decides is a priority call, and Persona would take the recommendation at a deadline it can undo) is safe: the row, its card and a push may answer it, so it may offer its answers on the lock screen.",
+      "description": "A decision that can be undone (why only the owner decides is a priority call, and Persona would take the recommendation at a deadline it can undo) is listed safe by the manager (askRisk), and the view keeps the listed risk: the row, its card and a push may answer it, so it may offer its answers on the lock screen.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 3",
         "docs/design/proposals/todos-redesign.md 3.7 \"Answers and taps per surface\"",
@@ -3449,7 +3449,7 @@
     },
     {
       "name": "decision_irreversible_open",
-      "description": "A decision that cannot be undone (why only the owner decides is irreversible) is open: the owner answers it after a look, on its page, and a push about it offers nothing on the lock screen.",
+      "description": "A decision that cannot be undone (why only the owner decides is irreversible) is listed open by the manager (askRisk), and the view keeps the listed risk: the owner answers it after a look, on its page, and a push about it offers nothing on the lock screen.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 3",
         "docs/design/proposals/todos-redesign.md 3.7 \"Answers and taps per surface\"",
@@ -3586,7 +3586,7 @@
     },
     {
       "name": "decision_visible_to_others_open",
-      "description": "A decision other people will see (why only the owner decides is visible_to_others) is open, as one that cannot be undone is.",
+      "description": "A decision other people will see (why only the owner decides is visible_to_others) is listed open by the manager (askRisk), as one that cannot be undone is, and the view keeps the listed risk.",
       "source": [
         "docs/design/proposals/todos-redesign.md 6.3 row 3",
         "docs/design/proposals/todos-redesign.md 3.7 \"Answers and taps per surface\"",

@@ -1,11 +1,14 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -33,8 +36,8 @@ func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now t
 }
 
 // todoFactsOf are the rows of list as the projection reads them, with their active runs' sessions and those runs'
-// pending cards (pendingInteractions), which say what a run that asks is asking (todoProjectionOf; todo_view_push.go
-// works out the views of a part of the list from them).
+// pending cards (todoRunCards), which say what a run that asks is asking (todoProjectionOf; todo_view_push.go works
+// out the views of a part of the list from them).
 func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projection.Facts {
 	want := map[string]map[string]bool{} // by computer, the session ids of the open to-dos' active runs
 	for i := range list {
@@ -64,15 +67,7 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 			sessions[[2]string{machine, c.SessionID}] = c
 		}
 	}
-	cards := map[[2]string][]proto.Interaction{} // the pending cards of those runs, oldest first
-	if len(want) > 0 {
-		for _, c := range s.pendingInteractions() {
-			if want[c.MachineID][c.SessionID] {
-				k := [2]string{c.MachineID, c.SessionID}
-				cards[k] = append(cards[k], c)
-			}
-		}
-	}
+	cards := s.todoRunCards(want)
 	loc := s.location(ctx)
 	facts := make([]projection.Facts, len(list))
 	for i := range list {
@@ -92,6 +87,28 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 		}
 	}
 	return facts
+}
+
+// todoRunCards are the pending cards of the sessions in want (by computer, the session ids), by computer and
+// session, oldest first. A health conversation's card is marked Private on this copy, as the hub's push treats it
+// (hub/push_payload.go askQuestion), so the view lets neither be answered from a row or a lock screen.
+func (s *Service) todoRunCards(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
+	if len(want) == 0 {
+		return nil
+	}
+	cards := s.pendingOf(want)
+	for _, l := range cards {
+		for i := range l {
+			l[i].Private = l[i].Private || identity.InHealthSpace(l[i].Cwd)
+		}
+		slices.SortFunc(l, func(a, b proto.Interaction) int {
+			if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.ID, b.ID)
+		})
+	}
+	return cards
 }
 
 // todoRunSessions are those of machine's sessions whose id is in want, each as the apps get it: the node's rows read
