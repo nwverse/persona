@@ -36,6 +36,8 @@ struct PersonaApp: App {
                     return .handled
                 })
                 .rootHubLinkSheet($model.linkSheet)
+                // A pairing link from outside the app asks before it pairs (#9929).
+                .pairConfirmation($model.pairToConfirm) { model.pairFromLink($0.config) }
                 #if os(iOS)
                 // A redial from the Phone app's Recents (#9290), where SwiftUI hands it over rather than the scene's delegate;
                 // the two are one tap (`PersonaCalls.continueActivity` takes it once).
@@ -78,24 +80,8 @@ struct PersonaApp: App {
                         }
                         return
                     }
-                    Task {
-                        do {
-                            try await model.pair(cfg)
-                            let host = cfg.url.host() ?? String(localized: "Server")
-                            model.toast = Toast(String(localized: "Connected to \(host)"), style: .success)
-                        }
-                        catch {
-                            // An expired code says so (showPairing); anything else is said too, not through `show`, which
-                            // keeps quiet about a timeout or no network: a hub out of reach then said nothing after 30 s on
-                            // the welcome page (#4273).
-                            if PairError.isExpiredCode(error) {
-                                model.showPairing(error)
-                            } else if !error.isCancellation {
-                                model.toast = Toast(String(localized: "Couldn't connect: \(error.localizedDescription)"), style: .error)
-                                Haptics.error()
-                            }
-                        }
-                    }
+                    // A link only opens pages: pairing waits for the user's Connect (#9929).
+                    model.askToPair(cfg)
                 }
         }
         #if os(visionOS)
@@ -187,6 +173,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
         UrgentCallPush.shared.start()
         #endif
+        #if DEBUG && os(iOS)
+        TerminationActivities.install() // a test's Live Activities end with the app, not at the next run's install (#10109)
+        #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
         // (several groups, docs/protocol/multi-hub.md「Tests」).
@@ -197,12 +186,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let d = UserDefaults.standard
         #if os(iOS)
         // `-showUrgentCallSample YES|held`: the urgent call page, from the mock hub (UrgentCallCenter.showSample); `held`
-        // on hold with Resume.
+        // on hold with Resume. `-showUrgentCallSampleTitle <text>`: its title instead of the mock's (a long one).
         let urgentSampleHeld = d.string(forKey: "showUrgentCallSample") == "held"
         if d.bool(forKey: "showUrgentCallSample") || urgentSampleHeld {
+            let title = d.string(forKey: "showUrgentCallSampleTitle")
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                UrgentCallCenter.shared.showSample(held: urgentSampleHeld)
+                UrgentCallCenter.shared.showSample(held: urgentSampleHeld, title: title)
             }
         }
         // `-openOwnerCall YES`: calls Persona (#9290) once the hub is there, as the main conversation's Call does (on the
@@ -220,12 +210,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 PersonaCalls.shared.hangUp()
             }
         }
-        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended`: the call page's
-        // state, with no system and no audio (PersonaCalls.showSample).
+        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended|speaking|hearing|
+        // thinking|working|asking|mutedSpeaking|paused|…`: the call page's state, with no system and no audio
+        // (PersonaCalls.showSample; a speaking or hearing sample has a made-up voice level). `-showCallSampleName <text>`,
+        // `-showCallSampleCaption <text>`, `-showCallSampleReason <text>`: the name (the page's and the bar's), the latest
+        // words and why it ended, instead of the sample's own (long texts for the screenshots). `-showCallSampleLook
+        // package|uploaded|<id>`: that look's avatar (waits up to 30 s for it to be on the phone; the mock's
+        // MOCK_PERSONAS=builtin MOCK_LOOK=nwverse has a package). `-showCallSampleAgent YES`: a call to an Agent session.
         if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
+            let name = d.string(forKey: "showCallSampleName"), caption = d.string(forKey: "showCallSampleCaption")
+            let reason = d.string(forKey: "showCallSampleReason"), wanted = d.string(forKey: "showCallSampleLook")
+            let agent = d.bool(forKey: "showCallSampleAgent")
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                PersonaCalls.shared.showSample(sample)
+                var look: Persona?
+                if let wanted {
+                    for _ in 0..<60 {
+                        look = PersonaCalls.sampleLook(wanted, model: AppModel.shared)
+                        if look != nil { break }
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+                PersonaCalls.shared.showSample(sample, name: name, caption: caption, reason: reason, look: look, agent: agent)
             }
         }
         #endif
