@@ -215,6 +215,11 @@ var preparedLifecycleEnds = []preparedLifecycleEnd{
 
 func TestPreparedLifecycleEndReleasesOriginalCallExactlyOnce(t *testing.T) {
 	for _, tc := range preparedLifecycleEnds {
+		if tc.status == "expired" {
+			// #10132 makes the first unanswered window non-final. Its real
+			// waiting-window terminal path is covered with the journal instead.
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			ft := newFleetTest(t)
 			preparedTestConversation(ft)
