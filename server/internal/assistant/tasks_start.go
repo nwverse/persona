@@ -867,6 +867,9 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)
 	}
+	if proto.UnrecoverableTurnErrorCode(cut.TurnError) != "" || cut.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		return nil, i18n.Err("assistant-agents_work.conversation_invalid")
+	}
 	m, ok := s.device(ctx, cut.MachineID)
 	if !ok || !m.Reachable {
 		name := cut.MachineID

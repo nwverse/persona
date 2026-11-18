@@ -55,7 +55,7 @@ enum class TaskState(val label: CoreText, val rank: Int) {
             todo.doneAt != null && !todo.startError.isNullOrBlank() -> Failed
             todo.doneAt != null -> Done
             AgentState.NeedsYou in agents -> NeedsYou
-            interrupted -> Interrupted
+            interrupted && AgentState.Working !in agents && todo.supervision?.state != "parked" -> Interrupted
             AgentState.Unread in agents -> Unread
             AgentState.Working in agents -> Working
             agents.isNotEmpty() -> Followup
@@ -76,12 +76,14 @@ fun receiptState(item: FeedItem): String = when (val st = item.field("state")) {
 fun receiptTitle(item: FeedItem, todo: Todo?): String? = todo?.title?.trim()?.ifEmpty { null } ?: item.field("title")
 
 /** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not. */
-data class Interruption(val reason: CoreText, val canContinue: Boolean) {
+data class Interruption(val reason: CoreText, val canContinue: Boolean, val invalid: Boolean = false) {
     companion object {
         fun of(s: Session?): Interruption? {
             if (s?.interrupted != true) return null
             val info = ApiErrorInfo.parse(s.turnError)
-            return Interruption(info?.reason ?: CoreText.of(Key.ApiFailed), info?.needsAction != true)
+            val invalid = s.turnErrorKind == "unrecoverable" || s.turnErrorCode == "compaction_sealed" || ApiErrorInfo.unrecoverable(s.turnError)
+            return Interruption(if (invalid) CoreText.of(Key.ApiConversationInvalid) else info?.reason ?: CoreText.of(Key.ApiFailed),
+                !invalid && info?.needsAction != true, invalid)
         }
     }
 }

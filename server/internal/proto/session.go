@@ -408,8 +408,9 @@ type Session struct {
 	// (docs/assistant/todos.md "State calculation rules", #1516).
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
-	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
-	// (a subscription's usage limit, until it resets); empty: read off the text.
+	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act), TurnErrorUsageLimit
+	// (a subscription's usage limit, until it resets), or TurnErrorUnrecoverable (the conversation is invalid).
+	// The hub's permanent-error classification overrides a generic runtime kind; empty: read off the text.
 	TurnErrorKind string `json:"turn_error_kind,omitempty"`
 	// TurnErrorResetsAt is when the subscription usage limit that ended the turn resets (TurnErrorKind
 	// TurnErrorUsageLimit): what the agent's record says (Claude Code's quotaLimits.resetsAt, the full window of a Codex
@@ -481,9 +482,10 @@ type Session struct {
 
 // Session.TurnErrorKind values.
 const (
-	TurnErrorTransient  = "transient"   // the model service failed for a moment: worth a "Continue"
-	TurnErrorUser       = "user"        // sign-in, context window, the model…: the user must act
-	TurnErrorUsageLimit = "usage_limit" // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorTransient     = "transient"     // the model service failed for a moment: worth a "Continue"
+	TurnErrorUser          = "user"          // sign-in, context window, the model…: the user must act
+	TurnErrorUsageLimit    = "usage_limit"   // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorUnrecoverable = "unrecoverable" // this conversation cannot continue; start a new one
 )
 
 // Session.TurnErrorCode values (docs/assistant/onboarding.md 4.6).
@@ -493,6 +495,7 @@ const (
 	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
 	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
 	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
+	TurnErrorCompactionSealed         = "compaction_sealed"          // native context is encrypted to another account
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):

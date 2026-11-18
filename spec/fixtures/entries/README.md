@@ -28,6 +28,8 @@ not.
   rank, newest first), then Agents. `shelved`: folded, not counted.
 - `expected.supervisor_review` (optional, absent means none): the `running` rows that say "Awaiting supervisor
   review", in order: tasks there because their supervisor's review is under way while nothing of them runs or asks.
+- `expected.web_parked` (optional, absent means none; web only): rows from `running` that the web places in its
+  separate Parked tray. An old interrupted conversation cannot bring a parked task back to Needs you.
 - `expected.web_review` (optional, absent means none; web only, #8678): the rows the web lists under Persona
   reviewing, in its order, instead of the `needs_you` or `running` rows above: every task waiting for its supervisor's
   review with nothing of it running or asking, however long it has waited. The web checks `needs_you`, `running` and

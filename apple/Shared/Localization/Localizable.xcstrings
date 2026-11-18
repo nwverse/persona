@@ -168093,6 +168093,54 @@
       },
       "extractionState" : "manual"
     },
+    "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue." : {
+      "comment" : "An unrecoverable account-sealed conversation; explain why and guide the owner to a replacement.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话已失效：压缩上下文属于另一个账号。请换新会话接着做。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話は無効です。圧縮されたコンテキストは別のアカウントに紐付いています。新しい会話で続けてください。"
+          }
+        }
+      }
+    },
+    "Invalid conversation" : {
+      "comment" : "An Agent conversation that cannot be resumed.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已失效"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無効な会話"
+          }
+        }
+      }
+    },
     "The model request failed" : {
       "comment" : "Why a model request failed: the first line of the error card in a chat (PersonaKit, #5758)",
       "localizations" : {
