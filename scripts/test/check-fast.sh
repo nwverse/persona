@@ -27,8 +27,10 @@
 #                              module that imports one of them, directly or transitively, or only from its tests (go
 #                              list; go_select). A file belongs to its directory's package, else to the nearest
 #                              enclosing one (embedded files, testdata/); internal/, cmd/ and plugins/ alike, and a
-#                              subpackage never pulls in its parent's other subpackages. A removed package's importers
-#                              that still name it run too. Files no package encloses (go.mod, go.sum): go build ./...
+#                              subpackage never pulls in its parent's other subpackages. A package whose changes are
+#                              all test-only (_test.go files, testdata/ files its code does not embed) runs alone: no
+#                              importer compiles them. A removed package's importers that still name it run too.
+#                              Files no package encloses (go.mod, go.sum): go build ./...
 #                              When go list fails: go test ./...
 #   sdk/go/**                  the same inside the sdk/go module; files no package there encloses: go test ./... there
 #   server/**, sdk/go/**       also the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS), which fail on
@@ -724,11 +726,14 @@ if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -q '^sdk/ts/src/'; then
 fi
 
 # go_select <module dir> <file of changed paths relative to it> picks the Go packages a change needs from the module's
-# package graph (one go list call: each package's imports and its tests' imports). One "<kind> <value>" line each:
+# package graph (one go list call: each package's imports, its tests' imports and its embedded files). One
+# "<kind> <value>" line each:
 #   changed ./internal/foo    the package a changed file belongs to: its directory's, else the nearest enclosing one
 #                             (embedded files; go ignores testdata/ and directories whose name starts with . or _)
 #   importer ./internal/bar   a package that imports one of those, directly or through other packages, or whose tests
 #                             do. A test-only import goes no further: no other package compiles those test files.
+#                             For the same reason a package whose changes are all test-only (_test.go files, files
+#                             under testdata/ that its code does not embed) selects no importers.
 #   gone internal/baz         the directory of a changed .go file that is no package here: removed, or excluded by
 #                             build constraints on this platform. The packages that still import it are selected.
 #   unowned go.sum            a changed file that no package encloses, and the module's go.mod and go.sum
@@ -743,13 +748,16 @@ go_select() {
     return 1
   fi
   ( cd "$_dir" && "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" go list -e \
-      -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}' ./... ) \
+      -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}|{{join .EmbedFiles "|"}}' \
+      ./... ) \
     > "$_list" 2> "$_list.err" || { _rc=$?; echo "exit $_rc" >> "$_list.err"; return 1; }
   # FILENAME, not FNR == NR: a module without packages lists nothing, and the changed paths must not count as packages.
   awk -v mod="$_mod" '
     function path(d) { return d == "." ? mod : mod "/" d }
     function rel(p) { return p == mod ? "." : "./" substr(p, length(mod) + 2) }
     function up(d) { return sub(/\/[^\/]*$/, "", d) ? d : "." }
+    # own marks package p changed; a change that reaches its importers (any but a test-only one) also marks it walked.
+    function own(p, testonly) { seed[p] = 1; if (!testonly) walk[p] = 1 }
     BEGIN { FS = "|" }
     FILENAME == ARGV[1] {
       pkg[$1] = 1
@@ -757,6 +765,7 @@ go_select() {
       for (i = 1; i <= n; i++) users[a[i]] = users[a[i]] " " $1
       n = split($3 " " $4, a, " ")
       for (i = 1; i <= n; i++) testers[a[i]] = testers[a[i]] " " $1
+      for (i = 5; i <= NF; i++) embed[$1 "|" $i] = 1
       next
     }
     $0 == "" { next }
@@ -765,12 +774,17 @@ go_select() {
     {
       d = up($0)
       if ($0 ~ /\.go$/ && (d == "." || ("/" d "/") !~ /\/(testdata|[._][^\/]*)\//)) {
-        seed[path(d)] = 1
+        own(path(d), $0 ~ /_test\.go$/)
         if (!(path(d) in pkg)) gone[d] = 1
         next
       }
       while (1) {
-        if (path(d) in pkg) { seed[path(d)] = 1; next }
+        if (path(d) in pkg) {
+          # testdata/ is read by the tests of that package alone, unless its code embeds the file (EmbedFiles, relative).
+          f = (d == ".") ? $0 : substr($0, length(d) + 2)
+          own(path(d), ("/" f) ~ /\/testdata\// && !((path(d) "|" f) in embed))
+          next
+        }
         if (d == ".") break
         d = up(d)
       }
@@ -778,14 +792,16 @@ go_select() {
     }
     END {
       n = 0
-      for (p in seed) { hit[p] = 1; queue[++n] = p }
+      for (p in seed) hit[p] = 1
+      for (p in walk) queue[++n] = p
       for (i = 1; i <= n; i++) {
         m = split(users[queue[i]], a, " ")
-        for (j = 1; j <= m; j++) if (!(a[j] in hit)) { hit[a[j]] = 1; queue[++n] = a[j] }
+        for (j = 1; j <= m; j++) if (!(a[j] in walk)) { walk[a[j]] = 1; hit[a[j]] = 1; queue[++n] = a[j] }
       }
       for (p in hit) {
         kind = (p in seed) ? "changed" : "importer"
         if (p in pkg) print kind " " rel(p)
+        if (!(p in walk)) continue
         m = split(testers[p], a, " ")
         for (j = 1; j <= m; j++) if (!(a[j] in hit)) print "importer " rel(a[j])
       }

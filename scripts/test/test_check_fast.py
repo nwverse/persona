@@ -835,6 +835,41 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertNotIn("server|build ./...", self.go_calls(), out)
 
     @needs_go
+    def test_a_test_only_change_runs_its_package_alone(self):
+        # No importer compiles a package's _test.go files or reads its testdata/: base runs without the 6 that import it.
+        self.write_graph()
+        self.write("server/internal/base/base.go",
+                   'package base\n\nimport _ "embed"\n\n//go:embed testdata/embedded.json\nvar embedded string\n')
+        self.write("server/internal/base/testdata/embedded.json", "{}\n")
+        self.write("server/internal/base/testdata/cases/one.json", "{}\n")
+        self.commit_base()
+        self.write("server/internal/base/base_test.go", "package base\n")
+        self.write("server/internal/base/testdata/cases/one.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/base"], packages, out)
+        self.assertIn("check-fast: server packages changed: ./internal/base\n", out)
+        self.assertNotIn("packages importing them", out)
+        self.assertIn("queued: server go test (1 package)", out)
+        # A testdata file the package's code embeds is part of what its importers build.
+        self.go_log.unlink()
+        self.write("server/internal/base/testdata/embedded.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual(["./cmd/tool", "./internal/base", "./internal/base/leaf", "./internal/mid", "./internal/top",
+                          "./internal/user", "./internal/xuser"], packages, out)
+
+    @needs_go
+    def test_a_test_only_change_keeps_the_importers_another_change_reaches(self):
+        # top's own change is test-only, but leaf's change reaches top through mid: top's importers still run.
+        self.write_graph()
+        self.write("server/internal/base/leaf/leaf.go", 'package leaf\n\nimport _ "example.com/server/internal/base"\n'
+                                                        "\nconst Changed = true\n")
+        self.write("server/internal/top/top_test.go", "package top\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./cmd/tool", "./internal/base/leaf", "./internal/mid", "./internal/top", "./internal/user",
+                          "./internal/xuser"], packages, out)
+        self.assertIn("check-fast: server packages changed: ./internal/base/leaf ./internal/top\n", out)
+
+    @needs_go
     def test_a_root_package_change_runs_every_package_that_imports_it(self):
         self.write_graph()
         self.write("server/internal/base/base.go", "package base\n\nconst Changed = true\n")
