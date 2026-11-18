@@ -458,8 +458,9 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 			b.WriteString(c.Text)
 		}
 		text := strings.TrimSpace(b.String())
+		quiet := false
 		if it.Phase == "final_answer" {
-			text = codexHeartbeatAnswer(text)
+			text, quiet = codexHeartbeatAnswer(text)
 		}
 		text = codexThreadLinks(text)
 		if text == "" {
@@ -472,6 +473,7 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		}
 		a := mk(0, it.ID, "assistant", proto.KindText)
 		a.Narration = it.Phase == "commentary"
+		a.CodexHeartbeatQuiet = quiet
 		a.Text = clip(text)
 		return []proto.Item{a}
 	case "Reasoning":

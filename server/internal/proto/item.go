@@ -212,6 +212,9 @@ type Item struct {
 	Compact *Compact `json:"compact,omitempty"`
 	// ModelRefusal preserves Claude Code's refusal record on a notice.
 	ModelRefusal *ModelRefusal `json:"model_refusal,omitempty"`
+	// CodexHeartbeatQuiet identifies a generated answer from a DONT_NOTIFY envelope, not model-written prose.
+	// It travels from the node to the hub so the hub can localize Text without guessing from its wording.
+	CodexHeartbeatQuiet bool `json:"codex_heartbeat_quiet,omitempty"`
 	// Model is the model that wrote this assistant item as the transcript records it: Claude Code's message.model
 	// (never its "<synthetic>" placeholder), a Codex turn's turn_context model. Absent when the transcript does not
 	// say, on other roles, and from older nodes. Clients draw a divider where the model of the replies changes.

@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// CodexHeartbeatQuiet is the visible answer for a scheduled check that reported nothing new.
-const CodexHeartbeatQuiet = "心跳检查已完成，无新动态"
+// The fallback answer for clients reading items without hub localization.
+const codexHeartbeatQuietText = "心跳检查已完成，无新动态"
 
 // A heartbeat is a whole machine envelope on a Codex item, not an XML fragment in ordinary
 // prose or Markdown. Check the exact field layout; encoding/xml alone ignores unknown fields.
@@ -49,7 +49,7 @@ func codexHeartbeatPrompt(text string) (string, bool) {
 	return fields[2], true
 }
 
-func codexHeartbeatAnswer(text string) string {
+func codexHeartbeatAnswer(text string) (shown string, quiet bool) {
 	fields, ok := codexHeartbeatFields(text, "automation_id", "decision", "message")
 	if !ok {
 		fields, ok = codexHeartbeatFields(text, "automation_id", "decision")
@@ -57,12 +57,12 @@ func codexHeartbeatAnswer(text string) string {
 	if ok {
 		switch fields[1] {
 		case "DONT_NOTIFY":
-			return CodexHeartbeatQuiet
+			return codexHeartbeatQuietText, true
 		case "NOTIFY":
 			if len(fields) == 3 && fields[2] != "" {
-				return fields[2]
+				return fields[2], false
 			}
 		}
 	}
-	return text
+	return text, false
 }

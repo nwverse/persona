@@ -34,7 +34,7 @@ func TestCodexHeartbeatTurn(t *testing.T) {
 		t.Fatalf("scheduled input: %+v (first user: %q)", u, m.FirstUser)
 	}
 	a := heartbeatItem(t, m, 3, "AgentMessage", "final_answer", heartbeatStart+`<decision>DONT_NOTIFY</decision><message>Nothing new.</message></heartbeat>`)
-	if a.Text != CodexHeartbeatQuiet || a.Role != "assistant" || a.Narration || m.LastText != a.Text || !m.TurnOpen {
+	if a.Text != codexHeartbeatQuietText || !a.CodexHeartbeatQuiet || a.Role != "assistant" || a.Narration || m.LastText != a.Text || !m.TurnOpen {
 		t.Fatalf("quiet answer: %+v (last text: %q, open: %t)", a, m.LastText, m.TurnOpen)
 	}
 	end := ParseLine(4, []byte(`{"type":"event_msg","payload":{"type":"task_complete","turn_id":"example","duration_ms":12000}}`), m)
@@ -48,16 +48,21 @@ func TestCodexHeartbeatAnswer(t *testing.T) {
 	notify := heartbeatStart + `<decision>NOTIFY</decision><message>**Build ready** &amp; queued.
 
 Next: run tests.</message></heartbeat>`
-	for _, c := range []struct{ phase, text, want string }{
-		{"final_answer", quiet, CodexHeartbeatQuiet},
-		{"final_answer", notify, "**Build ready** & queued.\n\nNext: run tests."},
-		{"commentary", quiet, quiet},
-		{"final_answer", "Example: " + quiet, "Example: " + quiet},
-		{"final_answer", "```xml\n" + notify + "\n```", "```xml\n" + notify + "\n```"},
+	for _, c := range []struct {
+		phase, text, want string
+		quiet             bool
+	}{
+		{"final_answer", quiet, codexHeartbeatQuietText, true},
+		{"final_answer", notify, "**Build ready** & queued.\n\nNext: run tests.", false},
+		{"final_answer", heartbeatStart + `<decision>NOTIFY</decision><message>` + codexHeartbeatQuietText + `</message></heartbeat>`, codexHeartbeatQuietText, false},
+		{"final_answer", codexHeartbeatQuietText, codexHeartbeatQuietText, false},
+		{"commentary", quiet, quiet, false},
+		{"final_answer", "Example: " + quiet, "Example: " + quiet, false},
+		{"final_answer", "```xml\n" + notify + "\n```", "```xml\n" + notify + "\n```", false},
 	} {
 		a := heartbeatItem(t, &Meta{}, 1, "AgentMessage", c.phase, c.text)
-		if a.Text != c.want {
-			t.Errorf("%s: %q → %q, want %q", c.phase, c.text, a.Text, c.want)
+		if a.Text != c.want || a.CodexHeartbeatQuiet != c.quiet {
+			t.Errorf("%s: %q → (%q, quiet=%t), want (%q, quiet=%t)", c.phase, c.text, a.Text, a.CodexHeartbeatQuiet, c.want, c.quiet)
 		}
 	}
 }
