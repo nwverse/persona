@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -39,35 +40,10 @@ func pinnedTLSConfig(fp, host string) *tls.Config {
 // pinned is an HTTP/1.1 client that only talks to the hub whose TLS key hashes to fp. onConn sees each new
 // connection (the link keeps its local address, to tell when the network under it is gone).
 func pinned(fp string, onConn func(net.Conn)) *http.Client {
-	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy: nil,
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				raw, err := d.DialContext(ctx, network, addr)
-				if err != nil {
-					return nil, err
-				}
-				host, _, _ := net.SplitHostPort(addr)
-				c := tls.Client(raw, pinnedTLSConfig(fp, host))
-				if err := tracedHandshake(ctx, c); err != nil {
-					raw.Close()
-					return nil, err
-				}
-				if onConn != nil {
-					onConn(raw)
-				}
-				return c, nil
-			},
-			ResponseHeaderTimeout: dialTimeout,
-			MaxIdleConns:          1,
-			IdleConnTimeout:       30 * time.Second,
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	return tlsClient(pinnedTLSConfig(fp, ""), directDial(onConn))
 }
 
-// systemRoots replaces the system's CAs for systemTrusted (UseRootsForTesting); nil means the system's.
+// systemRoots replaces the system's CAs for systemTLSConfig and an https proxy (UseRootsForTesting); nil means the system's.
 var systemRoots atomic.Pointer[x509.CertPool]
 
 // UseRootsForTesting makes the system-trust client trust pool instead of the system's CAs, until restore is called.
@@ -77,28 +53,45 @@ func UseRootsForTesting(pool *x509.CertPool) (restore func()) {
 	return func() { systemRoots.Store(old) }
 }
 
-// systemTrusted is the HTTP/1.1 client for a hub without a pin: it sits behind an HTTPS reverse proxy whose
-// certificate comes from a public CA (docs/operations/link.md "Hub behind a reverse proxy"). The certificate must chain to the system's
-// CAs and name the host dialed; nothing else is accepted. onConn is pinned's.
-func systemTrusted(onConn func(net.Conn)) *http.Client {
-	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+// systemTLSConfig checks a hub without a pin: it sits behind an HTTPS reverse proxy whose certificate comes from a
+// public CA (docs/operations/link.md "Hub behind a reverse proxy"). The certificate must chain to the system's CAs and
+// name the host dialed (the transport sets ServerName); nothing else is accepted.
+func systemTLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}, RootCAs: systemRoots.Load()}
+}
+
+// tlsClient is an HTTP/1.1 client whose connections come from dial and whose TLS the transport runs with cfg, after
+// whatever dial did (a CONNECT through a proxy): the hub's check is the same on every route. An empty ServerName
+// becomes the host dialed.
+func tlsClient(cfg *tls.Config, dial func(context.Context, string, string) (net.Conn, error)) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy: nil,
+			Proxy: nil, // an outbound proxy is dial's (proxyDial), never one the transport picks itself
 			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				raw, err := d.DialContext(ctx, network, addr)
+				raw, err := dial(ctx, network, addr)
 				if err != nil {
 					return nil, err
 				}
 				host, _, _ := net.SplitHostPort(addr)
-				c := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
-					ServerName: host, RootCAs: systemRoots.Load()})
-				if err := tracedHandshake(ctx, c); err != nil {
+				config := cfg
+				if config.ServerName == "" {
+					config = cfg.Clone()
+					if net.ParseIP(host) == nil {
+						config.ServerName = host
+					}
+				}
+				c := tls.Client(raw, config)
+				hctx, cancel := context.WithTimeout(ctx, dialTimeout)
+				defer cancel()
+				stop := context.AfterFunc(hctx, func() { _ = raw.Close() })
+				err = tracedHandshake(hctx, c)
+				if !stop() {
+					raw.Close()
+					return nil, hctx.Err()
+				}
+				if err != nil {
 					raw.Close()
 					return nil, err
-				}
-				if onConn != nil {
-					onConn(raw)
 				}
 				return c, nil
 			},
@@ -110,13 +103,35 @@ func systemTrusted(onConn func(net.Conn)) *http.Client {
 	}
 }
 
-// hubClient is how c's hub is checked: pinned to its key when the pairing gave one (never anything else then), else
-// with the system's CAs.
-func hubClient(c *Config, onConn func(net.Conn)) *http.Client {
-	if c.FP != "" {
-		return pinned(c.FP, onConn)
+// directDial dials the hub straight; onConn sees each new connection.
+func directDial(onConn func(net.Conn)) func(context.Context, string, string) (net.Conn, error) {
+	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		raw, err := d.DialContext(ctx, network, addr)
+		if err == nil && onConn != nil {
+			onConn(raw)
+		}
+		return raw, err
 	}
-	return systemTrusted(onConn)
+}
+
+// hubTLSConfig is how c's hub is checked: pinned to its key when the pairing gave one (never anything else then),
+// else with the system's CAs.
+func hubTLSConfig(c *Config) *tls.Config {
+	if c.FP != "" {
+		return pinnedTLSConfig(c.FP, "")
+	}
+	return systemTLSConfig()
+}
+
+// hubClient dials c's hub, straight or through outbound proxy p when it is set (proxyDial), and checks it with
+// hubTLSConfig either way: inside the proxy's tunnel the check is the same.
+func hubClient(c *Config, p *url.URL, onConn func(net.Conn)) *http.Client {
+	dial := directDial(onConn)
+	if p != nil {
+		dial = proxyDial(p, onConn)
+	}
+	return tlsClient(hubTLSConfig(c), dial)
 }
 
 // trustOf is Status.Trust for c.

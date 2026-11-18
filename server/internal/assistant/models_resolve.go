@@ -275,7 +275,7 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 				if err := checkAPITransport(l.Kind, l.API, l.Proxy, l.NoProxy, l.HeadersSealed != ""); err != nil {
 					return c, err
 				}
-				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
+				c = ai.Config{API: l.API, BaseURL: l.LaunchBaseURL(), Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
 				providerModels = l.Models
 				model, err := resolveAPITierAlias(l, cmp.Or(b.Model, l.Model))
 				if err != nil {
