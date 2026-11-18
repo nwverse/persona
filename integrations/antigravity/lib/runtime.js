@@ -89,7 +89,8 @@ export function createAgyRuntime(options = {}) {
   let installing = false
   let exiting = false
   let idleTimer
-  let inFlight = 0
+  let leases = 0 // runtime calls, turns and native reads that use agy acp, each held for its whole run (#10368)
+  let recycling // while agy acp is being replaced: new users wait for it and start on the new process
   const launchers = [{ name: 'agy', agent: RUNTIME, models: [] }]
 
   function publishModels(entries = catalog) {
@@ -132,16 +133,38 @@ export function createAgyRuntime(options = {}) {
     if (acp.generation > discoveredGeneration) publishModels(entries)
   }
 
-  /** Whether anything besides the caller's own `own` calls uses agy acp: a turn, a probe, a rewind, a card or a request. */
+  /** Run `fn` holding a lease on agy acp: it is never replaced under a lease, and a replacement in progress ends first. */
+  async function withAcp(fn) {
+    while (recycling) await recycling
+    leases++
+    try {
+      return await fn()
+    } finally {
+      leases--
+      if (want) void maybeExit()
+    }
+  }
+
+  /** Whether anything besides the caller's own `own` leases uses agy acp: a lease, a request or a phone card. */
   function acpBusy(own) {
-    return inFlight > own || activeTurns.size > 0 || promptTurns.size > 0 || checkTurns.size > 0 || rewinding.size > 0 ||
-      acp.pending.size > 0 || rt.busy()
+    return leases > own || acp.pending.size > 0 || rt.busy()
+  }
+
+  /**
+   * Replace agy acp when nothing besides the caller's own `own` leases uses it. The check and the replacement run with no
+   * await between them, and users arriving meanwhile wait for the new process. True when the next call gets a new one.
+   */
+  async function replaceAcp(own, reason) {
+    if (recycling || acpBusy(own)) return false
+    if (!acp.proc) return true
+    recycling = acp.recycle(reason).finally(() => { recycling = undefined })
+    await recycling
+    return true
   }
 
   /** Replace an agy acp process that was running before the CLI signed in again, once nothing else uses it. */
   async function recycleStale(own) {
-    if (!acp.proc || acp.generation > staleThrough || acpBusy(own)) return
-    await acp.recycle('the Antigravity CLI signed in again')
+    if (acp.proc && acp.generation <= staleThrough) await replaceAcp(own, 'the Antigravity CLI signed in again')
   }
 
   async function setNativeModel(rawId, model, timeoutMs) {
@@ -168,10 +191,10 @@ export function createAgyRuntime(options = {}) {
     }
     const entry = discovered.find((candidate) => candidate.id === model || candidate.name === model)
     const listed = discovered.map((candidate) => candidate.id).join('\n')
-    if (!entry || acpBusy(1)) return undefined
     const last = freshRejection
-    if (last?.generation === acp.generation && last.model === entry.id && last.listed === listed) return undefined
-    await acp.recycle(`it does not know ${entry.id}, which agy models lists`)
+    if (!entry || (last?.generation === acp.generation && last.model === entry.id && last.listed === listed)) return undefined
+    // Checked again: a call or turn that began during the discovery holds a lease.
+    if (!(await replaceAcp(1, `it does not know ${entry.id}, which agy models lists`))) return undefined
     return { model: entry.id, listed }
   }
 
@@ -475,7 +498,7 @@ export function createAgyRuntime(options = {}) {
     if (previous?.key === key && (!previous.retryAt || Date.now() < previous.retryAt)) return previous.pending
     const entry = { key }
     nativeTails.set(rawId, entry)
-    entry.pending = (async () => {
+    entry.pending = withAcp(async () => {
       try {
         const offset = Math.max(next, count - 8)
         const result = await acp.nativeRequest('GetCascadeTrajectorySteps', { cascadeId: rawId, stepOffset: offset, disableRehydration: true })
@@ -494,7 +517,7 @@ export function createAgyRuntime(options = {}) {
       } finally {
         entry.pending = undefined
       }
-    })()
+    })
     return entry.pending
   }
 
@@ -512,7 +535,7 @@ export function createAgyRuntime(options = {}) {
     if (!Number.isInteger(count) || count < 0 || !transcript.steps.some((step) => step.step_index >= count) ||
         cutMatches(nativeCuts.get(rawId), transcript)) return
     if (cutChecks.has(rawId)) return cutChecks.get(rawId)
-    const check = (async () => {
+    const check = withAcp(async () => {
       try {
         await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home, [])
         const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
@@ -526,7 +549,7 @@ export function createAgyRuntime(options = {}) {
       } finally {
         cutChecks.delete(rawId)
       }
-    })()
+    })
     cutChecks.set(rawId, check)
     return check
   }
@@ -742,15 +765,12 @@ export function createAgyRuntime(options = {}) {
     return mcpServers(personadBin, pid, isAsst)
   }
 
-  async function busyCall(fn) {
-    inFlight++
-    try {
+  /** A runtime call that uses agy acp, under a lease. A process from before the CLI signed in again is replaced first. */
+  function busyCall(fn) {
+    return withAcp(async () => {
       await recycleStale(1)
-      return await fn()
-    } finally {
-      inFlight--
-      if (want) void maybeExit()
-    }
+      return fn()
+    })
   }
 
   async function check(params) {
@@ -943,6 +963,7 @@ export function createAgyRuntime(options = {}) {
       const turnToken = Symbol('turn')
       const turn = { streamingText: '', newMessage: false, startedAt: Date.now(), pollTimer, token: turnToken }
       const prevPromise = prevTurn?.promise || Promise.resolve()
+      leases++ // the turn's own lease, until it ends
       const promise = prevPromise
         .catch(() => {})
         .then(() => {
@@ -961,22 +982,26 @@ export function createAgyRuntime(options = {}) {
           log(`agy prompt error (${pid}): ${err.message}`)
         })
         .finally(async () => {
-          if (!stopped) await readNativeError(rawId)
-          // The turn is over: a card still waiting has nothing to answer for any more.
-          cancelling.delete(rawId)
-          withdrawPermissionAsks(rawId, 'the turn ended')
-          if (promptTurns.get(pid) === turn) {
-            promptTurns.delete(pid)
-            rt.streamEnd(pid)
+          try {
+            if (!stopped) await readNativeError(rawId)
+            // The turn is over: a card still waiting has nothing to answer for any more.
+            cancelling.delete(rawId)
+            withdrawPermissionAsks(rawId, 'the turn ended')
+            if (promptTurns.get(pid) === turn) {
+              promptTurns.delete(pid)
+              rt.streamEnd(pid)
+            }
+            if (activeTurns.get(pid)?.token === turnToken) {
+              clearInterval(pollTimer)
+              activeTurns.delete(pid)
+              completedTurns.add(pid)
+              syncTranscriptAppend(rawId)
+              rt.sessionsChanged()
+            }
+          } finally {
+            leases--
+            if (want) void maybeExit()
           }
-          if (activeTurns.get(pid)?.token === turnToken) {
-            clearInterval(pollTimer)
-            activeTurns.delete(pid)
-            completedTurns.add(pid)
-            syncTranscriptAppend(rawId)
-            rt.sessionsChanged()
-          }
-          if (want) void maybeExit()
         })
       turn.promise = promise
       activeTurns.set(pid, turn)
@@ -986,9 +1011,11 @@ export function createAgyRuntime(options = {}) {
 
   async function interrupt(params) {
     const rawId = ownedId(params.session_id)
-    if (activeTurns.has(toPersonaId(rawId))) cancelling.add(rawId)
-    withdrawPermissionAsks(rawId, 'interrupted')
-    await acp.cancel(rawId)
+    return busyCall(async () => {
+      if (activeTurns.has(toPersonaId(rawId))) cancelling.add(rawId)
+      withdrawPermissionAsks(rawId, 'interrupted')
+      await acp.cancel(rawId)
+    })
   }
 
   async function rename(params) {
@@ -1001,13 +1028,19 @@ export function createAgyRuntime(options = {}) {
 
   async function close(params) {
     const rawId = ownedId(params.session_id)
-    archived.add(rawId)
-    await interrupt(params)
-    await acp.closeSession(rawId)
-    rt.sessionsChanged()
+    return busyCall(async () => {
+      archived.add(rawId)
+      await interrupt(params)
+      await acp.closeSession(rawId)
+      rt.sessionsChanged()
+    })
   }
 
   async function rewind(params) {
+    return busyCall(() => rewindConversation(params))
+  }
+
+  async function rewindConversation(params) {
     const rawId = ownedId(params.session_id)
     const pid = toPersonaId(rawId)
     if (params.restore !== 'conversation' || assistants.has(pid) || isAssistantDir(sessionCwds.get(rawId) || '')) {
@@ -1090,9 +1123,9 @@ export function createAgyRuntime(options = {}) {
     })
   }
 
-  /** No owned ACP turn, probe, rewind or phone card is in flight. */
+  /** No lease, replacement, owned ACP turn, probe, rewind or phone card is in flight. */
   function idle() {
-    return inFlight === 0 && activeTurns.size === 0 && rewinding.size === 0 && checkTurns.size === 0 && !rt.busy()
+    return leases === 0 && !recycling && activeTurns.size === 0 && rewinding.size === 0 && checkTurns.size === 0 && !rt.busy()
   }
 
   async function maybeExit() {
