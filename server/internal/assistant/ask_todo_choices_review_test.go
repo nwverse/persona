@@ -27,6 +27,7 @@ func TestExpiredQuestionIrreversibleDeadlineRemindsButStillNeedsOwnerDecision(t 
 	if code := answerExpiredQuestion(again, todo.ID, ix.CreatedAt, map[string]any{"option": "Wait"}); code != 200 {
 		t.Fatalf("the owner must still decide an overdue irreversible question: HTTP %d", code)
 	}
+	waitFor(t, "the owner's complete answer is delivered", func() bool { return len(again.told("c1x1x1")) == 1 })
 	rows, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
 	if err != nil || len(rows) != 1 || rows[0].Source != db.DecisionManual || rows[0].Choice != "Wait" ||
 		len(again.told("c1x1x1")) != 1 || again.get(todo.ID).DoneAt == nil {
@@ -102,6 +103,7 @@ func TestExpiredQuestionFailedDefaultReturnsToOwnerDespiteNonzeroDueAt(t *testin
 	if code := answerExpiredQuestion(again, todo.ID, ix.CreatedAt, map[string]any{"option": "Wait"}); code != 200 {
 		t.Fatalf("the owner must be able to answer after the default failed: HTTP %d", code)
 	}
+	waitFor(t, "the owner's answer after the failed default", func() bool { return len(again.told("c1x1x1")) == 1 })
 	rows, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
 	if err != nil || len(rows) != 1 || rows[0].Source != db.DecisionManual || len(again.told("c1x1x1")) != 1 {
 		t.Fatalf("the failed default must not record a second decision: rows=%+v err=%v", rows, err)
@@ -109,7 +111,7 @@ func TestExpiredQuestionFailedDefaultReturnsToOwnerDespiteNonzeroDueAt(t *testin
 	t.Log("default_failed=true deadline_due=true ask_present=true owner_http=200 manual_decisions=1")
 }
 
-func TestExpiredQuestionPersistedAnswerCanRetryAfterRelayFailure(t *testing.T) {
+func TestExpiredQuestionUnacceptedAnswerCanRetryAfterDestinationRecovers(t *testing.T) {
 	for _, choice := range []string{"Wait", "Merge (Recommended)"} {
 		t.Run(choice, func(t *testing.T) {
 			database := todoTestDB(t)
@@ -122,20 +124,17 @@ func TestExpiredQuestionPersistedAnswerCanRetryAfterRelayFailure(t *testing.T) {
 				t.Fatalf("an answer with nowhere to relay must fail, not complete: HTTP %d", code)
 			}
 			rows, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
-			if err != nil || len(rows) != 1 || e.get(todo.ID).DoneAt != nil || len(e.told("c1x1x1")) != 0 {
-				t.Fatalf("the decision must be persisted before its failed relay: rows=%+v err=%v", rows, err)
+			if err != nil || len(rows) != 0 || e.get(todo.ID).DoneAt != nil || len(e.told("c1x1x1")) != 0 {
+				t.Fatalf("an unaccepted answer must leave no decisions or relay: rows=%+v err=%v", rows, err)
 			}
 			again := newAskTodoEnv(t, database)
 			if code := answerExpiredQuestion(again, todo.ID, ix.CreatedAt, map[string]any{"option": choice}); code != 200 {
-				t.Fatalf("retrying a persisted answer after recovery must succeed: HTTP %d", code)
+				t.Fatalf("retrying an unaccepted answer after recovery must succeed: HTTP %d", code)
 			}
+			waitFor(t, "the recovered answer is delivered", func() bool { return len(again.told("c1x1x1")) == 1 })
 			rows, err = database.ListTodoDecisions(context.Background(), todo.ID, true)
-			wantRows := 1
-			if choice != "Wait" {
-				wantRows = 2 // An owner who changes the answer must not silently keep only the earlier choice.
-			}
 			messages := again.told("c1x1x1")
-			if err != nil || len(rows) != wantRows || len(messages) != 1 || !strings.Contains(messages[0], choice) ||
+			if err != nil || len(rows) != 1 || rows[0].Choice != choice || len(messages) != 1 || !strings.Contains(messages[0], choice) ||
 				again.get(todo.ID).DoneAt == nil {
 				t.Fatalf("recovery must record the chosen answer and send it once: rows=%+v messages=%q err=%v", rows, messages, err)
 			}
@@ -144,38 +143,19 @@ func TestExpiredQuestionPersistedAnswerCanRetryAfterRelayFailure(t *testing.T) {
 	}
 }
 
-type expiredQuestionInsertStore struct {
-	Store
-	todoStore
-	beforeInsert func()
-	afterInsert  func()
-}
-
-func (s *expiredQuestionInsertStore) InsertTodoDecision(ctx context.Context, row db.TodoDecisionRow) (bool, error) {
-	if s.beforeInsert != nil {
-		s.beforeInsert()
-	}
-	inserted, err := s.todoStore.InsertTodoDecision(ctx, row)
-	if err == nil && inserted && s.afterInsert != nil {
-		s.afterInsert()
-	}
-	return inserted, err
-}
-
 func TestExpiredQuestionClaimedAnswerSurvivesOwnerCloseOrDelete(t *testing.T) {
-	for _, when := range []string{"before decision insert", "after decision insert"} {
+	for _, when := range []string{"before acceptance commit", "after acceptance commit"} {
 		for _, action := range []string{"close", "delete"} {
 			t.Run(when+"/"+action, func(t *testing.T) {
 				database := todoTestDB(t)
-				base := newAskTodoEnv(t, database).s.store()
-				store := &expiredQuestionInsertStore{Store: base, todoStore: base.(todoStore)}
-				e := newAskTodoEnv(t, store)
+				e := newAskTodoEnv(t, database)
 				ix, _ := e.expire()
 				todo := e.onlyAskTodo()
 				interrupt := func() {
 					a, _ := e.s.askTodoOf(context.Background(), todo.ID)
-					if !a.held(time.Now()) {
-						t.Fatal("the owner action must interleave after the answer claimed the question")
+					if when == "before acceptance commit" && !a.held(time.Now()) ||
+						when == "after acceptance commit" && a.AnsweredAt.IsZero() {
+						t.Fatalf("the owner action must interleave at %s: %+v", when, a)
 					}
 					if action == "close" {
 						e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`)
@@ -186,14 +166,17 @@ func TestExpiredQuestionClaimedAnswerSurvivesOwnerCloseOrDelete(t *testing.T) {
 						t.Fatal("closing a claimed question must leave its terminal message to the answer")
 					}
 				}
-				if when == "before decision insert" {
-					store.beforeInsert = interrupt
+				e.f.mu.Lock()
+				if when == "before acceptance commit" {
+					e.f.beforeSessionGet = interrupt
 				} else {
-					store.afterInsert = interrupt
+					e.f.beforeAssistantSend = interrupt
 				}
+				e.f.mu.Unlock()
 				if code := answerExpiredQuestion(e, todo.ID, ix.CreatedAt, map[string]any{"option": "Wait"}); code != 200 {
 					t.Fatalf("a claimed answer must not be abandoned when the owner %ss its to-do: HTTP %d", action, code)
 				}
+				waitFor(t, "the claimed answer is delivered once", func() bool { return len(e.told("c1x1x1")) == 1 })
 				messages := e.told("c1x1x1")
 				a, _ := e.s.askTodoOf(context.Background(), todo.ID)
 				if len(messages) != 1 || !strings.Contains(messages[0], "Wait") || a.AnsweredAt.IsZero() ||

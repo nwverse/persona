@@ -45,12 +45,14 @@ type fakeHub struct {
 	beforeSend func()
 	// beforeAssistantSend blocks a relay before its reply, without holding the fake's lock.
 	beforeAssistantSend func()
-	afterList           map[string]func()
-	sendHangs           bool
-	hello               Hello
-	settings            *Settings
-	launcherList        []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
-	zshrc               map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
+	// beforeSessionGet runs once before checking an answer's destination, with no fake lock held.
+	beforeSessionGet func()
+	afterList        map[string]func()
+	sendHangs        bool
+	hello            Hello
+	settings         *Settings
+	launcherList     []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
+	zshrc            map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
 	// hostLaunchers: a machine's launchers.list for a start in its engine host (the call names a host), answered as an
 	// engine that runs only its own launchers would (host_runtime, #8140).
 	hostLaunchers map[string][]proto.Launcher
@@ -243,6 +245,15 @@ func listHooked(ctx context.Context) context.Context {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionGet {
+		f.mu.Lock()
+		hook := f.beforeSessionGet
+		f.beforeSessionGet = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+	}
 	if p.Device == DeviceAll && p.Method == DeviceDevicesList {
 		f.mu.Lock()
 		hook := f.onDevicesList

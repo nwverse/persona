@@ -73,6 +73,7 @@ func TestExpiredQuestionNeedsYouAndOriginalChoiceReturnsOnce(t *testing.T) {
 		t.Fatalf("inline original option: HTTP %d, want 200", code)
 	}
 	waitFor(t, "the answered question closes", func() bool { return e.get(todo.ID).DoneAt != nil })
+	waitFor(t, "the accepted answer is delivered", func() bool { return len(e.told("c1x1x1")) == 1 })
 	messages := e.told("c1x1x1")
 	if len(messages) != 1 || !strings.Contains(messages[0], "Wait") || !strings.Contains(messages[0], ix.Questions[0].Question) {
 		t.Fatalf("answer must reach its asking conversation once: %q", messages)
@@ -196,6 +197,7 @@ func TestExpiredQuestionSeveralAndMultipleSelectionStayWhole(t *testing.T) {
 		t.Fatalf("whole answer: HTTP %d", code)
 	}
 	waitFor(t, "the whole answer closes its to-do", func() bool { return e.get(todo.ID).DoneAt != nil })
+	waitFor(t, "the whole answer is delivered", func() bool { return len(e.told("c1x1x1")) == 1 })
 	if messages := e.told("c1x1x1"); len(messages) != 1 || !strings.Contains(messages[0], "Tests") || !strings.Contains(messages[0], "Web, Phone") {
 		t.Fatalf("the whole answer must return in one message: %q", messages)
 	}
@@ -248,6 +250,7 @@ func TestExpiredQuestionFailedClaimIsRetryableNotAlreadyHandled(t *testing.T) {
 	if code := answerExpiredQuestion(e, todo.ID, ix.CreatedAt, map[string]any{"option": "Wait"}); code != http.StatusOK {
 		t.Fatalf("retry after recovery: HTTP %d", code)
 	}
+	waitFor(t, "the recovered answer is delivered", func() bool { return len(e.told("c1x1x1")) == 1 })
 	if len(e.told("c1x1x1")) != 1 {
 		t.Fatalf("recovery did not return the answer once: %q", e.told("c1x1x1"))
 	}
@@ -326,7 +329,7 @@ func TestExpiredQuestionUnavailableRecordIsNotAlreadyHandled(t *testing.T) {
 	}
 }
 
-func TestExpiredQuestionHidesInFlightAnswer(t *testing.T) {
+func TestExpiredQuestionAcceptanceIsDurableBeforeInFlightDelivery(t *testing.T) {
 	e := newAskTodoEnv(t, todoTestDB(t))
 	ix, _ := e.expire()
 	todo := e.onlyAskTodo()
@@ -357,8 +360,8 @@ func TestExpiredQuestionHidesInFlightAnswer(t *testing.T) {
 		t.Fatal("the answer never reached its relay")
 	}
 	inFlight := expiredQuestionPayload(e, todo.ID)
-	if inFlight.Ask != nil || inFlight.DoneAt != nil {
-		t.Errorf("an in-flight answer must not advertise another answerable form: %+v", inFlight)
+	if inFlight.Ask != nil || inFlight.DoneAt == nil {
+		t.Errorf("an accepted answer must be terminal before its delivery completes: %+v", inFlight)
 	}
 	release()
 	select {
@@ -366,6 +369,7 @@ func TestExpiredQuestionHidesInFlightAnswer(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the released answer did not finish")
 	}
+	waitFor(t, "the accepted answer finishes delivery", func() bool { return len(e.told("c1x1x1")) == 1 })
 	if code.Load() != http.StatusOK || len(e.told("c1x1x1")) != 1 || e.get(todo.ID).DoneAt == nil {
 		t.Fatalf("the original answer must still finish once: HTTP %d", code.Load())
 	}
@@ -397,6 +401,9 @@ func TestExpiredQuestionEmptyStructuredAnswersNeverTakeRecommendation(t *testing
 			}
 			if code := answerExpiredQuestion(e, todo.ID, ix.CreatedAt, tc.answer); code != tc.want {
 				t.Fatalf("HTTP %d, want %d", code, tc.want)
+			}
+			if tc.want == http.StatusOK {
+				waitFor(t, "the complete accepted answer is delivered", func() bool { return len(e.told("c1x1x1")) == 1 })
 			}
 			rows, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
 			if err != nil {

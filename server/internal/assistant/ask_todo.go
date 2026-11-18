@@ -453,7 +453,8 @@ func (s *Service) askTodoDecided(ctx context.Context, row db.TodoDecisionRow) {
 	}()
 }
 
-// returnAskTodoAnswer is shared by the manual decision form and the original question's inline choices.
+// returnAskTodoAnswer is the manual decision form's background delivery. Inline choices instead commit their entire
+// answer, completion and relay together (commitExpiredQuestionAnswer), before starting delivery.
 func (s *Service) returnAskTodoAnswer(ctx context.Context, a askTodo, title string, choices []askChoice) error {
 	if err := s.tellAsker(ctx, a, title, renderAskAnswer(a, s.location(ctx), choices, false, false)); err != nil {
 		return err

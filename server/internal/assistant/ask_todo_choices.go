@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -137,35 +138,108 @@ func (s *Service) chooseExpiredQuestion(ctx context.Context, id, asked, option s
 	if !claimed {
 		return acceptResult{}, nil
 	}
-	sent := false
+	accepted := false
 	defer func() {
-		if !sent {
-			s.settleAskClaim(context.WithoutCancel(ctx), id, false)
+		if !accepted {
+			// A lost transaction reply is not proof of rollback. Reload before releasing the claim, so an
+			// answer already committed in the database cannot be overwritten with an unanswered record.
+			recoverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			s.askTodos.mu.Lock()
+			s.askTodos.loaded = false
+			loaded := s.loadAskTodosLocked(recoverCtx)
+			s.askTodos.mu.Unlock()
+			if loaded {
+				s.settleAskClaim(recoverCtx, id, false)
+			}
 		}
 	}()
-	for _, c := range choices {
-		// The database dedupes on nonempty source_message, not the primary key. Include the choice so an identical
-		// retry is idempotent but a changed answer after a failed relay is still recorded.
-		key := sha256.Sum256([]byte(id + "\x00" + c.Question + "\x00" + c.Choice))
-		source := hex.EncodeToString(key[:16])
-		row := db.TodoDecisionRow{ID: "dec_ask_" + source, TodoID: id, SourceMessage: "inline-answer:" + source,
-			Question: decisionText(c.Question), Choice: c.Choice, Source: db.DecisionManual, CreatedAt: decisionNow()}
-		inserted, err := s.insertDecision(ctx, st, row)
-		if errors.Is(err, db.ErrTodoNotFound) {
-			break // Deletion after the claim removes the ledger, but the claimed answer still owns the terminal message.
-		}
-		if err != nil {
-			return acceptResult{}, errors.Join(errAcceptStore, err)
-		}
-		if inserted {
-			s.decisionsChanged(ctx, id, row.CreatedAt)
-		}
-	}
-	// Close/drop declines to notify while this claim is held. Always deliver its answer; closeAskTodo preserves an
-	// already-closed or deleted to-do rather than reopening or recreating it.
-	if err := s.returnAskTodoAnswer(ctx, a, t.Title, choices); err != nil {
+	if err := s.commitExpiredQuestionAnswer(ctx, st, a, t.Title, choices); err != nil {
 		return acceptResult{}, err
 	}
-	sent = true
+	accepted = true
 	return acceptSucceeded(), nil
+}
+
+// Inline acceptance is a durable outbox commit, not a send followed by best-effort bookkeeping. The complete answer,
+// AnsweredAt, closed to-do and original relay (including its stable once_id inputs) commit before delivery may start.
+func (s *Service) commitExpiredQuestionAnswer(ctx context.Context, st todoStore, a askTodo, title string, choices []askChoice) error {
+	machine, to, err := s.askTarget(ctx, a)
+	if err != nil {
+		return err
+	}
+	now := decisionNow()
+	var decisions []db.TodoDecisionRow
+	for _, c := range choices {
+		// The database dedupes on nonempty source_message, not the primary key. Include the choice so an identical
+		// retry is idempotent, including retries of records written by older versions.
+		key := sha256.Sum256([]byte(a.TodoID + "\x00" + c.Question + "\x00" + c.Choice))
+		source := hex.EncodeToString(key[:16])
+		decisions = append(decisions, db.TodoDecisionRow{ID: "dec_ask_" + source, TodoID: a.TodoID,
+			SourceMessage: "inline-answer:" + source, Question: decisionText(c.Question), Choice: c.Choice,
+			Source: db.DecisionManual, CreatedAt: now})
+	}
+	msg := relayMsg{From: a.TodoID, FromTitle: "待办「" + title + "」", Tool: askAnswerTool, // i18n-ignore: existing relay label
+		Text: renderAskAnswer(a, s.location(ctx), choices, false, false), At: now, QueuedAt: now}
+	var inserted []db.TodoDecisionRow
+	var doneKeys [][2]string
+	err = func() error {
+		// No published state or delivery may observe a part of the transaction. Match the to-do writer's
+		// lock order, then guard both settings against concurrent saves until memory follows the commit.
+		s.todos.writing.Lock()
+		defer s.todos.writing.Unlock()
+		s.askTodos.mu.Lock()
+		defer s.askTodos.mu.Unlock()
+		s.relays.mu.Lock()
+		defer s.relays.mu.Unlock()
+		if !s.relayLocked(ctx) {
+			return errAcceptStore
+		}
+		records := slices.Clone(s.askTodos.list)
+		i := slices.IndexFunc(records, func(r askTodo) bool { return r.TodoID == a.TodoID })
+		if i < 0 {
+			return errAcceptStore
+		}
+		records[i].AnsweredAt, records[i].ClaimedAt = now, time.Time{}
+		relay := s.relays.st
+		relay.Queue = maps.Clone(relay.Queue)
+		msg.Depth = len(relay.Queue[to]) + 1
+		relay.Queue[to] = append(slices.Clone(relay.Queue[to]), msg)
+		row, added, err := st.CommitTodoAnswer(ctx, a.TodoID, decisions,
+			map[string]any{askTodosKey: records, relayKey: relay}, now)
+		if err != nil {
+			// A commit whose reply was lost may already be durable. Force subsequent readers to reload;
+			// the deferred claim release also rereads before writing anything.
+			s.relays.loaded = false
+			s.todos.mu.Lock()
+			s.todos.loaded = false
+			s.todos.mu.Unlock()
+			return errors.Join(errAcceptStore, err)
+		}
+		s.askTodos.list, s.relays.st = records, relay
+		inserted = added
+		if row != nil {
+			_, doneKeys, _ = s.setTodoRow(a.TodoID, *row, nil)
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+	// Side effects happen only after the whole answer commits. Do not call askTodoDecided per question: this
+	// submission is already terminal and owns exactly one complete relay, including when its to-do was deleted.
+	for _, row := range inserted {
+		s.todoDecisionEvent(row)
+		s.parkDecided(context.WithoutCancel(ctx), row)
+		if postable(row) {
+			s.threadPost(row.TodoID, threadEvent{kind: threadDecision, text: decisionLine(row)})
+		}
+	}
+	s.todoRowSet(ctx, doneKeys)
+	s.recordLateAnswer(a, choices, "", "")
+	go s.releaseHeldAsks(to)
+	if c, ok := s.session(ctx, machine, to); ok {
+		s.drainRelays(machine, []proto.Session{c})
+	}
+	return nil
 }
