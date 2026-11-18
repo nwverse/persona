@@ -62,7 +62,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			if s.endPreparedByID(p.ID, "dismissed", "The approval was dismissed on the computer; this card did not apply the change.") {
 				return false
 			}
-			s.recordEnd(p.ID, "dismissed", nil)
+			s.recordEnd(p.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 			s.finishInteraction(p.ID)
 		}
 		return false

@@ -41,6 +41,8 @@ import (
 )
 
 type Node struct {
+	runtimeUsage runtimeUsageReports
+
 	memoryMu     sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
@@ -277,6 +279,7 @@ type Node struct {
 	// terminals opened for Agents on engines without marks of their own (finished_close.go); n.mu.
 	finishedSince map[string]finishedClock
 	agentTerms    map[string]bool
+	agentRoots    map[string]bool // first shells of Agent worktrees on engines without tokens (personatab.go)
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -1778,9 +1781,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if strings.TrimSpace(in.Branch) != "" || strings.TrimSpace(in.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
 			}
-			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
+			return n.worktreeCreateAutomatic(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
+		return n.worktreeCreate(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
 	case methodWorktreeSource, methodWorktreePreset, methodWorktreeDelete:
 		var in worktreeSourceParams
 		if err := json.Unmarshal(params, &in); err != nil {

@@ -1,6 +1,8 @@
 # Automated PR review and merging
 
-This maintainer-side service watches explicitly configured GitHub repositories, performs an independent semantic code review, runs local repository checks, and can squash-merge a passing exact head. It is not part of the Persona hub, does not add an Assistant or Agents UI, and does not change hosted CI or repository rulesets.
+This maintainer-side service watches explicitly configured GitHub repositories, performs an independent semantic code review, runs the configured lightweight or repository checks, and can squash-merge a passing exact head. It is not part of the Persona hub, does not add an Assistant or Agents UI, and does not change hosted CI or repository rulesets.
+
+**Main verification is a separate responsibility.** The Persona and Persona Extensions maintainer queues use `semantic_only`: they do not repeat full build/vet, cross-platform or full-test suites on every PR. New `main` commits are checked and repaired by `main-verify-fix-loop` (`docs/operations/main-verification.md`), not by this PR watcher. Other repositories retain their configured full-verification profiles.
 
 The implementation is `scripts/operations/pr_watch.py`. It replaces a local focused-test-only watcher whose comments explicitly disclaimed semantic review. A pre-existing GitHub comment or review is **not** a verification credential: only this service's versioned record for `(repository, PR number, head SHA)` can satisfy its own gates.
 
