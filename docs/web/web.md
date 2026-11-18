@@ -20,6 +20,19 @@ select the icon set's `chevron` (`--select-chevron`, drawn in `--ink-3`) 10 px i
 unlayered so its padding wins over the `px-*` utilities; a select that draws its own arrow adds `appearance-none` and is left alone. `src/ui/select-chevron.test.tsx`
 keeps the token equal to the icon and `--ink-3`.
 
+## Assistant identity beside the sidebar
+
+For everyone chatting with their assistant, the expanded sidebar's head owns the assistant face and name.
+The main conversation row uses the existing home symbol (Back to main chat) and **Main chat** on one line;
+a left draft keeps its second line. The same symbol and title identify it in quick search and All chats,
+including message-search results. Other conversations retain their own titles.
+
+The main conversation header names the same live or remembered assistant as the sidebar head, even with
+only one assistant. Its name pill opens the existing conversation menu. While the full assistant head
+is beside the page, the header omits the repeated face. The face returns with the icon rail, a hidden
+sidebar, a phone layout, or an older hub without an assistant head. No appearance or model setting changes.
+Synthetic browser evidence and transitions: `web/e2e/assistant-identity.mjs`.
+
 ## Assistant task rows (#2878)
 
 An Assistant task's only card is its **Progress** tray row. Plan, execution, blocked progress, PR and acceptance update

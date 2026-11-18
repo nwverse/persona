@@ -592,8 +592,10 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   `json_schema` with its one retry); the next one is tried when a candidate fails (`model_failed`, `model_refused`, `model_paused`), runs past `timeout_seconds` (which then bounds
   each candidate; the whole call stops at 600 seconds), answers with no text (`model_failed`, "the reply was empty") or still does not match `json_schema` (`invalid_output`).
   The extension only names models: each runs on a provider the user configured in Settings › Model providers that the hub calls directly (a direct API provider, or a Persona-managed
-  Messages launcher with an address and a key; not hidden) and that lists it (its default, tier, small, subagent or custom model, or its model list). The purpose's own provider is looked at first,
-  then direct API providers, then launchers, in their order. A model none offers is skipped as `model_unavailable` (data `{model}`) without a request.
+  Messages launcher with an address and a key; not hidden) that offers it (#10657): first the purpose's own provider when it lists the model (its default, tier, small, subagent or custom model,
+  or its model list) or the purpose is bound to that model there, then direct API providers, then launchers that list it, in their order; failing those, the purpose's own provider when it
+  declares no model list (it has not said what it serves, so its gateway is asked; one that does not serve the model fails like any candidate). Other providers without a list are never tried.
+  A model nothing offers is skipped as `model_unavailable` (data `{model}`) without a request.
   The result adds `candidate` (the entry of `models` that answered; `model` stays what the upstream says) and `attempts`, the candidates that failed before it (`{model, code, message, until?, seconds, usage}`);
   `usage` covers every attempt. A single candidate that fails answers with its own code and data, exactly as a call without candidates would, so an extension that sends one model per call and
   counts failures itself keeps its existing error handling. When two or more all fail the error is `model_candidates_failed`, its message naming each candidate and how it failed, its data `{attempts, usage}`.
