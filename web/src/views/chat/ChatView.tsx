@@ -31,8 +31,8 @@ import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { assertDelivered, isKept, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
-import { UndeliveredBubble } from "./UndeliveredBubbles";
+import { assertDelivered, isKept, keptBubble, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
+import { lazyPage } from "../../lib/lazy-page";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, registerOutboxRecheck, relayNotice, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type DeliveryReply } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
@@ -167,6 +167,9 @@ const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ 
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
+// A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
+// a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
+const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
 
 const NO_FEED: FeedItem[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
@@ -2088,7 +2091,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
-              ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: <UndeliveredBubble key={`undelivered:${m.id}`} mid={mid} sid={sid} m={m} /> }))]
+              ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
+                <Suspense key={`undelivered:${m.id}`} fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
+                  <UndeliveredBubble mid={mid} sid={sid} m={m} />
+                </Suspense>
+              ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
             {(shownPending.some((p) => p.waits) || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (
