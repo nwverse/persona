@@ -34,7 +34,8 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	p := n.spare
 	if p == nil || !p.alive() || time.Since(p.born) > assistantSpareMaxAge ||
 		((p.agent == "claude" || p.agent == "codex") && p.personaMCPOnly != n.hubSupportsPersonaContracts()) ||
-		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) {
+		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) ||
+		n.toolSearchStale(p) { // its endpoint refused tool search since it started (#10365)
 		return nil
 	}
 	// A Claude start names the profile it resolved (assistantProfileSelection), Persona's own included; a spare warmed in
