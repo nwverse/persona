@@ -275,6 +275,34 @@ class CheckFastScriptsTests(unittest.TestCase):
                 self.assertEqual(1, code, out)
                 self.assertIn("FAIL     scripts/test/test_wire_schema.py", out)
 
+    def test_todo_fixture_inputs_run_the_todo_fixture_suite(self):
+        # test_todo_fixtures.py reads the to-do page and window fixtures, the view schema, the todo-view line keys, the
+        # agent names and the hub's row fields, and imports the wire and extension schema tests.
+        self.break_suite("test_todo_fixtures.py")
+        self.commit_on_top("scripts/test/test_sdk_bundle.py", PASSING, "base")  # a schema/ change runs it too
+        for path in ("spec/fixtures/todo-detail/x.json", "spec/fixtures/todo-layout/README.md",
+                     "spec/fixtures/todo-view/README.md", "spec/fixtures/agent-names/names.json",
+                     "schema/wire/todo-view.schema.json", "server/internal/assistant/todos.go",
+                     "server/internal/assistant/todo_ask.go", "scripts/test/test_wire_schema.py",
+                     "scripts/test/test_extension_schema.py"):
+            with self.subTest(path=path):
+                self.write(path, "# changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("checkout", "-q", "base", "--", "scripts")
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/test/test_todo_fixtures.py", out)
+
+    def test_other_todo_files_do_not_run_the_todo_fixture_suite(self):
+        self.break_suite("test_todo_fixtures.py")
+        for path in ("spec/fixtures/todo-view/todo_view.json", "spec/fixtures/todo-counts/x.json",
+                     "server/internal/assistant/todo_plan.go"):
+            with self.subTest(path=path):
+                self.write(path, "{}\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertNotIn("test_todo_fixtures.py", out)
+
     def test_other_schema_and_spec_files_do_not_run_the_wire_sample_suite(self):
         self.break_suite("test_wire_schema.py")
         self.commit_on_top("scripts/test/test_sdk_bundle.py", PASSING, "base")
@@ -470,6 +498,24 @@ class CheckFastScriptsTests(unittest.TestCase):
                 self.assertEqual(1, code, out)
                 self.assertIn("FAIL     scripts/ci/test_changed_ratchets.py", out)
                 self.assertIn("FAIL     scripts/test/test_merge_pr_sh.py", out)
+
+    def test_the_debug_switch_list_and_its_checker_run_the_suites_that_read_them(self):
+        # debug_switches.txt matches no script name, yet a union merge can leave it out of order (#10616) and a new
+        # name can equal one that ships; the checker and release.sh, which runs it, are tested by the same suites.
+        self.commit_on_top("scripts/release/test_debug_switches.py", FAILING, "base")
+        self.commit_on_top("scripts/release/test_release_debug_guard.py", FAILING, "base")
+        self.break_suite("test_apple_release_switch_names.py")
+        for path in ("scripts/release/debug_switches.txt", "scripts/release/debug_switches.py",
+                     "scripts/release/release.sh"):
+            with self.subTest(path=path):
+                self.write(path, "changed\n")
+                code, out = self.check_fast()
+                (self.repo / path).unlink()
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/release/test_debug_switches.py", out)
+                self.assertIn("FAIL     scripts/release/test_release_debug_guard.py", out)
+                self.assertIn("FAIL     scripts/test/test_apple_release_switch_names.py", out)
+                self.assertNotIn("scripts/tools/test_other.py", out)
 
     def test_a_migration_edit_runs_the_freeze_check(self):
         self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
