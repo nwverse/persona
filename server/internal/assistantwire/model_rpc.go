@@ -43,10 +43,9 @@ const (
 	CodeInvalidOutput = "invalid_output"
 	// CodeModelTimeout: the call ran past its timeout_seconds.
 	CodeModelTimeout = "timeout"
-	// CodeModelCandidatesFailed: with models, every candidate failed; data ModelCandidatesFailed names how each did.
+	// CodeModelCandidatesFailed: with two or more candidates, every one failed; data ModelCandidatesFailed names how
+	// each did. A single candidate that fails answers with its own code and data instead.
 	CodeModelCandidatesFailed = "model_candidates_failed"
-	// CodeModelEmpty is an attempt's code (ModelAttempt) when a candidate answered with no text.
-	CodeModelEmpty = "empty"
 )
 
 // ModelCandidatesMost is how many candidate models one call may name.
@@ -117,14 +116,21 @@ type ModelCompleteParams struct {
 	Models []string `json:"models,omitempty"`
 }
 
-// ModelAttempt is one candidate that did not answer: its model, the error code it failed with (one of model.complete's,
-// or "empty" for a reply with no text) and what happened.
+// ModelAttempt is one candidate that did not answer: its model, the error code it failed with (one of model.complete's;
+// a reply with no text is model_failed), what happened, how long it took and what it spent.
 type ModelAttempt struct {
 	Model   string `json:"model"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// Until is model_paused's: when its connection lets go (RFC 3339).
-	Until string `json:"until,omitempty"`
+	Until   string     `json:"until,omitempty"`
+	Seconds float64    `json:"seconds"`
+	Usage   ModelUsage `json:"usage"`
+}
+
+// ModelNotOffered is the data of model_unavailable for a candidate no configured provider offers.
+type ModelNotOffered struct {
+	Model string `json:"model"`
 }
 
 // ModelCandidatesFailed is the data of model_candidates_failed: every candidate's failure in order, and what they spent.

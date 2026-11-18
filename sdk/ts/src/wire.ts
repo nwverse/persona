@@ -5314,8 +5314,8 @@ export interface LeaderReportEvent {
  * dropped connection); model_refused (the model declined to answer this input, a refusal or a content filter: sending
  * it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal); timeout (past
  * timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after one more try;
- * data ModelInvalidOutput); model_candidates_failed (with models, every candidate failed; data ModelCandidatesFailed
- * names how each did).
+ * data ModelInvalidOutput); model_candidates_failed (with two or more candidates, every one failed; data
+ * ModelCandidatesFailed names how each did; a single candidate that fails answers with its own code and data).
  */
 export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "model_refused" | "timeout" | "invalid_output" | "model_candidates_failed" | (string & {});
 export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output", "model_candidates_failed"] as const;
@@ -5353,11 +5353,15 @@ export interface ModelCompleteParams {
   label?: string;
   /**
    * Candidate model ids, tried in order (#10398): one that fails (model_failed, model_refused, model_paused), runs
-   * past timeout_seconds, answers with no text or, with json_schema, still does not match it after its second try
-   * hands over to the next. Each runs on a provider the user configured in Settings › Model providers that offers it
-   * (a model none offers is model_unavailable, nothing sent). timeout_seconds bounds each candidate; the whole call
-   * stops at 600 seconds. The user can switch these lists off or replace them on the extension's purpose in Settings
-   * › Model configuration. Without models the call runs on the purpose's model, as it always did.
+   * past timeout_seconds, answers with no text (model_failed) or, with json_schema, still does not match it after its
+   * second try (invalid_output) hands over to the next. Each runs on a provider the user configured in Settings ›
+   * Model providers that offers it, the purpose's own provider first (a model none offers is model_unavailable with
+   * data {model}, nothing sent). One candidate that fails answers with its own error; when two or more all fail the
+   * error is model_candidates_failed. timeout_seconds bounds each candidate; the whole call stops at 600 seconds. The
+   * user can switch these lists off (the result then has no candidate) or replace them with a list of their own
+   * (candidate names the user's model) on the extension's purpose in Settings › Model configuration. Without models
+   * the call runs on the purpose's model, as it always did; a hub older than this field answers invalid_params
+   * (unknown field "models").
    */
   models?: string[];
 }
@@ -5392,8 +5396,8 @@ export interface ModelCompleteResult {
 }
 
 /**
- * A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode, or "empty" for a reply
- * with no text) and what happened.
+ * A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode; a reply with no text
+ * is model_failed), what happened, how long it took and what it spent.
  */
 export interface ModelAttempt {
   model: string;
@@ -5401,6 +5405,15 @@ export interface ModelAttempt {
   message: string;
   /** model_paused: when its connection lets go, an RFC 3339 time. */
   until?: string;
+  seconds: number;
+  usage: ModelUsage;
+}
+
+/**
+ * The data of model_unavailable for a candidate no provider the user configured offers.
+ */
+export interface ModelNotOffered {
+  model: string;
 }
 
 /**

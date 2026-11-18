@@ -589,16 +589,18 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
 - **Candidate models** (#10398): `models` is an optional ordered list of 1 to 8 distinct model IDs. Each candidate is a whole call of its own (the same prompt, `max_tokens` and
   `json_schema` with its one retry); the next one is tried when a candidate fails (`model_failed`, `model_refused`, `model_paused`), runs past `timeout_seconds` (which then bounds
-  each candidate; the whole call stops at 600 seconds), answers with no text (`empty`) or still does not match `json_schema` (`invalid_output`).
+  each candidate; the whole call stops at 600 seconds), answers with no text (`model_failed`, "the reply was empty") or still does not match `json_schema` (`invalid_output`).
   The extension only names models: each runs on a provider the user configured in Settings › Model providers that the hub calls directly (a direct API provider, or a Persona-managed
   Messages launcher with an address and a key; not hidden) and that lists it (its default, tier, small, subagent or custom model, or its model list). The purpose's own provider is looked at first,
-  then direct API providers, then launchers, in their order. A model none offers is skipped as `model_unavailable` without a request.
-  The result adds `candidate` (the entry of `models` that answered; `model` stays what the upstream says) and `attempts`, the candidates that failed before it (`{model, code, message, until?}`);
-  `usage` covers every attempt. When every candidate fails the error is `model_candidates_failed`, its message naming each candidate and how it failed, its data `{attempts, usage}`.
+  then direct API providers, then launchers, in their order. A model none offers is skipped as `model_unavailable` (data `{model}`) without a request.
+  The result adds `candidate` (the entry of `models` that answered; `model` stays what the upstream says) and `attempts`, the candidates that failed before it (`{model, code, message, until?, seconds, usage}`);
+  `usage` covers every attempt. A single candidate that fails answers with its own code and data, exactly as a call without candidates would, so an extension that sends one model per call and
+  counts failures itself keeps its existing error handling. When two or more all fail the error is `model_candidates_failed`, its message naming each candidate and how it failed, its data `{attempts, usage}`.
   Pick the list per call, for example a short-text chain and a long-text chain chosen by the input's length.
   The manager logs a line per attempt (`candidate i/n <model> via <provider>: <outcome>`) and one for the outcome (`answered by candidate <model> (<upstream model>) after <n> failed`, or `every candidate failed`).
   The user keeps control on the extension's purpose in Settings › Model configuration (docs/assistant/model-config.md "Extensions' own purposes"): the lists the extension sent are shown there,
-  and the user can switch them off (every call runs on the purpose's model) or replace them with a list of their own. Without `models` (and without a list of the user's) the call is exactly as before.
+  and the user can switch them off (every call runs on the purpose's model, and the result has no `candidate`) or replace them with a list of their own (`candidate` then names the user's model).
+  Without `models` (and without a list of the user's) the call is exactly as before. A hub older than this field answers `invalid_params` (`unknown field "models"`): send the call again without it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
 - **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
   `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, a selected model that is missing / unavailable to this key, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`,
@@ -623,7 +625,8 @@ A call with candidates and an answer from the second one:
 
 ```json
 {"text": "{...}", "json": {}, "model": "strong-model", "candidate": "strong-model",
- "attempts": [{"model": "fast-model", "code": "timeout", "message": "model.complete: timed out"}],
+ "attempts": [{"model": "fast-model", "code": "timeout", "message": "model.complete: timed out", "seconds": 90,
+               "usage": {"input_tokens": 0, "output_tokens": 0, "requests": 0}}],
  "stop_reason": "end_turn", "usage": {"input_tokens": 1200, "output_tokens": 300, "requests": 1}}
 ```
 

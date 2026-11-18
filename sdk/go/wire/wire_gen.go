@@ -4963,8 +4963,8 @@ type LeaderReportEvent struct {
 // status or a dropped connection); model_refused (the model declined to answer this input, a refusal or a content
 // filter: sending it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal);
 // timeout (past timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after
-// one more try; data ModelInvalidOutput); model_candidates_failed (with models, every candidate failed; data
-// ModelCandidatesFailed names how each did).
+// one more try; data ModelInvalidOutput); model_candidates_failed (with two or more candidates, every one failed;
+// data ModelCandidatesFailed names how each did; a single candidate that fails answers with its own code and data).
 const (
 	ModelErrorCodeInvalidParams         = "invalid_params"
 	ModelErrorCodeAssistantOffline      = "assistant_offline"
@@ -5012,11 +5012,15 @@ type ModelCompleteParams struct {
 	// What the call is for (daily, weekly…): it goes in the hub's log line with the usage.
 	Label string `json:"label,omitempty"`
 	// Candidate model ids, tried in order (#10398): one that fails (model_failed, model_refused, model_paused), runs
-	// past timeout_seconds, answers with no text or, with json_schema, still does not match it after its second try
-	// hands over to the next. Each runs on a provider the user configured in Settings › Model providers that offers it
-	// (a model none offers is model_unavailable, nothing sent). timeout_seconds bounds each candidate; the whole call
-	// stops at 600 seconds. The user can switch these lists off or replace them on the extension's purpose in Settings ›
-	// Model configuration. Without models the call runs on the purpose's model, as it always did.
+	// past timeout_seconds, answers with no text (model_failed) or, with json_schema, still does not match it after its
+	// second try (invalid_output) hands over to the next. Each runs on a provider the user configured in Settings ›
+	// Model providers that offers it, the purpose's own provider first (a model none offers is model_unavailable with
+	// data {model}, nothing sent). One candidate that fails answers with its own error; when two or more all fail the
+	// error is model_candidates_failed. timeout_seconds bounds each candidate; the whole call stops at 600 seconds. The
+	// user can switch these lists off (the result then has no candidate) or replace them with a list of their own
+	// (candidate names the user's model) on the extension's purpose in Settings › Model configuration. Without models
+	// the call runs on the purpose's model, as it always did; a hub older than this field answers invalid_params
+	// (unknown field "models").
 	Models []string `json:"models,omitempty"`
 }
 
@@ -5047,14 +5051,21 @@ type ModelCompleteResult struct {
 	Attempts []ModelAttempt `json:"attempts,omitempty"`
 }
 
-// ModelAttempt: A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode, or
-// "empty" for a reply with no text) and what happened.
+// ModelAttempt: A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode; a reply
+// with no text is model_failed), what happened, how long it took and what it spent.
 type ModelAttempt struct {
 	Model   string `json:"model"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// model_paused: when its connection lets go, an RFC 3339 time.
-	Until string `json:"until,omitempty"`
+	Until   string     `json:"until,omitempty"`
+	Seconds float64    `json:"seconds"`
+	Usage   ModelUsage `json:"usage"`
+}
+
+// ModelNotOffered: the data of model_unavailable for a candidate no provider the user configured offers.
+type ModelNotOffered struct {
+	Model string `json:"model"`
 }
 
 // ModelCandidatesFailed: the data of model_candidates_failed: every candidate's failure in order, and what they spent
@@ -6564,6 +6575,7 @@ var newDef = map[string]func() any{
 	"ModelUsage":                    func() any { return new(ModelUsage) },
 	"ModelCompleteResult":           func() any { return new(ModelCompleteResult) },
 	"ModelAttempt":                  func() any { return new(ModelAttempt) },
+	"ModelNotOffered":               func() any { return new(ModelNotOffered) },
 	"ModelCandidatesFailed":         func() any { return new(ModelCandidatesFailed) },
 	"ModelPause":                    func() any { return new(ModelPause) },
 	"ModelInvalidOutput":            func() any { return new(ModelInvalidOutput) },

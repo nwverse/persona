@@ -103,7 +103,7 @@ func TestModelCandidatesMoveOnForEachFailure(t *testing.T) {
 	if res.Text != "the answer" || res.Candidate != "m-ok" || res.Model != "m-ok" {
 		t.Fatalf("answered by %+v", res)
 	}
-	want := []string{"m-fail=model_failed", "m-slow=timeout", "m-empty=empty", "m-nowhere=model_unavailable"}
+	want := []string{"m-fail=model_failed", "m-slow=timeout", "m-empty=model_failed", "m-nowhere=model_unavailable"}
 	if got := attemptCodes(res.Attempts); !slices.Equal(got, want) {
 		t.Fatalf("attempts %v, want %v", got, want)
 	}
@@ -158,7 +158,7 @@ func TestModelCandidatesAllFailing(t *testing.T) {
 	if !errors.As(err, &re) || re.Code != assistantwire.CodeModelCandidatesFailed {
 		t.Fatalf("error %v", err)
 	}
-	for _, m := range []string{"m-fail: model_failed", "m-empty: empty", "m-nowhere: model_unavailable"} {
+	for _, m := range []string{"m-fail: model_failed", "m-empty: model_failed", "m-nowhere: model_unavailable"} {
 		if !strings.Contains(re.Message, m) {
 			t.Fatalf("the message does not say %q: %s", m, re.Message)
 		}
@@ -167,7 +167,7 @@ func TestModelCandidatesAllFailing(t *testing.T) {
 	if err := json.Unmarshal(re.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if got := attemptCodes(data.Attempts); !slices.Equal(got, []string{"m-fail=model_failed", "m-empty=empty", "m-nowhere=model_unavailable"}) {
+	if got := attemptCodes(data.Attempts); !slices.Equal(got, []string{"m-fail=model_failed", "m-empty=model_failed", "m-nowhere=model_unavailable"}) {
 		t.Fatalf("data %v", got)
 	}
 	if data.Usage.Requests == 0 {
@@ -281,5 +281,41 @@ func TestModelCandidatesUserSwitchesOffOrReplaces(t *testing.T) {
 	}
 	if p := purposeOf(t, s, "extension.kb-curator"); p.Candidates.Mode != "extension" || len(p.Candidates.Custom) != 0 {
 		t.Fatalf("after null: %+v", p.Candidates)
+	}
+}
+
+// One candidate at a time (how an extension that counts failures itself calls): its failure is its own code and data,
+// as a call without candidates gives, never model_candidates_failed.
+func TestModelSingleCandidateFailsWithItsOwnCode(t *testing.T) {
+	s, _, _ := extensionModelService(t, "unused")
+	candidateGateways(t, s, map[string]string{"m-fail": "fail", "m-empty": "empty", "m-prose": "prose"})
+	for model, want := range map[string]string{"m-fail": "model_failed", "m-empty": "model_failed", "m-nowhere": "model_unavailable", "m-prose": "invalid_output"} {
+		params := `{"messages":[{"role":"user","content":"hi"}],"models":["` + model + `"]}`
+		if model == "m-prose" {
+			params = `{"messages":[{"role":"user","content":"hi"}],"json_schema":{"type":"object"},"models":["m-prose"]}`
+		}
+		_, err := completeAs(s, "kb-curator", params)
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != want {
+			t.Fatalf("%s: %v, want %s", model, err, want)
+		}
+		switch model {
+		case "m-nowhere":
+			var data assistantwire.ModelNotOffered
+			if json.Unmarshal(re.Data, &data) != nil || data.Model != "m-nowhere" {
+				t.Fatalf("not offered data %s", re.Data)
+			}
+		case "m-prose":
+			var data assistantwire.ModelInvalidOutput
+			if json.Unmarshal(re.Data, &data) != nil || data.Text != "prose" || data.Usage.Requests != 2 {
+				t.Fatalf("invalid output data %s", re.Data)
+			}
+		}
+	}
+	// A later candidate's attempt list carries each failure's time and usage.
+	candidateGateways(t, s, map[string]string{"m-fail": "fail", "m-empty": "empty", "m-ok": "ok"})
+	res, err := completeAs(s, "kb-curator", `{"messages":[{"role":"user","content":"hi"}],"models":["m-empty","m-ok"]}`)
+	if err != nil || len(res.Attempts) != 1 || res.Attempts[0].Usage.Requests != 1 || res.Attempts[0].Seconds < 0 || res.Usage.Requests != 2 {
+		t.Fatalf("%+v %v", res, err)
 	}
 }

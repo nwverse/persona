@@ -233,7 +233,8 @@ func (s *Service) runCandidates(ctx context.Context, who string, c checkedCall, 
 		switch {
 		case cand.problem != "":
 			outcome = "unavailable"
-			err = &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: " + cand.problem}
+			data, _ := json.Marshal(assistantwire.ModelNotOffered{Model: cand.model})
+			err = &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: " + cand.model + ": " + cand.problem, Data: data}
 		case ctx.Err() != nil:
 			outcome = "not tried"
 			err = &rpc.Error{Code: assistantwire.CodeModelTimeout, Message: "model.complete: the call was cancelled"}
@@ -244,7 +245,7 @@ func (s *Service) runCandidates(ctx context.Context, who string, c checkedCall, 
 			out, outcome, err = s.attemptModel(callCtx, cand.config, c, min(c.timeout, left), &usage)
 			if err == nil && c.schema == nil && strings.TrimSpace(out.Text) == "" {
 				outcome = "empty"
-				err = &rpc.Error{Code: assistantwire.CodeModelEmpty, Message: "model.complete: the reply was empty"}
+				err = &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "model.complete: the reply was empty"}
 			}
 		}
 		s.logf("assistant: %s model call%s candidate %d/%d %s via %s: %s in %s, %d request(s), %d input + %d output tokens",
@@ -258,7 +259,13 @@ func (s *Service) runCandidates(ctx context.Context, who string, c checkedCall, 
 				usage.InputTokens, usage.OutputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens)
 			return out, nil
 		}
-		attempts = append(attempts, attemptOf(cand.model, err))
+		a := attemptOf(cand.model, err)
+		a.Seconds = time.Since(attemptStarted).Round(time.Millisecond).Seconds()
+		a.Usage = usageSince(before, usage)
+		attempts = append(attempts, a)
+		if len(chain) == 1 { // one candidate fails as a call without candidates would: its own code and data
+			return nil, err
+		}
 	}
 	parts := make([]string, len(attempts))
 	for i, a := range attempts {
@@ -269,6 +276,13 @@ func (s *Service) runCandidates(ctx context.Context, who string, c checkedCall, 
 		strings.Join(parts, "; "))
 	data, _ := json.Marshal(assistantwire.ModelCandidatesFailed{Attempts: attempts, Usage: usage})
 	return nil, &rpc.Error{Code: assistantwire.CodeModelCandidatesFailed, Message: "model.complete: every candidate failed: " + strings.Join(parts, "; "), Data: data}
+}
+
+// usageSince is what was spent from before to now.
+func usageSince(before, now assistantwire.ModelUsage) assistantwire.ModelUsage {
+	return assistantwire.ModelUsage{InputTokens: now.InputTokens - before.InputTokens, OutputTokens: now.OutputTokens - before.OutputTokens,
+		CacheReadInputTokens:     now.CacheReadInputTokens - before.CacheReadInputTokens,
+		CacheCreationInputTokens: now.CacheCreationInputTokens - before.CacheCreationInputTokens, Requests: now.Requests - before.Requests}
 }
 
 // attemptOf is the failed attempt of model with err (an *rpc.Error from attemptModel or runCandidates).
