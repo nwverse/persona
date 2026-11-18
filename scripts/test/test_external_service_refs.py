@@ -43,6 +43,8 @@ REPOSITORY_PATH = re.compile(r"(?<![\w/])(?:server|apple|android|site|web|schema
 # Repositories Persona depends on in the open; the docs and code cite them as sources.
 ALLOWED_REPOS = {
     "contribution": "the public contribution board Persona tiers are read from (persona_tiers.go)",
+    # #9694: a source-pinned compile-time generator for one Android-only read-only About Version experiment.
+    "refract": "public compile-time source for the bounded Android About Version generation experiment (#9694)",
 }
 # Not repository references: keys in the hub's own Persona file store.
 ALLOWED_IN_FILE = {
