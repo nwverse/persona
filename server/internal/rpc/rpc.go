@@ -547,7 +547,10 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message, lane Lane) (
 	if p.LineFilter != nil {
 		line = p.LineFilter(b)
 	}
-	_, err = p.w.Write(line)
+	n, err := p.w.Write(line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite // a writer that breaks io.Writer's rule must not pass for one that wrote the line
+	}
 	if err == nil && p.LineWritten != nil {
 		p.LineWritten(b)
 	}

@@ -89,8 +89,8 @@ func (m *Machine) run(ctx context.Context) {
 		next := m.takeNext()
 		planned := next != nil
 		lasted := time.Since(start)
-		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q", m.cfg.ID, conn.via,
-			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err))
+		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q %s", m.cfg.ID, conn.via,
+			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err), conn.peer.LaneStats())
 		m.d.pathEnded(conn.path, true, err, lasted, planned || conn.restarting.Load())
 		conn.close()
 		m.eventRetire.Lock()
@@ -250,6 +250,9 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		return nil, err
 	}
 	peer := rpc.New("h", l.w)
+	// Lanes are asked for below, once node.info says the node has them; until then (and with an older node for good)
+	// the connection is JSON lines.
+	peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
 	// Stop these operations on the node when the manager stops waiting (an older node ignores it).
 	peer.Cancels = map[string]bool{
 		proto.MethodModelHTTP:    true,
@@ -308,6 +311,13 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 	err = m.useEngine(ictx, peer)
 	if !handshakeInterrupted(err) {
 		err = peer.Call(ictx, "node.info", map[string]any{}, &c.info)
+	}
+	if err == nil && nodeHas(c.info, nodeproto.NodeLanes) {
+		// Before anything else goes out, so nothing large is on its way while the two sides switch. A refusal, or no
+		// answer in time, leaves lines: the connection works as with an older node.
+		if lerr := peer.UpgradeLanes(ictx); lerr != nil && ictx.Err() == nil {
+			m.d.logf("[%s] lanes over %s: %v (staying with lines)", m.cfg.ID, via, lerr)
+		}
 	}
 	icancel()
 	if err != nil {
@@ -376,7 +386,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	if trigger == "" {
 		trigger = "first"
 	}
-	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s (trigger: %s)", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion, trigger)
+	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s (trigger: %s) lanes=%s", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion, trigger, onOff(c.peer.Framed()))
 	m.tellLinks(true, "")
 	compat := compatOf(info)
 	if compat.Incompatible != "" {
@@ -589,6 +599,13 @@ func (m *Machine) watchPaths(ctx, runCtx context.Context, c *nodeConn) {
 		c.peer.Close(errSwitched)
 		return
 	}
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 func pathName(d *Devices, p *nodePath) string {

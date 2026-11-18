@@ -84,7 +84,7 @@ func TestLaneWriterPriority(t *testing.T) {
 	lw := newLaneWriter(g, closed, func(error) {}, nil)
 	lw.start()
 	first := queue(t, lw, LaneEvents, `{"event":"first"}`)
-	g.waitWrite(t) // the writer holds "first" in its write now
+	g.waitWrite(t)                                             // the writer holds "first" in its write now
 	bulk := queue(t, lw, LaneBulk, strings.Repeat("b", 20000)) // within the first window: no acknowledgement needed
 	ev := queue(t, lw, LaneEvents, `{"event":"e"}`)
 	in := queue(t, lw, LaneInteractive, `{"id":"h1","method":"m"}`)

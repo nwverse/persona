@@ -452,12 +452,15 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	if err := n.writeClaudeConfig(); err != nil {
 		n.logger.Printf("write claude config: %v", err)
 	}
-	// What the node sends hides the values handed to Agent starts (secretenv.go): the innermost writer, so every line.
-	w = scrubWriter{w: w, s: n.handoffs().scrub}
-	if n.updater != nil {
-		w = &updateResponseWriter{Writer: w, responseWritten: n.updater.ResponseWritten}
-	}
 	n.peer = rpc.New("n", w)
+	// What the node sends hides the values handed to Agent starts (secretenv.go): every line, as it goes out.
+	n.peer.LineFilter = n.handoffs().scrub.filter
+	if n.updater != nil {
+		n.peer.LineWritten = updateResponseWritten(n.updater.ResponseWritten)
+	}
+	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
+	// then pass file chunks and updates on the way.
+	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
 	if n.external != nil {
 		peer := n.peer
 		n.external.SetOnChange(func() { _ = peer.Notify("launchers.changed", map[string]any{}) })

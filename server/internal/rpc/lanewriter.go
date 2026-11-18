@@ -167,7 +167,10 @@ func (lw *laneWriter) run() {
 		}
 		lw.busy = true
 		lw.mu.Unlock()
-		_, err := lw.w.Write(batch)
+		n, err := lw.w.Write(batch)
+		if err == nil && n != len(batch) {
+			err = io.ErrShortWrite
+		}
 		lw.mu.Lock()
 		lw.busy = false
 		for _, l := range finished {
@@ -312,19 +315,23 @@ type LaneCounters struct {
 	OldestWait                time.Duration // how long the oldest line still waiting has
 }
 
-// String is the counters on one line, for a log: "lanes control=0/0B(max 2ms) … bulk=3/96KiB(max 1.2s) window=64KiB inflight=32KiB rtt=410ms".
+// String is the counters on one line, for a log, each field per lane in priority order (control/interactive/events/
+// bulk): "lanes=on queued=0/1/0/3 bytes=0B/1KiB/0B/96KiB maxwait=1ms/40ms/2ms/1.2s sent=12/340/88/51 window=64KiB
+// inflight=32KiB rtt=410ms base=380ms"; "lanes=off" for a connection of lines.
 func (s LaneStats) String() string {
 	if !s.Framed {
 		return "lanes=off"
 	}
-	var b strings.Builder
-	b.WriteString("lanes")
+	var queued, size, wait, sent [laneCount]string
 	for i, c := range s.Lanes {
-		fmt.Fprintf(&b, " %s=%d/%s(sent %d, max wait %s)", Lane(i), c.QueuedFrames, sizeText(c.QueuedBytes), c.SentFrames, c.MaxWait.Round(time.Millisecond))
+		queued[i] = fmt.Sprint(c.QueuedFrames)
+		size[i] = sizeText(c.QueuedBytes)
+		wait[i] = c.MaxWait.Round(time.Millisecond).String()
+		sent[i] = fmt.Sprint(c.SentFrames)
 	}
-	fmt.Fprintf(&b, " window=%s inflight=%s rtt=%s base=%s", sizeText(int64(s.Window)), sizeText(int64(s.InFlight)),
-		s.RTT.Round(time.Millisecond), s.BaseRTT.Round(time.Millisecond))
-	return b.String()
+	return fmt.Sprintf("lanes=on queued=%s bytes=%s maxwait=%s sent=%s window=%s inflight=%s rtt=%s base=%s",
+		strings.Join(queued[:], "/"), strings.Join(size[:], "/"), strings.Join(wait[:], "/"), strings.Join(sent[:], "/"),
+		sizeText(int64(s.Window)), sizeText(int64(s.InFlight)), s.RTT.Round(time.Millisecond), s.BaseRTT.Round(time.Millisecond))
 }
 
 func sizeText(n int64) string {
