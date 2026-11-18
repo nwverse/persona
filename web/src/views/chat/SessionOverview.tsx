@@ -9,8 +9,9 @@ import { credentialOwner } from "../../lib/api";
 import { openPanel } from "../../lib/panel";
 import { followChildSession, followSubagentLink } from "../../lib/subagent-link";
 import { getSession, useStore } from "../../lib/store";
-import { subagentTitle, subagentTree, taskLabel, taskPill, type FinishedTask } from "../../lib/tasks";
-import type { Session, Subagent } from "../../lib/types";
+import { subagentTitle, taskLabel, taskPill, type TaskIndex } from "../../lib/tasks";
+import { finishedBackgroundTasks, type FinishedTask } from "../../lib/finished-tasks";
+import type { Item, Session, Subagent } from "../../lib/types";
 import { cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
@@ -20,13 +21,16 @@ import { SessionInfoDialog } from "./SessionDialogs";
 interface OverviewProps {
   session: Session;
   machineName: string;
-  finished: readonly FinishedTask[];
+  items: Item[];
+  tasks: TaskIndex;
+  id: string;
   children: readonly Session[];
   onJumpToCall?: (call: string) => void;
 }
 
-export function SessionOverview({ session, machineName, finished, children, onJumpToCall }: OverviewProps) {
+export function SessionOverview({ id, session, machineName, items, tasks, children, onJumpToCall }: OverviewProps) {
   const [infoOpen, setInfoOpen] = useState(false);
+  const finished = useMemo(() => finishedBackgroundTasks(items, tasks), [items, tasks]);
   // Codex child threads are standalone sessions. Use the known rows from this machine and manager.
   const listed = useStore((s) => (s.sessions[session.machine_id] ?? []).filter((row) =>
     row.session_id !== session.session_id && row.manager === session.manager && (
@@ -61,7 +65,9 @@ export function SessionOverview({ session, machineName, finished, children, onJu
   };
 
   return (
-    <>
+    <aside id={id} data-session-overview aria-labelledby={`${id}-title`}
+      className="-order-1 flex max-h-[45%] min-h-0 shrink-0 flex-col border-b border-line bg-surface @min-[760px]/session:order-none @min-[760px]/session:max-h-none @min-[760px]/session:w-84 @min-[760px]/session:border-b-0 @min-[760px]/session:border-l">
+      <h2 id={`${id}-title`} className="shrink-0 border-b border-line px-3 py-2.5 text-sm font-semibold text-ink">{t("chat-chatview.session_overview")}</h2>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
         <Environment session={session} machineName={machineName} onInfo={() => setInfoOpen(true)} />
         <OverviewContext session={session} />
@@ -85,7 +91,7 @@ export function SessionOverview({ session, machineName, finished, children, onJu
         </div>
       </div>
       <SessionInfoDialog session={session} machineName={machineName} open={infoOpen} onClose={() => setInfoOpen(false)} />
-    </>
+    </aside>
   );
 }
 
@@ -170,7 +176,7 @@ function Subagents({ agents, running, open }: { agents: Subagent[]; running: num
                     <span className="truncate text-ink" title={subagentTitle(agent)}>{subagentTitle(agent)}</span>
                     {doing && <span className="truncate text-ink-3">{doing}</span>}
                   </span>
-                  <span className="shrink-0 whitespace-nowrap text-ink-3">{t(agent.running ? "chat-subagentcard.status_running" : "chat-subagentcard.ended")}</span>
+                  <span className="shrink-0 whitespace-nowrap text-ink-3">{agent.running ? t("chat-subagentcard.status_running") : t("chat-sessionoverview.ended")}</span>
                   <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" />
                 </button>
               </li>
@@ -182,7 +188,8 @@ function Subagents({ agents, running, open }: { agents: Subagent[]; running: num
   );
 }
 
-function FinishedTasks({ finished, session, onOpenOutput, onJumpToCall }: Pick<OverviewProps, "finished" | "session" | "onJumpToCall"> & {
+function FinishedTasks({ finished, session, onOpenOutput, onJumpToCall }: Pick<OverviewProps, "session" | "onJumpToCall"> & {
+  finished: readonly FinishedTask[];
   onOpenOutput: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -224,4 +231,37 @@ function FinishedTasks({ finished, session, onOpenOutput, onJumpToCall }: Pick<O
       )}
     </section>
   );
+}
+
+interface SubagentRow {
+  agent: Subagent;
+  /** 0: the session launched it (or its launcher is not listed); 1: a subagent did; … */
+  depth: number;
+}
+
+/** Every subagent by who launched whom (`parent_id`), flattened for a list: each right under its launcher, one level
+ *  deeper; one whose launcher is not listed (it ended before the node's one-day cutoff) at the top level. Within a
+ *  level running ones first, then the newest first (as the node lists them). */
+function subagentTree(all: Subagent[] | undefined): SubagentRow[] {
+  const list = all ?? [];
+  const listed = new Set(list.map((a) => a.id));
+  const newest = (a: Subagent) => Date.parse(a.started_at ?? "") || 0;
+  const order = (a: Subagent, b: Subagent) => Number(Boolean(b.running)) - Number(Boolean(a.running)) || newest(b) - newest(a);
+  const kids = new Map<string, Subagent[]>();
+  for (const a of [...list].sort(order)) {
+    const p = a.parent_id && a.parent_id !== a.id && listed.has(a.parent_id) ? a.parent_id : "";
+    kids.set(p, [...(kids.get(p) ?? []), a]);
+  }
+  const out: SubagentRow[] = [];
+  const placed = new Set<string>();
+  const place = (a: Subagent, depth: number) => {
+    if (placed.has(a.id)) return;
+    placed.add(a.id);
+    out.push({ agent: a, depth });
+    for (const k of kids.get(a.id) ?? []) place(k, depth + 1);
+  };
+  for (const a of kids.get("") ?? []) place(a, 0);
+  // launchers naming each other (only a runtime could write that) are reached from nowhere: list them at the top
+  for (const a of [...list].sort(order)) place(a, 0);
+  return out;
 }

@@ -48,6 +48,7 @@
   "files": "文件",
   "review_changes": "评审改动",
   "interrupt": "中断",
+  "session_overview": "会话概览",
   "session_info": "会话信息",
   "rename": "重命名…",
   "rename_space": "重命名空间…",

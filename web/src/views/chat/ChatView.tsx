@@ -26,7 +26,7 @@ import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, sav
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { buildTaskIndex, finishedBackgroundTasks, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type FinishedTask, type TaskIndex } from "../../lib/tasks";
+import { buildTaskIndex, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
@@ -154,7 +154,6 @@ const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => 
 const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 const SessionOverview = lazy(() => import("./SessionOverview").then((m) => ({ default: m.SessionOverview })));
-const NO_FINISHED_TASKS: readonly FinishedTask[] = [];
 // Full pages opened from a conversation's hand-off card or belonging to an Inbox item load their way-back strip on demand.
 const AgentStatusLine = lazy(() => import("./AgentStatusLine").then((m) => ({ default: m.AgentStatusLine })));
 const HandoffBack = lazy(() => import("./HandoffBack").then((m) => ({ default: m.HandoffBack })));
@@ -1960,11 +1959,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const overview = useMemo(() => showOverview
     ? { id: overviewId, open: overviewOpen, toggle: () => setOverviewOpen((open) => !open) }
     : undefined, [overviewId, overviewOpen, showOverview]);
-  const lastFinishedTasks = useRef<readonly FinishedTask[] | undefined>(undefined);
-  const finishedTasks = useMemo(() => overview?.open
-    ? stableValue(lastFinishedTasks.current, finishedBackgroundTasks(tr.items, tasks))
-    : NO_FINISHED_TASKS, [overview?.open, tr.items, tasks]);
-  lastFinishedTasks.current = finishedTasks;
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2268,15 +2262,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       )}
       </div>
       {session && overview?.open && (
-        <aside id={overviewId} data-session-overview aria-labelledby={`${overviewId}-title`}
-          className="-order-1 flex max-h-[45%] min-h-0 shrink-0 flex-col border-b border-line bg-surface @min-[760px]/session:order-none @min-[760px]/session:max-h-none @min-[760px]/session:w-84 @min-[760px]/session:border-b-0 @min-[760px]/session:border-l">
-          <h2 id={`${overviewId}-title`} className="shrink-0 border-b border-line px-3 py-2.5 text-sm font-semibold text-ink">{t("chat-sessionoverview.title")}</h2>
-          <PageBoundary page={`overview:${mid}/${sid}`}>
-            <Suspense fallback={<div className="px-3 py-2"><Loading /></div>}>
-              <SessionOverview session={session} machineName={machineName} finished={finishedTasks} children={kids.rows} onJumpToCall={jump} />
-            </Suspense>
-          </PageBoundary>
-        </aside>
+        <PageBoundary page={`overview:${mid}/${sid}`}>
+          <Suspense fallback={<div className="p-3"><Loading /></div>}>
+            <SessionOverview id={overviewId} session={session} machineName={machineName} items={tr.items} tasks={tasks}
+              children={kids.rows} onJumpToCall={jump} />
+          </Suspense>
+        </PageBoundary>
       )}
       </div>
 
@@ -2730,10 +2721,10 @@ export const Header = memo(function Header({
         <button
           type="button"
           data-session-overview-trigger
-          aria-label={t("chat-sessionoverview.title")}
+          aria-label={t("chat-chatview.session_overview")}
           aria-pressed={overview.open}
           aria-controls={overview.open ? overview.id : undefined}
-          title={t("chat-sessionoverview.title")}
+          title={t("chat-chatview.session_overview")}
           onClick={overview.toggle}
           className={cx("touch-hit relative flex size-7 shrink-0 items-center justify-center rounded-control transition-colors hover:bg-hover hover:text-ink", overview.open ? "bg-hover text-ink" : "text-ink-3")}
         >

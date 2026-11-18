@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildTaskIndex, finishedBackgroundTasks } from "./tasks";
+import { buildTaskIndex } from "./tasks";
+import { finishedBackgroundTasks } from "./finished-tasks";
 import type { Item, TaskNote } from "./types";
 
 const notice = (id: string, task: TaskNote): Item => ({ id, seq: id.charCodeAt(0) - 96, role: "assistant", kind: "notice", task });
