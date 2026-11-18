@@ -242,12 +242,14 @@ func repositoryWithoutCommits(err error) bool {
 
 // taskWorkspaceOwner checks durable active task links, and the gap between
 // admission and linking. Callers that admit a writer hold workspaceMu as well.
-// Directories compare by proto.NodeKey: on a Windows machine, case aside.
-// Branch-checkout reuse also checks owners below the checkout root.
+// Directories compare by taskDirKey: on a Windows machine, case aside, and a
+// linked home's two spellings as one. Branch-checkout reuse also checks owners
+// below the checkout root.
 func (s *Service) taskWorkspaceOwner(ctx context.Context, machine, cwd, except string, descendants bool) *Todo {
-	machine, cwd = s.effectiveBoardMachine(machine), proto.NodeKey(cwd)
+	key := s.taskDirKey(ctx, machine)
+	machine, cwd = s.effectiveBoardMachine(machine), key(cwd)
 	matches := func(dir string) bool {
-		dir = proto.NodeKey(dir)
+		dir = key(dir)
 		return dir == cwd || descendants && strings.HasPrefix(strings.ReplaceAll(dir, `\`, "/"),
 			strings.TrimRight(strings.ReplaceAll(cwd, `\`, "/"), "/")+"/")
 	}
@@ -279,6 +281,44 @@ func (s *Service) taskWorkspaceOwner(ctx context.Context, machine, cwd, except s
 		}
 	}
 	return nil
+}
+
+// taskDirKey is how task folders on machine compare: proto.NodeKey's form, with a directory under the home as its
+// links resolve (the node's HomeReal) written under the home as its node names it. A node names the folder an Agent
+// starts in by the home's own spelling (workspace.resolve terminal, #10365), while a claim or an Agent's folder from
+// before, from an older node or from a terminal host that reports it physically has the resolved one: either must
+// find the same writer.
+func (s *Service) taskDirKey(ctx context.Context, machine string) func(string) string {
+	m, ok := s.machineByName(ctx, machine)
+	if effective := s.effectiveBoardMachine(machine); !ok && effective != machine {
+		m, _ = s.machineByName(ctx, effective)
+	}
+	return func(dir string) string { return homeDirKey(dir, m.Home, m.HomeReal) }
+}
+
+// homeDirKey is proto.NodeKey(dir), with dir under real (a home as its links resolve) written under home; the key
+// alone when either home is unknown, they are one path, or are of different systems.
+func homeDirKey(dir, home, real string) string {
+	dir = proto.NodeKey(dir)
+	if !proto.NodeAbs(home) || !proto.NodeAbs(real) || proto.WindowsPath(home) != proto.WindowsPath(real) {
+		return dir
+	}
+	home, real = proto.NodeKey(home), proto.NodeKey(real)
+	sep := "/"
+	if proto.WindowsPath(real) {
+		sep = `\`
+	}
+	under := strings.TrimSuffix(real, sep) + sep
+	if home == real || strings.HasPrefix(home, under) { // a home inside its own target is no spelling to fold
+		return dir
+	}
+	if dir == real {
+		return home
+	}
+	if rest, ok := strings.CutPrefix(dir, under); ok {
+		return strings.TrimSuffix(home, sep) + sep + rest
+	}
+	return dir
 }
 
 func (s *Service) taskWorkspaceBusy(ctx context.Context, machine, cwd, except string) error {
@@ -334,11 +374,12 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 			return err
 		}
 		if t.TodoID != "" {
+			claim := s.effectiveBoardMachine(t.Machine) + "\x00" + s.taskDirKey(ctx, t.Machine)(t.Cwd)
 			s.tasks.mu.Lock()
 			if s.tasks.workspaceClaims == nil {
 				s.tasks.workspaceClaims = map[string]string{}
 			}
-			s.tasks.workspaceClaims[s.effectiveBoardMachine(t.Machine)+"\x00"+proto.NodeKey(t.Cwd)] = t.TodoID
+			s.tasks.workspaceClaims[claim] = t.TodoID
 			s.tasks.mu.Unlock()
 		}
 	}

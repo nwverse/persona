@@ -15,7 +15,9 @@ import (
 // Branch lookup is inspection only. General worktree creation still refuses duplicate checkouts. A checkout it hands
 // back is named as a terminal here opens it (visiblePath: git's worktree list gives the home's real path), says
 // whether it lies in the checkouts folder, and has its git links made portable (worktree_links.go); a refusal carries
-// its code (proto.CodeCheckout*) and the branch and path, so the hub tells them apart (#10365).
+// its code (proto.CodeCheckout*) and the branch and path, so the hub tells them apart (#10365). A refused checkout of
+// this repository's branch gets portable links too: the refusal names its path for a workspace {existing}, where an
+// Agent's terminal then needs git to work.
 func (n *Node) worktreePrepareBranch(ctx context.Context, kind, workspace, cwd, branch string) (proto.WorktreePrepare, error) {
 	prep, err := n.worktreePrepare(ctx, kind, workspace, cwd)
 	if err != nil || branch == "" {
@@ -50,6 +52,7 @@ func (n *Node) worktreePrepareBranch(ctx context.Context, kind, workspace, cwd, 
 		realPath(actual.root) != realPath(at) || realPath(common) != realPath(other) {
 		return prep, checkoutRefusal(ctx, proto.CodeCheckoutChanged, i18n.Args{"branch": branch, "path": shown})
 	}
+	n.portableWorktreeLinks(at)
 	if err := n.refreshHostInventory(ctx, true); err != nil {
 		return prep, unverified(err)
 	}
@@ -83,7 +86,6 @@ func (n *Node) worktreePrepareBranch(ctx context.Context, kind, workspace, cwd, 
 	if strings.TrimSpace(out) != "" {
 		return prep, checkoutRefusal(ctx, proto.CodeCheckoutDirty, i18n.Args{"branch": branch, "path": shown})
 	}
-	n.portableWorktreeLinks(at)
 	prep.Existing = &proto.WorktreeCheckout{Path: shown, Branch: branch,
 		InCheckouts: prep.Path != "" && within(realPath(at), realPath(prep.Path))}
 	return prep, nil
