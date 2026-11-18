@@ -28,19 +28,33 @@ import (
 //   - A draft in the box or a dialog in front puts it off (retried after modeRestartRetry, doubling); nothing is typed
 //     over what someone types at the computer.
 //   - Picking any other mode before it ran drops it; so does a restart that failed (the agent is resumed in the mode it
-//     had when the new start did not come up), and a pick older than switchMaxAge.
+//     had when the new start did not come up), and a pick older than modeRestartMaxAge.
+//   - It belongs to the claude process it was picked for (#10296): the pick keeps that process' pid and start (the
+//     hooks', else its sessions/<pid>.json), and goes once that process has exited or the session runs in another one.
+//     A claude that resumes the conversation later, at the computer or by Persona's Resume, was never chosen for Allow
+//     All and is never restarted into it by an old pick. Where Persona cannot tell the process, the pick is refused.
 //   - It lives in the node's memory, shared by a resident node's Nodes (switch_share.go): a node restart forgets it, and
 //     nothing restarts the agent behind the user's back after that.
 
 const (
 	modeRestartRetry    = 3 * time.Second
 	modeRestartMaxRetry = time.Minute
+	// modeRestartMaxAge: how long a pick waits for the turn to end. Long enough for a long turn, short enough that a pick
+	// the owner has forgotten does not run hours later (#10296; a launcher switch's switchMaxAge is a day).
+	modeRestartMaxAge = 2 * time.Hour
 )
 
-// modeRestart is a restart of a session in mode that waits for its turn to end.
+// errRestartProcessUnknown: Allow All by a restart is refused where Persona cannot tell which claude process the pick
+// is for, so it could not tell when that process is gone (#10296).
+var errRestartProcessUnknown = errors.New("Persona cannot tell which Claude Code process runs this session yet, so it cannot restart it in Allow All; try again once the agent has answered")
+
+// modeRestart is a restart of a session in mode that waits for its turn to end, for the claude process pid (started
+// at start) it was picked for.
 type modeRestart struct {
 	mode     string
 	at       time.Time
+	pid      int
+	start    string
 	applying bool
 	retryAt  time.Time
 	delay    time.Duration
@@ -49,8 +63,8 @@ type modeRestart struct {
 // errRestartLater: the restart cannot go now (busy, a draft, a dialog) and waits for a later look.
 var errRestartLater = errors.New("the agent is busy: the restart waits for its turn to end")
 
-// setRestart queues a restart of session id in mode ("" drops one).
-func (s *switchShare) setRestart(id, mode string, now time.Time) {
+// setRestart queues a restart of session id in mode for the claude process pid / start ("" drops one).
+func (s *switchShare) setRestart(id, mode string, now time.Time, pid int, start string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if mode == "" {
@@ -60,10 +74,28 @@ func (s *switchShare) setRestart(id, mode string, now time.Time) {
 	if s.restarts == nil {
 		s.restarts = map[string]*modeRestart{}
 	}
-	if r := s.restarts[id]; r != nil && r.mode == mode {
+	if r := s.restarts[id]; r != nil && r.mode == mode && r.pid == pid && r.start == start {
 		return // already waiting: keep its place and its backoff
 	}
-	s.restarts[id] = &modeRestart{mode: mode, at: now}
+	s.restarts[id] = &modeRestart{mode: mode, at: now, pid: pid, start: start}
+}
+
+// restartProcess is the claude process session id's waiting restart was picked for, 0 when none waits.
+func (s *switchShare) restartProcess(id string) (pid int, start string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.restarts[id]; r != nil {
+		return r.pid, r.start
+	}
+	return 0, ""
+}
+
+// restartApplying: session id's restart is being carried out now (taken by takeRestart, not settled yet).
+func (s *switchShare) restartApplying(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.restarts[id]
+	return r != nil && r.applying
 }
 
 // restartMode is the mode session id waits to be restarted in, "" when none.
@@ -84,7 +116,7 @@ func (s *switchShare) takeRestart(id string, now time.Time) string {
 	if r == nil || r.applying || now.Before(r.retryAt) {
 		return ""
 	}
-	if now.Sub(r.at) > switchMaxAge {
+	if now.Sub(r.at) > modeRestartMaxAge {
 		delete(s.restarts, id)
 		return ""
 	}
@@ -132,12 +164,19 @@ func (n *Node) restartable(ctx context.Context, id string) error {
 	return nil
 }
 
-// queueModeRestart queues session id's restart in mode and has it tried at once (it waits when the agent is busy).
-func (n *Node) queueModeRestart(id, mode string) {
-	n.switches().setRestart(id, mode, time.Now())
-	n.logf("session %s: restart in permission mode %s waits for the agent's turn to end", id, mode)
+// queueModeRestart queues session id's restart in mode for the claude process it runs in now, and has it tried at once
+// (it waits when the agent is busy). Where that process cannot be told, nothing is queued (errRestartProcessUnknown).
+func (n *Node) queueModeRestart(id, mode string) error {
+	pid, start := n.agentProcess(id)
+	if pid <= 0 {
+		n.logf("session %s: restart in permission mode %s refused: its claude process is not known", id, mode)
+		return errRestartProcessUnknown
+	}
+	n.switches().setRestart(id, mode, time.Now(), pid, start)
+	n.logf("session %s: restart in permission mode %s waits for the agent's turn to end (claude %d)", id, mode, pid)
 	n.notifySessions()
 	go n.tryModeRestart(id)
+	return nil
 }
 
 // dropModeRestart drops a restart session id waits for (another mode was picked).
@@ -145,9 +184,55 @@ func (n *Node) dropModeRestart(id string) {
 	if n.switches().restartMode(id) == "" {
 		return
 	}
-	n.switches().setRestart(id, "", time.Time{})
+	n.switches().setRestart(id, "", time.Time{}, 0, "")
 	n.logf("session %s: waiting restart in another permission mode dropped", id)
 	n.notifySessions()
+}
+
+// agentProcess is the claude process session id runs in: as its hooks last reported it, else as the sessions/<pid>.json
+// of a running claude with that session open says; 0 when neither can tell.
+func (n *Node) agentProcess(id string) (pid int, start string) {
+	if pid, start := n.hooks.process(id); pid > 0 && processAlive(pid, start) {
+		return pid, start
+	}
+	for _, c := range n.liveClaudes() {
+		if c.SessionID == id {
+			return c.pid, claudeFileStart(c.ProcStart)
+		}
+	}
+	return 0, ""
+}
+
+// restartGone says why session id's waiting restart no longer belongs to a running agent, "" while it does: the claude
+// process it was picked for has exited, or the hooks report the session in another process (a resume) since.
+func (n *Node) restartGone(id string) string {
+	pid, start := n.switches().restartProcess(id)
+	if pid <= 0 {
+		return "it was not picked for a known claude process"
+	}
+	if !processAlive(pid, start) {
+		return fmt.Sprintf("claude %d, the process it was picked for, has exited", pid)
+	}
+	if hp, hs := n.hooks.process(id); hp > 0 && (hp != pid || hs != "" && start != "" && hs != start) {
+		return fmt.Sprintf("the session runs in claude %d now, not in claude %d it was picked for", hp, pid)
+	}
+	return ""
+}
+
+// dropGoneRestart drops session id's waiting restart when its process is gone (restartGone), and says whether it did.
+// One being carried out is left alone: quitting that process is the restart's own first step (runModeRestart checks
+// before it).
+func (n *Node) dropGoneRestart(id string) bool {
+	if n.switches().restartApplying(id) {
+		return false
+	}
+	why := n.restartGone(id)
+	if why == "" {
+		return false
+	}
+	n.switches().setRestart(id, "", time.Time{}, 0, "")
+	n.logf("session %s: waiting restart in another permission mode dropped: %s", id, why)
+	return true
 }
 
 // modeRestartRow marks a row whose agent waits for a restart in Allow All, and starts it once the row is idle.
@@ -157,7 +242,11 @@ func (n *Node) modeRestartRow(s *proto.Session) {
 		return
 	}
 	if s.PermissionMode == mode && s.BypassAvailable {
-		n.switches().setRestart(s.SessionID, "", time.Time{}) // in it already (set at the computer)
+		n.switches().setRestart(s.SessionID, "", time.Time{}, 0, "") // in it already (set at the computer)
+		return
+	}
+	if n.dropGoneRestart(s.SessionID) { // the claude it was picked for is gone (#10296)
+		go n.notifySessions()
 		return
 	}
 	s.BypassPending = mode == proto.ModeBypass
@@ -195,6 +284,9 @@ func (n *Node) runModeRestart(ctx context.Context, id, mode string) error {
 	defer unlock()
 	if n.switches().restartMode(id) != mode {
 		return nil // dropped while it waited for the input
+	}
+	if why := n.restartGone(id); why != "" {
+		return errors.New(why) // the claude it was picked for is gone: a later one is never restarted by it (#10296)
 	}
 	if why := n.switchBusy(ctx, id); why != "" {
 		return errRestartLater
