@@ -266,11 +266,11 @@ func (lw *laneWriter) pickLocked(room int, first bool, now time.Time) (*outLine,
 				continue // every slot is busy with a line in progress: this one waits for its turn
 			}
 			n := min(l.left(), most)
-			if !first && frameHeader+n > room {
-				return nil, 0, false
-			}
 			if l.credit && !lw.win.canSend(n) {
 				continue // no credit for it; a line of the lane that needs none may go
+			}
+			if !first && frameHeader+n > room {
+				return nil, 0, false // the next frame in priority goes first in the next write
 			}
 			if !l.started {
 				l.slot = uint16(bits.TrailingZeros16(^q.slots)) // a free one: not every slot is busy (above)
