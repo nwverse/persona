@@ -97,7 +97,9 @@ func TestCodexEffortInheritedRunsTheCodexCLI(t *testing.T) {
 				}
 				for link, target := range tc.links {
 					mkdir(t, filepath.Dir(filepath.Join(home, link)))
-					symlink(t, filepath.Join(home, target), filepath.Join(home, link))
+					if err := os.Symlink(filepath.Join(home, target), filepath.Join(home, link)); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if got := n.codexEffortInherited(context.Background(), []string{"codex"}, tc.pane, filepath.Join(home, "repo"), "high"); got != tc.inherit {
 					t.Fatalf("inherited %v, want %v", got, tc.inherit)

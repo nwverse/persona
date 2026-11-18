@@ -650,7 +650,8 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err
 		}
-		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant})
+		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant,
+			"machine_id": c.MachineID, "session_id": c.SessionID}) // the run it told (#10465)
 		if err != nil && event != nil {
 			// The node already accepted this event; a feed failure cannot revoke delivery.
 			s.logf("task %s: external-event delivery feed: %v", t.ID, err)

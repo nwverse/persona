@@ -676,7 +676,7 @@ criteria; an accepted or cancelled review (and the judge's own acceptance) recor
 criterion `met`, `not_met`, `unchecked` or `dropped` (with the scope change that dropped it), then `also_done`. The
 review's feed item carries it (`body.result`), and the tool's answer says it.
 
-Two more places list the criteria (`server/internal/assistant/task_brief_result.go`):
+Two more places concern the criteria (`server/internal/assistant/task_brief_result.go`):
 
 - **The done receipt** (feed kind `receipt`, `state: "done"`) carries `criteria`: each criterion of the brief as it
   stood when the Agent stopped, `{criterion, state, evidence?, change?, changed_at?}` with the states above. They are
@@ -686,12 +686,11 @@ Two more places list the criteria (`server/internal/assistant/task_brief_result.
   the ledger no longer lists (from the brief's log). At
   most 8; `criteria_more` counts the rest. Absent for a to-do without a brief or criteria (no brief is made for a
   receipt), so a receipt from before reads as it did. `review {state, criteria}` (the count) is unchanged.
-- **The conclusion card** (`docs/extensions/bots.md`, "Conclusions") of a done or cannot-be-done conclusion lists the
-  result under its goal: **Against what was asked**, one line a criterion ("✅ …", "❌ … (not met)", "▫️ … (not
-  checked)", "➖ … (dropped: <the scope change>)"), the first 8 and "… and N more", then "Also done: …". Only once the
-  work ended against its brief with this to-do carrying it; a decision's card lists nothing (it is about what to
-  choose). It reads the brief's recorded `result`, the review's own checks at the moment the work ended, which is
-  also what the briefing tells; the ledger goes on living after that (a reopened task's criteria start again). The card's other lines and the ask's fields are unchanged.
+- **The conclusion card** (`docs/extensions/bots.md`, "Conclusions") names only the criteria the work did not meet
+  (#10380): one **Not met** line on a done or cannot-be-done conclusion, the first three and how many more, nothing when
+  every one was met or only some were not checked, and nothing on a decision. The task's page keeps every criterion
+  with its result, the dropped ones with their scope change, and what was done beyond the brief (the brief's recorded
+  `result`, the review's own checks at the moment the work ended, which is also what the briefing tells).
 
 **The briefing.** The morning and evening routines' facts (`docs/assistant/assistant.md`, "Scheduled tasks") list, from
 the briefs: for each open piece of work that needs the owner, is overdue, or whose scope changed since the last
@@ -1183,9 +1182,9 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | `plan` | `task_plan` hands you a plan | Plan ID |
 | `task` | A task starts | To-do ID |
 | `answered` | A task interaction is handled | To-do ID; one-line summary (question, your answer), and full question / answer `items` per question |
-| `receipt` | Task finishes / fails to start / is interrupted by a model-service error (`interrupted`, #1516) | To-do ID; summary, changed-file count, tests, PR; interrupted receipts include original error `error` |
+| `receipt` | Task finishes / fails to start / is interrupted by a model-service error (`interrupted`, #1516) | To-do ID; summary, changed-file count, tests, PR; interrupted receipts include original error `error`; a turn's receipt (done or interrupted) names its run in `machine_id` / `session_id` (#10465; not on failed starts or older receipts) |
 | `start_remedy` | A supervised task's agent did not start and its tab is kept (#2570): each step the main conversation takes (`screen` read, `keys` typed, `retry`), the owner's answer to the tab's startup question from the app (`answer`, #10365; `answer_not_typed` when the question had left the tab before it came and nothing was typed) and how it ended (`started`, `gave_up`) | To-do ID; `action`, `by` (`assistant`, `user`, `hub`), `attempt`, `keys` / `text` typed, `reason` in the user's language, `suggestion`, `launcher_from` / `launcher_to` (a retry on another launcher of the same computer, #10365), `choice` (the id of the answer given, never what a prompt asked for, #10365). The tab's screen is never stored here. Clients that don't know the kind show nothing; the live task cards (#2365) list these steps in the card's history |
-| `routed` | You speak directly to a task, or Persona sends its agent work (`agent_send` with `task`, `agent_interrupt` with `then`, a rework) | To-do ID; original text; `interrupted` (agent_interrupt); `from: "assistant"` when Persona wrote it ("Messages to agents"); `relay: "answer"` when the hub worded an answer of yours for the Agent (a recommendation taken, an option chosen, a reply to a card; #3804), drawn like your own message. Migration 0441 marked older ones Persona wrote: an `interrupted` key, the rework prompt's opening line, or a `task` card of the same to-do at most 5 seconds before; the case it can't tell (agent_send with `task` to an agent already on that task, which writes no card) keeps the bubble |
+| `routed` | You speak directly to a task, or Persona sends its agent work (`agent_send` with `task`, `agent_interrupt` with `then`, a rework) | To-do ID; original text; `interrupted` (agent_interrupt); `from: "assistant"` when Persona wrote it ("Messages to agents"); `relay: "answer"` when the hub worded an answer of yours for the Agent (a recommendation taken, an option chosen, a reply to a card; #3804), drawn like your own message; `machine_id` / `session_id`: the run the line reached, whoever wrote it (#10465; older entries have none, and a message that started an Agent whose start named no session has only `new_agent_machine`). Migration 0441 marked older ones Persona wrote: an `interrupted` key, the rework prompt's opening line, or a `task` card of the same to-do at most 5 seconds before; the case it can't tell (agent_send with `task` to an agent already on that task, which writes no card) keeps the bubble |
 | `message` | AI twin drafts a reply to an Inbox message related to a task | Inbox item ID; task, source, chat, sender, original message, draft |
 | `today` | First opening of this chat that day (App calls `POST …/today`) | Date; tasks completed overnight, waiting tasks, open supervised tasks awaiting review (`pending_review`, excluded from waiting / working / done), working count, remaining Lark meetings today, chats mentioning me, other unread counts, unsuccessful items since yesterday at 18:00 (failed-start tasks, failed / skipped scheduled tasks, #4124) |
 
