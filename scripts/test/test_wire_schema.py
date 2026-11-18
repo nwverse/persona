@@ -8,6 +8,7 @@ A sample must name no field the schema lacks, at any depth, and miss no required
 otherwise drop it or fail on it, changing the bytes it writes back. Every definition is reached by some sample.
 """
 
+import functools
 import importlib.util
 import json
 import re
@@ -146,6 +147,41 @@ def hand_copies(schemas, read, tracked):
     return sorted(set(out))
 
 
+# ---- hand-written decoders ----
+# A decoder that reads the JSON key by key declares no type (HarmonyOS's Wire.text(obj, 'key')), so the name guard above
+# never sees it. A schema's x-guard-keys are keys and values distinctive enough that a quoted one in a Swift, Kotlin or
+# ArkTS source it guards, outside its generated files and the tests, is such a copy. TypeScript and Go are left out:
+# plain code there compares the generated types' string values, and the Go hub produces them.
+KEY_LANGUAGES = {"swift", "kotlin", "arkts"}
+TEST_SOURCE = re.compile(r"(?:^|/)(?:src/[A-Za-z]*[Tt]est[A-Za-z]*|[^/]*Tests)/")  # src/test, src/androidTest, XTests
+
+
+def hand_decoders(schemas, read, tracked):
+    """(file, key) of every quoted x-guard-keys literal outside the generated files and the tests. Arguments as
+    hand_copies'."""
+    generated = {rel for doc in schemas.values() for rel in doc["x-out"].values()}
+    out = []
+    for doc in schemas.values():
+        languages = (set(doc["x-out"]) | set(doc.get("x-guard", []))) & KEY_LANGUAGES
+        if not doc.get("x-guard-keys") or not languages:
+            continue
+        suffixes = tuple(s for language in sorted(languages) for s in LANGUAGES[language][0])
+        quoted = re.compile(r"""(["'])(""" + "|".join(map(re.escape, sorted(doc["x-guard-keys"]))) + r")\1")
+        for rel in tracked:
+            if rel in generated or not rel.endswith(suffixes) or TEST_SOURCE.search(rel):
+                continue
+            out += [(rel, m.group(2)) for m in quoted.finditer(read(rel))]
+    return sorted(set(out))
+
+
+def schema_words(doc):
+    """Every property name and enum value doc's definitions use."""
+    words = set()
+    for d in doc["$defs"].values():
+        words |= set(d.get("properties", {})) | {v for v in d.get("enum", []) if isinstance(v, str)}
+    return words
+
+
 def wire_schemas():
     return {p.name: json.loads(p.read_text()) for p in sorted(WIRE.glob("*.schema.json"))}
 
@@ -168,6 +204,8 @@ class WireSchema(unittest.TestCase):
         for name, doc in wire_schemas().items():
             self.assertLessEqual(set(doc["x-out"]) | set(doc.get("x-guard", [])), set(LANGUAGES), name)
             self.assertFalse(set(doc.get("x-reserved", [])) & set(doc["$defs"]), f"{name}: reserved and defined")
+            # A key the schema does not use (a typo, a field renamed since) would guard nothing.
+            self.assertLessEqual(set(doc.get("x-guard-keys", [])), schema_words(doc), f"{name}: x-guard-keys")
 
     def test_samples_are_exactly_the_schema(self):
         for fname, source in SAMPLES.items():
@@ -194,11 +232,40 @@ class WireSchema(unittest.TestCase):
                                  check=True).stdout.split("\0")
         tracked = [rel for rel in tracked if rel and (ROOT / rel).is_file()]
 
+        @functools.cache
         def read(rel):
             return (ROOT / rel).read_text(errors="ignore")
 
-        for rel, name in hand_copies(wire_schemas(), read, tracked):
+        schemas = wire_schemas()
+        for rel, name in hand_copies(schemas, read, tracked):
             self.fail(f"{rel} declares {name}, which schema/wire generates or reserves")
+        for rel, key in hand_decoders(schemas, read, tracked):
+            self.fail(f"{rel} reads {key!r} by hand: use the type schema/wire generates for it")
+
+    def test_hand_decoder_guard_reads_quoted_keys(self):
+        schemas = {
+            "a.schema.json": {"x-out": {"ts": "web/a.ts", "swift": "apple/A.swift"}, "$defs": {},
+                              "x-guard-keys": ["next_change_at"]},  # no Kotlin or ArkTS
+            "b.schema.json": {"x-out": {"kotlin": "android/B.kt"}, "x-guard": ["arkts"], "$defs": {},
+                              "x-guard-keys": ["default_at", "finished_seen"]},
+        }
+        files = {
+            "apple/A.swift": 'case nextChangeAt = "next_change_at"\n',  # generated
+            "apple/Row.swift": 'let at = view["next_change_at"] as? String\n',
+            "apple/PersonaTests/RowTests.swift": 'let json = #"{"next_change_at": "x"}"#\n',
+            "android/B.kt": '@SerialName("default_at") val defaultAt: String? = null\n',  # generated
+            "android/app/src/main/Row.kt": 'if (reason == "finished_seen") hide()\n',
+            "android/app/src/test/RowTest.kt": 'val sample = """{"default_at": "x"}"""\n',
+            "android/app/src/main/Next.kt": 'val k = "next_change_at"\n',  # b.schema.json does not guard it
+            "harmony/entry/src/main/ets/Todo.ets": "const at = Wire.text(view, 'default_at')\n",
+            "harmony/entry/src/ohosTest/ets/Todo.test.ets": "expect(Wire.text(v, 'default_at'))\n",
+            "harmony/entry/src/main/ets/Words.ets": "const s = 'the default_at field'\n",
+            "web/src/row.ts": 'const order = ["next_change_at", "since"]\n',  # a.schema.json's TypeScript is not scanned
+        }
+        self.assertEqual(hand_decoders(schemas, files.__getitem__, sorted(files)), [
+            ("android/app/src/main/Row.kt", "finished_seen"), ("apple/Row.swift", "next_change_at"),
+            ("harmony/entry/src/main/ets/Todo.ets", "default_at"),
+        ])
 
     def test_hand_copy_guard_reads_each_language(self):
         schemas = {

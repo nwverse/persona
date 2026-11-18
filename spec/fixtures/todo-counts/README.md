@@ -27,7 +27,7 @@ All data is made up.
 
 ## The rules the cases pin
 
-- `open`: every to-do that is not closed and not in Someday, whatever its section. A failed start is open, though its
+- `open`: every to-do that is not closed, in any section but Someday. A failed start is open, though its
   `done_at` is stored; a ready or `finished_seen` to-do is open.
 - `needs_you` (N): the to-dos in the Needs you section, each once; Can wait and quiet tasks (`quiet`) are left out, as
   the badge leaves them out today (`docs/assistant/todo-status-sop.md` "Header count").

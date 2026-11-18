@@ -32,4 +32,8 @@ Hand-written copies of a generated type may not return: the test fails when a tr
 names outside its generated files, in every language its `x-out` names and in those its `x-guard` adds (`arkts`,
 `rust`: languages a copy could be written in before they are generated, or never are). `x-reserved` lists names a later
 stage will define, guarded from now on. The rule is per schema, so `recents.schema.json` guards TypeScript and Swift
-only (its Kotlin and Rust copies predate it).
+only (its Kotlin and Rust copies predate it). A decoder that reads the JSON key by key declares no type (HarmonyOS's
+`Wire.text(obj, 'key')`), so `x-guard-keys` lists keys and values distinctive enough that the test also fails on a
+quoted one in a Swift, Kotlin or ArkTS source the schema guards, outside its generated files and the tests. A key goes
+there only while no client source quotes it for another reason; TypeScript and Go are not scanned for keys, since plain
+code there compares the generated types' values.
