@@ -832,7 +832,7 @@ function GroupClearMenu({ clear }: { clear: GroupClear }) {
   const menu = useMenu();
   return (
     <>
-      <button type="button" onClick={menu.open} aria-haspopup="menu" aria-expanded={Boolean(menu.anchor)} data-group-clear className="touch-hit inline-flex h-6 shrink-0 items-center gap-0.5 rounded-[6px] px-1.5 text-[11.5px] whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink">
+      <button type="button" onClick={menu.open} aria-haspopup="menu" aria-expanded={Boolean(menu.anchor)} data-group-clear className="touch-hit inline-flex h-6 shrink-0 items-center gap-0.5 rounded-[6px] px-1.5 text-submeta whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink">
         {clear.label}
         <Icon name="chevron" size={10} stroke={2.4} />
       </button>
