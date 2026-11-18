@@ -366,7 +366,11 @@ func (lw *laneWriter) stats() LaneStats {
 	now := time.Now()
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
-	s := LaneStats{Framed: true, Window: lw.win.cwnd, InFlight: lw.win.inFlight, RTT: lw.win.rtt, BaseRTT: lw.win.base.min()}
+	base := lw.win.base[1].min() // full frames' when there are any
+	if base == 0 {
+		base = lw.win.base[0].min()
+	}
+	s := LaneStats{Framed: true, Window: lw.win.cwnd, InFlight: lw.win.inFlight, RTT: lw.win.rtt, BaseRTT: base}
 	for i := range lw.lanes {
 		c := &s.Lanes[i]
 		c.SentFrames, c.MaxWait = lw.totals[i].frames, lw.totals[i].maxWait

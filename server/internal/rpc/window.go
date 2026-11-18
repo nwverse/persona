@@ -18,15 +18,16 @@ type creditWindow struct {
 	inFlight int
 	sent     []sentFrame // sent and not acknowledged, oldest first; one entry per frame
 	limited  bool        // a frame waited for the window since it last grew
-	base     baseRTT
+	base     [2]baseRTT  // the link's own round trip as short frames [0] and full ones [1] see it (sentFrame.full)
 	lastCut  time.Time
 	rtt      time.Duration // the latest sample
 }
 
 // sentFrame is a frame with credit (or, past maxSentEntries, the frames through seq): its bytes, written from at.
-// full: it was cut to the frame size of its time, so its round trip is a sample. A shorter frame (a short line, a
-// long one's last piece) takes less time to go out than the frames the window is judged by, and would make their own
-// time on the wire look like queueing: on a 30 KB/s link a 4 KiB frame takes 137 ms, more than queueTarget.
+// full: it was cut to the frame size of its time. Full and shorter frames (short lines, a long one's last piece) are
+// judged against bases of their own kind: a short frame takes less time to go out than a full one, and next to a base
+// it set, a full frame's own time on the wire looks like queueing (a 4 KiB frame takes 137 ms at 30 KB/s, more than
+// queueTarget), while traffic of short frames alone still needs round trips to open the window.
 type sentFrame struct {
 	seq   uint64
 	bytes int
@@ -80,23 +81,28 @@ func (w *creditWindow) wrote(seq uint64, n int, at time.Time, full bool) {
 // acked takes an acknowledgement of every frame through seq, read at now, and adapts the window.
 func (w *creditWindow) acked(seq uint64, now time.Time) {
 	var freed int
-	var at time.Time // of the newest full frame acknowledged
+	var at time.Time // of the newest frame acknowledged, a full one if there is one
+	full := false
 	i := 0
 	for ; i < len(w.sent) && w.sent[i].seq <= seq; i++ {
 		freed += w.sent[i].bytes
-		if w.sent[i].full {
-			at = w.sent[i].at
+		if w.sent[i].full || !full {
+			at, full = w.sent[i].at, w.sent[i].full
 		}
+	}
+	if i == 0 {
+		return
 	}
 	w.sent = append(w.sent[:0], w.sent[i:]...)
 	w.inFlight -= freed
-	if at.IsZero() { // no sample: the window stays as it is
-		return
-	}
 	rtt := max(now.Sub(at), 0)
 	w.rtt = rtt
-	w.base.add(rtt, now)
-	queued := rtt - w.base.min()
+	base := &w.base[0]
+	if full {
+		base = &w.base[1]
+	}
+	base.add(rtt, now)
+	queued := rtt - base.min()
 	switch {
 	case queued > queueTarget:
 		if now.Sub(w.lastCut) >= rtt {

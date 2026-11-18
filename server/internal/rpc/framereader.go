@@ -157,7 +157,8 @@ type partLine struct {
 }
 
 // replyEnvelope: first, the start of a line, opens an answer to a call: an id and then a result or an error, in the
-// order message's fields put them.
+// order message's fields put them. The deadline answer that does not count (deadlineMessage) is never told apart here:
+// it is one short frame (no code, its message alone), so a line of several frames is not one.
 func replyEnvelope(first []byte) bool {
 	dec := jsontext.NewDecoder(bytes.NewReader(first))
 	if t, err := dec.ReadToken(); err != nil || t.Kind() != '{' {

@@ -129,22 +129,38 @@ func TestBaseRTTForgetsOldMinutes(t *testing.T) {
 	}
 }
 
-// Frames shorter than the frame size (short lines, a long line's last piece) free credit but give no round trip: on a
-// slow link the full frames' own time on the wire would look like queueing next to theirs, and the window would never
-// open past its least (#10660's lane experiment: 13 KB/s on a 30 KB/s link).
-func TestCreditWindowSamplesFullFramesOnly(t *testing.T) {
-	w := newCreditWindow()
-	now := time.Unix(1_000_000, 0)
-	w.wrote(1, 50, now, false)
-	w.acked(1, now.Add(400*time.Millisecond)) // a short frame: the link's delay alone
-	if w.base.min() != 0 || w.inFlight != 0 {
-		t.Fatalf("a short frame was a sample (base %s) or kept its credit (%d)", w.base.min(), w.inFlight)
-	}
-	seq := w.fillFrom(1, now)
-	w.acked(seq, now.Add(540*time.Millisecond)) // full frames: the delay and their own time on the wire
-	if w.base.min() != 540*time.Millisecond || w.cwnd <= windowInit {
-		t.Fatalf("full frames: base %s, window %d", w.base.min(), w.cwnd)
-	}
+// Short frames (short lines, a long line's last piece) and full ones are judged against bases of their own kind: next
+// to a base short frames set, full frames' own time on the wire read as queueing and the window never opened on a slow
+// link (13 KB/s on 30 KB/s in #10660's lane experiment), and with no samples from short frames a window of short lines
+// alone never grew (a review: 238 KiB/s where lines did 1920).
+func TestCreditWindowJudgesFramesByTheirKind(t *testing.T) {
+	t.Run("full frames next to short ones", func(t *testing.T) {
+		w := newCreditWindow()
+		now := time.Unix(1_000_000, 0)
+		w.wrote(1, 50, now, false)
+		w.acked(1, now.Add(400*time.Millisecond)) // a short frame: the link's delay alone
+		seq := w.fillFrom(1, now)
+		w.acked(seq, now.Add(540*time.Millisecond)) // full frames: the delay and their own time on the wire
+		if w.base[1].min() != 540*time.Millisecond || w.cwnd <= windowInit {
+			t.Fatalf("full frames: base %s, window %d", w.base[1].min(), w.cwnd)
+		}
+	})
+	t.Run("short frames alone", func(t *testing.T) {
+		w := newCreditWindow()
+		now := time.Unix(1_000_000, 0)
+		seq := uint64(0)
+		for range 10 { // a window of 6 KiB lines each round trip, no queue
+			for w.canSend(6 << 10) {
+				seq++
+				w.wrote(seq, 6<<10, now, false)
+			}
+			now = now.Add(200 * time.Millisecond)
+			w.acked(seq, now)
+		}
+		if w.cwnd < 16*windowInit {
+			t.Fatalf("window %d after 10 quiet round trips of short frames", w.cwnd)
+		}
+	})
 }
 
 // Past maxSentEntries the newest entry takes the next frames, and their time: its round trip is the newest frame's,
