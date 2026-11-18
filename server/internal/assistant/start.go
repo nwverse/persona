@@ -361,6 +361,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
+	if strings.TrimSpace(p.Text) == "" && len(p.Images) == 0 {
+		sess.Status, sess.State = proto.StatusIdle, proto.StateIdle
+	}
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
 }
