@@ -138,6 +138,17 @@ A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a
 
 In an iOS 26 toolbar, `.foregroundStyle(Color.primary)` on a `ToolbarItem`'s `Button` is ignored: the bar draws the button's label in the app's tint. Settings' ✕ carried that modifier from 11-01 and still showed in the orange accent. Style the label inside the button (`Text(…).sheetBarLabel()`, `ThemedIcon(…).sheetBarLabel()`, as `SheetClose` does). The system's own close button (`Button(role: .close)` with no label) is no way out of this: it draws its ✕ in the tint too (blue on the extension Update sheet, 11-17). Check a bar's colors in a screenshot, dark included, not in the code.
 
+## A UIKit field keeps the text size it was made at (#10165)
+
+The Agents search field is a `UISearchBar`'s own field in a representable. It takes the size of its words as it is made,
+and UIKit's `adjustsFontForContentSizeCategory` then follows only a change of the field's own text size. The field in the
+list's row is made at launch, before `RootView` caps the window at xxxLarge (`WindowTextSize`): at the system's AX5 it
+drew 53 pt words in its 44 pt capsule while its size, and everything around it, was already xxxLarge, so nothing ever
+told it to change. The field that floats up while searching is made later and was right, which hid it. A UIKit text
+view in a representable sizes its font itself on entering a window and on every text-size change, from its own trait
+collection and under a named cap (`AgentsSearchField.Holder.fitText`); check it at the largest size with the app
+launched there, not only after a page is opened again.
+
 ## A UI test cannot see a label that is cut (#9121)
 
 The Agents capsule drew a filter that was neither chosen nor in the strip's middle as its first two characters and an ellipsis (「工作…」), while VoiceOver and `XCUIElement.label` read the whole name: the button carries its own accessibility label, so the drawn text is not in the accessibility tree and a UI test that asserts labels passes whatever is painted. A width check does not catch it either, since three Chinese or Japanese characters and two characters with an ellipsis take the same room. Guard what is drawn by its pixels: `FilterCapsuleTests` renders a chip and the bare name with `ImageRenderer`, crops both to the ink and compares them, after checking that the comparison tells 「工作中」 from 「工作…」. Screenshots in every shipped language are the other evidence.
@@ -1010,6 +1021,15 @@ Use an invalidation revision as the task key and handle the flag after completio
 - NavigationStack root `.task` / `onAppear` reruns after pushing and returning: do not unconditionally restore saved defaults, overwriting choices just made on a child page (new-chat launcher reverting to the previous selection).
 - Put environment values for pushed pages (e.g. `feishuOpen`) on NavigationStack itself; pushed pages do not inherit values attached only to root content.
 - Hiding the navigation bar (`.toolbarVisibility(.hidden, for: .navigationBar)`) also disables edge-swipe Back; enable `interactivePopGestureRecognizer` yourself.
+- iOS 26's swipe back from anywhere on a page (`interactiveContentPopGestureRecognizer`) cannot be switched back on the same way (#9971).
+  UIKit gives it no touch at all on a page that hides the system's Back, with its bar or by `navigationBarBackButtonHidden`: the recognizer
+  stays enabled with your delegate, but it is not in `UITouch.gestureRecognizers` and no delegate method is called (logged on the
+  iPad simulator, iOS 27.1; the swipe did nothing on the iPhone and open Duo simulators too). The page below showing its bar, the system's bar
+  shown with its Back hidden, and a page without the chat's own gestures made no difference; showing the system's Back did. Only a page with the system's Back gets it:
+  under iPhone Duo's side bars the Agents chat and a task's page use it (`ChatView.systemBack`); with their own header they have the edge swipe.
+  Two more things kept it from a page that did show the system's Back: a scroll view that cannot scroll sideways still began its pan on a
+  sideways drag (`ContentPopPriority` makes it wait), and a SwiftUI `DragGesture` over the whole page (a sheet's edge-swipe close, left on
+  when the page was pushed) took the drag. A Back shown only after the page came (the chat back from files / Git) did not bring the swipe back.
 - If root hides the navigation bar and a pushed page has active search, swiping Back while searching leaves UIKit's bar on root (root title, ~106 pt high),
   while SwiftUI thinks it remains hidden (2026-11-01 new shell: Knowledge search → assistant edge swipe pushed the shell bar down ~106 pt; old switcher `position` hit an empty bar).
   Closing search on the pushed page when `isPresented` becomes false is too late. On root return, call UIKit `setNavigationBarHidden(true)` again (`AssistantView.RootBarHidden`).
@@ -3023,3 +3043,9 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
 - A mutating method on an observed struct property tells every reader even when it changes nothing (the Observation macro only
   skips an equal value on a plain assignment): `UnifiedSidebar.forget` reset roots that were already at the conversation on every
   choice of the Agents tab and redrew everything reading them, in the frame the switch is drawn in. Check first.
+
+## Machines metrics need a manager scope as well as a hub scope (2026-11-18, #4031)
+
+- `GET /api/v1/metrics` answers for the default manager unless the request names one by the established header or query. Fan out once per installed, online manager, keep the default's request bare, and merge machine IDs in roster order. A failed manager keeps its last-good snapshot; only a success, including an empty one, replaces it. A routed `no_manager` 404 is not evidence that monitoring is unsupported.
+- Keep the request's hub and manager scopes distinct: a settings page keeps its one captured manager rather than widening to the whole roster, and a roster restored from a snapshot cannot name managers until this launch confirms it. Fence late answers by both pairing and read generation.
+- The mock must enforce the same manager scoping or the UI fixture hides the bug. Each assistant's Machines page lists only its own computers, so a UI regression selects the non-default assistant before requiring that computer's numbers. `MachineMetricsLoadingTests`, `MachineMetricsStoreTests` and `MachinesPageTests/testNonDefaultManagerMetricsInLightAndDark` cover the request, cache, cancellation and visible-sample contracts.

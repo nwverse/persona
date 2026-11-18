@@ -130,7 +130,7 @@ checks; none of them is ever written by the hub's link builder.
 - **iPhone**: one parser for the three inputs (a paired hub's web link, an app link, an older form) and one entry that
   every surface opens links with: chats, the Inbox (an item's source link and its Timeline), knowledge, to-dos, mail and
   extension pages, and links from outside the app. A page in the table opens natively; anything else opens in the web
-  card as before (#9928).
+  card as before (#9928). The web sign-in page's `persona://browser-login` code, read by the Camera app, only says where to scan it (Settings › Devices › Scan Browser Sign-in Code, #10293); approving a browser happens only in that scanner.
 - **Web**: links to its own hub go through the router's own `parse` and open in place; app links and older forms in
   messages and cards open the same pages (#9930).
 - **Desktop**: the packaged app registers `persona://`. An app link's path is handed to the web app in the window,

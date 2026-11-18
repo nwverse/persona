@@ -47,6 +47,7 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		}
 	case c.Leader:
 		c.LeaderName = s.leaderNames(ctx, []string{p.SessionID})[p.SessionID]
+		c.LeaderStatus = s.directionStatus(ctx, p.SessionID)
 	}
 	text := prompts.RenderAssistantContext(c)
 	errs, receipts := s.viewErrors(ctx, p)
