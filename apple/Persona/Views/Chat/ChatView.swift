@@ -3214,7 +3214,7 @@ struct ChatView: View {
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
-        .scrollEdgeEffectHidden(true, for: .all)
+        .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
         .scrollPosition($position)
         // The part over the footer: what the page shows of the list, as the follow, the landings and the navigator take it.
         .onGeometryChange(for: CGRect.self, of: { g in
@@ -4037,7 +4037,7 @@ struct ChatView: View {
         let header = ChromeHeader(chrome: chrome, touched: { scratch.lastActivity = .now }) {
             VStack(spacing: 0) {
                 // One container for the row's glass (back, the terminal, ⋯): drawn together instead of as separate glasses.
-                GlassEffectContainer(spacing: 8) {
+                GlassGroup(spacing: 8) {
                     HStack(spacing: Theme.Space.s) {
                         headerBack
                         if pane == .chat, let expand = host?.expand { hostedExpandButton(expand) }
