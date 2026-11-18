@@ -33,6 +33,24 @@ Guests keep their own isolation (`node/assistant_user_setup.go`; `TestPrivatePro
 `TestPrivateProfileCarriesTheUserSkillSwitchesOff`, `TestClaudeStartDirIsTheUserProfile`,
 `TestSkillCatalogMatchesThePrivateProfileSettings`, `TestGuestSettingsIgnoreThePrivateProfileAdditions`).
 
+## Cold launch preparation
+
+A headless Claude assistant starts through the user's interactive shell. Before the assistant produces valid protocol
+output, launch preparation has a separate 60-second allowance from process creation. The first protocol output starts
+an ordinary 15-second settings acknowledgment budget; shell banners and stderr diagnostics do not count as readiness.
+Controls are written immediately because some CLI versions produce no output until they read one.
+
+A startup control timeout is retried up to three times before failure, within the caller's cancellation/deadline.
+Retries happen before any user input is written. Explicit settings refusals and caller cancellation are not retried.
+An empty conversation allocation follows the same preparation rule without sending a model turn. Effort remains
+unconfirmed until a control ACK: `--effort` cannot express automatic effort, and launcher environment or policy can
+override a startup flag. Initializing the in-memory field alone would silently skip that check.
+
+Logs record shell initialization completion and elapsed milliseconds. Timeouts distinguish shell initialization,
+assistant startup output, blocked settings writes and missing settings acknowledgments, and identify node-initiated
+termination. Exhausted startup attempts report their count, elapsed wait and final cause rather than presenting the
+node's termination as an assistant crash. Failed-message persistence and later redelivery are separate concerns.
+
 ## Work computers and personal context
 
 Set `machines[].trust` to `"work"` in `hub.json` to keep personal assistant data off that computer (see [config.md](../operations/config.md)).
